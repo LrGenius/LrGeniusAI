@@ -64,15 +64,16 @@ jobs:
             "https://github.com/LrGenius/geniusai-server/releases/download/${{ github.event.inputs.server_version }}/geniusai-server-macos-arm64.zip"
           
           # Create the build directory structure
-          mkdir -p build-macos/lrgenius-server
           mkdir -p build-macos/LrGeniusAI.lrplugin
           
           # Extract server to the correct location
-          unzip -q server-macos.zip -d build-macos/lrgenius-server
+          unzip -q server-macos.zip -d build-macos/
           
           # Copy plugin files
           cp LrGeniusAI.lrdevplugin/*.lua build-macos/LrGeniusAI.lrplugin/
           cp LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt build-macos/LrGeniusAI.lrplugin/
+
+          chmod +x build-macos/lrgenius-server/lrgenius_server
 
       - name: Create macOS plugin zip
         run: |
