@@ -27,11 +27,10 @@ jobs:
             "https://github.com/LrGenius/geniusai-server/releases/download/${{ github.event.inputs.server_version }}/geniusai-server-windows-x64.zip"
           
           # Create the build directory structure
-          mkdir -p build-windows/lrgenius-server
           mkdir -p build-windows/LrGeniusAI.lrplugin
           
           # Extract server to the correct location
-          unzip -q server-windows.zip -d build-windows/lrgenius-server
+          unzip -q server-windows.zip -d build-windows/
           
           # Copy plugin files
           cp LrGeniusAI.lrdevplugin/*.lua build-windows/LrGeniusAI.lrplugin/
