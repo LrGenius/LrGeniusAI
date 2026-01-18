@@ -1,0 +1,128 @@
+name: Build LrGeniusAI Plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Plugin version (e.g., v1.0.0)'
+        required: true
+        type: string
+      server_version:
+        description: 'geniusai-server version to bundle (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build-plugin-windows:
+    runs-on: ubuntu-latest
+    name: Build LrGeniusAI Plugin - Windows
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download geniusai-server Windows release
+        run: |
+          # Download the Windows server artifact from the geniusai-server release
+          curl -L -o server-windows.zip \
+            "https://github.com/LrGenius/geniusai-server/releases/download/${{ github.event.inputs.server_version }}/geniusai-server-windows-x64.zip"
+          
+          # Create the build directory structure
+          mkdir -p build-windows/lrgenius-server
+          mkdir -p build-windows/LrGeniusAI.lrplugin
+          
+          # Extract server to the correct location
+          unzip -q server-windows.zip -d build-windows/lrgenius-server
+          
+          # Copy plugin files
+          cp LrGeniusAI.lrdevplugin/*.lua build-windows/LrGeniusAI.lrplugin/
+          cp LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt build-windows/LrGeniusAI.lrplugin/
+
+      - name: Create Windows plugin zip
+        run: |
+          cd build-windows
+          zip -r ../lrgenius-ai-windows-x64-${{ github.event.inputs.version }}.zip .
+          cd ..
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-windows
+          path: lrgenius-ai-windows-x64-${{ github.event.inputs.version }}.zip
+          retention-days: 1
+
+  build-plugin-macos:
+    runs-on: ubuntu-latest
+    name: Build LrGeniusAI Plugin - macOS
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download geniusai-server macOS release
+        run: |
+          # Download the macOS server artifact from the geniusai-server release
+          curl -L -o server-macos.zip \
+            "https://github.com/LrGenius/geniusai-server/releases/download/${{ github.event.inputs.server_version }}/geniusai-server-macos-arm64.zip"
+          
+          # Create the build directory structure
+          mkdir -p build-macos/lrgenius-server
+          mkdir -p build-macos/LrGeniusAI.lrplugin
+          
+          # Extract server to the correct location
+          unzip -q server-macos.zip -d build-macos/lrgenius-server
+          
+          # Copy plugin files
+          cp LrGeniusAI.lrdevplugin/*.lua build-macos/LrGeniusAI.lrplugin/
+          cp LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt build-macos/LrGeniusAI.lrplugin/
+
+      - name: Create macOS plugin zip
+        run: |
+          cd build-macos
+          zip -r ../lrgenius-ai-macos-arm64-${{ github.event.inputs.version }}.zip .
+          cd ..
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-macos
+          path: lrgenius-ai-macos-arm64-${{ github.event.inputs.version }}.zip
+          retention-days: 1
+
+  create-release:
+    needs: [build-plugin-windows, build-plugin-macos]
+    runs-on: ubuntu-latest
+    name: Create Release
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create git tag
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag ${{ github.event.inputs.version }}
+          git push origin ${{ github.event.inputs.version }}
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-windows
+          path: artifacts
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-macos
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          files: artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
