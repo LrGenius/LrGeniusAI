@@ -1,9 +1,6 @@
 require "Info"
 
 UpdateCheck = {}
-require "Info"
-
-UpdateCheck = {}
 
 UpdateCheck.releaseTagName = "v" .. tostring(Info.MAJOR) .. "." .. tostring(Info.MINOR) .. "." .. tostring(Info.REVISION)
 UpdateCheck.updateCheckUrl = "https://api.github.com/repos/LrGenius/LrGeniusAI/releases/latest"
