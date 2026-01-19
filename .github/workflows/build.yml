@@ -21,15 +21,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download geniusai-server Windows release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Download the Windows server artifact from the geniusai-server release
-          curl -L -o server-windows.zip \
-            "https://github.com/LrGenius/geniusai-server/releases/download/${{ github.event.inputs.server_version }}/geniusai-server-windows-x64.zip"
+          gh release download ${{ github.event.inputs.server_version }} -R LrGenius/geniusai-server -p "geniusai-server-windows-x64.z*"
           
           # Create the build directory structure
           mkdir -p build-windows/LrGeniusAI.lrplugin
           
-          # Extract server to the correct location
+          # Combine split zip files if any, and extract
+          zip -s 0 geniusai-server-windows-x64.zip --out server-windows.zip
           unzip -q server-windows.zip -d build-windows/
           
           # Copy plugin files
@@ -39,7 +40,7 @@ jobs:
       - name: Create Windows plugin zip
         run: |
           cd build-windows
-          zip -r ../lrgenius-ai-windows-x64-${{ github.event.inputs.version }}.zip .
+          zip -r -s 1900m ../lrgenius-ai-windows-x64-${{ github.event.inputs.version }}.zip .
           cd ..
 
       - name: Upload Windows artifact
@@ -57,15 +58,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download geniusai-server macOS release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Download the macOS server artifact from the geniusai-server release
-          curl -L -o server-macos.zip \
-            "https://github.com/LrGenius/geniusai-server/releases/download/${{ github.event.inputs.server_version }}/geniusai-server-macos-arm64.zip"
+          gh release download ${{ github.event.inputs.server_version }} -R LrGenius/geniusai-server -p "geniusai-server-macos-arm64.z*"
           
           # Create the build directory structure
           mkdir -p build-macos/LrGeniusAI.lrplugin
           
-          # Extract server to the correct location
+          # Combine split zip files if any, and extract
+          zip -s 0 geniusai-server-macos-arm64.zip --out server-macos.zip
           unzip -q server-macos.zip -d build-macos/
           
           # Copy plugin files
@@ -77,7 +79,7 @@ jobs:
       - name: Create macOS plugin zip
         run: |
           cd build-macos
-          zip -r ../lrgenius-ai-macos-arm64-${{ github.event.inputs.version }}.zip .
+          zip -r -s 1900m ../lrgenius-ai-macos-arm64-${{ github.event.inputs.version }}.zip .
           cd ..
 
       - name: Upload macOS artifact
