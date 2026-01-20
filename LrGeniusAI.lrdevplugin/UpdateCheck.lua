@@ -41,7 +41,7 @@ function UpdateCheck.checkForNewVersionInBackground()
                 if decoded.tag_name ~= UpdateCheck.releaseTagName then
                     LrDialogs.message("A new version of LrGeniusAI is available: " .. decoded.tag_name .. ". Please visit the releases page to download the latest version.", "New Version Available", "info")
                 else
-                    LrDialogs.message("You're on the latest plugin version: " .. UpdateCheck.releaseTagName)
+                    -- LrDialogs.message("You're on the latest plugin version: " .. UpdateCheck.releaseTagName)
                 end
             end
         else
