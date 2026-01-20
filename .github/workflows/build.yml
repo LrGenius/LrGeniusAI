@@ -1,124 +1,131 @@
-name: Build LrGeniusAI Plugin
+name: Build LrGeniusAI Plugin and Server
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Plugin version (e.g., v1.0.0)'
+        description: 'Plugin and server version (e.g., 1.0.0)'
         required: true
         type: string
       server_version:
-        description: 'geniusai-server version to bundle (e.g., v1.0.0)'
+        description: 'geniusai-server git ref (e.g., main, v1.0.0)'
         required: true
         type: string
+        default: 'main'
 
 jobs:
-  build-plugin-windows:
-    runs-on: ubuntu-latest
-    name: Build LrGeniusAI Plugin - Windows
-    
+  build-and-release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            os_name: windows
+            arch: x64
+            python_arch: '3.12'
+            miniconda_arch: ''
+          - os: macos-latest
+            os_name: macos
+            arch: arm64
+            python_arch: '3.12'
+            miniconda_arch: arm64
+
+    name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout LrGeniusAI repository
+        uses: actions/checkout@v4
+        with:
+          path: LrGeniusAI
 
-      - name: Download geniusai-server Windows release
+      - name: Checkout geniusai-server repository
+        uses: actions/checkout@v4
+        with:
+          repository: LrGenius/geniusai-server
+          path: geniusai-server
+          ref: ${{ github.event.inputs.server_version }}
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: geniusai_server
+          environment-file: geniusai-server/environment.yml
+          python-version: ${{ matrix.python_arch }}
+          auto-activate-base: false
+          miniconda-version: latest
+          architecture: ${{ matrix.miniconda_arch }}
+
+      - name: Install PyInstaller
+        shell: bash -l {0}
+        run: pip install pyinstaller
+
+      - name: Prepare model bundle
+        shell: bash -l {0}
+        working-directory: geniusai-server
+        run: python model_scripts/prepare_model_bundle.py --output_dir ../dist/models
+
+      - name: Build geniusai-server
+        shell: bash -l {0}
+        working-directory: geniusai-server
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KMP_DUPLICATE_LIB_OK: 'TRUE'
+        run: pyinstaller geniusai_server.spec --noconfirm
+          
+      - name: Prepare plugin files
+        shell: bash
+        id: prep_files
         run: |
-          gh release download ${{ github.event.inputs.server_version }} -R LrGenius/geniusai-server -p "geniusai-server-windows-x64.z*"
+          VERSION=${{ github.event.inputs.version }}
+          OS_NAME=${{ matrix.os_name }}
+          ARCH=${{ matrix.arch }}
           
-          # Create the build directory structure
-          mkdir -p build-windows/LrGeniusAI.lrplugin
+          PLUGIN_DIR="dist/LrGeniusAI.lrplugin"
           
-          # Combine split zip files if any, and extract
-          zip -s 0 geniusai-server-windows-x64.zip --out server-windows.zip
-          unzip -q server-windows.zip -d build-windows/
+          mkdir -p $PLUGIN_DIR
           
-          # Copy plugin files
-          cp LrGeniusAI.lrdevplugin/*.lua build-windows/LrGeniusAI.lrplugin/
-          cp LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt build-windows/LrGeniusAI.lrplugin/
+          echo "Copying plugin files..."
+          cp LrGeniusAI/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
+          cp LrGeniusAI/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
-      - name: Create Windows plugin zip
-        run: |
-          cd build-windows
-          zip -r -s 1900m ../lrgenius-ai-windows-x64-${{ github.event.inputs.version }}.zip .
+          if [ "$OS_NAME" == "macos" ]; then
+            chmod +x dist/lrgenius-server/lrgenius-server
+          fi
+          
+          ZIP_NAME="LrGeniusAI-${OS_NAME}-${ARCH}-${VERSION}.zip"
+          cd dist
+          zip -r -s 1900m ../$ZIP_NAME .
           cd ..
+          echo "zip_path=$ZIP_NAME" >> $GITHUB_OUTPUT
 
-      - name: Upload Windows artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-windows
-          path: lrgenius-ai-windows-x64-${{ github.event.inputs.version }}.zip
+          name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: ${{ steps.prep_files.outputs.zip_path }}
           retention-days: 1
-
-  build-plugin-macos:
-    runs-on: ubuntu-latest
-    name: Build LrGeniusAI Plugin - macOS
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download geniusai-server macOS release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download ${{ github.event.inputs.server_version }} -R LrGenius/geniusai-server -p "geniusai-server-macos-arm64.z*"
           
-          # Create the build directory structure
-          mkdir -p build-macos/LrGeniusAI.lrplugin
-          
-          # Combine split zip files if any, and extract
-          zip -s 0 geniusai-server-macos-arm64.zip --out server-macos.zip
-          unzip -q server-macos.zip -d build-macos/
-          
-          # Copy plugin files
-          cp LrGeniusAI.lrdevplugin/*.lua build-macos/LrGeniusAI.lrplugin/
-          cp LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt build-macos/LrGeniusAI.lrplugin/
-
-          chmod +x build-macos/lrgenius-server/lrgenius_server
-
-      - name: Create macOS plugin zip
-        run: |
-          cd build-macos
-          zip -r -s 1900m ../lrgenius-ai-macos-arm64-${{ github.event.inputs.version }}.zip .
-          cd ..
-
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: plugin-macos
-          path: lrgenius-ai-macos-arm64-${{ github.event.inputs.version }}.zip
-          retention-days: 1
-
   create-release:
-    needs: [build-plugin-windows, build-plugin-macos]
+    needs: [build-and-release]
     runs-on: ubuntu-latest
     name: Create Release
     permissions:
       contents: write
-    
+
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download Windows artifact
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: plugin-windows
           path: artifacts
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: plugin-macos
-          path: artifacts
-
-      - name: Create Release
+          
+      - name: List downloaded files
+        run: ls -R artifacts
+      
+      - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Release ${{ github.event.inputs.version }}
-          files: artifacts/*
+          tag_name: v${{ github.event.inputs.version }}
+          name: Release v${{ github.event.inputs.version }}
+          files: artifacts/*/*
           draft: false
           prerelease: false
         env:
