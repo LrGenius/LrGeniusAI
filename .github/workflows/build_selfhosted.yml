@@ -1,0 +1,159 @@
+name: Build LrGeniusAI Plugin and Server (Self-Hosted)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Plugin and server version (e.g., 1.0.0)'
+        required: true
+        type: string
+      server_version:
+        description: 'geniusai-server git ref (e.g., main, v1.0.0)'
+        required: true
+        type: string
+        default: 'main'
+
+jobs:
+  build-and-release:
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            os_name: windows
+            arch: x64
+            python_arch: '3.12'
+            miniconda_arch: ''
+          - os: macos-latest
+            os_name: macos
+            arch: arm64
+            python_arch: '3.12'
+            miniconda_arch: arm64
+
+    name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
+
+    steps:
+      - name: Checkout LrGeniusAI repository
+        uses: actions/checkout@v4
+        with:
+          path: LrGeniusAI
+
+      - name: Checkout geniusai-server repository
+        uses: actions/checkout@v4
+        with:
+          repository: LrGenius/geniusai-server
+          path: geniusai-server
+          ref: ${{ github.event.inputs.server_version }}
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: geniusai_server
+          environment-file: geniusai-server/environment.yml
+          python-version: ${{ matrix.python_arch }}
+          auto-activate-base: false
+          miniconda-version: latest
+          architecture: ${{ matrix.miniconda_arch }}
+      - name: Force reinstall Pillow via pip
+        shell: bash -l {0}
+        run: |
+          pip uninstall -y pillow
+          pip install --force-reinstall --no-cache-dir pillow
+      - name: Install PyInstaller
+        shell: bash -l {0}
+        run: pip install pyinstaller
+
+      - name: Prepare model bundle
+        shell: bash -l {0}
+        working-directory: geniusai-server
+        run: python model_scripts/prepare_model_bundle.py --output_dir dist/models
+
+      - name: Build geniusai-server
+        shell: bash -l {0}
+        working-directory: geniusai-server
+        env:
+          KMP_DUPLICATE_LIB_OK: 'TRUE'
+        run: pyinstaller geniusai_server.spec --noconfirm
+          
+      - name: Prepare plugin files
+        shell: bash
+        run: |
+          BUILD_DIR="build"
+          PLUGIN_DIR="$BUILD_DIR/LrGeniusAI.lrplugin"
+          
+          mkdir -p $PLUGIN_DIR
+          
+          echo "Copying server and model files..."
+          cp -r geniusai-server/dist/* $BUILD_DIR/
+          
+          echo "Copying plugin files..."
+          cp LrGeniusAI/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
+          cp LrGeniusAI/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
+
+          if [ "${{ matrix.os_name }}" == "macos" ]; then
+            if [ -f "$BUILD_DIR/lrgenius-server/lrgenius-server" ]; then
+              echo "Setting executable permissions for macOS server binary..."
+              chmod +x $BUILD_DIR/lrgenius-server/lrgenius-server
+            fi
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: build/
+          retention-days: 1
+          
+  create-release:
+    needs: [build-and-release]
+    runs-on: ubuntu-latest
+    name: Create Release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: List downloaded files
+        run: ls -R artifacts
+      
+      - name: Zip artifacts
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          
+          cd artifacts
+          
+          if [ -d "lrgenius-ai-windows-x64" ]; then
+            cd lrgenius-ai-windows-x64
+            zip -r -s 1900m ../LrGeniusAI-windows-x64-${VERSION}.zip .
+            cd ..
+          fi
+
+          if [ -d "lrgenius-ai-macos-arm64" ]; then
+            cd lrgenius-ai-macos-arm64
+            zip -r -s 1900m ../LrGeniusAI-macos-arm64-${VERSION}.zip .
+            cd ..
+          fi
+          
+          cd ..
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: Release v${{ github.event.inputs.version }}
+          files: |
+            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.zip
+            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.z01
+            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.z02
+            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.zip
+            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z01
+            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z02
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
