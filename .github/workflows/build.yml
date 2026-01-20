@@ -73,38 +73,30 @@ jobs:
           
       - name: Prepare plugin files
         shell: bash
-        id: prep_files
         run: |
-          VERSION=${{ github.event.inputs.version }}
-          OS_NAME=${{ matrix.os_name }}
-          ARCH=${{ matrix.arch }}
-          
-          PLUGIN_DIR="dist/LrGeniusAI.lrplugin"
+          PLUGIN_DIR="build/LrGeniusAI.lrplugin"
           
           mkdir -p $PLUGIN_DIR
+          
+          echo "Copying server files..."
+          cp -r geniusai-server/dist/lrgenius-server/* $PLUGIN_DIR/
+          if [ -d "dist/models" ]; then
+            cp -r dist/models $PLUGIN_DIR/
+          fi
           
           echo "Copying plugin files..."
           cp LrGeniusAI/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
           cp LrGeniusAI/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
-          if [ "$OS_NAME" == "macos" ]; then
-            chmod +x geniusai-server/dist/lrgenius-server/lrgenius-server
+          if [ "${{ matrix.os_name }}" == "macos" ]; then
+            chmod +x $PLUGIN_DIR/lrgenius-server
           fi
-
-          echo "Copying server and model files..."
-          cp -r geniusai-server/dist/* dist/
-          
-          ZIP_NAME="LrGeniusAI-${OS_NAME}-${ARCH}-${VERSION}.zip"
-          cd dist
-          zip -r -s 1900m ../$ZIP_NAME .
-          cd ..
-          echo "zip_path=$ZIP_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LrGeniusAI-${{ matrix.os_name }}-${{ matrix.arch }}
-          path: ${{ steps.prep_files.outputs.zip_path }}
+          name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: build/
           retention-days: 1
           
   create-release:
@@ -123,12 +115,32 @@ jobs:
       - name: List downloaded files
         run: ls -R artifacts
       
+      - name: Zip artifacts
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          
+          cd artifacts
+          
+          if [ -d "lrgenius-ai-windows-x64" ]; then
+            cd lrgenius-ai-windows-x64
+            zip -r -s 1900m ../lrgenius-ai-windows-x64-${VERSION}.zip .
+            cd ..
+          fi
+
+          if [ -d "lrgenius-ai-macos-arm64" ]; then
+            cd lrgenius-ai-macos-arm64
+            zip -r -s 1900m ../LrGeniusAI-macos-arm64-${VERSION}.zip .
+            cd ..
+          fi
+          
+          cd ..
+
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
-          files: artifacts/*/*
+          files: ./LrGeniusAI-*.zip
           draft: false
           prerelease: false
         env:
