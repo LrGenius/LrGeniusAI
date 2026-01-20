@@ -150,5 +150,6 @@ jobs:
             artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z02
           draft: false
           prerelease: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
