@@ -54,7 +54,11 @@ jobs:
           auto-activate-base: false
           miniconda-version: latest
           architecture: ${{ matrix.miniconda_arch }}
-
+      - name: Force reinstall Pillow via pip
+        shell: bash -l {0}
+        run: |
+          pip uninstall -y pillow
+          pip install --force-reinstall --no-cache-dir pillow
       - name: Install PyInstaller
         shell: bash -l {0}
         run: pip install pyinstaller
