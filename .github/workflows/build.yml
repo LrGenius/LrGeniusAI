@@ -74,14 +74,15 @@ jobs:
       - name: Prepare plugin files
         shell: bash
         run: |
-          PLUGIN_DIR="build/LrGeniusAI.lrplugin"
+          BUILD_DIR="build"
+          PLUGIN_DIR="$BUILD_DIR/LrGeniusAI.lrplugin"
           
           mkdir -p $PLUGIN_DIR
           
           echo "Copying server files..."
-          cp -r geniusai-server/dist/lrgenius-server/* $PLUGIN_DIR/
+          cp -r geniusai-server/dist/lrgenius-server/* $BUILD_DIR/
           if [ -d "dist/models" ]; then
-            cp -r dist/models $PLUGIN_DIR/
+            cp -r dist/models $BUILD_DIR/
           fi
           
           echo "Copying plugin files..."
@@ -89,7 +90,10 @@ jobs:
           cp LrGeniusAI/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
           if [ "${{ matrix.os_name }}" == "macos" ]; then
-            chmod +x $PLUGIN_DIR/lrgenius-server
+            if [ -f "$BUILD_DIR/lrgenius-server/lrgenius-server" ]; then
+              echo "Setting executable permissions for macOS server binary..."
+              chmod +x $BUILD_DIR/lrgenius-server/lrgenius-server
+            fi
           fi
 
       - name: Upload artifact
@@ -123,7 +127,7 @@ jobs:
           
           if [ -d "lrgenius-ai-windows-x64" ]; then
             cd lrgenius-ai-windows-x64
-            zip -r -s 1900m ../lrgenius-ai-windows-x64-${VERSION}.zip .
+            zip -r -s 1900m ../LrGeniusAI-windows-x64-${VERSION}.zip .
             cd ..
           fi
 
