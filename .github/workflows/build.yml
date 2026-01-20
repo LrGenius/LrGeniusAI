@@ -88,8 +88,11 @@ jobs:
           cp LrGeniusAI/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
           if [ "$OS_NAME" == "macos" ]; then
-            chmod +x dist/lrgenius-server/lrgenius-server
+            chmod +x geniusai-server/dist/lrgenius-server/lrgenius-server
           fi
+
+          echo "Copying server and model files..."
+          cp -r geniusai-server/dist/* dist/
           
           ZIP_NAME="LrGeniusAI-${OS_NAME}-${ARCH}-${VERSION}.zip"
           cd dist
@@ -100,7 +103,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
+          name: LrGeniusAI-${{ matrix.os_name }}-${{ matrix.arch }}
           path: ${{ steps.prep_files.outputs.zip_path }}
           retention-days: 1
           
