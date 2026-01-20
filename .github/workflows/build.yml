@@ -79,11 +79,8 @@ jobs:
           
           mkdir -p $PLUGIN_DIR
           
-          echo "Copying server files..."
-          cp -r geniusai-server/dist/lrgenius-server/* $BUILD_DIR/
-          if [ -d "dist/models" ]; then
-            cp -r dist/models $BUILD_DIR/
-          fi
+          echo "Copying server and model files..."
+          cp -r geniusai-server/dist/* $BUILD_DIR/
           
           echo "Copying plugin files..."
           cp LrGeniusAI/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
