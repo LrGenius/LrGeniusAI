@@ -141,7 +141,7 @@ jobs:
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
-          files: ./LrGeniusAI-*.zip
+          files: ./artifacts/LrGeniusAI-*.z*
           draft: false
           prerelease: false
         env:
