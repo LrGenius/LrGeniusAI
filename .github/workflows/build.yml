@@ -137,12 +137,18 @@ jobs:
           cd ..
 
       - name: Create release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
-          files: ./artifacts/LrGeniusAI-*.z*
+          files: |
+            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.zip
+            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.z01
+            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.z02
+            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.zip
+            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z01
+            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z02
           draft: false
-          prerelease: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
