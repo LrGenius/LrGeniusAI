@@ -62,7 +62,7 @@ jobs:
       - name: Prepare model bundle
         shell: bash -l {0}
         working-directory: geniusai-server
-        run: python model_scripts/prepare_model_bundle.py --output_dir ../dist/models
+        run: python model_scripts/prepare_model_bundle.py --output_dir dist/models
 
       - name: Build geniusai-server
         shell: bash -l {0}
