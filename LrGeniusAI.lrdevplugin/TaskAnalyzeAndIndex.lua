@@ -19,7 +19,7 @@ local function showAnalyzeAndIndexDialog(ctx)
     props.scope = prefs.indexScope or "selected"
     
     -- Tasks to perform
-    props.enableEmbeddings = prefs.enableEmbeddings ~= false -- default true
+    props.enableEmbeddings = (prefs.enableEmbeddings ~= false) and prefs.useClip and SearchIndexAPI.isClipReady() -- default true
     props.enableMetadata = prefs.enableMetadata ~= false -- default true
     props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
     props.enableQuality = false 
@@ -221,6 +221,7 @@ local function showAnalyzeAndIndexDialog(ctx)
                 f:checkbox {
                     value = bind 'enableEmbeddings',
                     title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/EnableEmbeddings=Create search embeddings",
+                    enabled = prefs.useClip,
                 },
             },
             f:row {
