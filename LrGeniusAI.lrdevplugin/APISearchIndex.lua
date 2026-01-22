@@ -8,27 +8,17 @@ local ENDPOINTS = {
     INDEX = "/index",
     INDEX_BY_REFERENCE = "/index_by_reference",
     INDEX_BASE64 = "/index_base64",
-    RATE = "/rate",
-    PRETTIEST = "/prettiest",
-    UGLIEST = "/ugliest",
-    QUERY_QUALITY = "/query_quality",
     SEARCH = "/search",
-    UNRATED = "/unrated",
     STATS = "/stats",
     MODELS = "/models",
     GET_IDS = "/get/ids",
     REMOVE = "/remove",
-    RERATE_ALL = "/rerate_all",
     PING = "/ping",
     SHUTDOWN = "/shutdown",
-    GROUP_SIMILAR = "/group_similar",
-    GROUP_PHOTOS_BY_SCORES = "/group_by_scores",
-    GET_FACES = "/get_faces",
-    FIND_SIMILAR_FACES = "/find_similar_faces",
-    CLUSTER_FACES = "/cluster_faces",
-    PEOPLE = "/people",
-    FACES = "/faces",
     IMPORT_METADATA = "/import/metadata",
+    START_CLIP_DOWNLOAD = "/clip/download/start",
+    STATUS_CLIP_DOWNLOAD = "/clip/download/status",
+    CLIP_STATUS = "/clip/status",
 }
 
 local EXPORT_SETTINGS = {
@@ -857,4 +847,85 @@ function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
         return nil
     end
     return result
+end
+
+
+
+function SearchIndexAPI.startClipDownload()
+
+    if SearchIndexAPI.isClipReady() then
+        log:trace("CLIP model is already cached")
+        return
+    end
+
+    local status, err = _request('GET', BASE_URL .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
+    if not err and status ~= nil and status.status == "downloading" then
+        log:trace("CLIP model download is already in progress")
+        return
+    end
+
+    local progressScope = LrProgressScope({
+        title = LOC "$$$/LrGeniusAI/ClipDownload/ProgressTitle=Downloading CLIP AI model for advanced search",
+        functionContext = nil,
+    })
+
+    local url = BASE_URL .. ENDPOINTS.START_CLIP_DOWNLOAD
+    local body = {}
+
+    local res, err = _request('POST', url, body)
+
+    if err then
+        log:error("startClipDownload failed: " .. err)
+        return nil, err
+    end
+
+    LrTasks.startAsyncTask(function()
+        while true do
+            local status, err = _request('GET', BASE_URL .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
+            if err then
+                log:error("statusClipDownload failed: " .. err)
+                if progressScope ~= nil then
+                    progressScope:setCaption(LOC "$$$/LrGeniusAI/ClipDownload/Error=Error downloading CLIP model: ^1", err)
+                    progressScope:done()
+                end
+                break
+            end
+
+            if status ~= nil then
+                if progressScope ~= nil then
+                    progressScope:setCaption(LOC "$$$/LrGeniusAI/ClipDownload/Downloading=Downloading CLIP model...")
+                end
+                if status.status == "downloading" then
+                    progressScope:setPortionComplete(status.progress, status.total)
+                elseif status.status == "completed" then
+                    log:trace("CLIP model download completed")
+                    progressScope:done()
+                    break
+                end
+            end
+
+            LrTasks.sleep(2)
+        end
+    end)
+end
+
+
+function SearchIndexAPI.isClipReady()
+    local url = BASE_URL .. ENDPOINTS.CLIP_STATUS
+    local res, err = _request('GET', url)
+    if err then
+        log:error("isClipReady failed: " .. err)
+        return false, err
+    end
+    if res ~= nil then
+        if res.clip == "ready" then
+            log:trace("CLIP model is ready")
+            return true, res.message
+        else
+            log:trace("CLIP model is not ready")
+            return false, res.message
+        end
+    end
+    log:error("isClipReady: Unknown error")
+    return false, "Unknown error"
 end

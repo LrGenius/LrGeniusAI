@@ -205,6 +205,10 @@ if _G.prefs.knownTopLevelKeywords == nil then
     _G.prefs.knownTopLevelKeywords = Defaults.defaultTopLevelKeywords
 end
 
+if _G.prefs.useClip == nil then
+    _G.prefs.useClip = false
+end
+
 function _G.JSON.assert(b, m)
     LrDialogs.showError("Error decoding JSON response.")
 end
@@ -218,6 +222,9 @@ end
 
 LrTasks.startAsyncTask(function()
     SearchIndexAPI.startServer()
+    if prefs.enableOpenClip then
+        SearchIndexAPI.isClipReady() -- To trigger load of the CLIP model.
+    end
 end)
 
 
