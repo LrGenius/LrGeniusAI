@@ -883,7 +883,7 @@ function SearchIndexAPI.startClipDownload()
         while true do
             local status, err = _request('GET', BASE_URL .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
             if err then
-                log:error("statusClipDownload failed: " .. err)
+                Util.handleError("Error downloading CLIP model", err)
                 if progressScope ~= nil then
                     progressScope:setCaption(LOC "$$$/LrGeniusAI/ClipDownload/Error=Error downloading CLIP model: ^1", err)
                     progressScope:done()
