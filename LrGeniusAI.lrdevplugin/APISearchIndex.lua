@@ -901,6 +901,10 @@ function SearchIndexAPI.startClipDownload()
                     log:trace("CLIP model download completed")
                     progressScope:done()
                     break
+                elseif status.error ~= "null" then
+                    ErrorHandler.handleError("Error downloading CLIP model", status.error)
+                    progressScope:done()
+                    break
                 end
             end
 
