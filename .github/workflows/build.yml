@@ -58,6 +58,7 @@ jobs:
         shell: bash -l {0}
         run: |
           pip uninstall -y pillow
+          pip install --force-reinstall --no-cache-dir pillow
 
       - name: Build geniusai-server
         shell: bash -l {0}
