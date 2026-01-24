@@ -108,9 +108,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          
-      - name: List downloaded files
-        run: ls -R artifacts
       
       - name: Zip artifacts
         run: |
@@ -120,13 +117,13 @@ jobs:
           
           if [ -d "lrgenius-ai-windows-x64" ]; then
             cd lrgenius-ai-windows-x64
-            zip -r -s 1900m ../LrGeniusAI-windows-x64-${VERSION}.zip .
+            zip -r ../LrGeniusAI-windows-x64-${VERSION}.zip .
             cd ..
           fi
 
           if [ -d "lrgenius-ai-macos-arm64" ]; then
             cd lrgenius-ai-macos-arm64
-            zip -r -s 1900m ../LrGeniusAI-macos-arm64-${VERSION}.zip .
+            zip -r ../LrGeniusAI-macos-arm64-${VERSION}.zip .
             cd ..
           fi
           
