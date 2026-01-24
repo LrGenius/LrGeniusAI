@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Plugin and server version (e.g., 1.0.0)'
+        description: 'Plugin and server version (e.g., v1.0.0)'
         required: true
         type: string
       server_version:
@@ -58,14 +58,6 @@ jobs:
         shell: bash -l {0}
         run: |
           pip uninstall -y pillow
-      - name: Install PyInstaller
-        shell: bash -l {0}
-        run: pip install pyinstaller
-
-      - name: Prepare model bundle
-        shell: bash -l {0}
-        working-directory: geniusai-server
-        run: python model_scripts/prepare_model_bundle.py --output_dir dist/models
 
       - name: Build geniusai-server
         shell: bash -l {0}
@@ -146,11 +138,7 @@ jobs:
           name: Release v${{ github.event.inputs.version }}
           files: |
             artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.zip
-            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.z01
-            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.z02
             artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.zip
-            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z01
-            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.z02
           draft: false
           prerelease: true
           generate_release_notes: true
