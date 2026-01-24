@@ -58,9 +58,6 @@ jobs:
         shell: bash -l {0}
         run: |
           pip uninstall -y pillow
-          pip install --force-reinstall --no-cache-dir pillow
-          pip uninstall transformers -y
-          pip install -U huggingface-hub
       - name: Install PyInstaller
         shell: bash -l {0}
         run: pip install pyinstaller
