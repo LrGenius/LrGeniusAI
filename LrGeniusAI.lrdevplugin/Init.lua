@@ -30,17 +30,8 @@ require "Defaults"
 -- Global initializations
 _G.prefs = _G.LrPrefs.prefsForPlugin()
 _G.log = import 'LrLogger' ('LrGeniusAI')
--- if _G.prefs.logging == nil then
-    _G.prefs.logging = true
--- end
+_G.prefs.logging = true
 _G.log:enable('logfile') -- Always enable logging to a file
-
-if _G.prefs.perfLogging == nil then
-    _G.prefs.perfLogging = false
-end
-
-if _G.prefs.apiKey == nil then _G.prefs.apiKey = '' end
-if _G.prefs.url == nil then _G.prefs.url = '' end
 
 if _G.prefs.ai == nil then
     _G.prefs.ai = ""
@@ -70,22 +61,6 @@ if _G.prefs.generateAltText == nil then
     _G.prefs.generateAltText = true
 end
 
-if _G.prefs.reviewAltText == nil then
-    _G.prefs.reviewAltText = false
-end
-
-if _G.prefs.reviewCaption == nil then
-    _G.prefs.reviewCaption = false
-end
-
-if _G.prefs.reviewTitle == nil then
-    _G.prefs.reviewTitle = false
-end
-
-if _G.prefs.reviewKeywords == nil then
-    _G.prefs.reviewKeywords = false
-end
-
 if _G.prefs.enableValidation == nil then
     _G.prefs.enableValidation = true
 end
@@ -110,20 +85,8 @@ if _G.prefs.exportQuality == nil then
     _G.prefs.exportQuality = Defaults.defaultExportQuality
 end
 
-if _G.prefs.showPreflightDialog == nil then
-    _G.prefs.showPreflightDialog = true
-end
-
 if _G.prefs.showPhotoContextDialog == nil then
     _G.prefs.showPhotoContextDialog = true
-end
-
-if _G.prefs.task == nil then
-    _G.prefs.task = Defaults.defaultTask
-end
-
-if _G.prefs.systemInstruction == nil then
-    _G.prefs.systemInstruction = ""
 end
 
 if _G.prefs.submitKeywords == nil then
@@ -155,15 +118,7 @@ if _G.prefs.prompt == nil then
 end
 
 if _G.prefs.ollamaBaseUrl == nil then
-    _G.prefs.ollamaBaseUrl = "http://localhost:11434"
-end
-
-if _G.prefs.licenseKey == nil then
-    _G.prefs.licenseKey = ""
-end
-
-if _G.prefs.activated == nil then
-    _G.prefs.activated = false
+    _G.prefs.ollamaBaseUrl = Defaults.defaultOllamaBaseUrl
 end
 
 if _G.prefs.pluginInstallDate == nil then
@@ -182,21 +137,10 @@ if _G.prefs.useLightroomKeywords == nil then
     _G.prefs.useLightroomKeywords = false
 end
 
-if _G.prefs.enableOpenClip == nil then
-    _G.prefs.enableOpenClip = false
-end
-
 if _G.prefs.indexingParallelTasks == nil then
     _G.prefs.indexingParallelTasks = 2
 end
 
-if _G.prefs.useGPU == nil then
-    _G.prefs.useGPU = false
-end
-
-if _G.prefs.clipRateImages == nil then
-    _G.prefs.clipRateImages = true
-end
 
 if _G.prefs.topLevelKeyword == nil then
     _G.prefs.topLevelKeyword = "LrGeniusAI"

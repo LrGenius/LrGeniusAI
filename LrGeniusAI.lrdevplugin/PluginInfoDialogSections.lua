@@ -15,40 +15,12 @@ function PluginInfoDialogSections.startDialog(propertyTable)
         end
     )
     propertyTable.logging = prefs.logging
-    propertyTable.perfLogging = prefs.perfLogging
     propertyTable.geminiApiKey = prefs.geminiApiKey
     propertyTable.chatgptApiKey = prefs.chatgptApiKey
-    propertyTable.generateTitle = prefs.generateTitle
-    propertyTable.generateCaption = prefs.generateCaption
-    propertyTable.generateKeywords = prefs.generateKeywords
-    propertyTable.generateAltText = prefs.generateAltText
-    
-    propertyTable.reviewAltText = prefs.reviewAltText
-    propertyTable.reviewCaption = prefs.reviewCaption
-    propertyTable.reviewTitle = prefs.reviewTitle
-    propertyTable.reviewKeywords = prefs.reviewKeywords
 
-    propertyTable.ai  = prefs.ai
+
     propertyTable.exportSize = prefs.exportSize
     propertyTable.exportQuality = prefs.exportQuality
-
-    propertyTable.showCosts = prefs.showCosts
-
-    propertyTable.showPreflightDialog = prefs.showPreflightDialog
-    propertyTable.showPhotoContextDialog = prefs.showPhotoContextDialog
-
-    propertyTable.submitGPS = prefs.submitGPS
-    propertyTable.submitKeywords = prefs.submitKeywords
-
-    propertyTable.task = prefs.task
-    propertyTable.systemInstruction = prefs.systemInstruction
-
-    propertyTable.useKeywordHierarchy = prefs.useKeywordHierarchy
-
-    propertyTable.useTopLevelKeyword = prefs.useTopLevelKeyword
-
-    propertyTable.generateLanguage = prefs.generateLanguage
-    propertyTable.replaceSS = prefs.replaceSS
 
     propertyTable.promptTitles = {}
     for title, prompt in pairs(prefs.prompts) do
@@ -68,17 +40,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
         properties.prompts[properties.prompt] = newValue
     end)
 
-    propertyTable.ollamaBaseUrl = prefs.ollamaBaseUrl
-
-    propertyTable.licenseKey = prefs.licenseKey
-
     propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
-
-    propertyTable.submitFolderName = prefs.submitFolderName
-
-    propertyTable.enableValidation = prefs.enableValidation
-
-    propertyTable.useLightroomKeywords = prefs.useLightroomKeywords
 end
 
 function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
@@ -173,7 +135,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                 f:push_button {
                     title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/Docs=Read documentation online",
                     action = function(button) 
-                        LrHttp.openUrlInBrowser("https://github.com/LrGenius")
+                        LrHttp.openUrlInBrowser("https://lrgenius.com/help/")
                     end,
                 },
             },
@@ -323,43 +285,11 @@ end
 function PluginInfoDialogSections.endDialog(propertyTable)
     prefs.geminiApiKey = propertyTable.geminiApiKey
     prefs.chatgptApiKey = propertyTable.chatgptApiKey
-    prefs.generateCaption = propertyTable.generateCaption
-    prefs.generateTitle = propertyTable.generateTitle
-    prefs.generateKeywords = propertyTable.generateKeywords
-    prefs.generateAltText = propertyTable.generateAltText
-    prefs.ai = propertyTable.ai
     prefs.exportSize = propertyTable.exportSize
     prefs.exportQuality = propertyTable.exportQuality
 
-    prefs.reviewCaption = propertyTable.reviewCaption
-    prefs.reviewTitle = propertyTable.reviewTitle
-    prefs.reviewAltText = propertyTable.reviewAltText
-    prefs.reviewKeywords = propertyTable.reviewKeywords
-
-    prefs.showCosts = propertyTable.showCosts
-
-    prefs.showPreflightDialog = propertyTable.showPreflightDialog
-    prefs.showPhotoContextDialog = propertyTable.showPhotoContextDialog
-
-    prefs.submitGPS = propertyTable.submitGPS
-    prefs.submitKeywords = propertyTable.submitKeywords
-
-    prefs.task = propertyTable.task
-    prefs.systemInstruction = propertyTable.systemInstruction
-
-    prefs.useKeywordHierarchy = propertyTable.useKeywordHierarchy
-
-    prefs.useTopLevelKeyword = propertyTable.useTopLevelKeyword
-
-    prefs.generateLanguage = propertyTable.generateLanguage
-    prefs.replaceSS = propertyTable.replaceSS
-
     prefs.prompt = propertyTable.prompt
     prefs.prompts = propertyTable.prompts
-
-    prefs.ollamaBaseUrl = propertyTable.ollamaBaseUrl
-
-    prefs.licenseKey = propertyTable.licenseKey
     
     prefs.logging = propertyTable.logging
     if propertyTable.logging then
@@ -368,18 +298,10 @@ function PluginInfoDialogSections.endDialog(propertyTable)
         log:disable()
     end
 
-    prefs.perfLogging = propertyTable.perfLogging
-
     prefs.periodicalUpdateCheck = propertyTable.periodicalUpdateCheck
-
-    prefs.submitFolderName = propertyTable.submitFolderName
-
-    prefs.enableValidation = propertyTable.enableValidation
-
-    prefs.useLightroomKeywords = propertyTable.useLightroomKeywords
 
     prefs.useClip = propertyTable.useClip
 
-    propertyTable.keepChecksRunning = false
+    propertyTable.keepChecksRunning = false -- Stop the async task checking for CLIP readiness
 
 end

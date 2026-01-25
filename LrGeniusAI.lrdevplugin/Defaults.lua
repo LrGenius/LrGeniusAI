@@ -32,51 +32,12 @@ Defaults.defaultKeywordCategories = {
     LOC "$$$/lrc-ai-assistant/Defaults/ResponseStructure/keywords/Vehicles=Vehicles",
 }
 
-Defaults.targetDataFields = {
-    { title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/keywords=Keywords", value = "keyword" },
-    { title = LOC "$$$/lrc-ai-assistant/Defaults/ResponseStructure/ImageTitle=Image title", value = "title" },
-    { title = LOC "$$$/lrc-ai-assistant/Defaults/ResponseStructure/ImageCaption=Image caption", value = "caption" },
-    { title = LOC "$$$/lrc-ai-assistant/Defaults/ResponseStructure/ImageAltText=Image Alt Text", value = "altTextAccessibility" },
-}
-
 Defaults.exportSizes = {
     "512", "1024", "2048", "3072", "4096"
 }
 
-Defaults.pricing = {}
-Defaults.pricing["gemini-2.5-pro"] = {}
-Defaults.pricing["gemini-2.5-pro"].input = 1.25 / 1000000
-Defaults.pricing["gemini-2.5-pro"].output= 10 / 1000000
-Defaults.pricing["gemini-2.0-flash"] = {}
-Defaults.pricing["gemini-2.0-flash"].input = 0.1 / 1000000
-Defaults.pricing["gemini-2.0-flash"].output= 0.4 / 1000000
-Defaults.pricing["gemini-2.5-flash"] = {}
-Defaults.pricing["gemini-2.5-flash"].input = 0.30 / 1000000
-Defaults.pricing["gemini-2.5-flash"].output= 2.5 / 1000000
-Defaults.pricing["gemini-2.0-flash-lite"] = {}
-Defaults.pricing["gemini-2.0-flash-lite"].input = 0.075 / 1000000
-Defaults.pricing["gemini-2.0-flash-lite"].output= 0.3 / 1000000
 
-Defaults.pricing["gpt-4.1"] = {}
-Defaults.pricing["gpt-4.1"].input = 2 / 1000000
-Defaults.pricing["gpt-4.1"].output= 8 / 1000000
-Defaults.pricing["gpt-4.1-mini"] = {}
-Defaults.pricing["gpt-4.1-mini"].input = 0.4 / 1000000
-Defaults.pricing["gpt-4.1-mini"].output= 1.6 / 1000000
-Defaults.pricing["gpt-4.1-nano"] = {}
-Defaults.pricing["gpt-4.1-nano"].input = 0.1 / 1000000
-Defaults.pricing["gpt-4.1-nano"].output= 0.4 / 1000000
-
-Defaults.pricing["gpt-5"] = {}
-Defaults.pricing["gpt-5"].input = 1.25 / 1000000
-Defaults.pricing["gpt-5"].output= 10 / 1000000
-Defaults.pricing["gpt-5-mini"] = {}
-Defaults.pricing["gpt-5-mini"].input = 0.25 / 1000000
-Defaults.pricing["gpt-5-mini"].output= 2.0 / 1000000
-Defaults.pricing["gpt-5-nano"] = {}
-Defaults.pricing["gpt-5-nano"].input = 0.05 / 1000000
-Defaults.pricing["gpt-5-nano"].output= 0.4 / 1000000
-
+Defaults.defaultOllamaBaseUrl = "http://localhost:11434"
 
 Defaults.defaultExportQuality = 50
 Defaults.defaultExportSize = "3072"
