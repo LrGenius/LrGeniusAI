@@ -1,5 +1,9 @@
 Defaults = {}
 
+Defaults.defaultTopLevelKeyword = "LrGeniusAI"
+
+Defaults.defaultPromptName = "Default"
+
 Defaults.defaultTopLevelKeywords = {
     "LrGeniusAI",
     "Ollama",

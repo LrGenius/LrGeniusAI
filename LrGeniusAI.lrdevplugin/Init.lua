@@ -114,15 +114,11 @@ if _G.prefs.prompts == nil then
 end
 
 if _G.prefs.prompt == nil then
-    _G.prefs.prompt = "Default"
+    _G.prefs.prompt = Defaults.defaultPromptName
 end
 
 if _G.prefs.ollamaBaseUrl == nil then
     _G.prefs.ollamaBaseUrl = Defaults.defaultOllamaBaseUrl
-end
-
-if _G.prefs.pluginInstallDate == nil then
-    _G.prefs.pluginInstallDate = LrDate.currentTime()
 end
 
 if _G.prefs.periodicalUpdateCheck == nil then
@@ -137,14 +133,10 @@ if _G.prefs.useLightroomKeywords == nil then
     _G.prefs.useLightroomKeywords = false
 end
 
-if _G.prefs.indexingParallelTasks == nil then
-    _G.prefs.indexingParallelTasks = 2
-end
-
-
 if _G.prefs.topLevelKeyword == nil then
-    _G.prefs.topLevelKeyword = "LrGeniusAI"
+    _G.prefs.topLevelKeyword = Defaults.defaultTopLevelKeyword
 end
+
 if _G.prefs.knownTopLevelKeywords == nil then
     _G.prefs.knownTopLevelKeywords = Defaults.defaultTopLevelKeywords
 end
