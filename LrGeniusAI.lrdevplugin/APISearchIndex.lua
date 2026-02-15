@@ -3,7 +3,21 @@
 
 SearchIndexAPI = {}
 
-local BASE_URL = "http://127.0.0.1:19819"
+local function getBaseUrl()
+    local url = (prefs and prefs.backendServerUrl) and prefs.backendServerUrl or ""
+    url = url:gsub("^%s*(.-)%s*$", "%1")  -- trim whitespace
+    if url == "" then
+        return "http://127.0.0.1:19819"
+    end
+    -- Ensure URL has protocol
+    if not url:match("^https?://") then
+        url = "http://" .. url
+    end
+    -- Remove trailing slash for consistency
+    url = url:gsub("/+$", "")
+    return url
+end
+
 local ENDPOINTS = {
     INDEX = "/index",
     INDEX_BY_REFERENCE = "/index_by_reference",
@@ -153,7 +167,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
 
     options = options or {}
     
-    local url = BASE_URL .. ENDPOINTS.INDEX_BY_REFERENCE
+    local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
 
     local body = {
         path = filepath,
@@ -188,8 +202,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
         folder_names = options.folder_names,
         prompt = options.prompt,
         keyword_categories = JSON:encode(options.keyword_categories or {}),
-        date_time = options.date_time
-        
+        date_time = options.date_time,
+        ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) or nil
     }
 
     -- Regeneration control: if false, server will only fill missing fields
@@ -249,7 +263,7 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch)
         quality_sort = qualitySort,
     }
 
-    local url = BASE_URL .. ENDPOINTS.SEARCH
+    local url = getBaseUrl() .. ENDPOINTS.SEARCH
 
     if photosToSearch and #photosToSearch > 0 then
         -- Perform a scoped search via POST
@@ -275,11 +289,11 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch)
 end
 
 function SearchIndexAPI.getStats()
-    return _request('GET', BASE_URL .. ENDPOINTS.STATS)
+    return _request('GET', getBaseUrl() .. ENDPOINTS.STATS)
 end
 
 function SearchIndexAPI.getAllIndexedPhotoUUIDs(requireEmbeddings)
-    local url = BASE_URL .. ENDPOINTS.GET_IDS
+    local url = getBaseUrl() .. ENDPOINTS.GET_IDS
     -- If requireEmbeddings is true, only get UUIDs with real embeddings
     if requireEmbeddings then
         url = url .. "?has_embedding=true"
@@ -305,7 +319,7 @@ function SearchIndexAPI.getPhotoData(uuid)
         return nil
     end
     
-    local url = BASE_URL .. "/get"
+    local url = getBaseUrl() .. "/get"
     local body = { uuid = uuid }
     
     log:trace("Retrieving photo data for UUID: " .. uuid)
@@ -326,7 +340,7 @@ function SearchIndexAPI.getPhotoData(uuid)
 end
 
 function SearchIndexAPI.removeUUID(uuid)
-    local url = BASE_URL .. ENDPOINTS.REMOVE
+    local url = getBaseUrl() .. ENDPOINTS.REMOVE
     local body = { uuid = uuid }
     log:trace("Removing UUID: " .. uuid)
 
@@ -583,7 +597,7 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
             table.insert(metadataBatch, metadata)
 
             if #metadataBatch >= batchSize or i == numPhotos then
-                local response = _request('POST', BASE_URL .. ENDPOINTS.IMPORT_METADATA, { metadata_items = metadataBatch })
+                local response = _request('POST', getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, { metadata_items = metadataBatch })
                 if response ~= nil and response.status == "processed" then
                     stats.success = stats.success + #metadataBatch
                 else
@@ -625,7 +639,7 @@ end
 
 
 function SearchIndexAPI.pingServer()
-    local url = BASE_URL .. "/ping"
+    local url = getBaseUrl() .. "/ping"
     local result, hdrs = LrHttp.get(url)
     if hdrs.status == 200 and result == "pong" then
         return true
@@ -640,7 +654,7 @@ function SearchIndexAPI.shutdownServer()
         return true
     end
 
-    local url = BASE_URL .. ENDPOINTS.SHUTDOWN
+    local url = getBaseUrl() .. ENDPOINTS.SHUTDOWN
     log:trace("Shutting down server")
     
     _request('POST', url)
@@ -703,6 +717,12 @@ function SearchIndexAPI.startServer()
     if SearchIndexAPI.pingServer() then
         log:trace("Search index server is already running")
         return true
+    end
+
+    local url = getBaseUrl()
+    if not url:match("^https?://127%.0%.0%.1:") and not url:match("^https?://localhost:") then
+        log:trace("Backend URL points to remote server (" .. url .. "), skipping local server start")
+        return false
     end
 
     local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
@@ -828,7 +848,7 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
             tasks = tasks,
             regenerate_metadata = taskOptions.regenerateMetadata or false
         }
-        local result, err = _request('POST', BASE_URL .. ENDPOINTS.CHECK_UNPROCESSED, body)
+        local result, err = _request('POST', getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body)
         if err then
             ErrorHandler.handleError("Failed to check unprocessed photos", err)
             return false, {}
@@ -871,7 +891,7 @@ end
 -- @param distanceThreshold number Optional L2 distance threshold (default 0.55).
 -- @return table|nil { status, person_count, face_count, updated } or nil, err
 function SearchIndexAPI.clusterFaces(distanceThreshold)
-    local url = BASE_URL .. ENDPOINTS.FACES_CLUSTER
+    local url = getBaseUrl() .. ENDPOINTS.FACES_CLUSTER
     local body = {}
     if distanceThreshold and type(distanceThreshold) == "number" then
         body.distance_threshold = distanceThreshold
@@ -888,7 +908,7 @@ end
 -- Get list of all persons (face clusters) with name, face_count, photo_count, thumbnail.
 -- @return table|nil { status, persons = { { person_id, name, face_count, photo_count, thumbnail }, ... } } or nil, err
 function SearchIndexAPI.getPersons()
-    local url = BASE_URL .. ENDPOINTS.FACES_PERSONS
+    local url = getBaseUrl() .. ENDPOINTS.FACES_PERSONS
     local result, err = _request('GET', url)
     if err then
         log:error("getPersons failed: " .. err)
@@ -904,7 +924,7 @@ end
 -- @return boolean success, err
 function SearchIndexAPI.setPersonName(personId, name)
     if not personId or personId == "" then return false, "person_id required" end
-    local url = BASE_URL .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId
+    local url = getBaseUrl() .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId
     local result, err = _request('PUT', url, { name = name or "" })
     if err then
         log:error("setPersonName failed: " .. err)
@@ -919,7 +939,7 @@ end
 -- @return table|nil { status, person_id, photo_uuids } or nil, err
 function SearchIndexAPI.getPhotosForPerson(personId)
     if not personId or personId == "" then return nil, "person_id required" end
-    local url = BASE_URL .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId .. "/photos"
+    local url = getBaseUrl() .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId .. "/photos"
     local result, err = _request('GET', url, {})
     if err then
         log:error("getPhotosForPerson failed: " .. err)
@@ -948,10 +968,11 @@ end
 -- @param geminiApiKey string|nil Gemini API key for listing Gemini models
 -- @return table|nil Response from server with format: { models = { qwen = {...}, ollama = {...}, ... } }
 function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
-    local url = BASE_URL .. ENDPOINTS.MODELS
+    local url = getBaseUrl() .. ENDPOINTS.MODELS
     local body = { 
         openai_apikey = openaiApiKey, 
-        gemini_apikey = geminiApiKey 
+        gemini_apikey = geminiApiKey,
+        ollama_base_url = (prefs and prefs.ollamaBaseUrl) or nil
     }
     local result, err = _request('POST', url, body)
     if err then
@@ -970,7 +991,7 @@ function SearchIndexAPI.startClipDownload()
         return
     end
 
-    local status, err = _request('GET', BASE_URL .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
+    local status, err = _request('GET', getBaseUrl() .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
     if not err and status ~= nil and status.status == "downloading" then
         log:trace("CLIP model download is already in progress")
         return
@@ -981,7 +1002,7 @@ function SearchIndexAPI.startClipDownload()
         functionContext = nil,
     })
 
-    local url = BASE_URL .. ENDPOINTS.START_CLIP_DOWNLOAD
+    local url = getBaseUrl() .. ENDPOINTS.START_CLIP_DOWNLOAD
     local body = {}
 
     local res, err = _request('POST', url, body)
@@ -993,7 +1014,7 @@ function SearchIndexAPI.startClipDownload()
 
     LrTasks.startAsyncTask(function()
         while true do
-            local status, err = _request('GET', BASE_URL .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
+            local status, err = _request('GET', getBaseUrl() .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
             if err then
                 ErrorHandler.handleError("Error downloading CLIP model", err)
                 if progressScope ~= nil then
@@ -1027,7 +1048,7 @@ end
 
 
 function SearchIndexAPI.isClipReady()
-    local url = BASE_URL .. ENDPOINTS.CLIP_STATUS
+    local url = getBaseUrl() .. ENDPOINTS.CLIP_STATUS
     local res, err = _request('GET', url)
     if err then
         log:error("isClipReady failed: " .. err)

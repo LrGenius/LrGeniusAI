@@ -41,6 +41,8 @@ function PluginInfoDialogSections.startDialog(propertyTable)
     end)
 
     propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
+    propertyTable.backendServerUrl = prefs.backendServerUrl or Defaults.defaultBackendServerUrl
+    propertyTable.ollamaBaseUrl = prefs.ollamaBaseUrl or Defaults.defaultOllamaBaseUrl
 end
 
 function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
@@ -183,6 +185,57 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
             },
             f:group_box {
                 width = share 'groupBoxWidth',
+                title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServer=Backend Server",
+                f:row {
+                    f:static_text {
+                        title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServerUrl=Backend server URL (IP/hostname)",
+                        width = share 'labelWidth'
+                    },
+                    f:edit_field {
+                        value = bind 'backendServerUrl',
+                        width = share 'inputWidth',
+                        width_in_chars = 35,
+                    },
+                },
+                f:row {
+                    f:static_text {
+                        title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServerUrlDesc=Example: http://192.168.1.100:19819 or 192.168.1.100:19819. Leave empty for localhost.",
+                        width_in_chars = 60,
+                        wrap = true,
+                    },
+                },
+            },
+            f:group_box {
+                width = share 'groupBoxWidth',
+                title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/ollamaSettings=Ollama Settings",
+                f:row {
+                    f:static_text {
+                        title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaBaseUrl=Ollama Base URL",
+                        width = share 'labelWidth'
+                    },
+                    f:edit_field {
+                        value = bind 'ollamaBaseUrl',
+                        width = share 'inputWidth',
+                        width_in_chars = 35,
+                    },
+                    f:push_button {
+                        title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaSetup=Setup Ollama",
+                        action = function(button)
+                            LrHttp.openUrlInBrowser("https://lrgenius.com/help/ollama-setup/")
+                        end,
+                        width = share 'apiButtonWidth',
+                    },
+                },
+                f:row {
+                    f:static_text {
+                        title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaBaseUrlDesc=For local Ollama leave default. Use IP/hostname to run Ollama on another machine (e.g. http://192.168.1.50:11434).",
+                        width_in_chars = 60,
+                        wrap = true,
+                    },
+                },
+            },
+            f:group_box {
+                width = share 'groupBoxWidth',
                 title = LOC "$$$/LrGeniusAI/UI/Prompts=Prompts",
                 f:row {
                     f:static_text {
@@ -301,6 +354,18 @@ function PluginInfoDialogSections.endDialog(propertyTable)
     prefs.periodicalUpdateCheck = propertyTable.periodicalUpdateCheck
 
     prefs.useClip = propertyTable.useClip
+
+    if propertyTable.backendServerUrl and propertyTable.backendServerUrl:gsub("^%s*(.-)%s*$", "%1") ~= "" then
+        prefs.backendServerUrl = propertyTable.backendServerUrl:gsub("^%s*(.-)%s*$", "%1")
+    else
+        prefs.backendServerUrl = Defaults.defaultBackendServerUrl
+    end
+
+    if propertyTable.ollamaBaseUrl and propertyTable.ollamaBaseUrl:gsub("^%s*(.-)%s*$", "%1") ~= "" then
+        prefs.ollamaBaseUrl = propertyTable.ollamaBaseUrl:gsub("^%s*(.-)%s*$", "%1")
+    else
+        prefs.ollamaBaseUrl = Defaults.defaultOllamaBaseUrl
+    end
 
     propertyTable.keepChecksRunning = false -- Stop the async task checking for CLIP readiness
 

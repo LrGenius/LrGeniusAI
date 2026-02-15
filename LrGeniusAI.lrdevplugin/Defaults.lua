@@ -43,6 +43,8 @@ Defaults.exportSizes = {
 
 Defaults.defaultOllamaBaseUrl = "http://localhost:11434"
 
+Defaults.defaultBackendServerUrl = "http://127.0.0.1:19819"
+
 Defaults.defaultExportQuality = 50
 Defaults.defaultExportSize = "3072"
 
