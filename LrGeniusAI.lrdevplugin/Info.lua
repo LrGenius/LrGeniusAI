@@ -1,7 +1,7 @@
 Info = {}
 
 Info.MAJOR = 2
-Info.MINOR = 2
+Info.MINOR = 3
 Info.REVISION = 0
 Info.VERSION = { major = Info.MAJOR, minor = Info.MINOR, revision = Info.REVISION, build = 0, }
 
@@ -39,6 +39,10 @@ return {
 			title = LOC "$$$/LrGeniusAI/Menu/ImportMetadata=Import Metadata from Catalog...",
 			file = "TaskImportMetadata.lua",
 		},
+		{
+			title = LOC "$$$/LrGeniusAI/Menu/People=People...",
+			file = "TaskPeople.lua",
+		},
 	},
 
 	LrExportMenuItems = {
@@ -57,6 +61,10 @@ return {
 		{
 			title = LOC "$$$/LrGeniusAI/Menu/ImportMetadata=Import Metadata from Catalog...",
 			file = "TaskImportMetadata.lua",
+		},
+		{
+			title = LOC "$$$/LrGeniusAI/Menu/People=People...",
+			file = "TaskPeople.lua",
 		},
 	},
 

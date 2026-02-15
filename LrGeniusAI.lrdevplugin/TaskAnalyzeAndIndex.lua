@@ -24,6 +24,7 @@ local function showAnalyzeAndIndexDialog(ctx)
     -- Tasks to perform
     props.enableEmbeddings = (prefs.enableEmbeddings ~= false) and props.clipReady -- default true
     props.enableMetadata = prefs.enableMetadata ~= false -- default true
+    props.enableFaces = prefs.enableFaces or false
     props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
     props.enableQuality = false 
     props.regenerateMetadata = prefs.regenerateMetadata or false
@@ -235,6 +236,12 @@ local function showAnalyzeAndIndexDialog(ctx)
             },
             f:row {
                 f:checkbox {
+                    value = bind 'enableFaces',
+                    title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Create face embeddings",
+                },
+            },
+            f:row {
+                f:checkbox {
                     value = bind 'enableImportBeforeIndex',
                     title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/EnableImportBeforeIndex=Import metadata from catalog before indexing",
                 },
@@ -403,6 +410,7 @@ local function showAnalyzeAndIndexDialog(ctx)
         prefs.indexScope = props.scope
         prefs.enableEmbeddings = props.enableEmbeddings
         prefs.enableMetadata = props.enableMetadata
+        prefs.enableFaces = props.enableFaces
         prefs.enableQuality = props.enableQuality
         prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
         prefs.regenerateMetadata = props.regenerateMetadata
@@ -538,7 +546,7 @@ LrTasks.startAsyncTask(function()
         if not props then return end
 
         -- Validate that at least one task is selected
-        if not props.enableEmbeddings and not props.enableMetadata and not props.enableQuality then
+        if not props.enableEmbeddings and not props.enableMetadata and not props.enableQuality and not props.enableFaces then
             LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected=Please select at least one task to perform.")
             return
         end
@@ -548,6 +556,7 @@ LrTasks.startAsyncTask(function()
         if props.enableEmbeddings then table.insert(tasks, "embeddings") end
         if props.enableMetadata then table.insert(tasks, "metadata") end
         if props.enableQuality then table.insert(tasks, "quality") end
+        if props.enableFaces then table.insert(tasks, "faces") end
 
         -- Parse provider and model from unified modelKey (format: provider::model)
         local providerFromKey, modelFromKey = nil, nil
@@ -580,6 +589,7 @@ LrTasks.startAsyncTask(function()
             submit_date_time = props.submitDateTime,
             enableMetadata = props.enableMetadata,
             enableQuality = props.enableQuality,
+            enableFaces = props.enableFaces,
             replace_ss = props.replaceSS,
             regenerate_metadata = props.regenerateMetadata,
             prompt = props.selectedPrompt,
@@ -618,8 +628,15 @@ LrTasks.startAsyncTask(function()
         local status, processed, failed, processedPhotos
 
         -- Get photos to process
-        -- Pass enableEmbeddings flag to properly filter metadata-only entries
-        local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(props.scope, props.enableEmbeddings)
+        -- For scope 'missing', pass task options so backend checks which photos need the selected tasks
+        local taskOptionsForScope = (props.scope == "missing") and {
+            enableEmbeddings = props.enableEmbeddings,
+            enableMetadata = props.enableMetadata,
+            enableQuality = props.enableQuality,
+            enableFaces = props.enableFaces,
+            regenerateMetadata = props.regenerateMetadata
+        } or nil
+        local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(props.scope, taskOptionsForScope)
 
         if photosToProcess == nil or type(photosToProcess) ~= 'table' or #photosToProcess == 0 then
             if errorStatus == "Invalid view" then

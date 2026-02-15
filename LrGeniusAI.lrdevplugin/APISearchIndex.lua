@@ -19,6 +19,10 @@ local ENDPOINTS = {
     START_CLIP_DOWNLOAD = "/clip/download/start",
     STATUS_CLIP_DOWNLOAD = "/clip/download/status",
     CLIP_STATUS = "/clip/status",
+    CHECK_UNPROCESSED = "/index/check-unprocessed",
+    FACES_CLUSTER = "/faces/cluster",
+    FACES_PERSONS = "/faces/persons",
+    FACES_PERSON_PHOTOS = "/faces/persons",  -- suffix /<id>/photos
 }
 
 local EXPORT_SETTINGS = {
@@ -766,13 +770,15 @@ _request = function(method, url, body, timeout)
         return nil, err
     end
 
-    if hdrs ~= nil and hdrs.status ~= nil and hdrs.status >= 200 and hdrs.status < 300 then
+    -- hdrs kann Tabelle mit .status oder (in einigen LR-Versionen) direkt die Status-Nummer sein
+    local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
+    if status ~= nil and status >= 200 and status < 300 then
         if result and #result > 0 then
             return JSON:decode(result)
         end
         return {} -- Return an empty table for successful but empty responses
     else
-        local err_msg = "API request failed. HTTP status: " .. tostring(hdrs and hdrs.status or 'unknown')
+        local err_msg = "API request failed. HTTP status: " .. tostring(status or (type(hdrs) == "table" and hdrs.status) or hdrs or 'unknown')
         if result and #result > 0 then
             local decoded_err = JSON:decode(result)
             if decoded_err and decoded_err.error then
@@ -787,34 +793,140 @@ _request = function(method, url, body, timeout)
 end
 
 
-function SearchIndexAPI.getMissingPhotosFromIndex(requireEmbeddings)
-    -- If requireEmbeddings is true, we only get photos that have real embeddings
-    -- (excluding metadata-only entries with dummy embeddings)
+---
+-- Gets photos that need processing for "New or unprocessed photos" scope.
+-- When taskOptions is provided, uses backend to check which photos lack the selected tasks' data.
+-- When taskOptions is nil, falls back to legacy behavior: photos not in index (with embeddings).
+-- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableQuality, enableFaces, regenerateMetadata }
+-- @return boolean success, table photosToProcess
+--
+function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
+    local allPhotos = PhotoSelector.getPhotosInScope('all')
+    if allPhotos == nil then
+        ErrorHandler.handleError("No photos found in catalog", "Something went wrong")
+        return false, {}
+    end
+
+    -- New behavior: use backend to check which photos need processing based on selected tasks
+    if taskOptions and type(taskOptions) == "table" then
+        local uuids = {}
+        for _, photo in ipairs(allPhotos) do
+            table.insert(uuids, photo:getRawMetadata("uuid"))
+        end
+        if #uuids == 0 then
+            return true, {}
+        end
+
+        local tasks = {}
+        if taskOptions.enableEmbeddings then table.insert(tasks, "embeddings") end
+        if taskOptions.enableMetadata then table.insert(tasks, "metadata") end
+        if taskOptions.enableQuality then table.insert(tasks, "quality") end
+        if taskOptions.enableFaces then table.insert(tasks, "faces") end
+
+        local body = {
+            uuids = uuids,
+            tasks = tasks,
+            regenerate_metadata = taskOptions.regenerateMetadata or false
+        }
+        local result, err = _request('POST', BASE_URL .. ENDPOINTS.CHECK_UNPROCESSED, body)
+        if err then
+            ErrorHandler.handleError("Failed to check unprocessed photos", err)
+            return false, {}
+        end
+
+        local needingUUIDs = result and result.uuids or {}
+        local uuidSet = {}
+        for _, u in ipairs(needingUUIDs) do uuidSet[u] = true end
+
+        local photosToProcess = {}
+        for _, photo in ipairs(allPhotos) do
+            if uuidSet[photo:getRawMetadata("uuid")] then
+                table.insert(photosToProcess, photo)
+            end
+        end
+        return true, photosToProcess
+    end
+
+    -- Legacy: photos not in index (optionally requiring real embeddings)
+    local requireEmbeddings = (taskOptions == true)
     local indexedUUIDs, err = SearchIndexAPI.getAllIndexedPhotoUUIDs(requireEmbeddings)
     if err then
         ErrorHandler.handleError("Failed to retrieve indexed photos", err)
         return false, {}
     end
 
-    local allPhotos = PhotoSelector.getPhotosInScope('all')
-
-    if allPhotos == nil then
-        ErrorHandler.handleError("No photos found in catalog", "Something went wrong")
-        return false, {}
-    end
-
     local photosToProcess = {}
-    
-    for i, photo in ipairs(allPhotos) do
+    for _, photo in ipairs(allPhotos) do
         local uuid = photo:getRawMetadata("uuid")
         if not Util.table_contains(indexedUUIDs, uuid) then
             table.insert(photosToProcess, photo)
         end
     end
-
     return true, photosToProcess
 end
 
+
+---
+-- Run face clustering to group similar faces into persons.
+-- @param distanceThreshold number Optional L2 distance threshold (default 0.55).
+-- @return table|nil { status, person_count, face_count, updated } or nil, err
+function SearchIndexAPI.clusterFaces(distanceThreshold)
+    local url = BASE_URL .. ENDPOINTS.FACES_CLUSTER
+    local body = {}
+    if distanceThreshold and type(distanceThreshold) == "number" then
+        body.distance_threshold = distanceThreshold
+    end
+    local result, err = _request('POST', url, body)
+    if err then
+        log:error("clusterFaces failed: " .. err)
+        return nil, err
+    end
+    return result
+end
+
+---
+-- Get list of all persons (face clusters) with name, face_count, photo_count, thumbnail.
+-- @return table|nil { status, persons = { { person_id, name, face_count, photo_count, thumbnail }, ... } } or nil, err
+function SearchIndexAPI.getPersons()
+    local url = BASE_URL .. ENDPOINTS.FACES_PERSONS
+    local result, err = _request('GET', url)
+    if err then
+        log:error("getPersons failed: " .. err)
+        return nil, err
+    end
+    return result
+end
+
+---
+-- Set display name for a person.
+-- @param personId string e.g. "person_0"
+-- @param name string Display name (empty to clear)
+-- @return boolean success, err
+function SearchIndexAPI.setPersonName(personId, name)
+    if not personId or personId == "" then return false, "person_id required" end
+    local url = BASE_URL .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId
+    local result, err = _request('PUT', url, { name = name or "" })
+    if err then
+        log:error("setPersonName failed: " .. err)
+        return false, err
+    end
+    return true
+end
+
+---
+-- Get photo UUIDs that contain this person.
+-- @param personId string e.g. "person_0"
+-- @return table|nil { status, person_id, photo_uuids } or nil, err
+function SearchIndexAPI.getPhotosForPerson(personId)
+    if not personId or personId == "" then return nil, "person_id required" end
+    local url = BASE_URL .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId .. "/photos"
+    local result, err = _request('GET', url, {})
+    if err then
+        log:error("getPhotosForPerson failed: " .. err)
+        return nil, err
+    end
+    return result
+end
 
 function SearchIndexAPI.saveThumbnail(uuid, faceIndex, base64Data)
     local tempDir = LrPathUtils.getStandardFilePath('temp')

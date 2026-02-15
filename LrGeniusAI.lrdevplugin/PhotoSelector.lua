@@ -11,7 +11,14 @@ local function filterPhotos(photos)
     return filteredPhotos
 end
 
-function PhotoSelector.getPhotosInScope(scope, requireEmbeddings)
+---
+-- @param scope string 'selected'|'view'|'all'|'missing'
+-- @param taskOptions table|boolean|nil For scope 'missing': task options table
+--   { enableEmbeddings, enableMetadata, enableQuality, enableFaces, regenerateMetadata }
+--   to check backend for unprocessed photos. Or boolean for legacy (requireEmbeddings).
+--   Nil/omitted = legacy true (photos not in index with embeddings).
+--
+function PhotoSelector.getPhotosInScope(scope, taskOptions)
     local catalog = LrApplication.activeCatalog()
     local photosToProcess = {}
     local status = "ok"
@@ -70,8 +77,7 @@ function PhotoSelector.getPhotosInScope(scope, requireEmbeddings)
         photosToProcess = filterPhotos(catalog:getAllPhotos())
     elseif scope == "missing" then
         local success = false
-        -- Pass requireEmbeddings flag to filter out metadata-only entries when generating embeddings
-        success, photosToProcess = SearchIndexAPI.getMissingPhotosFromIndex(requireEmbeddings)
+        success, photosToProcess = SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
         status = success and "ok" or "indexerror"
     end
 
