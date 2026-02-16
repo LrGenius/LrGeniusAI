@@ -61,6 +61,7 @@ local EXPORT_SETTINGS = {
 
 -- Forward declarations for private helper functions
 local _request
+local _requestMultipart
 
 ---
 -- Exports a photo to a temporary location for processing.
@@ -169,51 +170,79 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
 
     options = options or {}
     
-    local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
+    local url = getBaseUrl() .. ENDPOINTS.INDEX
 
-    local body = {
-        path = filepath,
-        images = {
-            { path = filepath, uuid = uuid },
-        },
-        
-        -- Tasks to perform
-        tasks = options.tasks,
-        
-        -- AI Provider settings
-        provider = options.provider,
-        model = options.model,
-        api_key = options.api_key,
-        language = options.language or prefs.generateLanguage or "English",
-        temperature = options.temperature or prefs.temperature or 0.2,
-        replace_ss = options.replace_ss or false,
-        
-        -- Metadata generation options
-        generate_keywords = options.generate_keywords,
-        generate_caption = options.generate_caption,
-        generate_title = options.generate_title,
-        generate_alt_text = options.generate_alt_text,
-        
-        -- Context options
-        submit_gps = options.submit_gps,
-        submit_keywords = options.submit_keywords,
-        submit_folder_names = options.submit_folder_names,
-        user_context = options.user_context,
-        gps_coordinates = options.gps_coordinates,
-        existing_keywords = options.existing_keywords,
-        folder_names = options.folder_names,
-        prompt = options.prompt,
-        keyword_categories = JSON:encode(options.keyword_categories or {}),
-        date_time = options.date_time,
-        ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) or nil
-    }
-
-    -- Regeneration control: if false, server will only fill missing fields
-    body.regenerate_metadata = options.regenerate_metadata ~= false -- default true if nil
+    -- Prepare multipart content chunks
+    local mimeChunks = {}
     
-    log:trace("Analyzing and indexing photo: " .. filename .. " with tasks: " .. table.concat(body.tasks, ", "))
+    -- Add form fields
+    table.insert(mimeChunks, { name = "uuid", value = uuid })
+    table.insert(mimeChunks, { name = "tasks", value = JSON:encode(options.tasks or {}) })
+    
+    if options.provider then
+        table.insert(mimeChunks, { name = "provider", value = options.provider })
+    end
+    if options.model then
+        table.insert(mimeChunks, { name = "model", value = options.model })
+    end
+    if options.api_key then
+        table.insert(mimeChunks, { name = "api_key", value = options.api_key })
+    end
+    
+    table.insert(mimeChunks, { name = "language", value = options.language or prefs.generateLanguage or "English" })
+    table.insert(mimeChunks, { name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) })
+    table.insert(mimeChunks, { name = "replace_ss", value = tostring(options.replace_ss or false) })
+    
+    -- Metadata generation options
+    table.insert(mimeChunks, { name = "generate_keywords", value = tostring(options.generate_keywords or false) })
+    table.insert(mimeChunks, { name = "generate_caption", value = tostring(options.generate_caption or false) })
+    table.insert(mimeChunks, { name = "generate_title", value = tostring(options.generate_title or false) })
+    table.insert(mimeChunks, { name = "generate_alt_text", value = tostring(options.generate_alt_text or false) })
+    
+    -- Context options
+    table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
+    table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
+    table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
+    
+    if options.user_context then
+        table.insert(mimeChunks, { name = "user_context", value = options.user_context })
+    end
+    if options.gps_coordinates then
+        table.insert(mimeChunks, { name = "gps_coordinates", value = JSON:encode(options.gps_coordinates) })
+    end
+    if options.existing_keywords then
+        table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
+    end
+    if options.folder_names then
+        table.insert(mimeChunks, { name = "folder_names", value = options.folder_names })
+    end
+    if options.prompt then
+        table.insert(mimeChunks, { name = "prompt", value = options.prompt })
+    end
+    
+    table.insert(mimeChunks, { name = "keyword_categories", value = JSON:encode(options.keyword_categories or {}) })
+    
+    if options.date_time then
+        table.insert(mimeChunks, { name = "date_time", value = options.date_time })
+    end
+    if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
+        table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
+    end
+    
+    -- Regeneration control: if false, server will only fill missing fields
+    table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
+    
+    -- Add file
+    table.insert(mimeChunks, {
+        name = "image",
+        fileName = filename,
+        filePath = filepath,
+        contentType = "image/jpeg"
+    })
+    
+    log:trace("Analyzing and indexing photo: " .. filename .. " with tasks: " .. (options.tasks and table.concat(options.tasks, ", ") or "none"))
 
-    local response, err = _request('POST', url, body, 720)
+    local response, err = _requestMultipart(url, mimeChunks, 720)
 
     if not response then
         log:error("Failed to analyze/index photo: " .. tostring(err))
@@ -772,6 +801,31 @@ function SearchIndexAPI.startServer()
             return false
         end
     end)
+end
+
+_requestMultipart = function(url, mimeChunks, timeout)
+    local result, hdrs = LrHttp.postMultipart(url, mimeChunks, nil, timeout)
+    
+    -- hdrs kann Tabelle mit .status oder (in einigen LR-Versionen) direkt die Status-Nummer sein
+    local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
+    if status ~= nil and status >= 200 and status < 300 then
+        if result and #result > 0 then
+            return JSON:decode(result)
+        end
+        return {} -- Return an empty table for successful but empty responses
+    else
+        local err_msg = "API request failed. HTTP status: " .. tostring(status or (type(hdrs) == "table" and hdrs.status) or hdrs or 'unknown')
+        if result and #result > 0 then
+            local decoded_err = JSON:decode(result)
+            if decoded_err and decoded_err.error then
+                err_msg = err_msg .. " - " .. decoded_err.error
+            else
+                err_msg = err_msg .. " Response: " .. result
+            end
+        end
+        log:error(err_msg)
+        return nil, err_msg
+    end
 end
 
 _request = function(method, url, body, timeout)
