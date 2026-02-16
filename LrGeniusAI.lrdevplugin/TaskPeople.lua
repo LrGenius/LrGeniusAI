@@ -104,6 +104,14 @@ local function showPeopleDialog(ctx, persons, loadError)
         end
     end
 
+    local listScroller = f:scrolled_view {
+        horizontal_scroller = false,
+        vertical_scroller = true,
+        width = 420,
+        height = 220,
+        f:column { unpack(listRows) },
+    }
+
     local contents = f:column {
         bind_to_object = props,
         spacing = f:control_spacing(),
@@ -129,15 +137,7 @@ local function showPeopleDialog(ctx, persons, loadError)
             font = "<system/bold>",
         },
 
-        f:scrolled_view {
-            horizontal_scroller = false,
-            vertical_scroller = true,
-            width = 420,
-            height = 220,
-            f:column {
-                unpack(listRows),
-            },
-        },
+        listScroller,
 
         f:row {
             spacing = f:control_spacing(),
@@ -163,7 +163,10 @@ local function showPeopleDialog(ctx, persons, loadError)
                             ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/SetNameError=Could not set name", err)
                             return
                         end
-                        -- Name ist gespeichert; beim nächsten Öffnen des Dialogs sichtbar
+                        LrDialogs.stopModalWithResult(listScroller, "refresh")
+                        LrTasks.yield()
+                        local freshPersons, freshErr = loadPersonsFromServer()
+                        showPeopleDialog(ctx, freshPersons, freshErr)
                     end
                 end,
             },
@@ -251,7 +254,6 @@ LrTasks.startAsyncTask(function()
             ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/ErrorTitle=Error", tostring(result))
             return
         end
-        -- pending wird gesetzt wenn User "Show in Library" geklickt hat (Dialog schließt mit "ok")
         if pending and type(pending) == "table" and pending.person_id then
             doShowInLibrary(pending.person_id, pending.person_name)
         end

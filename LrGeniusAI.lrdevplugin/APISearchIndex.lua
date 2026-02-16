@@ -37,6 +37,8 @@ local ENDPOINTS = {
     FACES_CLUSTER = "/faces/cluster",
     FACES_PERSONS = "/faces/persons",
     FACES_PERSON_PHOTOS = "/faces/persons",  -- suffix /<id>/photos
+    FACES_DETECT = "/faces/detect",
+    FACES_QUERY = "/faces/query",
 }
 
 local EXPORT_SETTINGS = {
@@ -171,12 +173,12 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
 
     local body = {
         path = filepath,
-        images = {      
+        images = {
             { path = filepath, uuid = uuid },
         },
         
-        -- Tasks to perform (default: all three)
-        tasks = options.tasks or {"embeddings", "metadata", "quality"},
+        -- Tasks to perform
+        tasks = options.tasks,
         
         -- AI Provider settings
         provider = options.provider,
@@ -408,7 +410,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 
     options = options or {}
     
-    progressScope:setCaption(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle=Processing photos...")
+    progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...", #selectedPhotos, options.model or "AI"))
     progressScope:setPortionComplete(0, numPhotos)
 
     local photoToProcessStack = {}
@@ -888,7 +890,7 @@ end
 
 ---
 -- Run face clustering to group similar faces into persons.
--- @param distanceThreshold number Optional L2 distance threshold (default 0.55).
+-- @param distanceThreshold number Optional cosine distance; default 0.5. Use 0.45 if over-merge; 0.55-0.65 if same person split.
 -- @return table|nil { status, person_count, face_count, updated } or nil, err
 function SearchIndexAPI.clusterFaces(distanceThreshold)
     local url = getBaseUrl() .. ENDPOINTS.FACES_CLUSTER
@@ -943,6 +945,41 @@ function SearchIndexAPI.getPhotosForPerson(personId)
     local result, err = _request('GET', url, {})
     if err then
         log:error("getPhotosForPerson failed: " .. err)
+        return nil, err
+    end
+    return result
+end
+
+---
+-- Detect all faces in an image (base64). Returns list of { thumbnail, index } for selection.
+-- @param imageBase64 string Base64-encoded image
+-- @return table|nil { status, faces = [ { thumbnail, index }, ... ] } or nil, err
+function SearchIndexAPI.detectFacesInImage(imageBase64)
+    if not imageBase64 or imageBase64 == "" then return nil, "image (base64) required" end
+    local url = getBaseUrl() .. ENDPOINTS.FACES_DETECT
+    local result, err = _request('POST', url, { image = imageBase64 })
+    if err then
+        log:error("detectFacesInImage failed: " .. err)
+        return nil, err
+    end
+    return result
+end
+
+---
+-- Find indexed faces similar to the selected face in the image.
+-- @param imageBase64 string Base64-encoded image
+-- @param faceIndex number 0-based index of the face to use (default 0)
+-- @param nResults number Max results (default 500 for full cluster)
+-- @return table|nil { status, results = [ { face_id, photo_uuid, thumbnail, person_id, distance }, ... ] } or nil, err
+function SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, nResults)
+    if not imageBase64 or imageBase64 == "" then return nil, "image (base64) required" end
+    local url = getBaseUrl() .. ENDPOINTS.FACES_QUERY
+    local body = { image = imageBase64 }
+    if faceIndex ~= nil and type(faceIndex) == "number" then body.face_index = faceIndex end
+    if nResults ~= nil and type(nResults) == "number" then body.n_results = nResults end
+    local result, err = _request('POST', url, body)
+    if err then
+        log:error("queryFacesByImage failed: " .. err)
         return nil, err
     end
     return result

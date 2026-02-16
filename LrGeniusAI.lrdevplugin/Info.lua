@@ -43,6 +43,10 @@ return {
 			title = LOC "$$$/LrGeniusAI/Menu/People=People...",
 			file = "TaskPeople.lua",
 		},
+		{
+			title = LOC "$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces...",
+			file = "TaskFindSimilarFaces.lua",
+		},
 	},
 
 	LrExportMenuItems = {
@@ -65,6 +69,10 @@ return {
 		{
 			title = LOC "$$$/LrGeniusAI/Menu/People=People...",
 			file = "TaskPeople.lua",
+		},
+		{
+			title = LOC "$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces...",
+			file = "TaskFindSimilarFaces.lua",
 		},
 	},
 
