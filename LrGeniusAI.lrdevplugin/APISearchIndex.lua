@@ -679,6 +679,11 @@ function SearchIndexAPI.pingServer()
     end
 end
 
+function SearchIndexAPI.isBackendOnLocalhost()
+    local url = getBaseUrl()
+    return not not (url:match("^https?://127%.0%.0%.1") or url:match("^https?://localhost"))
+end
+
 function SearchIndexAPI.shutdownServer()
     if not SearchIndexAPI.pingServer() then
         log:trace("Search index server is not running")
