@@ -228,7 +228,13 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
     if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
         table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
     end
-    
+    if options.vertex_project_id and options.vertex_project_id ~= "" then
+        table.insert(mimeChunks, { name = "vertex_project_id", value = options.vertex_project_id })
+    end
+    if options.vertex_location and options.vertex_location ~= "" then
+        table.insert(mimeChunks, { name = "vertex_location", value = options.vertex_location })
+    end
+
     -- Regeneration control: if false, server will only fill missing fields
     table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
     
@@ -878,7 +884,7 @@ end
 -- Gets photos that need processing for "New or unprocessed photos" scope.
 -- When taskOptions is provided, uses backend to check which photos lack the selected tasks' data.
 -- When taskOptions is nil, falls back to legacy behavior: photos not in index (with embeddings).
--- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableQuality, enableFaces, regenerateMetadata }
+-- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableQuality, enableFaces, enableVertexAI, regenerateMetadata }
 -- @return boolean success, table photosToProcess
 --
 function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
@@ -903,6 +909,7 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
         if taskOptions.enableMetadata then table.insert(tasks, "metadata") end
         if taskOptions.enableQuality then table.insert(tasks, "quality") end
         if taskOptions.enableFaces then table.insert(tasks, "faces") end
+        if taskOptions.enableVertexAI then table.insert(tasks, "vertexai") end
 
         local body = {
             uuids = uuids,

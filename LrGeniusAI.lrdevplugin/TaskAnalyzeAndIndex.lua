@@ -25,6 +25,7 @@ local function showAnalyzeAndIndexDialog(ctx)
     props.enableEmbeddings = (prefs.enableEmbeddings ~= false) and props.clipReady -- default true
     props.enableMetadata = prefs.enableMetadata ~= false -- default true
     props.enableFaces = prefs.enableFaces or false
+    props.enableVertexAI = prefs.enableVertexAI or false
     props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
     props.enableQuality = false 
     props.regenerateMetadata = prefs.regenerateMetadata or false
@@ -242,6 +243,12 @@ local function showAnalyzeAndIndexDialog(ctx)
             },
             f:row {
                 f:checkbox {
+                    value = bind 'enableVertexAI',
+                    title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings",
+                },
+            },
+            f:row {
+                f:checkbox {
                     value = bind 'enableImportBeforeIndex',
                     title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/EnableImportBeforeIndex=Import metadata from catalog before indexing",
                 },
@@ -411,6 +418,7 @@ local function showAnalyzeAndIndexDialog(ctx)
         prefs.enableEmbeddings = props.enableEmbeddings
         prefs.enableMetadata = props.enableMetadata
         prefs.enableFaces = props.enableFaces
+        prefs.enableVertexAI = props.enableVertexAI
         prefs.enableQuality = props.enableQuality
         prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
         prefs.regenerateMetadata = props.regenerateMetadata
@@ -546,17 +554,18 @@ LrTasks.startAsyncTask(function()
         if not props then return end
 
         -- Validate that at least one task is selected
-        if not props.enableEmbeddings and not props.enableMetadata and not props.enableQuality and not props.enableFaces then
+        if not props.enableEmbeddings and not props.enableMetadata and not props.enableQuality and not props.enableFaces and not props.enableVertexAI then
             LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected=Please select at least one task to perform.")
             return
         end
 
-        -- Build tasks array
+        -- Build tasks array (task name compute_vertexai → "vertexai" in API)
         local tasks = {}
         if props.enableEmbeddings then table.insert(tasks, "embeddings") end
         if props.enableMetadata then table.insert(tasks, "metadata") end
         if props.enableQuality then table.insert(tasks, "quality") end
         if props.enableFaces then table.insert(tasks, "faces") end
+        if props.enableVertexAI then table.insert(tasks, "vertexai") end
 
         -- Parse provider and model from unified modelKey (format: provider::model)
         local providerFromKey, modelFromKey = nil, nil
@@ -590,10 +599,15 @@ LrTasks.startAsyncTask(function()
             enableMetadata = props.enableMetadata,
             enableQuality = props.enableQuality,
             enableFaces = props.enableFaces,
+            enableVertexAI = props.enableVertexAI,
             replace_ss = props.replaceSS,
             regenerate_metadata = props.regenerateMetadata,
             prompt = props.selectedPrompt,
         }
+        if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
+            options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")
+            options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1")) or "us-central1"
+        end
         -- Add API key for cloud providers if configured
         if providerFromKey == 'chatgpt' and prefs then
             log:trace("Added ChatGPT API key to options")
@@ -609,6 +623,14 @@ LrTasks.startAsyncTask(function()
             end
             log:trace("Added Gemini API key to options")
             options.api_key = prefs.geminiApiKey
+        end
+
+        if props.enableVertexAI and prefs then
+            local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
+            if projectId == "" then
+                LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences.")
+                return
+            end
         end
 
         if prefs.useKeywordHierarchy then
@@ -634,6 +656,7 @@ LrTasks.startAsyncTask(function()
             enableMetadata = props.enableMetadata,
             enableQuality = props.enableQuality,
             enableFaces = props.enableFaces,
+            enableVertexAI = props.enableVertexAI,
             regenerateMetadata = props.regenerateMetadata
         } or nil
         local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(props.scope, taskOptionsForScope)

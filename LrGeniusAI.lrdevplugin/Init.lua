@@ -45,6 +45,14 @@ if _G.prefs.chatgptApiKey == nil then
     _G.prefs.chatgptApiKey = ""
 end
 
+if _G.prefs.vertexProjectId == nil then
+    _G.prefs.vertexProjectId = ""
+end
+
+if _G.prefs.vertexLocation == nil then
+    _G.prefs.vertexLocation = "us-central1"
+end
+
 if _G.prefs.generateTitle == nil then
     _G.prefs.generateTitle = true
 end
