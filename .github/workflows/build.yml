@@ -129,16 +129,34 @@ jobs:
           
           cd ..
 
+      - name: Set release metadata
+        id: release-meta
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          if [ "$BRANCH_NAME" = "main" ]; then
+            echo "release_name=Release v${VERSION}" >> $GITHUB_OUTPUT
+          else
+            echo "release_name=Release v${VERSION} (${BRANCH_NAME})" >> $GITHUB_OUTPUT
+          fi
+          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+
       - name: Prepare release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ github.event.inputs.version }}"
           TAG="v${VERSION}"
+          BRANCH_NAME="${{ steps.release-meta.outputs.branch_name }}"
           # Auto-generierte Release Notes von GitHub (falls möglich)
           gh api repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name="${TAG}" \
             -q '.body' > release_notes.md 2>/dev/null || echo -n "" > release_notes.md
+          # Branch-Hinweis oben einfügen (wenn nicht main)
+          if [ "$BRANCH_NAME" != "main" ]; then
+            { echo "**Build from branch:** \`${BRANCH_NAME}\`"; echo ""; cat release_notes.md; } > release_notes.tmp
+            mv release_notes.tmp release_notes.md
+          fi
           # Standard-Hinweise zu Known Issues und manuellen Schritten anhängen
           cat >> release_notes.md << 'NOTES'
 
@@ -165,7 +183,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version }}
-          name: Release v${{ github.event.inputs.version }}
+          name: ${{ steps.release-meta.outputs.release_name }}
           body_path: release_notes.md
           files: |
             artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.zip
