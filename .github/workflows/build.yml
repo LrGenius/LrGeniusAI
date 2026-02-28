@@ -12,6 +12,11 @@ on:
         required: true
         type: string
         default: 'main'
+      draft_release:
+        description: 'Release als Draft erstellen (zum Testen, später manuell veröffentlichen)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-and-release:
@@ -188,7 +193,7 @@ jobs:
           files: |
             artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.zip
             artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.zip
-          draft: false
+          draft: ${{ github.event.inputs.draft_release == 'true' }}
           prerelease: ${{ github.ref != 'refs/heads/main' }}
           generate_release_notes: false
         env:
