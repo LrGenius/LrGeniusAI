@@ -7,11 +7,6 @@ on:
         description: 'Plugin and server version (e.g., v1.0.0)'
         required: true
         type: string
-      server_version:
-        description: 'geniusai-server git ref (e.g., main, v1.0.0)'
-        required: true
-        type: string
-        default: 'main'
       draft_release:
         description: 'Release als Draft erstellen (zum Testen, später manuell veröffentlichen)'
         required: false
@@ -38,23 +33,14 @@ jobs:
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
     steps:
-      - name: Checkout LrGeniusAI repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          path: LrGeniusAI
-
-      - name: Checkout geniusai-server repository
-        uses: actions/checkout@v4
-        with:
-          repository: LrGenius/geniusai-server
-          path: geniusai-server
-          ref: ${{ github.event.inputs.server_version }}
 
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
           activate-environment: geniusai_server
-          environment-file: geniusai-server/environment.yml
+          environment-file: server/environment.yml
           python-version: ${{ matrix.python_arch }}
           auto-activate-base: false
           miniconda-version: latest
@@ -67,7 +53,7 @@ jobs:
 
       - name: Build geniusai-server
         shell: bash -l {0}
-        working-directory: geniusai-server
+        working-directory: server
         env:
           KMP_DUPLICATE_LIB_OK: 'TRUE'
         run: pyinstaller geniusai_server.spec --noconfirm
@@ -81,11 +67,11 @@ jobs:
           mkdir -p $PLUGIN_DIR
           
           echo "Copying server and model files..."
-          cp -r geniusai-server/dist/* $BUILD_DIR/
+          cp -r server/dist/* $BUILD_DIR/
           
           echo "Copying plugin files..."
-          cp LrGeniusAI/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
-          cp LrGeniusAI/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
+          cp plugin/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
+          cp plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
           if [ "${{ matrix.os_name }}" == "macos" ]; then
             if [ -f "$BUILD_DIR/lrgenius-server/lrgenius-server" ]; then
