@@ -55,10 +55,21 @@ class LMStudioProvider(LLMProviderBase):
             chat.add_user_message(user_prompt, images=[image_handle])
 
             response = model.respond(chat, response_format=response_schema, config={"temperature": request.temperature })
-            
+
             # Extract message content
             content = response.parsed
-            logger.debug(f"LM Studio JSON response: {content}")
+            logger.debug(f"LM Studio raw response: {content}")
+
+            # The lmstudio-python client may return a JSON string instead of a dict.
+            # Normalize to a dict so that `.get(...)` access below is always safe.
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except Exception as parse_err:
+                    raise ValueError(f"Unexpected non-JSON response from LM Studio: {content}") from parse_err
+
+            if not isinstance(content, dict):
+                raise ValueError(f"Unexpected response type from LM Studio: {type(content)}")
             
             # Extract metadata
             keywords = content.get("keywords", [])
@@ -125,11 +136,20 @@ class LMStudioProvider(LLMProviderBase):
             chat.add_user_message(user_prompt, images=[image_handle])
 
             response = model.respond(chat, response_format=quality_schema, config={"temperature": request.temperature })
-            
+
             # Extract message content
             content = response.parsed
 
-            logger.debug(f"LM Studio quality response: {content}")
+            logger.debug(f"LM Studio raw quality response: {content}")
+
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except Exception as parse_err:
+                    raise ValueError(f"Unexpected non-JSON quality response from LM Studio: {content}") from parse_err
+
+            if not isinstance(content, dict):
+                raise ValueError(f"Unexpected quality response type from LM Studio: {type(content)}")
          
             return QualityScoreResponse(
                 uuid=request.uuid,
