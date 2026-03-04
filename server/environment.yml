@@ -1,0 +1,36 @@
+name: geniusai_server
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Core Python Environment
+  - python=3.12
+  - pip
+  - setuptools
+  - wheel
+  - pyinstaller
+  
+  - pip:
+    - open_clip_torch
+    # transformers + tokenizers gemeinsam: älteres transformers will tokenizers<0.20,
+    # Modell-tokenizer.json braucht tokenizers>=0.22 → Mindestversionen.
+    - "transformers>=4.46"
+    - "tokenizers>=0.22.0"
+    - rich
+    - ollama
+    - lmstudio
+    - pillow
+    - google-genai
+    - openai
+    - requests
+    - chromadb
+    - numpy
+    - pandas
+    - psutil
+    - flask
+    - waitress
+    - insightface
+    - onnxruntime
+    - scikit-learn
+    - scipy

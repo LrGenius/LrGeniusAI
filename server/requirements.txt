@@ -1,0 +1,25 @@
+# geniusai-server dependencies (for Docker / pip install)
+# open_clip (lokal) benötigt:
+ftfy
+regex
+# Mindestversion: Modell-tokenizer.json braucht tokenizers>=0.22; älteres transformers
+# verlangt tokenizers<0.20 → ModelWrapper-Fehler. Beide zusammen upgraden.
+transformers>=4.46
+tokenizers>=0.22.0
+pillow
+ollama
+lmstudio
+google-genai
+openai
+requests
+chromadb
+numpy
+pandas
+psutil
+flask
+waitress
+insightface
+onnxruntime
+scikit-learn
+torchvision
+timm
