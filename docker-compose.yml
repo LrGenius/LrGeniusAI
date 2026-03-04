@@ -1,0 +1,21 @@
+# geniusai-server mit Docker Compose
+# Start: docker compose up -d
+# Stop:  docker compose down
+# Logs:  docker compose logs -f geniusai-server
+
+services:
+  geniusai-server:
+    build: .
+    image: geniusai-server:latest
+    container_name: geniusai-server
+    restart: unless-stopped
+    ports:
+      - "19819:19819"
+    volumes:
+      # ChromaDB und Logs persistent im Ordner ./data
+      - ./data:/data
+      # OpenCLIP/Hugging Face + InsightFace: Modell-Downloads persistent (große Dateien)
+      - ./models:/models
+    environment:
+      - GENIUSAI_HOST=0.0.0.0
+      - GENIUSAI_PORT=19819

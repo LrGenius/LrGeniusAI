@@ -1,0 +1,17 @@
+# Build/IDE
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+env
+
+# Docs / Meta
+*.md
+environment.yml
+geniusai_server.spec
+
+# Nicht für Laufzeit nötig
+model_scripts
