@@ -36,6 +36,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Update Info.lua with version and build date
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${VERSION#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          REVISION=$(echo "$VERSION" | cut -d. -f3)
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          REVISION=${REVISION:-0}
+          BUILD_DATE=$(date +%Y%m%d)
+          INFO_LUA="plugin/LrGeniusAI.lrdevplugin/Info.lua"
+          sed 's/Info.MAJOR = .*/Info.MAJOR = '"$MAJOR"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
+          sed 's/Info.MINOR = .*/Info.MINOR = '"$MINOR"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
+          sed 's/Info.REVISION = .*/Info.REVISION = '"$REVISION"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
+          sed 's/Info.BUILD = [0-9]*/build = '"$BUILD_DATE"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
+          echo "Updated Info.lua: MAJOR=$MAJOR MINOR=$MINOR REVISION=$REVISION build=$BUILD_DATE"
+
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:

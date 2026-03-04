@@ -1,9 +1,10 @@
 Info = {}
 
-Info.MAJOR = 2
-Info.MINOR = 3
-Info.REVISION = 0
-Info.VERSION = { major = Info.MAJOR, minor = Info.MINOR, revision = Info.REVISION, build = 0, }
+Info.MAJOR = 9
+Info.MINOR = 9
+Info.REVISION = 9
+Info.BUILD = 99991212
+Info.VERSION = { major = Info.MAJOR, minor = Info.MINOR, revision = Info.REVISION, build = Info.BUILD, }
 
 
 return {
