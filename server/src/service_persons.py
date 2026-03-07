@@ -186,7 +186,8 @@ def run_clustering(
         else:
             person_id = label_to_person.get(lb, f"person_{next_new_idx}")
         new_meta = {
-            "photo_uuid": meta.get("photo_uuid", ""),
+            "photo_id": meta.get("photo_id", meta.get("photo_uuid", "")),
+            "photo_uuid": meta.get("photo_uuid", meta.get("photo_id", "")),
             "thumbnail": meta.get("thumbnail", ""),
             "person_id": person_id,
         }
@@ -223,14 +224,14 @@ def list_persons() -> List[Dict[str, Any]]:
         if pid == "":
             pid = "_unassigned"
         if pid not in by_person:
-            by_person[pid] = {"person_id": pid if pid != "_unassigned" else "", "face_ids": [], "photo_uuids": set(), "thumbnail": meta.get("thumbnail", "")}
+            by_person[pid] = {"person_id": pid if pid != "_unassigned" else "", "face_ids": [], "photo_ids": set(), "thumbnail": meta.get("thumbnail", "")}
         by_person[pid]["face_ids"].append(ids[i] if i < len(ids) else "")
-        by_person[pid]["photo_uuids"].add(meta.get("photo_uuid", ""))
+        by_person[pid]["photo_ids"].add(meta.get("photo_id", meta.get("photo_uuid", "")))
 
     result = []
     def _sort_key(item):
         pid, info = item[0], item[1]
-        photo_count = len(info["photo_uuids"])
+        photo_count = len(info["photo_ids"])
         if pid == "_unassigned" or pid == "person_unassigned":
             return (1, 0, pid)  # unassigned at end
         return (0, -photo_count, pid)  # most photos first
@@ -240,18 +241,23 @@ def list_persons() -> List[Dict[str, Any]]:
             "person_id": person_id,
             "name": names.get(person_id, "") if person_id else "",
             "face_count": len(info["face_ids"]),
-            "photo_count": len(info["photo_uuids"]),
+            "photo_count": len(info["photo_ids"]),
             "thumbnail": info["thumbnail"] or "",
         })
     return result
 
 
-def get_photo_uuids_for_person(person_id: str) -> List[str]:
-    """Return list of photo UUIDs that contain this person (unique)."""
+def get_photo_ids_for_person(person_id: str) -> List[str]:
+    """Return list of photo IDs that contain this person (unique)."""
     data = chroma_service.get_all_faces(include_embeddings=False)
     metadatas = data.get("metadatas", [])
-    uuids = set()
+    photo_ids = set()
     for meta in metadatas or []:
         if meta.get("person_id") == person_id:
-            uuids.add(meta.get("photo_uuid", ""))
-    return sorted(uuids)
+            photo_ids.add(meta.get("photo_id", meta.get("photo_uuid", "")))
+    return sorted(photo_ids)
+
+
+def get_photo_uuids_for_person(person_id: str) -> List[str]:
+    # Backward-compatible alias
+    return get_photo_ids_for_person(person_id)

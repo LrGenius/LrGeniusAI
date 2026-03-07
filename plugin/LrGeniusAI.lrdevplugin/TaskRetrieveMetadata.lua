@@ -228,8 +228,8 @@ LrTasks.startAsyncTask(function()
             progressScope:setCaption(string.format(LOC "$$$/LrGeniusAI/RetrieveMetadata/Processing=Processing %s (%d of %d)", 
                 fileName, i, #photos))
 
-            local uuid = photo:getRawMetadata('uuid')
-            if uuid then
+            local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
+            if photoId then
                 if not SearchIndexAPI.pingServer() then
                     LrDialogs.message(
                         LOC "$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachable=Server Unreachable",
@@ -240,8 +240,8 @@ LrTasks.startAsyncTask(function()
                     break
                 end
                 -- Retrieve data from backend
-                log:trace("Retrieving data for UUID: " .. uuid)
-                local retrievedData = SearchIndexAPI.getPhotoData(uuid)
+                log:trace("Retrieving data for photo_id: " .. photoId)
+                local retrievedData = SearchIndexAPI.getPhotoData(photoId)
 
                 log:trace("Retrieved data: " .. Util.dumpTable(retrievedData))
                 
@@ -284,7 +284,7 @@ LrTasks.startAsyncTask(function()
                     errorCount = errorCount + 1
                 end
             else
-                log:warn("Photo has no UUID, skipping: " .. fileName)
+                log:warn("Photo has no usable photo_id, skipping: " .. fileName .. " (" .. tostring(photoIdErr) .. ")")
                 errorCount = errorCount + 1
             end
         end

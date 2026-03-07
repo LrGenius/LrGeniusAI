@@ -234,6 +234,21 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         wrap = true,
                     },
                 },
+                f:row {
+                    f:push_button {
+                        title = "Migrate existing DB IDs to photo_id",
+                        action = function(button)
+                            LrTasks.startAsyncTask(function()
+                                local ok, msg = SearchIndexAPI.migratePhotoIdsFromCatalog()
+                                if ok then
+                                    LrDialogs.message("Photo-ID Migration", msg or "Migration completed.")
+                                else
+                                    LrDialogs.message("Photo-ID Migration failed", msg or "Unknown error", "critical")
+                                end
+                            end)
+                        end,
+                    },
+                },
             },
             f:group_box {
                 width = share 'groupBoxWidth',

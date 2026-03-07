@@ -5,7 +5,7 @@ import os
 
 import service_chroma as chroma_service
 from config import logger
-from service_index import process_image_task, get_uuids_needing_processing
+from service_index import process_image_task, get_photo_ids_needing_processing
 import service_face as face_service
 import service_persons as persons_service
 import base64
@@ -85,6 +85,20 @@ def _extract_options(data):
 
     return options
 
+
+def _extract_photo_ids(form_or_json):
+    """Accept new photo_id(s) and legacy uuid(s)."""
+    if hasattr(form_or_json, "getlist"):
+        photo_ids = form_or_json.getlist("photo_id")
+        if photo_ids:
+            return photo_ids
+        return form_or_json.getlist("uuid")
+    photo_id = form_or_json.get("photo_id")
+    if photo_id:
+        return [photo_id]
+    uuid = form_or_json.get("uuid")
+    return [uuid] if uuid else []
+
 @index_bp.route('/index', methods=['POST'])
 def index_images_batch():
     """
@@ -93,12 +107,12 @@ def index_images_batch():
     """
     logger.info("Index request received")
     images = request.files.getlist('image')
-    uuids = request.form.getlist('uuid')
+    photo_ids = _extract_photo_ids(request.form)
     
     options = _extract_options(request.form)
 
-    if not images or not uuids or len(images) != len(uuids):
-        return jsonify({"error": "Mismatch between number of images and UUIDs, or no images provided"}), 400
+    if not images or not photo_ids or len(images) != len(photo_ids):
+        return jsonify({"error": "Mismatch between number of images and photo IDs, or no images provided"}), 400
 
     batch_size = len(images)
     current_time = time.time()
@@ -114,13 +128,13 @@ def index_images_batch():
     image_triplets = []
     for i in range(batch_size):
         file = images[i]
-        uuid = uuids[i]
+        photo_id = photo_ids[i]
 
-        if not file or not uuid:
-            logger.warning(f"Skipping an entry in the batch due to missing file or uuid.")
+        if not file or not photo_id:
+            logger.warning("Skipping an entry in the batch due to missing file or photo_id.")
             continue
 
-        image_triplets.append((file.read(), uuid, file.filename))
+        image_triplets.append((file.read(), photo_id, file.filename))
 
     if not image_triplets:
         logger.info("No valid images to process in the batch.")
@@ -153,17 +167,17 @@ def index_images_batch_base64():
     
     # Extract required fields
     image = data.get('image')
-    uuid = data.get('uuid')
+    photo_id = data.get('photo_id') or data.get('uuid')
     filename = data.get('filename')
 
-    if not image or not uuid or not filename:
-        logger.info(f"{image}, {uuid}, {filename}")
-        return jsonify({"error": "Missing required fields: image, uuid, filename"}), 400
+    if not image or not photo_id or not filename:
+        logger.info(f"{image}, {photo_id}, {filename}")
+        return jsonify({"error": "Missing required fields: image, photo_id, filename"}), 400
 
     options = _extract_options(data)
 
     success_count, failure_count = process_image_task(
-        [(base64.b64decode(image.encode('ascii')), uuid, filename)],
+        [(base64.b64decode(image.encode('ascii')), photo_id, filename)],
         options=options
     )
     
@@ -195,13 +209,13 @@ def index_images_batch_by_reference():
     # Extract image list
     images_data = data.get('images', [])
 
-    # Use a list comprehension to extract the paths and UUIDs.
+    # Use a list comprehension to extract paths and photo IDs.
     paths = [item.get('path') for item in images_data]
-    uuids = [item.get('uuid') for item in images_data]
+    photo_ids = [item.get('photo_id') or item.get('uuid') for item in images_data]
 
     # Check for missing keys or mismatched lengths (robustness).
-    if not all(paths) or not all(uuids) or len(paths) != len(uuids):
-        return jsonify({"error": "Mismatch in data, or missing 'path' or 'uuid' keys in some objects"}), 400
+    if not all(paths) or not all(photo_ids) or len(paths) != len(photo_ids):
+        return jsonify({"error": "Mismatch in data, or missing 'path' or 'photo_id' keys in some objects"}), 400
 
     batch_size = len(paths)
 
@@ -209,10 +223,10 @@ def index_images_batch_by_reference():
     failed_paths = []
     for i in range(batch_size):
         path = paths[i]
-        uuid = uuids[i]
+        photo_id = photo_ids[i]
 
-        if not path or not uuid:
-            logger.warning(f"Skipping an entry in the batch due to missing file or uuid.")
+        if not path or not photo_id:
+            logger.warning("Skipping an entry in the batch due to missing file or photo_id.")
             continue
 
         try:
@@ -220,7 +234,7 @@ def index_images_batch_by_reference():
                 image_data = file.read()
 
             filename = os.path.basename(path)
-            image_triplets.append((image_data, uuid, filename))
+            image_triplets.append((image_data, photo_id, filename))
         except FileNotFoundError:
             logger.warning(f"File not found at path: {path}. Skipping.")
             failed_paths.append(path)
@@ -251,48 +265,49 @@ def index_images_batch_by_reference():
 @index_bp.route('/remove', methods=['POST'])
 def remove_image():
     logger.info("Remove request received")
-    if 'uuid' not in request.json:
-        return jsonify({"error": "No uuid provided"}), 400
-    uuid = request.json.get('uuid')
+    body = request.json or {}
+    photo_id = body.get('photo_id') or body.get('uuid')
+    if not photo_id:
+        return jsonify({"error": "No photo_id provided"}), 400
     
     try:
-        chroma_service.delete_image(uuid)
-        chroma_service.delete_faces_by_photo_uuid(uuid)
-        logger.info(f"Image ID {uuid} removed from ChromaDB (including face embeddings).")
-        return jsonify({"status": "removed", "uuid": uuid})
+        chroma_service.delete_image(photo_id)
+        chroma_service.delete_faces_by_photo_uuid(photo_id)
+        logger.info(f"Image ID {photo_id} removed from ChromaDB (including face embeddings).")
+        return jsonify({"status": "removed", "photo_id": photo_id, "uuid": photo_id})
     except Exception as e:
-        logger.error(f"Error removing image {uuid}: {e}")
-        return jsonify({"error": "UUID not found or error during removal"}), 404
+        logger.error(f"Error removing image {photo_id}: {e}")
+        return jsonify({"error": "photo_id not found or error during removal"}), 404
         
 
 @index_bp.route('/get', methods=['POST'])
 def get_photo_data():
     """
-    Retrieves metadata and quality scores for a photo by UUID.
+    Retrieves metadata and quality scores for a photo by photo_id.
     
     JSON body parameters:
-    - uuid (string): The UUID of the photo to retrieve
+    - photo_id (string): The ID of the photo to retrieve
     
     Returns:
     - status: "success" or "error"
-    - uuid: The photo's UUID
+    - photo_id: The photo ID
     - metadata: Dictionary with all metadata fields (title, caption, keywords, etc.)
     - quality: Dictionary with quality scores (overall_score, composition_score, etc.)
     """
     logger.info("Get photo data request received")
     
-    if 'uuid' not in request.json:
-        return jsonify({"status": "error", "error": "No uuid provided"}), 400
-    
-    uuid = request.json.get('uuid')
+    body = request.json or {}
+    photo_id = body.get('photo_id') or body.get('uuid')
+    if not photo_id:
+        return jsonify({"status": "error", "error": "No photo_id provided"}), 400
     
     try:
         # Get photo data from ChromaDB
-        photo_data = chroma_service.get_image(uuid)
-        logger.debug(f"Retrieved photo data for UUID {uuid}: {photo_data}")
+        photo_data = chroma_service.get_image(photo_id)
+        logger.debug(f"Retrieved photo data for photo_id {photo_id}: {photo_data}")
         
         if not photo_data or not photo_data['ids']:
-            logger.warning(f"Photo with UUID {uuid} not found in database")
+            logger.warning(f"Photo with photo_id {photo_id} not found in database")
             return jsonify({"status": "error", "error": "Photo not found"}), 404
         
         # Extract metadata
@@ -337,11 +352,12 @@ def get_photo_data():
                 else:
                     metadata_fields[key] = value
         
-        logger.info(f"Retrieved data for photo {uuid}: {len(metadata_fields)} metadata fields, {len(quality_fields)} quality fields")
+        logger.info(f"Retrieved data for photo {photo_id}: {len(metadata_fields)} metadata fields, {len(quality_fields)} quality fields")
         
         return jsonify({
             "status": "success",
-            "uuid": uuid,
+            "photo_id": photo_id,
+            "uuid": photo_id,
             "metadata": metadata_fields,
             "quality": quality_fields,
             "ai_model": ai_model,
@@ -349,7 +365,7 @@ def get_photo_data():
         })
         
     except Exception as e:
-        logger.error(f"Error retrieving photo data for {uuid}: {e}", exc_info=True)
+        logger.error(f"Error retrieving photo data for {photo_id}: {e}", exc_info=True)
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
@@ -383,12 +399,12 @@ def check_unprocessed():
     Used by the Lightroom plugin for "New or unprocessed photos" scope.
     """
     data = request.get_json() or {}
-    uuids = data.get('uuids', [])
-    if not uuids:
-        return jsonify({"uuids": []}), 200
+    photo_ids = data.get('photo_ids') or data.get('uuids', [])
+    if not photo_ids:
+        return jsonify({"photo_ids": [], "uuids": []}), 200
 
     options = _extract_options(data)
-    needing = get_uuids_needing_processing(uuids, options)
-    logger.info(f"check-unprocessed: {len(needing)} of {len(uuids)} photos need processing")
-    return jsonify({"uuids": needing}), 200
+    needing = get_photo_ids_needing_processing(photo_ids, options)
+    logger.info(f"check-unprocessed: {len(needing)} of {len(photo_ids)} photos need processing")
+    return jsonify({"photo_ids": needing, "uuids": needing}), 200
 

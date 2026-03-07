@@ -95,6 +95,11 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     return needing_processing
 
 
+def get_photo_ids_needing_processing(photo_ids: list[str], options: dict) -> list[str]:
+    """Preferred alias for get_uuids_needing_processing with generic photo IDs."""
+    return get_uuids_needing_processing(photo_ids, options)
+
+
 def process_image_task(
     image_triplets: list[tuple[bytes, str, str]], 
     options: dict
@@ -271,10 +276,12 @@ def process_image_task(
                     main_metadata = existing.copy()
                     # Update only basic fields that should always be current
                     main_metadata["filename"] = filename
-                    main_metadata["uuid"] = uuid
+                    main_metadata["photo_id"] = uuid
+                    main_metadata["uuid"] = existing.get("uuid", uuid)
                 else:
                     main_metadata = {
                         "filename": filename,
+                        "photo_id": uuid,
                         "uuid": uuid,
                         "provider": provider,
                         "model": model_name,
@@ -354,7 +361,7 @@ def process_image_task(
 
                 # Vertex AI embeddings (optional, separate Chroma collection)
                 if uuid in vertex_embeddings_by_uuid:
-                    chroma_service.add_vertex_image(uuid, vertex_embeddings_by_uuid[uuid], {"uuid": uuid})
+                    chroma_service.add_vertex_image(uuid, vertex_embeddings_by_uuid[uuid], {"photo_id": uuid, "uuid": uuid})
                     logger.debug(f"UUID {uuid}: Vertex AI embedding stored.")
 
                 # Face detection and indexing (second Chroma collection)

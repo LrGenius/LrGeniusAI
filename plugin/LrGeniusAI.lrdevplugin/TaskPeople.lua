@@ -201,17 +201,13 @@ local function doShowInLibrary(person_id, person_name)
         ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/GetPhotosError=Could not get photos for person", err or "No data")
         return
     end
-    local uuids = type(resp.photo_uuids) == "table" and resp.photo_uuids or {}
-    if #uuids == 0 then
+    local photoIds = type(resp.photo_ids) == "table" and resp.photo_ids or (type(resp.photo_uuids) == "table" and resp.photo_uuids or {})
+    if #photoIds == 0 then
         LrDialogs.message(LOC "$$$/LrGeniusAI/People/NoPhotos=No photos", LOC "$$$/LrGeniusAI/People/NoPhotosForPerson=No photos found for this person.")
         return
     end
     local catalog = LrApplication.activeCatalog()
-    local photos = {}
-    for _, uuid in ipairs(uuids) do
-        local photo = catalog:findPhotoByUuid(uuid)
-        if photo then table.insert(photos, photo) end
-    end
+    local photos = SearchIndexAPI.findPhotosByPhotoIds(photoIds)
     if #photos == 0 then
         LrDialogs.message(LOC "$$$/LrGeniusAI/People/NoPhotosInCatalog=Not in catalog", LOC "$$$/LrGeniusAI/People/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog.")
         return

@@ -9,7 +9,7 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
     Process a batch of metadata imports.
     
     Args:
-        metadata_items: List of dictionaries, each with uuid and metadata.
+        metadata_items: List of dictionaries, each with photo_id and metadata.
         
     Returns:
         Tuple of (success_count, failure_count)
@@ -21,18 +21,18 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
     logger.info(f"Starting metadata import task for {total_items} items...")
 
     for item in metadata_items:
-        uuid = item.get('uuid')
-        if not uuid:
-            logger.warning("Skipping item due to missing uuid.")
+        photo_id = item.get('photo_id') or item.get('uuid')
+        if not photo_id:
+            logger.warning("Skipping item due to missing photo_id.")
             failure_count += 1
             continue
 
         try:
-            existing_record = chroma_service.get_image(uuid)
+            existing_record = chroma_service.get_image(photo_id)
 
             metadata_to_update = {}
             if 'keywords' in item and item['keywords'] and item['keywords'] != []:
-                logger.debug(f"Importing keywords for UUID {uuid}: {item['keywords']}")
+                logger.debug(f"Importing keywords for photo_id {photo_id}: {item['keywords']}")
                 metadata_to_update['keywords'] = json.dumps(item['keywords'])
                 metadata_to_update['flattened_keywords'] = _flatten_keywords(item['keywords'])
             if 'title' in item and item['title'] and item['title'] != '':
@@ -43,7 +43,7 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
                 metadata_to_update['alt_text'] = item['alt_text']
             
             if not metadata_to_update:
-                logger.warning(f"No metadata provided to update for UUID {uuid}. Skipping.")
+                logger.warning(f"No metadata provided to update for photo_id {photo_id}. Skipping.")
                 failure_count += 1
                 continue
 
@@ -52,19 +52,23 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
             # independently of embeddings.
             if not existing_record or not existing_record['ids']:
                 metadata_to_update['run_date'] = time.now().strftime("%Y-%m-%d %H:%M:%S")
-                chroma_service.add_image(uuid, None, metadata_to_update)
-                logger.info(f"Created metadata-only entry for UUID {uuid}.")
+                metadata_to_update['photo_id'] = photo_id
+                metadata_to_update['uuid'] = item.get('uuid', photo_id)
+                chroma_service.add_image(photo_id, None, metadata_to_update, legacy_uuid=item.get('uuid'))
+                logger.info(f"Created metadata-only entry for photo_id {photo_id}.")
                 success_count += 1
                 continue
 
             metadata_to_update['run_date'] = time.now().strftime("%Y-%m-%d %H:%M:%S")
+            metadata_to_update['photo_id'] = photo_id
+            metadata_to_update['uuid'] = item.get('uuid', photo_id)
 
-            chroma_service.update_image(uuid, metadata_to_update)
-            logger.info(f"Successfully imported metadata for UUID {uuid}.")
+            chroma_service.update_image(photo_id, metadata_to_update, legacy_uuid=item.get('uuid'))
+            logger.info(f"Successfully imported metadata for photo_id {photo_id}.")
             success_count += 1
 
         except Exception as e:
-            logger.error(f"Error importing metadata for UUID {uuid}: {str(e)}", exc_info=True)
+            logger.error(f"Error importing metadata for photo_id {photo_id}: {str(e)}", exc_info=True)
             failure_count += 1
             
     return success_count, failure_count

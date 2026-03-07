@@ -3,9 +3,10 @@ import sys
 from flask import Flask, jsonify
 from waitress import serve
 import datetime
+import json
 
 # Import modularized components
-from config import logger, args
+from config import logger, args, DB_PATH
 logger.info("Imported config")
 
 # Lazy import server_lifecycle to speed up startup
@@ -19,6 +20,7 @@ from routes_server import server_bp
 from routes_import import import_bp
 from routes_clip import clip_bp
 from routes_faces import faces_bp
+import service_chroma
 
 app = Flask(__name__)
 logger.info("Flask app created")
@@ -43,6 +45,20 @@ if __name__ == "__main__":
     logger.info(f"Database: {args.db_path}")
     logger.info("=" * 60)
     
+    # Optional one-shot ID migration for deployed databases.
+    # Set GENIUSAI_MIGRATION_FILE to a JSON list/object with mappings.
+    migration_file = os.environ.get("GENIUSAI_MIGRATION_FILE", "").strip()
+    if migration_file:
+        migration_path = migration_file if os.path.isabs(migration_file) else os.path.join(DB_PATH, migration_file)
+        try:
+            with open(migration_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            mappings = payload.get("mappings", payload)
+            summary = service_chroma.migrate_photo_ids(mappings or [])
+            logger.info("Startup photo_id migration summary: %s", summary)
+        except Exception as e:
+            logger.error("Startup photo_id migration failed: %s", e, exc_info=True)
+
     # Mark server as ready for startup scripts
     server_lifecycle.write_ok_file()
     

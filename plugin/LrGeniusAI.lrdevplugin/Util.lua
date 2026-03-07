@@ -2,6 +2,8 @@
 
 Util = {}
 
+local DEFAULT_PARTIAL_HASH_WINDOW_BYTES = 4 * 1024 * 1024
+
 -- Utility function to check if table contains a value
 function Util.table_contains(tbl, x)
     for _, v in pairs(tbl) do
@@ -111,6 +113,132 @@ function Util.encodePhotoToBase64(filePath)
 
     local base64 = LrStringUtils.encodeBase64(data)
     return base64
+end
+
+function Util.getDefaultPartialHashWindowBytes()
+    return DEFAULT_PARTIAL_HASH_WINDOW_BYTES
+end
+
+local function getFileAttributes(filePath)
+    if Util.nilOrEmpty(filePath) then
+        return nil, "File path missing"
+    end
+
+    if not LrFileUtils.exists(filePath) then
+        return nil, "File does not exist"
+    end
+    if not LrFileUtils.isReadable(filePath) then
+        return nil, "File is not readable"
+    end
+
+    local attributes = LrFileUtils.fileAttributes(filePath) or {}
+    local fileSize = tonumber(attributes.fileSize)
+    if not fileSize then
+        return nil, "Could not read file size"
+    end
+
+    return {
+        fileSize = fileSize,
+        fileModificationDate = tonumber(attributes.fileModificationDate) or 0,
+    }, nil
+end
+
+function Util.computePartialFileMd5(filePath, windowBytes)
+    if type(LrMD5) ~= "table" or type(LrMD5.digest) ~= "function" then
+        return nil, "LrMD5.digest is unavailable"
+    end
+
+    local attributes, attrErr = getFileAttributes(filePath)
+    if not attributes then
+        return nil, attrErr
+    end
+
+    local chunkSize = math.max(1, tonumber(windowBytes) or DEFAULT_PARTIAL_HASH_WINDOW_BYTES)
+    local fh = io.open(filePath, "rb")
+    if not fh then
+        return nil, "Could not open file for binary read"
+    end
+
+    local firstLen = math.min(attributes.fileSize, chunkSize)
+    local firstChunk = fh:read(firstLen) or ""
+
+    local lastChunk = ""
+    if attributes.fileSize > firstLen then
+        local lastOffset = math.max(0, attributes.fileSize - chunkSize)
+        fh:seek("set", lastOffset)
+        lastChunk = fh:read(math.min(chunkSize, attributes.fileSize)) or ""
+    end
+    fh:close()
+
+    local md5Input = tostring(attributes.fileSize) .. ":" .. firstChunk .. ":" .. lastChunk
+    local digest = LrMD5.digest(md5Input)
+    if Util.nilOrEmpty(digest) then
+        return nil, "MD5 digest failed"
+    end
+
+    return digest, {
+        fileSize = attributes.fileSize,
+        fileModificationDate = attributes.fileModificationDate,
+        windowBytes = chunkSize,
+    }
+end
+
+function Util.buildGlobalPhotoId(filePath, windowBytes)
+    local digest, metadataOrErr = Util.computePartialFileMd5(filePath, windowBytes)
+    if not digest then
+        return nil, metadataOrErr
+    end
+
+    if type(metadataOrErr) ~= "table" then
+        return nil, "Invalid hash metadata"
+    end
+    local metadata = metadataOrErr
+    local fileSize = tostring(metadata.fileSize or 0)
+    local mtime = tostring(math.floor(tonumber(metadata.fileModificationDate) or 0))
+    local globalPhotoId = "md5p:" .. fileSize .. ":" .. mtime .. ":" .. digest
+    return globalPhotoId, metadata
+end
+
+function Util.getGlobalPhotoIdForPhoto(photo, options)
+    options = options or {}
+    if not photo then
+        return nil, "Photo is nil"
+    end
+
+    local originalFilePath = photo:getRawMetadata("path")
+    local attributes, attrErr = getFileAttributes(originalFilePath)
+    if not attributes then
+        return nil, attrErr
+    end
+
+    local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
+    local cachedSize = tonumber(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize") or "")
+    local cachedMtime = tonumber(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate") or "")
+
+    if not options.forceRecompute and not Util.nilOrEmpty(cachedId)
+        and cachedSize == attributes.fileSize
+        and cachedMtime == attributes.fileModificationDate then
+        return cachedId, nil
+    end
+
+    local globalPhotoId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
+    if not globalPhotoId then
+        return nil, metadataOrErr
+    end
+
+    if type(metadataOrErr) ~= "table" then
+        return nil, "Invalid photo metadata"
+    end
+    local metadata = metadataOrErr
+    local catalog = LrApplication.activeCatalog()
+    catalog:withPrivateWriteAccessDo(function()
+        photo:setPropertyForPlugin(_PLUGIN, "globalPhotoId", globalPhotoId)
+        photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize", metadata.fileSize)
+        photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate", metadata.fileModificationDate)
+        photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm", "md5_partial")
+    end)
+
+    return globalPhotoId, nil
 end
 
 function Util.getStringsFromRelativePath(absolutePath)
@@ -381,7 +509,7 @@ function Util.keywordTableToHierarchyStringList(keywordTable)
                     table.insert(result, table.concat(path, ">") .. ">" .. v)
                 else
                     -- Otherwise, k is a parent keyword
-                    local newPath = Util.deepcopy(path)
+                    local newPath = Util.deepcopy(path) or {}
                     table.insert(newPath, k)
                     recurse(v, newPath)
                 end

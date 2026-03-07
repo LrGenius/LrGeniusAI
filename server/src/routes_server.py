@@ -1,7 +1,9 @@
 from flask import Blueprint, jsonify, request
+import json
+import os
 
 import server_lifecycle
-from config import logger
+from config import logger, DB_PATH
 from service_metadata import get_analysis_service
 import service_chroma as chroma_service
 import service_persons as persons_service
@@ -105,3 +107,47 @@ def list_models():
     except Exception as e:
         logger.error(f"Error listing models: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+@server_bp.route('/database/migrate-photo-ids', methods=['POST'])
+def migrate_photo_ids():
+    """Migrate existing Chroma IDs from legacy uuid to new photo_id.
+
+    Body:
+      {
+        "mappings": [{"old_id":"...", "new_id":"..."}],
+        "overwrite": false,
+        "dry_run": false,
+        "update_faces": true,
+        "update_vertex": true
+      }
+    Alternative:
+      {
+        "mapping_file": "relative/or/absolute/path.json"
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    mappings = data.get("mappings")
+
+    if mappings is None and data.get("mapping_file"):
+        file_path = data["mapping_file"]
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(DB_PATH, file_path)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            mappings = payload.get("mappings", payload)
+        except Exception as e:
+            return jsonify({"error": f"Could not read mapping_file: {e}"}), 400
+
+    if not isinstance(mappings, list):
+        return jsonify({"error": "mappings must be a list"}), 400
+
+    summary = chroma_service.migrate_photo_ids(
+        mappings,
+        update_faces=bool(data.get("update_faces", True)),
+        update_vertex=bool(data.get("update_vertex", True)),
+        overwrite=bool(data.get("overwrite", False)),
+        dry_run=bool(data.get("dry_run", False)),
+    )
+    return jsonify({"status": "ok", "summary": summary}), 200

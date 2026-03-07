@@ -19,6 +19,26 @@ VERTEX_EMBEDDING_DIM = 1408
 # Max limit for get() when counting; Chroma may apply a default limit otherwise
 STATS_GET_LIMIT = 2_000_000
 
+PHOTO_ID_FIELD = "photo_id"
+LEGACY_UUID_FIELD = "uuid"
+
+
+def _normalize_photo_id(photo_id=None, legacy_uuid=None):
+    pid = photo_id or legacy_uuid
+    if pid is None:
+        return None
+    pid = str(pid).strip()
+    return pid or None
+
+
+def _ensure_photo_metadata(photo_id, metadata, legacy_uuid=None):
+    out = dict(metadata or {})
+    out[PHOTO_ID_FIELD] = photo_id
+    # Keep legacy field for older clients/filters.
+    out.setdefault(LEGACY_UUID_FIELD, legacy_uuid or photo_id)
+    return out
+
+
 def _ensure_initialized():
     """Initialize ChromaDB client and collections on first use (lazy loading)."""
     global chroma_client, collection, face_collection, vertex_collection
@@ -53,7 +73,7 @@ def _ensure_initialized():
         logger.info("Created new ChromaDB image_embeddings_vertex collection.")
 
 
-def add_image(uuid, embedding, metadata):
+def add_image(photo_id, embedding, metadata, *, legacy_uuid=None):
     """Add a new image record to the Chroma collection.
 
     embedding may be None for metadata-only records; in that case we add
@@ -65,87 +85,119 @@ def add_image(uuid, embedding, metadata):
     They can still be found via metadata keyword searches.
     """
     _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        raise ValueError("photo_id is required")
+    metadata = _ensure_photo_metadata(photo_id, metadata, legacy_uuid=legacy_uuid)
     try:
         if embedding is None:
             # Add metadata-only record with a dummy zero embedding
             # The collection expects 1152-dimensional embeddings (from vision model)
             dummy_embedding = np.zeros(1152, dtype=np.float32).tolist()
-            collection.add(embeddings=[dummy_embedding], metadatas=[metadata], ids=[uuid])
+            collection.add(embeddings=[dummy_embedding], metadatas=[metadata], ids=[photo_id])
         else:
-            collection.add(embeddings=[embedding], metadatas=[metadata], ids=[uuid])
+            collection.add(embeddings=[embedding], metadatas=[metadata], ids=[photo_id])
     except Exception as e:
         # Surface a helpful log message and re-raise so callers can decide what to do.
-        logger.error(f"Failed to add image {uuid} to ChromaDB (embedding provided: {embedding is not None}): {e}", exc_info=True)
+        logger.error(f"Failed to add image {photo_id} to ChromaDB (embedding provided: {embedding is not None}): {e}", exc_info=True)
         raise
 
 
-def update_image(uuid, metadata, embedding=None):
+def update_image(photo_id, metadata, embedding=None, *, legacy_uuid=None):
     _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        raise ValueError("photo_id is required")
+    metadata = _ensure_photo_metadata(photo_id, metadata, legacy_uuid=legacy_uuid)
     if embedding is not None:
-        collection.update(ids=[uuid], metadatas=[metadata], embeddings=[embedding])
+        collection.update(ids=[photo_id], metadatas=[metadata], embeddings=[embedding])
     else:
-        collection.update(ids=[uuid], metadatas=[metadata])
+        collection.update(ids=[photo_id], metadatas=[metadata])
 
 
-def get_image(uuid):
+def get_image(photo_id, *, legacy_uuid=None):
     _ensure_initialized()
-    return collection.get(ids=[uuid], include=['metadatas', 'embeddings'])
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        return {"ids": [], "metadatas": [], "embeddings": []}
+    return collection.get(ids=[photo_id], include=['metadatas', 'embeddings'])
 
 
-def delete_image(uuid):
+def delete_image(photo_id, *, legacy_uuid=None):
     _ensure_initialized()
-    collection.delete(ids=[uuid])
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        return
+    collection.delete(ids=[photo_id])
     try:
-        delete_vertex_image(uuid)
+        delete_vertex_image(photo_id)
     except Exception:
         pass
 
 
 # --- Vertex AI image embeddings collection API ---
 
-def add_vertex_image(uuid, embedding, metadata=None):
-    """Add or overwrite Vertex AI embedding for an image. metadata can be minimal (e.g. {"uuid": uuid})."""
+def add_vertex_image(photo_id, embedding, metadata=None, *, legacy_uuid=None):
+    """Add or overwrite Vertex AI embedding for an image."""
     _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        raise ValueError("photo_id is required")
     if metadata is None:
-        metadata = {"uuid": uuid}
-    existing = vertex_collection.get(ids=[uuid], include=[])
+        metadata = {}
+    metadata = _ensure_photo_metadata(photo_id, metadata, legacy_uuid=legacy_uuid)
+    existing = vertex_collection.get(ids=[photo_id], include=[])
     if existing and existing.get("ids"):
-        vertex_collection.update(ids=[uuid], embeddings=[embedding], metadatas=[metadata])
+        vertex_collection.update(ids=[photo_id], embeddings=[embedding], metadatas=[metadata])
     else:
-        vertex_collection.add(ids=[uuid], embeddings=[embedding], metadatas=[metadata])
+        vertex_collection.add(ids=[photo_id], embeddings=[embedding], metadatas=[metadata])
 
 
-def update_vertex_image(uuid, embedding=None, metadata=None):
+def update_vertex_image(photo_id, embedding=None, metadata=None, *, legacy_uuid=None):
     """Update Vertex AI embedding and/or metadata for an existing document."""
     _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        raise ValueError("photo_id is required")
+    if metadata is not None:
+        metadata = _ensure_photo_metadata(photo_id, metadata, legacy_uuid=legacy_uuid)
     if embedding is not None and metadata is not None:
-        vertex_collection.update(ids=[uuid], embeddings=[embedding], metadatas=[metadata])
+        vertex_collection.update(ids=[photo_id], embeddings=[embedding], metadatas=[metadata])
     elif embedding is not None:
-        vertex_collection.update(ids=[uuid], embeddings=[embedding])
+        vertex_collection.update(ids=[photo_id], embeddings=[embedding])
     elif metadata is not None:
-        vertex_collection.update(ids=[uuid], metadatas=[metadata])
+        vertex_collection.update(ids=[photo_id], metadatas=[metadata])
 
 
-def get_vertex_image(uuid):
+def get_vertex_image(photo_id, *, legacy_uuid=None):
     """Get Vertex AI embedding record for an image. Returns Chroma get() result or empty."""
     _ensure_initialized()
-    return vertex_collection.get(ids=[uuid], include=['metadatas', 'embeddings'])
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        return {"ids": [], "metadatas": [], "embeddings": []}
+    return vertex_collection.get(ids=[photo_id], include=['metadatas', 'embeddings'])
 
 
-def delete_vertex_image(uuid):
+def delete_vertex_image(photo_id, *, legacy_uuid=None):
     """Remove Vertex AI embedding for an image."""
     _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        return
     try:
-        vertex_collection.delete(ids=[uuid])
+        vertex_collection.delete(ids=[photo_id])
     except Exception as e:
-        logger.debug("delete_vertex_image %s: %s", uuid, e)
+        logger.debug("delete_vertex_image %s: %s", photo_id, e)
 
 
-def has_vertex_embedding(uuid):
+def has_vertex_embedding(photo_id, *, legacy_uuid=None):
     """Return True if this image has a Vertex AI embedding in the vertex collection."""
     _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        return False
     try:
-        r = vertex_collection.get(ids=[uuid], include=[])
+        r = vertex_collection.get(ids=[photo_id], include=[])
         return len(r.get("ids", [])) > 0
     except Exception:
         return False
@@ -280,7 +332,7 @@ def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id=""):
         person_id: Optional person cluster id (empty until clustering assigns one).
     """
     _ensure_initialized()
-    metadata = {"photo_uuid": photo_uuid, "thumbnail": thumbnail_b64, "person_id": person_id}
+    metadata = {"photo_id": photo_uuid, "photo_uuid": photo_uuid, "thumbnail": thumbnail_b64, "person_id": person_id}
     face_collection.add(ids=[face_id], embeddings=[embedding], metadatas=[metadata])
 
 
@@ -295,7 +347,7 @@ def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_id
     if person_ids is None:
         person_ids = [""] * len(face_ids)
     metadatas = [
-        {"photo_uuid": pu, "thumbnail": tb, "person_id": pid}
+        {"photo_id": pu, "photo_uuid": pu, "thumbnail": tb, "person_id": pid}
         for pu, tb, pid in zip(photo_uuids, thumbnails_b64, person_ids)
     ]
     face_collection.add(ids=face_ids, embeddings=embeddings, metadatas=metadatas)
@@ -335,8 +387,11 @@ def has_faces_for_photo(photo_uuid):
     """Return True if the photo has any face embeddings in the collection."""
     _ensure_initialized()
     try:
-        result = face_collection.get(where={"photo_uuid": photo_uuid}, include=[], limit=1)
-        return len(result.get("ids", [])) > 0
+        result = face_collection.get(where={"photo_id": photo_uuid}, include=[], limit=1)
+        if len(result.get("ids", [])) > 0:
+            return True
+        legacy = face_collection.get(where={"photo_uuid": photo_uuid}, include=[], limit=1)
+        return len(legacy.get("ids", [])) > 0
     except Exception as e:
         logger.warning(f"Could not check faces for {photo_uuid}: {e}")
         return False
@@ -376,10 +431,99 @@ def delete_faces_by_photo_uuid(photo_uuid):
     """Remove all face entries that belong to the given photo UUID."""
     _ensure_initialized()
     try:
+        face_collection.delete(where={"photo_id": photo_uuid})
+    except Exception:
+        pass
+    try:
         face_collection.delete(where={"photo_uuid": photo_uuid})
         logger.info(f"Deleted face embeddings for photo_uuid={photo_uuid}.")
     except Exception as e:
         logger.warning(f"Delete faces for photo_uuid={photo_uuid}: {e}")
+
+
+def migrate_photo_ids(id_mappings, *, update_faces=True, update_vertex=True, overwrite=False, dry_run=False):
+    """Migrate existing DB entries from old IDs (uuid) to new photo_id values.
+
+    Args:
+        id_mappings: list of {"old_id": "...", "new_id": "..."} dicts.
+    """
+    _ensure_initialized()
+    summary = {
+        "requested": len(id_mappings or []),
+        "migrated": 0,
+        "skipped": 0,
+        "missing_old": 0,
+        "conflicts": 0,
+        "errors": 0,
+    }
+    if not id_mappings:
+        return summary
+
+    for item in id_mappings:
+        old_id = _normalize_photo_id(item.get("old_id") or item.get("old_uuid"))
+        new_id = _normalize_photo_id(item.get("new_id") or item.get("new_photo_id"))
+        if not old_id or not new_id:
+            summary["skipped"] += 1
+            continue
+        if old_id == new_id:
+            summary["skipped"] += 1
+            continue
+        try:
+            old_rec = get_image(old_id)
+            if not old_rec or not old_rec.get("ids"):
+                summary["missing_old"] += 1
+                continue
+
+            new_rec = get_image(new_id)
+            if new_rec and new_rec.get("ids") and not overwrite:
+                summary["conflicts"] += 1
+                continue
+
+            if dry_run:
+                summary["migrated"] += 1
+                continue
+
+            old_metadata = (old_rec.get("metadatas") or [{}])[0] or {}
+            old_embedding = (old_rec.get("embeddings") or [None])[0]
+            merged_metadata = dict(old_metadata)
+            merged_metadata[LEGACY_UUID_FIELD] = old_id
+            merged_metadata[PHOTO_ID_FIELD] = new_id
+
+            if new_rec and new_rec.get("ids"):
+                update_image(new_id, merged_metadata, embedding=old_embedding)
+            else:
+                add_image(new_id, old_embedding, merged_metadata, legacy_uuid=old_id)
+            delete_image(old_id)
+
+            if update_vertex:
+                old_v = get_vertex_image(old_id)
+                if old_v and old_v.get("ids"):
+                    old_v_emb = (old_v.get("embeddings") or [None])[0]
+                    old_v_meta = (old_v.get("metadatas") or [{}])[0] or {}
+                    old_v_meta = _ensure_photo_metadata(new_id, old_v_meta)
+                    old_v_meta[LEGACY_UUID_FIELD] = old_id
+                    if old_v_emb is not None:
+                        add_vertex_image(new_id, old_v_emb, old_v_meta, legacy_uuid=old_id)
+                        delete_vertex_image(old_id)
+
+            if update_faces:
+                face_data = face_collection.get(where={"photo_uuid": old_id}, include=["metadatas"])
+                face_ids = face_data.get("ids", []) or []
+                metas = face_data.get("metadatas", []) or []
+                if face_ids and metas:
+                    new_metas = []
+                    for m in metas:
+                        nm = dict(m or {})
+                        nm["photo_uuid"] = new_id
+                        nm["photo_id"] = new_id
+                        new_metas.append(nm)
+                    update_face_metadatas(face_ids, new_metas)
+
+            summary["migrated"] += 1
+        except Exception as e:
+            logger.error("Failed to migrate photo ID %s -> %s: %s", old_id, new_id, e, exc_info=True)
+            summary["errors"] += 1
+    return summary
 
 
 def query_faces(query_embedding, n_results, where_clause=None):

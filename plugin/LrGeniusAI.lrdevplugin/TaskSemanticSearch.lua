@@ -200,18 +200,21 @@ LrTasks.startAsyncTask(function()
             return
         end
 
-        if results == nil or #results == 0 then
+        if type(results) ~= "table" or #results == 0 then
             LrDialogs.message(LOC "$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results", LOC "$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
             return
         end
 
         local photos = {}
         for _, result in ipairs(results) do
-            local photo = catalog:findPhotoByUuid(result.uuid)
-            if photo then
-                table.insert(photos, photo)
-            else
-                log:warn(LOC("$$$/LrGeniusAI/AdvancedSearchTask/photoNotFound=Photo with UUID ^1 not found in catalog.", result.uuid))
+            if type(result) == "table" then
+                local resultPhotoId = result.photo_id or result.uuid
+                local photo = SearchIndexAPI.findPhotoByPhotoId(resultPhotoId)
+                if photo then
+                    table.insert(photos, photo)
+                else
+                    log:warn(LOC("$$$/LrGeniusAI/AdvancedSearchTask/photoNotFound=Photo with ID ^1 not found in catalog.", tostring(resultPhotoId)))
+                end
             end
         end
 

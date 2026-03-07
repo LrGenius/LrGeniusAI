@@ -43,7 +43,7 @@ def query_faces_by_image():
     """
     Find indexed faces similar to the face(s) in the given image.
     Body: JSON with "image" (base64), optional "face_index" (default 0), optional "n_results" (default 10).
-    Returns: For the selected face: list of { face_id, photo_uuid, thumbnail, person_id, distance }.
+    Returns: For the selected face: list of { face_id, photo_id, thumbnail, person_id, distance }.
     """
     logger.info("Faces query request received")
     data = request.get_json()
@@ -70,7 +70,7 @@ def query_faces_by_image():
     distances = result.get("distances", [[]])[0]
     metadatas = result.get("metadatas", [[]])[0]
     results = [
-        {"face_id": fid, "photo_uuid": m.get("photo_uuid"), "thumbnail": m.get("thumbnail", ""), "person_id": m.get("person_id", ""), "distance": d}
+        {"face_id": fid, "photo_id": m.get("photo_id") or m.get("photo_uuid"), "photo_uuid": m.get("photo_uuid") or m.get("photo_id"), "thumbnail": m.get("thumbnail", ""), "person_id": m.get("person_id", ""), "distance": d}
         for fid, m, d in zip(ids, metadatas or [], distances or [])
     ]
     return jsonify({"status": "ok", "results": results}), 200
@@ -141,11 +141,11 @@ def set_person_name_route(person_id):
 
 @faces_bp.route('/faces/persons/<person_id>/photos', methods=['GET'])
 def get_photos_for_person(person_id):
-    """Get list of photo UUIDs that contain this person."""
+    """Get list of photo IDs that contain this person."""
     logger.info("Get photos for person request received for person_id=%s", person_id)
     try:
-        uuids = persons_service.get_photo_uuids_for_person(person_id)
-        return jsonify({"status": "ok", "person_id": person_id, "photo_uuids": uuids}), 200
+        photo_ids = persons_service.get_photo_ids_for_person(person_id)
+        return jsonify({"status": "ok", "person_id": person_id, "photo_ids": photo_ids, "photo_uuids": photo_ids}), 200
     except Exception as e:
         logger.error(f"Get photos for person failed: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

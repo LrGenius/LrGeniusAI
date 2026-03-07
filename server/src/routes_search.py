@@ -14,19 +14,19 @@ def search_route():
 
         quality_sort = request.args.get('quality_sort', None)
 
-        uuids_to_search = None
+        photo_ids_to_search = None
         search_sources = None
         vertex_project_id = None
         vertex_location = None
         if request.method == 'POST' and request.is_json:
             body = request.get_json()
-            uuids_to_search = body.get('uuids')
+            photo_ids_to_search = body.get('photo_ids') or body.get('uuids')
             search_sources = body.get('search_sources')
             vertex_project_id = body.get('vertex_project_id') or body.get('vertexProjectId')
             vertex_location = body.get('vertex_location') or body.get('vertexLocation')
 
         sorted_results = service_search.search_images(
-            term, quality_sort, uuids_to_search, search_sources,
+            term, quality_sort, photo_ids_to_search, search_sources,
             vertex_project_id=vertex_project_id, vertex_location=vertex_location
         )
         return jsonify(sorted_results)
@@ -41,7 +41,7 @@ def group_similar_route():
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
-    uuids = data.get('uuids')
+    photo_ids = data.get('photo_ids') or data.get('uuids')
 
     phash_threshold_param = data.get('phash_threshold', 'auto')
     if phash_threshold_param != 'auto':
@@ -63,11 +63,11 @@ def group_similar_route():
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid time_delta_seconds value"}), 400
 
-    if not uuids or not isinstance(uuids, list):
-        return jsonify({"error": "Missing or invalid 'uuids' list in request body"}), 400
+    if not photo_ids or not isinstance(photo_ids, list):
+        return jsonify({"error": "Missing or invalid 'photo_ids' list in request body"}), 400
 
     try:
-        grouped_results = service_search.group_similar_images(uuids, phash_threshold_param, clip_threshold_param, time_delta_param)
+        grouped_results = service_search.group_similar_images(photo_ids, phash_threshold_param, clip_threshold_param, time_delta_param)
         return jsonify(grouped_results)
     except Exception as e:
         logger.error(f"Error during similarity grouping: {str(e)}")
