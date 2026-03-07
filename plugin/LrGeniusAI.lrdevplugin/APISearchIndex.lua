@@ -39,6 +39,7 @@ local ENDPOINTS = {
     FACES_PERSON_PHOTOS = "/faces/persons",  -- suffix /<id>/photos
     FACES_DETECT = "/faces/detect",
     FACES_QUERY = "/faces/query",
+    MIGRATE_PHOTO_IDS = "/database/migrate-photo-ids",
 }
 
 local EXPORT_SETTINGS = {
@@ -563,7 +564,7 @@ function SearchIndexAPI.removeMissingFromIndex()
 
     local indexedUUIDs = SearchIndexAPI.getAllIndexedPhotoIds()
 
-    if indexedUUIDs == nil then
+    if indexedUUIDs == nil or type(indexedUUIDs) ~= "table" then
         log:warn("Failed to retrieve indexed UUIDs")
         return false
     end
@@ -1275,6 +1276,141 @@ function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
         return nil
     end
     return result
+end
+
+---
+-- Migrates existing server-side photo UUID entries to the new photo_id values.
+-- Builds mappings from current catalog photos: old_id=Lightroom UUID, new_id=global photo_id.
+-- @return boolean success, string message
+function SearchIndexAPI.migratePhotoIdsFromCatalog()
+    if not SearchIndexAPI.pingServer() then
+        return false, "Backend server is not reachable."
+    end
+
+    local indexedIds = SearchIndexAPI.getAllIndexedPhotoIds()
+    if type(indexedIds) ~= "table" then
+        return false, "Could not retrieve indexed IDs from backend."
+    end
+    local indexedIdSet = {}
+    for _, id in ipairs(indexedIds) do
+        indexedIdSet[id] = true
+    end
+
+    local catalog = LrApplication.activeCatalog()
+    local photos = catalog:getAllPhotos() or {}
+    local totalPhotos = #photos
+    if totalPhotos == 0 then
+        return true, "No photos found in catalog."
+    end
+
+    local progressScope = LrProgressScope({
+        title = "Migrating photo IDs...",
+        functionContext = nil,
+    })
+
+    local mappings = {}
+    local skipped = 0
+    local skippedNotIndexed = 0
+    local skippedAlreadyMigrated = 0
+
+    for i, photo in ipairs(photos) do
+        if progressScope:isCanceled() then
+            progressScope:done()
+            return false, "Migration canceled."
+        end
+
+        local legacyUuid = photo:getRawMetadata("uuid")
+        if not legacyUuid or legacyUuid == "" or not indexedIdSet[legacyUuid] then
+            skipped = skipped + 1
+            skippedNotIndexed = skippedNotIndexed + 1
+        else
+            local photoId, photoIdErr = getPhotoIdForPhoto(photo)
+            if photoId and photoId ~= "" and legacyUuid ~= photoId then
+                if indexedIdSet[photoId] then
+                    skipped = skipped + 1
+                    skippedAlreadyMigrated = skippedAlreadyMigrated + 1
+                else
+                    table.insert(mappings, {
+                        old_id = legacyUuid,
+                        new_id = photoId,
+                    })
+                end
+            else
+                skipped = skipped + 1
+                if photoIdErr then
+                    log:warn("Could not compute photo_id during migration prep: " .. tostring(photoIdErr))
+                end
+            end
+        end
+
+        progressScope:setPortionComplete(i, totalPhotos)
+        progressScope:setCaption("Preparing migration mappings " .. tostring(i) .. "/" .. tostring(totalPhotos))
+    end
+
+    if #mappings == 0 then
+        progressScope:done()
+        return true, "No migration needed. All photos are already using photo_id."
+    end
+
+    local batchSize = 250
+    local migratedTotal = 0
+    local missingOldTotal = 0
+    local conflictTotal = 0
+    local errorTotal = 0
+
+    for startIdx = 1, #mappings, batchSize do
+        if progressScope:isCanceled() then
+            progressScope:done()
+            return false, "Migration canceled."
+        end
+
+        local stopIdx = math.min(startIdx + batchSize - 1, #mappings)
+        local batch = {}
+        for i = startIdx, stopIdx do
+            table.insert(batch, mappings[i])
+        end
+
+        local response, err = _request(
+            "POST",
+            getBaseUrl() .. ENDPOINTS.MIGRATE_PHOTO_IDS,
+            {
+                mappings = batch,
+                overwrite = false,
+                dry_run = false,
+                update_faces = true,
+                update_vertex = true,
+            },
+            300
+        )
+
+        if err then
+            progressScope:done()
+            return false, "Migration request failed: " .. tostring(err)
+        end
+
+        local summary = (response and response.summary) or {}
+        migratedTotal = migratedTotal + (summary.migrated or 0)
+        missingOldTotal = missingOldTotal + (summary.missing_old or 0)
+        conflictTotal = conflictTotal + (summary.conflicts or 0)
+        errorTotal = errorTotal + (summary.errors or 0)
+
+        progressScope:setPortionComplete(stopIdx, #mappings)
+        progressScope:setCaption("Migrating photo IDs " .. tostring(stopIdx) .. "/" .. tostring(#mappings))
+    end
+
+    progressScope:done()
+
+    local msg = "Migration finished.\n" ..
+        "Indexed IDs in backend: " .. tostring(#indexedIds) .. "\n" ..
+        "Mappings prepared: " .. tostring(#mappings) .. "\n" ..
+        "Migrated: " .. tostring(migratedTotal) .. "\n" ..
+        "Missing old IDs: " .. tostring(missingOldTotal) .. "\n" ..
+        "Conflicts: " .. tostring(conflictTotal) .. "\n" ..
+        "Errors: " .. tostring(errorTotal) .. "\n" ..
+        "Skipped (not indexed in backend): " .. tostring(skippedNotIndexed) .. "\n" ..
+        "Skipped (already migrated): " .. tostring(skippedAlreadyMigrated) .. "\n" ..
+        "Skipped in catalog prep: " .. tostring(skipped)
+    return errorTotal == 0, msg
 end
 
 
