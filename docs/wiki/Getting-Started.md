@@ -27,7 +27,18 @@ Then use:
 - People
 - Retrieve Metadata
 
-## 4. Vertex AI login
+## 4. Run one-time ID migration (upgrade path)
+
+If you upgraded from an older release with UUID-based backend IDs:
+
+1. Open `File -> Plug-in Manager`
+2. Open LrGeniusAI settings
+3. In `Backend Server`, click **Migrate existing DB IDs to photo_id**
+4. Wait until the progress scope finishes
+
+This is a one-time step.
+
+## 5. Vertex AI login
 
 Use gcloud ADC on the server host:
 
@@ -37,7 +48,7 @@ gcloud config set project YOUR_PROJECT_ID
 gcloud auth application-default login
 ```
 
-## 5. Imported help pages
+## 6. Imported help pages
 
 Curated pages migrated from `lrgenius.com/help`:
 

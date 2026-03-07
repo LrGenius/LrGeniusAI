@@ -66,6 +66,25 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 
 ---
 
+## Breaking Change: ID Migration Required
+
+The plugin/backend now use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
+
+If you already have an indexed backend database from older versions, run this one-time migration:
+
+1. Open `File -> Plug-in Manager`
+2. Select `LrGeniusAI`
+3. In the `Backend Server` section, click **Migrate existing DB IDs to photo_id**
+4. Wait for the `LrProgressScope` migration to finish
+
+Notes:
+
+- Migration is incremental and skips photos that are not indexed in backend.
+- Existing migrated entries are skipped automatically.
+- Main embeddings, vertex embeddings, and face references are migrated.
+
+---
+
 ## Configuration (Plugin Manager)
 
 In the plugin settings dialog you can configure:

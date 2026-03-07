@@ -45,6 +45,27 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 
 ---
 
+## ⚠️ Breaking Change: `photo_id` Migration
+
+Recent versions switched the backend identity key from Lightroom catalog UUIDs to file-based `photo_id` values.
+
+If you upgrade from an older version, run a one-time migration to keep existing index/search data usable.
+
+### Recommended migration path (from Lightroom)
+
+1. Open `File -> Plug-in Manager`
+2. Open LrGeniusAI settings
+3. In `Backend Server`, click **Migrate existing DB IDs to photo_id**
+4. Wait until the progress dialog is complete
+
+The migration updates all relevant backend collections:
+
+- main image embeddings
+- vertex embeddings
+- face/person references
+
+---
+
 ## ☁️ Google Vertex AI Login (gcloud)
 
 If you want to use Vertex AI with LrGeniusAI, run the login on the machine where `geniusai-server` is running.

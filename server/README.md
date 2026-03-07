@@ -26,3 +26,27 @@ The server is built with **Python** and designed to run as a local background pr
     - `vertexai`: For even better semantic embeddings.
 - **Database:** SQLite (local-first approach).
 - **Task Handling:** Efficient processing of batch image analysis.
+
+---
+
+## ⚠️ Breaking Change: `photo_id` Migration
+
+The server switched primary IDs from legacy Lightroom UUIDs to file-based `photo_id` values.
+
+If you run an existing database, perform a one-time migration.
+
+### Migration options
+
+- Trigger from Lightroom plugin UI:
+  - `File -> Plug-in Manager -> LrGeniusAI -> Backend Server -> Migrate existing DB IDs to photo_id`
+- Trigger via API:
+  - `POST /database/migrate-photo-ids`
+  - Body: `{ "mappings": [{ "old_id": "...", "new_id": "..." }] }`
+- Trigger on server startup:
+  - Set `GENIUSAI_MIGRATION_FILE` to a JSON mapping file path
+
+### Affected collections
+
+- `image_embeddings`
+- `image_embeddings_vertex`
+- `face_embeddings` (metadata references)
