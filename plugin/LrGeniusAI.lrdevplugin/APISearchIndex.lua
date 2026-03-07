@@ -1283,14 +1283,21 @@ end
 -- Builds mappings from current catalog photos: old_id=Lightroom UUID, new_id=global photo_id.
 -- @return boolean success, string message
 function SearchIndexAPI.migratePhotoIdsFromCatalog()
+    local migrationStartedAt = LrDate.currentTime()
+    log:info("migratePhotoIdsFromCatalog: started")
+
     if not SearchIndexAPI.pingServer() then
+        log:error("migratePhotoIdsFromCatalog: backend server not reachable")
         return false, "Backend server is not reachable."
     end
 
     local indexedIds = SearchIndexAPI.getAllIndexedPhotoIds()
     if type(indexedIds) ~= "table" then
+        log:error("migratePhotoIdsFromCatalog: could not retrieve indexed IDs")
         return false, "Could not retrieve indexed IDs from backend."
     end
+    log:info("migratePhotoIdsFromCatalog: indexed IDs fetched: " .. tostring(#indexedIds))
+
     local indexedIdSet = {}
     for _, id in ipairs(indexedIds) do
         indexedIdSet[id] = true
@@ -1300,8 +1307,10 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
     local photos = catalog:getAllPhotos() or {}
     local totalPhotos = #photos
     if totalPhotos == 0 then
+        log:info("migratePhotoIdsFromCatalog: no photos in catalog")
         return true, "No photos found in catalog."
     end
+    log:info("migratePhotoIdsFromCatalog: catalog photos to inspect: " .. tostring(totalPhotos))
 
     local progressScope = LrProgressScope({
         title = "Migrating photo IDs...",
@@ -1345,12 +1354,26 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
 
         progressScope:setPortionComplete(i, totalPhotos)
         progressScope:setCaption("Preparing migration mappings " .. tostring(i) .. "/" .. tostring(totalPhotos))
+        if i % 250 == 0 then
+            log:trace(
+                "migratePhotoIdsFromCatalog: prep progress " .. tostring(i) .. "/" .. tostring(totalPhotos) ..
+                " mappings=" .. tostring(#mappings) ..
+                " skippedNotIndexed=" .. tostring(skippedNotIndexed) ..
+                " skippedAlreadyMigrated=" .. tostring(skippedAlreadyMigrated)
+            )
+        end
     end
 
     if #mappings == 0 then
         progressScope:done()
+        log:info(
+            "migratePhotoIdsFromCatalog: no mappings prepared. skippedNotIndexed=" .. tostring(skippedNotIndexed) ..
+            " skippedAlreadyMigrated=" .. tostring(skippedAlreadyMigrated) ..
+            " skippedTotal=" .. tostring(skipped)
+        )
         return true, "No migration needed. All photos are already using photo_id."
     end
+    log:info("migratePhotoIdsFromCatalog: mappings prepared: " .. tostring(#mappings))
 
     local batchSize = 250
     local migratedTotal = 0
@@ -1385,6 +1408,7 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
 
         if err then
             progressScope:done()
+            log:error("migratePhotoIdsFromCatalog: batch failed at " .. tostring(startIdx) .. "-" .. tostring(stopIdx) .. " err=" .. tostring(err))
             return false, "Migration request failed: " .. tostring(err)
         end
 
@@ -1394,11 +1418,20 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
         conflictTotal = conflictTotal + (summary.conflicts or 0)
         errorTotal = errorTotal + (summary.errors or 0)
 
+        log:trace(
+            "migratePhotoIdsFromCatalog: batch " .. tostring(startIdx) .. "-" .. tostring(stopIdx) ..
+            " migrated=" .. tostring(summary.migrated or 0) ..
+            " missing_old=" .. tostring(summary.missing_old or 0) ..
+            " conflicts=" .. tostring(summary.conflicts or 0) ..
+            " errors=" .. tostring(summary.errors or 0)
+        )
+
         progressScope:setPortionComplete(stopIdx, #mappings)
         progressScope:setCaption("Migrating photo IDs " .. tostring(stopIdx) .. "/" .. tostring(#mappings))
     end
 
     progressScope:done()
+    local migrationElapsedMs = math.floor((LrDate.currentTime() - migrationStartedAt) * 1000)
 
     local msg = "Migration finished.\n" ..
         "Indexed IDs in backend: " .. tostring(#indexedIds) .. "\n" ..
@@ -1410,6 +1443,15 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
         "Skipped (not indexed in backend): " .. tostring(skippedNotIndexed) .. "\n" ..
         "Skipped (already migrated): " .. tostring(skippedAlreadyMigrated) .. "\n" ..
         "Skipped in catalog prep: " .. tostring(skipped)
+    log:info(
+        "migratePhotoIdsFromCatalog: finished elapsedMs=" .. tostring(migrationElapsedMs) ..
+        " prepared=" .. tostring(#mappings) ..
+        " migrated=" .. tostring(migratedTotal) ..
+        " missing_old=" .. tostring(missingOldTotal) ..
+        " conflicts=" .. tostring(conflictTotal) ..
+        " errors=" .. tostring(errorTotal) ..
+        " skippedTotal=" .. tostring(skipped)
+    )
     return errorTotal == 0, msg
 end
 

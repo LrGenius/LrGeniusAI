@@ -239,7 +239,12 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         title = "Migrate existing DB IDs to photo_id",
                         action = function(button)
                             LrTasks.startAsyncTask(function()
-                                local ok, msg = SearchIndexAPI.migratePhotoIdsFromCatalog()
+                                local status, ok, msg = pcall(SearchIndexAPI.migratePhotoIdsFromCatalog)
+                                if not status then
+                                    log:error("Photo-ID migration crashed: " .. tostring(ok))
+                                    LrDialogs.message("Photo-ID Migration failed", tostring(ok), "critical")
+                                    return
+                                end
                                 if ok then
                                     LrDialogs.message("Photo-ID Migration", msg or "Migration completed.")
                                 else

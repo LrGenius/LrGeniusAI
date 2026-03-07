@@ -148,14 +148,17 @@ function Util.computePartialFileMd5(filePath, windowBytes)
         return nil, "LrMD5.digest is unavailable"
     end
 
+    local startedAt = LrDate.currentTime()
     local attributes, attrErr = getFileAttributes(filePath)
     if not attributes then
+        log:error("computePartialFileMd5: file attribute error for " .. tostring(filePath) .. ": " .. tostring(attrErr))
         return nil, attrErr
     end
 
     local chunkSize = math.max(1, tonumber(windowBytes) or DEFAULT_PARTIAL_HASH_WINDOW_BYTES)
     local fh = io.open(filePath, "rb")
     if not fh then
+        log:error("computePartialFileMd5: could not open file for binary read: " .. tostring(filePath))
         return nil, "Could not open file for binary read"
     end
 
@@ -173,8 +176,19 @@ function Util.computePartialFileMd5(filePath, windowBytes)
     local md5Input = tostring(attributes.fileSize) .. ":" .. firstChunk .. ":" .. lastChunk
     local digest = LrMD5.digest(md5Input)
     if Util.nilOrEmpty(digest) then
+        log:error("computePartialFileMd5: digest failed for " .. tostring(filePath))
         return nil, "MD5 digest failed"
     end
+
+    local elapsedMs = math.floor((LrDate.currentTime() - startedAt) * 1000)
+    log:trace(
+        "computePartialFileMd5: file=" .. tostring(filePath) ..
+        " size=" .. tostring(attributes.fileSize) ..
+        " chunkSize=" .. tostring(chunkSize) ..
+        " firstLen=" .. tostring(firstLen) ..
+        " lastLen=" .. tostring(string.len(lastChunk)) ..
+        " elapsedMs=" .. tostring(elapsedMs)
+    )
 
     return digest, {
         fileSize = attributes.fileSize,
@@ -208,6 +222,7 @@ function Util.getGlobalPhotoIdForPhoto(photo, options)
     local originalFilePath = photo:getRawMetadata("path")
     local attributes, attrErr = getFileAttributes(originalFilePath)
     if not attributes then
+        log:error("getGlobalPhotoIdForPhoto: file attributes unavailable for photo path=" .. tostring(originalFilePath) .. " err=" .. tostring(attrErr))
         return nil, attrErr
     end
 
@@ -218,11 +233,14 @@ function Util.getGlobalPhotoIdForPhoto(photo, options)
     if not options.forceRecompute and not Util.nilOrEmpty(cachedId)
         and cachedSize == attributes.fileSize
         and cachedMtime == attributes.fileModificationDate then
+        log:trace("getGlobalPhotoIdForPhoto: cache hit for " .. tostring(originalFilePath))
         return cachedId, nil
     end
 
+    local rebuildStartedAt = LrDate.currentTime()
     local globalPhotoId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
     if not globalPhotoId then
+        log:error("getGlobalPhotoIdForPhoto: failed for " .. tostring(originalFilePath) .. " err=" .. tostring(metadataOrErr))
         return nil, metadataOrErr
     end
 
@@ -237,6 +255,13 @@ function Util.getGlobalPhotoIdForPhoto(photo, options)
         photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate", tostring(metadata.fileModificationDate or ""))
         photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm", "md5_partial")
     end)
+
+    local rebuildElapsedMs = math.floor((LrDate.currentTime() - rebuildStartedAt) * 1000)
+    log:trace(
+        "getGlobalPhotoIdForPhoto: cache miss -> generated id for " .. tostring(originalFilePath) ..
+        " elapsedMs=" .. tostring(rebuildElapsedMs) ..
+        " idPrefix=" .. tostring(string.sub(globalPhotoId, 1, 24))
+    )
 
     return globalPhotoId, nil
 end
