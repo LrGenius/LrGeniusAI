@@ -1,7 +1,5 @@
 # LrGeniusAI Lightroom Plugin
 
-[![Build LrGeniusAI Plugin](https://github.com/LrGenius/LrGeniusAI/actions/workflows/build.yml/badge.svg)](https://github.com/LrGenius/LrGeniusAI/actions/workflows/build.yml)
-
 AI-powered metadata, semantic search, quality scoring, and face workflows for Adobe Lightroom Classic.
 
 ---
