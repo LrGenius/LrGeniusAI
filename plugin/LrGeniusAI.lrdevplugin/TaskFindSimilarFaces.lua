@@ -99,14 +99,10 @@ local function showFaceSelectionDialog(context, faces)
     return props.selectedFaceIndex
 end
 
---- Create collection from photo UUIDs and show in Library (same pattern as TaskPeople doShowInLibrary).
-local function createCollectionFromUuids(uuids, collectionName)
+-- Create collection from photo IDs and show in Library (same pattern as TaskPeople doShowInLibrary).
+local function createCollectionFromPhotoIds(photoIds, collectionName)
     local catalog = LrApplication.activeCatalog()
-    local photos = {}
-    for _, uuid in ipairs(uuids) do
-        local photo = catalog:findPhotoByUuid(uuid)
-        if photo then table.insert(photos, photo) end
-    end
+    local photos = SearchIndexAPI.findPhotosByPhotoIds(photoIds)
     if #photos == 0 then
         LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoPhotosInCatalog=Not in catalog", LOC "$$$/LrGeniusAI/FindSimilarFaces/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog.")
         return
@@ -212,25 +208,25 @@ LrTasks.startAsyncTask(function()
 
         -- 4) Get cluster: prefer person_id from first result, then get all photos for that person
         local personId = results[1].person_id
-        local uuids = {}
+        local photoIds = {}
         if personId and personId ~= "" then
             local personResp, personErr = SearchIndexAPI.getPhotosForPerson(personId)
-            if not personErr and personResp and personResp.photo_uuids then
-                uuids = personResp.photo_uuids
+            if not personErr and personResp and (personResp.photo_ids or personResp.photo_uuids) then
+                photoIds = personResp.photo_ids or personResp.photo_uuids
             end
         end
-        if #uuids == 0 then
+        if #photoIds == 0 then
             local seen = {}
             for _, r in ipairs(results) do
-                local uuid = r.photo_uuid
-                if uuid and not seen[uuid] then
-                    seen[uuid] = true
-                    table.insert(uuids, uuid)
+                local photoId = r.photo_id or r.photo_uuid
+                if photoId and not seen[photoId] then
+                    seen[photoId] = true
+                    table.insert(photoIds, photoId)
                 end
             end
         end
 
-        if #uuids == 0 then
+        if #photoIds == 0 then
             LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces", LOC "$$$/LrGeniusAI/FindSimilarFaces/NoPhotosForFace=No photos found for this face.")
             return
         end
@@ -246,6 +242,6 @@ LrTasks.startAsyncTask(function()
             personDisplayName = LOC "$$$/LrGeniusAI/FindSimilarFaces/SimilarFaces=Similar Faces"
         end
         local collectionName = string.format("%s @ %s", personDisplayName, LrDate.timeToW3CDate(LrDate.currentTime()))
-        createCollectionFromUuids(uuids, collectionName)
+        createCollectionFromPhotoIds(photoIds, collectionName)
     end)
 end)

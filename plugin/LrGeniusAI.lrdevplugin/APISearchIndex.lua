@@ -63,6 +63,105 @@ local EXPORT_SETTINGS = {
 local _request
 local _requestMultipart
 
+local function shouldUseGlobalPhotoId()
+    return prefs and prefs.useGlobalPhotoId ~= false
+end
+
+local function getPhotoIdForPhoto(photo)
+    if not photo then
+        return nil, "Photo is nil"
+    end
+    if shouldUseGlobalPhotoId() then
+        return Util.getGlobalPhotoIdForPhoto(photo, {
+            windowBytes = Util.getDefaultPartialHashWindowBytes(),
+        })
+    end
+    local uuid = photo:getRawMetadata("uuid")
+    if not uuid or uuid == "" then
+        return nil, "Photo UUID is missing"
+    end
+    return uuid, nil
+end
+
+function SearchIndexAPI.getPhotoIdForPhoto(photo)
+    return getPhotoIdForPhoto(photo)
+end
+
+function SearchIndexAPI.findPhotoByPhotoId(photoId)
+    if not photoId or photoId == "" then
+        return nil
+    end
+
+    local catalog = LrApplication.activeCatalog()
+    if not shouldUseGlobalPhotoId() then
+        return catalog:findPhotoByUuid(photoId)
+    end
+
+    for _, photo in ipairs(catalog:getAllPhotos()) do
+        local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
+        if cachedId == photoId then
+            return photo
+        end
+    end
+
+    for _, photo in ipairs(catalog:getAllPhotos()) do
+        local candidateId = getPhotoIdForPhoto(photo)
+        if candidateId == photoId then
+            return photo
+        end
+    end
+
+    return nil
+end
+
+function SearchIndexAPI.findPhotosByPhotoIds(photoIds)
+    local photos = {}
+    if type(photoIds) ~= "table" or #photoIds == 0 then
+        return photos
+    end
+
+    local catalog = LrApplication.activeCatalog()
+    if not shouldUseGlobalPhotoId() then
+        for _, photoId in ipairs(photoIds) do
+            local photo = catalog:findPhotoByUuid(photoId)
+            if photo then
+                table.insert(photos, photo)
+            end
+        end
+        return photos
+    end
+
+    local idSet = {}
+    for _, photoId in ipairs(photoIds) do
+        idSet[photoId] = true
+    end
+
+    local photoById = {}
+    local allPhotos = catalog:getAllPhotos()
+
+    for _, photo in ipairs(allPhotos) do
+        local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
+        if cachedId and idSet[cachedId] and not photoById[cachedId] then
+            photoById[cachedId] = photo
+        end
+    end
+
+    for _, photo in ipairs(allPhotos) do
+        local candidateId = getPhotoIdForPhoto(photo)
+        if candidateId and idSet[candidateId] and not photoById[candidateId] then
+            photoById[candidateId] = photo
+        end
+    end
+
+    for _, photoId in ipairs(photoIds) do
+        if photoById[photoId] then
+            table.insert(photos, photoById[photoId])
+        end
+    end
+
+    return photos
+end
+
 ---
 -- Exports a photo to a temporary location for processing.
 -- @param photo The Lightroom photo object to export.
@@ -137,7 +236,7 @@ end
 ---
 -- Unified function to analyze and index photos with metadata, quality scores, and embeddings.
 -- Replaces the old separate analyze and index workflows.
--- @param uuid string The UUID of the photo.
+-- @param photoId string The ID of the photo.
 -- @param filename string The filename of the photo.
 -- @param jpeg string The JPEG data of the photo.
 -- @param options table Optional parameters for the analysis:
@@ -160,10 +259,14 @@ end
 ---
 
 
-function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
+function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     if filepath == nil then 
         log:error("JPEG is nil")
         return false, "No image data provided"
+    end
+    if not photoId or photoId == "" then
+        log:error("Photo ID is missing")
+        return false, "No photo ID provided"
     end
 
     local filename = LrPathUtils.leafName(filepath)
@@ -176,7 +279,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
     local mimeChunks = {}
     
     -- Add form fields
-    table.insert(mimeChunks, { name = "uuid", value = uuid })
+    table.insert(mimeChunks, { name = "photo_id", value = photoId })
     table.insert(mimeChunks, { name = "tasks", value = JSON:encode(options.tasks or {}) })
     
     if options.provider then
@@ -246,7 +349,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
         contentType = "image/jpeg"
     })
     
-    log:trace("Analyzing and indexing photo: " .. filename .. " with tasks: " .. (options.tasks and table.concat(options.tasks, ", ") or "none"))
+    log:trace("Analyzing and indexing photo: " .. filename .. " with id " .. photoId .. " and tasks: " .. (options.tasks and table.concat(options.tasks, ", ") or "none"))
 
     local response, err = _requestMultipart(url, mimeChunks, 720)
 
@@ -314,11 +417,14 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
     end
 
     -- Vertex AI config from plugin prefs so server can use Vertex for semantic search
-    local vertex_project_id = (searchOptions and searchOptions.vertex_project_id) or (prefs and prefs.vertexProjectId)
+    local vertex_project_id_raw = (searchOptions and searchOptions.vertex_project_id) or (prefs and prefs.vertexProjectId)
+    local vertex_project_id = nil
     local vertex_location = (searchOptions and searchOptions.vertex_location) or (prefs and prefs.vertexLocation) or "us-central1"
-    if vertex_project_id and type(vertex_project_id) == "string" then
-        vertex_project_id = vertex_project_id:gsub("^%s*(.-)%s*$", "%1")
-        if vertex_project_id == "" then vertex_project_id = nil end
+    if type(vertex_project_id_raw) == "string" then
+        local trimmedProjectId = vertex_project_id_raw:gsub("^%s*(.-)%s*$", "%1")
+        if trimmedProjectId ~= "" then
+            vertex_project_id = trimmedProjectId
+        end
     end
     if vertex_location and type(vertex_location) == "string" then
         vertex_location = vertex_location:gsub("^%s*(.-)%s*$", "%1")
@@ -326,14 +432,19 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
 
     if photosToSearch and #photosToSearch > 0 then
         -- Perform a scoped search via POST
-        local uuids = {}
+        local photoIds = {}
         for _, photo in ipairs(photosToSearch) do
-            table.insert(uuids, photo:getRawMetadata("uuid"))
+            local photoId, idErr = getPhotoIdForPhoto(photo)
+            if photoId then
+                table.insert(photoIds, photoId)
+            else
+                log:error("Skipping photo in scoped search due to missing photo ID: " .. tostring(idErr))
+            end
         end
 
         local body = {
             term = searchTerm,
-            uuids = uuids,
+            photo_ids = photoIds,
         }
         if search_sources then
             body.search_sources = search_sources
@@ -375,7 +486,7 @@ function SearchIndexAPI.getStats()
     return _request('GET', getBaseUrl() .. ENDPOINTS.STATS)
 end
 
-function SearchIndexAPI.getAllIndexedPhotoUUIDs(requireEmbeddings)
+function SearchIndexAPI.getAllIndexedPhotoIds(requireEmbeddings)
     local url = getBaseUrl() .. ENDPOINTS.GET_IDS
     -- If requireEmbeddings is true, only get UUIDs with real embeddings
     if requireEmbeddings then
@@ -384,28 +495,32 @@ function SearchIndexAPI.getAllIndexedPhotoUUIDs(requireEmbeddings)
     return _request('GET', url)
 end
 
+function SearchIndexAPI.getAllIndexedPhotoUUIDs(requireEmbeddings)
+    return SearchIndexAPI.getAllIndexedPhotoIds(requireEmbeddings)
+end
+
 ---
--- Retrieves metadata and quality scores for a photo by UUID.
--- @param uuid The UUID of the photo to retrieve.
+-- Retrieves metadata and quality scores for a photo by ID.
+-- @param photoId The photo ID to retrieve.
 -- @return table|nil Response containing metadata and quality fields, or nil on error.
 -- Response structure:
 --   {
 --     status = "success",
---     uuid = "...",
+--     photo_id = "...",
 --     metadata = { title = "...", caption = "...", keywords = {...}, alt_text = "..." },
 --     quality = { overall_score = 0.8, composition_score = 0.9, ... }
 --   }
 --
-function SearchIndexAPI.getPhotoData(uuid)
-    if not uuid then
-        log:error("getPhotoData: UUID is required")
+function SearchIndexAPI.getPhotoData(photoId)
+    if not photoId then
+        log:error("getPhotoData: photo_id is required")
         return nil
     end
     
     local url = getBaseUrl() .. "/get"
-    local body = { uuid = uuid }
+    local body = { photo_id = photoId }
     
-    log:trace("Retrieving photo data for UUID: " .. uuid)
+    log:trace("Retrieving photo data for photo_id: " .. photoId)
     
     local result, err = _request('POST', url, body)
     if err then
@@ -414,18 +529,18 @@ function SearchIndexAPI.getPhotoData(uuid)
     end
     
     if result and result.status == "success" then
-        log:trace("Successfully retrieved photo data for UUID: " .. uuid)
+        log:trace("Successfully retrieved photo data for photo_id: " .. photoId)
         return result
     else
-        log:warn("Photo data not found for UUID: " .. uuid)
+        log:warn("Photo data not found for photo_id: " .. photoId)
         return nil
     end
 end
 
-function SearchIndexAPI.removeUUID(uuid)
+function SearchIndexAPI.removePhotoId(photoId)
     local url = getBaseUrl() .. ENDPOINTS.REMOVE
-    local body = { uuid = uuid }
-    log:trace("Removing UUID: " .. uuid)
+    local body = { photo_id = photoId }
+    log:trace("Removing photo_id: " .. photoId)
 
     local result, err = _request('POST', url, body)
     if not err then
@@ -436,8 +551,17 @@ function SearchIndexAPI.removeUUID(uuid)
     end
 end
 
+function SearchIndexAPI.removeUUID(uuid)
+    return SearchIndexAPI.removePhotoId(uuid)
+end
+
 function SearchIndexAPI.removeMissingFromIndex()
-    local indexedUUIDs = SearchIndexAPI.getAllIndexedPhotoUUIDs()
+    if shouldUseGlobalPhotoId() then
+        log:warn("removeMissingFromIndex is disabled while useGlobalPhotoId is enabled")
+        return false
+    end
+
+    local indexedUUIDs = SearchIndexAPI.getAllIndexedPhotoIds()
 
     if indexedUUIDs == nil then
         log:warn("Failed to retrieve indexed UUIDs")
@@ -515,70 +639,78 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
             local photo = table.remove(photoToProcessStack, 1)
             if photo ~= nil then
                 
-                local uuid = photo:getRawMetadata("uuid")
                 local filename = photo:getFormattedMetadata("fileName")
-                
-                -- Export photo as JPEG
-                local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
-                
-                if exportedPhotoPath ~= nil then
+                local hashStart = LrDate.currentTime()
+                local photoId, photoIdErr = getPhotoIdForPhoto(photo)
+                if photoId then
+                    log:trace("Using photo_id for " .. filename .. " (hashing_ms=" .. tostring(math.floor((LrDate.currentTime() - hashStart) * 1000)) .. ")")
 
-                    -- Prepare analysis options with photo-specific context
-                    local photoOptions = {}
-                    for k, v in pairs(options) do
-                        photoOptions[k] = v
-                    end
-
-                    log:trace("Options for photo " .. filename .. ": " .. Util.dumpTable(photoOptions))
+                    -- Export photo as JPEG
+                    local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
                     
-                    -- Add GPS if enabled
-                    if options.submit_gps then
-                        local gps = photo:getRawMetadata('gps')
-                        if gps then
-                            photoOptions.gps_coordinates = gps
+                    if exportedPhotoPath ~= nil then
+
+                        -- Prepare analysis options with photo-specific context
+                        local photoOptions = {}
+                        for k, v in pairs(options) do
+                            photoOptions[k] = v
                         end
-                    end
-                    
-                    -- Add existing keywords if enabled
-                    if options.submit_keywords then
-                        local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-                        if keywords then
-                            photoOptions.existing_keywords = keywords
+
+                        log:trace("Options for photo " .. filename .. ": " .. Util.dumpTable(photoOptions))
+                        
+                        -- Add GPS if enabled
+                        if options.submit_gps then
+                            local gps = photo:getRawMetadata('gps')
+                            if gps then
+                                photoOptions.gps_coordinates = gps
+                            end
                         end
-                    end
-                    
-                    -- Add folder names if enabled
-                    if options.submit_folder_names then
-                        local originalFilePath = photo:getRawMetadata("path")
-                        if originalFilePath then
-                            photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
+                        
+                        -- Add existing keywords if enabled
+                        if options.submit_keywords then
+                            local keywords = photo:getFormattedMetadata("keywordTagsForExport")
+                            if keywords then
+                                photoOptions.existing_keywords = keywords
+                            end
                         end
-                    end
-
-
-                    if options.submit_date_time then
-                        local datetime = photo:getRawMetadata("dateTime")
-                        if datetime ~= nil and type(datetime) == "number" then
-                            photoOptions.date_time = LrDate.timeToW3CDate(datetime)
+                        
+                        -- Add folder names if enabled
+                        if options.submit_folder_names then
+                            local originalFilePath = photo:getRawMetadata("path")
+                            if originalFilePath then
+                                photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
+                            end
                         end
-                    end
 
 
-                    photoOptions.user_context = catalog:getPropertyForPlugin(_PLUGIN, 'photoContext') or ""
+                        if options.submit_date_time then
+                            local datetime = photo:getRawMetadata("dateTime")
+                            if datetime ~= nil and type(datetime) == "number" then
+                                photoOptions.date_time = LrDate.timeToW3CDate(datetime)
+                            end
+                        end
 
-                    -- Call unified API to index/analyze
-                    local success, indexResponse = SearchIndexAPI.analyzeAndIndexPhoto(uuid, exportedPhotoPath, photoOptions)
-                    if success then
-                        stats.success = stats.success + 1
+
+                        photoOptions.user_context = catalog:getPropertyForPlugin(_PLUGIN, 'photoContext') or ""
+                        photoOptions.photo_id = photoId
+
+                        -- Call unified API to index/analyze
+                        local success, indexResponse = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath, photoOptions)
+                        if success then
+                            stats.success = stats.success + 1
+                        else
+                            stats.failed = stats.failed + 1
+                            log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown"))
+                        end
+                        -- Cleanup temp filename
+                        LrFileUtils.delete(exportedPhotoPath)
                     else
                         stats.failed = stats.failed + 1
-                        log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown"))
+                        log:error("Failed to read exported photo: " .. filename)
                     end
-                    -- Cleanup temp filename
-                    LrFileUtils.delete(exportedPhotoPath)
                 else
                     stats.failed = stats.failed + 1
-                    log:error("Failed to read exported photo: " .. filename)
+                    log:error("Failed to compute photo ID for " .. filename .. ": " .. tostring(photoIdErr))
                 end
                 
 
@@ -670,16 +802,24 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
                 break
             end
 
+            local photoId = getPhotoIdForPhoto(photo)
             local metadata = {
-                uuid = photo:getRawMetadata("uuid"),
+                photo_id = photoId,
                 caption = photo:getFormattedMetadata("caption"),
                 title = photo:getFormattedMetadata("title"),
                 keywords = MetadataManager.getPhotoKeywordHierarchy(photo),
                 alt_text = photo:getFormattedMetadata("altTextAccessibility")
             }
-            table.insert(metadataBatch, metadata)
+            if type(metadata.photo_id) ~= "string" or metadata.photo_id == "" then
+                stats.failed = stats.failed + 1
+                stats.processed = stats.processed + 1
+                log:error("Skipping metadata import for photo due to missing photo_id: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
+                progressScope:setPortionComplete(stats.processed, numPhotos)
+            else
+                table.insert(metadataBatch, metadata)
+            end
 
-            if #metadataBatch >= batchSize or i == numPhotos then
+            if #metadataBatch > 0 and (#metadataBatch >= batchSize or i == numPhotos) then
                 local response = _request('POST', getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, { metadata_items = metadataBatch })
                 if response ~= nil and response.status == "processed" then
                     stats.success = stats.success + #metadataBatch
@@ -942,11 +1082,16 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
 
     -- New behavior: use backend to check which photos need processing based on selected tasks
     if taskOptions and type(taskOptions) == "table" then
-        local uuids = {}
+        local photoIds = {}
         for _, photo in ipairs(allPhotos) do
-            table.insert(uuids, photo:getRawMetadata("uuid"))
+            local photoId, idErr = getPhotoIdForPhoto(photo)
+            if photoId then
+                table.insert(photoIds, photoId)
+            else
+                log:error("Could not compute photo_id for missing-check: " .. tostring(idErr))
+            end
         end
-        if #uuids == 0 then
+        if #photoIds == 0 then
             return true, {}
         end
 
@@ -958,7 +1103,7 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
         if taskOptions.enableVertexAI then table.insert(tasks, "vertexai") end
 
         local body = {
-            uuids = uuids,
+            photo_ids = photoIds,
             tasks = tasks,
             regenerate_metadata = taskOptions.regenerateMetadata or false
         }
@@ -968,13 +1113,14 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
             return false, {}
         end
 
-        local needingUUIDs = result and result.uuids or {}
-        local uuidSet = {}
-        for _, u in ipairs(needingUUIDs) do uuidSet[u] = true end
+        local needingPhotoIds = result and (result.photo_ids or result.uuids) or {}
+        local photoIdSet = {}
+        for _, pid in ipairs(needingPhotoIds) do photoIdSet[pid] = true end
 
         local photosToProcess = {}
         for _, photo in ipairs(allPhotos) do
-            if uuidSet[photo:getRawMetadata("uuid")] then
+            local photoId = getPhotoIdForPhoto(photo)
+            if photoIdSet[photoId] then
                 table.insert(photosToProcess, photo)
             end
         end
@@ -983,7 +1129,7 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
 
     -- Legacy: photos not in index (optionally requiring real embeddings)
     local requireEmbeddings = (taskOptions == true)
-    local indexedUUIDs, err = SearchIndexAPI.getAllIndexedPhotoUUIDs(requireEmbeddings)
+    local indexedPhotoIds, err = SearchIndexAPI.getAllIndexedPhotoIds(requireEmbeddings)
     if err then
         ErrorHandler.handleError("Failed to retrieve indexed photos", err)
         return false, {}
@@ -991,8 +1137,8 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
 
     local photosToProcess = {}
     for _, photo in ipairs(allPhotos) do
-        local uuid = photo:getRawMetadata("uuid")
-        if not Util.table_contains(indexedUUIDs, uuid) then
+        local photoId = getPhotoIdForPhoto(photo)
+        if photoId and not Util.table_contains(indexedPhotoIds, photoId) then
             table.insert(photosToProcess, photo)
         end
     end

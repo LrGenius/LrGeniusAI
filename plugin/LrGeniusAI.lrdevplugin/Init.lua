@@ -17,6 +17,7 @@ _G.LrPrefs = import 'LrPrefs'
 _G.LrProgressScope = import 'LrProgressScope'
 _G.LrExportSession = import 'LrExportSession'
 _G.LrStringUtils = import 'LrStringUtils'
+_G.LrMD5 = import 'LrMD5'
 _G.LrLocalization = import 'LrLocalization'
 _G.LrShell = import 'LrShell'
 _G.LrSystemInfo = import 'LrSystemInfo'
@@ -139,6 +140,10 @@ end
 
 if _G.prefs.submitFolderName == nil then
     _G.prefs.submitFolderName = false
+end
+
+if _G.prefs.useGlobalPhotoId == nil then
+    _G.prefs.useGlobalPhotoId = true
 end
 
 if _G.prefs.useLightroomKeywords == nil then
