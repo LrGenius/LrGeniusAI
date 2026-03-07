@@ -16,6 +16,9 @@ services:
       - ./data:/data
       # OpenCLIP/Hugging Face + InsightFace: Modell-Downloads persistent (große Dateien)
       - ./models:/models
+      # Persist Google Cloud CLI config + ADC login across container restarts/rebuilds
+      - ./gcloud:/root/.config/gcloud
     environment:
       - GENIUSAI_HOST=0.0.0.0
       - GENIUSAI_PORT=19819
+      - CLOUDSDK_CONFIG=/root/.config/gcloud

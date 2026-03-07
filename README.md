@@ -119,10 +119,50 @@ gcloud auth application-default login
 gcloud auth application-default print-access-token
 ```
 
+### Remote backend with Docker Compose
+
+If your backend runs as a remote Docker container, authenticate inside the container and persist the Google Cloud CLI state with the bind mount in `server/docker-compose.yml`.
+
+1. Open a shell on the server and go to the backend folder:
+
+```bash
+cd server
+mkdir -p gcloud
+docker compose up -d --build
+```
+
+2. Set the Vertex project inside the running container:
+
+```bash
+docker compose exec geniusai-server gcloud config set project YOUR_PROJECT_ID
+```
+
+3. Login for Application Default Credentials (ADC):
+
+```bash
+docker compose exec geniusai-server gcloud auth application-default login
+```
+
+4. Optional verification:
+
+```bash
+docker compose exec geniusai-server gcloud auth application-default print-access-token
+```
+
+For headless SSH hosts without a browser, use:
+
+```bash
+docker compose exec geniusai-server gcloud auth application-default login --no-browser
+```
+
+Then follow the remote bootstrap flow shown by `gcloud` on a second trusted machine that has a browser and Google Cloud CLI installed.
+
 ### Notes
 
 - `gcloud auth application-default login` creates local Application Default Credentials (ADC).
+- In Docker Compose, the bind mount `./gcloud:/root/.config/gcloud` keeps ADC and the active gcloud project across container restarts and rebuilds.
 - Set `Vertex AI Project ID` and `Vertex AI Location` in the Lightroom plugin settings.
+- Do not set `GOOGLE_APPLICATION_CREDENTIALS` when you want the container to use ADC created by `gcloud auth application-default login`.
 - For headless/server deployments, prefer service-account auth via `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ---

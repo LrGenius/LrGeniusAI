@@ -48,6 +48,24 @@ gcloud config set project YOUR_PROJECT_ID
 gcloud auth application-default login
 ```
 
+If the backend runs in Docker Compose on a remote server, run the login inside the container instead:
+
+```bash
+cd server
+mkdir -p gcloud
+docker compose up -d --build
+docker compose exec geniusai-server gcloud config set project YOUR_PROJECT_ID
+docker compose exec geniusai-server gcloud auth application-default login
+```
+
+For headless SSH hosts without a browser:
+
+```bash
+docker compose exec geniusai-server gcloud auth application-default login --no-browser
+```
+
+The bind mount `./gcloud:/root/.config/gcloud` keeps ADC and the active gcloud project persistent across container restarts and rebuilds.
+
 ## 6. Imported help pages
 
 Curated pages migrated from `lrgenius.com/help`:
