@@ -50,3 +50,15 @@ If you run an existing database, perform a one-time migration.
 - `image_embeddings`
 - `image_embeddings_vertex`
 - `face_embeddings` (metadata references)
+
+### Identity scope note
+
+The current `photo_id` / hash / derived `canonicalId` strategy is more stable than legacy Lightroom UUIDs, but it is still not guaranteed to be 100% cross-catalog safe in every workflow.
+
+In practice, backend identity should still be treated as best-effort and mostly catalog-scoped, especially when:
+
+- the same source files exist in multiple Lightroom catalogs
+- files were duplicated, re-exported, or rewritten outside Lightroom
+- ID generation had to fall back to partial file hashes because stable metadata IDs were unavailable
+
+For workflows that depend on strict cross-catalog identity, re-indexing and migration validation are still recommended when moving photos between catalogs or restoring older backend databases.

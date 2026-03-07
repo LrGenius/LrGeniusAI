@@ -65,6 +65,18 @@ The migration updates all relevant backend collections:
 - vertex embeddings
 - face/person references
 
+### Identity scope note
+
+The current `photo_id` / hash / derived `canonicalId` strategy is more stable than Lightroom catalog UUIDs, but it is still not guaranteed to be 100% cross-catalog safe in every workflow.
+
+Treat backend identity as best-effort and primarily catalog-scoped for now, especially when:
+
+- the same files exist in multiple Lightroom catalogs
+- files were duplicated, re-exported, or rewritten outside Lightroom
+- the plugin had to fall back to partial file hashes because stable metadata IDs were unavailable
+
+If strict cross-catalog identity is important for your workflow, plan for re-indexing or migration checks when moving photos between catalogs or restoring older databases.
+
 ---
 
 ## ☁️ Google Vertex AI Login (gcloud)
