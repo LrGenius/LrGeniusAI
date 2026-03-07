@@ -44,7 +44,7 @@ return {
         {
             id = 'globalPhotoIdFileSize',
             title = "Global Photo ID File Size",
-            dataType = 'number',
+            dataType = 'string',
             readOnly = true,
             searchable = false,
             browsable = false,
@@ -52,7 +52,7 @@ return {
         {
             id = 'globalPhotoIdFileModificationDate',
             title = "Global Photo ID File Modification Date",
-            dataType = 'number',
+            dataType = 'string',
             readOnly = true,
             searchable = false,
             browsable = false,
