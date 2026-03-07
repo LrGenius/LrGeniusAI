@@ -228,7 +228,13 @@ function SearchIndexAPI.analyzeAndIndexPhoto(uuid, filepath, options)
     if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
         table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
     end
-    
+    if options.vertex_project_id and options.vertex_project_id ~= "" then
+        table.insert(mimeChunks, { name = "vertex_project_id", value = options.vertex_project_id })
+    end
+    if options.vertex_location and options.vertex_location ~= "" then
+        table.insert(mimeChunks, { name = "vertex_location", value = options.vertex_location })
+    end
+
     -- Regeneration control: if false, server will only fill missing fields
     table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
     
@@ -288,13 +294,35 @@ local function buildUrlWithParams(baseUrl, params)
     end
 end
 
-function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch)
+function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, searchOptions)
     local params = {
         term = searchTerm,
         quality_sort = qualitySort,
     }
 
     local url = getBaseUrl() .. ENDPOINTS.SEARCH
+
+    -- Build search_sources for API (snake_case). If searchOptions is nil, backend uses defaults.
+    local search_sources = nil
+    if searchOptions then
+        search_sources = {
+            semantic_siglip = searchOptions.semanticSiglip ~= false,
+            semantic_vertex = searchOptions.semanticVertex ~= false,
+            metadata = searchOptions.metadata ~= false,
+            metadata_fields = searchOptions.metadataFields or { "flattened_keywords", "alt_text", "caption", "title" },
+        }
+    end
+
+    -- Vertex AI config from plugin prefs so server can use Vertex for semantic search
+    local vertex_project_id = (searchOptions and searchOptions.vertex_project_id) or (prefs and prefs.vertexProjectId)
+    local vertex_location = (searchOptions and searchOptions.vertex_location) or (prefs and prefs.vertexLocation) or "us-central1"
+    if vertex_project_id and type(vertex_project_id) == "string" then
+        vertex_project_id = vertex_project_id:gsub("^%s*(.-)%s*$", "%1")
+        if vertex_project_id == "" then vertex_project_id = nil end
+    end
+    if vertex_location and type(vertex_location) == "string" then
+        vertex_location = vertex_location:gsub("^%s*(.-)%s*$", "%1")
+    end
 
     if photosToSearch and #photosToSearch > 0 then
         -- Perform a scoped search via POST
@@ -305,14 +333,38 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch)
 
         local body = {
             term = searchTerm,
-            uuids = uuids
+            uuids = uuids,
         }
+        if search_sources then
+            body.search_sources = search_sources
+        end
+        if vertex_project_id and vertex_project_id ~= "" then
+            body.vertex_project_id = vertex_project_id
+            body.vertex_location = vertex_location
+        end
         local postUrl = buildUrlWithParams(url, params)
 
         log:trace("Searching index via POST (scoped): " .. postUrl)
         return _request('POST', postUrl, body)
     else
-        -- Perform a global search via GET
+        -- Global search: use POST when search_sources are provided so we can send JSON body
+        if search_sources then
+            local body = { term = searchTerm, search_sources = search_sources }
+            if vertex_project_id and vertex_project_id ~= "" then
+                body.vertex_project_id = vertex_project_id
+                body.vertex_location = vertex_location
+            end
+            local postUrl = buildUrlWithParams(url, params)
+            log:trace("Searching index via POST (global with search_sources): " .. postUrl)
+            return _request('POST', postUrl, body)
+        end
+        -- GET without search_sources: still send Vertex config via POST if we have it so Vertex search works
+        if vertex_project_id and vertex_project_id ~= "" then
+            local body = { term = searchTerm, vertex_project_id = vertex_project_id, vertex_location = vertex_location }
+            local postUrl = buildUrlWithParams(url, params)
+            log:trace("Searching index via POST (global with vertex config): " .. postUrl)
+            return _request('POST', postUrl, body)
+        end
         local getUrl = buildUrlWithParams(url, params)
         log:trace("Searching index via GET (global): " .. getUrl)
         return _request('GET', getUrl)
@@ -878,7 +930,7 @@ end
 -- Gets photos that need processing for "New or unprocessed photos" scope.
 -- When taskOptions is provided, uses backend to check which photos lack the selected tasks' data.
 -- When taskOptions is nil, falls back to legacy behavior: photos not in index (with embeddings).
--- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableQuality, enableFaces, regenerateMetadata }
+-- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableQuality, enableFaces, enableVertexAI, regenerateMetadata }
 -- @return boolean success, table photosToProcess
 --
 function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
@@ -903,6 +955,7 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions)
         if taskOptions.enableMetadata then table.insert(tasks, "metadata") end
         if taskOptions.enableQuality then table.insert(tasks, "quality") end
         if taskOptions.enableFaces then table.insert(tasks, "faces") end
+        if taskOptions.enableVertexAI then table.insert(tasks, "vertexai") end
 
         local body = {
             uuids = uuids,

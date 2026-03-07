@@ -8,7 +8,15 @@ local function showAdvancedSearchDialog(ctx)
     props.searchTerm = ""
     props.useQualityFilter = false
     props.qualitySort = 'prettiest'
-    props.searchScope = 'all' -- 'view', 'selection', 'all'
+    -- Scope and search-in options from prefs (persisted)
+    props.searchScope = prefs.searchScope or 'all'
+    props.searchInSemanticSiglip = prefs.searchInSemanticSiglip ~= false
+    props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
+    props.searchInMetadata = prefs.searchInMetadata ~= false
+    props.searchInMetadataKeywords = prefs.searchInMetadataKeywords ~= false
+    props.searchInMetadataCaption = prefs.searchInMetadataCaption ~= false
+    props.searchInMetadataTitle = prefs.searchInMetadataTitle ~= false
+    props.searchInMetadataAltText = prefs.searchInMetadataAltText ~= false
 
     local f = LrView.osFactory()
     local bind = LrView.bind
@@ -23,35 +31,6 @@ local function showAdvancedSearchDialog(ctx)
                 f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchTerm=Search Term", width = share 'labelWidth', alignment = 'right' },
                 f:edit_field { value = bind('searchTerm'), width_in_chars = 40 },
             },
-            -- f:group_box {
-            --     title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/QualityFilter=Quality Filter",
-            --     f:column {
-            --         spacing = f:control_spacing(),
-            --         f:row {
-            --             f:checkbox {
-            --                 value = bind('useQualityFilter'),
-            --             },
-            --             f:static_text { title = "Enable Quality Sorting" },
-            --         },
-            --         f:row {
-            --             f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SortBy=Sort by:", width = share 'labelWidth', enabled = bind('useQualityFilter'), alignment = 'right' },
-            --             f:radio_button {
-            --                 title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/PrettiestFirst=Prettiest first",
-            --                 value = bind "qualitySort",
-            --                 bind_to_property = "qualitySort",
-            --                 enabled = bind('useQualityFilter'),
-            --                 checked_value = 'prettiest',
-            --             },
-            --             f:radio_button {
-            --                 title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/UgliestFirst=Ugliest first",
-            --                 value = bind "qualitySort",
-            --                 bind_to_property = "qualitySort",
-            --                 enabled = bind('useQualityFilter'),
-            --                 checked_value = 'ugliest',
-            --             },
-            --         },
-            --     }
-            -- },
             f:row {
                 f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchScope=Search Scope:", width = share 'labelWidth', alignment = 'right' },
                 f:popup_menu {
@@ -60,6 +39,57 @@ local function showAdvancedSearchDialog(ctx)
                         { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/ScopeAllPhotos=All photos", value = 'all' },
                         { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/ScopeCurrentView=Current view", value = 'view' },
                         { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/ScopeSelectedPhotos=Selected photos", value = 'selected' },
+                    },
+                },
+            },
+            f:group_box {
+                title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchIn=Search in",
+                f:column {
+                    spacing = f:control_spacing(),
+                    f:row {
+                        f:checkbox { value = bind('searchInSemanticSiglip') },
+                        f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)" },
+                    },
+                    f:row {
+                        f:checkbox { value = bind('searchInSemanticVertex') },
+                        f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)" },
+                    },
+                    f:row {
+                        f:checkbox { value = bind('searchInMetadata') },
+                        f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata" },
+                    },
+                    f:column {
+                        spacing = 2,
+                        fill_horizontal = 1,
+                        f:row {
+                            fill_horizontal = 1,
+                            f:static_text { width = 20 },
+                            f:row {
+                                f:checkbox { value = bind('searchInMetadataKeywords'), enabled = bind('searchInMetadata') },
+                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataKeywords=Keywords" },
+                            },
+                        },
+                        f:row {
+                            f:static_text { width = 20 },
+                            f:row {
+                                f:checkbox { value = bind('searchInMetadataCaption'), enabled = bind('searchInMetadata') },
+                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataCaption=Caption" },
+                            },
+                        },
+                        f:row {
+                            f:static_text { width = 20 },
+                            f:row {
+                                f:checkbox { value = bind('searchInMetadataTitle'), enabled = bind('searchInMetadata') },
+                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataTitle=Title" },
+                            },
+                        },
+                        f:row {
+                            f:static_text { width = 20 },
+                            f:row {
+                                f:checkbox { value = bind('searchInMetadataAltText'), enabled = bind('searchInMetadata') },
+                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataAltText=Alt text" },
+                            },
+                        },
                     },
                 },
             },
@@ -75,6 +105,15 @@ local function showAdvancedSearchDialog(ctx)
     }
 
     if result == 'ok' then
+        -- Persist dialog options to prefs for next time
+        prefs.searchScope = props.searchScope
+        prefs.searchInSemanticSiglip = props.searchInSemanticSiglip
+        prefs.searchInSemanticVertex = props.searchInSemanticVertex
+        prefs.searchInMetadata = props.searchInMetadata
+        prefs.searchInMetadataKeywords = props.searchInMetadataKeywords
+        prefs.searchInMetadataCaption = props.searchInMetadataCaption
+        prefs.searchInMetadataTitle = props.searchInMetadataTitle
+        prefs.searchInMetadataAltText = props.searchInMetadataAltText
         return props
     else
         return nil
@@ -113,7 +152,22 @@ LrTasks.startAsyncTask(function()
         -- Semantic search (with optional quality filter)
         if props.searchTerm ~= "" then
             log:trace("Performing semantic search for: " .. props.searchTerm)
-            results = SearchIndexAPI.searchIndex(props.searchTerm, qualitySort, photosToSearch)
+            local searchOptions = {
+                semanticSiglip = props.searchInSemanticSiglip,
+                semanticVertex = props.searchInSemanticVertex,
+                metadata = props.searchInMetadata,
+                metadataFields = {},
+            }
+            if props.searchInMetadata then
+                if props.searchInMetadataKeywords then table.insert(searchOptions.metadataFields, "flattened_keywords") end
+                if props.searchInMetadataCaption then table.insert(searchOptions.metadataFields, "caption") end
+                if props.searchInMetadataTitle then table.insert(searchOptions.metadataFields, "title") end
+                if props.searchInMetadataAltText then table.insert(searchOptions.metadataFields, "alt_text") end
+            end
+            if #searchOptions.metadataFields == 0 and props.searchInMetadata then
+                searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
+            end
+            results = SearchIndexAPI.searchIndex(props.searchTerm, qualitySort, photosToSearch, searchOptions)
             collectionName = string.format("'%s' @ %s", props.searchTerm, LrDate.timeToW3CDate(LrDate.currentTime()))
 
         -- Quality-only search

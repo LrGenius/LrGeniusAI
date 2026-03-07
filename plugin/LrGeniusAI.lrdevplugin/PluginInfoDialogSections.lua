@@ -17,7 +17,8 @@ function PluginInfoDialogSections.startDialog(propertyTable)
     propertyTable.logging = prefs.logging
     propertyTable.geminiApiKey = prefs.geminiApiKey
     propertyTable.chatgptApiKey = prefs.chatgptApiKey
-
+    propertyTable.vertexProjectId = prefs.vertexProjectId
+    propertyTable.vertexLocation = prefs.vertexLocation or "us-central1"
 
     propertyTable.exportSize = prefs.exportSize
     propertyTable.exportQuality = prefs.exportQuality
@@ -182,6 +183,35 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         width = share 'apiButtonWidth',
                     },
                 },
+                f:row {
+                    f:static_text {
+                        title = LOC "$$$/LrGeniusAI/PluginInfo/VertexProjectId=Vertex AI Project ID",
+                        width = share 'labelWidth'
+                    },
+                    f:edit_field {
+                        value = bind 'vertexProjectId',
+                        width = share 'inputWidth',
+                        width_in_chars = 30,
+                    },
+                    f:push_button {
+                        title = LOC "$$$/LrGeniusAI/PluginInfo/VertexConsole=Console",
+                        action = function(button) 
+                            LrHttp.openUrlInBrowser("https://console.cloud.google.com/vertex-ai")
+                        end,
+                        width = share 'apiButtonWidth',
+                    },
+                },
+                f:row {
+                    f:static_text {
+                        title = LOC "$$$/LrGeniusAI/PluginInfo/VertexLocation=Vertex AI Location",
+                        width = share 'labelWidth'
+                    },
+                    f:edit_field {
+                        value = bind 'vertexLocation',
+                        width = share 'inputWidth',
+                        width_in_chars = 20,
+                    },
+                },
             },
             f:group_box {
                 width = share 'groupBoxWidth',
@@ -338,6 +368,8 @@ end
 function PluginInfoDialogSections.endDialog(propertyTable)
     prefs.geminiApiKey = propertyTable.geminiApiKey
     prefs.chatgptApiKey = propertyTable.chatgptApiKey
+    prefs.vertexProjectId = (propertyTable.vertexProjectId and propertyTable.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
+    prefs.vertexLocation = (propertyTable.vertexLocation and propertyTable.vertexLocation:gsub("^%s*(.-)%s*$", "%1")) or "us-central1"
     prefs.exportSize = propertyTable.exportSize
     prefs.exportQuality = propertyTable.exportQuality
 

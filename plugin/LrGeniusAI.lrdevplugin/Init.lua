@@ -45,6 +45,14 @@ if _G.prefs.chatgptApiKey == nil then
     _G.prefs.chatgptApiKey = ""
 end
 
+if _G.prefs.vertexProjectId == nil then
+    _G.prefs.vertexProjectId = ""
+end
+
+if _G.prefs.vertexLocation == nil then
+    _G.prefs.vertexLocation = "us-central1"
+end
+
 if _G.prefs.generateTitle == nil then
     _G.prefs.generateTitle = true
 end
@@ -147,6 +155,32 @@ end
 
 if _G.prefs.useClip == nil then
     _G.prefs.useClip = false
+end
+
+-- Advanced Search dialog options (persisted for convenience)
+if _G.prefs.searchScope == nil then
+    _G.prefs.searchScope = "all"
+end
+if _G.prefs.searchInSemanticSiglip == nil then
+    _G.prefs.searchInSemanticSiglip = true
+end
+if _G.prefs.searchInSemanticVertex == nil then
+    _G.prefs.searchInSemanticVertex = true
+end
+if _G.prefs.searchInMetadata == nil then
+    _G.prefs.searchInMetadata = true
+end
+if _G.prefs.searchInMetadataKeywords == nil then
+    _G.prefs.searchInMetadataKeywords = true
+end
+if _G.prefs.searchInMetadataCaption == nil then
+    _G.prefs.searchInMetadataCaption = true
+end
+if _G.prefs.searchInMetadataTitle == nil then
+    _G.prefs.searchInMetadataTitle = true
+end
+if _G.prefs.searchInMetadataAltText == nil then
+    _G.prefs.searchInMetadataAltText = true
 end
 
 function _G.JSON.assert(b, m)
