@@ -52,6 +52,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 ## ⚠️ Breaking Change: `photo_id` Migration
 
 Recent versions switched the backend identity key from Lightroom catalog UUIDs to file-based `photo_id` values.
+The stable ID algorithm was later adjusted to remain stable when metadata is written to files (for example DNG updates).
 
 If you upgrade from an older version, run a one-time migration to keep existing index/search data usable.
 

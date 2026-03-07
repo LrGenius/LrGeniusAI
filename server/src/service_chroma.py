@@ -39,6 +39,20 @@ def _ensure_photo_metadata(photo_id, metadata, legacy_uuid=None):
     return out
 
 
+def _first_result_item(values, default=None):
+    """Return first item from Chroma results without truthiness checks."""
+    if values is None:
+        return default
+    if isinstance(values, np.ndarray):
+        if values.size == 0:
+            return default
+        return values[0]
+    try:
+        return values[0]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
 def _ensure_initialized():
     """Initialize ChromaDB client and collections on first use (lazy loading)."""
     global chroma_client, collection, face_collection, vertex_collection
@@ -483,8 +497,8 @@ def migrate_photo_ids(id_mappings, *, update_faces=True, update_vertex=True, ove
                 summary["migrated"] += 1
                 continue
 
-            old_metadata = (old_rec.get("metadatas") or [{}])[0] or {}
-            old_embedding = (old_rec.get("embeddings") or [None])[0]
+            old_metadata = _first_result_item(old_rec.get("metadatas"), {}) or {}
+            old_embedding = _first_result_item(old_rec.get("embeddings"))
             merged_metadata = dict(old_metadata)
             merged_metadata[LEGACY_UUID_FIELD] = old_id
             merged_metadata[PHOTO_ID_FIELD] = new_id
@@ -498,8 +512,8 @@ def migrate_photo_ids(id_mappings, *, update_faces=True, update_vertex=True, ove
             if update_vertex:
                 old_v = get_vertex_image(old_id)
                 if old_v and old_v.get("ids"):
-                    old_v_emb = (old_v.get("embeddings") or [None])[0]
-                    old_v_meta = (old_v.get("metadatas") or [{}])[0] or {}
+                    old_v_emb = _first_result_item(old_v.get("embeddings"))
+                    old_v_meta = _first_result_item(old_v.get("metadatas"), {}) or {}
                     old_v_meta = _ensure_photo_metadata(new_id, old_v_meta)
                     old_v_meta[LEGACY_UUID_FIELD] = old_id
                     if old_v_emb is not None:

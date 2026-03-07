@@ -67,7 +67,7 @@ return {
         },
     },
 
-    schemaVersion = 24,
+    schemaVersion = 25,
     updateFromEarlierSchemaVersion = function (catalog, previousSchemaVersion, progressScope)
             catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
             if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then
@@ -120,6 +120,39 @@ return {
                         "Plug-in Manager -> LrGeniusAI -> Backend Server.",
                         "info"
                     )
+                end
+            end
+
+            if previousSchemaVersion ~= nil and previousSchemaVersion < 25 then
+                local migrationChoice = LrDialogs.confirm(
+                    "Backend ID migration recommended",
+                    "The photo_id algorithm was updated to remain stable when metadata is written to files (for example DNG updates).\n\n" ..
+                    "Please run the backend ID migration once so existing indexed data matches the new stable IDs.",
+                    "Run migration now",
+                    "Later"
+                )
+
+                if migrationChoice == "ok" then
+                    LrTasks.startAsyncTask(function()
+                        local status, ok, msg
+                        if type(LrTasks) == "table" and type(LrTasks.pcall) == "function" then
+                            status, ok, msg = LrTasks.pcall(function()
+                                return SearchIndexAPI.migratePhotoIdsFromCatalog()
+                            end)
+                        else
+                            ok, msg = SearchIndexAPI.migratePhotoIdsFromCatalog()
+                            status = true
+                        end
+
+                        if not status then
+                            log:error("Photo-ID migration crashed during schema upgrade to 25.")
+                            LrDialogs.message("Photo-ID Migration failed", tostring(ok), "critical")
+                        elseif ok then
+                            LrDialogs.message("Photo-ID Migration", msg or "Migration completed.")
+                        else
+                            LrDialogs.message("Photo-ID Migration failed", msg or "Unknown error", "critical")
+                        end
+                    end)
                 end
             end
         end,

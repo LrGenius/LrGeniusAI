@@ -69,6 +69,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ## Breaking Change: ID Migration Required
 
 The plugin/backend now use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
+The stable ID algorithm was updated again to avoid ID changes when metadata is written into files (for example DNG metadata updates).
 
 If you already have an indexed backend database from older versions, run this one-time migration:
 
