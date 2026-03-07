@@ -134,6 +134,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare image name
+        id: image-name
+        shell: bash
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "registry_image=ghcr.io/${OWNER_LC}/geniusai-server" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -154,7 +161,7 @@ jobs:
           file: ./server/Dockerfile
           platforms: ${{ matrix.docker_platform }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/geniusai-server:${{ github.ref_name }}-${{ matrix.arch }}
+          tags: ${{ steps.image-name.outputs.registry_image }}:${{ github.ref_name }}-${{ matrix.arch }}
           cache-from: type=gha,scope=lrgeniusai-server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=lrgeniusai-server-${{ matrix.arch }}
           labels: |
