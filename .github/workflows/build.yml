@@ -1,20 +1,14 @@
 name: Build LrGeniusAI Plugin and Server
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Plugin and server version (e.g., v1.0.0)'
-        required: true
-        type: string
-      draft_release:
-        description: 'Release als Draft erstellen (zum Testen, später manuell veröffentlichen)'
-        required: false
-        type: boolean
-        default: false
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build-and-release:
+    # Trigger only for version tags and ensure tagged commit is on main.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -35,11 +29,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit is on main
+        shell: bash
+        run: |
+          TAG_SHA="${GITHUB_SHA}"
+          git fetch origin main
+          if git branch -r --contains "$TAG_SHA" | grep -q "origin/main"; then
+            echo "Tag commit is contained in origin/main."
+          else
+            echo "Error: Tag commit is not contained in origin/main."
+            exit 1
+          fi
 
       - name: Update Info.lua with version and build date
         shell: bash
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
@@ -121,7 +129,7 @@ jobs:
       
       - name: Zip artifacts
         run: |
-          VERSION=${{ github.event.inputs.version }}
+          VERSION=${{ github.ref_name }}
           
           cd artifacts
           
@@ -142,31 +150,19 @@ jobs:
       - name: Set release metadata
         id: release-meta
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          if [ "$BRANCH_NAME" = "main" ]; then
-            echo "release_name=Release v${VERSION}" >> $GITHUB_OUTPUT
-          else
-            echo "release_name=Release v${VERSION} (${BRANCH_NAME})" >> $GITHUB_OUTPUT
-          fi
-          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          VERSION="${{ github.ref_name }}"
+          echo "release_name=Release ${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Prepare release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          TAG="v${VERSION}"
-          BRANCH_NAME="${{ steps.release-meta.outputs.branch_name }}"
+          VERSION="${{ github.ref_name }}"
+          TAG="${VERSION}"
           # Auto-generierte Release Notes von GitHub (falls möglich)
           gh api repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name="${TAG}" \
             -q '.body' > release_notes.md 2>/dev/null || echo -n "" > release_notes.md
-          # Branch-Hinweis oben einfügen (wenn nicht main)
-          if [ "$BRANCH_NAME" != "main" ]; then
-            { echo "**Build from branch:** \`${BRANCH_NAME}\`"; echo ""; cat release_notes.md; } > release_notes.tmp
-            mv release_notes.tmp release_notes.md
-          fi
           # Standard-Hinweise zu Known Issues und manuellen Schritten anhängen
           cat >> release_notes.md << 'NOTES'
 
@@ -192,14 +188,14 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.event.inputs.version }}
+          tag_name: ${{ github.ref_name }}
           name: ${{ steps.release-meta.outputs.release_name }}
           body_path: release_notes.md
           files: |
-            artifacts/LrGeniusAI-windows-x64-${{ github.event.inputs.version }}.zip
-            artifacts/LrGeniusAI-macos-arm64-${{ github.event.inputs.version }}.zip
-          draft: ${{ github.event.inputs.draft_release == 'true' }}
-          prerelease: ${{ github.ref != 'refs/heads/main' }}
+            artifacts/LrGeniusAI-windows-x64-${{ github.ref_name }}.zip
+            artifacts/LrGeniusAI-macos-arm64-${{ github.ref_name }}.zip
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
