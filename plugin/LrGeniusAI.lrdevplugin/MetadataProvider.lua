@@ -33,9 +33,41 @@ return {
             searchable = true,
             browsable = true,
         },
+        {
+            id = 'globalPhotoId',
+            title = "Global Photo ID",
+            dataType = 'string',
+            readOnly = true,
+            searchable = false,
+            browsable = false,
+        },
+        {
+            id = 'globalPhotoIdFileSize',
+            title = "Global Photo ID File Size",
+            dataType = 'number',
+            readOnly = true,
+            searchable = false,
+            browsable = false,
+        },
+        {
+            id = 'globalPhotoIdFileModificationDate',
+            title = "Global Photo ID File Modification Date",
+            dataType = 'number',
+            readOnly = true,
+            searchable = false,
+            browsable = false,
+        },
+        {
+            id = 'globalPhotoIdAlgorithm',
+            title = "Global Photo ID Algorithm",
+            dataType = 'string',
+            readOnly = true,
+            searchable = false,
+            browsable = false,
+        },
     },
 
-    schemaVersion = 23,
+    schemaVersion = 24,
     updateFromEarlierSchemaVersion = function (catalog, previousSchemaVersion, progressScope)
             catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
             if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then
