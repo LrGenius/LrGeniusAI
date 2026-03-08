@@ -1012,7 +1012,12 @@ function SearchIndexAPI.downloadDatabaseBackup()
 
     log:info("Downloading database backup from " .. url .. " to " .. outputPath)
 
-    local responseBody, hdrs = LrHttp.get(url, 300)
+    local responseBody, hdrs, getErr = _safeHttpGet(url, 300)
+    if getErr then
+        local err = "Backup download GET crashed: " .. tostring(getErr)
+        log:error("downloadDatabaseBackup: " .. err)
+        return false, err
+    end
     local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
     log:info(
         "downloadDatabaseBackup: HTTP finished, status=" .. tostring(status) ..
@@ -1071,6 +1076,27 @@ function SearchIndexAPI.downloadDatabaseBackup()
 
     log:info("Database backup downloaded successfully: " .. outputPath .. " (writtenBytes=" .. tostring(#dataToWrite) .. ")")
     return true, outputPath
+end
+
+-- Lightroom SDK versions differ in accepted LrHttp.get signatures.
+-- Some versions crash when a numeric value is passed as second argument.
+_safeHttpGet = function(url, timeout)
+    if timeout ~= nil then
+        local ok, result, hdrs = pcall(LrHttp.get, url, timeout)
+        if ok then
+            return result, hdrs, nil
+        end
+        log:warning("_safeHttpGet: get(url, timeout) failed for url=" .. tostring(url) .. " err=" .. tostring(result))
+    end
+
+    local okFallback, resultFallback, hdrsFallback = pcall(LrHttp.get, url)
+    if okFallback then
+        return resultFallback, hdrsFallback, nil
+    end
+
+    local err = tostring(resultFallback)
+    log:error("_safeHttpGet: get(url) failed for url=" .. tostring(url) .. " err=" .. err)
+    return nil, nil, err
 end
 
 function SearchIndexAPI.shutdownServer()
@@ -1223,11 +1249,16 @@ _requestMultipart = function(url, mimeChunks, timeout)
 end
 
 _request = function(method, url, body, timeout)
-    local result, hdrs
+    local result, hdrs, getErr
     local bodyString = (body and type(body) == 'table') and JSON:encode(body) or nil
 
     if method == 'GET' then
-        result, hdrs = LrHttp.get(url, timeout)
+        result, hdrs, getErr = _safeHttpGet(url, timeout)
+        if getErr then
+            local err = "HTTP GET crashed: " .. tostring(getErr)
+            log:error(err)
+            return nil, err
+        end
     elseif method == 'POST' then
         result, hdrs = LrHttp.post(url, bodyString or "", { { field = "Content-Type", value = "application/json" } }, 'POST', timeout)
     elseif method == 'PUT' then
