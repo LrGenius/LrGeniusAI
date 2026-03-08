@@ -71,7 +71,6 @@ The Compose file mounts `./gcloud` to `/root/.config/gcloud`, which keeps the ac
 ### Recommended setup
 
 ```bash
-cd server
 mkdir -p gcloud
 docker compose up -d --build
 docker compose exec geniusai-server gcloud config set project YOUR_PROJECT_ID

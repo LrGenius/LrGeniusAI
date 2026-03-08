@@ -122,12 +122,11 @@ gcloud auth application-default print-access-token
 
 ### Remote backend with Docker Compose
 
-If your backend runs as a remote Docker container, authenticate inside the container and persist the Google Cloud CLI state with the bind mount in `server/docker-compose.yml`.
+If your backend runs as a remote Docker container, authenticate inside the container and persist the Google Cloud CLI state with the bind mount in `docker-compose.yml`.
 
-1. Open a shell on the server and go to the backend folder:
+1. Open a shell on the server in the repository root:
 
 ```bash
-cd server
 mkdir -p gcloud
 docker compose up -d --build
 ```

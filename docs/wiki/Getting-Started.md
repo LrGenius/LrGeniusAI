@@ -62,7 +62,6 @@ gcloud auth application-default login
 If the backend runs in Docker Compose on a remote server, run the login inside the container instead:
 
 ```bash
-cd server
 mkdir -p gcloud
 docker compose up -d --build
 docker compose exec geniusai-server gcloud config set project YOUR_PROJECT_ID

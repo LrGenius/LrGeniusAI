@@ -1,22 +1,24 @@
-# geniusai-server mit Docker Compose
+# geniusai-server with Docker Compose
 # Start: docker compose up -d
 # Stop:  docker compose down
 # Logs:  docker compose logs -f geniusai-server
 
 services:
   geniusai-server:
-    build: .
+    build:
+      context: ./server
+      dockerfile: Dockerfile
     image: geniusai-server:latest
     container_name: geniusai-server
     restart: unless-stopped
     ports:
       - "19819:19819"
     volumes:
-      # ChromaDB und Logs persistent im Ordner ./data
+      # Persistent backend data and logs
       - ./data:/data
-      # OpenCLIP/Hugging Face + InsightFace: Modell-Downloads persistent (große Dateien)
+      # Persistent model caches (OpenCLIP / Hugging Face / InsightFace)
       - ./models:/models
-      # Persist Google Cloud CLI config + ADC login across container restarts/rebuilds
+      # Persistent Google Cloud CLI config + ADC login
       - ./gcloud:/root/.config/gcloud
     environment:
       - GENIUSAI_HOST=0.0.0.0
