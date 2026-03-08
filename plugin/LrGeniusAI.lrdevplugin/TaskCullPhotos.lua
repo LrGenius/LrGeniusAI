@@ -60,6 +60,7 @@ local function showCullDialog(ctx)
                         { title = LOC "$$$/LrGeniusAI/CullTask/PresetDefault=Default (balanced)", value = 'default' },
                         { title = LOC "$$$/LrGeniusAI/CullTask/PresetPortrait=Portrait (face-focused)", value = 'portrait' },
                         { title = LOC "$$$/LrGeniusAI/CullTask/PresetStreet=Street (technical-focused)", value = 'street' },
+                        { title = LOC "$$$/LrGeniusAI/CullTask/PresetEvent=Event (people + moments)", value = 'event' },
                         { title = LOC "$$$/LrGeniusAI/CullTask/PresetSports=Sports (motion-tolerant)", value = 'sports' },
                     },
                     width = 260,

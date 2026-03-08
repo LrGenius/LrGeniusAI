@@ -169,6 +169,26 @@ CULLING_PRESETS = {
             "reject_score_delta": 0.22,
         },
     },
+    "event": {
+        "grouping": {
+            "time_window_default_seconds": 2,
+            "burst_distance_auto": 0.14,
+        },
+        "ranking": {
+            "face_group_weight_technical": 0.48,
+            "face_group_weight_face": 0.52,
+            "face_group_weight_aesthetic": 0.14,
+            "face_group_blink_penalty_weight": 0.14,
+            "face_group_occlusion_penalty_weight": 0.10,
+            "reason_possible_blink_threshold": 0.50,
+            "reason_occlusion_threshold": 0.50,
+            "reason_low_aesthetic_threshold": 0.38,
+            "reject_blink_penalty_threshold": 0.62,
+            "reject_face_score_threshold": 0.33,
+            "reject_occlusion_threshold": 0.62,
+            "reject_score_delta": 0.20,
+        },
+    },
     "sports": {
         "grouping": {
             "time_window_default_seconds": 3,
