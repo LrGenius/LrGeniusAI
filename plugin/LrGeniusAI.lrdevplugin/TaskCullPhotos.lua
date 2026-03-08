@@ -6,6 +6,7 @@ local function showCullDialog(ctx)
     local props = LrBinding.makePropertyTable(ctx)
     props.scope = prefs.cullScope or "selected"
     props.timeDeltaSeconds = prefs.cullTimeDeltaSeconds or 2
+    props.cullingPreset = prefs.cullPreset or "default"
     props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
 
     local contents = f:column {
@@ -49,6 +50,22 @@ local function showCullDialog(ctx)
                 },
             },
             f:row {
+                f:static_text {
+                    title = LOC "$$$/LrGeniusAI/CullTask/PresetLabel=Culling preset:",
+                    width = share 'labelWidth',
+                },
+                f:popup_menu {
+                    value = bind 'cullingPreset',
+                    items = {
+                        { title = LOC "$$$/LrGeniusAI/CullTask/PresetDefault=Default (balanced)", value = 'default' },
+                        { title = LOC "$$$/LrGeniusAI/CullTask/PresetPortrait=Portrait (face-focused)", value = 'portrait' },
+                        { title = LOC "$$$/LrGeniusAI/CullTask/PresetStreet=Street (technical-focused)", value = 'street' },
+                        { title = LOC "$$$/LrGeniusAI/CullTask/PresetSports=Sports (motion-tolerant)", value = 'sports' },
+                    },
+                    width = 260,
+                },
+            },
+            f:row {
                 f:checkbox {
                     value = bind 'createDuplicatesCollection',
                 },
@@ -72,11 +89,13 @@ local function showCullDialog(ctx)
 
     prefs.cullScope = props.scope
     prefs.cullTimeDeltaSeconds = props.timeDeltaSeconds
+    prefs.cullPreset = props.cullingPreset
     prefs.cullCreateDuplicatesCollection = props.createDuplicatesCollection
 
     return {
         scope = props.scope,
         timeDeltaSeconds = props.timeDeltaSeconds,
+        cullingPreset = props.cullingPreset,
         createDuplicatesCollection = props.createDuplicatesCollection,
     }
 end
@@ -178,6 +197,7 @@ LrTasks.startAsyncTask(function()
             phash_threshold = "auto",
             clip_threshold = "auto",
             time_delta_seconds = options.timeDeltaSeconds,
+            culling_preset = options.cullingPreset,
         })
 
         progressScope:setPortionComplete(1, 1)

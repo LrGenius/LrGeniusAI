@@ -1,4 +1,5 @@
 import argparse
+import copy
 import logging
 import sys
 import os
@@ -65,7 +66,7 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 # --- Culling Tuning Configuration ---
 # Centralized weights and thresholds for image culling logic.
 # Adjust these values to tune ranking behavior without code changes.
-CULLING_CONFIG = {
+BASE_CULLING_CONFIG = {
     "grouping": {
         "time_window_default_seconds": 1,
         "burst_distance_auto": 0.12,
@@ -124,6 +125,69 @@ CULLING_CONFIG = {
         "reject_blink_penalty_threshold": 0.75,
     },
 }
+
+CULLING_PRESETS = {
+    "default": {},
+    "portrait": {
+        "ranking": {
+            "face_group_weight_technical": 0.40,
+            "face_group_weight_face": 0.60,
+            "face_group_blink_penalty_weight": 0.16,
+            "reason_possible_blink_threshold": 0.45,
+            "reject_blink_penalty_threshold": 0.65,
+            "reject_face_score_threshold": 0.35,
+        },
+    },
+    "street": {
+        "ranking": {
+            "face_group_weight_technical": 0.70,
+            "face_group_weight_face": 0.30,
+            "face_group_blink_penalty_weight": 0.06,
+            "reason_possible_blink_threshold": 0.65,
+            "reject_blink_penalty_threshold": 0.85,
+            "reject_score_delta": 0.22,
+        },
+    },
+    "sports": {
+        "grouping": {
+            "time_window_default_seconds": 3,
+            "burst_distance_auto": 0.16,
+        },
+        "ranking": {
+            "face_group_weight_technical": 0.75,
+            "face_group_weight_face": 0.25,
+            "face_group_blink_penalty_weight": 0.04,
+            "reason_blur_threshold": 0.15,
+            "reject_score_delta": 0.24,
+            "reason_possible_blink_threshold": 0.75,
+            "reject_blink_penalty_threshold": 0.92,
+        },
+    },
+}
+
+
+def _deep_merge_dict(base: dict, override: dict) -> dict:
+    merged = copy.deepcopy(base)
+    for key, value in (override or {}).items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def get_culling_config(preset: str | None = None) -> dict:
+    selected = str(preset or "default").strip().lower() or "default"
+    if selected not in CULLING_PRESETS:
+        selected = "default"
+    return _deep_merge_dict(BASE_CULLING_CONFIG, CULLING_PRESETS[selected])
+
+
+def get_available_culling_presets() -> list[str]:
+    return sorted(CULLING_PRESETS.keys())
+
+
+CULLING_CONFIG = get_culling_config("default")
 
 # --- Logger Setup ---
 LOG_PATH = os.path.join(os.path.dirname(DB_PATH), "lrgenius-server.log")

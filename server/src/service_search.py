@@ -198,12 +198,25 @@ def search_images(term, quality_sort, photo_ids_to_search, search_sources=None, 
     return final_results
 
     
-def group_similar_images(photo_ids, phash_threshold, clip_threshold, time_delta):
+def group_similar_images(photo_ids, phash_threshold, clip_threshold, time_delta, culling_preset="default"):
     """Groups a list of images by similarity and sorts them by quality."""
-    logger.info(f"Grouping {len(photo_ids)} photo IDs with phash_threshold='{phash_threshold}', clip_threshold='{clip_threshold}', and time_delta='{time_delta}s'.")
+    logger.info(
+        "Grouping %s photo IDs with phash_threshold='%s', clip_threshold='%s', time_delta='%ss', culling_preset='%s'.",
+        len(photo_ids),
+        phash_threshold,
+        clip_threshold,
+        time_delta,
+        culling_preset,
+    )
 
     try:
-        grouped_results = chroma_service.group_and_sort_images(photo_ids, phash_threshold, clip_threshold, time_delta)
+        grouped_results = chroma_service.group_and_sort_images(
+            photo_ids,
+            phash_threshold,
+            clip_threshold,
+            time_delta,
+            culling_preset=culling_preset,
+        )
         return grouped_results
     except Exception as e:
         logger.error(f"Error during similarity grouping: {str(e)}")

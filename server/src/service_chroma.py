@@ -2,7 +2,7 @@ import chromadb
 from chromadb.config import Settings
 import os
 import numpy as np
-from config import DB_PATH, logger, CULLING_CONFIG
+from config import DB_PATH, logger, CULLING_CONFIG, get_culling_config
 
 
 # --- ChromaDB Client and Collection Initialization (Lazy) ---
@@ -358,39 +358,40 @@ def _cosine_distance(embedding_a, embedding_b):
     return 1.0 - similarity
 
 
-def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta):
+def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, culling_config=None):
+    culling_config = culling_config or CULLING_CONFIG
     try:
         time_window_seconds = max(0, int(time_delta))
     except (TypeError, ValueError):
-        time_window_seconds = CULLING_CONFIG["grouping"]["time_window_default_seconds"]
+        time_window_seconds = culling_config["grouping"]["time_window_default_seconds"]
 
     if clip_threshold == "auto":
-        burst_distance_threshold = CULLING_CONFIG["grouping"]["burst_distance_auto"]
+        burst_distance_threshold = culling_config["grouping"]["burst_distance_auto"]
     else:
         try:
             burst_distance_threshold = max(0.0, float(clip_threshold))
         except (TypeError, ValueError):
-            burst_distance_threshold = CULLING_CONFIG["grouping"]["burst_distance_auto"]
+            burst_distance_threshold = culling_config["grouping"]["burst_distance_auto"]
 
     if phash_threshold == "auto":
-        duplicate_distance_threshold = CULLING_CONFIG["grouping"]["duplicate_distance_auto"]
+        duplicate_distance_threshold = culling_config["grouping"]["duplicate_distance_auto"]
     else:
         try:
             # The route exposes a pHash-style integer threshold even though the
             # current implementation uses stored embeddings only. Lower numbers
             # therefore remain stricter and higher numbers relax duplicate linking.
-            phash_max = CULLING_CONFIG["grouping"]["phash_max"]
+            phash_max = culling_config["grouping"]["phash_max"]
             normalized = max(0.0, min(float(phash_threshold), phash_max)) / phash_max
             duplicate_distance_threshold = (
-                CULLING_CONFIG["grouping"]["duplicate_distance_min"]
-                + (normalized * CULLING_CONFIG["grouping"]["duplicate_distance_span"])
+                culling_config["grouping"]["duplicate_distance_min"]
+                + (normalized * culling_config["grouping"]["duplicate_distance_span"])
             )
         except (TypeError, ValueError):
-            duplicate_distance_threshold = CULLING_CONFIG["grouping"]["duplicate_distance_auto"]
+            duplicate_distance_threshold = culling_config["grouping"]["duplicate_distance_auto"]
 
     duplicate_time_window_seconds = max(
-        time_window_seconds * CULLING_CONFIG["grouping"]["duplicate_time_window_multiplier"],
-        CULLING_CONFIG["grouping"]["duplicate_time_window_min_seconds"],
+        time_window_seconds * culling_config["grouping"]["duplicate_time_window_multiplier"],
+        culling_config["grouping"]["duplicate_time_window_min_seconds"],
     )
     return duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds
 
@@ -429,7 +430,8 @@ def _explanation_from_reason_codes(reason_codes):
     return "; ".join(labels.get(code, code.replace("_", " ")) for code in reason_codes)
 
 
-def _rank_group_records(component_records, group_type):
+def _rank_group_records(component_records, group_type, culling_config=None):
+    culling_config = culling_config or CULLING_CONFIG
     scored_records = []
     for record in component_records:
         metadata = record["metadata"]
@@ -452,9 +454,9 @@ def _rank_group_records(component_records, group_type):
             metadata,
             "cull_face_score",
             (
-                CULLING_CONFIG["face_metrics"]["score_weight_sharpness"] * face_sharpness
-                + CULLING_CONFIG["face_metrics"]["score_weight_prominence"] * face_prominence
-                + CULLING_CONFIG["face_metrics"]["score_weight_visibility"] * face_visibility
+                culling_config["face_metrics"]["score_weight_sharpness"] * face_sharpness
+                + culling_config["face_metrics"]["score_weight_prominence"] * face_prominence
+                + culling_config["face_metrics"]["score_weight_visibility"] * face_visibility
             ),
         )
         eye_openness = _extract_culling_metric(metadata, "cull_eye_openness", 0.0)
@@ -482,15 +484,15 @@ def _rank_group_records(component_records, group_type):
         if group_has_faces:
             if item["cull_face_count"] > 0:
                 item["cull_score"] = (
-                    CULLING_CONFIG["ranking"]["face_group_weight_technical"] * item["cull_technical_score"]
-                    + CULLING_CONFIG["ranking"]["face_group_weight_face"] * item["cull_face_score"]
+                    culling_config["ranking"]["face_group_weight_technical"] * item["cull_technical_score"]
+                    + culling_config["ranking"]["face_group_weight_face"] * item["cull_face_score"]
                 )
                 item["cull_score"] = max(
                     0.0,
                     min(
                         1.0,
                         item["cull_score"] - (
-                            CULLING_CONFIG["ranking"]["face_group_blink_penalty_weight"] * item["cull_blink_penalty"]
+                            culling_config["ranking"]["face_group_blink_penalty_weight"] * item["cull_blink_penalty"]
                         ),
                     ),
                 )
@@ -499,8 +501,8 @@ def _rank_group_records(component_records, group_type):
                 item["cull_score"] = max(
                     0.0,
                     (
-                        CULLING_CONFIG["ranking"]["face_missing_technical_weight"] * item["cull_technical_score"]
-                    ) - CULLING_CONFIG["ranking"]["face_missing_penalty"],
+                        culling_config["ranking"]["face_missing_technical_weight"] * item["cull_technical_score"]
+                    ) - culling_config["ranking"]["face_missing_penalty"],
                 )
         else:
             item["cull_score"] = item["cull_technical_score"]
@@ -524,35 +526,35 @@ def _rank_group_records(component_records, group_type):
 
     for index, item in enumerate(scored_records, start=1):
         reason_codes = []
-        if item["cull_sharpness"] < CULLING_CONFIG["ranking"]["reason_blur_threshold"]:
+        if item["cull_sharpness"] < culling_config["ranking"]["reason_blur_threshold"]:
             reason_codes.append("blurred")
-        if item["cull_exposure"] < CULLING_CONFIG["ranking"]["reason_exposure_threshold"]:
+        if item["cull_exposure"] < culling_config["ranking"]["reason_exposure_threshold"]:
             if item["cull_shadow_clip"] >= item["cull_highlight_clip"]:
                 reason_codes.append("underexposed")
             else:
                 reason_codes.append("overexposed")
         if index == 1 and len(scored_records) > 1 and item["cull_sharpness"] >= (
-            max_sharpness - CULLING_CONFIG["ranking"]["reason_sharpest_delta"]
+            max_sharpness - culling_config["ranking"]["reason_sharpest_delta"]
         ):
             reason_codes.append("sharpest_in_group")
         if group_has_faces:
             if item["cull_face_count"] == 0:
                 reason_codes.append("no_face_detected_in_group")
             elif item["cull_face_score"] >= (
-                max_face_score - CULLING_CONFIG["ranking"]["reason_best_face_delta"]
+                max_face_score - culling_config["ranking"]["reason_best_face_delta"]
             ) and index == 1:
                 reason_codes.append("best_face_quality")
             elif item["cull_face_score"] < max(
                 0.0,
-                max_face_score - CULLING_CONFIG["ranking"]["reason_weak_face_delta"],
+                max_face_score - culling_config["ranking"]["reason_weak_face_delta"],
             ):
                 reason_codes.append("weak_face_quality")
             if item["cull_eye_openness"] >= max(
                 0.0,
-                max_eye_openness - CULLING_CONFIG["ranking"]["reason_eyes_open_delta"],
+                max_eye_openness - culling_config["ranking"]["reason_eyes_open_delta"],
             ) and index == 1:
                 reason_codes.append("eyes_open_best")
-            elif item["cull_blink_penalty"] > CULLING_CONFIG["ranking"]["reason_possible_blink_threshold"]:
+            elif item["cull_blink_penalty"] > culling_config["ranking"]["reason_possible_blink_threshold"]:
                 reason_codes.append("possible_blink")
         if index > 1 and group_type != "single":
             reason_codes.append("near_duplicate_weaker")
@@ -560,18 +562,18 @@ def _rank_group_records(component_records, group_type):
         reject_candidate = False
         if len(scored_records) > 1:
             reject_candidate = (
-                item["cull_score"] <= max(0.0, winner_score - CULLING_CONFIG["ranking"]["reject_score_delta"])
-                or item["cull_sharpness"] < CULLING_CONFIG["ranking"]["reason_blur_threshold"]
-                or item["cull_exposure"] < CULLING_CONFIG["ranking"]["reject_exposure_threshold"]
+                item["cull_score"] <= max(0.0, winner_score - culling_config["ranking"]["reject_score_delta"])
+                or item["cull_sharpness"] < culling_config["ranking"]["reason_blur_threshold"]
+                or item["cull_exposure"] < culling_config["ranking"]["reject_exposure_threshold"]
                 or (
                     group_has_faces
                     and item["cull_face_count"] > 0
-                    and item["cull_face_score"] < CULLING_CONFIG["ranking"]["reject_face_score_threshold"]
+                    and item["cull_face_score"] < culling_config["ranking"]["reject_face_score_threshold"]
                 )
                 or (
                     group_has_faces
                     and item["cull_face_count"] > 0
-                    and item["cull_blink_penalty"] > CULLING_CONFIG["ranking"]["reject_blink_penalty_threshold"]
+                    and item["cull_blink_penalty"] > culling_config["ranking"]["reject_blink_penalty_threshold"]
                 )
             )
 
@@ -584,7 +586,7 @@ def _rank_group_records(component_records, group_type):
     return scored_records
 
 
-def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
+def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, culling_preset="default"):
     """
     Group indexed images into stable similarity clusters for culling workflows.
 
@@ -597,8 +599,10 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
     if not uuids:
         return []
 
+    culling_config = get_culling_config(culling_preset)
+
     duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds = _derive_grouping_thresholds(
-        phash_threshold, clip_threshold, time_delta
+        phash_threshold, clip_threshold, time_delta, culling_config=culling_config
     )
 
     unique_photo_ids = []
@@ -726,7 +730,7 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
         else:
             group_type = "near_duplicate"
 
-        ranked_records = _rank_group_records(component_records, group_type)
+        ranked_records = _rank_group_records(component_records, group_type, culling_config=culling_config)
         group_id = f"group_{group_counter:04d}"
         winner_photo_id = ranked_records[0]["photo_id"] if ranked_records else group_photo_ids[0]
         alternate_photo_ids = [item["photo_id"] for item in ranked_records[1:] if not item["cull_reject_candidate"]]
@@ -799,6 +803,7 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
             "max_capture_time": max(capture_times) if capture_times else None,
             "time_span_seconds": round(time_span_seconds, 3),
             "debug": {
+                "culling_preset": culling_preset,
                 "thresholds": {
                     "duplicate_distance": round(duplicate_distance_threshold, 4),
                     "burst_distance": round(burst_distance_threshold, 4),
@@ -823,9 +828,10 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
         collection.update(ids=update_ids, metadatas=update_metadatas)
 
     logger.info(
-        "Grouped %s photos into %s groups (duplicate_distance=%s, burst_distance=%s, time_window=%ss)",
+        "Grouped %s photos into %s groups (preset=%s, duplicate_distance=%s, burst_distance=%s, time_window=%ss)",
         len(unique_photo_ids),
         len(groups),
+        culling_preset,
         round(duplicate_distance_threshold, 4),
         round(burst_distance_threshold, 4),
         time_window_seconds,

@@ -571,6 +571,7 @@ function SearchIndexAPI.groupSimilarPhotos(photoIds, options)
         phash_threshold = options.phash_threshold or "auto",
         clip_threshold = options.clip_threshold or "auto",
         time_delta_seconds = options.time_delta_seconds or 2,
+        culling_preset = options.culling_preset or "default",
     }
 
     local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.GROUP_SIMILAR, body, 300)
