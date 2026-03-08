@@ -967,10 +967,11 @@ function SearchIndexAPI.downloadDatabaseBackup()
 
     log:info("Downloading database backup from " .. url .. " to " .. outputPath)
 
-    local responseBody, hdrs, getErr = _safeHttpGet(url, 300)
-    if getErr then
-        local err = "Backup download GET crashed: " .. tostring(getErr)
-        log:error("downloadDatabaseBackup: " .. err)
+    -- _request mit leerer Tabelle als body, kein Timeout (vermeidet SDK-Crash), raw=true für Binär-Zip
+    local responseBody, hdrs = _request('GET', url, {}, nil, { raw = true })
+    if responseBody == nil then
+        local err = hdrs or "Backup download failed"
+        log:error("downloadDatabaseBackup: " .. tostring(err))
         return false, err
     end
     local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
@@ -1031,27 +1032,6 @@ function SearchIndexAPI.downloadDatabaseBackup()
 
     log:info("Database backup downloaded successfully: " .. outputPath .. " (writtenBytes=" .. tostring(#dataToWrite) .. ")")
     return true, outputPath
-end
-
--- Lightroom SDK versions differ in accepted LrHttp.get signatures.
--- Some versions crash when a numeric value is passed as second argument.
-_safeHttpGet = function(url, timeout)
-    if timeout ~= nil then
-        local ok, result, hdrs = pcall(LrHttp.get, url, timeout)
-        if ok then
-            return result, hdrs, nil
-        end
-        log:warn("_safeHttpGet: get(url, timeout) failed for url=" .. tostring(url) .. " err=" .. tostring(result))
-    end
-
-    local okFallback, resultFallback, hdrsFallback = pcall(LrHttp.get, url)
-    if okFallback then
-        return resultFallback, hdrsFallback, nil
-    end
-
-    local err = tostring(resultFallback)
-    log:error("_safeHttpGet: get(url) failed for url=" .. tostring(url) .. " err=" .. err)
-    return nil, nil, err
 end
 
 function SearchIndexAPI.shutdownServer()
@@ -1203,16 +1183,17 @@ _requestMultipart = function(url, mimeChunks, timeout)
     end
 end
 
-_request = function(method, url, body, timeout)
-    local result, hdrs, getErr
+_request = function(method, url, body, timeout, options)
+    options = options or {}
+    local result, hdrs
     local bodyString = (body and type(body) == 'table') and JSON:encode(body) or nil
 
     if method == 'GET' then
-        result, hdrs, getErr = _safeHttpGet(url, timeout)
-        if getErr then
-            local err = "HTTP GET crashed: " .. tostring(getErr)
-            log:error(err)
-            return nil, err
+        -- Einige LR-Versionen crashen bei LrHttp.get(url, number); nur mit einem Argument aufrufen wenn kein Timeout.
+        if timeout ~= nil then
+            result, hdrs = LrHttp.get(url, timeout)
+        else
+            result, hdrs = LrHttp.get(url)
         end
     elseif method == 'POST' then
         result, hdrs = LrHttp.post(url, bodyString or "", { { field = "Content-Type", value = "application/json" } }, 'POST', timeout)
@@ -1229,6 +1210,9 @@ _request = function(method, url, body, timeout)
     -- hdrs kann Tabelle mit .status oder (in einigen LR-Versionen) direkt die Status-Nummer sein
     local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
     if status ~= nil and status >= 200 and status < 300 then
+        if options.raw then
+            return result, hdrs
+        end
         if result and #result > 0 then
             return JSON:decode(result)
         end
