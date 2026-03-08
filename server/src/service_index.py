@@ -153,6 +153,8 @@ def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
             "cull_face_prominence": 0.0,
             "cull_face_visibility": 0.0,
             "cull_face_score": 0.0,
+            "cull_eye_openness": 0.0,
+            "cull_blink_penalty": 1.0,
             "cull_faces_present": False,
         }
 
@@ -166,14 +168,19 @@ def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
         )
         for face in face_results
     ]
+    eye_openness_values = [_safe_unit_interval(face.get("eye_openness", 0.0)) for face in face_results]
+    blink_penalties = [_safe_unit_interval(face.get("blink_penalty", 1.0)) for face in face_results]
 
     face_sharpness = max(sharpness_values) if sharpness_values else 0.0
     face_prominence = max(prominence_values) if prominence_values else 0.0
     face_visibility = sum(visibility_values) / len(visibility_values) if visibility_values else 0.0
+    eye_openness = max(eye_openness_values) if eye_openness_values else 0.0
+    blink_penalty = min(blink_penalties) if blink_penalties else 1.0
     face_score = _safe_unit_interval(
-        (0.45 * face_sharpness)
-        + (0.35 * face_prominence)
+        (0.35 * face_sharpness)
+        + (0.25 * face_prominence)
         + (0.20 * face_visibility)
+        + (0.20 * eye_openness)
     )
 
     return {
@@ -182,6 +189,8 @@ def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
         "cull_face_prominence": round(face_prominence, 4),
         "cull_face_visibility": round(face_visibility, 4),
         "cull_face_score": round(face_score, 4),
+        "cull_eye_openness": round(eye_openness, 4),
+        "cull_blink_penalty": round(blink_penalty, 4),
         "cull_faces_present": True,
     }
 
@@ -483,6 +492,8 @@ def process_image_task(
                                         "face_sharpness": face.get("sharpness", 0.0),
                                         "face_det_score": face.get("det_score", 0.0),
                                         "face_center_proximity": face.get("center_proximity", 0.0),
+                                        "face_eye_openness": face.get("eye_openness", 0.0),
+                                        "face_blink_penalty": face.get("blink_penalty", 1.0),
                                     }
                                     for face in face_results
                                 ]

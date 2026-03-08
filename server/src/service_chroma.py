@@ -413,6 +413,8 @@ def _explanation_from_reason_codes(reason_codes):
         "best_face_quality": "best face quality in group",
         "weak_face_quality": "weaker face quality than alternatives",
         "no_face_detected_in_group": "no clear face detected while alternatives have faces",
+        "eyes_open_best": "best eyes-open result in group",
+        "possible_blink": "possible blink or eyes less open",
         "near_duplicate_weaker": "weaker duplicate or burst alternative",
     }
     if not reason_codes:
@@ -444,6 +446,8 @@ def _rank_group_records(component_records, group_type):
             "cull_face_score",
             (0.45 * face_sharpness) + (0.35 * face_prominence) + (0.20 * face_visibility),
         )
+        eye_openness = _extract_culling_metric(metadata, "cull_eye_openness", 0.0)
+        blink_penalty = _extract_culling_metric(metadata, "cull_blink_penalty", 1.0)
 
         scored_records.append({
             **record,
@@ -458,6 +462,8 @@ def _rank_group_records(component_records, group_type):
             "cull_face_prominence": face_prominence,
             "cull_face_visibility": face_visibility,
             "cull_face_score": face_score,
+            "cull_eye_openness": eye_openness,
+            "cull_blink_penalty": blink_penalty,
         })
 
     group_has_faces = any(item["cull_face_count"] > 0 for item in scored_records)
@@ -468,6 +474,7 @@ def _rank_group_records(component_records, group_type):
                     0.55 * item["cull_technical_score"]
                     + 0.45 * item["cull_face_score"]
                 )
+                item["cull_score"] = max(0.0, min(1.0, item["cull_score"] - (0.10 * item["cull_blink_penalty"])))
             else:
                 # Penalize face-missing shots in face-heavy groups.
                 item["cull_score"] = max(0.0, (0.70 * item["cull_technical_score"]) - 0.20)
@@ -488,6 +495,7 @@ def _rank_group_records(component_records, group_type):
 
     max_sharpness = max(item["cull_sharpness"] for item in scored_records)
     max_face_score = max(item["cull_face_score"] for item in scored_records)
+    max_eye_openness = max(item["cull_eye_openness"] for item in scored_records)
     winner_score = scored_records[0]["cull_score"]
 
     for index, item in enumerate(scored_records, start=1):
@@ -508,6 +516,10 @@ def _rank_group_records(component_records, group_type):
                 reason_codes.append("best_face_quality")
             elif item["cull_face_score"] < max(0.0, max_face_score - 0.10):
                 reason_codes.append("weak_face_quality")
+            if item["cull_eye_openness"] >= max(0.0, max_eye_openness - 0.05) and index == 1:
+                reason_codes.append("eyes_open_best")
+            elif item["cull_blink_penalty"] > 0.55:
+                reason_codes.append("possible_blink")
         if index > 1 and group_type != "single":
             reason_codes.append("near_duplicate_weaker")
 
@@ -518,6 +530,7 @@ def _rank_group_records(component_records, group_type):
                 or item["cull_sharpness"] < 0.2
                 or item["cull_exposure"] < 0.28
                 or (group_has_faces and item["cull_face_count"] > 0 and item["cull_face_score"] < 0.30)
+                or (group_has_faces and item["cull_face_count"] > 0 and item["cull_blink_penalty"] > 0.75)
             )
 
         item["cull_group_rank"] = index
@@ -699,6 +712,8 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
                 "cull_face_prominence": round(ranked["cull_face_prominence"], 4),
                 "cull_face_visibility": round(ranked["cull_face_visibility"], 4),
                 "cull_face_score": round(ranked["cull_face_score"], 4),
+                "cull_eye_openness": round(ranked["cull_eye_openness"], 4),
+                "cull_blink_penalty": round(ranked["cull_blink_penalty"], 4),
             })
             metadata_updates.append((ranked["photo_id"], updated_metadata))
 
@@ -732,6 +747,8 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
                         "face_prominence": round(item["cull_face_prominence"], 4),
                         "face_visibility": round(item["cull_face_visibility"], 4),
                         "face_score": round(item["cull_face_score"], 4),
+                        "eye_openness": round(item["cull_eye_openness"], 4),
+                        "blink_penalty": round(item["cull_blink_penalty"], 4),
                     },
                 }
                 for item in ranked_records

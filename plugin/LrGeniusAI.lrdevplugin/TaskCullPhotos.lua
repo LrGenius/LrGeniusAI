@@ -272,6 +272,8 @@ LrTasks.startAsyncTask(function()
                         faceProminence = formatMetric(metrics["face_prominence"]),
                         faceVisibility = formatMetric(metrics["face_visibility"]),
                         faceScore = formatMetric(metrics["face_score"]),
+                        eyeOpenness = formatMetric(metrics["eye_openness"]),
+                        blinkPenalty = formatMetric(metrics["blink_penalty"]),
                     }
                 end
             end
@@ -298,6 +300,8 @@ LrTasks.startAsyncTask(function()
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceProminence", cullData.faceProminence)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceVisibility", cullData.faceVisibility)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceScore", cullData.faceScore)
+                    photo:setPropertyForPlugin(_PLUGIN, "cullEyeOpenness", cullData.eyeOpenness)
+                    photo:setPropertyForPlugin(_PLUGIN, "cullBlinkPenalty", cullData.blinkPenalty)
                 end
             end
         end, Defaults.catalogWriteAccessOptions)

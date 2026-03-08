@@ -58,6 +58,56 @@ def _compute_face_sharpness(crop_rgb: np.ndarray) -> float:
     return max(0.0, min(1.0, variance / (variance + 0.02)))
 
 
+def _compute_eye_openness_proxy(crop_rgb: np.ndarray, bbox_list: List[int], keypoints) -> float:
+    """
+    Lightweight proxy for eye openness using vertical gradient energy near eye landmarks.
+    This is not a full landmark-based blink detector, but works as a cheap signal.
+    """
+    if crop_rgb.size == 0 or not bbox_list or keypoints is None:
+        return 0.0
+    try:
+        kps = np.asarray(keypoints, dtype=np.float32)
+    except Exception:
+        return 0.0
+    if kps.ndim != 2 or kps.shape[0] < 2 or kps.shape[1] < 2:
+        return 0.0
+
+    x1, y1, x2, y2 = bbox_list
+    gray = (
+        0.299 * crop_rgb[:, :, 0].astype(np.float32)
+        + 0.587 * crop_rgb[:, :, 1].astype(np.float32)
+        + 0.114 * crop_rgb[:, :, 2].astype(np.float32)
+    ) / 255.0
+    h, w = gray.shape[:2]
+    if h < 6 or w < 6:
+        return 0.0
+
+    face_span = max(4.0, float(min(x2 - x1, y2 - y1)))
+    patch_radius = int(max(2, min(8, round(face_span * 0.08))))
+    eye_scores = []
+
+    # InsightFace 5-point format starts with left and right eye.
+    for eye_idx in [0, 1]:
+        ex = int(round(kps[eye_idx, 0] - x1))
+        ey = int(round(kps[eye_idx, 1] - y1))
+        px1 = max(0, ex - patch_radius)
+        py1 = max(0, ey - patch_radius)
+        px2 = min(w, ex + patch_radius + 1)
+        py2 = min(h, ey + patch_radius + 1)
+        if px2 - px1 < 3 or py2 - py1 < 3:
+            continue
+        patch = gray[py1:py2, px1:px2]
+        # Eyes-open tends to keep stronger local vertical gradients than shut eyelids.
+        vgrad = np.abs(np.diff(patch, axis=0))
+        score_raw = float(np.mean(vgrad))
+        score = max(0.0, min(1.0, score_raw / (score_raw + 0.07)))
+        eye_scores.append(score)
+
+    if not eye_scores:
+        return 0.0
+    return float(sum(eye_scores) / len(eye_scores))
+
+
 def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
     """
     Detect faces in an image and return embedding, thumbnail, and quality metadata.
@@ -100,6 +150,7 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
         area_ratio = 0.0
         sharpness = 0.0
         center_proximity = 0.0
+        eye_openness = 0.0
         if bbox is not None and len(bbox) >= 4:
             x1, y1, x2, y2 = [int(round(x)) for x in bbox[:4]]
             h, w = img.shape[:2]
@@ -110,6 +161,7 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
                 bbox_list = [x1, y1, x2, y2]
                 area_ratio = max(0.0, min(1.0, ((x2 - x1) * (y2 - y1)) / image_area))
                 sharpness = _compute_face_sharpness(crop)
+                eye_openness = _compute_eye_openness_proxy(crop, bbox_list, getattr(face, "kps", None))
                 center_x = (x1 + x2) / 2.0
                 center_y = (y1 + y2) / 2.0
                 offset_x = abs((center_x / max(1.0, image_width)) - 0.5) * 2.0
@@ -128,6 +180,8 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
             "sharpness": round(sharpness, 4),
             "det_score": float(getattr(face, "det_score", 0.0) or 0.0),
             "center_proximity": round(center_proximity, 4),
+            "eye_openness": round(eye_openness, 4),
+            "blink_penalty": round(max(0.0, min(1.0, 1.0 - eye_openness)), 4),
         })
 
     return results

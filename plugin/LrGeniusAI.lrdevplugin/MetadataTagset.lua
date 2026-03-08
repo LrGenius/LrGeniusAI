@@ -38,6 +38,8 @@ return {
         _PLUGIN.id .. '.cullFaceProminence',
         _PLUGIN.id .. '.cullFaceVisibility',
         _PLUGIN.id .. '.cullFaceScore',
+        _PLUGIN.id .. '.cullEyeOpenness',
+        _PLUGIN.id .. '.cullBlinkPenalty',
         { _PLUGIN.id .. '.cullReasonCodes', height_in_lines = 2 },
         { _PLUGIN.id .. '.cullExplanation', height_in_lines = 4 },
         { _PLUGIN.id .. '.photoContext', height_in_lines = 5 },
