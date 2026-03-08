@@ -116,7 +116,16 @@ def _compute_culling_metrics(image_bytes: bytes) -> dict:
     except the explicit clip/noise fields which are stored as penalties.
     """
     try:
-        gray = _load_analysis_grayscale(image_bytes)
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        if max(image.size) > 512:
+            scale = 512 / float(max(image.size))
+            resized = (
+                max(32, int(round(image.size[0] * scale))),
+                max(32, int(round(image.size[1] * scale))),
+            )
+            image = image.resize(resized, Image.Resampling.BILINEAR)
+        rgb = np.asarray(image, dtype=np.float32) / 255.0
+        gray = (0.299 * rgb[:, :, 0]) + (0.587 * rgb[:, :, 1]) + (0.114 * rgb[:, :, 2])
         if gray.shape[0] < 8 or gray.shape[1] < 8:
             raise ValueError("Image too small for culling metrics")
 
@@ -171,6 +180,16 @@ def _compute_culling_metrics(image_bytes: bytes) -> dict:
             + (CULLING_CONFIG["image_metrics"]["technical_weight_noise"] * (1.0 - noise_penalty))
         )
 
+        contrast = _safe_unit_interval(float(np.std(gray)) / 0.25)
+        rg = np.abs(rgb[:, :, 0] - rgb[:, :, 1])
+        yb = np.abs(0.5 * (rgb[:, :, 0] + rgb[:, :, 1]) - rgb[:, :, 2])
+        colorfulness = _safe_unit_interval(float(np.mean(np.sqrt((rg * rg) + (yb * yb)))) / 0.35)
+        aesthetic_score = _safe_unit_interval(
+            (CULLING_CONFIG["image_metrics"]["aesthetic_contrast_weight"] * contrast)
+            + (CULLING_CONFIG["image_metrics"]["aesthetic_colorfulness_weight"] * colorfulness)
+            + (CULLING_CONFIG["image_metrics"]["aesthetic_exposure_weight"] * exposure)
+        )
+
         return {
             "cull_sharpness": round(sharpness, 4),
             "cull_exposure": round(exposure, 4),
@@ -178,6 +197,7 @@ def _compute_culling_metrics(image_bytes: bytes) -> dict:
             "cull_highlight_clip": round(highlight_clip, 4),
             "cull_shadow_clip": round(shadow_clip, 4),
             "cull_technical_score": round(technical_score, 4),
+            "cull_aesthetic": round(aesthetic_score, 4),
         }
     except Exception as exc:
         logger.warning("Could not compute culling metrics: %s", exc)
@@ -188,6 +208,7 @@ def _compute_culling_metrics(image_bytes: bytes) -> dict:
             "cull_highlight_clip": 0.0,
             "cull_shadow_clip": 0.0,
             "cull_technical_score": 0.0,
+            "cull_aesthetic": 0.0,
         }
 
 
@@ -201,6 +222,7 @@ def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
             "cull_face_score": 0.0,
             "cull_eye_openness": 0.0,
             "cull_blink_penalty": 1.0,
+            "cull_occlusion": 0.0,
             "cull_faces_present": False,
         }
 
@@ -219,18 +241,42 @@ def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
     ]
     eye_openness_values = [_safe_unit_interval(face.get("eye_openness", 0.0)) for face in face_results]
     blink_penalties = [_safe_unit_interval(face.get("blink_penalty", 1.0)) for face in face_results]
+    occlusion_values = []
+    for face in face_results:
+        if "occlusion" in face:
+            occlusion_values.append(_safe_unit_interval(face.get("occlusion", 0.0)))
+        else:
+            occlusion_values.append(
+                _safe_unit_interval(
+                    1.0 - (
+                        (CULLING_CONFIG["face_metrics"]["occlusion_det_weight"] * _safe_unit_interval(face.get("det_score", 0.0)))
+                        + (CULLING_CONFIG["face_metrics"]["occlusion_center_weight"] * _safe_unit_interval(face.get("center_proximity", 0.0)))
+                        + (CULLING_CONFIG["face_metrics"]["occlusion_eye_weight"] * _safe_unit_interval(face.get("eye_openness", 0.0)))
+                    )
+                )
+            )
 
     face_sharpness = max(sharpness_values) if sharpness_values else 0.0
     face_prominence = max(prominence_values) if prominence_values else 0.0
     face_visibility = sum(visibility_values) / len(visibility_values) if visibility_values else 0.0
     eye_openness = max(eye_openness_values) if eye_openness_values else 0.0
     blink_penalty = min(blink_penalties) if blink_penalties else 1.0
-    face_score = _safe_unit_interval(
+    occlusion_penalty = min(occlusion_values) if occlusion_values else 0.0
+    face_score_raw = (
         (CULLING_CONFIG["face_metrics"]["score_weight_sharpness"] * face_sharpness)
         + (CULLING_CONFIG["face_metrics"]["score_weight_prominence"] * face_prominence)
         + (CULLING_CONFIG["face_metrics"]["score_weight_visibility"] * face_visibility)
         + (CULLING_CONFIG["face_metrics"]["score_weight_eye_openness"] * eye_openness)
+        + (CULLING_CONFIG["face_metrics"]["score_weight_occlusion"] * (1.0 - occlusion_penalty))
     )
+    weight_total = (
+        CULLING_CONFIG["face_metrics"]["score_weight_sharpness"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_prominence"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_visibility"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_eye_openness"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_occlusion"]
+    )
+    face_score = _safe_unit_interval(face_score_raw / max(1e-6, weight_total))
 
     return {
         "cull_face_count": face_count,
@@ -240,6 +286,7 @@ def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
         "cull_face_score": round(face_score, 4),
         "cull_eye_openness": round(eye_openness, 4),
         "cull_blink_penalty": round(blink_penalty, 4),
+        "cull_occlusion": round(occlusion_penalty, 4),
         "cull_faces_present": True,
     }
 
@@ -557,6 +604,7 @@ def process_image_task(
                                         "face_center_proximity": face.get("center_proximity", 0.0),
                                         "face_eye_openness": face.get("eye_openness", 0.0),
                                         "face_blink_penalty": face.get("blink_penalty", 1.0),
+                                        "face_occlusion": face.get("occlusion", 0.0),
                                     }
                                     for face in face_results
                                 ]

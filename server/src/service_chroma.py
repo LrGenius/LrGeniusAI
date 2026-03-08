@@ -441,9 +441,11 @@ def _explanation_from_reason_codes(reason_codes):
         "blurred": "noticeably blurred",
         "underexposed": "darker than stronger alternatives",
         "overexposed": "brighter than stronger alternatives",
+        "low_aesthetic": "weaker aesthetic impression than alternatives",
         "best_face_quality": "best face quality in group",
         "weak_face_quality": "weaker face quality than alternatives",
         "no_face_detected_in_group": "no clear face detected while alternatives have faces",
+        "possible_occlusion": "possible facial occlusion or weak visibility",
         "eyes_open_best": "best eyes-open result in group",
         "possible_blink": "possible blink or eyes less open",
         "near_duplicate_weaker": "weaker duplicate or burst alternative",
@@ -469,17 +471,30 @@ def _rank_group_records(component_records, group_type, culling_config=None):
             "cull_technical_score",
             (0.5 * sharpness) + (0.3 * exposure) + (0.1 * (1.0 - noise_penalty)) + (0.1 * (1.0 - clipping_penalty)),
         )
+        aesthetic_score = _extract_culling_metric(metadata, "cull_aesthetic", 0.0)
         face_count = int(_safe_float((metadata or {}).get("cull_face_count"), 0) or 0)
         face_sharpness = _extract_culling_metric(metadata, "cull_face_sharpness", 0.0)
         face_prominence = _extract_culling_metric(metadata, "cull_face_prominence", 0.0)
         face_visibility = _extract_culling_metric(metadata, "cull_face_visibility", 0.0)
+        occlusion_penalty = _extract_culling_metric(metadata, "cull_occlusion", 0.0)
         face_score = _extract_culling_metric(
             metadata,
             "cull_face_score",
             (
-                culling_config["face_metrics"]["score_weight_sharpness"] * face_sharpness
-                + culling_config["face_metrics"]["score_weight_prominence"] * face_prominence
-                + culling_config["face_metrics"]["score_weight_visibility"] * face_visibility
+                (
+                    culling_config["face_metrics"]["score_weight_sharpness"] * face_sharpness
+                    + culling_config["face_metrics"]["score_weight_prominence"] * face_prominence
+                    + culling_config["face_metrics"]["score_weight_visibility"] * face_visibility
+                    + culling_config["face_metrics"]["score_weight_eye_openness"] * eye_openness
+                    + culling_config["face_metrics"]["score_weight_occlusion"] * (1.0 - occlusion_penalty)
+                ) / max(
+                    1e-6,
+                    culling_config["face_metrics"]["score_weight_sharpness"]
+                    + culling_config["face_metrics"]["score_weight_prominence"]
+                    + culling_config["face_metrics"]["score_weight_visibility"]
+                    + culling_config["face_metrics"]["score_weight_eye_openness"]
+                    + culling_config["face_metrics"]["score_weight_occlusion"]
+                )
             ),
         )
         eye_openness = _extract_culling_metric(metadata, "cull_eye_openness", 0.0)
@@ -493,11 +508,13 @@ def _rank_group_records(component_records, group_type, culling_config=None):
             "cull_highlight_clip": highlight_clip,
             "cull_shadow_clip": shadow_clip,
             "cull_technical_score": technical_score,
+            "cull_aesthetic": aesthetic_score,
             "cull_face_count": face_count,
             "cull_face_sharpness": face_sharpness,
             "cull_face_prominence": face_prominence,
             "cull_face_visibility": face_visibility,
             "cull_face_score": face_score,
+            "cull_occlusion": occlusion_penalty,
             "cull_eye_openness": eye_openness,
             "cull_blink_penalty": blink_penalty,
         })
@@ -506,16 +523,24 @@ def _rank_group_records(component_records, group_type, culling_config=None):
     for item in scored_records:
         if group_has_faces:
             if item["cull_face_count"] > 0:
-                item["cull_score"] = (
+                weighted_score = (
                     culling_config["ranking"]["face_group_weight_technical"] * item["cull_technical_score"]
                     + culling_config["ranking"]["face_group_weight_face"] * item["cull_face_score"]
+                    + culling_config["ranking"]["face_group_weight_aesthetic"] * item["cull_aesthetic"]
                 )
+                weight_sum = (
+                    culling_config["ranking"]["face_group_weight_technical"]
+                    + culling_config["ranking"]["face_group_weight_face"]
+                    + culling_config["ranking"]["face_group_weight_aesthetic"]
+                )
+                item["cull_score"] = max(0.0, min(1.0, weighted_score / max(1e-6, weight_sum)))
                 item["cull_score"] = max(
                     0.0,
                     min(
                         1.0,
                         item["cull_score"] - (
                             culling_config["ranking"]["face_group_blink_penalty_weight"] * item["cull_blink_penalty"]
+                            + culling_config["ranking"]["face_group_occlusion_penalty_weight"] * item["cull_occlusion"]
                         ),
                     ),
                 )
@@ -528,7 +553,12 @@ def _rank_group_records(component_records, group_type, culling_config=None):
                     ) - culling_config["ranking"]["face_missing_penalty"],
                 )
         else:
-            item["cull_score"] = item["cull_technical_score"]
+            weighted_score = (
+                item["cull_technical_score"]
+                + (culling_config["ranking"]["no_face_group_weight_aesthetic"] * item["cull_aesthetic"])
+            )
+            weight_sum = 1.0 + culling_config["ranking"]["no_face_group_weight_aesthetic"]
+            item["cull_score"] = max(0.0, min(1.0, weighted_score / max(1e-6, weight_sum)))
 
     scored_records.sort(key=lambda item: (
         -item["cull_score"],
@@ -545,6 +575,7 @@ def _rank_group_records(component_records, group_type, culling_config=None):
     max_sharpness = max(item["cull_sharpness"] for item in scored_records)
     max_face_score = max(item["cull_face_score"] for item in scored_records)
     max_eye_openness = max(item["cull_eye_openness"] for item in scored_records)
+    max_aesthetic = max(item["cull_aesthetic"] for item in scored_records)
     winner_score = scored_records[0]["cull_score"]
 
     for index, item in enumerate(scored_records, start=1):
@@ -556,6 +587,8 @@ def _rank_group_records(component_records, group_type, culling_config=None):
                 reason_codes.append("underexposed")
             else:
                 reason_codes.append("overexposed")
+        if item["cull_aesthetic"] < culling_config["ranking"]["reason_low_aesthetic_threshold"] and item["cull_aesthetic"] < max(0.0, max_aesthetic - 0.08):
+            reason_codes.append("low_aesthetic")
         if index == 1 and len(scored_records) > 1 and item["cull_sharpness"] >= (
             max_sharpness - culling_config["ranking"]["reason_sharpest_delta"]
         ):
@@ -572,6 +605,8 @@ def _rank_group_records(component_records, group_type, culling_config=None):
                 max_face_score - culling_config["ranking"]["reason_weak_face_delta"],
             ):
                 reason_codes.append("weak_face_quality")
+            if item["cull_occlusion"] > culling_config["ranking"]["reason_occlusion_threshold"]:
+                reason_codes.append("possible_occlusion")
             if item["cull_eye_openness"] >= max(
                 0.0,
                 max_eye_openness - culling_config["ranking"]["reason_eyes_open_delta"],
@@ -597,6 +632,11 @@ def _rank_group_records(component_records, group_type, culling_config=None):
                     group_has_faces
                     and item["cull_face_count"] > 0
                     and item["cull_blink_penalty"] > culling_config["ranking"]["reject_blink_penalty_threshold"]
+                )
+                or (
+                    group_has_faces
+                    and item["cull_face_count"] > 0
+                    and item["cull_occlusion"] > culling_config["ranking"]["reject_occlusion_threshold"]
                 )
             )
 
@@ -783,11 +823,13 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
                 "cull_highlight_clip": round(ranked["cull_highlight_clip"], 4),
                 "cull_shadow_clip": round(ranked["cull_shadow_clip"], 4),
                 "cull_technical_score": round(ranked["cull_technical_score"], 4),
+                "cull_aesthetic": round(ranked["cull_aesthetic"], 4),
                 "cull_face_count": int(ranked["cull_face_count"]),
                 "cull_face_sharpness": round(ranked["cull_face_sharpness"], 4),
                 "cull_face_prominence": round(ranked["cull_face_prominence"], 4),
                 "cull_face_visibility": round(ranked["cull_face_visibility"], 4),
                 "cull_face_score": round(ranked["cull_face_score"], 4),
+                "cull_occlusion": round(ranked["cull_occlusion"], 4),
                 "cull_eye_openness": round(ranked["cull_eye_openness"], 4),
                 "cull_blink_penalty": round(ranked["cull_blink_penalty"], 4),
             })
@@ -818,11 +860,13 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
                         "highlight_clip": round(item["cull_highlight_clip"], 4),
                         "shadow_clip": round(item["cull_shadow_clip"], 4),
                         "technical_score": round(item["cull_technical_score"], 4),
+                        "aesthetic": round(item["cull_aesthetic"], 4),
                         "face_count": int(item["cull_face_count"]),
                         "face_sharpness": round(item["cull_face_sharpness"], 4),
                         "face_prominence": round(item["cull_face_prominence"], 4),
                         "face_visibility": round(item["cull_face_visibility"], 4),
                         "face_score": round(item["cull_face_score"], 4),
+                        "occlusion": round(item["cull_occlusion"], 4),
                         "eye_openness": round(item["cull_eye_openness"], 4),
                         "blink_penalty": round(item["cull_blink_penalty"], 4),
                     },

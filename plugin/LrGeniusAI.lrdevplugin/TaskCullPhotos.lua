@@ -287,11 +287,13 @@ LrTasks.startAsyncTask(function()
                         exposure = formatMetric(metrics["exposure"]),
                         noise = formatMetric(metrics["noise"]),
                         technicalScore = formatMetric(metrics["technical_score"]),
+                        aesthetic = formatMetric(metrics["aesthetic"]),
                         faceCount = tostring(metrics["face_count"] or ""),
                         faceSharpness = formatMetric(metrics["face_sharpness"]),
                         faceProminence = formatMetric(metrics["face_prominence"]),
                         faceVisibility = formatMetric(metrics["face_visibility"]),
                         faceScore = formatMetric(metrics["face_score"]),
+                        occlusion = formatMetric(metrics["occlusion"]),
                         eyeOpenness = formatMetric(metrics["eye_openness"]),
                         blinkPenalty = formatMetric(metrics["blink_penalty"]),
                     }
@@ -315,11 +317,13 @@ LrTasks.startAsyncTask(function()
                     photo:setPropertyForPlugin(_PLUGIN, "cullExposure", cullData.exposure)
                     photo:setPropertyForPlugin(_PLUGIN, "cullNoise", cullData.noise)
                     photo:setPropertyForPlugin(_PLUGIN, "cullTechnicalScore", cullData.technicalScore)
+                    photo:setPropertyForPlugin(_PLUGIN, "cullAesthetic", cullData.aesthetic)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceCount", cullData.faceCount)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceSharpness", cullData.faceSharpness)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceProminence", cullData.faceProminence)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceVisibility", cullData.faceVisibility)
                     photo:setPropertyForPlugin(_PLUGIN, "cullFaceScore", cullData.faceScore)
+                    photo:setPropertyForPlugin(_PLUGIN, "cullOcclusion", cullData.occlusion)
                     photo:setPropertyForPlugin(_PLUGIN, "cullEyeOpenness", cullData.eyeOpenness)
                     photo:setPropertyForPlugin(_PLUGIN, "cullBlinkPenalty", cullData.blinkPenalty)
                 end

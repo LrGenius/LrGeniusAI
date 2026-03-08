@@ -113,6 +113,20 @@ def _compute_eye_openness_proxy(crop_rgb: np.ndarray, bbox_list: List[int], keyp
     return float(sum(eye_scores) / len(eye_scores))
 
 
+def _compute_occlusion_proxy(det_score: float, center_proximity: float, eye_openness: float) -> float:
+    return max(
+        0.0,
+        min(
+            1.0,
+            1.0 - (
+                CULLING_CONFIG["face_metrics"]["occlusion_det_weight"] * max(0.0, min(1.0, det_score))
+                + CULLING_CONFIG["face_metrics"]["occlusion_center_weight"] * max(0.0, min(1.0, center_proximity))
+                + CULLING_CONFIG["face_metrics"]["occlusion_eye_weight"] * max(0.0, min(1.0, eye_openness))
+            ),
+        ),
+    )
+
+
 def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
     """
     Detect faces in an image and return embedding, thumbnail, and quality metadata.
@@ -156,6 +170,7 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
         sharpness = 0.0
         center_proximity = 0.0
         eye_openness = 0.0
+        occlusion = 0.0
         if bbox is not None and len(bbox) >= 4:
             x1, y1, x2, y2 = [int(round(x)) for x in bbox[:4]]
             h, w = img.shape[:2]
@@ -176,6 +191,8 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
                 buf = io.BytesIO()
                 thumb.save(buf, format="JPEG", quality=85)
                 thumbnail_b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+                det_score = float(getattr(face, "det_score", 0.0) or 0.0)
+                occlusion = _compute_occlusion_proxy(det_score, center_proximity, eye_openness)
 
         results.append({
             "embedding": emb,
@@ -187,6 +204,7 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
             "center_proximity": round(center_proximity, 4),
             "eye_openness": round(eye_openness, 4),
             "blink_penalty": round(max(0.0, min(1.0, 1.0 - eye_openness)), 4),
+            "occlusion": round(occlusion, 4),
         })
 
     return results

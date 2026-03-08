@@ -122,6 +122,14 @@ return {
             browsable = true,
         },
         {
+            id = 'cullAesthetic',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullAesthetic=Aesthetic score",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
             id = 'cullFaceCount',
             title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceCount=Face count",
             dataType = 'string',
@@ -156,6 +164,14 @@ return {
         {
             id = 'cullFaceScore',
             title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceScore=Face score",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
+            id = 'cullOcclusion',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullOcclusion=Occlusion penalty",
             dataType = 'string',
             readOnly = true,
             searchable = true,
@@ -219,7 +235,7 @@ return {
         },
     },
 
-    schemaVersion = 28,
+    schemaVersion = 29,
     updateFromEarlierSchemaVersion = function (catalog, previousSchemaVersion, progressScope)
             catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
             if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then
