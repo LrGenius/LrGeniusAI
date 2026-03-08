@@ -255,7 +255,7 @@ function SearchIndexAPI.getJpegThumbnailForPhoto(photo, minWidth, minHeight)
     local result = nil
     local errResult = nil
     local done = false
-    local timeoutSeconds = 30
+    local timeoutSeconds = 3
     local deadline = LrDate.currentTime() + timeoutSeconds
 
     local callback = function(jpegData, err)
