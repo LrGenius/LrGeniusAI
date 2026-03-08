@@ -358,6 +358,24 @@ def _cosine_distance(embedding_a, embedding_b):
     return 1.0 - similarity
 
 
+def _phash_to_int(value):
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    try:
+        return int(text, 16)
+    except ValueError:
+        return None
+
+
+def _phash_hamming_distance(left_hash, right_hash):
+    if left_hash is None or right_hash is None:
+        return None
+    return int((left_hash ^ right_hash).bit_count())
+
+
 def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, culling_config=None):
     culling_config = culling_config or CULLING_CONFIG
     try:
@@ -374,26 +392,31 @@ def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, cul
             burst_distance_threshold = culling_config["grouping"]["burst_distance_auto"]
 
     if phash_threshold == "auto":
-        duplicate_distance_threshold = culling_config["grouping"]["duplicate_distance_auto"]
+        phash_hamming_threshold = int(culling_config["grouping"]["phash_hamming_auto"])
     else:
         try:
-            # The route exposes a pHash-style integer threshold even though the
-            # current implementation uses stored embeddings only. Lower numbers
-            # therefore remain stricter and higher numbers relax duplicate linking.
-            phash_max = culling_config["grouping"]["phash_max"]
-            normalized = max(0.0, min(float(phash_threshold), phash_max)) / phash_max
-            duplicate_distance_threshold = (
-                culling_config["grouping"]["duplicate_distance_min"]
-                + (normalized * culling_config["grouping"]["duplicate_distance_span"])
-            )
+            phash_hamming_threshold = int(max(0.0, min(float(phash_threshold), culling_config["grouping"]["phash_max"])))
         except (TypeError, ValueError):
-            duplicate_distance_threshold = culling_config["grouping"]["duplicate_distance_auto"]
+            phash_hamming_threshold = int(culling_config["grouping"]["phash_hamming_auto"])
+
+    phash_max = culling_config["grouping"]["phash_max"]
+    normalized = max(0.0, min(float(phash_hamming_threshold), phash_max)) / phash_max
+    duplicate_distance_threshold = (
+        culling_config["grouping"]["duplicate_distance_min"]
+        + (normalized * culling_config["grouping"]["duplicate_distance_span"])
+    )
 
     duplicate_time_window_seconds = max(
         time_window_seconds * culling_config["grouping"]["duplicate_time_window_multiplier"],
         culling_config["grouping"]["duplicate_time_window_min_seconds"],
     )
-    return duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds
+    return (
+        phash_hamming_threshold,
+        duplicate_distance_threshold,
+        burst_distance_threshold,
+        duplicate_time_window_seconds,
+        time_window_seconds,
+    )
 
 
 def _record_sort_key(item):
@@ -590,9 +613,8 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
     """
     Group indexed images into stable similarity clusters for culling workflows.
 
-    The current implementation uses stored capture times and image embeddings.
-    A stricter embedding threshold acts as the duplicate signal until a real
-    perceptual hash is available in the backend.
+    Uses stored capture times, perceptual hash (pHash) hamming distance, and
+    image embedding similarity as a fallback/secondary duplicate signal.
     """
     _ensure_initialized()
 
@@ -601,7 +623,7 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
 
     culling_config = get_culling_config(culling_preset)
 
-    duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds = _derive_grouping_thresholds(
+    phash_hamming_threshold, duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds = _derive_grouping_thresholds(
         phash_threshold, clip_threshold, time_delta, culling_config=culling_config
     )
 
@@ -635,6 +657,7 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
             "filename": filename,
             "capture_time": capture_time,
             "embedding": _embedding_to_array(embedding_by_id.get(photo_id)),
+            "phash": _phash_to_int(metadata.get("cull_phash") or metadata.get("phash")),
             "metadata": metadata,
         })
 
@@ -648,16 +671,19 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
         for right_index in range(left_index + 1, len(records)):
             right = records[right_index]
             distance = _cosine_distance(left["embedding"], right["embedding"])
+            phash_distance = _phash_hamming_distance(left["phash"], right["phash"])
 
             time_gap = None
             if left["capture_time"] is not None and right["capture_time"] is not None:
                 time_gap = abs(right["capture_time"] - left["capture_time"])
-                if time_gap > duplicate_time_window_seconds and distance is None:
+                if time_gap > duplicate_time_window_seconds and distance is None and phash_distance is None:
                     break
 
             is_near_duplicate = (
-                distance is not None
-                and distance <= duplicate_distance_threshold
+                (
+                    (phash_distance is not None and phash_distance <= phash_hamming_threshold)
+                    or (distance is not None and distance <= duplicate_distance_threshold)
+                )
                 and (time_gap is None or time_gap <= duplicate_time_window_seconds)
             )
             is_burst_neighbor = (
@@ -709,14 +735,18 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
             time_span_seconds = float(max(capture_times) - min(capture_times))
 
         pair_distances = []
+        pair_phash_distances = []
         group_edge_types = set()
         for left_index in range(len(component_records)):
             for right_index in range(left_index + 1, len(component_records)):
                 left = component_records[left_index]
                 right = component_records[right_index]
                 distance = _cosine_distance(left["embedding"], right["embedding"])
+                phash_distance = _phash_hamming_distance(left["phash"], right["phash"])
                 if distance is not None:
                     pair_distances.append(round(distance, 4))
+                if phash_distance is not None:
+                    pair_phash_distances.append(phash_distance)
                 edge_type = edge_kinds.get(tuple(sorted((left["photo_id"], right["photo_id"]))))
                 if edge_type:
                     group_edge_types.add(edge_type)
@@ -805,12 +835,14 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
             "debug": {
                 "culling_preset": culling_preset,
                 "thresholds": {
+                    "phash_hamming_threshold": phash_hamming_threshold,
                     "duplicate_distance": round(duplicate_distance_threshold, 4),
                     "burst_distance": round(burst_distance_threshold, 4),
                     "duplicate_time_window_seconds": duplicate_time_window_seconds,
                     "time_window_seconds": time_window_seconds,
                 },
                 "pairwise_distances": pair_distances,
+                "pairwise_phash_distances": pair_phash_distances,
                 "edge_types": sorted(group_edge_types),
             },
         })
@@ -828,10 +860,11 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
         collection.update(ids=update_ids, metadatas=update_metadatas)
 
     logger.info(
-        "Grouped %s photos into %s groups (preset=%s, duplicate_distance=%s, burst_distance=%s, time_window=%ss)",
+        "Grouped %s photos into %s groups (preset=%s, phash_hamming=%s, duplicate_distance=%s, burst_distance=%s, time_window=%ss)",
         len(unique_photo_ids),
         len(groups),
         culling_preset,
+        phash_hamming_threshold,
         round(duplicate_distance_threshold, 4),
         round(burst_distance_threshold, 4),
         time_window_seconds,

@@ -69,11 +69,12 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 BASE_CULLING_CONFIG = {
     "grouping": {
         "time_window_default_seconds": 1,
+        "phash_hamming_auto": 10,
         "burst_distance_auto": 0.12,
         "duplicate_distance_auto": 0.05,
         "duplicate_distance_min": 0.02,
         "duplicate_distance_span": 0.06,
-        "phash_max": 32.0,
+        "phash_max": 64.0,
         "duplicate_time_window_multiplier": 4,
         "duplicate_time_window_min_seconds": 10,
     },

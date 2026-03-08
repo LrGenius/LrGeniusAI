@@ -6,6 +6,7 @@ import service_face as face_service
 import service_vertexai as vertexai_service
 import json
 from datetime import datetime as time
+from functools import lru_cache
 from PIL import Image
 import io
 import numpy as np
@@ -74,6 +75,38 @@ def _load_analysis_grayscale(image_bytes: bytes, max_side: int = 512) -> np.ndar
         image = image.resize(resized, Image.Resampling.BILINEAR)
     rgb = np.asarray(image, dtype=np.float32) / 255.0
     return (0.299 * rgb[:, :, 0]) + (0.587 * rgb[:, :, 1]) + (0.114 * rgb[:, :, 2])
+
+
+@lru_cache(maxsize=4)
+def _build_dct_matrix(size: int) -> np.ndarray:
+    indices = np.arange(size, dtype=np.float32)
+    matrix = np.zeros((size, size), dtype=np.float32)
+    scale = np.pi / (2.0 * float(size))
+    for u in range(size):
+        alpha = np.sqrt(1.0 / size) if u == 0 else np.sqrt(2.0 / size)
+        matrix[u, :] = alpha * np.cos((2.0 * indices + 1.0) * u * scale)
+    return matrix
+
+
+def _compute_perceptual_hash(image_bytes: bytes) -> str:
+    """
+    Compute a classic 64-bit pHash (DCT-based) and return 16-char hex.
+    Returns empty string on failure.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("L").resize((32, 32), Image.Resampling.LANCZOS)
+        pixels = np.asarray(image, dtype=np.float32)
+        dct_matrix = _build_dct_matrix(32)
+        dct_transformed = dct_matrix @ pixels @ dct_matrix.T
+        low_freq = dct_transformed[:8, :8]
+        median = float(np.median(low_freq[1:, :]))
+        bits = (low_freq > median).astype(np.uint8).flatten()
+        hash_value = 0
+        for bit in bits:
+            hash_value = (hash_value << 1) | int(bit)
+        return f"{hash_value:016x}"
+    except Exception:
+        return ""
 
 
 def _compute_culling_metrics(image_bytes: bytes) -> dict:
@@ -221,6 +254,7 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     compute_metadata = options.get('compute_metadata', False)
     compute_faces = options.get('compute_faces', False)
     compute_vertexai = options.get('compute_vertexai', False)
+    any_processing_task_enabled = compute_embeddings or compute_metadata or compute_faces or compute_vertexai
 
     if not uuids:
         return []
@@ -241,8 +275,9 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
         needs_metadata = compute_metadata and (regenerate_metadata or not has_any_metadata)
         needs_faces = compute_faces and (regenerate_metadata or not chroma_service.faces_checked_for_photo(uuid))
         needs_vertexai = compute_vertexai and (regenerate_metadata or not chroma_service.has_vertex_embedding(uuid))
+        needs_cull_phash = any_processing_task_enabled and (regenerate_metadata or not existing.get('cull_phash'))
 
-        if needs_embedding or needs_metadata or needs_faces or needs_vertexai:
+        if needs_embedding or needs_metadata or needs_faces or needs_vertexai or needs_cull_phash:
             needing_processing.append(uuid)
 
     return needing_processing
@@ -299,6 +334,7 @@ def process_image_task(
         images_needing_metadata = []
         images_needing_faces = []
         images_needing_vertexai = []
+        images_needing_cull_phash = []
         
         for _, uuid, _ in image_triplets:
             existing = existing_records.get(uuid, {})
@@ -326,6 +362,10 @@ def process_image_task(
                           f"alt_text={bool(existing.get('alt_text'))}, keywords={bool(existing.get('keywords'))}")
             if needs_metadata:
                 images_needing_metadata.append(uuid)
+
+            # cull_phash is part of culling foundation and should be backfilled in delta mode.
+            if regenerate_metadata or not existing.get('cull_phash'):
+                images_needing_cull_phash.append(uuid)
         
         logger.info(f"Generation needed: {len(images_needing_embeddings)} embeddings, "
                    f"{len(images_needing_metadata)} metadata, {len(images_needing_faces)} faces, {len(images_needing_vertexai)} vertexai")
@@ -338,7 +378,8 @@ def process_image_task(
                 and not compute_faces
                 and not compute_vertexai
                 and len(images_needing_embeddings) == 0
-                and len(images_needing_metadata) == 0):
+                and len(images_needing_metadata) == 0
+                and len(images_needing_cull_phash) == 0):
             logger.info("No generation required (regenerate_metadata=False and all fields present). Returning success without changes.")
             return len(image_triplets), 0
 
@@ -389,6 +430,7 @@ def process_image_task(
                 
                 need_embedding = uuid in images_needing_embeddings
                 need_metadata = uuid in images_needing_metadata
+                need_cull_phash = uuid in images_needing_cull_phash
 
                 # Validate that required new data was generated if needed
                 if need_embedding and embedding is None:
@@ -404,6 +446,7 @@ def process_image_task(
                 # If nothing needed for this UUID (already complete) and no face processing, skip
                 # When compute_faces is True we must not skip - we need to reach face detection
                 if (not need_embedding and not need_metadata
+                        and not need_cull_phash
                         and not regenerate_metadata and not compute_faces):
                     logger.info(f"UUID {uuid}: already fully indexed; skipping update.")
                     success_count += 1
@@ -433,6 +476,10 @@ def process_image_task(
 
                 # Technical culling metrics are cheap enough to compute on every pass.
                 main_metadata.update(_compute_culling_metrics(image_bytes))
+                phash_hex = _compute_perceptual_hash(image_bytes)
+                if phash_hex:
+                    main_metadata["cull_phash"] = phash_hex
+                    main_metadata["phash"] = phash_hex
 
                 # Update metadata fields if newly generated
                 if metadata_data and metadata_data.success:
