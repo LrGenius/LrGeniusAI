@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 import server_lifecycle
 from config import logger
 from service_metadata import get_analysis_service
+import service_version
 
 server_bp = Blueprint('server', __name__)
 
@@ -69,4 +70,23 @@ def list_models():
         logger.error(f"Error listing models: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+
+@server_bp.route('/version', methods=['GET'])
+def version():
+    return jsonify(service_version.get_backend_version_info())
+
+
+@server_bp.route('/version/check', methods=['POST'])
+def version_check():
+    data = request.get_json(silent=True) or {}
+    plugin_version = data.get("plugin_version")
+    plugin_release_tag = data.get("plugin_release_tag")
+    plugin_build = data.get("plugin_build")
+
+    result = service_version.check_plugin_backend_version(
+        plugin_version=plugin_version,
+        plugin_build=plugin_build,
+        plugin_release_tag=plugin_release_tag,
+    )
+    return jsonify(result), 200
 

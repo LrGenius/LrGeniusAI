@@ -63,6 +63,20 @@ jobs:
           sed 's/Info.BUILD = [0-9]*/build = '"$BUILD_DATE"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
           echo "Updated Info.lua: MAJOR=$MAJOR MINOR=$MINOR REVISION=$REVISION build=$BUILD_DATE"
 
+      - name: Update backend version info from tag
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          BUILD_DATE=$(date +%Y%m%d)
+          VERSION_FILE="server/src/version_info.py"
+          cat > "$VERSION_FILE" <<EOF
+          BACKEND_VERSION = "${VERSION}"
+          BACKEND_RELEASE_TAG = "v${VERSION}"
+          BACKEND_BUILD = ${BUILD_DATE}
+          EOF
+          echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
+
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:

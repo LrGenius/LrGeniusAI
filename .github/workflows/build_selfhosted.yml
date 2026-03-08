@@ -31,6 +31,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Update backend version info
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          BUILD_DATE=$(date +%Y%m%d)
+          VERSION_FILE="server/src/version_info.py"
+          cat > "$VERSION_FILE" <<EOF
+          BACKEND_VERSION = "${VERSION}"
+          BACKEND_RELEASE_TAG = "v${VERSION}"
+          BACKEND_BUILD = ${BUILD_DATE}
+          EOF
+          echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
+
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:

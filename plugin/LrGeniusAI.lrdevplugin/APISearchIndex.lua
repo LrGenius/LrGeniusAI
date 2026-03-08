@@ -29,6 +29,8 @@ local ENDPOINTS = {
     GET_IDS = "/get/ids",
     REMOVE = "/remove",
     PING = "/ping",
+    VERSION = "/version",
+    VERSION_CHECK = "/version/check",
     SHUTDOWN = "/shutdown",
     IMPORT_METADATA = "/import/metadata",
     START_CLIP_DOWNLOAD = "/clip/download/start",
@@ -487,6 +489,21 @@ end
 
 function SearchIndexAPI.getStats()
     return _request('GET', getBaseUrl() .. ENDPOINTS.STATS)
+end
+
+function SearchIndexAPI.getBackendVersion()
+    return _request('GET', getBaseUrl() .. ENDPOINTS.VERSION)
+end
+
+function SearchIndexAPI.checkVersionCompatibility()
+    local pluginVersion = tostring(Info.MAJOR) .. "." .. tostring(Info.MINOR) .. "." .. tostring(Info.REVISION)
+    local pluginReleaseTag = "v" .. pluginVersion
+    local body = {
+        plugin_version = pluginVersion,
+        plugin_release_tag = pluginReleaseTag,
+        plugin_build = tonumber(Info.BUILD) or 0
+    }
+    return _request('POST', getBaseUrl() .. ENDPOINTS.VERSION_CHECK, body)
 end
 
 function SearchIndexAPI.formatStats(stats)

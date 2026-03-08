@@ -261,6 +261,42 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         end,
                     },
                     f:push_button {
+                        title = "Check Plugin/Backend versions",
+                        action = function(button)
+                            LrTasks.startAsyncTask(function()
+                                local result, err = SearchIndexAPI.checkVersionCompatibility()
+                                if result then
+                                    local backendTag = tostring(result.backend_release_tag or ("v" .. tostring(result.backend_version or "unknown")))
+                                    local pluginTag = tostring(result.plugin_release_tag or ("v" .. tostring(result.plugin_version or "unknown")))
+                                    local buildInfo = "Plugin build: " .. tostring(result.plugin_build or "n/a") ..
+                                        "\nBackend build: " .. tostring(result.backend_build or "n/a")
+
+                                    if result.compatible then
+                                        LrDialogs.message(
+                                            "Version check passed",
+                                            "Plugin and backend versions match.\n" ..
+                                            "Plugin: " .. pluginTag .. "\n" ..
+                                            "Backend: " .. backendTag .. "\n\n" ..
+                                            buildInfo
+                                        )
+                                    else
+                                        LrDialogs.message(
+                                            "Version mismatch",
+                                            "Plugin and backend versions differ.\n" ..
+                                            "Plugin: " .. pluginTag .. "\n" ..
+                                            "Backend: " .. backendTag .. "\n" ..
+                                            "Reason: " .. tostring(result.reason or "unknown") .. "\n\n" ..
+                                            buildInfo,
+                                            "warning"
+                                        )
+                                    end
+                                else
+                                    LrDialogs.message("Version check failed", tostring(err or "Unknown error"), "critical")
+                                end
+                            end)
+                        end,
+                    },
+                    f:push_button {
                         title = "Download DB backup",
                         action = function(button)
                             LrTasks.startAsyncTask(function()
