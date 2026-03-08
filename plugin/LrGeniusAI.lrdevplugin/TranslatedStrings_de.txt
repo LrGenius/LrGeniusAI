@@ -57,6 +57,7 @@
 "$$$/LrGeniusAI/PluginInfo/VertexProjectId=Vertex AI Projekt-ID"
 "$$$/LrGeniusAI/PluginInfo/VertexLocation=Vertex AI Region"
 "$$$/LrGeniusAI/PluginInfo/VertexConsole=Konsole"
+"$$$/LrGeniusAI/PluginInfo/UsePreviewThumbnails=Lightroom-Vorschauen für schnelleres Indizieren verwenden"
 "$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Projekt-ID ist nicht konfiguriert. Bitte in den Plugin-Einstellungen festlegen."
 "$$$/lrc-ai-assistant/PluginInfoDialogSections/ContentValidateConfig=Inhalts- und Kontrollkonfiguration"
 "$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSettings=Exporteinstellungen"

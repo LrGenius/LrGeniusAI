@@ -240,6 +240,132 @@ end
 
 
 ---
+-- Gets a JPEG thumbnail from Lightroom's preview system (must be called from LrTasks async context).
+-- Uses photo:requestJpegThumbnail(width, height, callback) and waits for the callback with a timeout.
+-- @param photo LrPhoto
+-- @param minWidth number Minimum width (long edge); nil = smallest preview.
+-- @param minHeight number Optional; if minWidth is set, controls height of returned pixels.
+-- @return string|nil JPEG data string, or nil on failure.
+-- @return string|nil Error message when JPEG is nil.
+--
+function SearchIndexAPI.getJpegThumbnailForPhoto(photo, minWidth, minHeight)
+    if not photo then
+        return nil, "Photo is nil"
+    end
+    local result = nil
+    local errResult = nil
+    local done = false
+    local timeoutSeconds = 30
+    local deadline = LrDate.currentTime() + timeoutSeconds
+
+    local callback = function(jpegData, err)
+        result = jpegData
+        errResult = err
+        done = true
+    end
+
+    local requestObj = photo:requestJpegThumbnail(minWidth, minHeight, callback)
+    if not requestObj then
+        return nil, "requestJpegThumbnail failed to start"
+    end
+
+    while not done and LrDate.currentTime() < deadline do
+        if MAC_ENV then
+            LrTasks.yield()
+        else
+            LrTasks.sleep(0.05)
+        end
+    end
+
+    if not done then
+        return nil, "Thumbnail request timed out"
+    end
+    if result and type(result) == "string" and #result > 0 then
+        return result, nil
+    end
+    return nil, errResult or "No thumbnail data"
+end
+
+
+---
+-- Analyzes and indexes a single photo using base64-encoded JPEG (e.g. from requestJpegThumbnail).
+-- Uses the /index_base64 endpoint; same options as analyzeAndIndexPhoto.
+-- @param photoId string
+-- @param jpegData string Raw JPEG bytes.
+-- @param filename string Display filename for logging.
+-- @param options table Same as analyzeAndIndexPhoto.
+-- @return boolean success, table|string response or error.
+--
+function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, options)
+    if not jpegData or type(jpegData) ~= "string" or #jpegData == 0 then
+        log:error("analyzeAndIndexPhotoBase64: no JPEG data")
+        return false, "No image data provided"
+    end
+    if not photoId or photoId == "" then
+        log:error("Photo ID is missing")
+        return false, "No photo ID provided"
+    end
+
+    options = options or {}
+    local base64Image = LrStringUtils.encodeBase64(jpegData)
+    local url = getBaseUrl() .. ENDPOINTS.INDEX_BASE64
+
+    local body = {
+        image = base64Image,
+        photo_id = photoId,
+        filename = filename or "photo.jpg",
+        tasks = options.tasks or {},
+        provider = options.provider,
+        model = options.model,
+        api_key = options.api_key,
+        language = options.language or (prefs and prefs.generateLanguage) or "English",
+        temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+        replace_ss = tostring(options.replace_ss or false),
+        generate_keywords = tostring(options.generate_keywords or false),
+        generate_caption = tostring(options.generate_caption or false),
+        generate_title = tostring(options.generate_title or false),
+        generate_alt_text = tostring(options.generate_alt_text or false),
+        submit_gps = tostring(options.submit_gps or false),
+        submit_keywords = tostring(options.submit_keywords or false),
+        submit_folder_names = tostring(options.submit_folder_names or false),
+        user_context = options.user_context,
+        gps_coordinates = options.gps_coordinates and JSON:encode(options.gps_coordinates) or nil,
+        existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
+        folder_names = options.folder_names,
+        prompt = options.prompt,
+        keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
+        date_time = options.date_time,
+        ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
+        vertex_project_id = options.vertex_project_id,
+        vertex_location = options.vertex_location,
+        regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+    }
+
+    log:trace("Analyzing and indexing photo (base64): " .. tostring(filename) .. " id " .. photoId)
+
+    local response, err = _request('POST', url, body, 720)
+
+    if not response then
+        log:error("Failed to analyze/index photo (base64): " .. tostring(err))
+        return false, err or "Unknown error"
+    end
+    if response.status == "processed" then
+        local success_count = response.success_count or 0
+        local failure_count = response.failure_count or 0
+        if success_count > 0 then
+            log:trace("Successfully processed photo (base64): " .. tostring(filename))
+            return true, response
+        else
+            log:error("Photo processing failed (base64): " .. tostring(filename))
+            return false, response.error or "Processing failed"
+        end
+    end
+    log:error("Unexpected response status (base64): " .. tostring(response.status))
+    return false, "Unexpected response status"
+end
+
+
+---
 -- Unified function to analyze and index photos with metadata and embeddings.
 -- Replaces the old separate analyze and index workflows.
 -- @param photoId string The ID of the photo.
@@ -752,68 +878,64 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                 if photoId then
                     log:trace("Using photo_id for " .. filename .. " (hashing_ms=" .. tostring(math.floor((LrDate.currentTime() - hashStart) * 1000)) .. ")")
 
-                    -- Export photo as JPEG
-                    local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
-                    
-                    if exportedPhotoPath ~= nil then
-
-                        -- Prepare analysis options with photo-specific context
-                        local photoOptions = {}
-                        for k, v in pairs(options) do
-                            photoOptions[k] = v
+                    -- Prepare analysis options with photo-specific context
+                    local photoOptions = {}
+                    for k, v in pairs(options) do
+                        photoOptions[k] = v
+                    end
+                    if options.submit_gps then
+                        local gps = photo:getRawMetadata('gps')
+                        if gps then photoOptions.gps_coordinates = gps end
+                    end
+                    if options.submit_keywords then
+                        local keywords = photo:getFormattedMetadata("keywordTagsForExport")
+                        if keywords then photoOptions.existing_keywords = keywords end
+                    end
+                    if options.submit_folder_names then
+                        local originalFilePath = photo:getRawMetadata("path")
+                        if originalFilePath then
+                            photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
                         end
-
-                        log:trace("Options for photo " .. filename .. ": " .. Util.dumpTable(photoOptions))
-                        
-                        -- Add GPS if enabled
-                        if options.submit_gps then
-                            local gps = photo:getRawMetadata('gps')
-                            if gps then
-                                photoOptions.gps_coordinates = gps
-                            end
+                    end
+                    if options.submit_date_time then
+                        local datetime = photo:getRawMetadata("dateTime")
+                        if datetime ~= nil and type(datetime) == "number" then
+                            photoOptions.date_time = LrDate.timeToW3CDate(datetime)
                         end
-                        
-                        -- Add existing keywords if enabled
-                        if options.submit_keywords then
-                            local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-                            if keywords then
-                                photoOptions.existing_keywords = keywords
-                            end
-                        end
-                        
-                        -- Add folder names if enabled
-                        if options.submit_folder_names then
-                            local originalFilePath = photo:getRawMetadata("path")
-                            if originalFilePath then
-                                photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
-                            end
-                        end
+                    end
+                    photoOptions.user_context = catalog:getPropertyForPlugin(_PLUGIN, 'photoContext') or ""
+                    photoOptions.photo_id = photoId
 
+                    local success, indexResponse
+                    local usePreviewThumbnails = (prefs and prefs.usePreviewThumbnails ~= false)
+                    local thumbnailSize = tonumber(prefs and prefs.exportSize) or 1024
+                    local leafName = LrPathUtils.leafName(filename or "photo.jpg")
 
-                        if options.submit_date_time then
-                            local datetime = photo:getRawMetadata("dateTime")
-                            if datetime ~= nil and type(datetime) == "number" then
-                                photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-                            end
-                        end
-
-
-                        photoOptions.user_context = catalog:getPropertyForPlugin(_PLUGIN, 'photoContext') or ""
-                        photoOptions.photo_id = photoId
-
-                        -- Call unified API to index/analyze
-                        local success, indexResponse = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath, photoOptions)
-                        if success then
-                            stats.success = stats.success + 1
+                    if usePreviewThumbnails then
+                        local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(photo, thumbnailSize, thumbnailSize)
+                        if jpegData and #jpegData > 0 then
+                            log:trace("Using Lightroom preview for " .. filename)
+                            success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, leafName, photoOptions)
                         else
-                            stats.failed = stats.failed + 1
-                            log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown"))
+                            log:trace("Preview unavailable for " .. filename .. ", falling back to export: " .. tostring(thumbErr))
+                            jpegData = nil
                         end
-                        -- Cleanup temp filename
-                        LrFileUtils.delete(exportedPhotoPath)
+                    end
+
+                    if not success then
+                        local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
+                        if exportedPhotoPath then
+                            log:trace("Using exported JPEG for " .. filename)
+                            success, indexResponse = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath, photoOptions)
+                            LrFileUtils.delete(exportedPhotoPath)
+                        end
+                    end
+
+                    if success then
+                        stats.success = stats.success + 1
                     else
                         stats.failed = stats.failed + 1
-                        log:error("Failed to read exported photo: " .. filename)
+                        log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown"))
                     end
                 else
                     stats.failed = stats.failed + 1

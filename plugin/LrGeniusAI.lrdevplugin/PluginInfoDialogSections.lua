@@ -22,6 +22,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
     propertyTable.exportSize = prefs.exportSize
     propertyTable.exportQuality = prefs.exportQuality
+    propertyTable.usePreviewThumbnails = (prefs.usePreviewThumbnails ~= false)
 
     propertyTable.promptTitles = {}
     for title, prompt in pairs(prefs.prompts) do
@@ -422,6 +423,14 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         title = bind 'exportQuality'
                     },
                 },
+                f:row {
+                    f:checkbox {
+                        value = bind 'usePreviewThumbnails',
+                    },
+                    f:static_text {
+                        title = LOC "$$$/LrGeniusAI/PluginInfo/UsePreviewThumbnails=Use Lightroom previews for faster indexing",
+                    },
+                },
             },
             f:group_box {
                 width = share 'groupBoxWidth',
@@ -462,6 +471,7 @@ function PluginInfoDialogSections.endDialog(propertyTable)
     prefs.vertexLocation = (propertyTable.vertexLocation and propertyTable.vertexLocation:gsub("^%s*(.-)%s*$", "%1")) or "us-central1"
     prefs.exportSize = propertyTable.exportSize
     prefs.exportQuality = propertyTable.exportQuality
+    prefs.usePreviewThumbnails = (propertyTable.usePreviewThumbnails ~= false)
 
     prefs.prompt = propertyTable.prompt
     prefs.prompts = propertyTable.prompts

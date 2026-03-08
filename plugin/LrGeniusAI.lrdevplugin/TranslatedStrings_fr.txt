@@ -55,6 +55,7 @@
 "$$$/lrc-ai-assistant/PluginInfoDialogSections/ApiKeys=Clés API"
 "$$$/lrc-ai-assistant/PluginInfoDialogSections/ContentValidateConfig=Configuration du contenu et de la validation"
 "$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSettings=Paramètres d'exportation"
+"$$$/LrGeniusAI/PluginInfo/UsePreviewThumbnails=Utiliser les aperçus Lightroom pour une indexation plus rapide"
 "$$$/lrc-ai-assistant/ResponseStructure/ConfigureResponseStructure=Configurer la génération et le mappage des données"
 "$$$/lrc-ai-assistant/ResponseStructure/Keywords=Mots-clés"
 "$$$/lrc-ai-assistant/ResponseStructure/ResetToDefaultKeywordStructure=Réinitialiser les catégories de mots clés par défaut ?"
