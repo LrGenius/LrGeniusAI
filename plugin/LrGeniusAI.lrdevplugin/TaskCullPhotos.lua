@@ -201,6 +201,7 @@ LrTasks.startAsyncTask(function()
             culling_preset = options.cullingPreset,
         })
         local groups = cullResult and cullResult.groups or nil
+        local summary = (cullResult and cullResult.summary) or {}
 
         progressScope:setPortionComplete(1, 1)
         progressScope:done()
@@ -225,6 +226,7 @@ LrTasks.startAsyncTask(function()
         local alternateIds = {}
         local rejectIds = {}
         local duplicateIds = {}
+        local nearDuplicateGroupCount = 0
 
         for _, group in ipairs(groups) do
             local winnerPhotoId = group["winner_photo_id"]
@@ -243,11 +245,14 @@ LrTasks.startAsyncTask(function()
                 table.insert(rejectIds, photoId)
             end
             if options.createDuplicatesCollection and groupType == "near_duplicate" then
+                nearDuplicateGroupCount = nearDuplicateGroupCount + 1
                 for _, photoId in ipairs(groupPhotoIds) do
                     if photoId ~= winnerPhotoId then
                         table.insert(duplicateIds, photoId)
                     end
                 end
+            elseif groupType == "near_duplicate" then
+                nearDuplicateGroupCount = nearDuplicateGroupCount + 1
             end
         end
 
@@ -375,11 +380,13 @@ LrTasks.startAsyncTask(function()
         LrDialogs.message(
             LOC "$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete",
             LOC(
-                "$$$/LrGeniusAI/CullTask/CompletionMessage=Created culling collections for ^1 groups. Picks: ^2, Alternates: ^3, Reject candidates: ^4.",
-                tostring(#groups),
-                tostring(#picksPhotos),
-                tostring(#alternatePhotos),
-                tostring(#rejectPhotos)
+                "$$$/LrGeniusAI/CullTask/CompletionMessage=Created culling collections for ^1 groups. Picks: ^2, Alternates: ^3, Reject candidates: ^4. Near-duplicate groups: ^5. Preset: ^6.",
+                tostring(summary.group_count or #groups),
+                tostring(summary.pick_count or #picksPhotos),
+                tostring(summary.alternate_count or #alternatePhotos),
+                tostring(summary.reject_candidate_count or #rejectPhotos),
+                tostring(summary.near_duplicate_group_count or nearDuplicateGroupCount),
+                tostring(summary.culling_preset or options.cullingPreset or "default")
             )
         )
     end)
