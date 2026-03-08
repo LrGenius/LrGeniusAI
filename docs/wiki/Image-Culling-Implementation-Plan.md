@@ -274,3 +274,136 @@ For each set, compare:
 - [ ] Add explanation fields and debug output
 - [ ] Build small benchmark dataset for evaluation
 - [ ] Evaluate optional aesthetic model as secondary signal
+
+## Branch Start Package
+
+This is the recommended first work package for a dedicated implementation branch.
+
+### Ticket 1: Finish grouping backend
+
+Goal:
+Implement the missing grouping foundation so culling can operate on similar-image stacks instead of isolated photos.
+
+Scope:
+
+- implement `group_and_sort_images(...)` in `server/src/service_chroma.py`
+- combine `capture_time`, embedding similarity, and a cheap duplicate signal
+- return stable grouped results for a provided list of photo IDs
+- keep output deterministic and easy to debug
+
+Suggested output shape:
+
+- `group_id`
+- `photo_ids`
+- `group_type` such as `single`, `burst`, `near_duplicate`
+- optional similarity/debug fields
+
+Definition of done:
+
+- the backend groups obvious bursts and near-duplicates reliably
+- single photos still come back as one-item groups
+- repeated runs produce the same grouping for the same input
+
+### Ticket 2: Add technical culling metrics
+
+Goal:
+Create the first cheap, explainable ranking basis without LLMs.
+
+Scope:
+
+- add image-level metrics for:
+  - sharpness / blur
+  - exposure sanity
+  - highlight / shadow clipping approximation
+  - noise estimate
+- store these metrics in backend metadata or a dedicated culling result payload
+- expose the metrics in logs or debug output for tuning
+
+Definition of done:
+
+- clearly blurred or badly exposed images score worse than stronger alternatives
+- metrics can be inspected per photo during development
+
+### Ticket 3: Rank photos within each group
+
+Goal:
+Turn groups plus technical metrics into a usable first-pass culling result.
+
+Scope:
+
+- define the first `cull_score`
+- rank only within each group
+- mark `group winner`, `alternates`, and `reject candidates`
+- add short reason codes derived from the score components
+
+Suggested first reason codes:
+
+- `sharpest_in_group`
+- `blurred`
+- `underexposed`
+- `overexposed`
+- `near_duplicate_weaker`
+
+Definition of done:
+
+- every non-empty group has a stable winner
+- weak images can be flagged without deleting anything
+- ranking reasons are reproducible and understandable
+
+### Ticket 4: Add Lightroom culling task
+
+Goal:
+Make the backend result usable in Lightroom without changing existing metadata workflows.
+
+Scope:
+
+- add a new plugin task such as `Cull Similar Photos`
+- support `selected photos` and `current view`
+- call the grouping / culling API
+- create result collections:
+  - `Picks`
+  - `Alternates`
+  - `Reject Candidates`
+  - optional `Duplicates / Near Duplicates`
+
+Definition of done:
+
+- a user can run culling on a selection and immediately inspect the result in collections
+- no destructive action happens automatically
+
+### Ticket 5: Add face-aware ranking
+
+Goal:
+Improve culling quality for portraits, weddings, events, and family photography.
+
+Scope:
+
+- reuse existing face detection
+- add face-level signals:
+  - face sharpness
+  - eye openness / blink
+  - face prominence
+  - simple visibility / occlusion heuristics
+- fold these into the `cull_score` when faces exist
+
+Definition of done:
+
+- in people-heavy bursts, sharp open-eye shots are preferred over blink shots
+- photos without faces still rank correctly using generic signals
+
+## Recommended Branch Order
+
+If implementation happens in a separate branch, use this order:
+
+1. Ticket 1
+2. Ticket 2
+3. Ticket 3
+4. Ticket 4
+5. Ticket 5
+
+## Optional Nice-to-Haves After MVP
+
+- lightweight aesthetic model such as `NIMA` or a CLIP-based aesthetic predictor
+- user-adjustable presets for `portrait`, `event`, `action`
+- in-plugin review dialog for thresholds and debug explanations
+- learning from user keep/reject feedback
