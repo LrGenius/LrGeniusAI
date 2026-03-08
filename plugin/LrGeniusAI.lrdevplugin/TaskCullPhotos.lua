@@ -194,12 +194,13 @@ LrTasks.startAsyncTask(function()
         })
         progressScope:setPortionComplete(0, 1)
 
-        local groups, err = SearchIndexAPI.groupSimilarPhotos(photoIds, {
+        local cullResult, err = SearchIndexAPI.cullPhotos(photoIds, {
             phash_threshold = "auto",
             clip_threshold = "auto",
             time_delta_seconds = options.timeDeltaSeconds,
             culling_preset = options.cullingPreset,
         })
+        local groups = cullResult and cullResult.groups or nil
 
         progressScope:setPortionComplete(1, 1)
         progressScope:done()

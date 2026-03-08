@@ -23,6 +23,7 @@ local ENDPOINTS = {
     INDEX_BY_REFERENCE = "/index_by_reference",
     INDEX_BASE64 = "/index_base64",
     GROUP_SIMILAR = "/group_similar",
+    CULL = "/cull",
     SEARCH = "/search",
     STATS = "/db/stats",
     MODELS = "/models",
@@ -616,6 +617,28 @@ function SearchIndexAPI.groupSimilarPhotos(photoIds, options)
     local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.GROUP_SIMILAR, body, 300)
     if err then
         log:error("groupSimilarPhotos failed: " .. tostring(err))
+        return nil, err
+    end
+    return result
+end
+
+function SearchIndexAPI.cullPhotos(photoIds, options)
+    options = options or {}
+    if type(photoIds) ~= "table" or #photoIds == 0 then
+        return nil, "photo_ids required"
+    end
+
+    local body = {
+        photo_ids = photoIds,
+        phash_threshold = options.phash_threshold or "auto",
+        clip_threshold = options.clip_threshold or "auto",
+        time_delta_seconds = options.time_delta_seconds or 2,
+        culling_preset = options.culling_preset or "default",
+    }
+
+    local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CULL, body, 300)
+    if err then
+        log:error("cullPhotos failed: " .. tostring(err))
         return nil, err
     end
     return result
