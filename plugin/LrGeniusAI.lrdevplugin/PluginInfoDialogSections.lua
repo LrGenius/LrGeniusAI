@@ -300,17 +300,10 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         title = "Download DB backup",
                         action = function(button)
                             LrTasks.startAsyncTask(function()
-                                local callOk, ok, result = pcall(SearchIndexAPI.downloadDatabaseBackup)
-                                if not callOk then
-                                    log:error("Download DB backup crashed: " .. tostring(ok))
-                                    LrDialogs.message("Database backup crashed", tostring(ok or "Unknown runtime error"), "critical")
-                                    return
-                                end
-                                if ok then
-                                    LrShell.revealInShell(result)
-                                    LrDialogs.message("Database backup downloaded.", result)
-                                elseif result == "canceled" then
-                                    log:trace("Database backup download canceled by user")
+                                local result, path = SearchIndexAPI.downloadDatabaseBackup()
+                                if result then
+                                    LrShell.revealInShell(path)
+                                    LrDialogs.message("Database backup downloaded.", path)
                                 else
                                     LrDialogs.message("Database backup failed", tostring(result or "Unknown error"), "critical")
                                 end
