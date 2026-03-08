@@ -941,16 +941,24 @@ end
 
 function SearchIndexAPI.downloadDatabaseBackup()
     local url = getBaseUrl() .. ENDPOINTS.DB_BACKUP
+    log:info("downloadDatabaseBackup: start, url=" .. tostring(url))
     local outputPath = LrDialogs.runSavePanel({
         title = "Save database backup",
         prompt = "Save Backup",
         canCreateDirectories = true,
         requiredFileType = "zip",
     })
+    log:info("downloadDatabaseBackup: save panel returned type=" .. tostring(type(outputPath)) .. " value=" .. tostring(outputPath))
 
     if not outputPath or outputPath == "" then
         log:info("Database backup download canceled by user")
         return nil, "canceled"
+    end
+
+    if type(outputPath) ~= "string" then
+        local err = "Save panel returned unexpected type for outputPath: " .. tostring(type(outputPath))
+        log:error("downloadDatabaseBackup: " .. err)
+        return false, err
     end
 
     if not outputPath:lower():match("%.zip$") then
@@ -961,15 +969,24 @@ function SearchIndexAPI.downloadDatabaseBackup()
 
     local responseBody, hdrs = LrHttp.get(url, 300)
     local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
+    log:info(
+        "downloadDatabaseBackup: HTTP finished, status=" .. tostring(status) ..
+        ", hdrsType=" .. tostring(type(hdrs)) ..
+        ", bodyType=" .. tostring(type(responseBody)) ..
+        ", bodyLen=" .. tostring(type(responseBody) == "string" and #responseBody or "n/a")
+    )
     if status == nil or status < 200 or status >= 300 then
         local err = "Backup download failed. HTTP status: " .. tostring(status or "unknown")
-        if responseBody and #responseBody > 0 then
+        if type(responseBody) == "string" and #responseBody > 0 then
             local ok, decoded = pcall(function()
                 return JSON:decode(responseBody)
             end)
+            log:info("downloadDatabaseBackup: error response JSON decode ok=" .. tostring(ok) .. ", decodedType=" .. tostring(type(decoded)))
             if ok and type(decoded) == "table" and decoded.error then
                 err = err .. " - " .. tostring(decoded.error)
             end
+        elseif responseBody ~= nil then
+            err = err .. " - rawBody(" .. tostring(type(responseBody)) .. "): " .. tostring(responseBody)
         end
         log:error(err)
         return false, err
@@ -982,7 +999,23 @@ function SearchIndexAPI.downloadDatabaseBackup()
         return false, err
     end
 
-    file:write(responseBody or "")
+    local dataToWrite = responseBody
+    if dataToWrite == nil then
+        dataToWrite = ""
+    elseif type(dataToWrite) ~= "string" then
+        log:warning("downloadDatabaseBackup: responseBody is not a string, converting via tostring. type=" .. tostring(type(dataToWrite)))
+        dataToWrite = tostring(dataToWrite)
+    end
+
+    local writeOk, writeErr = pcall(function()
+        file:write(dataToWrite)
+    end)
+    if not writeOk then
+        file:close()
+        local err = "Could not write backup file: " .. tostring(writeErr)
+        log:error("downloadDatabaseBackup: " .. err)
+        return false, err
+    end
     file:close()
 
     if not LrFileUtils.exists(outputPath) then
@@ -991,7 +1024,7 @@ function SearchIndexAPI.downloadDatabaseBackup()
         return false, err
     end
 
-    log:info("Database backup downloaded successfully: " .. outputPath)
+    log:info("Database backup downloaded successfully: " .. outputPath .. " (writtenBytes=" .. tostring(#dataToWrite) .. ")")
     return true, outputPath
 end
 
