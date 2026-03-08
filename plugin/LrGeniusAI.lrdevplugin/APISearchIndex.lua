@@ -1008,7 +1008,7 @@ function SearchIndexAPI.downloadDatabaseBackup()
     if dataToWrite == nil then
         dataToWrite = ""
     elseif type(dataToWrite) ~= "string" then
-        log:warning("downloadDatabaseBackup: responseBody is not a string, converting via tostring. type=" .. tostring(type(dataToWrite)))
+        log:warn("downloadDatabaseBackup: responseBody is not a string, converting via tostring. type=" .. tostring(type(dataToWrite)))
         dataToWrite = tostring(dataToWrite)
     end
 
@@ -1041,7 +1041,7 @@ _safeHttpGet = function(url, timeout)
         if ok then
             return result, hdrs, nil
         end
-        log:warning("_safeHttpGet: get(url, timeout) failed for url=" .. tostring(url) .. " err=" .. tostring(result))
+        log:warn("_safeHttpGet: get(url, timeout) failed for url=" .. tostring(url) .. " err=" .. tostring(result))
     end
 
     local okFallback, resultFallback, hdrsFallback = pcall(LrHttp.get, url)
