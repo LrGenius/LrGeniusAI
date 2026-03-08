@@ -14,7 +14,7 @@ end
 ---
 -- @param scope string 'selected'|'view'|'all'|'missing'
 -- @param taskOptions table|boolean|nil For scope 'missing': task options table
---   { enableEmbeddings, enableMetadata, enableQuality, enableFaces, regenerateMetadata }
+--   { enableEmbeddings, enableMetadata, enableFaces, regenerateMetadata }
 --   to check backend for unprocessed photos. Or boolean for legacy (requireEmbeddings).
 --   Nil/omitted = legacy true (photos not in index with embeddings).
 --

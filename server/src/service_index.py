@@ -1,4 +1,4 @@
-from config import logger
+from config import logger, CULLING_CONFIG
 import service_chroma as chroma_service
 from service_metadata import get_analysis_service
 import server_lifecycle as server_lifecycle
@@ -6,6 +6,10 @@ import service_face as face_service
 import service_vertexai as vertexai_service
 import json
 from datetime import datetime as time
+from functools import lru_cache
+from PIL import Image
+import io
+import numpy as np
 
 def _flatten_keywords(keywords):
     """
@@ -56,6 +60,237 @@ def _flatten_keywords(keywords):
     return ""
 
 
+def _safe_unit_interval(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _load_analysis_grayscale(image_bytes: bytes, max_side: int = 512) -> np.ndarray:
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    if max(image.size) > max_side:
+        scale = max_side / float(max(image.size))
+        resized = (
+            max(32, int(round(image.size[0] * scale))),
+            max(32, int(round(image.size[1] * scale))),
+        )
+        image = image.resize(resized, Image.Resampling.BILINEAR)
+    rgb = np.asarray(image, dtype=np.float32) / 255.0
+    return (0.299 * rgb[:, :, 0]) + (0.587 * rgb[:, :, 1]) + (0.114 * rgb[:, :, 2])
+
+
+@lru_cache(maxsize=4)
+def _build_dct_matrix(size: int) -> np.ndarray:
+    indices = np.arange(size, dtype=np.float32)
+    matrix = np.zeros((size, size), dtype=np.float32)
+    scale = np.pi / (2.0 * float(size))
+    for u in range(size):
+        alpha = np.sqrt(1.0 / size) if u == 0 else np.sqrt(2.0 / size)
+        matrix[u, :] = alpha * np.cos((2.0 * indices + 1.0) * u * scale)
+    return matrix
+
+
+def _compute_perceptual_hash(image_bytes: bytes) -> str:
+    """
+    Compute a classic 64-bit pHash (DCT-based) and return 16-char hex.
+    Returns empty string on failure.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("L").resize((32, 32), Image.Resampling.LANCZOS)
+        pixels = np.asarray(image, dtype=np.float32)
+        dct_matrix = _build_dct_matrix(32)
+        dct_transformed = dct_matrix @ pixels @ dct_matrix.T
+        low_freq = dct_transformed[:8, :8]
+        median = float(np.median(low_freq[1:, :]))
+        bits = (low_freq > median).astype(np.uint8).flatten()
+        hash_value = 0
+        for bit in bits:
+            hash_value = (hash_value << 1) | int(bit)
+        return f"{hash_value:016x}"
+    except Exception:
+        return ""
+
+
+def _compute_culling_metrics(image_bytes: bytes) -> dict:
+    """
+    Compute cheap, deterministic image-quality metrics for culling.
+    All normalized quality scores use a 0..1 range where higher is better,
+    except the explicit clip/noise fields which are stored as penalties.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        if max(image.size) > 512:
+            scale = 512 / float(max(image.size))
+            resized = (
+                max(32, int(round(image.size[0] * scale))),
+                max(32, int(round(image.size[1] * scale))),
+            )
+            image = image.resize(resized, Image.Resampling.BILINEAR)
+        rgb = np.asarray(image, dtype=np.float32) / 255.0
+        gray = (0.299 * rgb[:, :, 0]) + (0.587 * rgb[:, :, 1]) + (0.114 * rgb[:, :, 2])
+        if gray.shape[0] < 8 or gray.shape[1] < 8:
+            raise ValueError("Image too small for culling metrics")
+
+        center = gray[1:-1, 1:-1]
+        laplacian = (
+            -4.0 * center
+            + gray[:-2, 1:-1]
+            + gray[2:, 1:-1]
+            + gray[1:-1, :-2]
+            + gray[1:-1, 2:]
+        )
+        sharpness_raw = float(np.var(laplacian))
+        sharpness = _safe_unit_interval(
+            sharpness_raw / (sharpness_raw + CULLING_CONFIG["image_metrics"]["sharpness_denominator"])
+        )
+
+        luminance_mean = float(np.mean(gray))
+        highlight_clip = float(np.mean(gray >= CULLING_CONFIG["image_metrics"]["highlight_threshold"]))
+        shadow_clip = float(np.mean(gray <= CULLING_CONFIG["image_metrics"]["shadow_threshold"]))
+        clipping_penalty = _safe_unit_interval(
+            (highlight_clip * CULLING_CONFIG["image_metrics"]["highlight_clip_weight"])
+            + (shadow_clip * CULLING_CONFIG["image_metrics"]["shadow_clip_weight"])
+        )
+        exposure_balance = _safe_unit_interval(
+            1.0 - (
+                abs(luminance_mean - CULLING_CONFIG["image_metrics"]["exposure_target"])
+                / CULLING_CONFIG["image_metrics"]["exposure_tolerance"]
+            )
+        )
+        exposure = _safe_unit_interval(
+            (CULLING_CONFIG["image_metrics"]["exposure_balance_weight"] * exposure_balance)
+            + (CULLING_CONFIG["image_metrics"]["exposure_clip_weight"] * (1.0 - clipping_penalty))
+        )
+
+        blurred = (
+            gray[:-2, :-2] + gray[:-2, 1:-1] + gray[:-2, 2:]
+            + gray[1:-1, :-2] + gray[1:-1, 1:-1] + gray[1:-1, 2:]
+            + gray[2:, :-2] + gray[2:, 1:-1] + gray[2:, 2:]
+        ) / 9.0
+        reference = gray[1:-1, 1:-1]
+        residual = np.abs(reference - blurred)
+        midtone_mask = (reference > 0.15) & (reference < 0.85)
+        if np.any(midtone_mask):
+            noise_raw = float(np.mean(residual[midtone_mask]))
+        else:
+            noise_raw = float(np.mean(residual))
+        noise_penalty = _safe_unit_interval(noise_raw / CULLING_CONFIG["image_metrics"]["noise_denominator"])
+
+        technical_score = _safe_unit_interval(
+            (CULLING_CONFIG["image_metrics"]["technical_weight_sharpness"] * sharpness)
+            + (CULLING_CONFIG["image_metrics"]["technical_weight_exposure"] * exposure)
+            + (CULLING_CONFIG["image_metrics"]["technical_weight_noise"] * (1.0 - noise_penalty))
+        )
+
+        contrast = _safe_unit_interval(float(np.std(gray)) / 0.25)
+        rg = np.abs(rgb[:, :, 0] - rgb[:, :, 1])
+        yb = np.abs(0.5 * (rgb[:, :, 0] + rgb[:, :, 1]) - rgb[:, :, 2])
+        colorfulness = _safe_unit_interval(float(np.mean(np.sqrt((rg * rg) + (yb * yb)))) / 0.35)
+        aesthetic_score = _safe_unit_interval(
+            (CULLING_CONFIG["image_metrics"]["aesthetic_contrast_weight"] * contrast)
+            + (CULLING_CONFIG["image_metrics"]["aesthetic_colorfulness_weight"] * colorfulness)
+            + (CULLING_CONFIG["image_metrics"]["aesthetic_exposure_weight"] * exposure)
+        )
+
+        return {
+            "cull_sharpness": round(sharpness, 4),
+            "cull_exposure": round(exposure, 4),
+            "cull_noise": round(noise_penalty, 4),
+            "cull_highlight_clip": round(highlight_clip, 4),
+            "cull_shadow_clip": round(shadow_clip, 4),
+            "cull_technical_score": round(technical_score, 4),
+            "cull_aesthetic": round(aesthetic_score, 4),
+        }
+    except Exception as exc:
+        logger.warning("Could not compute culling metrics: %s", exc)
+        return {
+            "cull_sharpness": 0.0,
+            "cull_exposure": 0.0,
+            "cull_noise": 1.0,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0,
+            "cull_technical_score": 0.0,
+            "cull_aesthetic": 0.0,
+        }
+
+
+def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
+    if not face_results:
+        return {
+            "cull_face_count": 0,
+            "cull_face_sharpness": 0.0,
+            "cull_face_prominence": 0.0,
+            "cull_face_visibility": 0.0,
+            "cull_face_score": 0.0,
+            "cull_eye_openness": 0.0,
+            "cull_blink_penalty": 1.0,
+            "cull_occlusion": 0.0,
+            "cull_faces_present": False,
+        }
+
+    face_count = len(face_results)
+    sharpness_values = [_safe_unit_interval(face.get("sharpness", 0.0)) for face in face_results]
+    prominence_values = [
+        _safe_unit_interval(face.get("area_ratio", 0.0) / CULLING_CONFIG["face_metrics"]["prominence_normalizer"])
+        for face in face_results
+    ]
+    visibility_values = [
+        _safe_unit_interval(
+            (CULLING_CONFIG["face_metrics"]["visibility_det_weight"] * _safe_unit_interval(face.get("det_score", 0.0)))
+            + (CULLING_CONFIG["face_metrics"]["visibility_center_weight"] * _safe_unit_interval(face.get("center_proximity", 0.0)))
+        )
+        for face in face_results
+    ]
+    eye_openness_values = [_safe_unit_interval(face.get("eye_openness", 0.0)) for face in face_results]
+    blink_penalties = [_safe_unit_interval(face.get("blink_penalty", 1.0)) for face in face_results]
+    occlusion_values = []
+    for face in face_results:
+        if "occlusion" in face:
+            occlusion_values.append(_safe_unit_interval(face.get("occlusion", 0.0)))
+        else:
+            occlusion_values.append(
+                _safe_unit_interval(
+                    1.0 - (
+                        (CULLING_CONFIG["face_metrics"]["occlusion_det_weight"] * _safe_unit_interval(face.get("det_score", 0.0)))
+                        + (CULLING_CONFIG["face_metrics"]["occlusion_center_weight"] * _safe_unit_interval(face.get("center_proximity", 0.0)))
+                        + (CULLING_CONFIG["face_metrics"]["occlusion_eye_weight"] * _safe_unit_interval(face.get("eye_openness", 0.0)))
+                    )
+                )
+            )
+
+    face_sharpness = max(sharpness_values) if sharpness_values else 0.0
+    face_prominence = max(prominence_values) if prominence_values else 0.0
+    face_visibility = sum(visibility_values) / len(visibility_values) if visibility_values else 0.0
+    eye_openness = max(eye_openness_values) if eye_openness_values else 0.0
+    blink_penalty = min(blink_penalties) if blink_penalties else 1.0
+    occlusion_penalty = min(occlusion_values) if occlusion_values else 0.0
+    face_score_raw = (
+        (CULLING_CONFIG["face_metrics"]["score_weight_sharpness"] * face_sharpness)
+        + (CULLING_CONFIG["face_metrics"]["score_weight_prominence"] * face_prominence)
+        + (CULLING_CONFIG["face_metrics"]["score_weight_visibility"] * face_visibility)
+        + (CULLING_CONFIG["face_metrics"]["score_weight_eye_openness"] * eye_openness)
+        + (CULLING_CONFIG["face_metrics"]["score_weight_occlusion"] * (1.0 - occlusion_penalty))
+    )
+    weight_total = (
+        CULLING_CONFIG["face_metrics"]["score_weight_sharpness"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_prominence"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_visibility"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_eye_openness"]
+        + CULLING_CONFIG["face_metrics"]["score_weight_occlusion"]
+    )
+    face_score = _safe_unit_interval(face_score_raw / max(1e-6, weight_total))
+
+    return {
+        "cull_face_count": face_count,
+        "cull_face_sharpness": round(face_sharpness, 4),
+        "cull_face_prominence": round(face_prominence, 4),
+        "cull_face_visibility": round(face_visibility, 4),
+        "cull_face_score": round(face_score, 4),
+        "cull_eye_openness": round(eye_openness, 4),
+        "cull_blink_penalty": round(blink_penalty, 4),
+        "cull_occlusion": round(occlusion_penalty, 4),
+        "cull_faces_present": True,
+    }
+
+
 def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     """
     Returns UUIDs that need processing based on selected tasks and existing backend data.
@@ -64,9 +299,9 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     regenerate_metadata = options.get('regenerate_metadata', True)
     compute_embeddings = options.get('compute_embeddings', True)
     compute_metadata = options.get('compute_metadata', False)
-    compute_quality = options.get('compute_quality', True)
     compute_faces = options.get('compute_faces', False)
     compute_vertexai = options.get('compute_vertexai', False)
+    any_processing_task_enabled = compute_embeddings or compute_metadata or compute_faces or compute_vertexai
 
     if not uuids:
         return []
@@ -85,11 +320,11 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
         needs_embedding = compute_embeddings and (regenerate_metadata or not existing.get('has_embedding', False))
         has_any_metadata = existing.get('title') or existing.get('caption') or existing.get('alt_text') or existing.get('keywords')
         needs_metadata = compute_metadata and (regenerate_metadata or not has_any_metadata)
-        needs_quality = compute_quality and (regenerate_metadata or existing.get('overall_score') is None)
         needs_faces = compute_faces and (regenerate_metadata or not chroma_service.faces_checked_for_photo(uuid))
         needs_vertexai = compute_vertexai and (regenerate_metadata or not chroma_service.has_vertex_embedding(uuid))
+        needs_cull_phash = any_processing_task_enabled and (regenerate_metadata or not existing.get('cull_phash'))
 
-        if needs_embedding or needs_metadata or needs_quality or needs_faces or needs_vertexai:
+        if needs_embedding or needs_metadata or needs_faces or needs_vertexai or needs_cull_phash:
             needing_processing.append(uuid)
 
     return needing_processing
@@ -125,13 +360,12 @@ def process_image_task(
         regenerate_metadata = options.get('regenerate_metadata', True)
         compute_embeddings = options.get('compute_embeddings', True)
         compute_metadata = options.get('compute_metadata', False)
-        compute_quality = options.get('compute_quality', True)
         compute_faces = options.get('compute_faces', False)
         compute_vertexai = options.get('compute_vertexai', False)
 
         logger.info(f"Starting batch processing of {total_images} images...")
         logger.info(f"regenerate_metadata={regenerate_metadata}, compute_embeddings={compute_embeddings}, "
-                   f"compute_metadata={compute_metadata}, compute_quality={compute_quality}, compute_faces={compute_faces}, compute_vertexai={compute_vertexai}")
+                   f"compute_metadata={compute_metadata}, compute_faces={compute_faces}, compute_vertexai={compute_vertexai}")
         
         # Check existing records if regenerate_metadata is False
         existing_records = {}
@@ -145,9 +379,9 @@ def process_image_task(
         # Determine what actually needs to be computed for each image
         images_needing_embeddings = []
         images_needing_metadata = []
-        images_needing_quality = []
         images_needing_faces = []
         images_needing_vertexai = []
+        images_needing_cull_phash = []
         
         for _, uuid, _ in image_triplets:
             existing = existing_records.get(uuid, {})
@@ -175,14 +409,13 @@ def process_image_task(
                           f"alt_text={bool(existing.get('alt_text'))}, keywords={bool(existing.get('keywords'))}")
             if needs_metadata:
                 images_needing_metadata.append(uuid)
-            
-            # Check if quality scores are needed
-            needs_quality = compute_quality and (regenerate_metadata or not existing.get('overall_score'))
-            if needs_quality:
-                images_needing_quality.append(uuid)
+
+            # cull_phash is part of culling foundation and should be backfilled in delta mode.
+            if regenerate_metadata or not existing.get('cull_phash'):
+                images_needing_cull_phash.append(uuid)
         
         logger.info(f"Generation needed: {len(images_needing_embeddings)} embeddings, "
-                   f"{len(images_needing_metadata)} metadata, {len(images_needing_quality)} quality scores, {len(images_needing_faces)} faces, {len(images_needing_vertexai)} vertexai")
+                   f"{len(images_needing_metadata)} metadata, {len(images_needing_faces)} faces, {len(images_needing_vertexai)} vertexai")
 
         # If nothing needs to be generated and we're not regenerating, skip work.
         # When regenerate_metadata is True we must not early-return: new images (no entry yet)
@@ -193,7 +426,7 @@ def process_image_task(
                 and not compute_vertexai
                 and len(images_needing_embeddings) == 0
                 and len(images_needing_metadata) == 0
-                and len(images_needing_quality) == 0):
+                and len(images_needing_cull_phash) == 0):
             logger.info("No generation required (regenerate_metadata=False and all fields present). Returning success without changes.")
             return len(image_triplets), 0
 
@@ -206,9 +439,9 @@ def process_image_task(
         siglip_processor = server_lifecycle.get_processor()
 
         # Convert lists to sets for faster lookup in analyze_batch
-        embeddings, datetimes, metadata_results, ratings = analysis_service.analyze_batch(
+        embeddings, datetimes, metadata_results = analysis_service.analyze_batch(
             image_triplets, options, siglip_model, siglip_processor,
-            set(images_needing_embeddings), set(images_needing_metadata), set(images_needing_quality)
+            set(images_needing_embeddings), set(images_needing_metadata)
         )
 
         # Only fail batch when we actually needed embeddings but got none
@@ -238,23 +471,17 @@ def process_image_task(
         for i, (image_bytes, uuid, filename) in enumerate(image_triplets):
             try:
                 embedding = embeddings[i] if embeddings is not None else None
-                rating_data = ratings[i] if ratings else None
                 metadata_data = metadata_results[i] if metadata_results else None
                 
                 existing = existing_records.get(uuid, {})
                 
                 need_embedding = uuid in images_needing_embeddings
                 need_metadata = uuid in images_needing_metadata
-                need_quality = uuid in images_needing_quality
+                need_cull_phash = uuid in images_needing_cull_phash
 
                 # Validate that required new data was generated if needed
                 if need_embedding and embedding is None:
                     logger.error(f"Embedding generation failed for {uuid}. Skipping.")
-                    failure_count += 1
-                    continue
-                
-                if need_quality and (not rating_data or not rating_data.success):
-                    logger.error(f"Quality rating generation failed for {uuid}. Skipping.")
                     failure_count += 1
                     continue
 
@@ -265,7 +492,8 @@ def process_image_task(
 
                 # If nothing needed for this UUID (already complete) and no face processing, skip
                 # When compute_faces is True we must not skip - we need to reach face detection
-                if (not need_embedding and not need_metadata and not need_quality
+                if (not need_embedding and not need_metadata
+                        and not need_cull_phash
                         and not regenerate_metadata and not compute_faces):
                     logger.info(f"UUID {uuid}: already fully indexed; skipping update.")
                     success_count += 1
@@ -293,17 +521,12 @@ def process_image_task(
                     if capture_time:
                         main_metadata["capture_time"] = capture_time
 
-                # Update quality scores if newly generated
-                if rating_data and rating_data.success:
-                    main_metadata["overall_score"] = rating_data.overall_score
-                    main_metadata["composition_score"] = rating_data.composition_score
-                    main_metadata["lighting_score"] = rating_data.lighting_score
-                    main_metadata["motiv_score"] = rating_data.motiv_score
-                    main_metadata["colors_score"] = rating_data.colors_score
-                    main_metadata["emotion_score"] = rating_data.emotion_score
-                    main_metadata["quality_critique"] = rating_data.critique
-                    main_metadata["provider"] = provider
-                    main_metadata["model"] = model_name
+                # Technical culling metrics are cheap enough to compute on every pass.
+                main_metadata.update(_compute_culling_metrics(image_bytes))
+                phash_hex = _compute_perceptual_hash(image_bytes)
+                if phash_hex:
+                    main_metadata["cull_phash"] = phash_hex
+                    main_metadata["phash"] = phash_hex
 
                 # Update metadata fields if newly generated
                 if metadata_data and metadata_data.success:
@@ -359,11 +582,6 @@ def process_image_task(
                         logger.info(f"UUID {uuid} is new. Indexing metadata-only entry (no embedding).")
                     chroma_service.add_image(uuid, embedding, main_metadata)
 
-                # Vertex AI embeddings (optional, separate Chroma collection)
-                if uuid in vertex_embeddings_by_uuid:
-                    chroma_service.add_vertex_image(uuid, vertex_embeddings_by_uuid[uuid], {"photo_id": uuid, "uuid": uuid})
-                    logger.debug(f"UUID {uuid}: Vertex AI embedding stored.")
-
                 # Face detection and indexing (second Chroma collection)
                 if compute_faces and image_bytes:
                     # Without regenerate_metadata: skip if already checked (has faces or marked as checked, no faces)
@@ -375,17 +593,40 @@ def process_image_task(
                             face_results = face_service.detect_faces(image_bytes)
                             if face_results:
                                 face_ids = [f"{uuid}_{i}" for i in range(len(face_results))]
-                                embeddings_f = [r[0] for r in face_results]
-                                thumbnails_b64 = [r[1] for r in face_results]
+                                embeddings_f = [face["embedding"] for face in face_results]
+                                thumbnails_b64 = [face.get("thumbnail", "") for face in face_results]
+                                face_extra_metadatas = [
+                                    {
+                                        "bbox": json.dumps(face.get("bbox") or []),
+                                        "face_area_ratio": face.get("area_ratio", 0.0),
+                                        "face_sharpness": face.get("sharpness", 0.0),
+                                        "face_det_score": face.get("det_score", 0.0),
+                                        "face_center_proximity": face.get("center_proximity", 0.0),
+                                        "face_eye_openness": face.get("eye_openness", 0.0),
+                                        "face_blink_penalty": face.get("blink_penalty", 1.0),
+                                        "face_occlusion": face.get("occlusion", 0.0),
+                                    }
+                                    for face in face_results
+                                ]
                                 chroma_service.add_faces_batch(
-                                    face_ids, embeddings_f, [uuid] * len(face_results), thumbnails_b64
+                                    face_ids, embeddings_f, [uuid] * len(face_results), thumbnails_b64,
+                                    extra_metadatas=face_extra_metadatas
                                 )
+                                main_metadata.update(_aggregate_face_culling_metrics(face_results))
+                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
                                 logger.info(f"UUID {uuid}: indexed {len(face_results)} face(s).")
                             else:
+                                main_metadata.update(_aggregate_face_culling_metrics([]))
+                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
                                 chroma_service.set_faces_checked(uuid)
                                 logger.debug(f"UUID {uuid}: no faces detected (marked as checked).")
                         except Exception as e:
                             logger.warning(f"Face detection/indexing failed for {uuid}: {e}", exc_info=True)
+
+                # Vertex AI embeddings (optional, separate Chroma collection)
+                if uuid in vertex_embeddings_by_uuid:
+                    chroma_service.add_vertex_image(uuid, vertex_embeddings_by_uuid[uuid], {"photo_id": uuid, "uuid": uuid})
+                    logger.debug(f"UUID {uuid}: Vertex AI embedding stored.")
 
                 success_count += 1
 

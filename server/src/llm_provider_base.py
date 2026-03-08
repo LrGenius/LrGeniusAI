@@ -7,11 +7,7 @@ import io
 
 
 # Import prompts from config
-from config import (
-    METADATA_GENERATION_SYSTEM_PROMPT,
-    QUALITY_SCORING_SYSTEM_PROMPT,
-    QUALITY_SCORING_USER_PROMPT
-)
+from config import METADATA_GENERATION_SYSTEM_PROMPT
 
 @dataclass
 class MetadataGenerationRequest:
@@ -82,57 +78,6 @@ class MetadataGenerationResponse:
     error: Optional[str] = None
 
 
-@dataclass
-class QualityScoreRequest:
-    """Request structure for quality scoring"""
-    image_data: bytes
-    uuid: str
-    
-    # Provider selection and model configuration
-    provider: str
-    model: str
-    api_key: Optional[str]
-    
-    # Output language for critique
-    language: str
-    
-    # LLM parameters
-    temperature: float
-    max_tokens: Optional[int]
-    
-    # System and user prompts (can override defaults)
-    system_prompt: Optional[str]
-    user_prompt: Optional[str]
-
-    # Provider-specific overrides (e.g. Ollama on remote host)
-    ollama_base_url: Optional[str] = None
-
-
-@dataclass
-class QualityScoreResponse:
-    """Response structure for quality scoring"""
-    uuid: str
-    success: bool
-    
-    # Quality scores (1.0 - 10.0)
-    overall_score: Optional[float] = None
-    composition_score: Optional[float] = None
-    lighting_score: Optional[float] = None
-    motiv_score: Optional[float] = None
-    colors_score: Optional[float] = None
-    emotion_score: Optional[float] = None
-    
-    # Detailed critique text
-    critique: Optional[str] = None
-    
-    # Token usage for tracking
-    input_tokens: int = 0
-    output_tokens: int = 0
-    
-    # Error information
-    error: Optional[str] = None
-
-
 class LLMProviderBase(ABC):
     """
     Abstract base class for all LLM providers.
@@ -159,19 +104,6 @@ class LLMProviderBase(ABC):
             
         Returns:
             MetadataGenerationResponse with generated metadata or error
-        """
-        pass
-    
-    @abstractmethod
-    def generate_quality_scores(self, request: QualityScoreRequest) -> QualityScoreResponse:
-        """
-        Generate quality scores and critique for a single image.
-        
-        Args:
-            request: QualityScoreRequest containing image and options
-            
-        Returns:
-            QualityScoreResponse with quality scores and critique or error
         """
         pass
     
@@ -278,33 +210,6 @@ class LLMProviderBase(ABC):
             base_prompt += "\n\n" + "\n".join(context_additions)
         
         return base_prompt
-    
-    def _prepare_quality_system_prompt(self, request: QualityScoreRequest) -> str:
-        """
-        Prepare system prompt for quality scoring.
-        Can be overridden by specific providers if needed.
-        """
-        # Use custom system prompt if provided
-        if request.system_prompt:
-            return request.system_prompt
-        
-        # Use default quality scoring system prompt from config
-        return QUALITY_SCORING_SYSTEM_PROMPT
-    
-    def _prepare_quality_user_prompt(self, request: QualityScoreRequest) -> str:
-        """
-        Prepare user prompt for quality scoring.
-        Can be overridden by specific providers if needed.
-        """
-        # Use custom user prompt if provided
-        if request.user_prompt:
-            return request.user_prompt
-        
-        # Use default quality scoring user prompt from config and add language instruction
-        prompt = QUALITY_SCORING_USER_PROMPT
-        prompt += f'\n\nUse the full 1-10 scale. Be critical and specific about weaknesses. Write the critique in {request.language}.'
-        
-        return prompt
     
     def _build_nested_keyword_schema(self, categories: Dict[str, Any]) -> Dict[str, Any]:
         """

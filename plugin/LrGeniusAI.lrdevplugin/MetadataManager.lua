@@ -71,18 +71,6 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
         end, Defaults.catalogWriteAccessOptions)
     end
 
-    -- Save quality scores
-    log:trace("Saving quality scores to catalog")
-    if response.quality and type(response.quality) == 'table' and options.applyQuality then
-        catalog:withPrivateWriteAccessDo(function()
-            log:trace("Saving quality scores to catalog")
-            for key, value in pairs(response.quality) do
-                --log:trace("Setting property for key: " .. key .. " value: " .. tostring(value))
-                photo:setPropertyForPlugin(_PLUGIN, key, tostring(value))
-            end
-        end, Defaults.catalogWriteAccessOptions)
-    end
-
     if response.ai_model then
         catalog:withPrivateWriteAccessDo(function()
             log:trace("Saving AI model to catalog")

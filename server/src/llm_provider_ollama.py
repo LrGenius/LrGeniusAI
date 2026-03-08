@@ -13,8 +13,6 @@ from llm_provider_base import (
     LLMProviderBase,
     MetadataGenerationRequest,
     MetadataGenerationResponse,
-    QualityScoreRequest,
-    QualityScoreResponse
 )
 from config import logger, OLLAMA_BASE_URL
 
@@ -153,89 +151,6 @@ class OllamaProvider(LLMProviderBase):
                 error=str(e),
             )
 
-    def generate_quality_scores(self, request: QualityScoreRequest) -> QualityScoreResponse:
-        """
-        Generate quality scores using Ollama.
-        
-        Args:
-            request: QualityScoreRequest with image
-            
-        Returns:
-            QualityScoreResponse with quality scores
-        """
-        
-        try:
-            if Client is None:
-                return QualityScoreResponse(
-                    uuid=request.uuid,
-                    success=False,
-                    error="Ollama SDK not installed. Please install the 'ollama' Python package.",
-                )
-            client = self._get_client(getattr(request, 'ollama_base_url', None))
-
-            # Convert image to base64
-            image_b64 = self._image_to_base64(request.image_data)
-
-            # Prepare prompts and response schema
-            system_prompt = self._prepare_quality_system_prompt(request)
-            user_prompt = self._prepare_quality_user_prompt(request)
-
-            response_schema = {
-                "type": "object",
-                "properties": {
-                    "overall_score": {"type": "number"},
-                    "composition_score": {"type": "number"},
-                    "lighting_score": {"type": "number"},
-                    "motiv_score": {"type": "number"},
-                    "colors_score": {"type": "number"},
-                    "emotion_score": {"type": "number"},
-                    "critique": {"type": "string"},
-                },
-            }
-
-            model_to_use = request.model
-            logger.info(f"[Ollama] Using model for quality: {model_to_use}")
-
-            result = client.chat(
-                model=model_to_use,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt, "images": [image_b64]},
-                ],
-                format=response_schema,
-                options={"temperature": request.temperature, "top_p": 0.8},
-                stream=False,
-            )
-
-            if isinstance(result, dict):
-                message = result.get("message") or {}
-                content = message.get("content")
-            else:
-                message = getattr(result, "message", None)
-                content = getattr(message, "content", None) if message is not None else None
-            if not content:
-                error_msg = "Empty response content from Ollama"
-                logger.error(error_msg)
-                return QualityScoreResponse(uuid=request.uuid, success=False, error=error_msg)
-
-            parsed_data = json.loads(content)
-
-            return QualityScoreResponse(
-                uuid=request.uuid,
-                success=True,
-                overall_score=float(parsed_data.get("overall_score", 0)),
-                composition_score=float(parsed_data.get("composition_score", 0)),
-                lighting_score=float(parsed_data.get("lighting_score", 0)),
-                motiv_score=float(parsed_data.get("motiv_score", 0)),
-                colors_score=float(parsed_data.get("colors_score", 0)),
-                emotion_score=float(parsed_data.get("emotion_score", 0)),
-                critique=parsed_data.get("critique", ""),
-            )
-
-        except Exception as e:
-            logger.error(f"Error generating quality scores with Ollama: {e}", exc_info=True)
-            return QualityScoreResponse(uuid=request.uuid, success=False, error=str(e))
-    
     def list_available_models(self) -> list:
         """
         List available Ollama models using Ollama API.

@@ -4,7 +4,7 @@ LM Studio Provider for metadata generation using the lmstudio-python library
 import json
 import lmstudio as lms
 from typing import Dict, Any
-from llm_provider_base import LLMProviderBase, MetadataGenerationRequest, MetadataGenerationResponse, QualityScoreRequest, QualityScoreResponse
+from llm_provider_base import LLMProviderBase, MetadataGenerationRequest, MetadataGenerationResponse
 from config import logger, LMSTUDIO_HOST
 
 
@@ -92,82 +92,6 @@ class LMStudioProvider(LLMProviderBase):
         except Exception as e:
             logger.error(f"Error generating metadata with LM Studio: {e}", exc_info=True)
             return MetadataGenerationResponse(uuid=request.uuid, success=False, error=str(e))
-    
-    def generate_quality_scores(self, request: QualityScoreRequest) -> QualityScoreResponse:
-        """
-        Generate quality scores using LM Studio API.
-        
-        Args:
-            request: QualityScoreRequest with image
-            
-        Returns:
-            QualityScoreResponse with quality scores and critique
-        """
-        
-        try:
-            # Convert image to base64 data URI
-            image_handle = lms.prepare_image(request.image_data)
-
-            model = lms.llm(request.model)
-            
-            # Prepare quality scoring prompts using base class methods
-            system_prompt = self._prepare_quality_system_prompt(request)
-            user_prompt = self._prepare_quality_user_prompt(request)
-            
-            # Prepare OpenAI-style response schema
-            quality_schema = {
-                "type": "object",
-                "properties": {
-                    "overall_score": {"type": "number"},
-                    "composition_score": {"type": "number"},
-                    "lighting_score": {"type": "number"},
-                    "motiv_score": {"type": "number"},
-                    "colors_score": {"type": "number"},
-                    "emotion_score": {"type": "number"},
-                    "critique": {"type": "string"}
-                },
-                "required": ["overall_score", "composition_score", "lighting_score", "motiv_score", "colors_score", "emotion_score", "critique"],
-                "additionalProperties": False
-            }
-
-            # Make request to LM Studio
-            logger.debug(f"Sending quality scoring request to LM Studio")
-            chat = lms.Chat(system_prompt)
-            chat.add_user_message(user_prompt, images=[image_handle])
-
-            response = model.respond(chat, response_format=quality_schema, config={"temperature": request.temperature })
-
-            # Extract message content
-            content = response.parsed
-
-            logger.debug(f"LM Studio raw quality response: {content}")
-
-            if isinstance(content, str):
-                try:
-                    content = json.loads(content)
-                except Exception as parse_err:
-                    raise ValueError(f"Unexpected non-JSON quality response from LM Studio: {content}") from parse_err
-
-            if not isinstance(content, dict):
-                raise ValueError(f"Unexpected quality response type from LM Studio: {type(content)}")
-         
-            return QualityScoreResponse(
-                uuid=request.uuid,
-                success=True,
-                overall_score=float(content.get("overall_score", 0)),
-                composition_score=float(content.get("composition_score", 0)),
-                lighting_score=float(content.get("lighting_score", 0)),
-                motiv_score=float(content.get("motiv_score", 0)),
-                colors_score=float(content.get("colors_score", 0)),
-                emotion_score=float(content.get("emotion_score", 0)),
-                critique=content.get("critique", ""),
-                input_tokens=0,
-                output_tokens=0
-            )
-            
-        except Exception as e:
-            logger.error(f"Error generating quality scores with LM Studio: {e}", exc_info=True)
-            return QualityScoreResponse(uuid=request.uuid, success=False, error=str(e))
     
     def _prepare_openai_response_format(self, request: MetadataGenerationRequest) -> Dict[str, Any]:
         """Prepare OpenAI-style response format with JSON schema"""

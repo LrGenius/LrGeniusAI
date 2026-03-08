@@ -33,6 +33,10 @@ return {
 			file = "TaskSemanticSearch.lua",
 		},
 		{
+			title = LOC "$$$/LrGeniusAI/Menu/CullPhotos=Cull Similar Photos...",
+			file = "TaskCullPhotos.lua",
+		},
+		{
 			title = LOC "$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend...",
 			file = "TaskRetrieveMetadata.lua",
 		},
@@ -58,6 +62,10 @@ return {
 		{
 			title = LOC "$$$/LrGeniusAI/Menu/AdvancedSearch=Advanced Search...",
 			file = "TaskSemanticSearch.lua",
+		},
+		{
+			title = LOC "$$$/LrGeniusAI/Menu/CullPhotos=Cull Similar Photos...",
+			file = "TaskCullPhotos.lua",
 		},
 		{
 			title = LOC "$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend...",

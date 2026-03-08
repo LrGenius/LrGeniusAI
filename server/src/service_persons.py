@@ -185,12 +185,13 @@ def run_clustering(
             unassigned_count += 1
         else:
             person_id = label_to_person.get(lb, f"person_{next_new_idx}")
-        new_meta = {
+        new_meta = dict(meta or {})
+        new_meta.update({
             "photo_id": meta.get("photo_id", meta.get("photo_uuid", "")),
             "photo_uuid": meta.get("photo_uuid", meta.get("photo_id", "")),
             "thumbnail": meta.get("thumbnail", ""),
             "person_id": person_id,
-        }
+        })
         new_metadatas.append(new_meta)
 
     chroma_service.update_face_metadatas(ids, new_metadatas)

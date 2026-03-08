@@ -1,5 +1,5 @@
 -- TaskRetrieveMetadata.lua
--- Retrieves stored metadata and quality scores from the backend and writes them to the Lightroom catalog.
+-- Retrieves stored metadata from the backend and writes them to the Lightroom catalog.
 -- Allows user to select which data fields to transfer and optionally validate before applying.
 
 
@@ -23,7 +23,6 @@ local function showRetrieveMetadataDialog(ctx)
     props.applyTitle = prefs.applyTitle ~= false -- default true
     props.applyCaption = prefs.applyCaption ~= false -- default true
     props.applyAltText = prefs.applyAltText ~= false -- default true
-    props.applyQuality = prefs.applyQuality ~= false -- default true (includes ratings + critique)
     props.useTopLevelKeyword = prefs.useTopLevelKeyword ~= false -- default true
     props.topLevelKeyword = prefs.topLevelKeyword or "LrGeniusAI"
     
@@ -99,15 +98,6 @@ local function showRetrieveMetadataDialog(ctx)
                         title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AltText=Alt Text",
                     },
                 },
-                -- f:row {
-                --     f:checkbox {
-                --         value = bind 'applyQuality',
-                --         width = share 'checkboxWidth',
-                --     },
-                --     f:static_text {
-                --         title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Quality=Quality Ratings & Critique",
-                --     },
-                -- },
             },
         },
         
@@ -155,7 +145,6 @@ local function showRetrieveMetadataDialog(ctx)
         prefs.applyTitle = props.applyTitle
         prefs.applyCaption = props.applyCaption
         prefs.applyAltText = props.applyAltText
-        prefs.applyQuality = props.applyQuality
         prefs.retrieveEnableValidation = props.enableValidation
         prefs.useTopLevelKeyword = props.useTopLevelKeyword
         prefs.topLevelKeyword = props.topLevelKeyword
@@ -166,7 +155,6 @@ local function showRetrieveMetadataDialog(ctx)
             applyTitle = props.applyTitle,
             applyCaption = props.applyCaption,
             applyAltText = props.applyAltText,
-            applyQuality = props.applyQuality,
             enableValidation = props.enableValidation,
             useTopLevelKeyword = props.useTopLevelKeyword,
             topLevelKeyword = props.topLevelKeyword,

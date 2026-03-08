@@ -2,7 +2,7 @@ import chromadb
 from chromadb.config import Settings
 import os
 import numpy as np
-from config import DB_PATH, logger
+from config import DB_PATH, logger, CULLING_CONFIG, get_culling_config
 
 
 # --- ChromaDB Client and Collection Initialization (Lazy) ---
@@ -325,17 +325,600 @@ def get_all_image_ids(has_embedding=None):
     return filtered_ids
 
 
-def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
+def _safe_float(value, default=None):
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _embedding_to_array(embedding):
+    if embedding is None:
+        return None
+    try:
+        arr = np.asarray(embedding, dtype=np.float32)
+    except Exception:
+        return None
+    if arr.size == 0 or np.allclose(arr, 0.0):
+        return None
+    return arr
+
+
+def _cosine_distance(embedding_a, embedding_b):
+    if embedding_a is None or embedding_b is None:
+        return None
+    norm_a = np.linalg.norm(embedding_a)
+    norm_b = np.linalg.norm(embedding_b)
+    if norm_a == 0.0 or norm_b == 0.0:
+        return None
+    similarity = float(np.dot(embedding_a, embedding_b) / (norm_a * norm_b))
+    similarity = max(-1.0, min(1.0, similarity))
+    return 1.0 - similarity
+
+
+def _phash_to_int(value):
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    try:
+        return int(text, 16)
+    except ValueError:
+        return None
+
+
+def _phash_hamming_distance(left_hash, right_hash):
+    if left_hash is None or right_hash is None:
+        return None
+    return int((left_hash ^ right_hash).bit_count())
+
+
+def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, culling_config=None):
+    culling_config = culling_config or CULLING_CONFIG
+    try:
+        time_window_seconds = max(0, int(time_delta))
+    except (TypeError, ValueError):
+        time_window_seconds = culling_config["grouping"]["time_window_default_seconds"]
+
+    if clip_threshold == "auto":
+        burst_distance_threshold = culling_config["grouping"]["burst_distance_auto"]
+    else:
+        try:
+            burst_distance_threshold = max(0.0, float(clip_threshold))
+        except (TypeError, ValueError):
+            burst_distance_threshold = culling_config["grouping"]["burst_distance_auto"]
+
+    if phash_threshold == "auto":
+        phash_hamming_threshold = int(culling_config["grouping"]["phash_hamming_auto"])
+    else:
+        try:
+            phash_hamming_threshold = int(max(0.0, min(float(phash_threshold), culling_config["grouping"]["phash_max"])))
+        except (TypeError, ValueError):
+            phash_hamming_threshold = int(culling_config["grouping"]["phash_hamming_auto"])
+
+    phash_max = culling_config["grouping"]["phash_max"]
+    normalized = max(0.0, min(float(phash_hamming_threshold), phash_max)) / phash_max
+    duplicate_distance_threshold = (
+        culling_config["grouping"]["duplicate_distance_min"]
+        + (normalized * culling_config["grouping"]["duplicate_distance_span"])
+    )
+
+    duplicate_time_window_seconds = max(
+        time_window_seconds * culling_config["grouping"]["duplicate_time_window_multiplier"],
+        culling_config["grouping"]["duplicate_time_window_min_seconds"],
+    )
+    return (
+        phash_hamming_threshold,
+        duplicate_distance_threshold,
+        burst_distance_threshold,
+        duplicate_time_window_seconds,
+        time_window_seconds,
+    )
+
+
+def _record_sort_key(item):
+    return (
+        item["capture_time"] is None,
+        item["capture_time"] if item["capture_time"] is not None else float("inf"),
+        item["filename"],
+        item["photo_id"],
+    )
+
+
+def _extract_culling_metric(metadata, key, default):
+    value = _safe_float((metadata or {}).get(key), default)
+    if value is None:
+        return default
+    return max(0.0, min(1.0, value))
+
+
+def _explanation_from_reason_codes(reason_codes):
+    labels = {
+        "sharpest_in_group": "sharpest in group",
+        "blurred": "noticeably blurred",
+        "underexposed": "darker than stronger alternatives",
+        "overexposed": "brighter than stronger alternatives",
+        "low_aesthetic": "weaker aesthetic impression than alternatives",
+        "best_face_quality": "best face quality in group",
+        "weak_face_quality": "weaker face quality than alternatives",
+        "no_face_detected_in_group": "no clear face detected while alternatives have faces",
+        "possible_occlusion": "possible facial occlusion or weak visibility",
+        "eyes_open_best": "best eyes-open result in group",
+        "possible_blink": "possible blink or eyes less open",
+        "near_duplicate_weaker": "weaker duplicate or burst alternative",
+    }
+    if not reason_codes:
+        return "single image in group"
+    return "; ".join(labels.get(code, code.replace("_", " ")) for code in reason_codes)
+
+
+def _rank_group_records(component_records, group_type, culling_config=None):
+    culling_config = culling_config or CULLING_CONFIG
+    scored_records = []
+    for record in component_records:
+        metadata = record["metadata"]
+        sharpness = _extract_culling_metric(metadata, "cull_sharpness", 0.0)
+        exposure = _extract_culling_metric(metadata, "cull_exposure", 0.0)
+        noise_penalty = _extract_culling_metric(metadata, "cull_noise", 1.0)
+        highlight_clip = _extract_culling_metric(metadata, "cull_highlight_clip", 0.0)
+        shadow_clip = _extract_culling_metric(metadata, "cull_shadow_clip", 0.0)
+        clipping_penalty = max(0.0, min(1.0, highlight_clip + shadow_clip))
+        technical_score = _extract_culling_metric(
+            metadata,
+            "cull_technical_score",
+            (0.5 * sharpness) + (0.3 * exposure) + (0.1 * (1.0 - noise_penalty)) + (0.1 * (1.0 - clipping_penalty)),
+        )
+        aesthetic_score = _extract_culling_metric(metadata, "cull_aesthetic", 0.0)
+        face_count = int(_safe_float((metadata or {}).get("cull_face_count"), 0) or 0)
+        face_sharpness = _extract_culling_metric(metadata, "cull_face_sharpness", 0.0)
+        face_prominence = _extract_culling_metric(metadata, "cull_face_prominence", 0.0)
+        face_visibility = _extract_culling_metric(metadata, "cull_face_visibility", 0.0)
+        occlusion_penalty = _extract_culling_metric(metadata, "cull_occlusion", 0.0)
+        face_score = _extract_culling_metric(
+            metadata,
+            "cull_face_score",
+            (
+                (
+                    culling_config["face_metrics"]["score_weight_sharpness"] * face_sharpness
+                    + culling_config["face_metrics"]["score_weight_prominence"] * face_prominence
+                    + culling_config["face_metrics"]["score_weight_visibility"] * face_visibility
+                    + culling_config["face_metrics"]["score_weight_eye_openness"] * eye_openness
+                    + culling_config["face_metrics"]["score_weight_occlusion"] * (1.0 - occlusion_penalty)
+                ) / max(
+                    1e-6,
+                    culling_config["face_metrics"]["score_weight_sharpness"]
+                    + culling_config["face_metrics"]["score_weight_prominence"]
+                    + culling_config["face_metrics"]["score_weight_visibility"]
+                    + culling_config["face_metrics"]["score_weight_eye_openness"]
+                    + culling_config["face_metrics"]["score_weight_occlusion"]
+                )
+            ),
+        )
+        eye_openness = _extract_culling_metric(metadata, "cull_eye_openness", 0.0)
+        blink_penalty = _extract_culling_metric(metadata, "cull_blink_penalty", 1.0)
+
+        scored_records.append({
+            **record,
+            "cull_sharpness": sharpness,
+            "cull_exposure": exposure,
+            "cull_noise": noise_penalty,
+            "cull_highlight_clip": highlight_clip,
+            "cull_shadow_clip": shadow_clip,
+            "cull_technical_score": technical_score,
+            "cull_aesthetic": aesthetic_score,
+            "cull_face_count": face_count,
+            "cull_face_sharpness": face_sharpness,
+            "cull_face_prominence": face_prominence,
+            "cull_face_visibility": face_visibility,
+            "cull_face_score": face_score,
+            "cull_occlusion": occlusion_penalty,
+            "cull_eye_openness": eye_openness,
+            "cull_blink_penalty": blink_penalty,
+        })
+
+    group_has_faces = any(item["cull_face_count"] > 0 for item in scored_records)
+    for item in scored_records:
+        if group_has_faces:
+            if item["cull_face_count"] > 0:
+                weighted_score = (
+                    culling_config["ranking"]["face_group_weight_technical"] * item["cull_technical_score"]
+                    + culling_config["ranking"]["face_group_weight_face"] * item["cull_face_score"]
+                    + culling_config["ranking"]["face_group_weight_aesthetic"] * item["cull_aesthetic"]
+                )
+                weight_sum = (
+                    culling_config["ranking"]["face_group_weight_technical"]
+                    + culling_config["ranking"]["face_group_weight_face"]
+                    + culling_config["ranking"]["face_group_weight_aesthetic"]
+                )
+                item["cull_score"] = max(0.0, min(1.0, weighted_score / max(1e-6, weight_sum)))
+                item["cull_score"] = max(
+                    0.0,
+                    min(
+                        1.0,
+                        item["cull_score"] - (
+                            culling_config["ranking"]["face_group_blink_penalty_weight"] * item["cull_blink_penalty"]
+                            + culling_config["ranking"]["face_group_occlusion_penalty_weight"] * item["cull_occlusion"]
+                        ),
+                    ),
+                )
+            else:
+                # Penalize face-missing shots in face-heavy groups.
+                item["cull_score"] = max(
+                    0.0,
+                    (
+                        culling_config["ranking"]["face_missing_technical_weight"] * item["cull_technical_score"]
+                    ) - culling_config["ranking"]["face_missing_penalty"],
+                )
+        else:
+            weighted_score = (
+                item["cull_technical_score"]
+                + (culling_config["ranking"]["no_face_group_weight_aesthetic"] * item["cull_aesthetic"])
+            )
+            weight_sum = 1.0 + culling_config["ranking"]["no_face_group_weight_aesthetic"]
+            item["cull_score"] = max(0.0, min(1.0, weighted_score / max(1e-6, weight_sum)))
+
+    scored_records.sort(key=lambda item: (
+        -item["cull_score"],
+        -item["cull_face_score"],
+        -item["cull_sharpness"],
+        -item["cull_exposure"],
+        item["cull_noise"],
+        item["photo_id"],
+    ))
+
+    if not scored_records:
+        return []
+
+    max_sharpness = max(item["cull_sharpness"] for item in scored_records)
+    max_face_score = max(item["cull_face_score"] for item in scored_records)
+    max_eye_openness = max(item["cull_eye_openness"] for item in scored_records)
+    max_aesthetic = max(item["cull_aesthetic"] for item in scored_records)
+    winner_score = scored_records[0]["cull_score"]
+
+    for index, item in enumerate(scored_records, start=1):
+        reason_codes = []
+        if item["cull_sharpness"] < culling_config["ranking"]["reason_blur_threshold"]:
+            reason_codes.append("blurred")
+        if item["cull_exposure"] < culling_config["ranking"]["reason_exposure_threshold"]:
+            if item["cull_shadow_clip"] >= item["cull_highlight_clip"]:
+                reason_codes.append("underexposed")
+            else:
+                reason_codes.append("overexposed")
+        if item["cull_aesthetic"] < culling_config["ranking"]["reason_low_aesthetic_threshold"] and item["cull_aesthetic"] < max(0.0, max_aesthetic - 0.08):
+            reason_codes.append("low_aesthetic")
+        if index == 1 and len(scored_records) > 1 and item["cull_sharpness"] >= (
+            max_sharpness - culling_config["ranking"]["reason_sharpest_delta"]
+        ):
+            reason_codes.append("sharpest_in_group")
+        if group_has_faces:
+            if item["cull_face_count"] == 0:
+                reason_codes.append("no_face_detected_in_group")
+            elif item["cull_face_score"] >= (
+                max_face_score - culling_config["ranking"]["reason_best_face_delta"]
+            ) and index == 1:
+                reason_codes.append("best_face_quality")
+            elif item["cull_face_score"] < max(
+                0.0,
+                max_face_score - culling_config["ranking"]["reason_weak_face_delta"],
+            ):
+                reason_codes.append("weak_face_quality")
+            if item["cull_occlusion"] > culling_config["ranking"]["reason_occlusion_threshold"]:
+                reason_codes.append("possible_occlusion")
+            if item["cull_eye_openness"] >= max(
+                0.0,
+                max_eye_openness - culling_config["ranking"]["reason_eyes_open_delta"],
+            ) and index == 1:
+                reason_codes.append("eyes_open_best")
+            elif item["cull_blink_penalty"] > culling_config["ranking"]["reason_possible_blink_threshold"]:
+                reason_codes.append("possible_blink")
+        if index > 1 and group_type != "single":
+            reason_codes.append("near_duplicate_weaker")
+
+        reject_candidate = False
+        if len(scored_records) > 1:
+            reject_candidate = (
+                item["cull_score"] <= max(0.0, winner_score - culling_config["ranking"]["reject_score_delta"])
+                or item["cull_sharpness"] < culling_config["ranking"]["reason_blur_threshold"]
+                or item["cull_exposure"] < culling_config["ranking"]["reject_exposure_threshold"]
+                or (
+                    group_has_faces
+                    and item["cull_face_count"] > 0
+                    and item["cull_face_score"] < culling_config["ranking"]["reject_face_score_threshold"]
+                )
+                or (
+                    group_has_faces
+                    and item["cull_face_count"] > 0
+                    and item["cull_blink_penalty"] > culling_config["ranking"]["reject_blink_penalty_threshold"]
+                )
+                or (
+                    group_has_faces
+                    and item["cull_face_count"] > 0
+                    and item["cull_occlusion"] > culling_config["ranking"]["reject_occlusion_threshold"]
+                )
+            )
+
+        item["cull_group_rank"] = index
+        item["cull_group_winner"] = index == 1
+        item["cull_reject_candidate"] = reject_candidate and index != 1
+        item["cull_reason_codes"] = reason_codes
+        item["cull_explanation"] = _explanation_from_reason_codes(reason_codes)
+
+    return scored_records
+
+
+def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, culling_preset="default"):
     """
-    [NOT IMPLEMENTED] Groups a list of images by similarity and sorts them by quality.
+    Group indexed images into stable similarity clusters for culling workflows.
+
+    Uses stored capture times, perceptual hash (pHash) hamming distance, and
+    image embedding similarity as a fallback/secondary duplicate signal.
     """
-    logger.warning("group_and_sort_images is not yet implemented.")
-    return []
+    _ensure_initialized()
+
+    if not uuids:
+        return []
+
+    culling_config = get_culling_config(culling_preset)
+
+    phash_hamming_threshold, duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds = _derive_grouping_thresholds(
+        phash_threshold, clip_threshold, time_delta, culling_config=culling_config
+    )
+
+    unique_photo_ids = []
+    seen_ids = set()
+    for photo_id in uuids:
+        normalized_id = _normalize_photo_id(photo_id)
+        if normalized_id and normalized_id not in seen_ids:
+            unique_photo_ids.append(normalized_id)
+            seen_ids.add(normalized_id)
+
+    if not unique_photo_ids:
+        return []
+
+    raw = collection.get(ids=unique_photo_ids, include=["metadatas", "embeddings"])
+    metadata_by_id = {}
+    embedding_by_id = {}
+    for idx, photo_id in enumerate(raw.get("ids", [])):
+        metadata_list = raw.get("metadatas", [])
+        embedding_list = raw.get("embeddings", [])
+        metadata_by_id[photo_id] = metadata_list[idx] if idx < len(metadata_list) else {}
+        embedding_by_id[photo_id] = embedding_list[idx] if idx < len(embedding_list) else None
+
+    records = []
+    for photo_id in unique_photo_ids:
+        metadata = metadata_by_id.get(photo_id, {}) or {}
+        capture_time = _safe_float(metadata.get("capture_time"))
+        filename = str(metadata.get("filename") or "")
+        records.append({
+            "photo_id": photo_id,
+            "filename": filename,
+            "capture_time": capture_time,
+            "embedding": _embedding_to_array(embedding_by_id.get(photo_id)),
+            "phash": _phash_to_int(metadata.get("cull_phash") or metadata.get("phash")),
+            "metadata": metadata,
+        })
+
+    records.sort(key=_record_sort_key)
+
+    adjacency = {item["photo_id"]: set() for item in records}
+    edge_kinds = {}
+
+    for left_index in range(len(records)):
+        left = records[left_index]
+        for right_index in range(left_index + 1, len(records)):
+            right = records[right_index]
+            distance = _cosine_distance(left["embedding"], right["embedding"])
+            phash_distance = _phash_hamming_distance(left["phash"], right["phash"])
+
+            time_gap = None
+            if left["capture_time"] is not None and right["capture_time"] is not None:
+                time_gap = abs(right["capture_time"] - left["capture_time"])
+                if time_gap > duplicate_time_window_seconds and distance is None and phash_distance is None:
+                    break
+
+            is_near_duplicate = (
+                (
+                    (phash_distance is not None and phash_distance <= phash_hamming_threshold)
+                    or (distance is not None and distance <= duplicate_distance_threshold)
+                )
+                and (time_gap is None or time_gap <= duplicate_time_window_seconds)
+            )
+            is_burst_neighbor = (
+                distance is not None
+                and distance <= burst_distance_threshold
+                and time_gap is not None
+                and time_gap <= time_window_seconds
+            )
+
+            if not is_near_duplicate and not is_burst_neighbor:
+                continue
+
+            left_id = left["photo_id"]
+            right_id = right["photo_id"]
+            adjacency[left_id].add(right_id)
+            adjacency[right_id].add(left_id)
+            edge_kinds[tuple(sorted((left_id, right_id)))] = "near_duplicate" if is_near_duplicate else "burst"
+
+    groups = []
+    visited = set()
+    group_counter = 1
+    metadata_updates = []
+
+    for record in records:
+        start_id = record["photo_id"]
+        if start_id in visited:
+            continue
+
+        stack = [start_id]
+        component_ids = []
+        while stack:
+            current_id = stack.pop()
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+            component_ids.append(current_id)
+            for neighbor_id in sorted(adjacency[current_id], reverse=True):
+                if neighbor_id not in visited:
+                    stack.append(neighbor_id)
+
+        component_id_set = set(component_ids)
+        component_records = [item for item in records if item["photo_id"] in component_id_set]
+        component_records.sort(key=_record_sort_key)
+
+        group_photo_ids = [item["photo_id"] for item in component_records]
+        capture_times = [item["capture_time"] for item in component_records if item["capture_time"] is not None]
+        time_span_seconds = 0.0
+        if len(capture_times) >= 2:
+            time_span_seconds = float(max(capture_times) - min(capture_times))
+
+        pair_distances = []
+        pair_phash_distances = []
+        group_edge_types = set()
+        for left_index in range(len(component_records)):
+            for right_index in range(left_index + 1, len(component_records)):
+                left = component_records[left_index]
+                right = component_records[right_index]
+                distance = _cosine_distance(left["embedding"], right["embedding"])
+                phash_distance = _phash_hamming_distance(left["phash"], right["phash"])
+                if distance is not None:
+                    pair_distances.append(round(distance, 4))
+                if phash_distance is not None:
+                    pair_phash_distances.append(phash_distance)
+                edge_type = edge_kinds.get(tuple(sorted((left["photo_id"], right["photo_id"]))))
+                if edge_type:
+                    group_edge_types.add(edge_type)
+
+        if len(group_photo_ids) == 1:
+            group_type = "single"
+        elif "near_duplicate" in group_edge_types and "burst" not in group_edge_types:
+            group_type = "near_duplicate"
+        elif time_span_seconds <= time_window_seconds:
+            group_type = "burst"
+        else:
+            group_type = "near_duplicate"
+
+        ranked_records = _rank_group_records(component_records, group_type, culling_config=culling_config)
+        group_id = f"group_{group_counter:04d}"
+        winner_photo_id = ranked_records[0]["photo_id"] if ranked_records else group_photo_ids[0]
+        alternate_photo_ids = [item["photo_id"] for item in ranked_records[1:] if not item["cull_reject_candidate"]]
+        reject_candidate_photo_ids = [item["photo_id"] for item in ranked_records if item["cull_reject_candidate"]]
+
+        for ranked in ranked_records:
+            updated_metadata = dict(ranked["metadata"] or {})
+            updated_metadata.update({
+                "cull_group_id": group_id,
+                "cull_group_size": len(group_photo_ids),
+                "cull_group_rank": ranked["cull_group_rank"],
+                "cull_group_winner": ranked["cull_group_winner"],
+                "cull_score": round(ranked["cull_score"], 4),
+                "cull_reject_candidate": ranked["cull_reject_candidate"],
+                "cull_reason_codes": json.dumps(ranked["cull_reason_codes"]),
+                "cull_explanation": ranked["cull_explanation"],
+                "cull_sharpness": round(ranked["cull_sharpness"], 4),
+                "cull_exposure": round(ranked["cull_exposure"], 4),
+                "cull_noise": round(ranked["cull_noise"], 4),
+                "cull_highlight_clip": round(ranked["cull_highlight_clip"], 4),
+                "cull_shadow_clip": round(ranked["cull_shadow_clip"], 4),
+                "cull_technical_score": round(ranked["cull_technical_score"], 4),
+                "cull_aesthetic": round(ranked["cull_aesthetic"], 4),
+                "cull_face_count": int(ranked["cull_face_count"]),
+                "cull_face_sharpness": round(ranked["cull_face_sharpness"], 4),
+                "cull_face_prominence": round(ranked["cull_face_prominence"], 4),
+                "cull_face_visibility": round(ranked["cull_face_visibility"], 4),
+                "cull_face_score": round(ranked["cull_face_score"], 4),
+                "cull_occlusion": round(ranked["cull_occlusion"], 4),
+                "cull_eye_openness": round(ranked["cull_eye_openness"], 4),
+                "cull_blink_penalty": round(ranked["cull_blink_penalty"], 4),
+            })
+            metadata_updates.append((ranked["photo_id"], updated_metadata))
+
+        groups.append({
+            "group_id": group_id,
+            "group_type": group_type,
+            "group_size": len(group_photo_ids),
+            "primary_photo_id": group_photo_ids[0],
+            "photo_ids": group_photo_ids,
+            "winner_photo_id": winner_photo_id,
+            "alternate_photo_ids": alternate_photo_ids,
+            "reject_candidate_photo_ids": reject_candidate_photo_ids,
+            "photos": [
+                {
+                    "photo_id": item["photo_id"],
+                    "rank": item["cull_group_rank"],
+                    "cull_score": round(item["cull_score"], 4),
+                    "winner": item["cull_group_winner"],
+                    "reject_candidate": item["cull_reject_candidate"],
+                    "reason_codes": item["cull_reason_codes"],
+                    "explanation": item["cull_explanation"],
+                    "metrics": {
+                        "sharpness": round(item["cull_sharpness"], 4),
+                        "exposure": round(item["cull_exposure"], 4),
+                        "noise": round(item["cull_noise"], 4),
+                        "highlight_clip": round(item["cull_highlight_clip"], 4),
+                        "shadow_clip": round(item["cull_shadow_clip"], 4),
+                        "technical_score": round(item["cull_technical_score"], 4),
+                        "aesthetic": round(item["cull_aesthetic"], 4),
+                        "face_count": int(item["cull_face_count"]),
+                        "face_sharpness": round(item["cull_face_sharpness"], 4),
+                        "face_prominence": round(item["cull_face_prominence"], 4),
+                        "face_visibility": round(item["cull_face_visibility"], 4),
+                        "face_score": round(item["cull_face_score"], 4),
+                        "occlusion": round(item["cull_occlusion"], 4),
+                        "eye_openness": round(item["cull_eye_openness"], 4),
+                        "blink_penalty": round(item["cull_blink_penalty"], 4),
+                    },
+                }
+                for item in ranked_records
+            ],
+            "min_capture_time": min(capture_times) if capture_times else None,
+            "max_capture_time": max(capture_times) if capture_times else None,
+            "time_span_seconds": round(time_span_seconds, 3),
+            "debug": {
+                "culling_preset": culling_preset,
+                "thresholds": {
+                    "phash_hamming_threshold": phash_hamming_threshold,
+                    "duplicate_distance": round(duplicate_distance_threshold, 4),
+                    "burst_distance": round(burst_distance_threshold, 4),
+                    "duplicate_time_window_seconds": duplicate_time_window_seconds,
+                    "time_window_seconds": time_window_seconds,
+                },
+                "pairwise_distances": pair_distances,
+                "pairwise_phash_distances": pair_phash_distances,
+                "edge_types": sorted(group_edge_types),
+            },
+        })
+        group_counter += 1
+
+    groups.sort(key=lambda group: (
+        group["min_capture_time"] is None,
+        group["min_capture_time"] if group["min_capture_time"] is not None else float("inf"),
+        group["primary_photo_id"],
+    ))
+
+    if metadata_updates:
+        update_ids = [photo_id for photo_id, _ in metadata_updates]
+        update_metadatas = [metadata for _, metadata in metadata_updates]
+        collection.update(ids=update_ids, metadatas=update_metadatas)
+
+    logger.info(
+        "Grouped %s photos into %s groups (preset=%s, phash_hamming=%s, duplicate_distance=%s, burst_distance=%s, time_window=%ss)",
+        len(unique_photo_ids),
+        len(groups),
+        culling_preset,
+        phash_hamming_threshold,
+        round(duplicate_distance_threshold, 4),
+        round(burst_distance_threshold, 4),
+        time_window_seconds,
+    )
+    return groups
 
 
 # --- Face embeddings collection API ---
 
-def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id=""):
+def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id="", extra_metadata=None):
     """
     Add a single face to the face_embeddings collection.
 
@@ -348,10 +931,12 @@ def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id=""):
     """
     _ensure_initialized()
     metadata = {"photo_id": photo_uuid, "photo_uuid": photo_uuid, "thumbnail": thumbnail_b64, "person_id": person_id}
+    if extra_metadata:
+        metadata.update(extra_metadata)
     face_collection.add(ids=[face_id], embeddings=[embedding], metadatas=[metadata])
 
 
-def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_ids=None):
+def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_ids=None, extra_metadatas=None):
     """
     Add multiple faces in one call. All lists must have the same length.
     person_ids: optional list of person_id (default "" for each).
@@ -361,10 +946,14 @@ def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_id
         return
     if person_ids is None:
         person_ids = [""] * len(face_ids)
-    metadatas = [
-        {"photo_id": pu, "photo_uuid": pu, "thumbnail": tb, "person_id": pid}
-        for pu, tb, pid in zip(photo_uuids, thumbnails_b64, person_ids)
-    ]
+    if extra_metadatas is None:
+        extra_metadatas = [{}] * len(face_ids)
+    metadatas = []
+    for pu, tb, pid, extra_meta in zip(photo_uuids, thumbnails_b64, person_ids, extra_metadatas):
+        metadata = {"photo_id": pu, "photo_uuid": pu, "thumbnail": tb, "person_id": pid}
+        if extra_meta:
+            metadata.update(extra_meta)
+        metadatas.append(metadata)
     face_collection.add(ids=face_ids, embeddings=embeddings, metadatas=metadatas)
 
 

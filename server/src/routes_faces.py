@@ -32,8 +32,8 @@ def detect_faces_in_image():
     if not faces:
         return jsonify({"status": "ok", "faces": []}), 200
     result_faces = [
-        {"thumbnail": thumb, "index": i}
-        for i, (_, thumb) in enumerate(faces)
+        {"thumbnail": face.get("thumbnail", ""), "index": i}
+        for i, face in enumerate(faces)
     ]
     return jsonify({"status": "ok", "faces": result_faces}), 200
 
@@ -64,7 +64,7 @@ def query_faces_by_image():
         return jsonify({"status": "no_face", "results": []}), 200
     if face_index < 0 or face_index >= len(faces):
         return jsonify({"error": f"face_index must be 0..{len(faces) - 1}"}), 400
-    embedding = faces[face_index][0]
+    embedding = faces[face_index].get("embedding")
     result = chroma_service.query_faces(embedding, n_results=n_results)
     ids = result.get("ids", [[]])[0]
     distances = result.get("distances", [[]])[0]
