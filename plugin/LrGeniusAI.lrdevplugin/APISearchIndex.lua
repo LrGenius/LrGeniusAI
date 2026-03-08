@@ -506,6 +506,28 @@ function SearchIndexAPI.checkVersionCompatibility()
     return _request('POST', getBaseUrl() .. ENDPOINTS.VERSION_CHECK, body)
 end
 
+function SearchIndexAPI.ensureVersionCompatibility()
+    local result, err = SearchIndexAPI.checkVersionCompatibility()
+    if err then
+        return false, "Version check request failed: " .. tostring(err), nil
+    end
+    if type(result) ~= "table" then
+        return false, "Version check failed: invalid response from backend.", nil
+    end
+    if result.compatible then
+        return true, nil, result
+    end
+
+    local pluginTag = tostring(result.plugin_release_tag or ("v" .. tostring(result.plugin_version or "unknown")))
+    local backendTag = tostring(result.backend_release_tag or ("v" .. tostring(result.backend_version or "unknown")))
+    local reason = tostring(result.reason or "plugin and backend version differ")
+    local message = "Plugin and backend versions are not compatible.\n" ..
+        "Plugin: " .. pluginTag .. "\n" ..
+        "Backend: " .. backendTag .. "\n" ..
+        "Reason: " .. reason
+    return false, message, result
+end
+
 function SearchIndexAPI.formatStats(stats)
     if type(stats) ~= "table" then
         return "No statistics available."

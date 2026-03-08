@@ -660,6 +660,15 @@ end
 
 function Util.waitForServerDialog()
     if SearchIndexAPI.pingServer() then
+        local compatible, versionMessage = SearchIndexAPI.ensureVersionCompatibility()
+        if not compatible then
+            LrDialogs.message(
+                "Plugin/Backend version mismatch",
+                versionMessage or "Version check failed.",
+                "critical"
+            )
+            return false
+        end
         return true
     end
 
@@ -679,7 +688,17 @@ function Util.waitForServerDialog()
         local timeout = 60 -- 60 seconds timeout
         while not progressScope:isCanceled() and elapsedTime < timeout do
             if SearchIndexAPI.pingServer() then
+                local compatible, versionMessage = SearchIndexAPI.ensureVersionCompatibility()
                 progressScope:done()
+                if not compatible then
+                    LrDialogs.message(
+                        "Plugin/Backend version mismatch",
+                        versionMessage or "Version check failed.",
+                        "critical"
+                    )
+                    result = false
+                    return
+                end
                 result = true
                 return
             end
