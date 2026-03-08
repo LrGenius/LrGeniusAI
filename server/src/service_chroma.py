@@ -410,6 +410,9 @@ def _explanation_from_reason_codes(reason_codes):
         "blurred": "noticeably blurred",
         "underexposed": "darker than stronger alternatives",
         "overexposed": "brighter than stronger alternatives",
+        "best_face_quality": "best face quality in group",
+        "weak_face_quality": "weaker face quality than alternatives",
+        "no_face_detected_in_group": "no clear face detected while alternatives have faces",
         "near_duplicate_weaker": "weaker duplicate or burst alternative",
     }
     if not reason_codes:
@@ -432,6 +435,15 @@ def _rank_group_records(component_records, group_type):
             "cull_technical_score",
             (0.5 * sharpness) + (0.3 * exposure) + (0.1 * (1.0 - noise_penalty)) + (0.1 * (1.0 - clipping_penalty)),
         )
+        face_count = int(_safe_float((metadata or {}).get("cull_face_count"), 0) or 0)
+        face_sharpness = _extract_culling_metric(metadata, "cull_face_sharpness", 0.0)
+        face_prominence = _extract_culling_metric(metadata, "cull_face_prominence", 0.0)
+        face_visibility = _extract_culling_metric(metadata, "cull_face_visibility", 0.0)
+        face_score = _extract_culling_metric(
+            metadata,
+            "cull_face_score",
+            (0.45 * face_sharpness) + (0.35 * face_prominence) + (0.20 * face_visibility),
+        )
 
         scored_records.append({
             **record,
@@ -441,11 +453,30 @@ def _rank_group_records(component_records, group_type):
             "cull_highlight_clip": highlight_clip,
             "cull_shadow_clip": shadow_clip,
             "cull_technical_score": technical_score,
-            "cull_score": technical_score,
+            "cull_face_count": face_count,
+            "cull_face_sharpness": face_sharpness,
+            "cull_face_prominence": face_prominence,
+            "cull_face_visibility": face_visibility,
+            "cull_face_score": face_score,
         })
+
+    group_has_faces = any(item["cull_face_count"] > 0 for item in scored_records)
+    for item in scored_records:
+        if group_has_faces:
+            if item["cull_face_count"] > 0:
+                item["cull_score"] = (
+                    0.55 * item["cull_technical_score"]
+                    + 0.45 * item["cull_face_score"]
+                )
+            else:
+                # Penalize face-missing shots in face-heavy groups.
+                item["cull_score"] = max(0.0, (0.70 * item["cull_technical_score"]) - 0.20)
+        else:
+            item["cull_score"] = item["cull_technical_score"]
 
     scored_records.sort(key=lambda item: (
         -item["cull_score"],
+        -item["cull_face_score"],
         -item["cull_sharpness"],
         -item["cull_exposure"],
         item["cull_noise"],
@@ -456,6 +487,7 @@ def _rank_group_records(component_records, group_type):
         return []
 
     max_sharpness = max(item["cull_sharpness"] for item in scored_records)
+    max_face_score = max(item["cull_face_score"] for item in scored_records)
     winner_score = scored_records[0]["cull_score"]
 
     for index, item in enumerate(scored_records, start=1):
@@ -469,6 +501,13 @@ def _rank_group_records(component_records, group_type):
                 reason_codes.append("overexposed")
         if index == 1 and len(scored_records) > 1 and item["cull_sharpness"] >= (max_sharpness - 0.02):
             reason_codes.append("sharpest_in_group")
+        if group_has_faces:
+            if item["cull_face_count"] == 0:
+                reason_codes.append("no_face_detected_in_group")
+            elif item["cull_face_score"] >= (max_face_score - 0.03) and index == 1:
+                reason_codes.append("best_face_quality")
+            elif item["cull_face_score"] < max(0.0, max_face_score - 0.10):
+                reason_codes.append("weak_face_quality")
         if index > 1 and group_type != "single":
             reason_codes.append("near_duplicate_weaker")
 
@@ -478,6 +517,7 @@ def _rank_group_records(component_records, group_type):
                 item["cull_score"] <= max(0.0, winner_score - 0.18)
                 or item["cull_sharpness"] < 0.2
                 or item["cull_exposure"] < 0.28
+                or (group_has_faces and item["cull_face_count"] > 0 and item["cull_face_score"] < 0.30)
             )
 
         item["cull_group_rank"] = index
@@ -654,6 +694,11 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
                 "cull_highlight_clip": round(ranked["cull_highlight_clip"], 4),
                 "cull_shadow_clip": round(ranked["cull_shadow_clip"], 4),
                 "cull_technical_score": round(ranked["cull_technical_score"], 4),
+                "cull_face_count": int(ranked["cull_face_count"]),
+                "cull_face_sharpness": round(ranked["cull_face_sharpness"], 4),
+                "cull_face_prominence": round(ranked["cull_face_prominence"], 4),
+                "cull_face_visibility": round(ranked["cull_face_visibility"], 4),
+                "cull_face_score": round(ranked["cull_face_score"], 4),
             })
             metadata_updates.append((ranked["photo_id"], updated_metadata))
 
@@ -682,6 +727,11 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
                         "highlight_clip": round(item["cull_highlight_clip"], 4),
                         "shadow_clip": round(item["cull_shadow_clip"], 4),
                         "technical_score": round(item["cull_technical_score"], 4),
+                        "face_count": int(item["cull_face_count"]),
+                        "face_sharpness": round(item["cull_face_sharpness"], 4),
+                        "face_prominence": round(item["cull_face_prominence"], 4),
+                        "face_visibility": round(item["cull_face_visibility"], 4),
+                        "face_score": round(item["cull_face_score"], 4),
                     },
                 }
                 for item in ranked_records
@@ -726,7 +776,7 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta):
 
 # --- Face embeddings collection API ---
 
-def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id=""):
+def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id="", extra_metadata=None):
     """
     Add a single face to the face_embeddings collection.
 
@@ -739,10 +789,12 @@ def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id=""):
     """
     _ensure_initialized()
     metadata = {"photo_id": photo_uuid, "photo_uuid": photo_uuid, "thumbnail": thumbnail_b64, "person_id": person_id}
+    if extra_metadata:
+        metadata.update(extra_metadata)
     face_collection.add(ids=[face_id], embeddings=[embedding], metadatas=[metadata])
 
 
-def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_ids=None):
+def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_ids=None, extra_metadatas=None):
     """
     Add multiple faces in one call. All lists must have the same length.
     person_ids: optional list of person_id (default "" for each).
@@ -752,10 +804,14 @@ def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_id
         return
     if person_ids is None:
         person_ids = [""] * len(face_ids)
-    metadatas = [
-        {"photo_id": pu, "photo_uuid": pu, "thumbnail": tb, "person_id": pid}
-        for pu, tb, pid in zip(photo_uuids, thumbnails_b64, person_ids)
-    ]
+    if extra_metadatas is None:
+        extra_metadatas = [{}] * len(face_ids)
+    metadatas = []
+    for pu, tb, pid, extra_meta in zip(photo_uuids, thumbnails_b64, person_ids, extra_metadatas):
+        metadata = {"photo_id": pu, "photo_uuid": pu, "thumbnail": tb, "person_id": pid}
+        if extra_meta:
+            metadata.update(extra_meta)
+        metadatas.append(metadata)
     face_collection.add(ids=face_ids, embeddings=embeddings, metadatas=metadatas)
 
 

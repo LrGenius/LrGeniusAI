@@ -145,6 +145,47 @@ def _compute_culling_metrics(image_bytes: bytes) -> dict:
         }
 
 
+def _aggregate_face_culling_metrics(face_results: list[dict]) -> dict:
+    if not face_results:
+        return {
+            "cull_face_count": 0,
+            "cull_face_sharpness": 0.0,
+            "cull_face_prominence": 0.0,
+            "cull_face_visibility": 0.0,
+            "cull_face_score": 0.0,
+            "cull_faces_present": False,
+        }
+
+    face_count = len(face_results)
+    sharpness_values = [_safe_unit_interval(face.get("sharpness", 0.0)) for face in face_results]
+    prominence_values = [_safe_unit_interval(face.get("area_ratio", 0.0) / 0.12) for face in face_results]
+    visibility_values = [
+        _safe_unit_interval(
+            (0.5 * _safe_unit_interval(face.get("det_score", 0.0)))
+            + (0.5 * _safe_unit_interval(face.get("center_proximity", 0.0)))
+        )
+        for face in face_results
+    ]
+
+    face_sharpness = max(sharpness_values) if sharpness_values else 0.0
+    face_prominence = max(prominence_values) if prominence_values else 0.0
+    face_visibility = sum(visibility_values) / len(visibility_values) if visibility_values else 0.0
+    face_score = _safe_unit_interval(
+        (0.45 * face_sharpness)
+        + (0.35 * face_prominence)
+        + (0.20 * face_visibility)
+    )
+
+    return {
+        "cull_face_count": face_count,
+        "cull_face_sharpness": round(face_sharpness, 4),
+        "cull_face_prominence": round(face_prominence, 4),
+        "cull_face_visibility": round(face_visibility, 4),
+        "cull_face_score": round(face_score, 4),
+        "cull_faces_present": True,
+    }
+
+
 def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     """
     Returns UUIDs that need processing based on selected tasks and existing backend data.
@@ -422,11 +463,6 @@ def process_image_task(
                         logger.info(f"UUID {uuid} is new. Indexing metadata-only entry (no embedding).")
                     chroma_service.add_image(uuid, embedding, main_metadata)
 
-                # Vertex AI embeddings (optional, separate Chroma collection)
-                if uuid in vertex_embeddings_by_uuid:
-                    chroma_service.add_vertex_image(uuid, vertex_embeddings_by_uuid[uuid], {"photo_id": uuid, "uuid": uuid})
-                    logger.debug(f"UUID {uuid}: Vertex AI embedding stored.")
-
                 # Face detection and indexing (second Chroma collection)
                 if compute_faces and image_bytes:
                     # Without regenerate_metadata: skip if already checked (has faces or marked as checked, no faces)
@@ -438,17 +474,37 @@ def process_image_task(
                             face_results = face_service.detect_faces(image_bytes)
                             if face_results:
                                 face_ids = [f"{uuid}_{i}" for i in range(len(face_results))]
-                                embeddings_f = [r[0] for r in face_results]
-                                thumbnails_b64 = [r[1] for r in face_results]
+                                embeddings_f = [face["embedding"] for face in face_results]
+                                thumbnails_b64 = [face.get("thumbnail", "") for face in face_results]
+                                face_extra_metadatas = [
+                                    {
+                                        "bbox": json.dumps(face.get("bbox") or []),
+                                        "face_area_ratio": face.get("area_ratio", 0.0),
+                                        "face_sharpness": face.get("sharpness", 0.0),
+                                        "face_det_score": face.get("det_score", 0.0),
+                                        "face_center_proximity": face.get("center_proximity", 0.0),
+                                    }
+                                    for face in face_results
+                                ]
                                 chroma_service.add_faces_batch(
-                                    face_ids, embeddings_f, [uuid] * len(face_results), thumbnails_b64
+                                    face_ids, embeddings_f, [uuid] * len(face_results), thumbnails_b64,
+                                    extra_metadatas=face_extra_metadatas
                                 )
+                                main_metadata.update(_aggregate_face_culling_metrics(face_results))
+                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
                                 logger.info(f"UUID {uuid}: indexed {len(face_results)} face(s).")
                             else:
+                                main_metadata.update(_aggregate_face_culling_metrics([]))
+                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
                                 chroma_service.set_faces_checked(uuid)
                                 logger.debug(f"UUID {uuid}: no faces detected (marked as checked).")
                         except Exception as e:
                             logger.warning(f"Face detection/indexing failed for {uuid}: {e}", exc_info=True)
+
+                # Vertex AI embeddings (optional, separate Chroma collection)
+                if uuid in vertex_embeddings_by_uuid:
+                    chroma_service.add_vertex_image(uuid, vertex_embeddings_by_uuid[uuid], {"photo_id": uuid, "uuid": uuid})
+                    logger.debug(f"UUID {uuid}: Vertex AI embedding stored.")
 
                 success_count += 1
 

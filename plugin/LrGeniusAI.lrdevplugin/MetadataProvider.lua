@@ -122,6 +122,46 @@ return {
             browsable = true,
         },
         {
+            id = 'cullFaceCount',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceCount=Face count",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
+            id = 'cullFaceSharpness',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceSharpness=Face sharpness",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
+            id = 'cullFaceProminence',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceProminence=Face prominence",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
+            id = 'cullFaceVisibility',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceVisibility=Face visibility",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
+            id = 'cullFaceScore',
+            title = LOC "$$$/LrGeniusAI/AIMetadataProvider/cullFaceScore=Face score",
+            dataType = 'string',
+            readOnly = true,
+            searchable = true,
+            browsable = true,
+        },
+        {
             id = 'keywords',
             title = LOC "$$$/lrc-ai-assistant/AIMetadataProvider/keywords=AI Keywords",
             dataType = 'string',
@@ -163,7 +203,7 @@ return {
         },
     },
 
-    schemaVersion = 26,
+    schemaVersion = 27,
     updateFromEarlierSchemaVersion = function (catalog, previousSchemaVersion, progressScope)
             catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
             if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then
