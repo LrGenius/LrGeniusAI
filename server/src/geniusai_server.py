@@ -25,6 +25,7 @@ from routes_clip import clip_bp
 from routes_faces import faces_bp
 import service_chroma
 import service_persons
+import service_db
 
 app = Flask(__name__)
 logger.info("Flask app created")
@@ -106,6 +107,51 @@ def _start_faces_cluster_scheduler() -> None:
     t = threading.Thread(target=_loop, name="faces-cluster-scheduler", daemon=True)
     t.start()
 
+
+def _start_housekeeping_scheduler() -> None:
+    """
+    Periodically run housekeeping tasks such as database backups.
+
+    Controlled via environment variables:
+      GENIUSAI_BACKUP_ENABLED       (bool; default: false)
+      GENIUSAI_BACKUP_INTERVAL      (seconds; default: 86400, min 600)
+      GENIUSAI_BACKUP_MAX_KEEP      (int; number of backup files to keep; default: 14)
+    """
+    if not _bool_env("GENIUSAI_BACKUP_ENABLED", default=False):
+        logger.info("DB backup scheduler disabled (GENIUSAI_BACKUP_ENABLED not set).")
+        return
+
+    try:
+        interval = int(os.environ.get("GENIUSAI_BACKUP_INTERVAL", "86400"))
+    except ValueError:
+        interval = 86400
+    interval = max(600, interval)
+
+    try:
+        max_keep = int(os.environ.get("GENIUSAI_BACKUP_MAX_KEEP", "14"))
+    except ValueError:
+        max_keep = 14
+    if max_keep <= 0:
+        max_keep = 1
+
+    def _loop() -> None:
+        logger.info(
+            "Starting DB backup scheduler: interval=%ss, max_keep=%s",
+            interval,
+            max_keep,
+        )
+        while True:
+            try:
+                zip_path, backup_name = service_db.build_backup_zip()
+                logger.info("Periodic DB backup created: %s (%s)", backup_name, zip_path)
+                service_db.prune_old_backups(max_keep=max_keep)
+            except Exception as e:
+                logger.error("Periodic DB backup failed: %s", e, exc_info=True)
+            time.sleep(interval)
+
+    t = threading.Thread(target=_loop, name="db-backup-scheduler", daemon=True)
+    t.start()
+
 @app.errorhandler(500)
 def handle_internal_server_error(e):
     logger.error(f"Internal Server Error: {e}")
@@ -138,7 +184,8 @@ if __name__ == "__main__":
     # Write PID for lifecycle management
     server_lifecycle.write_pid_file()
 
-    # Start optional background faces clustering scheduler
+    # Start optional background schedulers (housekeeping, clustering)
+    _start_housekeeping_scheduler()
     _start_faces_cluster_scheduler()
     
     host = os.environ.get("GENIUSAI_HOST", "127.0.0.1")

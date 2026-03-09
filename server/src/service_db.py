@@ -70,6 +70,53 @@ def build_backup_zip() -> tuple[str, str]:
     return zip_path, backup_name
 
 
+def prune_old_backups(max_keep: int = 10) -> int:
+    """
+    Remove old backup ZIPs from BACKUPS_DIR, keeping only the newest max_keep files.
+
+    Args:
+        max_keep: Number of most recent backup files to retain.
+
+    Returns:
+        Number of backup files that were deleted.
+    """
+    if max_keep <= 0:
+        max_keep = 1
+
+    if not os.path.isdir(BACKUPS_DIR):
+        return 0
+
+    try:
+        entries = [
+            os.path.join(BACKUPS_DIR, name)
+            for name in os.listdir(BACKUPS_DIR)
+            if name.lower().endswith(".zip")
+            and os.path.isfile(os.path.join(BACKUPS_DIR, name))
+        ]
+    except Exception as e:
+        logger.warning("Could not list backups in %s: %s", BACKUPS_DIR, e)
+        return 0
+
+    if len(entries) <= max_keep:
+        return 0
+
+    entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    to_delete = entries[max_keep:]
+    deleted = 0
+    for path in to_delete:
+        try:
+            os.remove(path)
+            deleted += 1
+            logger.info("Pruned old DB backup: %s", path)
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            logger.warning("Could not remove old backup %s: %s", path, e)
+    if deleted > 0:
+        logger.info("Pruned %s old backups in %s, kept %s newest.", deleted, BACKUPS_DIR, max_keep)
+    return deleted
+
+
 def migrate_photo_ids(data: dict) -> dict:
     """Migrate existing Chroma IDs from legacy uuid to new photo_id values."""
     mappings = data.get("mappings")
