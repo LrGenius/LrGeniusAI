@@ -96,6 +96,55 @@ Then complete the remote bootstrap flow on a second trusted machine with a brows
 
 ---
 
+## 🧹 Automatic Housekeeping (Faces & Backups)
+
+When running the backend in Docker (or any long‑lived environment), you can enable optional background housekeeping tasks using environment variables.
+
+### Periodic face clustering
+
+The server can automatically re‑cluster face embeddings in the background, using the same logic as the `POST /faces/cluster` endpoint:
+
+- `GENIUSAI_FACES_CLUSTER_ENABLED`  
+  - `true` / `1` / `yes` / `on` to enable.  
+  - Default: disabled.
+- `GENIUSAI_FACES_CLUSTER_INTERVAL`  
+  - Interval in seconds between clustering runs.  
+  - Default: `3600` (1 hour). Minimum effective interval is 60 seconds.
+- `GENIUSAI_FACES_CLUSTER_DISTANCE`  
+  - Cosine distance threshold, same scale as Immich “Maximum recognition distance”.  
+  - Typical range: `0.45–0.65`. Default: `0.5`.
+- `GENIUSAI_FACES_CLUSTER_MIN_FACES`  
+  - Minimum number of faces required to form a person cluster (DBSCAN mode).  
+  - Example: `3` (singletons go to `person_unassigned`).  
+  - If unset/empty, every face is assigned to a cluster (Agglomerative mode).
+- `GENIUSAI_FACES_CLUSTER_LINKAGE`  
+  - `"complete"` (default) = tighter clusters, fewer false merges.  
+  - `"average"` = more merging.
+
+These runs happen entirely in the backend process and do not require Lightroom to be open.
+
+### Periodic database backups
+
+The backend can also create periodic ZIP backups of the database directory and prune older backups automatically:
+
+- `GENIUSAI_BACKUP_ENABLED`  
+  - `true` / `1` / `yes` / `on` to enable.  
+  - Default: disabled.
+- `GENIUSAI_BACKUP_INTERVAL`  
+  - Interval in seconds between backup runs.  
+  - Default: `86400` (once per day). Minimum is 600 seconds.
+- `GENIUSAI_BACKUP_MAX_KEEP`  
+  - Number of newest backup ZIPs to keep under `<db-path>/backups`.  
+  - Default: `14`. Values ≤ 0 are treated as `1`.
+
+Each run:
+
+1. Calls the same backup logic used by `GET /db/backup` to create a ZIP of the DB path.
+2. Stores a persistent copy under `<db-path>/backups`.
+3. Deletes older ZIPs so that only the newest `GENIUSAI_BACKUP_MAX_KEEP` remain.
+
+---
+
 ## ⚠️ Breaking Change: `photo_id` Migration
 
 The server switched primary IDs from legacy Lightroom UUIDs to file-based `photo_id` values.

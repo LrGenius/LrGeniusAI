@@ -21,6 +21,27 @@ services:
       # Persistent Google Cloud CLI config + ADC login
       - ./gcloud:/root/.config/gcloud
     environment:
+      # Core server binding
       - GENIUSAI_HOST=0.0.0.0
       - GENIUSAI_PORT=19819
       - CLOUDSDK_CONFIG=/root/.config/gcloud
+
+      # --- Optional: periodic face clustering housekeeping ---
+      # Enable background face clustering; runs while the backend is up
+      - GENIUSAI_FACES_CLUSTER_ENABLED=true
+      # Run clustering once per hour (in seconds). Minimum effective interval is 60s.
+      - GENIUSAI_FACES_CLUSTER_INTERVAL=3600
+      # Cosine distance threshold, same scale as Immich (0.45–0.65 typical)
+      - GENIUSAI_FACES_CLUSTER_DISTANCE=0.5
+      # Only form a person if at least this many faces match; unset/empty to cluster all faces
+      - GENIUSAI_FACES_CLUSTER_MIN_FACES=3
+      # "complete" = tighter clusters; "average" = more merging
+      - GENIUSAI_FACES_CLUSTER_LINKAGE=complete
+
+      # --- Optional: periodic DB backup housekeeping ---
+      # Enable automatic ZIP backups of the backend DB directory
+      - GENIUSAI_BACKUP_ENABLED=true
+      # Run backups once per day (in seconds). Minimum is 600s.
+      - GENIUSAI_BACKUP_INTERVAL=86400
+      # Keep only the 14 newest backup ZIPs under /data/db/backups
+      - GENIUSAI_BACKUP_MAX_KEEP=14
