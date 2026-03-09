@@ -71,7 +71,7 @@ def _extract_options(data):
         reg_val = data.get('regenerateMetadata', 'true')
     options['regenerate_metadata'] = str(reg_val).lower() == 'true'
     options['prompt'] = data.get('prompt')
-    # Optional capture time from Lightroom catalog (preferred over EXIF).
+    # Optional capture time from Lightroom catalog.
     # `date_time_unix` is a float seconds-since-epoch value; `date_time` is an
     # ISO/W3C string kept for backwards compatibility.
     options['date_time'] = data.get('date_time')

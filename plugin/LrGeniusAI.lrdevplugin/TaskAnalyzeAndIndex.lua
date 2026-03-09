@@ -97,7 +97,6 @@ local function showAnalyzeAndIndexDialog(ctx)
     props.submitKeywords = prefs.submitKeywords or false
     props.submitFolderName = prefs.submitFolderName or false
     props.showPhotoContextDialog = prefs.showPhotoContextDialog or false
-    props.submitDateTime = prefs.submitDateTime or false
     
     -- SaveDataToCatalog
     props.saveDataToCatalog = prefs.saveDataToCatalog ~= false -- default true
@@ -359,13 +358,6 @@ local function showAnalyzeAndIndexDialog(ctx)
                 f:static_text {
                     title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/submitKeywords=Existing Keywords",
                 },
-                f:checkbox {
-                    value = bind 'submitDateTime',
-                    width = share 'checkboxWidth',
-                },
-                f:static_text {
-                    title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/submitDateTime=Capture Date/Time",
-                },
             },
             f:row {
                 f:checkbox {
@@ -438,7 +430,6 @@ local function showAnalyzeAndIndexDialog(ctx)
         prefs.submitGPS = props.submitGPS
         prefs.submitKeywords = props.submitKeywords
         prefs.submitFolderName = props.submitFolderName
-        prefs.submitDateTime = props.submitDateTime
         prefs.showPhotoContextDialog = props.showPhotoContextDialog
         prefs.enableValidation = props.enableValidation
         prefs.saveDataToCatalog = props.saveDataToCatalog
@@ -592,7 +583,6 @@ LrTasks.startAsyncTask(function()
             submit_keywords = props.submitKeywords,
             submit_folder_names = props.submitFolderName,
             submit_user_context = props.showPhotoContextDialog,
-            submit_date_time = props.submitDateTime,
             enableMetadata = props.enableMetadata,
             enableFaces = props.enableFaces,
             enableVertexAI = props.enableVertexAI,

@@ -150,9 +150,9 @@ class AnalysisService:
                 else:
                     metadata_results.append(None)
 
-        # Datetime/capture_time extraction is now handled entirely by the client
+        # Datetime/capture_time extraction is handled entirely by the client
         # (Lightroom plugin) via explicit fields in the request and stored in
-        # service_index.process_image_task. We no longer read EXIF here.
+        # service_index.process_image_task.
         return embeddings, metadata_results
 
     def _generate_image_embeddings(self, images: List[Image.Image], image_model, image_processor) -> List[Optional[List[float]]]:
