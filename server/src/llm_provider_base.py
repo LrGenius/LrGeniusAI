@@ -54,8 +54,9 @@ class MetadataGenerationRequest:
     # Or a nested dict: {"People": {"Family": {}, "Friends": {}}, "Activities": {}}
     keyword_categories: Optional[Union[List[str], Dict[str, Any]]]
 
-    # Provider-specific overrides (e.g. Ollama on remote host)
+    # Provider-specific overrides (e.g. Ollama/LM Studio on remote host)
     ollama_base_url: Optional[str] = None
+    lmstudio_base_url: Optional[str] = None
 
 
 @dataclass

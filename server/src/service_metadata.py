@@ -211,10 +211,6 @@ class AnalysisService:
             logger.warning(f"Requested provider '{provider}' not available, using fallback: {provider}")
         
         selected_provider = self.providers[provider]
-
-        # Allow overriding LM Studio host per-request (e.g. remote LM Studio server)
-        if provider == 'lmstudio' and options.get('lmstudio_base_url'):
-            selected_provider = LMStudioProvider({'base_url': options['lmstudio_base_url']})
         logger.info(f"Generating metadata for {uuid} using {provider}")
         
         request = MetadataGenerationRequest(
@@ -242,6 +238,7 @@ class AnalysisService:
             system_prompt=options.get('prompt'),
             date_time=options.get('date_time'),
             ollama_base_url=options.get('ollama_base_url'),
+            lmstudio_base_url=options.get('lmstudio_base_url'),
         )
         
         try:
@@ -274,7 +271,8 @@ class AnalysisService:
                 if provider_name == 'ollama' and ollama_base_url:
                     provider_instance = OllamaProvider({'base_url': ollama_base_url})
                 if provider_name == 'lmstudio' and lmstudio_base_url:
-                    provider_instance = LMStudioProvider({'base_url': lmstudio_base_url})
+                    # Reuse existing provider instance but point it to a different host
+                    provider_instance.host = lmstudio_base_url
 
                 if provider_name in ['ollama', 'lmstudio'] and not provider_instance.is_available():
                     result[provider_name] = []

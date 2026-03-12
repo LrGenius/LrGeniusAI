@@ -18,7 +18,6 @@ class LMStudioProvider(LLMProviderBase):
         super().__init__(config)
         self.host = config.get('base_url', LMSTUDIO_HOST)
         self.timeout = config.get('timeout', 720)
-        lms.configure_default_client(self.host)
 
 
     def is_available(self) -> bool:
@@ -36,10 +35,15 @@ class LMStudioProvider(LLMProviderBase):
             MetadataGenerationResponse with generated metadata
         """
         try:
+            # Resolve host: request override -> provider default
+            host = getattr(request, "lmstudio_base_url", None) or self.host
+
             # Convert image to base64 data URI
             image_handle = lms.prepare_image(request.image_data)
 
-            model = lms.llm(request.model)
+            # Use a scoped client for this host instead of global default client
+            with lms.Client(host) as client:
+                model = client.llm(request.model)
             
             # Prepare prompts
             system_prompt = self._prepare_system_prompt(request)
@@ -51,10 +55,10 @@ class LMStudioProvider(LLMProviderBase):
             # Make request to LM Studio
             logger.debug(f"Sending request to LM Studio")
 
-            chat = lms.Chat(system_prompt)
-            chat.add_user_message(user_prompt, images=[image_handle])
+                chat = client.Chat(system_prompt)
+                chat.add_user_message(user_prompt, images=[image_handle])
 
-            response = model.respond(chat, response_format=response_schema, config={"temperature": request.temperature })
+                response = model.respond(chat, response_format=response_schema, config={"temperature": request.temperature })
 
             # Extract message content
             content = response.parsed
