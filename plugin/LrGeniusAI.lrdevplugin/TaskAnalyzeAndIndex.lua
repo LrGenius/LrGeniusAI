@@ -742,9 +742,10 @@ LrTasks.startAsyncTask(function()
                     log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
 
                     if props.enableValidation and props.enableMetadata and response and response.metadata then
-                        -- Show validation dialog
                         local result, validatedData = nil, nil
+
                         if not skipFromHere then
+                            -- Show validation dialog
                             result, validatedData = MetadataManager.showValidationDialog(context, photo, response, {
                                 applyKeywords = props.generateKeywords,
                                 applyTitle = props.generateTitle,
@@ -756,13 +757,31 @@ LrTasks.startAsyncTask(function()
                                 log:trace("Skipping validation from here for subsequent photos.")
                                 skipFromHere = true
                             end
-                        else
-                            skippedCount = skippedCount + 1
-                        end
 
-                        if result == "ok" and validatedData then
-                            -- Apply validated metadata
-                            MetadataManager.applyMetadata(photo, response, validatedData, {
+                            if result == "ok" and validatedData then
+                                -- Apply validated metadata
+                                MetadataManager.applyMetadata(photo, response, validatedData, {
+                                    applyKeywords = props.generateKeywords,
+                                    applyTitle = props.generateTitle,
+                                    applyCaption = props.generateCaption,
+                                    applyAltText = props.generateAltText,
+                                    useTopLevelKeyword = props.useTopLevelKeyword,
+                                    topLevelKeyword = props.topLevelKeyword,
+                                })
+
+                                -- Overwrite with validated data
+                                log:trace("Reimported validated metadata for photo: " .. (photo:getFormattedMetadata('fileName') or "unknown"))
+                                SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope)
+
+                                savedCount = savedCount + 1
+                            elseif result == "other" then
+                                skippedCount = skippedCount + 1
+                            elseif result == "cancel" then
+                                break
+                            end
+                        else
+                            -- Validation has been skipped from here on; apply metadata without showing dialog
+                            MetadataManager.applyMetadata(photo, response, nil, {
                                 applyKeywords = props.generateKeywords,
                                 applyTitle = props.generateTitle,
                                 applyCaption = props.generateCaption,
@@ -771,15 +790,10 @@ LrTasks.startAsyncTask(function()
                                 topLevelKeyword = props.topLevelKeyword,
                             })
 
-                            -- Overwrite with validated data
-                            log:trace("Reimported validated metadata for photo: " .. (photo:getFormattedMetadata('fileName') or "unknown"))
+                            log:trace("Applied metadata without validation for photo (skipFromHere active): " .. (photo:getFormattedMetadata('fileName') or "unknown"))
                             SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope)
 
                             savedCount = savedCount + 1
-                        elseif result == "other" then
-                            skippedCount = skippedCount + 1
-                        elseif result == "cancel" then
-                            break
                         end
 
                     elseif props.enableMetadata and response and response.metadata then
