@@ -42,7 +42,7 @@ class LMStudioProvider(LLMProviderBase):
             with lms.Client(host) as client:
                 # Prepare image via client so we don't depend on the default client
                 image_handle = client.files.prepare_image(request.image_data)
-                model = client.llm(request.model)
+                model = client.llm.model(request.model)
                 
                 # Prepare prompts
                 system_prompt = self._prepare_system_prompt(request)
@@ -54,7 +54,7 @@ class LMStudioProvider(LLMProviderBase):
                 # Make request to LM Studio
                 logger.debug(f"Sending request to LM Studio")
 
-                chat = client.Chat(system_prompt)
+                chat = lms.Chat(system_prompt)
                 chat.add_user_message(user_prompt, images=[image_handle])
 
                 response = model.respond(chat, response_format=response_schema, config={"temperature": request.temperature })
