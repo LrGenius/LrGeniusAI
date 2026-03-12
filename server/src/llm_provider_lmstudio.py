@@ -44,16 +44,16 @@ class LMStudioProvider(LLMProviderBase):
             # Use a scoped client for this host instead of global default client
             with lms.Client(host) as client:
                 model = client.llm(request.model)
-            
-            # Prepare prompts
-            system_prompt = self._prepare_system_prompt(request)
-            user_prompt = self._prepare_user_prompt(request)
-            
-            # Prepare OpenAI-style response format
-            response_schema = self._prepare_response_structure(request)
-            
-            # Make request to LM Studio
-            logger.debug(f"Sending request to LM Studio")
+                
+                # Prepare prompts
+                system_prompt = self._prepare_system_prompt(request)
+                user_prompt = self._prepare_user_prompt(request)
+                
+                # Prepare OpenAI-style response format
+                response_schema = self._prepare_response_structure(request)
+                
+                # Make request to LM Studio
+                logger.debug(f"Sending request to LM Studio")
 
                 chat = client.Chat(system_prompt)
                 chat.add_user_message(user_prompt, images=[image_handle])
