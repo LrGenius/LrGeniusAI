@@ -370,12 +370,12 @@ LrTasks.startAsyncTask(function()
                     duplicatePhotos
                 )
             end
-
-            if picksCollection then
-                catalog:setActiveSources({ picksCollection })
-                LrApplicationView.gridView()
-            end
         end, Defaults.catalogWriteAccessOptions)
+
+        if picksCollection then
+            catalog:setActiveSources({ picksCollection })
+            LrApplicationView.gridView()
+        end
 
         LrDialogs.message(
             LOC "$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete",
