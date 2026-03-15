@@ -94,8 +94,9 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
                 end
             end
         end
+        local currentTopLevelKeyword = options.useTopLevelKeyword and (options.topLevelKeyword or "LrGeniusAI") or nil
         catalog:withWriteAccessDo("$$$/lrc-ai-assistant/AnalyzeImageTask/saveTopKeyword=Save AI generated keywords", function()
-            MetadataManager.addKeywordRecursively(photo, keywords, topKeyword, existingKeywordNames)
+            MetadataManager.addKeywordRecursively(photo, keywords, topKeyword, existingKeywordNames, currentTopLevelKeyword)
         end, Defaults.catalogWriteAccessOptions)
     end
 
@@ -113,9 +114,12 @@ end
 -- @param photo The LrPhoto object.
 -- @param keywordSubTable A table of keywords, possibly nested.
 -- @param parent The parent LrKeyword object for the current level.
+-- @param existingKeywordNames Optional set of keyword names already on the photo (append mode).
+-- @param currentTopLevelKeyword Optional top-level keyword for this task (avoids prefs race in parallel jobs).
 --
-function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, existingKeywordNames)
+function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, existingKeywordNames, currentTopLevelKeyword)
     local addKeywords = {}
+    local reservedTopLevel = currentTopLevelKeyword or prefs.topLevelKeyword
     for key, value in pairs(keywordSubTable) do
         -- log:trace("Processing keyword key: " .. tostring(key) .. " value: " .. tostring(value))
         local keyword
@@ -125,7 +129,7 @@ function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, e
             if existingKeywordNames and existingKeywordNames[value] then
                 -- Append mode: skip keyword that already exists on photo
             elseif not Util.table_contains(addKeywords, value) then
-                if value == "Ollama" or value == "LMStudio" or value == "Google Gemini" or value == "ChatGPT" or value == prefs.topLevelKeyword then
+                if value == "Ollama" or value == "LMStudio" or value == "Google Gemini" or value == "ChatGPT" or value == reservedTopLevel then
                     log:trace("Skipping keyword: " .. tostring(value) .. " as it is reserved.")
                 else
                     local currentParent = prefs.useKeywordHierarchy and parent or nil
@@ -136,7 +140,7 @@ function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, e
             end
         end
         if type(value) == 'table' then
-            MetadataManager.addKeywordRecursively(photo, value, keyword, existingKeywordNames)
+            MetadataManager.addKeywordRecursively(photo, value, keyword, existingKeywordNames, currentTopLevelKeyword)
         end
     end
 end
