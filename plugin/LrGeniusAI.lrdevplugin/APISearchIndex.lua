@@ -29,6 +29,7 @@ local ENDPOINTS = {
     MODELS = "/models",
     GET_IDS = "/get/ids",
     REMOVE = "/remove",
+    REMOVE_METADATA = "/remove/metadata",
     PING = "/ping",
     VERSION = "/version",
     VERSION_CHECK = "/version/check",
@@ -778,6 +779,22 @@ end
 
 function SearchIndexAPI.removeUUID(uuid)
     return SearchIndexAPI.removePhotoId(uuid)
+end
+
+--- Remove only AI-generated metadata for a photo (keeps embeddings so the photo stays in the index).
+--- Use when the user discards a suggestion in the review dialog so they can regenerate later.
+function SearchIndexAPI.removePhotoMetadata(photoId)
+    local url = getBaseUrl() .. ENDPOINTS.REMOVE_METADATA
+    local body = { photo_id = photoId }
+    log:trace("Removing metadata for photo_id: " .. photoId)
+
+    local result, err = _request('POST', url, body)
+    if not err then
+        return true
+    else
+        ErrorHandler.handleError("Remove metadata failed", err)
+        return false
+    end
 end
 
 function SearchIndexAPI.removeMissingFromIndex()

@@ -150,6 +150,56 @@ def delete_image(photo_id, *, legacy_uuid=None):
         pass
 
 
+# Keys that hold AI-generated metadata; cleared by clear_image_metadata so the photo stays indexed.
+AI_METADATA_KEYS = frozenset({
+    "title", "caption", "keywords", "alt_text",
+    "model", "run_date", "tokens_used", "flattened_keywords",
+})
+
+
+def clear_image_metadata(photo_id, *, legacy_uuid=None):
+    """
+    Clear only AI-generated metadata for an image. Keeps the document and embedding
+    in both main and Vertex collections so the photo remains searchable; use when
+    the user discards a suggestion and may regenerate later.
+    Returns True if the main collection had the photo (and metadata was cleared), False otherwise.
+    """
+    _ensure_initialized()
+    photo_id = _normalize_photo_id(photo_id, legacy_uuid)
+    if not photo_id:
+        return False
+    # Main collection: get current, strip AI fields, update (keep embedding)
+    data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    if not data or not data.get("ids"):
+        logger.debug("clear_image_metadata: photo_id %s not in main collection", photo_id)
+        return False
+    meta = dict(data["metadatas"][0]) if data.get("metadatas") else {}
+    embedding = _first_result_item(data.get("embeddings"))
+    for key in AI_METADATA_KEYS:
+        meta.pop(key, None)
+    meta = _ensure_photo_metadata(photo_id, meta, legacy_uuid=legacy_uuid)
+    if embedding is not None:
+        collection.update(ids=[photo_id], metadatas=[meta], embeddings=[embedding])
+    else:
+        collection.update(ids=[photo_id], metadatas=[meta])
+    # Vertex collection: same if present
+    try:
+        vdata = vertex_collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+        if vdata and vdata.get("ids"):
+            vmeta = dict(vdata["metadatas"][0]) if vdata.get("metadatas") else {}
+            vemb = _first_result_item(vdata.get("embeddings"))
+            for key in AI_METADATA_KEYS:
+                vmeta.pop(key, None)
+            vmeta = _ensure_photo_metadata(photo_id, vmeta, legacy_uuid=legacy_uuid)
+            if vemb is not None:
+                vertex_collection.update(ids=[photo_id], metadatas=[vmeta], embeddings=[vemb])
+            else:
+                vertex_collection.update(ids=[photo_id], metadatas=[vmeta])
+    except Exception as e:
+        logger.debug("clear_image_metadata vertex %s: %s", photo_id, e)
+    return True
+
+
 # --- Vertex AI image embeddings collection API ---
 
 def add_vertex_image(photo_id, embedding, metadata=None, *, legacy_uuid=None):

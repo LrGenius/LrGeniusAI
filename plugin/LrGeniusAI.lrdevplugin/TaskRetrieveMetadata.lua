@@ -250,6 +250,8 @@ LrTasks.startAsyncTask(function()
                             skipCount = skipCount + 1
                             shouldApply = false
                             validatedData = nil
+                            -- Clear only metadata so the photo stays in the index and can be regenerated later
+                            SearchIndexAPI.removePhotoMetadata(photoId)
                         else
                             -- Validation canceled
                             break

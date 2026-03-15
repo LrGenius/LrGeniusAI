@@ -776,6 +776,8 @@ LrTasks.startAsyncTask(function()
                                 savedCount = savedCount + 1
                             elseif result == "other" then
                                 skippedCount = skippedCount + 1
+                                -- Clear only metadata so the photo stays in the index and can be regenerated later
+                                SearchIndexAPI.removePhotoMetadata(photoId)
                             elseif result == "cancel" then
                                 break
                             end

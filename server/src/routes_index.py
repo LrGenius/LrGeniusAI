@@ -304,7 +304,30 @@ def remove_image():
     except Exception as e:
         logger.error(f"Error removing image {photo_id}: {e}")
         return jsonify({"error": "photo_id not found or error during removal"}), 404
-        
+
+
+@index_bp.route('/remove/metadata', methods=['POST'])
+def remove_metadata():
+    """
+    Clear only AI-generated metadata (title, caption, keywords, alt_text, etc.) for a photo.
+    Keeps the document and embeddings so the photo remains in the index and searchable.
+    Use when the user discards a suggestion (e.g. in the review dialog) so they can regenerate later.
+    """
+    logger.info("Remove metadata request received")
+    body = request.json or {}
+    photo_id = body.get('photo_id') or body.get('uuid')
+    if not photo_id:
+        return jsonify({"error": "No photo_id provided"}), 400
+    try:
+        cleared = chroma_service.clear_image_metadata(photo_id)
+        if not cleared:
+            return jsonify({"error": "photo_id not found"}), 404
+        logger.info(f"Metadata cleared for photo_id {photo_id} (embeddings kept).")
+        return jsonify({"status": "ok", "photo_id": photo_id, "uuid": photo_id})
+    except Exception as e:
+        logger.error(f"Error clearing metadata for {photo_id}: {e}", exc_info=True)
+        return jsonify({"error": "photo_id not found or error during metadata clear"}), 404
+
 
 @index_bp.route('/get', methods=['POST'])
 def get_photo_data():
