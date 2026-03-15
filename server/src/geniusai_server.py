@@ -9,6 +9,7 @@ import json
 
 # Import modularized components
 from config import logger, args, DB_PATH
+from service_version import get_backend_version_info
 logger.info("Imported config")
 
 # Lazy import server_lifecycle to speed up startup
@@ -162,7 +163,9 @@ def handle_internal_server_error(e):
     return jsonify({"error": "Internal Server Error"}), 500
 
 if __name__ == "__main__":
+    version_info = get_backend_version_info()
     logger.info("=" * 60)
+    logger.info("LrGenius Server version %s (build %s)", version_info.get("backend_version", "?"), version_info.get("backend_build", "?"))
     logger.info("LrGenius Server starting...")
     logger.info(f"Python: {sys.version.split()[0]}")
     logger.info(f"Database: {args.db_path}")

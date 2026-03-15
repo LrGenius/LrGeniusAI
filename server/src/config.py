@@ -237,13 +237,62 @@ LOG_PATH = os.path.join(os.path.dirname(DB_PATH), "lrgenius-server.log")
 
 log_level = logging.DEBUG if args.debug else logging.INFO
 
+# When running locally (not in Docker), on every start create a new log file and keep N backups.
+# In Docker we keep a single file so container logs stay simple.
+def _is_running_in_docker() -> bool:
+    return os.path.exists("/.dockerenv") or os.environ.get("container") == "docker"
+
+def _rotate_log_on_startup(log_path: str, backup_count: int) -> None:
+    """Shift existing log files: .log -> .log.1, .log.1 -> .log.2, ...; remove .log.backup_count."""
+    if backup_count <= 0 or not os.path.isfile(log_path):
+        return
+    base = log_path + "."
+    # Remove oldest backup if it exists
+    oldest = base + str(backup_count)
+    try:
+        if os.path.isfile(oldest):
+            os.remove(oldest)
+    except OSError:
+        pass
+    # Shift backups: .log.(n-1) -> .log.n, ..., .log.1 -> .log.2
+    for i in range(backup_count - 1, 0, -1):
+        src = base + str(i)
+        dst = base + str(i + 1)
+        try:
+            if os.path.isfile(src):
+                os.rename(src, dst)
+        except OSError:
+            pass
+    # Current log -> .log.1
+    try:
+        os.rename(log_path, base + "1")
+    except OSError:
+        pass
+
+def _file_log_handler():
+    if _is_running_in_docker():
+        return logging.FileHandler(LOG_PATH, encoding="utf-8")
+    # Local: on every start create a new log file; keep N backups (GENIUSAI_LOG_ROTATE_BACKUPS).
+    try:
+        backup_count = int(os.environ.get("GENIUSAI_LOG_ROTATE_BACKUPS", "3"))
+    except ValueError:
+        backup_count = 3
+    backup_count = max(1, min(backup_count, 20))
+    _rotate_log_on_startup(LOG_PATH, backup_count)
+    return logging.FileHandler(LOG_PATH, encoding="utf-8")
+
 # Configure logging with UTF-8 encoding to handle Unicode characters
 logging.basicConfig(
     level=log_level,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
-        logging.FileHandler(LOG_PATH, encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+        _file_log_handler(),
+        logging.StreamHandler(sys.stdout),
+    ],
 )
 logger = logging.getLogger("geniusai-server")
+if not _is_running_in_docker():
+    logger.info(
+        "Log file rotation on startup enabled for %s (GENIUSAI_LOG_ROTATE_BACKUPS)",
+        LOG_PATH,
+    )
