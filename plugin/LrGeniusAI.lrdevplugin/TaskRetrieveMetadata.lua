@@ -28,6 +28,7 @@ local function showRetrieveMetadataDialog(ctx)
     
     -- Validation option
     props.enableValidation = prefs.retrieveEnableValidation or false
+    props.appendMetadata = prefs.retrieveAppendMetadata or false
 
     local scopeItems = {
         { title = LOC "$$$/LrGeniusAI/Scope/Selected=Selected Photos", value = 'selected' },
@@ -115,6 +116,20 @@ local function showRetrieveMetadataDialog(ctx)
             },
         },
 
+        -- Append metadata option
+        f:group_box {
+            title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AppendOption=Apply Options",
+            fill_horizontal = 1,
+            f:row {
+                f:checkbox {
+                    value = bind 'appendMetadata',
+                },
+                f:static_text {
+                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AppendMetadata=Append metadata (do not overwrite existing)",
+                },
+            },
+        },
+
         -- Keyword Option
         f:group_box {
             title = LOC "$$$/LrGeniusAI/RetrieveMetadata/UseTopLevelKeyword=Use top-level keyword for applied keywords",
@@ -146,6 +161,7 @@ local function showRetrieveMetadataDialog(ctx)
         prefs.applyCaption = props.applyCaption
         prefs.applyAltText = props.applyAltText
         prefs.retrieveEnableValidation = props.enableValidation
+        prefs.retrieveAppendMetadata = props.appendMetadata
         prefs.useTopLevelKeyword = props.useTopLevelKeyword
         prefs.topLevelKeyword = props.topLevelKeyword
         
@@ -156,6 +172,7 @@ local function showRetrieveMetadataDialog(ctx)
             applyCaption = props.applyCaption,
             applyAltText = props.applyAltText,
             enableValidation = props.enableValidation,
+            appendMetadata = props.appendMetadata,
             useTopLevelKeyword = props.useTopLevelKeyword,
             topLevelKeyword = props.topLevelKeyword,
         }

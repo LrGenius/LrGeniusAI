@@ -100,6 +100,7 @@ local function showAnalyzeAndIndexDialog(ctx)
     
     -- SaveDataToCatalog
     props.saveDataToCatalog = prefs.saveDataToCatalog ~= false -- default true
+    props.appendMetadata = prefs.appendMetadata or false
 
     -- Validation
     props.enableValidation = prefs.enableValidation or false
@@ -257,8 +258,14 @@ local function showAnalyzeAndIndexDialog(ctx)
                     title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateMetadata=Regenerate all data (overwrite existing)",
                 },
             },
+            f:row {
+                f:checkbox {
+                    value = bind 'appendMetadata',
+                    title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/AppendMetadata=Append metadata (do not overwrite existing)",
+                },
+            },
         },
-        
+
         -- Metadata Options (only shown if metadata is enabled)
         f:group_box {
             title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/MetadataOptions=Metadata Options",
@@ -412,6 +419,7 @@ local function showAnalyzeAndIndexDialog(ctx)
         prefs.enableVertexAI = props.enableVertexAI
         prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
         prefs.regenerateMetadata = props.regenerateMetadata
+        prefs.appendMetadata = props.appendMetadata
         prefs.generateKeywords = props.generateKeywords
         prefs.generateCaption = props.generateCaption
         prefs.generateTitle = props.generateTitle
@@ -751,6 +759,7 @@ LrTasks.startAsyncTask(function()
                                 applyTitle = props.generateTitle,
                                 applyCaption = props.generateCaption,
                                 applyAltText = props.generateAltText,
+                                appendMetadata = props.appendMetadata,
                             })
 
                             if validatedData ~= nil and validatedData.skipFromHere then
@@ -767,6 +776,7 @@ LrTasks.startAsyncTask(function()
                                     applyAltText = props.generateAltText,
                                     useTopLevelKeyword = props.useTopLevelKeyword,
                                     topLevelKeyword = props.topLevelKeyword,
+                                    appendMetadata = props.appendMetadata,
                                 })
 
                                 -- Overwrite with validated data
@@ -791,6 +801,7 @@ LrTasks.startAsyncTask(function()
                                 applyAltText = props.generateAltText,
                                 useTopLevelKeyword = props.useTopLevelKeyword,
                                 topLevelKeyword = props.topLevelKeyword,
+                                appendMetadata = props.appendMetadata,
                             })
 
                             log:trace("Applied metadata without validation for photo (skipFromHere active): " .. (photo:getFormattedMetadata('fileName') or "unknown"))
@@ -808,6 +819,7 @@ LrTasks.startAsyncTask(function()
                             applyAltText = props.generateAltText,
                             useTopLevelKeyword = props.useTopLevelKeyword,
                             topLevelKeyword = props.topLevelKeyword,
+                            appendMetadata = props.appendMetadata,
                         })
                         savedCount = savedCount + 1
                     end
