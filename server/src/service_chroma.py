@@ -465,26 +465,63 @@ def get_image_metadata_stats(catalog_id=None):
     }
 
 
+# Batch size for sync_claim: one get + one or two updates per batch instead of per photo
+SYNC_CLAIM_BATCH_SIZE = 200
+
+
 def sync_claim(catalog_id, photo_ids):
     """Add catalog_id to each photo's catalog_ids (claim existing backend photos for this catalog).
     Used for migration: unclaimed photos become visible to this catalog.
-    Returns {"claimed": N, "errors": M}.
+    Returns {"claimed": N, "errors": M}. Uses batched get/update for speed.
     """
     _ensure_initialized()
     if not catalog_id:
         return {"claimed": 0, "errors": 0}
     catalog_id_str = str(catalog_id).strip()
+    photo_ids = [str(pid).strip() for pid in (photo_ids or []) if pid]
     claimed = 0
     errors = 0
-    for photo_id in photo_ids or []:
-        if not photo_id:
-            continue
+    for start in range(0, len(photo_ids), SYNC_CLAIM_BATCH_SIZE):
+        chunk = photo_ids[start : start + SYNC_CLAIM_BATCH_SIZE]
         try:
-            _add_catalog_id(str(photo_id).strip(), catalog_id_str)
-            claimed += 1
+            data = collection.get(ids=chunk, include=["metadatas", "embeddings"])
+            if not data or not data.get("ids"):
+                continue
+            ids = data["ids"]
+            metadatas = data.get("metadatas") or [{}] * len(ids)
+            embeddings = data.get("embeddings")
+            if embeddings is not None and isinstance(embeddings, np.ndarray):
+                embeddings = list(embeddings)
+            elif embeddings is None:
+                embeddings = [None] * len(ids)
+            update_ids = []
+            update_metadatas = []
+            update_embeddings = []
+            no_emb_ids = []
+            no_emb_metadatas = []
+            for i, pid in enumerate(ids):
+                meta = dict(metadatas[i]) if i < len(metadatas) else {}
+                ids_set = _parse_catalog_ids(meta)
+                ids_set.add(catalog_id_str)
+                meta[CATALOG_IDS_FIELD] = _serialize_catalog_ids(ids_set)
+                meta = _ensure_photo_metadata(pid, meta)
+                emb = embeddings[i] if i < len(embeddings) else None
+                if emb is not None:
+                    update_ids.append(pid)
+                    update_metadatas.append(meta)
+                    update_embeddings.append(emb if not isinstance(emb, np.ndarray) else emb.tolist())
+                else:
+                    no_emb_ids.append(pid)
+                    no_emb_metadatas.append(meta)
+            if update_ids:
+                collection.update(ids=update_ids, metadatas=update_metadatas, embeddings=update_embeddings)
+                claimed += len(update_ids)
+            if no_emb_ids:
+                collection.update(ids=no_emb_ids, metadatas=no_emb_metadatas)
+                claimed += len(no_emb_ids)
         except Exception as e:
-            logger.warning("sync_claim failed for %s: %s", photo_id, e)
-            errors += 1
+            logger.warning("sync_claim batch failed for chunk %s..%s: %s", start, start + len(chunk), e)
+            errors += len(chunk)
     return {"claimed": claimed, "errors": errors}
 
 
