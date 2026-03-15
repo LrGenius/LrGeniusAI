@@ -156,7 +156,12 @@ local function ensureDbMigrationsDone()
         for _, m in ipairs(pending) do
             local ok, err
             if type(m.run) == "function" then
-                local status, a, b = pcall(function() return m.run() end)
+                local status, a, b
+                if type(LrTasks) == "table" and type(LrTasks.pcall) == "function" then
+                    status, a, b = LrTasks.pcall(function() return m.run() end)
+                else
+                    status, a, b = pcall(function() return m.run() end)
+                end
                 if status then
                     ok, err = a, b
                 else
