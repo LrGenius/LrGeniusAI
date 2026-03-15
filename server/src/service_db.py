@@ -13,9 +13,11 @@ import service_chroma as chroma_service
 import service_persons as persons_service
 
 
-def get_database_stats() -> dict:
-    """Return database statistics for photos, faces, and persons."""
-    image_stats = chroma_service.get_image_metadata_stats()
+def get_database_stats(catalog_id=None) -> dict:
+    """Return database statistics for photos, faces, and persons.
+    If catalog_id is provided, photo stats are limited to that catalog (soft state).
+    """
+    image_stats = chroma_service.get_image_metadata_stats(catalog_id=catalog_id)
     face_count = chroma_service.get_face_count()
     persons = persons_service.list_persons()
     person_count = len(persons)

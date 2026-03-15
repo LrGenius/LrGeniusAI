@@ -302,14 +302,15 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     compute_faces = options.get('compute_faces', False)
     compute_vertexai = options.get('compute_vertexai', False)
     any_processing_task_enabled = compute_embeddings or compute_metadata or compute_faces or compute_vertexai
+    catalog_id = options.get('catalog_id')
 
     if not uuids:
         return []
 
-    # Load existing records for all UUIDs
+    # Load existing records for all UUIDs (catalog-scoped when catalog_id provided)
     existing_records = {}
     for uuid in uuids:
-        existing_record = chroma_service.get_image(uuid)
+        existing_record = chroma_service.get_image(uuid, catalog_id=catalog_id)
         if existing_record and existing_record['ids']:
             existing_records[uuid] = existing_record['metadatas'][0] if existing_record['metadatas'] else {}
 
@@ -368,11 +369,12 @@ def process_image_task(
                    f"compute_metadata={compute_metadata}, compute_faces={compute_faces}, compute_vertexai={compute_vertexai}")
         
         # Check existing records if regenerate_metadata is False
+        catalog_id = options.get('catalog_id')
         existing_records = {}
         if not regenerate_metadata:
             logger.info("Checking existing records to determine what needs generation...")
             for _, uuid, _ in image_triplets:
-                existing_record = chroma_service.get_image(uuid)
+                existing_record = chroma_service.get_image(uuid, catalog_id=catalog_id)
                 if existing_record and existing_record['ids']:
                     existing_records[uuid] = existing_record['metadatas'][0] if existing_record['metadatas'] else {}
         
@@ -589,21 +591,21 @@ def process_image_task(
                 
                 if existing and not regenerate_metadata:
                     logger.info(f"UUID {uuid} already exists. Updating (embedding: {update_embedding is not None}).")
-                    chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
+                    chroma_service.update_image(uuid, main_metadata, embedding=update_embedding, catalog_id=catalog_id)
                 elif regenerate_metadata:
                     logger.info(f"UUID {uuid} set to regenerate. Updating (embedding: {update_embedding is not None}).")
                     existing_in_chroma = chroma_service.get_image(uuid)
                     if existing_in_chroma and existing_in_chroma.get("ids"):
-                        chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
+                        chroma_service.update_image(uuid, main_metadata, embedding=update_embedding, catalog_id=catalog_id)
                     else:
-                        chroma_service.add_image(uuid, embedding, main_metadata)
+                        chroma_service.add_image(uuid, embedding, main_metadata, catalog_id=catalog_id)
                 else:
                     # New record
                     if embedding is not None:
                         logger.info(f"UUID {uuid} is new. Indexing with embeddings.")
                     else:
                         logger.info(f"UUID {uuid} is new. Indexing metadata-only entry (no embedding).")
-                    chroma_service.add_image(uuid, embedding, main_metadata)
+                    chroma_service.add_image(uuid, embedding, main_metadata, catalog_id=catalog_id)
 
                 # Face detection and indexing (second Chroma collection)
                 if compute_faces and image_bytes:
@@ -636,11 +638,11 @@ def process_image_task(
                                     extra_metadatas=face_extra_metadatas
                                 )
                                 main_metadata.update(_aggregate_face_culling_metrics(face_results))
-                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
+                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding, catalog_id=catalog_id)
                                 logger.info(f"UUID {uuid}: indexed {len(face_results)} face(s).")
                             else:
                                 main_metadata.update(_aggregate_face_culling_metrics([]))
-                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding)
+                                chroma_service.update_image(uuid, main_metadata, embedding=update_embedding, catalog_id=catalog_id)
                                 chroma_service.set_faces_checked(uuid)
                                 logger.debug(f"UUID {uuid}: no faces detected (marked as checked).")
                         except Exception as e:

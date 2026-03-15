@@ -64,16 +64,21 @@ def search_route():
         search_sources = None
         vertex_project_id = None
         vertex_location = None
+        catalog_id = None
         if request.method == 'POST' and request.is_json:
             body = request.get_json()
             photo_ids_to_search = body.get('photo_ids') or body.get('uuids')
             search_sources = body.get('search_sources')
             vertex_project_id = body.get('vertex_project_id') or body.get('vertexProjectId')
             vertex_location = body.get('vertex_location') or body.get('vertexLocation')
+            catalog_id = body.get('catalog_id')
+        if catalog_id is None:
+            catalog_id = request.args.get('catalog_id')
 
         sorted_results = service_search.search_images(
             term, quality_sort, photo_ids_to_search, search_sources,
-            vertex_project_id=vertex_project_id, vertex_location=vertex_location
+            vertex_project_id=vertex_project_id, vertex_location=vertex_location,
+            catalog_id=catalog_id
         )
         return jsonify(sorted_results)
     except Exception as e:

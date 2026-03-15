@@ -19,7 +19,8 @@ def import_metadata_batch():
     if not isinstance(metadata_items, list):
         return jsonify({"error": "metadata_items should be a list"}), 400
 
-    success_count, failure_count = import_service.import_metadata_task(metadata_items)
+    catalog_id = data.get('catalog_id')
+    success_count, failure_count = import_service.import_metadata_task(metadata_items, catalog_id=catalog_id)
 
     logger.info(f"Metadata import complete. Success: {success_count}, Failures: {failure_count}.")
 

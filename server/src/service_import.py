@@ -4,13 +4,14 @@ import json
 from datetime import datetime as time
 from service_index import _flatten_keywords
 
-def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
+def import_metadata_task(metadata_items: list[dict], catalog_id=None) -> tuple[int, int]:
     """
     Process a batch of metadata imports.
-    
+
     Args:
         metadata_items: List of dictionaries, each with photo_id and metadata.
-        
+        catalog_id: Optional; associate updated/created records with this catalog (soft state).
+
     Returns:
         Tuple of (success_count, failure_count)
     """
@@ -28,6 +29,7 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
             continue
 
         try:
+            # Check existence without catalog filter so we update existing docs from other catalogs
             existing_record = chroma_service.get_image(photo_id)
 
             metadata_to_update = {}
@@ -54,7 +56,7 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
                 metadata_to_update['run_date'] = time.now().strftime("%Y-%m-%d %H:%M:%S")
                 metadata_to_update['photo_id'] = photo_id
                 metadata_to_update['uuid'] = item.get('uuid', photo_id)
-                chroma_service.add_image(photo_id, None, metadata_to_update, legacy_uuid=item.get('uuid'))
+                chroma_service.add_image(photo_id, None, metadata_to_update, legacy_uuid=item.get('uuid'), catalog_id=catalog_id)
                 logger.info(f"Created metadata-only entry for photo_id {photo_id}.")
                 success_count += 1
                 continue
@@ -63,7 +65,7 @@ def import_metadata_task(metadata_items: list[dict]) -> tuple[int, int]:
             metadata_to_update['photo_id'] = photo_id
             metadata_to_update['uuid'] = item.get('uuid', photo_id)
 
-            chroma_service.update_image(photo_id, metadata_to_update, legacy_uuid=item.get('uuid'))
+            chroma_service.update_image(photo_id, metadata_to_update, legacy_uuid=item.get('uuid'), catalog_id=catalog_id)
             logger.info(f"Successfully imported metadata for photo_id {photo_id}.")
             success_count += 1
 

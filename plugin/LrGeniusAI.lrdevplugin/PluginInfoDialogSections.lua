@@ -253,6 +253,20 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                 },
                 f:row {
                     f:push_button {
+                        title = "Claim photos for this catalog",
+                        action = function(button)
+                            LrTasks.startAsyncTask(function()
+                                local ok, err, result = SearchIndexAPI.claimPhotosForCatalog()
+                                if ok then
+                                    local msg = result and ("Claimed: " .. tostring(result.claimed) .. (result.errors and result.errors > 0 and ("; errors: " .. tostring(result.errors)) or "")) or "Done."
+                                    LrDialogs.message("Claim photos", msg)
+                                else
+                                    LrDialogs.message("Claim photos failed", tostring(err or "Unknown error"), "critical")
+                                end
+                            end)
+                        end,
+                    },
+                    f:push_button {
                         title = "Migrate existing DB IDs to photo_id",
                         action = function(button)
                             LrTasks.startAsyncTask(function()

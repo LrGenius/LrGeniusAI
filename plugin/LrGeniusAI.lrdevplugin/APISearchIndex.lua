@@ -46,6 +46,8 @@ local ENDPOINTS = {
     FACES_QUERY = "/faces/query",
     MIGRATE_PHOTO_IDS = "/db/migrate-photo-ids",
     DB_BACKUP = "/db/backup",
+    SYNC_CLEANUP = "/sync/cleanup",
+    SYNC_CLAIM = "/sync/claim",
 }
 
 local EXPORT_SETTINGS = {
@@ -72,6 +74,16 @@ local _requestMultipart
 
 local function shouldUseGlobalPhotoId()
     return prefs and prefs.useGlobalPhotoId ~= false
+end
+
+--- Returns the stable catalog identifier for the active catalog (for backend catalog-scoped operations).
+local function getCatalogId()
+    local id, err = Util.getCatalogIdentifier()
+    if not id then
+        log:warn("getCatalogId: " .. tostring(err))
+        return nil
+    end
+    return id
 end
 
 local function getPhotoIdForPhoto(photo)
@@ -332,6 +344,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
         image = base64Image,
         photo_id = photoId,
         filename = filename or "photo.jpg",
+        catalog_id = getCatalogId(),
         tasks = options.tasks or {},
         provider = options.provider,
         model = options.model,
@@ -431,6 +444,10 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     
     -- Add form fields
     table.insert(mimeChunks, { name = "photo_id", value = photoId })
+    local cid = getCatalogId()
+    if cid then
+        table.insert(mimeChunks, { name = "catalog_id", value = cid })
+    end
     table.insert(mimeChunks, { name = "tasks", value = JSON:encode(options.tasks or {}) })
     
     if options.provider then
@@ -556,6 +573,10 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
         term = searchTerm,
         quality_sort = qualitySort,
     }
+    local cid = getCatalogId()
+    if cid then
+        params.catalog_id = cid
+    end
 
     local url = getBaseUrl() .. ENDPOINTS.SEARCH
 
@@ -585,6 +606,7 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
         local body = {
             term = searchTerm,
             photo_ids = photoIds,
+            catalog_id = getCatalogId(),
         }
         if search_sources then
             body.search_sources = search_sources
@@ -596,7 +618,7 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
     else
         -- Global search: use POST when search_sources are provided so we can send JSON body
         if search_sources then
-            local body = { term = searchTerm, search_sources = search_sources }
+            local body = { term = searchTerm, search_sources = search_sources, catalog_id = getCatalogId() }
             local postUrl = buildUrlWithParams(url, params)
             log:trace("Searching index via POST (global with search_sources): " .. postUrl)
             return _request('POST', postUrl, body)
@@ -608,7 +630,12 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
 end
 
 function SearchIndexAPI.getStats()
-    return _request('GET', getBaseUrl() .. ENDPOINTS.STATS)
+    local cid = getCatalogId()
+    local url = getBaseUrl() .. ENDPOINTS.STATS
+    if cid then
+        url = url .. (url:find("?") and "&" or "?") .. "catalog_id=" .. cid
+    end
+    return _request('GET', url)
 end
 
 function SearchIndexAPI.getBackendVersion()
@@ -671,9 +698,20 @@ end
 
 function SearchIndexAPI.getAllIndexedPhotoIds(requireEmbeddings)
     local url = getBaseUrl() .. ENDPOINTS.GET_IDS
-    -- If requireEmbeddings is true, only get UUIDs with real embeddings
+    local params = {}
     if requireEmbeddings then
-        url = url .. "?has_embedding=true"
+        params.has_embedding = "true"
+    end
+    local cid = getCatalogId()
+    if cid then
+        params.catalog_id = cid
+    end
+    if next(params) then
+        local sep = "?"
+        for k, v in pairs(params) do
+            url = url .. sep .. k .. "=" .. v
+            sep = "&"
+        end
     end
     return _request('GET', url)
 end
@@ -701,7 +739,11 @@ function SearchIndexAPI.getPhotoData(photoId)
     
     local url = getBaseUrl() .. "/get"
     local body = { photo_id = photoId }
-    
+    local cid = getCatalogId()
+    if cid then
+        body.catalog_id = cid
+    end
+
     log:trace("Retrieving photo data for photo_id: " .. photoId)
     
     local result, err = _request('POST', url, body)
@@ -797,41 +839,131 @@ function SearchIndexAPI.removePhotoMetadata(photoId)
     end
 end
 
-function SearchIndexAPI.removeMissingFromIndex()
-    if shouldUseGlobalPhotoId() then
-        log:warn("removeMissingFromIndex is disabled while useGlobalPhotoId is enabled")
-        return false
+---
+-- Sync cleanup: disassociate this catalog from backend photos that are no longer in the catalog.
+-- Does not delete backend data; works with global photo ID and cross-catalog backends.
+-- @return boolean success, string|nil error message
+--
+function SearchIndexAPI.syncCleanup()
+    local catalogId = getCatalogId()
+    if not catalogId then
+        log:warn("syncCleanup: no catalog identifier")
+        return false, "No catalog identifier"
     end
 
-    local indexedUUIDs = SearchIndexAPI.getAllIndexedPhotoIds()
-
-    if indexedUUIDs == nil or type(indexedUUIDs) ~= "table" then
-        log:warn("Failed to retrieve indexed UUIDs")
-        return false
+    if not SearchIndexAPI.pingServer() then
+        return false, "Backend not reachable"
     end
 
     local catalog = LrApplication.activeCatalog()
+    local allPhotos = catalog:getAllPhotos()
+    local photoIds = {}
+    local updateInterval = math.max(1, math.floor(#allPhotos / 50))
 
     local progressScope = LrProgressScope({
         title = LOC "$$$/LrGeniusAI/SearchIndexAPI/cleaningIndex=Cleaning search index",
         functionContext = nil,
     })
 
-    local total = #indexedUUIDs
-    local missingPhotosUUIDs = {}
-    for _, uuid in ipairs(indexedUUIDs) do
-        progressScope:setPortionComplete(_ - 1, total)
-        progressScope:setCaption(LOC "$$$/LrGeniusAI/SearchIndexAPI/cleaningIndexProgress=Cleaning index. Photo ^1/^2", tostring(_), tostring(total))
-        if progressScope:isCanceled() then break end
+    for i, photo in ipairs(allPhotos) do
+        if progressScope:isCanceled() then
+            progressScope:done()
+            return false, "canceled"
+        end
+        local photoId, err = getPhotoIdForPhoto(photo)
+        if photoId then
+            photoIds[#photoIds + 1] = photoId
+        end
+        if i % updateInterval == 0 or i == #allPhotos then
+            progressScope:setPortionComplete(i, #allPhotos)
+            progressScope:setCaption(LOC "$$$/LrGeniusAI/SearchIndexAPI/cleaningIndexProgress=Cleaning index. Photo ^1/^2", tostring(i), tostring(#allPhotos))
+        end
+    end
 
-        local photo = catalog:findPhotoByUuid(uuid)
-        if photo == nil then
-            missingPhotosUUIDs[#missingPhotosUUIDs + 1] = uuid
-            log:trace("Photo with UUID " .. uuid .. " not found in catalog, removing from index")
-            SearchIndexAPI.removeUUID(uuid)
+    progressScope:setCaption(LOC "$$$/LrGeniusAI/SearchIndexAPI/syncCleanupSending=Syncing with backend...")
+    local batchSize = 5000
+    local disassociated = 0
+    for startIdx = 1, #photoIds, batchSize do
+        if progressScope:isCanceled() then
+            progressScope:done()
+            return false, "canceled"
+        end
+        local stopIdx = math.min(startIdx + batchSize - 1, #photoIds)
+        local batch = {}
+        for j = startIdx, stopIdx do
+            batch[#batch + 1] = photoIds[j]
+        end
+        local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.SYNC_CLEANUP, {
+            catalog_id = catalogId,
+            photo_ids = batch,
+        }, 120)
+        if err then
+            progressScope:done()
+            log:error("syncCleanup failed: " .. tostring(err))
+            return false, err
+        end
+        if result and result.disassociated then
+            disassociated = disassociated + result.disassociated
         end
     end
     progressScope:done()
+    log:info("syncCleanup finished: " .. tostring(#photoIds) .. " photos in catalog, " .. tostring(disassociated) .. " disassociated")
+    return true
+end
+
+---
+-- Claim backend photos for this catalog (add catalog_id to their catalog_ids).
+-- Use after migration so existing indexed photos become visible to this catalog.
+-- @return boolean success, string|nil error message, table|nil result
+--
+function SearchIndexAPI.claimPhotosForCatalog()
+    local catalogId = getCatalogId()
+    if not catalogId then
+        return false, "No catalog identifier", nil
+    end
+    if not SearchIndexAPI.pingServer() then
+        return false, "Backend not reachable", nil
+    end
+    local catalog = LrApplication.activeCatalog()
+    local allPhotos = catalog:getAllPhotos()
+    local photoIds = {}
+    for _, photo in ipairs(allPhotos) do
+        local photoId, _ = getPhotoIdForPhoto(photo)
+        if photoId then
+            photoIds[#photoIds + 1] = photoId
+        end
+    end
+    if #photoIds == 0 then
+        return true, nil, { claimed = 0, errors = 0 }
+    end
+    local batchSize = 2500
+    local totalClaimed = 0
+    local totalErrors = 0
+    for startIdx = 1, #photoIds, batchSize do
+        local stopIdx = math.min(startIdx + batchSize - 1, #photoIds)
+        local batch = {}
+        for j = startIdx, stopIdx do
+            batch[#batch + 1] = photoIds[j]
+        end
+        local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.SYNC_CLAIM, {
+            catalog_id = catalogId,
+            photo_ids = batch,
+        }, 120)
+        if err then
+            return false, err, nil
+        end
+        if result then
+            totalClaimed = totalClaimed + (result.claimed or 0)
+            totalErrors = totalErrors + (result.errors or 0)
+        end
+    end
+    return true, nil, { claimed = totalClaimed, errors = totalErrors }
+end
+
+function SearchIndexAPI.removeMissingFromIndex()
+    -- Use sync cleanup (soft state): disassociate this catalog from photos no longer in catalog.
+    -- Works with global photo ID and cross-catalog backends; no backend data is deleted.
+    return SearchIndexAPI.syncCleanup()
 end
 
 ---
@@ -1095,7 +1227,12 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
             end
 
             if #metadataBatch > 0 and (#metadataBatch >= batchSize or i == numPhotos) then
-                local response = _request('POST', getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, { metadata_items = metadataBatch })
+                local importBody = { metadata_items = metadataBatch }
+                local importCid = getCatalogId()
+                if importCid then
+                    importBody.catalog_id = importCid
+                end
+                local response = _request('POST', getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, importBody)
                 if response ~= nil and response.status == "processed" then
                     stats.success = stats.success + #metadataBatch
                 else
@@ -1513,6 +1650,10 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
             tasks = tasks,
             regenerate_metadata = taskOptions.regenerateMetadata or false
         }
+        local checkCid = getCatalogId()
+        if checkCid then
+            body.catalog_id = checkCid
+        end
         local result, err = _request('POST', getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body)
         if err then
             ErrorHandler.handleError("Failed to check unprocessed photos", err)
