@@ -1229,8 +1229,10 @@ def find_similar_to_photo(
         return []
 
     target_embedding = None
-    if use_clip and target_data.get("embeddings"):
-        target_embedding = _embedding_to_array(_first_result_item(target_data.get("embeddings")))
+    if use_clip:
+        first_emb = _first_result_item(target_data.get("embeddings"))
+        if first_emb is not None:
+            target_embedding = _embedding_to_array(first_emb)
 
     if scope_photo_ids is not None:
         candidate_ids = [str(pid).strip() for pid in scope_photo_ids if pid and str(pid).strip() != photo_id]
