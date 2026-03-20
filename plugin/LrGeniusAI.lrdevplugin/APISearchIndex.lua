@@ -1628,72 +1628,195 @@ function SearchIndexAPI.downloadDatabaseBackup()
     return true, outputPath
 end
 
-function SearchIndexAPI.shutdownServer()
+-- -----------------------------
+-- Structured backend lifecycle
+-- -----------------------------
+local SERVER_PID_FILENAME = "lrgenius-server.pid"
+local SERVER_OK_FILENAME = "lrgenius-server.OK"
+local SERVER_LOCK_FILENAME = "lrgenius-server.lock"
+
+local serverStartInProgress = false
+
+local function getServerControlDir()
+    -- Backend uses --db-path = "<catalogParent>/lrgenius.db", and writes pid/OK files next to it.
+    return LrPathUtils.parent(LrApplication.activeCatalog():getPath())
+end
+
+local function getServerPidFilePath()
+    return LrPathUtils.child(getServerControlDir(), SERVER_PID_FILENAME)
+end
+
+local function getServerOkFilePath()
+    return LrPathUtils.child(getServerControlDir(), SERVER_OK_FILENAME)
+end
+
+local function getServerLockFilePath()
+    return LrPathUtils.child(getServerControlDir(), SERVER_LOCK_FILENAME)
+end
+
+local function cleanupServerPidAndOkFiles()
+    local pidPath = getServerPidFilePath()
+    local okPath = getServerOkFilePath()
+    if LrFileUtils.exists(pidPath) then pcall(function() LrFileUtils.delete(pidPath) end) end
+    if LrFileUtils.exists(okPath) then pcall(function() LrFileUtils.delete(okPath) end) end
+end
+
+local function readPidFromPidFile()
+    local pidFilePath = getServerPidFilePath()
+    local pidFile = io.open(pidFilePath, "r")
+    if not pidFile then return nil end
+    local pid = pidFile:read("*l")
+    pidFile:close()
+    if not pid then return nil end
+    return tonumber(pid)
+end
+
+local function isPidAlive(pid)
+    if not pid then return false end
+    if MAC_ENV then
+        -- Exit code 0 => process exists
+        local cmd = "ps -p " .. tostring(pid) .. " >/dev/null 2>&1"
+        local rc = LrTasks.execute(cmd)
+        return rc == 0
+    end
+    if WIN_ENV then
+        -- Best-effort (avoid brittle parsing of tasklist output)
+        local cmd = "tasklist /FI \"PID eq " .. tostring(pid) .. "\" | findstr /I \"" .. tostring(pid) .. "\" >NUL"
+        local rc = LrTasks.execute(cmd)
+        return rc == 0
+    end
+    return false
+end
+
+local function acquireStartLock(lockStaleSeconds)
+    if serverStartInProgress then return false end
+    lockStaleSeconds = lockStaleSeconds or 120
+
+    local lockPath = getServerLockFilePath()
+    if LrFileUtils.exists(lockPath) then
+        local lockFile = io.open(lockPath, "r")
+        local content = lockFile and lockFile:read("*a") or ""
+        if lockFile then lockFile:close() end
+
+        local ts = content:match("ts=(%d+)")
+        local tsN = tonumber(ts)
+        if tsN and (os.time() - tsN) < lockStaleSeconds then
+            -- Another start attempt is still considered fresh.
+            return false
+        else
+            -- Stale lock: remove it.
+            pcall(function() LrFileUtils.delete(lockPath) end)
+        end
+    end
+
+    local f = io.open(lockPath, "w")
+    if not f then return false end
+    f:write("ts=" .. tostring(os.time()))
+    f:close()
+
+    serverStartInProgress = true
+    return true
+end
+
+local function releaseStartLock()
+    serverStartInProgress = false
+    local lockPath = getServerLockFilePath()
+    if LrFileUtils.exists(lockPath) then pcall(function() LrFileUtils.delete(lockPath) end) end
+end
+
+function SearchIndexAPI.shutdownServer(opts)
+    opts = opts or {}
+    local graceSeconds = opts.graceSeconds or 10
+    local pollIntervalSeconds = opts.pollIntervalSeconds or 0.5
+    local shutdownRequestTimeoutSeconds = opts.shutdownRequestTimeoutSeconds or 5
+
     if not SearchIndexAPI.pingServer() then
-        log:trace("Search index server is not running")
+        log:trace("Search index server is not running (or unreachable)")
+        cleanupServerPidAndOkFiles()
         return true
     end
 
     local url = getBaseUrl() .. ENDPOINTS.SHUTDOWN
-    log:trace("Shutting down server")
-    
-    _request('POST', url)
+    log:trace("Requesting graceful backend shutdown")
+
+    -- /shutdown returns JSON, so we can go through _request() decoding.
+    pcall(function()
+        _request("POST", url, {}, shutdownRequestTimeoutSeconds)
+    end)
+
+    local deadline = LrDate.currentTime() + graceSeconds
+    while LrDate.currentTime() < deadline do
+        if not SearchIndexAPI.pingServer() then
+            cleanupServerPidAndOkFiles()
+            return true
+        end
+        LrTasks.sleep(pollIntervalSeconds)
+    end
+
+    log:trace("Graceful shutdown timed out; escalating to kill")
+    return SearchIndexAPI.killServer({ killMode = "force", forceWaitSeconds = opts.forceWaitSeconds or 10 })
 end
 
-function SearchIndexAPI.killServer()
-    if not SearchIndexAPI.pingServer() then
-        log:trace("Search index server is not running")
+function SearchIndexAPI.killServer(opts)
+    opts = opts or {}
+    local killMode = opts.killMode or "force" -- "force" => SIGKILL on unix
+    local forceWaitSeconds = opts.forceWaitSeconds or 10
+    local pollIntervalSeconds = opts.pollIntervalSeconds or 0.5
+
+    local pid = readPidFromPidFile()
+    if not pid then
+        -- Without a pid file, we can only do a best-effort ping check.
+        if not SearchIndexAPI.pingServer() then
+            cleanupServerPidAndOkFiles()
+            return true
+        end
+        log:error("killServer: no PID available; cannot force kill safely.")
+        return false
+    end
+
+    if not isPidAlive(pid) then
+        cleanupServerPidAndOkFiles()
         return true
     end
 
-    log:trace("Attempting to shut down search index server gracefully")
-    SearchIndexAPI.shutdownServer()
-
-    local pidFilePath = LrPathUtils.child(LrPathUtils.parent(LrApplication.activeCatalog():getPath()), "lrgenius-server.pid")
-
-    local pidFile = io.open(pidFilePath, "r")
-    if not pidFile then
-        log:error("Error: Could not open PID file at " .. pidFilePath)
-        return false
-    end
-
-    local pid = pidFile:read("*l")
-    pidFile:close()
-
-    if not pid then
-        log:error("Error: Could not read PID from the file.")
-        return false
-    end
-    
-    local pid_number = tonumber(pid)
-    if not pid_number then
-        log:error("Error: The content of the PID file is not a valid number.")
-        return false
-    end
-
-    log:trace("Attempting to kill process with PID: " .. pid)
-
-    local command
+    local killCmd = nil
     if WIN_ENV then
-        command = "taskkill /PID " .. pid
+        killCmd = "taskkill /PID " .. tostring(pid) .. " /F"
     elseif MAC_ENV then
-        command = "kill " .. pid
+        if killMode == "force" then
+            killCmd = "kill -9 " .. tostring(pid)
+        else
+            killCmd = "kill " .. tostring(pid)
+        end
+    else
+        log:error("killServer: unsupported platform for pid kill")
+        return false
     end
 
-    LrTasks.startAsyncTask(function()
-        local success = LrTasks.execute(command)
+    log:trace("Forcing backend process kill: " .. tostring(killCmd))
+    local rc = LrTasks.execute(killCmd)
+    if rc ~= 0 then
+        log:error("killServer: kill command exit code: " .. tostring(rc))
+    end
 
-        if success == 0 then
-            log:trace("Successfully killed the process.")
-        else
-            log:error("Error: Failed to kill the process. Command returned " .. tostring(success))
+    local deadline = LrDate.currentTime() + forceWaitSeconds
+    while LrDate.currentTime() < deadline do
+        if not SearchIndexAPI.pingServer() then
+            cleanupServerPidAndOkFiles()
+            return true
         end
-        return success == 0
-    end)
+        LrTasks.sleep(pollIntervalSeconds)
+    end
+
+    cleanupServerPidAndOkFiles()
+    return false
 end
 
+function SearchIndexAPI.startServer(opts)
+    opts = opts or {}
+    local readyTimeoutSeconds = opts.readyTimeoutSeconds or 60
+    local lockStaleSeconds = opts.lockStaleSeconds or 120
 
-function SearchIndexAPI.startServer()
     if SearchIndexAPI.pingServer() then
         log:trace("Search index server is already running")
         return true
@@ -1705,51 +1828,69 @@ function SearchIndexAPI.startServer()
         return false
     end
 
-    local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
-    local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
-    if WIN_ENV then
-        serverBinary = serverBinary .. ".exe"
+    if not acquireStartLock(lockStaleSeconds) then
+        log:trace("Backend start lock is active; another start attempt may be in progress")
+        return false
     end
 
-    if not LrFileUtils.exists(serverBinary) then
-        log:error(serverBinary .. " not found. Not trying to start server")
-        return
-    end
+    -- Make sure we don't leave the lock behind on early returns.
+    local ok, startResult = pcall(function()
+        -- If pid/OK are stale, clean them before starting.
+        local pid = readPidFromPidFile()
+        if pid and not isPidAlive(pid) then
+            cleanupServerPidAndOkFiles()
+        end
 
-    LrTasks.startAsyncTask(function()
+        local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
+        local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
+        if WIN_ENV then
+            serverBinary = serverBinary .. ".exe"
+        end
+
+        if not LrFileUtils.exists(serverBinary) then
+            log:error(serverBinary .. " not found. Not trying to start server")
+            return false
+        end
+
         local startServerCmd = nil
-        
         if WIN_ENV then
             -- Set KMP_DUPLICATE_LIB_OK environment variable to fix OpenMP library conflict in PyInstaller builds
             local envCmd = "set KMP_DUPLICATE_LIB_OK=TRUE &&"
             startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" cmd /c \"" .. envCmd .. " lrgenius-server.exe"
-            startServerCmd = startServerCmd .. " --db-path \"" .. LrPathUtils.child(LrPathUtils.parent(LrApplication.activeCatalog():getPath()), "lrgenius.db") .. "\""
+            startServerCmd = startServerCmd .. " --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""
             startServerCmd = startServerCmd .. "\""
-        else 
-            -- Set environment variable for Mac as well
-            local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
-            startServerCmd = serverBinary
-            startServerCmd = envPrefix .. "\"" .. startServerCmd .. "\" --db-path \"" .. LrPathUtils.child(LrPathUtils.parent(LrApplication.activeCatalog():getPath()), "lrgenius.db") .. "\""
-        end
-        log:trace("Trying to start search index server with command: " .. startServerCmd)
-        local result = LrTasks.execute(startServerCmd)
-        log:trace("Search index server start command result: " .. tostring(result))
-    end)
-
-    LrTasks.startAsyncTask(function()
-        LrTasks.sleep(20)
-        if SearchIndexAPI.pingServer() then
-            log:trace("Search index server is running")
-            return true
         else
-            LrTasks.sleep(20)
+            local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
+            startServerCmd = envPrefix .. "\"" .. tostring(serverBinary) .. "\" --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""
+        end
+
+        log:trace("Trying to start search index server with command: " .. tostring(startServerCmd))
+        LrTasks.startAsyncTask(function()
+            local result = LrTasks.execute(startServerCmd)
+            log:trace("Search index server start command exit code: " .. tostring(result))
+        end)
+
+        local deadline = LrDate.currentTime() + readyTimeoutSeconds
+        while LrDate.currentTime() < deadline do
             if SearchIndexAPI.pingServer() then
                 log:trace("Search index server is running")
                 return true
             end
-            return false
+            LrTasks.sleep(0.5)
         end
+
+        log:trace("Search index server did not become ready within timeout")
+        return false
     end)
+
+    releaseStartLock()
+
+    if not ok then
+        log:error("startServer: unexpected error: " .. tostring(startResult))
+        return false
+    end
+
+    return startResult == true
 end
 
 _requestMultipart = function(url, mimeChunks, timeout)
