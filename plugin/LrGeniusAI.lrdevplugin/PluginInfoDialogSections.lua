@@ -250,6 +250,33 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                             end)
                         end,
                     },
+                    f:push_button {
+                        title = "Show DB stats",
+                        action = function(button)
+                            LrTasks.startAsyncTask(function()
+                                local stats, err = SearchIndexAPI.getStats()
+                                if stats then
+                                    LrDialogs.message("Database statistics", SearchIndexAPI.formatStats(stats), "info")
+                                else
+                                    LrDialogs.message("Database statistics failed", tostring(err or "Unknown error"), "critical")
+                                end
+                            end)
+                        end,
+                    },
+                    f:push_button {
+                        title = "Download DB backup",
+                        action = function(button)
+                            LrTasks.startAsyncTask(function()
+                                local result, path = SearchIndexAPI.downloadDatabaseBackup()
+                                if result then
+                                    LrShell.revealInShell(path)
+                                    LrDialogs.message("Database backup downloaded.", path)
+                                else
+                                    LrDialogs.message("Database backup failed", tostring(result or "Unknown error"), "critical")
+                                end
+                            end)
+                        end,
+                    },
                 },
                 f:row {
                     f:push_button {
@@ -328,33 +355,6 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                                     end
                                 else
                                     LrDialogs.message("Version check failed", tostring(err or "Unknown error"), "critical")
-                                end
-                            end)
-                        end,
-                    },
-                    f:push_button {
-                        title = "Download DB backup",
-                        action = function(button)
-                            LrTasks.startAsyncTask(function()
-                                local result, path = SearchIndexAPI.downloadDatabaseBackup()
-                                if result then
-                                    LrShell.revealInShell(path)
-                                    LrDialogs.message("Database backup downloaded.", path)
-                                else
-                                    LrDialogs.message("Database backup failed", tostring(result or "Unknown error"), "critical")
-                                end
-                            end)
-                        end,
-                    },
-                    f:push_button {
-                        title = "Show DB stats",
-                        action = function(button)
-                            LrTasks.startAsyncTask(function()
-                                local stats, err = SearchIndexAPI.getStats()
-                                if stats then
-                                    LrDialogs.message("Database statistics", SearchIndexAPI.formatStats(stats), "info")
-                                else
-                                    LrDialogs.message("Database statistics failed", tostring(err or "Unknown error"), "critical")
                                 end
                             end)
                         end,
