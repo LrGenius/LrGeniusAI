@@ -204,14 +204,74 @@ local function ensureDbMigrationsDone()
     end)
 end
 
+local function allCatalogDbMigrationsCompleted(completed)
+    for _, m in ipairs(CATALOG_DB_MIGRATIONS) do
+        if not completed[m.id] then
+            return false
+        end
+    end
+    return true
+end
+
+--- Waits for catalog-scoped DB migrations (tracked by `catalogDbMigrations`) to complete.
+--- This is important because backend operations (e.g. photo claiming visibility) can race if we start
+--- indexing before `claim_photos_v1` finishes.
+--- @param timeoutSeconds number
+--- @return boolean success (all migrations completed)
+local function waitForCatalogDbMigrationsDone(timeoutSeconds)
+    local catalog = LrApplication.activeCatalog()
+    if not catalog then
+        return false
+    end
+
+    timeoutSeconds = tonumber(timeoutSeconds) or 600
+    local start = LrDate.currentTime()
+    local sawInProgress = false
+
+    while (LrDate.currentTime() - start) < timeoutSeconds do
+        local raw = catalog:getPropertyForPlugin(_PLUGIN, "catalogDbMigrations") or ""
+        local completed, inProgress = parseCompletedMigrations(raw)
+
+        if inProgress then
+            sawInProgress = true
+        end
+
+        if allCatalogDbMigrationsCompleted(completed) then
+            return true
+        end
+
+        -- If we saw migrations in progress and now they stopped but not everything is completed,
+        -- treat it as a failure (e.g. claim_photos_v1 errored).
+        if sawInProgress and not inProgress then
+            return false
+        end
+
+        LrTasks.sleep(0.5)
+    end
+
+    return false
+end
+
 --- Returns the stable catalog identifier for the active catalog (for backend catalog-scoped operations).
-local function getCatalogId()
+local function getCatalogIdValue()
     local id, err = Util.getCatalogIdentifier()
     if not id then
         log:warn("getCatalogId: " .. tostring(err))
         return nil
     end
+    return id
+end
+
+local function getCatalogId()
+    local id = getCatalogIdValue()
+    if not id then return nil end
     ensureDbMigrationsDone()
+    -- Block until the background catalog DB migrations (including photo claiming) finish.
+    -- Prevents backend requests from failing when the catalog hasn't been fully "claimed" yet.
+    local ok = waitForCatalogDbMigrationsDone(tonumber(prefs and prefs.dbMigrationWaitTimeoutSeconds) or 600)
+    if not ok then
+        log:warn("getCatalogId: timed out or failed waiting for catalogDbMigrations to complete")
+    end
     return id
 end
 
@@ -1083,7 +1143,10 @@ end
 -- @return boolean success, string|nil error message, table|nil result
 --
 function SearchIndexAPI.claimPhotosForCatalog(progressScope)
-    local catalogId = getCatalogId()
+    -- This function is executed as one of the catalog-scoped background DB migrations.
+    -- Avoid calling `getCatalogId()` here because it would wait for migrations that include
+    -- this very function (self-wait / deadlock-like behavior).
+    local catalogId = getCatalogIdValue()
     if not catalogId then
         return false, "No catalog identifier", nil
     end
