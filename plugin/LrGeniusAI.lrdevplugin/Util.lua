@@ -693,15 +693,45 @@ end
 function Util.waitForServerDialog()
     if SearchIndexAPI.pingServer() then
         local compatible, versionMessage = SearchIndexAPI.ensureVersionCompatibility()
-        if not compatible then
-            LrDialogs.message(
-                "Plugin/Backend version mismatch",
-                versionMessage or "Version check failed.",
-                "critical"
-            )
-            return false
+        if compatible then
+            return true
         end
-        return true
+
+        -- If the backend is local and currently running an older process, we can restart it
+        -- once and then re-check compatibility (covers "stale backend still running").
+        if SearchIndexAPI.isBackendOnLocalhost() then
+            log:trace("Backend version mismatch detected; attempting local backend restart once.")
+
+            -- Best-effort: try graceful shutdown first; structured lifecycle will escalate if needed.
+            pcall(function()
+                SearchIndexAPI.shutdownServer({
+                    graceSeconds = 5,
+                    forceWaitSeconds = 5,
+                    pollIntervalSeconds = 0.5,
+                    shutdownRequestTimeoutSeconds = 5,
+                })
+            end)
+
+            LrTasks.sleep(1)
+            pcall(function()
+                SearchIndexAPI.startServer({ readyTimeoutSeconds = 60 })
+            end)
+
+            if SearchIndexAPI.pingServer() then
+                local compatible2, versionMessage2 = SearchIndexAPI.ensureVersionCompatibility()
+                if compatible2 then
+                    return true
+                end
+                versionMessage = versionMessage2 or versionMessage
+            end
+        end
+
+        LrDialogs.message(
+            "Plugin/Backend version mismatch",
+            versionMessage or "Version check failed.",
+            "critical"
+        )
+        return false
     end
 
     local result = false
@@ -718,20 +748,52 @@ function Util.waitForServerDialog()
 
         local elapsedTime = 0
         local timeout = 60 -- 60 seconds timeout
+        local restartAttempted = false
         while not progressScope:isCanceled() and elapsedTime < timeout do
             if SearchIndexAPI.pingServer() then
                 local compatible, versionMessage = SearchIndexAPI.ensureVersionCompatibility()
                 progressScope:done()
-                if not compatible then
-                    LrDialogs.message(
-                        "Plugin/Backend version mismatch",
-                        versionMessage or "Version check failed.",
-                        "critical"
-                    )
-                    result = false
+                if compatible then
+                    result = true
                     return
                 end
-                result = true
+
+                -- If we found a mismatch after the server started (likely a stale backend),
+                -- restart it once and re-check.
+                if SearchIndexAPI.isBackendOnLocalhost() and not restartAttempted then
+                    restartAttempted = true
+                    log:trace("Backend version mismatch detected after ping; restarting local backend once.")
+
+                    pcall(function()
+                        SearchIndexAPI.shutdownServer({
+                            graceSeconds = 5,
+                            forceWaitSeconds = 5,
+                            pollIntervalSeconds = 0.5,
+                            shutdownRequestTimeoutSeconds = 5,
+                        })
+                    end)
+                    LrTasks.sleep(1)
+                    pcall(function()
+                        SearchIndexAPI.startServer({ readyTimeoutSeconds = 60 })
+                    end)
+
+                    -- Re-check compatibility immediately (without restarting the modal loop).
+                    if SearchIndexAPI.pingServer() then
+                        local compatible2, versionMessage2 = SearchIndexAPI.ensureVersionCompatibility()
+                        if compatible2 then
+                            result = true
+                            return
+                        end
+                        versionMessage = versionMessage2 or versionMessage
+                    end
+                end
+
+                LrDialogs.message(
+                    "Plugin/Backend version mismatch",
+                    versionMessage or "Version check failed.",
+                    "critical"
+                )
+                result = false
                 return
             end
             LrTasks.sleep(0.5) -- Poll every 500ms
