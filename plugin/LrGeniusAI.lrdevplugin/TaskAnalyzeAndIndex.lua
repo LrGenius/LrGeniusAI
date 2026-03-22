@@ -653,18 +653,9 @@ LrTasks.startAsyncTask(function()
             regenerateMetadata = props.regenerateMetadata
         } or nil
 
-        local lookupProgressScope
-        if props.scope == "missing" then
-            lookupProgressScope = LrProgressScope({
-                title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/LookupTitle=Looking up which photos need processing...",
-                functionContext = context,
-                parent = progressScope,
-            })
-        end
-        local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(props.scope, taskOptionsForScope, lookupProgressScope)
-        if lookupProgressScope then
-            lookupProgressScope:done()
-        end
+        -- Use the main progress scope for "missing" lookup so the bar resets for import/analysis (nested child scopes complete the parent segment).
+        local lookupScope = (props.scope == "missing") and progressScope or nil
+        local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(props.scope, taskOptionsForScope, lookupScope)
 
         if photosToProcess == nil or type(photosToProcess) ~= 'table' or #photosToProcess == 0 then
             progressScope:done()
@@ -683,12 +674,9 @@ LrTasks.startAsyncTask(function()
             return
         end
 
-        -- Update main progress with photo count (counter)
+        -- Per-photo progress for import and analysis (denominator = photos to process, not 1)
         progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressCount=^1 photos to process", tostring(#photosToProcess)))
-        -- Reset progress portion after delta lookup so subsequent phases (import, processing) start from 0
-        if props.scope == "missing" then
-            progressScope:setPortionComplete(0, 1)
-        end
+        progressScope:setPortionComplete(0, #photosToProcess)
 
         -- If photo context dialog is enabled, show it for each photo
         if props.showPhotoContextDialog and props.enableMetadata then
@@ -713,25 +701,13 @@ LrTasks.startAsyncTask(function()
         end
 
         if props.enableImportBeforeIndex then
-            local importProgressScope = LrProgressScope({
-                title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/ImportingMetadata=Importing existing metadata from catalog...",
-                functionContext = context,
-                parent = progressScope,
-            })
             log:trace("Importing existing metadata from catalog before indexing...")
-            SearchIndexAPI.importMetadataFromCatalog(photosToProcess, importProgressScope)
+            SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, false)
         end
 
         log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
-        
-        -- Update progress title with photo count
-        local processingProgressScope = LrProgressScope({
-            title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...", #photosToProcess, modelFromKey or "AI"),
-            functionContext = context,
-            parent = progressScope,
-        })
-        
-        status, processed, failed, processedPhotos = SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, processingProgressScope, options)
+
+        status, processed, failed, processedPhotos = SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
 
         if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog then
             log:trace("Saving metadata for processed photos...")
@@ -781,7 +757,7 @@ LrTasks.startAsyncTask(function()
 
                                 -- Overwrite with validated data
                                 log:trace("Reimported validated metadata for photo: " .. (photo:getFormattedMetadata('fileName') or "unknown"))
-                                SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope)
+                                SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
 
                                 savedCount = savedCount + 1
                             elseif result == "other" then
@@ -805,7 +781,7 @@ LrTasks.startAsyncTask(function()
                             })
 
                             log:trace("Applied metadata without validation for photo (skipFromHere active): " .. (photo:getFormattedMetadata('fileName') or "unknown"))
-                            SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope)
+                            SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
 
                             savedCount = savedCount + 1
                         end

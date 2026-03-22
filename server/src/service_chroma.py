@@ -1393,6 +1393,29 @@ def get_all_faces(include_embeddings=True):
     return face_collection.get(include=include)
 
 
+def get_first_face_thumbnail_for_person(person_id: str) -> str:
+    """
+    Return base64-encoded JPEG thumbnail from one face assigned to person_id, or "".
+    Uses a single Chroma metadata query (no full face scan).
+    """
+    if not person_id:
+        return ""
+    _ensure_initialized()
+    try:
+        result = face_collection.get(
+            where={"person_id": person_id},
+            include=["metadatas"],
+            limit=1,
+        )
+    except Exception as e:
+        logger.warning(f"get_first_face_thumbnail_for_person({person_id!r}): {e}")
+        return ""
+    metas = result.get("metadatas") or []
+    if not metas:
+        return ""
+    return (metas[0] or {}).get("thumbnail") or ""
+
+
 # ChromaDB has a max batch size (~5461); stay safely below it.
 FACE_UPDATE_BATCH_SIZE = 5000
 

@@ -210,7 +210,8 @@ def run_clustering(
 
 def list_persons() -> List[Dict[str, Any]]:
     """
-    List all persons: for each person_id, return name, face_count, photo_count, and sample thumbnail.
+    List all persons: for each person_id, return name, face_count, photo_count.
+    Thumbnails are not included; use GET /faces/persons/<person_id>/thumbnail.
     """
     data = chroma_service.get_all_faces(include_embeddings=False)
     ids = data.get("ids", [])
@@ -225,7 +226,7 @@ def list_persons() -> List[Dict[str, Any]]:
         if pid == "":
             pid = "_unassigned"
         if pid not in by_person:
-            by_person[pid] = {"person_id": pid if pid != "_unassigned" else "", "face_ids": [], "photo_ids": set(), "thumbnail": meta.get("thumbnail", "")}
+            by_person[pid] = {"person_id": pid if pid != "_unassigned" else "", "face_ids": [], "photo_ids": set()}
         by_person[pid]["face_ids"].append(ids[i] if i < len(ids) else "")
         by_person[pid]["photo_ids"].add(meta.get("photo_id", meta.get("photo_uuid", "")))
 
@@ -243,9 +244,13 @@ def list_persons() -> List[Dict[str, Any]]:
             "name": names.get(person_id, "") if person_id else "",
             "face_count": len(info["face_ids"]),
             "photo_count": len(info["photo_ids"]),
-            "thumbnail": info["thumbnail"] or "",
         })
     return result
+
+
+def get_person_thumbnail_b64(person_id: str) -> str:
+    """Return base64 JPEG for one face of this person, or empty string."""
+    return chroma_service.get_first_face_thumbnail_for_person(person_id)
 
 
 def get_photo_ids_for_person(person_id: str) -> List[str]:

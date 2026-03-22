@@ -17,7 +17,7 @@ end
 --   { enableEmbeddings, enableMetadata, enableFaces, regenerateMetadata }
 --   to check backend for unprocessed photos. Or boolean for legacy (requireEmbeddings).
 --   Nil/omitted = legacy true (photos not in index with embeddings).
--- @param lookupProgressScope LrProgressScope|nil For scope 'missing': optional progress for lookup phase.
+-- @param lookupProgressScope LrProgressScope|nil For scope 'missing': optional progress for lookup (may be the task's main scope).
 --
 function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
     local catalog = LrApplication.activeCatalog()

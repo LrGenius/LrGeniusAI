@@ -1216,12 +1216,13 @@ end
 -- @param selectedPhotos table Array of LrPhoto objects to process.
 -- @param progressScope LrProgressScope Progress scope for UI updates.
 -- @param options table Processing options (tasks, provider, language, temperature, etc.).
+-- @param closeProgressScope boolean|nil When false, does not call :done() on the scope (caller must close).
 -- @return string status Status: "success", "canceled", "somefailed", or "allfailed".
 -- @return number processed Number of photos processed.
 -- @return number failed Number of photos that failed.
 -- @return table responses Array of response data from the server for each photo.
 --
-function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressScope, options)
+function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressScope, options, closeProgressScope)
     local numPhotos = #selectedPhotos
     if numPhotos == 0 then
         return "success", 0, 0, {}
@@ -1232,7 +1233,8 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
     end
 
     options = options or {}
-    
+    local shouldCloseScope = (closeProgressScope ~= false)
+
     progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...", #selectedPhotos, options.model or "AI"))
     progressScope:setPortionComplete(0, numPhotos)
 
@@ -1410,7 +1412,9 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
         end
     end
 
-    progressScope:done()
+    if shouldCloseScope then
+        progressScope:done()
+    end
 
     if progressScope:isCanceled() then
         return "canceled", stats.processed, stats.failed, processedPhotos
@@ -1428,9 +1432,13 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
     return status, stats.processed, stats.failed, processedPhotos
 end
 
-
-
-function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope)
+---
+-- Imports metadata from the Lightroom catalog into the backend index.
+-- @param photosToProcess table Array of LrPhoto.
+-- @param progressScope LrProgressScope Progress scope for UI updates.
+-- @param closeProgressScope boolean|nil When false, does not call :done() on the scope (caller must close).
+--
+function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, closeProgressScope)
     local numPhotos = #photosToProcess
     if numPhotos == 0 then
         return "success", 0, 0
@@ -1439,6 +1447,8 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
     if not SearchIndexAPI.pingServer() then
         return "allfailed", numPhotos, numPhotos
     end
+
+    local shouldCloseScope = (closeProgressScope ~= false)
 
     progressScope:setCaption(LOC "$$$/LrGeniusAI/ImportMetadata/ProgressTitle=Importing metadata for photos...")
     progressScope:setPortionComplete(0, numPhotos)
@@ -1497,7 +1507,9 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
         end
     end
 
-    progressScope:done()
+    if shouldCloseScope then
+        progressScope:done()
+    end
 
     if progressScope:isCanceled() then
         return "canceled", stats.processed, stats.failed
@@ -2120,13 +2132,29 @@ function SearchIndexAPI.clusterFaces(distanceThreshold)
 end
 
 ---
--- Get list of all persons (face clusters) with name, face_count, photo_count, thumbnail.
--- @return table|nil { status, persons = { { person_id, name, face_count, photo_count, thumbnail }, ... } } or nil, err
+-- Get list of all persons (face clusters) with name, face_count, photo_count (no thumbnails).
+-- @return table|nil { status, persons = { { person_id, name, face_count, photo_count }, ... } } or nil, err
 function SearchIndexAPI.getPersons()
     local url = getBaseUrl() .. ENDPOINTS.FACES_PERSONS
     local result, err = _request('GET', url)
     if err then
         log:error("getPersons failed: " .. err)
+        return nil, err
+    end
+    return result
+end
+
+---
+-- Get base64 JPEG thumbnail for one person (lazy load). GET /faces/persons/<id>/thumbnail
+-- @return table|nil { status, person_id, thumbnail } or nil, err
+function SearchIndexAPI.getPersonThumbnail(personId)
+    if not personId or personId == "" then
+        return nil, "person_id required"
+    end
+    local url = getBaseUrl() .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId .. "/thumbnail"
+    local result, err = _request('GET', url)
+    if err then
+        log:error("getPersonThumbnail failed: " .. err)
         return nil, err
     end
     return result

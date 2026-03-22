@@ -113,13 +113,25 @@ def cluster_faces():
 
 @faces_bp.route('/faces/persons', methods=['GET'])
 def list_persons():
-    """List all persons (cluster groups) with name, face_count, photo_count, thumbnail."""
+    """List all persons (cluster groups) with name, face_count, photo_count (no thumbnails)."""
     logger.info("List persons request received")
     try:
         persons = persons_service.list_persons()
         return jsonify({"status": "ok", "persons": persons}), 200
     except Exception as e:
         logger.error(f"List persons failed: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@faces_bp.route('/faces/persons/<person_id>/thumbnail', methods=['GET'])
+def get_person_thumbnail(person_id):
+    """Return base64 JPEG thumbnail for one face of this person (lazy load for UI)."""
+    logger.info("Get person thumbnail request received for person_id=%s", person_id)
+    try:
+        thumb = persons_service.get_person_thumbnail_b64(person_id)
+        return jsonify({"status": "ok", "person_id": person_id, "thumbnail": thumb}), 200
+    except Exception as e:
+        logger.error(f"Get person thumbnail failed: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

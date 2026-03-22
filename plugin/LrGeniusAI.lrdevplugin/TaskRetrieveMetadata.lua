@@ -284,7 +284,7 @@ LrTasks.startAsyncTask(function()
                         
                         -- Overwrite with validated data if any
                         if result ~= nil and result == "ok" then
-                            SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope)
+                            SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
                         end
                     end
                 else
