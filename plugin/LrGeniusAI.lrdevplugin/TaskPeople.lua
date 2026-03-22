@@ -31,6 +31,24 @@ local function savePersonThumbnails(persons)
     end
 end
 
+--- Namen zuerst (nach photo_count absteigend), dann Unbenannte (nach photo_count absteigend).
+local function sortPersonsForDisplay(persons)
+    if not persons or #persons < 2 then return end
+    local function hasName(p)
+        return p and type(p.name) == "string" and p.name ~= ""
+    end
+    local function photoCount(p)
+        return tonumber(p and p.photo_count) or 0
+    end
+    table.sort(persons, function(a, b)
+        local aNamed, bNamed = hasName(a), hasName(b)
+        if aNamed ~= bNamed then
+            return aNamed
+        end
+        return photoCount(a) > photoCount(b)
+    end)
+end
+
 --- Lädt Personen vom Server, speichert Thumbnails in Temp-Dateien. Gibt persons (Tabelle), loadError (string|nil) zurück.
 local function loadPersonsFromServer()
     local resp, err = SearchIndexAPI.getPersons()
@@ -38,6 +56,7 @@ local function loadPersonsFromServer()
         return {}, (LOC "$$$/LrGeniusAI/People/LoadError=Could not load persons. Check server connection. Try 'Cluster faces' or close and reopen.")
     end
     local persons = (resp and resp.persons) and resp.persons or {}
+    sortPersonsForDisplay(persons)
     savePersonThumbnails(persons)
     return persons, nil
 end
@@ -112,6 +131,10 @@ local function showPeopleDialog(ctx, persons, loadError)
         f:column { unpack(listRows) },
     }
 
+    -- Filled when user clicks "Set name..."; main dialog is closed immediately, then async task runs
+    -- showSetNameDialog + API + reload + fresh showPeopleDialog.
+    local pendingSetNamePayload = nil
+
     local contents = f:column {
         bind_to_object = props,
         spacing = f:control_spacing(),
@@ -155,19 +178,11 @@ local function showPeopleDialog(ctx, persons, loadError)
                     local person = props.persons[idx]
                     local personId = person.person_id
                     if not personId or personId == "" then return end
-                    local currentName = person.name or ""
-                    local newName = showSetNameDialog(currentName)
-                    if newName ~= nil then
-                        local ok, err = SearchIndexAPI.setPersonName(personId, newName)
-                        if not ok then
-                            ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/SetNameError=Could not set name", err)
-                            return
-                        end
-                        LrDialogs.stopModalWithResult(listScroller, "refresh")
-                        LrTasks.yield()
-                        local freshPersons, freshErr = loadPersonsFromServer()
-                        showPeopleDialog(ctx, freshPersons, freshErr)
-                    end
+                    pendingSetNamePayload = {
+                        person_id = personId,
+                        currentName = person.name or "",
+                    }
+                    LrDialogs.stopModalWithResult(listScroller, "set_name")
                 end,
             },
         },
@@ -179,6 +194,11 @@ local function showPeopleDialog(ctx, persons, loadError)
         actionVerb = LOC "$$$/LrGeniusAI/common/Close=Close",
         otherVerb = LOC "$$$/LrGeniusAI/People/ShowInLibrary=Show in Library",
     }
+    if dialogResult == "set_name" and pendingSetNamePayload then
+        local payload = pendingSetNamePayload
+        pendingSetNamePayload = nil
+        return "set_name", nil, payload
+    end
     -- Wenn User "Show in Library" (otherVerb) geklickt hat: Auswahl aus props auslesen
     local pendingShowInLibrary = nil
     if dialogResult == "other" then
@@ -191,7 +211,7 @@ local function showPeopleDialog(ctx, persons, loadError)
             end
         end
     end
-    return dialogResult, pendingShowInLibrary
+    return dialogResult, pendingShowInLibrary, nil
 end
 
 --- Führt "Show in Library" aus: Fotos laden, Collection anlegen, Ansicht wechseln. Läuft im Async-Task (Yielding erlaubt).
@@ -245,13 +265,30 @@ LrTasks.startAsyncTask(function()
     LrFunctionContext.callWithContext("TaskPeople", function(context)
         if not Util.waitForServerDialog() then return end
         local persons, loadError = loadPersonsFromServer()
-        local ok, result, pending = LrTasks.pcall(showPeopleDialog, context, persons, loadError)
-        if not ok then
-            ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/ErrorTitle=Error", tostring(result))
-            return
-        end
-        if pending and type(pending) == "table" and pending.person_id then
-            doShowInLibrary(pending.person_id, pending.person_name)
+        while true do
+            local ok, r, pending, setPayload = LrTasks.pcall(showPeopleDialog, context, persons, loadError)
+            if not ok then
+                ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/ErrorTitle=Error", tostring(r))
+                return
+            end
+            if r == "other" and pending and type(pending) == "table" and pending.person_id then
+                doShowInLibrary(pending.person_id, pending.person_name)
+                return
+            end
+            if r == "set_name" and type(setPayload) == "table" and setPayload.person_id then
+                local newName = showSetNameDialog(setPayload.currentName)
+                if newName ~= nil then
+                    local nameOk, nameErr = SearchIndexAPI.setPersonName(setPayload.person_id, newName)
+                    if not nameOk then
+                        ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/SetNameError=Could not set name", nameErr)
+                    end
+                end
+                LrTasks.yield()
+                persons, loadError = loadPersonsFromServer()
+                -- Reopen main People dialog with fresh list (name line includes server data).
+            else
+                break
+            end
         end
     end)
 end)
