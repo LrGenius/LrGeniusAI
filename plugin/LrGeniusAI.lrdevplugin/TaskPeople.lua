@@ -179,7 +179,7 @@ local function showPeopleDialog(ctx, persons, loadError)
         listScroller = f:scrolled_view {
             horizontal_scroller = false,
             vertical_scroller = true,
-            width = 580,
+            width = 540,
             height = 320,
             alignment = "center",
             f:column {
