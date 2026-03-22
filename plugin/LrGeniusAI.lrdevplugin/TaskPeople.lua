@@ -74,7 +74,7 @@ local function showPeopleDialog(ctx, persons, loadError)
 
     local props = LrBinding.makePropertyTable(ctx)
     props.persons = persons
-    props.libraryMatchMode = "union"
+    props.libraryMatchMode = "intersection"
 
     local nameSnapshot = {}
     if #persons > 0 then
@@ -234,7 +234,7 @@ local function showPeopleDialog(ctx, persons, loadError)
                     end
                     pendingShowInLibrary = {
                         entries = sel,
-                        matchMode = props.libraryMatchMode or "union",
+                        matchMode = props.libraryMatchMode or "intersection",
                     }
                     LrDialogs.stopModalWithResult(listScroller, "show_library")
                 end,
