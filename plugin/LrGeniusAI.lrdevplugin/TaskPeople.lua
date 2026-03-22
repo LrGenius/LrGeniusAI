@@ -133,6 +133,7 @@ local function showPeopleDialog(ctx, persons, loadError)
                     local thumbKey = "personThumb_" .. idx
                     local nameKey = "personName_" .. idx
                     local thumbView = f:picture {
+                        alignment = "center",
                         value = bind(thumbKey),
                         width = THUMB_SIZE,
                         height = THUMB_SIZE,
@@ -186,7 +187,7 @@ local function showPeopleDialog(ctx, persons, loadError)
         listScroller = f:scrolled_view {
             horizontal_scroller = false,
             vertical_scroller = true,
-            width = 540,
+            width = 740,
             height = 320,
             alignment = "center",
             f:column {
