@@ -362,23 +362,15 @@ jobs:
           gh api repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name="${TAG}" \
             -q '.body' > release_notes.md 2>/dev/null || echo -n "" > release_notes.md
-          # Standard-Hinweise zu Known Issues und manuellen Schritten anhängen
+          # Hinweise zu Backend-Startverhalten und Docker-Asset anhängen
           cat >> release_notes.md << 'NOTES'
 
-          ## Known issues
-          On macOS, Gatekeeper quarantine can block first launch of the bundled backend runtime. If Lightroom reports that the LrGeniusAI database cannot be started, run the manual steps below once.
-
-          ## Manual steps
-          **macOS**
-          - Open a Terminal
-          - `cd <directory with contents of the downloaded zip file>`
-          - `chmod +x lrgenius-server/lrgenius-server`
-          - `xattr -dr com.apple.quarantine lrgenius-server`
-
-          **Windows**
-          - Open Explorer go to folder where you extracted the zip file.
-          - Go to the lrgenius-server sub directory.
-          - Double-click lrgenius-server.cmd
+          ## Desktop backend startup
+          - The bundled micromamba-based backend starts automatically from Lightroom.
+          - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required for this package.
+          - Optional manual troubleshooting start:
+            - Windows: `lrgenius-server/lrgenius-server.cmd`
+            - macOS: `lrgenius-server/lrgenius-server`
 
           ## Docker backend
           - Users running the backend via Docker can use the `LrGeniusAI-plugin-docker-backend-<version>.zip` asset.

@@ -35,12 +35,9 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 1. Download the latest release from the [GitHub Releases page](https://github.com/LrGenius/LrGeniusAI/releases).
 2. Extract the ZIP file and add the plugin via the **Plug-in Manager** in Lightroom Classic.
 3. **Backend Server Setup (First Launch):**
-   - **Windows:** Navigate to the `lrgenius-server` folder and run `lrgenius-server.exe`. If a SmartScreen warning appears, click *More info -> Run anyway*.
-   - **macOS:** Open the Terminal, navigate to the extracted folder, and run the following commands to bypass Gatekeeper restrictions:
-     ```bash
-     chmod +x lrgenius-server/lrgenius-server
-     xattr -dr com.apple.quarantine lrgenius-server
-     ```
+   - The backend now starts automatically from Lightroom.
+   - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required with the micromamba-based release package.
+   - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
 4. Select your photos in the library and choose from the menu: **Library -> Plug-in Extras -> Analyze & Index photos**.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
