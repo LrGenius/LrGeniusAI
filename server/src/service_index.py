@@ -33,9 +33,41 @@ def _flatten_keywords(keywords):
         # Already a string, return as-is
         return keywords
     
+    seen_keywords = set()
+
+    def _append_unique(values, text):
+        normalized = text.lower()
+        if normalized in seen_keywords:
+            return
+        seen_keywords.add(normalized)
+        values.append(text)
+
+    def _normalize_keyword_text(value):
+        if isinstance(value, str):
+            text = value.strip()
+            values = []
+            if text:
+                _append_unique(values, text)
+            return values
+        if isinstance(value, dict):
+            values = []
+            name = value.get("name")
+            if isinstance(name, str) and name.strip():
+                _append_unique(values, name.strip())
+            synonyms = value.get("synonyms")
+            if isinstance(synonyms, list):
+                for synonym in synonyms:
+                    if isinstance(synonym, str) and synonym.strip():
+                        _append_unique(values, synonym.strip())
+            return values
+        return []
+
     if isinstance(keywords, list):
-        # Flat list of strings
-        return ', '.join(str(kw) for kw in keywords if kw)
+        # Flat list of strings or structured keyword objects
+        flattened = []
+        for kw in keywords:
+            flattened.extend(_normalize_keyword_text(kw))
+        return ', '.join(flattened)
     
     if isinstance(keywords, dict):
         # Nested dict - recursively collect all keywords
@@ -44,15 +76,18 @@ def _flatten_keywords(keywords):
         def collect_keywords(d):
             for key, value in d.items():
                 if isinstance(value, list):
-                    # Leaf node with keywords
-                    all_keywords.extend(str(kw) for kw in value if kw)
+                    # Leaf node with keywords (strings or structured keyword objects)
+                    for kw in value:
+                        all_keywords.extend(_normalize_keyword_text(kw))
                 elif isinstance(value, dict) and value:
-                    # Nested dict, recurse
-                    collect_keywords(value)
+                    if isinstance(value.get("name"), str):
+                        all_keywords.extend(_normalize_keyword_text(value))
+                    else:
+                        # Nested dict, recurse
+                        collect_keywords(value)
                 else:
                     # Single keyword value
-                    if value:
-                        all_keywords.append(str(key))
+                    all_keywords.extend(_normalize_keyword_text(value))
         
         collect_keywords(keywords)
         return ', '.join(all_keywords)

@@ -16,13 +16,9 @@ jobs:
           - os: windows-latest
             os_name: windows
             arch: x64
-            python_arch: '3.12'
-            miniconda_arch: ''
           - os: macos-latest
             os_name: macos
             arch: arm64
-            python_arch: '3.12'
-            miniconda_arch: arm64
 
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
@@ -77,27 +73,63 @@ jobs:
           EOF
           echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
 
-      - name: Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v3
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v2
         with:
-          activate-environment: geniusai_server
+          environment-name: geniusai_server
           environment-file: server/environment.yml
-          python-version: ${{ matrix.python_arch }}
-          auto-activate-base: false
-          miniconda-version: latest
-          architecture: ${{ matrix.miniconda_arch }}
-      - name: Fix environment
-        shell: bash -l {0}
-        run: |
-          pip uninstall -y pillow
-          pip install --force-reinstall --no-cache-dir pillow
+          cache-environment: true
+          init-shell: bash
 
-      - name: Build geniusai-server
-        shell: bash -l {0}
-        working-directory: server
-        env:
-          KMP_DUPLICATE_LIB_OK: 'TRUE'
-        run: pyinstaller geniusai_server.spec --noconfirm
+      - name: Build micromamba backend runtime
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          BUILD_DIR="build"
+          SERVER_DIR="$BUILD_DIR/lrgenius-server"
+          SERVER_APP_DIR="$SERVER_DIR/app"
+          SERVER_ENV_DIR="$SERVER_DIR/env"
+          mkdir -p "$SERVER_APP_DIR"
+
+          # Pack the CI env into a relocatable runtime env.
+          micromamba install -y -n geniusai_server conda-pack
+          micromamba run -n geniusai_server conda-pack -n geniusai_server -o "$SERVER_DIR/env.tar.gz"
+          mkdir -p "$SERVER_ENV_DIR"
+          tar -xzf "$SERVER_DIR/env.tar.gz" -C "$SERVER_ENV_DIR"
+          rm -f "$SERVER_DIR/env.tar.gz"
+
+          echo "Copying backend source files..."
+          cp -r server/src "$SERVER_APP_DIR/"
+          cp -r server/open_clip "$SERVER_APP_DIR/"
+
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
+            {
+              echo '@echo off'
+              echo 'setlocal'
+              echo 'set "SCRIPT_DIR=%~dp0"'
+              echo 'set "KMP_DUPLICATE_LIB_OK=TRUE"'
+              echo 'set "PYTHONPATH=%SCRIPT_DIR%app;%PYTHONPATH%"'
+              echo 'if not exist "%SCRIPT_DIR%.env_unpacked" ('
+              echo '  call "%SCRIPT_DIR%env\Scripts\conda-unpack.exe" >nul 2>&1'
+              echo '  type nul > "%SCRIPT_DIR%.env_unpacked"'
+              echo ')'
+              echo 'call "%SCRIPT_DIR%env\python.exe" "%SCRIPT_DIR%app\src\geniusai_server.py" %*'
+            } > "$SERVER_DIR/lrgenius-server.cmd"
+          else
+            {
+              echo '#!/usr/bin/env bash'
+              echo 'set -euo pipefail'
+              echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"'
+              echo 'export KMP_DUPLICATE_LIB_OK=TRUE'
+              echo 'export PYTHONPATH="$SCRIPT_DIR/app:${PYTHONPATH:-}"'
+              echo 'if [ ! -f "$SCRIPT_DIR/.env_unpacked" ] && [ -x "$SCRIPT_DIR/env/bin/conda-unpack" ]; then'
+              echo '  "$SCRIPT_DIR/env/bin/conda-unpack" >/dev/null 2>&1 || true'
+              echo '  touch "$SCRIPT_DIR/.env_unpacked"'
+              echo 'fi'
+              echo 'exec "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/app/src/geniusai_server.py" "$@"'
+            } > "$SERVER_DIR/lrgenius-server"
+            chmod +x "$SERVER_DIR/lrgenius-server"
+          fi
           
       - name: Prepare plugin files
         shell: bash
@@ -106,9 +138,6 @@ jobs:
           PLUGIN_DIR="$BUILD_DIR/LrGeniusAI.lrplugin"
           
           mkdir -p $PLUGIN_DIR
-          
-          echo "Copying server and model files..."
-          cp -r server/dist/* $BUILD_DIR/
           
           echo "Copying plugin files..."
           cp plugin/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
@@ -120,6 +149,43 @@ jobs:
               chmod +x $BUILD_DIR/lrgenius-server/lrgenius-server
             fi
           fi
+
+      - name: Smoke test packaged backend and log cold start
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          DB_DIR="$RUNNER_TEMP/lrgenius-smoke-db"
+          DB_PATH="$DB_DIR/lrgenius.db"
+          mkdir -p "$DB_DIR"
+          URL="http://127.0.0.1:19819/ping"
+          START_TS=$(python -c "import time; print(time.time())")
+
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
+            DB_PATH_WIN=$(cygpath -w "$DB_PATH")
+            cmd.exe /c "start \"\" /b \"${GITHUB_WORKSPACE}\\build\\lrgenius-server\\lrgenius-server.cmd\" --db-path \"${DB_PATH_WIN}\""
+          else
+            "build/lrgenius-server/lrgenius-server" --db-path "$DB_PATH" >/dev/null 2>&1 &
+          fi
+
+          READY=0
+          for i in $(seq 1 240); do
+            if curl -sf "$URL" | grep -q "pong"; then
+              READY=1
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "Backend smoke test failed: /ping did not return pong in time."
+            exit 1
+          fi
+
+          END_TS=$(python -c "import time; print(time.time())")
+          COLD_START_SECONDS=$(python -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$START_TS" "$END_TS")
+          echo "Measured cold start to /ping: ${COLD_START_SECONDS}s"
+
+          curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -296,26 +362,15 @@ jobs:
           gh api repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name="${TAG}" \
             -q '.body' > release_notes.md 2>/dev/null || echo -n "" > release_notes.md
-          # Standard-Hinweise zu Known Issues und manuellen Schritten anhängen
+          # Hinweise zu Backend-Startverhalten und Docker-Asset anhängen
           cat >> release_notes.md << 'NOTES'
 
-          ## Known issues
-          This release has issues with Windows Smartscreen and macOS Gatekeeper, which will prevent the start of the LrGenius backend. You will get an error in Lightroom that the LrGeniusAI database cannot be started.
-          Which means depending on your platform there are necessary manual steps to do before the first use. 
-
-          ## Manual steps
-          **macOS**
-          - Open a Terminal
-          - `cd <directory with contents of the downloaded zip file>`
-          - `chmod +x lrgenius-server/lrgenius-server`
-          - `xattr -dr com.apple.quarantine lrgenius-server`
-
-          **Windows**
-          - Open Explorer go to folder where you extracted the zip file.
-          - Go to the lrgenius-server sub directory.
-          - Double-click lrgenius-server.exe
-          - A Windows Smartscreen warning will appear.
-          - Click More -> Run anyway
+          ## Desktop backend startup
+          - The bundled micromamba-based backend starts automatically from Lightroom.
+          - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required for this package.
+          - Optional manual troubleshooting start:
+            - Windows: `lrgenius-server/lrgenius-server.cmd`
+            - macOS: `lrgenius-server/lrgenius-server`
 
           ## Docker backend
           - Users running the backend via Docker can use the `LrGeniusAI-plugin-docker-backend-<version>.zip` asset.

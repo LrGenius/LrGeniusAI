@@ -53,6 +53,8 @@ class MetadataGenerationRequest:
     # Can be either a flat list of strings: ["People", "Activities"]
     # Or a nested dict: {"People": {"Family": {}, "Friends": {}}, "Activities": {}}
     keyword_categories: Optional[Union[List[str], Dict[str, Any]]]
+    bilingual_keywords: bool = False
+    keyword_secondary_language: Optional[str] = None
 
     # Provider-specific overrides (e.g. Ollama/LM Studio on remote host)
     ollama_base_url: Optional[str] = None
@@ -211,6 +213,23 @@ class LLMProviderBase(ABC):
                 # Flat list
                 categories_str = ", ".join(request.keyword_categories)
                 context_additions.append(f"Please organize keywords into these categories: {categories_str}")
+
+        if request.generate_keywords and request.bilingual_keywords:
+            secondary_language = (request.keyword_secondary_language or "English").strip() or "English"
+            if secondary_language.lower() != request.language.lower():
+                context_additions.append(
+                    "For keywords only, return each keyword as an object with fields "
+                    "`name` (in "
+                    + request.language
+                    + ") and `synonyms` (array in "
+                    + secondary_language
+                    + "). Include only true language equivalents; avoid duplicates and inflected-only variants."
+                )
+            else:
+                context_additions.append(
+                    "For keywords, return each keyword as an object with fields `name` and `synonyms`. "
+                    "Use `synonyms` only for meaningful alternate terms and avoid duplicates."
+                )
         
         # Append context if any
         if context_additions:
@@ -218,7 +237,7 @@ class LLMProviderBase(ABC):
         
         return base_prompt
     
-    def _build_nested_keyword_schema(self, categories: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_nested_keyword_schema(self, categories: Dict[str, Any], bilingual: bool = False) -> Dict[str, Any]:
         """
         Recursively build JSON schema for nested keyword categories.
         
@@ -238,16 +257,33 @@ class LLMProviderBase(ABC):
         for category_name, subcategories in categories.items():
             if isinstance(subcategories, dict) and len(subcategories) > 0:
                 # Nested structure - recursively build
-                schema["properties"][category_name] = self._build_nested_keyword_schema(subcategories)
+                schema["properties"][category_name] = self._build_nested_keyword_schema(subcategories, bilingual)
             else:
                 # Leaf node - array of keywords
                 schema["properties"][category_name] = {
                     "type": "array",
-                    "items": {"type": "string"}
+                    "items": self._keyword_leaf_item_schema(request_bilingual=bilingual)
                 }
             schema["required"].append(category_name)
         
         return schema
+
+    def _keyword_leaf_item_schema(self, request_bilingual: bool) -> Dict[str, Any]:
+        if not request_bilingual:
+            return {"type": "string"}
+
+        return {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "synonyms": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["name"],
+            "additionalProperties": False
+        }
     
     def _flatten_keyword_categories(self, categories: Union[List[str], Dict[str, Any]]) -> List[str]:
         """
@@ -302,7 +338,7 @@ class LLMProviderBase(ABC):
                 # Structured keywords by category (handles both flat and nested)
                 if isinstance(request.keyword_categories, dict):
                     # Nested structure
-                    keywords_schema = self._build_nested_keyword_schema(request.keyword_categories)
+                    keywords_schema = self._build_nested_keyword_schema(request.keyword_categories, request.bilingual_keywords)
                 else:
                     # Flat list
                     keywords_schema = {
@@ -314,7 +350,7 @@ class LLMProviderBase(ABC):
                     for category in request.keyword_categories:
                         keywords_schema["properties"][category] = {
                             "type": "array",
-                            "items": {"type": "string"}
+                            "items": self._keyword_leaf_item_schema(request.bilingual_keywords)
                         }
                         keywords_schema["required"].append(category)
                 schema["properties"]["keywords"] = keywords_schema
@@ -322,11 +358,71 @@ class LLMProviderBase(ABC):
                 # Simple keyword array
                 schema["properties"]["keywords"] = {
                     "type": "array",
-                    "items": {"type": "string"}
+                    "items": self._keyword_leaf_item_schema(request.bilingual_keywords)
                 }
             schema["required"].append("keywords")
         
         return schema
+
+    def _normalize_keyword_leaf(self, value: Any) -> Optional[Union[str, Dict[str, Any]]]:
+        if isinstance(value, str):
+            keyword = value.strip()
+            return keyword or None
+        if isinstance(value, dict):
+            keyword_name = value.get("name")
+            if not isinstance(keyword_name, str):
+                return None
+            keyword_name = keyword_name.strip()
+            if not keyword_name:
+                return None
+            normalized = {"name": keyword_name}
+            synonyms = value.get("synonyms")
+            if isinstance(synonyms, list):
+                cleaned_synonyms: List[str] = []
+                seen = set()
+                for synonym in synonyms:
+                    if not isinstance(synonym, str):
+                        continue
+                    synonym_text = synonym.strip()
+                    if not synonym_text:
+                        continue
+                    lowered = synonym_text.lower()
+                    if lowered == keyword_name.lower() or lowered in seen:
+                        continue
+                    seen.add(lowered)
+                    cleaned_synonyms.append(synonym_text)
+                if cleaned_synonyms:
+                    normalized["synonyms"] = cleaned_synonyms
+            return normalized
+        return None
+
+    def _normalize_keywords_structure(self, value: Any) -> Any:
+        if isinstance(value, list):
+            normalized_list: List[Any] = []
+            for item in value:
+                normalized_leaf = self._normalize_keyword_leaf(item)
+                if normalized_leaf is not None:
+                    normalized_list.append(normalized_leaf)
+                elif isinstance(item, (dict, list)):
+                    nested = self._normalize_keywords_structure(item)
+                    if nested not in (None, {}, []):
+                        normalized_list.append(nested)
+            return normalized_list
+
+        if isinstance(value, dict):
+            if "name" in value and isinstance(value.get("name"), str):
+                return self._normalize_keyword_leaf(value)
+
+            normalized_dict: Dict[str, Any] = {}
+            for key, item in value.items():
+                normalized_item = self._normalize_keywords_structure(item)
+                if normalized_item in (None, {}, []):
+                    continue
+                normalized_dict[key] = normalized_item
+            return normalized_dict
+
+        normalized_leaf = self._normalize_keyword_leaf(value)
+        return normalized_leaf
     
     def _image_to_base64(self, image_data: bytes) -> str:
         """

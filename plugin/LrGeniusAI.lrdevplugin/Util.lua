@@ -507,42 +507,108 @@ end
 
 
 ---
--- Extracts all keywords (strings) from the inner arrays of the
--- hierarchical table and returns them as a single, flat list.
+-- Returns true if a table is a keyword leaf object.
+-- Supported shape: { name = "keyword", synonyms = { ... } }
+local function isKeywordLeafObject(value)
+    return type(value) == "table" and type(value.name) == "string"
+end
+
+local function sanitizeKeywordLeaf(value)
+    if type(value) == "string" then
+        local keyword = Util.trim(value)
+        if keyword == "" then
+            return nil, {}
+        end
+        return keyword, {}
+    end
+
+    if isKeywordLeafObject(value) then
+        local keyword = Util.trim(value.name)
+        if keyword == "" then
+            return nil, {}
+        end
+
+        local cleanedSynonyms = {}
+        local seen = {}
+        if type(value.synonyms) == "table" then
+            for _, synonym in ipairs(value.synonyms) do
+                if type(synonym) == "string" then
+                    local synonymText = Util.trim(synonym)
+                    local normalized = string.lower(synonymText)
+                    if synonymText ~= "" and normalized ~= string.lower(keyword) and not seen[normalized] then
+                        table.insert(cleanedSynonyms, synonymText)
+                        seen[normalized] = true
+                    end
+                end
+            end
+        end
+
+        return keyword, cleanedSynonyms
+    end
+
+    return nil, {}
+end
+
+local function iterateDeterministic(tbl, callback)
+    local stringKeys = {}
+    local numberKeys = {}
+    for key in pairs(tbl) do
+        if type(key) == "number" then
+            table.insert(numberKeys, key)
+        elseif type(key) == "string" then
+            table.insert(stringKeys, key)
+        end
+    end
+
+    table.sort(stringKeys, function(a, b) return a < b end)
+    table.sort(numberKeys, function(a, b) return a < b end)
+
+    for _, key in ipairs(stringKeys) do
+        callback(key, tbl[key])
+    end
+    for _, key in ipairs(numberKeys) do
+        callback(key, tbl[key])
+    end
+end
+
+---
+-- Extracts all keyword leaf names from the hierarchical table.
+-- Keeps an optional metadata map with synonyms for structured leaves.
 --
 -- @param hierarchicalTable The original table with categories.
--- @return A flat table (array) containing all keywords.
+-- @return table keywordsVal, table keywordsMeta
 --
 function Util.extractAllKeywords(hierarchicalTable)
     if hierarchicalTable == nil or type(hierarchicalTable) ~= "table" then
-        return {}
+        return {}, {}
     end
 
-    local flatList = {}
+    local result = {}
+    local meta = {}
+    local keywordCounter = 0
 
     local function recurse(tbl)
-        for _, v in pairs(tbl) do
-            if type(v) == "table" then
-                recurse(v)
-            elseif type(v) == "string" then
-                table.insert(flatList, Util.trim(v))
+        iterateDeterministic(tbl, function(_, value)
+            if type(value) == "table" and not isKeywordLeafObject(value) then
+                recurse(value)
+                return
             end
-        end
+
+            local keywordName, synonyms = sanitizeKeywordLeaf(value)
+            if keywordName and keywordName ~= "" then
+                keywordCounter = keywordCounter + 1
+                local keywordId = "kw_" .. tostring(keywordCounter)
+                result[keywordId] = keywordName
+                meta[keywordId] = { synonyms = synonyms }
+            end
+        end)
     end
 
     recurse(hierarchicalTable)
 
-    log:trace("Extracted keywords: " .. Util.dumpTable(flatList))
+    log:trace("Extracted keywords: " .. Util.dumpTable(result))
 
-    local result = {}
-
-    for _, keyword in ipairs(flatList) do
-        local keywordWoDots = string.gsub(keyword, "%.", "_;_")
-        -- Ensure that each keyword is trimmed of whitespace
-        result[keywordWoDots] = keyword
-    end
-
-    return result
+    return result, meta
 end
 
 ---
@@ -552,25 +618,58 @@ end
 -- @param originalTable The original multidimensional table, used as a structural template.
 -- @param keywordsVal A table mapping keyword keys to their values.
 -- @param keywordsSel A table indicating which keywords are selected (key = true).
+-- @param keywordsMeta Optional metadata table with synonyms for each keyword key.
 -- @return A new hierarchical table containing only the selected keywords.
 --
-function Util.rebuildTableFromKeywords(originalTable, keywordsVal, keywordsSel)
+function Util.rebuildTableFromKeywords(originalTable, keywordsVal, keywordsSel, keywordsMeta)
+    local keywordCounter = 0
+
+    local function buildKeywordLeaf(keywordId, fallbackValue, fallbackSynonyms)
+        if not keywordsSel[keywordId] then
+            return nil
+        end
+        local newKeyword = keywordsVal[keywordId] or fallbackValue
+        if not newKeyword or Util.trim(newKeyword) == "" then
+            return nil
+        end
+        newKeyword = Util.trim(newKeyword)
+        local meta = keywordsMeta and keywordsMeta[keywordId] or nil
+        local synonyms = (meta and meta.synonyms) or fallbackSynonyms or {}
+        if synonyms and #synonyms > 0 then
+            return {
+                name = newKeyword,
+                synonyms = Util.deepcopy(synonyms),
+            }
+        end
+        return newKeyword
+    end
+
     local function recurse(tbl)
         local newTbl = {}
-        for key, value in pairs(tbl) do
-            if type(value) == "table" then
+        iterateDeterministic(tbl, function(key, value)
+            if type(value) == "table" and not isKeywordLeafObject(value) then
                 local child = recurse(value)
-                -- Only add non-empty child tables
                 if next(child) ~= nil then
                     newTbl[key] = child
                 end
-            elseif type(value) == "string" then
-                local keywordWoDots = string.gsub(value, "%.", "_;_")
-                if keywordsSel[keywordWoDots] then
-                    newTbl[#newTbl + 1] = keywordsVal[keywordWoDots]
+                return
+            end
+
+            keywordCounter = keywordCounter + 1
+            local keywordId = "kw_" .. tostring(keywordCounter)
+
+            if type(value) == "string" then
+                local leafValue = buildKeywordLeaf(keywordId, value, {})
+                if leafValue ~= nil then
+                    newTbl[#newTbl + 1] = leafValue
+                end
+            elseif isKeywordLeafObject(value) then
+                local leafValue = buildKeywordLeaf(keywordId, value.name, value.synonyms or {})
+                if leafValue ~= nil then
+                    newTbl[#newTbl + 1] = leafValue
                 end
             end
-        end
+        end)
         return newTbl
     end
 

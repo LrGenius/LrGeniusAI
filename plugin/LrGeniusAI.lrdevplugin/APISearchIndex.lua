@@ -554,6 +554,8 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
         folder_names = options.folder_names,
         prompt = options.prompt,
         keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
+        bilingual_keywords = tostring(options.bilingual_keywords or false),
+        keyword_secondary_language = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English",
         date_time = options.date_time,
         ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
         lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
@@ -681,6 +683,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     end
     
     table.insert(mimeChunks, { name = "keyword_categories", value = JSON:encode(options.keyword_categories or {}) })
+    table.insert(mimeChunks, { name = "bilingual_keywords", value = tostring(options.bilingual_keywords or false) })
+    table.insert(mimeChunks, { name = "keyword_secondary_language", value = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English" })
     
     if options.date_time then
         table.insert(mimeChunks, { name = "date_time", value = options.date_time })
@@ -1856,7 +1860,13 @@ function SearchIndexAPI.startServer(opts)
         local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
         local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
         if WIN_ENV then
-            serverBinary = serverBinary .. ".exe"
+            local serverLauncherCmd = serverBinary .. ".cmd"
+            local serverExe = serverBinary .. ".exe"
+            if LrFileUtils.exists(serverLauncherCmd) then
+                serverBinary = serverLauncherCmd
+            else
+                serverBinary = serverExe
+            end
         end
 
         if not LrFileUtils.exists(serverBinary) then
@@ -1866,11 +1876,11 @@ function SearchIndexAPI.startServer(opts)
 
         local startServerCmd = nil
         if WIN_ENV then
-            -- Set KMP_DUPLICATE_LIB_OK environment variable to fix OpenMP library conflict in PyInstaller builds
+            -- Keep KMP_DUPLICATE_LIB_OK to avoid OpenMP conflicts with Python ML runtime stacks.
             local envCmd = "set KMP_DUPLICATE_LIB_OK=TRUE &&"
-            startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" cmd /c \"" .. envCmd .. " lrgenius-server.exe"
-            startServerCmd = startServerCmd .. " --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""
-            startServerCmd = startServerCmd .. "\""
+            local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+            local innerCmd = envCmd .. " \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
+            startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" cmd /c \"" .. innerCmd .. "\""
         else
             local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
             startServerCmd = envPrefix .. "\"" .. tostring(serverBinary) .. "\" --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""

@@ -73,6 +73,9 @@ def _extract_options(data):
     else:
         options['keyword_categories'] = keyword_categories_raw
 
+    options['bilingual_keywords'] = str(data.get('bilingual_keywords', 'false')).lower() == 'true'
+    options['keyword_secondary_language'] = data.get('keyword_secondary_language') or None
+
     options['replace_ss'] = str(data.get('replace_ss', 'false')).lower() == 'true'
     options['ollama_base_url'] = data.get('ollama_base_url') or None  # Optional: use custom Ollama host
     options['lmstudio_base_url'] = data.get('lmstudio_base_url') or None  # Optional: use custom LM Studio host

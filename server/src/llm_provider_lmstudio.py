@@ -89,7 +89,7 @@ class LMStudioProvider(LLMProviderBase):
                 raise ValueError(f"Unexpected response type from LM Studio: {type(content)}")
             
             # Extract metadata
-            keywords = content.get("keywords", [])
+            keywords = self._normalize_keywords_structure(content.get("keywords", []))
             
             caption = content.get("caption") if request.generate_caption else None
             title = content.get("title") if request.generate_title else None

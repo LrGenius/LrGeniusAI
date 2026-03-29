@@ -57,6 +57,8 @@ local function showAnalyzeAndIndexDialog(ctx)
     props.useCatalogKeywordStructure = prefs.useCatalogKeywordStructure or false
     props.useTopLevelKeyword = prefs.useTopLevelKeyword or false
     props.topLevelKeyword = prefs.topLevelKeyword or "LrGeniusAI"
+    props.bilingualKeywords = prefs.bilingualKeywords or false
+    props.keywordSecondaryLanguage = prefs.keywordSecondaryLanguage or Defaults.defaultKeywordSecondaryLanguage
     
     -- AI Model selection (unified across providers)
     props.modelKey = prefs.modelKey -- format: "provider::model"
@@ -342,6 +344,22 @@ local function showAnalyzeAndIndexDialog(ctx)
                     width_in_chars = 20,
                     enabled = bind 'useTopLevelKeyword',
                 },
+            },
+            f:row {
+                f:checkbox {
+                    value = bind 'bilingualKeywords',
+                    enabled = bind 'generateKeywords',
+                    width = share 'checkboxWidth',
+                },
+                f:static_text {
+                    title = LOC "$$$/LrGeniusAI/UI/BilingualKeywords=Generate bilingual keyword synonyms",
+                },
+                f:combo_box {
+                    value = bind 'keywordSecondaryLanguage',
+                    items = Defaults.generateLanguages,
+                    enabled = bind 'bilingualKeywords',
+                    width = 160,
+                },
             }
         },
         
@@ -448,6 +466,8 @@ local function showAnalyzeAndIndexDialog(ctx)
         prefs.useCatalogKeywordStructure = props.useCatalogKeywordStructure
         prefs.useTopLevelKeyword = props.useTopLevelKeyword
         prefs.topLevelKeyword = props.topLevelKeyword
+        prefs.bilingualKeywords = props.bilingualKeywords
+        prefs.keywordSecondaryLanguage = props.keywordSecondaryLanguage
 
         -- Keep track of used top-level keywords
         if props.useTopLevelKeyword and not Util.table_contains(prefs.knownTopLevelKeywords, props.topLevelKeyword) then
@@ -597,6 +617,8 @@ LrTasks.startAsyncTask(function()
             replace_ss = props.replaceSS,
             regenerate_metadata = props.regenerateMetadata,
             prompt = props.selectedPrompt,
+            bilingual_keywords = props.bilingualKeywords,
+            keyword_secondary_language = props.keywordSecondaryLanguage,
         }
         if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
             options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")

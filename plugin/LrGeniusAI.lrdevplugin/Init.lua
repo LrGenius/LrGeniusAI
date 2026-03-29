@@ -82,6 +82,14 @@ if _G.prefs.generateLanguage == nil then
     _G.prefs.generateLanguage = Defaults.defaultGenerateLanguage
 end
 
+if _G.prefs.bilingualKeywords == nil then
+    _G.prefs.bilingualKeywords = Defaults.defaultBilingualKeywords
+end
+
+if _G.prefs.keywordSecondaryLanguage == nil then
+    _G.prefs.keywordSecondaryLanguage = Defaults.defaultKeywordSecondaryLanguage
+end
+
 if _G.prefs.replaceSS == nil then
     _G.prefs.replaceSS = false
 end

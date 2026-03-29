@@ -235,6 +235,8 @@ class AnalysisService:
             folder_names=options.get('folder_names'),
             user_context=options.get('user_context'),
             keyword_categories=options.get('keyword_categories'),
+            bilingual_keywords=options.get('bilingual_keywords', False),
+            keyword_secondary_language=options.get('keyword_secondary_language'),
             system_prompt=options.get('prompt'),
             date_time=options.get('date_time'),
             ollama_base_url=options.get('ollama_base_url'),

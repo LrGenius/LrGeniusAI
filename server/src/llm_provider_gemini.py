@@ -170,7 +170,7 @@ class GeminiProvider(LLMProviderBase):
             parsed_data = json.loads(text)
             
             # Extract metadata
-            keywords = parsed_data.get("keywords", [])
+            keywords = self._normalize_keywords_structure(parsed_data.get("keywords", []))
             # logger.debug(f"Extracted keywords: {keywords} .. type: {type(keywords)}")
             
             caption = parsed_data.get("caption") if request.generate_caption else None
@@ -270,7 +270,10 @@ class GeminiProvider(LLMProviderBase):
                 # Structured keywords (handles both flat and nested)
                 if isinstance(request.keyword_categories, dict):
                     # Nested structure - recursively build Gemini schema
-                    keywords_schema = self._build_nested_gemini_keyword_schema(request.keyword_categories)
+                    keywords_schema = self._build_nested_gemini_keyword_schema(
+                        request.keyword_categories,
+                        request.bilingual_keywords
+                    )
                 else:
                     # Flat list
                     keywords_schema = {
@@ -280,19 +283,19 @@ class GeminiProvider(LLMProviderBase):
                     for category in request.keyword_categories:
                         keywords_schema["properties"][category] = {
                             "type": "ARRAY",
-                            "items": {"type": "STRING"}
+                            "items": self._gemini_keyword_leaf_item_schema(request.bilingual_keywords)
                         }
                 schema["properties"]["keywords"] = keywords_schema
             else:
                 # Simple array
                 schema["properties"]["keywords"] = {
                     "type": "ARRAY",
-                    "items": {"type": "STRING"}
+                    "items": self._gemini_keyword_leaf_item_schema(request.bilingual_keywords)
                 }
         
         return schema
     
-    def _build_nested_gemini_keyword_schema(self, categories: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_nested_gemini_keyword_schema(self, categories: Dict[str, Any], bilingual: bool = False) -> Dict[str, Any]:
         """
         Recursively build Gemini JSON schema for nested keyword categories.
         
@@ -310,15 +313,31 @@ class GeminiProvider(LLMProviderBase):
         for category_name, subcategories in categories.items():
             if isinstance(subcategories, dict) and len(subcategories) > 0:
                 # Nested structure - recursively build
-                schema["properties"][category_name] = self._build_nested_gemini_keyword_schema(subcategories)
+                schema["properties"][category_name] = self._build_nested_gemini_keyword_schema(subcategories, bilingual)
             else:
                 # Leaf node - array of keywords
                 schema["properties"][category_name] = {
                     "type": "ARRAY",
-                    "items": {"type": "STRING"}
+                    "items": self._gemini_keyword_leaf_item_schema(bilingual)
                 }
         
         return schema
+
+    def _gemini_keyword_leaf_item_schema(self, bilingual: bool) -> Dict[str, Any]:
+        if not bilingual:
+            return {"type": "STRING"}
+
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING"},
+                "synonyms": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"}
+                }
+            },
+            "required": ["name"]
+        }
     
     def _clean_gemini_response(self, text: str) -> str:
         """Clean Gemini-specific response artifacts"""

@@ -118,6 +118,36 @@ end
 -- @param currentTopLevelKeyword Optional top-level keyword for this task (avoids prefs race in parallel jobs).
 --
 function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, existingKeywordNames, currentTopLevelKeyword)
+    local function parseKeywordLeaf(leafValue)
+        if type(leafValue) == "string" then
+            local keywordName = Util.trim(leafValue)
+            return keywordName, {}
+        end
+        if type(leafValue) == "table" and type(leafValue.name) == "string" then
+            local keywordName = Util.trim(leafValue.name)
+            local synonyms = {}
+            local seenSynonyms = {}
+            if type(leafValue.synonyms) == "table" then
+                for _, synonym in ipairs(leafValue.synonyms) do
+                    if type(synonym) == "string" then
+                        local synonymText = Util.trim(synonym)
+                        local normalized = string.lower(synonymText)
+                        if synonymText ~= "" and normalized ~= string.lower(keywordName) and not seenSynonyms[normalized] then
+                            table.insert(synonyms, synonymText)
+                            seenSynonyms[normalized] = true
+                        end
+                    end
+                end
+            end
+            return keywordName, synonyms
+        end
+        return nil, {}
+    end
+
+    local function isKeywordLeafObject(value)
+        return type(value) == "table" and type(value.name) == "string"
+    end
+
     local addKeywords = {}
     local reservedTopLevel = currentTopLevelKeyword or prefs.topLevelKeyword
     for key, value in pairs(keywordSubTable) do
@@ -125,21 +155,24 @@ function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, e
         local keyword
         if type(key) == 'string' and key ~= "" and key ~= "None" and key ~= "none" and prefs.useKeywordHierarchy then
             keyword = photo.catalog:createKeyword(key, {}, false, parent, true)
-        elseif type(key) == 'number' and value and value ~= "" and value ~= "None" and value ~= "none" then
-            if existingKeywordNames and existingKeywordNames[value] then
+        elseif type(key) == 'number' and value then
+            local keywordName, keywordSynonyms = parseKeywordLeaf(value)
+            if not keywordName or keywordName == "" or keywordName == "None" or keywordName == "none" then
+                -- Skip invalid keyword leafs
+            elseif existingKeywordNames and existingKeywordNames[keywordName] then
                 -- Append mode: skip keyword that already exists on photo
-            elseif not Util.table_contains(addKeywords, value) then
-                if value == "Ollama" or value == "LMStudio" or value == "Google Gemini" or value == "ChatGPT" or value == reservedTopLevel then
-                    log:trace("Skipping keyword: " .. tostring(value) .. " as it is reserved.")
+            elseif not Util.table_contains(addKeywords, keywordName) then
+                if keywordName == "Ollama" or keywordName == "LMStudio" or keywordName == "Google Gemini" or keywordName == "ChatGPT" or keywordName == reservedTopLevel then
+                    log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
                 else
                     local currentParent = prefs.useKeywordHierarchy and parent or nil
-                    keyword = photo.catalog:createKeyword(value, {}, true, currentParent, true)
+                    keyword = photo.catalog:createKeyword(keywordName, keywordSynonyms, true, currentParent, true)
                     photo:addKeyword(keyword)
-                    table.insert(addKeywords, value)
+                    table.insert(addKeywords, keywordName)
                 end
             end
         end
-        if type(value) == 'table' then
+        if type(value) == 'table' and not isKeywordLeafObject(value) then
             MetadataManager.addKeywordRecursively(photo, value, keyword, existingKeywordNames, currentTopLevelKeyword)
         end
     end
@@ -160,7 +193,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 
     local propertyTable = LrBinding.makePropertyTable(ctx)
     propertyTable.skipFromHere = false
-    propertyTable.keywordsVal = Util.extractAllKeywords(keywords or {})
+    propertyTable.keywordsVal, propertyTable.keywordsMeta = Util.extractAllKeywords(keywords or {})
     propertyTable.keywordsSel = {}
     propertyTable.title = title or ""
     propertyTable.caption = caption or ""
@@ -299,7 +332,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
     local results = {}
     local validatedKeywords = {}
     if propertyTable.saveKeywords then
-        validatedKeywords = Util.rebuildTableFromKeywords(keywords, propertyTable.keywordsVal, propertyTable.keywordsSel)
+        validatedKeywords = Util.rebuildTableFromKeywords(keywords, propertyTable.keywordsVal, propertyTable.keywordsSel, propertyTable.keywordsMeta)
     end
 
     results.keywords = validatedKeywords
