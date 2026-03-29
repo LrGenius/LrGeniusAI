@@ -9,7 +9,6 @@ dependencies:
   - pip
   - setuptools
   - wheel
-  - pyinstaller
   
   - pip:
     - open_clip_torch

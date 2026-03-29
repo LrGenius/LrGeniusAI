@@ -1860,7 +1860,13 @@ function SearchIndexAPI.startServer(opts)
         local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
         local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
         if WIN_ENV then
-            serverBinary = serverBinary .. ".exe"
+            local serverLauncherCmd = serverBinary .. ".cmd"
+            local serverExe = serverBinary .. ".exe"
+            if LrFileUtils.exists(serverLauncherCmd) then
+                serverBinary = serverLauncherCmd
+            else
+                serverBinary = serverExe
+            end
         end
 
         if not LrFileUtils.exists(serverBinary) then
@@ -1870,11 +1876,11 @@ function SearchIndexAPI.startServer(opts)
 
         local startServerCmd = nil
         if WIN_ENV then
-            -- Set KMP_DUPLICATE_LIB_OK environment variable to fix OpenMP library conflict in PyInstaller builds
+            -- Keep KMP_DUPLICATE_LIB_OK to avoid OpenMP conflicts with Python ML runtime stacks.
             local envCmd = "set KMP_DUPLICATE_LIB_OK=TRUE &&"
-            startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" cmd /c \"" .. envCmd .. " lrgenius-server.exe"
-            startServerCmd = startServerCmd .. " --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""
-            startServerCmd = startServerCmd .. "\""
+            local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+            local innerCmd = envCmd .. " \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
+            startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" cmd /c \"" .. innerCmd .. "\""
         else
             local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
             startServerCmd = envPrefix .. "\"" .. tostring(serverBinary) .. "\" --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""
