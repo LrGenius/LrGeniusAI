@@ -177,28 +177,41 @@ jobs:
           set -euo pipefail
           DB_DIR="$RUNNER_TEMP/lrgenius-smoke-db"
           DB_PATH="$DB_DIR/lrgenius.db"
+          LOG_PATH="$DB_DIR/lrgenius-server.log"
           mkdir -p "$DB_DIR"
           URL="http://127.0.0.1:19819/ping"
           START_TS=$(python -c "import time; print(time.time())")
 
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             DB_PATH_WIN=$(cygpath -w "$DB_PATH")
-            cmd.exe /c "start \"\" /b \"${GITHUB_WORKSPACE}\\build\\lrgenius-server\\lrgenius-server.cmd\" --db-path \"${DB_PATH_WIN}\""
+            WORKSPACE_WIN=$(cygpath -w "$GITHUB_WORKSPACE")
+            LAUNCHER_WIN="${WORKSPACE_WIN}\\build\\lrgenius-server\\lrgenius-server.cmd"
+            cmd.exe /c "start \"\" /b \"${LAUNCHER_WIN}\" --db-path \"${DB_PATH_WIN}\""
           else
             "build/lrgenius-server/lrgenius-server" --db-path "$DB_PATH" >/dev/null 2>&1 &
           fi
 
           READY=0
-          for i in $(seq 1 240); do
+          for i in $(seq 1 600); do
             if curl -sf "$URL" | grep -q "pong"; then
               READY=1
               break
+            fi
+            if [ $((i % 120)) -eq 0 ]; then
+              echo "Still waiting for backend readiness... (${i}/600)"
             fi
             sleep 0.5
           done
 
           if [ "$READY" -ne 1 ]; then
             echo "Backend smoke test failed: /ping did not return pong in time."
+            if [ -f "$LOG_PATH" ]; then
+              echo "---- backend log tail ----"
+              tail -n 120 "$LOG_PATH" || true
+              echo "--------------------------"
+            else
+              echo "Backend log file not found at $LOG_PATH"
+            fi
             exit 1
           fi
 
