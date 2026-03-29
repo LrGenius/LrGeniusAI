@@ -95,12 +95,10 @@ jobs:
           SERVER_ENV_DIR="$SERVER_DIR/env"
           mkdir -p "$SERVER_APP_DIR"
 
-          # Pack the CI env into a relocatable runtime env.
-          micromamba install -y -n geniusai_server conda-pack
-          micromamba run -n geniusai_server conda-pack -p "$MAMBA_ROOT_PREFIX/envs/geniusai_server" -o "$SERVER_DIR/env.tar.gz"
-          mkdir -p "$SERVER_ENV_DIR"
-          tar -xzf "$SERVER_DIR/env.tar.gz" -C "$SERVER_ENV_DIR"
-          rm -f "$SERVER_DIR/env.tar.gz"
+          # Build the runtime env directly at target prefix.
+          # This avoids conda-pack conflicts when pip-installed packages
+          # modify conda-managed metadata.
+          micromamba create -y -p "$SERVER_ENV_DIR" -f server/environment.yml
 
           echo "Copying backend source files..."
           cp -r server/src "$SERVER_APP_DIR/"
@@ -113,10 +111,6 @@ jobs:
               echo 'set "SCRIPT_DIR=%~dp0"'
               echo 'set "KMP_DUPLICATE_LIB_OK=TRUE"'
               echo 'set "PYTHONPATH=%SCRIPT_DIR%app;%PYTHONPATH%"'
-              echo 'if not exist "%SCRIPT_DIR%.env_unpacked" ('
-              echo '  call "%SCRIPT_DIR%env\Scripts\conda-unpack.exe" >nul 2>&1'
-              echo '  type nul > "%SCRIPT_DIR%.env_unpacked"'
-              echo ')'
               echo 'call "%SCRIPT_DIR%env\python.exe" "%SCRIPT_DIR%app\src\geniusai_server.py" %*'
             } > "$SERVER_DIR/lrgenius-server.cmd"
           else
@@ -126,10 +120,6 @@ jobs:
               echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"'
               echo 'export KMP_DUPLICATE_LIB_OK=TRUE'
               echo 'export PYTHONPATH="$SCRIPT_DIR/app:${PYTHONPATH:-}"'
-              echo 'if [ ! -f "$SCRIPT_DIR/.env_unpacked" ] && [ -x "$SCRIPT_DIR/env/bin/conda-unpack" ]; then'
-              echo '  "$SCRIPT_DIR/env/bin/conda-unpack" >/dev/null 2>&1 || true'
-              echo '  touch "$SCRIPT_DIR/.env_unpacked"'
-              echo 'fi'
               echo 'exec "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/app/src/geniusai_server.py" "$@"'
             } > "$SERVER_DIR/lrgenius-server"
             chmod +x "$SERVER_DIR/lrgenius-server"
