@@ -25,7 +25,6 @@ dependencies:
     - requests
     - chromadb
     - numpy
-    - pandas
     - psutil
     - flask
     - waitress

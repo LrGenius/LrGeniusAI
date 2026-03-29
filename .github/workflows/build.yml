@@ -14,6 +14,7 @@ jobs:
     if: github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -95,12 +96,18 @@ jobs:
           SERVER_ENV_DIR="$SERVER_DIR/env"
           mkdir -p "$SERVER_APP_DIR"
 
-          # Pack the CI env into a relocatable runtime env.
-          micromamba install -y -n geniusai_server conda-pack
-          micromamba run -n geniusai_server conda-pack -p "$MAMBA_ROOT_PREFIX/envs/geniusai_server" -o "$SERVER_DIR/env.tar.gz"
-          mkdir -p "$SERVER_ENV_DIR"
-          tar -xzf "$SERVER_DIR/env.tar.gz" -C "$SERVER_ENV_DIR"
-          rm -f "$SERVER_DIR/env.tar.gz"
+          # Build the runtime env directly at target prefix.
+          # This avoids conda-pack conflicts when pip-installed packages
+          # modify conda-managed metadata.
+          micromamba create -y -p "$SERVER_ENV_DIR" -f server/environment.yml
+
+          # Sanity check: backend import path expects torch.testing to exist.
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
+            PY_EXE="$SERVER_ENV_DIR/python.exe"
+          else
+            PY_EXE="$SERVER_ENV_DIR/bin/python"
+          fi
+          "$PY_EXE" -c "import torch, torch.testing; print('torch ok', torch.__version__)"
 
           echo "Copying backend source files..."
           cp -r server/src "$SERVER_APP_DIR/"
@@ -113,10 +120,6 @@ jobs:
               echo 'set "SCRIPT_DIR=%~dp0"'
               echo 'set "KMP_DUPLICATE_LIB_OK=TRUE"'
               echo 'set "PYTHONPATH=%SCRIPT_DIR%app;%PYTHONPATH%"'
-              echo 'if not exist "%SCRIPT_DIR%.env_unpacked" ('
-              echo '  call "%SCRIPT_DIR%env\Scripts\conda-unpack.exe" >nul 2>&1'
-              echo '  type nul > "%SCRIPT_DIR%.env_unpacked"'
-              echo ')'
               echo 'call "%SCRIPT_DIR%env\python.exe" "%SCRIPT_DIR%app\src\geniusai_server.py" %*'
             } > "$SERVER_DIR/lrgenius-server.cmd"
           else
@@ -126,10 +129,6 @@ jobs:
               echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"'
               echo 'export KMP_DUPLICATE_LIB_OK=TRUE'
               echo 'export PYTHONPATH="$SCRIPT_DIR/app:${PYTHONPATH:-}"'
-              echo 'if [ ! -f "$SCRIPT_DIR/.env_unpacked" ] && [ -x "$SCRIPT_DIR/env/bin/conda-unpack" ]; then'
-              echo '  "$SCRIPT_DIR/env/bin/conda-unpack" >/dev/null 2>&1 || true'
-              echo '  touch "$SCRIPT_DIR/.env_unpacked"'
-              echo 'fi'
               echo 'exec "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/app/src/geniusai_server.py" "$@"'
             } > "$SERVER_DIR/lrgenius-server"
             chmod +x "$SERVER_DIR/lrgenius-server"
@@ -160,28 +159,58 @@ jobs:
           set -euo pipefail
           DB_DIR="$RUNNER_TEMP/lrgenius-smoke-db"
           DB_PATH="$DB_DIR/lrgenius.db"
+          LOG_PATH="$DB_DIR/lrgenius-server.log"
+          SMOKE_STDOUT="$DB_DIR/smoke-backend.out"
           mkdir -p "$DB_DIR"
           URL="http://127.0.0.1:19819/ping"
           START_TS=$(python -c "import time; print(time.time())")
 
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             DB_PATH_WIN=$(cygpath -w "$DB_PATH")
-            cmd.exe /c "start \"\" /b \"${GITHUB_WORKSPACE}\\build\\lrgenius-server\\lrgenius-server.cmd\" --db-path \"${DB_PATH_WIN}\""
+            LAUNCHER_WIN=$(cygpath -w "$GITHUB_WORKSPACE/build/lrgenius-server/lrgenius-server.cmd")
+            SMOKE_LAUNCH_CMD="$DB_DIR/smoke-launch.cmd"
+            {
+              echo '@echo off'
+              echo "call \"$LAUNCHER_WIN\" --db-path \"$DB_PATH_WIN\""
+            } > "$SMOKE_LAUNCH_CMD"
+            SMOKE_LAUNCH_CMD_WIN=$(cygpath -w "$SMOKE_LAUNCH_CMD")
+            cmd.exe //c "$SMOKE_LAUNCH_CMD_WIN" >"$SMOKE_STDOUT" 2>&1 &
+            BACKEND_PID=$!
           else
-            "build/lrgenius-server/lrgenius-server" --db-path "$DB_PATH" >/dev/null 2>&1 &
+            "build/lrgenius-server/lrgenius-server" --db-path "$DB_PATH" >"$SMOKE_STDOUT" 2>&1 &
+            BACKEND_PID=$!
           fi
 
           READY=0
-          for i in $(seq 1 240); do
+          for i in $(seq 1 600); do
             if curl -sf "$URL" | grep -q "pong"; then
               READY=1
               break
+            fi
+            if [ -n "${BACKEND_PID:-}" ] && ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+              echo "Backend process exited early before /ping became ready."
+              break
+            fi
+            if [ $((i % 120)) -eq 0 ]; then
+              echo "Still waiting for backend readiness... (${i}/600)"
             fi
             sleep 0.5
           done
 
           if [ "$READY" -ne 1 ]; then
             echo "Backend smoke test failed: /ping did not return pong in time."
+            if [ -f "$LOG_PATH" ]; then
+              echo "---- backend log tail ----"
+              tail -n 120 "$LOG_PATH" || true
+              echo "--------------------------"
+            else
+              echo "Backend log file not found at $LOG_PATH"
+            fi
+            if [ -f "$SMOKE_STDOUT" ]; then
+              echo "---- launcher stdout/stderr ----"
+              tail -n 120 "$SMOKE_STDOUT" || true
+              echo "--------------------------------"
+            fi
             exit 1
           fi
 
