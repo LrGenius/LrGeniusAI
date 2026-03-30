@@ -208,6 +208,43 @@ function _G.JSON.assert(b, m)
     LrDialogs.showError("Error decoding JSON response.")
 end
 
+local function ensureMacOSServerUnquarantined()
+    if not MAC_ENV then return end
+    
+    local serverBinary = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
+    if not LrFileUtils.exists(serverBinary) then return end
+    
+    local escapedBinary = serverBinary:gsub('"', '\\"')
+    local script = 'BIN="' .. escapedBinary .. '"\n'
+    script = script .. 'if xattr -p com.apple.quarantine "$BIN" >/dev/null 2>&1; then\n'
+    script = script .. '    xattr -d com.apple.quarantine "$BIN" 2>&1\n'
+    script = script .. '    if xattr -p com.apple.quarantine "$BIN" >/dev/null 2>&1; then\n'
+    script = script .. '        echo "REMOVED_FAILED"\n'
+    script = script .. '    else\n'
+    script = script .. '        echo "REMOVED_SUCCESS"\n'
+    script = script .. '    fi\n'
+    script = script .. 'else\n'
+    script = script .. '    echo "NOT_QUARANTINED"\n'
+    script = script .. 'fi\n'
+    
+    local handle = io.popen(script, "r")
+    if not handle then
+        log:error("Unquarantine: io.popen failed")
+        return
+    end
+    local result = handle:read("*a"):gsub("%s+$", "")
+    handle:close()
+    
+    if result == "NOT_QUARANTINED" then
+        log:trace("Unquarantine: not quarantined")
+    elseif result == "REMOVED_SUCCESS" then
+        log:info("Unquarantine: removed successfully")
+    elseif result == "REMOVED_FAILED" then
+        log:warn("Unquarantine: failed")
+    else
+        log:warn("Unquarantine: unexpected result: " .. result)
+    end
+end
 if prefs.periodicalUpdateCheck then
     LrTasks.startAsyncTask(function()
         -- Check for updates in the background
@@ -216,9 +253,13 @@ if prefs.periodicalUpdateCheck then
 end
 
 LrTasks.startAsyncTask(function()
+    local ok, err = pcall(ensureMacOSServerUnquarantined)
+    if not ok then
+        log:error("ensureMacOSServerUnquarantined failed: " .. tostring(err))
+    end
     SearchIndexAPI.startServer()
     if prefs.enableOpenClip then
-        SearchIndexAPI.isClipReady() -- To trigger load of the CLIP model.
+        SearchIndexAPI.isClipReady()
     end
 end)
 
