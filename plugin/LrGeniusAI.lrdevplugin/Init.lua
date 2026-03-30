@@ -216,16 +216,20 @@ local function ensureMacOSServerUnquarantined()
     
     local escapedBinary = serverBinary:gsub('"', '\\"')
     local script = 'BIN="' .. escapedBinary .. '"\n'
-    script = script .. 'chmod +x "$BIN"\n'
+    script = script .. 'if [ -x "$BIN" ]; then\n'
+    script = script .. '    CHMOD="SKIPPED"\n'
+    script = script .. 'else\n'
+    script = script .. '    chmod +x "$BIN" && CHMOD="DONE" || CHMOD="FAILED"\n'
+    script = script .. 'fi\n'
     script = script .. 'if xattr -p com.apple.quarantine "$BIN" >/dev/null 2>&1; then\n'
     script = script .. '    xattr -d com.apple.quarantine "$BIN" 2>&1\n'
     script = script .. '    if xattr -p com.apple.quarantine "$BIN" >/dev/null 2>&1; then\n'
-    script = script .. '        echo "REMOVED_FAILED"\n'
+    script = script .. '        echo "REMOVED_FAILED:$CHMOD"\n'
     script = script .. '    else\n'
-    script = script .. '        echo "REMOVED_SUCCESS"\n'
+    script = script .. '        echo "REMOVED_SUCCESS:$CHMOD"\n'
     script = script .. '    fi\n'
     script = script .. 'else\n'
-    script = script .. '    echo "NOT_QUARANTINED"\n'
+    script = script .. '    echo "NOT_QUARANTINED:$CHMOD"\n'
     script = script .. 'fi\n'
     
     local handle = io.popen(script, "r")
@@ -236,12 +240,22 @@ local function ensureMacOSServerUnquarantined()
     local result = handle:read("*a"):gsub("%s+$", "")
     handle:close()
     
-    if result == "NOT_QUARANTINED" then
-        log:trace("Unquarantine: not quarantined, chmod done")
-    elseif result == "REMOVED_SUCCESS" then
-        log:info("Unquarantine: chmod +x and quarantine removed successfully")
-    elseif result == "REMOVED_FAILED" then
-        log:warn("Unquarantine: chmod +x done, quarantine removal failed")
+    local unquarantineStatus, chmodStatus = result:match("([^:]+):(.+)")
+    if not unquarantineStatus then
+        unquarantineStatus = result
+        chmodStatus = "UNKNOWN"
+    end
+    
+    if unquarantineStatus == "NOT_QUARANTINED" then
+        if chmodStatus == "SKIPPED" then
+            log:trace("Unquarantine: not quarantined, chmod skipped (already executable)")
+        else
+            log:info("Unquarantine: not quarantined, chmod " .. chmodStatus:lower())
+        end
+    elseif unquarantineStatus == "REMOVED_SUCCESS" then
+        log:info("Unquarantine: quarantine removed, chmod " .. chmodStatus:lower())
+    elseif unquarantineStatus == "REMOVED_FAILED" then
+        log:warn("Unquarantine: quarantine removal failed, chmod " .. chmodStatus:lower())
     else
         log:warn("Unquarantine: unexpected result: " .. result)
     end
