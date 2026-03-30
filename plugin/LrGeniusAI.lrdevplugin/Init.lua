@@ -216,6 +216,7 @@ local function ensureMacOSServerUnquarantined()
     
     local escapedBinary = serverBinary:gsub('"', '\\"')
     local script = 'BIN="' .. escapedBinary .. '"\n'
+    script = script .. 'chmod +x "$BIN"\n'
     script = script .. 'if xattr -p com.apple.quarantine "$BIN" >/dev/null 2>&1; then\n'
     script = script .. '    xattr -d com.apple.quarantine "$BIN" 2>&1\n'
     script = script .. '    if xattr -p com.apple.quarantine "$BIN" >/dev/null 2>&1; then\n'
@@ -236,11 +237,11 @@ local function ensureMacOSServerUnquarantined()
     handle:close()
     
     if result == "NOT_QUARANTINED" then
-        log:trace("Unquarantine: not quarantined")
+        log:trace("Unquarantine: not quarantined, chmod done")
     elseif result == "REMOVED_SUCCESS" then
-        log:info("Unquarantine: removed successfully")
+        log:info("Unquarantine: chmod +x and quarantine removed successfully")
     elseif result == "REMOVED_FAILED" then
-        log:warn("Unquarantine: failed")
+        log:warn("Unquarantine: chmod +x done, quarantine removal failed")
     else
         log:warn("Unquarantine: unexpected result: " .. result)
     end
