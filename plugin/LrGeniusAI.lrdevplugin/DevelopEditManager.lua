@@ -62,11 +62,6 @@ local AI_MASK_TOOL_CANDIDATES = {
     background = { "background", "subject", "selectSubject" },
 }
 
-local MANUAL_MASK_MODE_CANDIDATES = {
-    linear_gradient = { "linearGradient", "lineargradient", "linear" },
-    radial_gradient = { "radialGradient", "radialgradient", "radial" },
-}
-
 local HSL_LABELS = {
     red = "Red",
     orange = "Orange",
@@ -162,6 +157,9 @@ local DEVELOP_VALUE_BOUNDS = {
     ParametricLights = { min = -100, max = 100 },
     ParametricDarks = { min = -100, max = 100 },
     ParametricShadows = { min = -100, max = 100 },
+    ParametricShadowSplit = { min = 0, max = 100 },
+    ParametricMidtoneSplit = { min = 0, max = 100 },
+    ParametricHighlightSplit = { min = 0, max = 100 },
 }
 
 for _, label in pairs(HSL_LABELS) do
@@ -288,6 +286,29 @@ local function buildToneCurveSettings(toneCurve)
     if toneCurve.lights ~= nil then settings.ParametricLights = toneCurve.lights end
     if toneCurve.darks ~= nil then settings.ParametricDarks = toneCurve.darks end
     if toneCurve.shadows ~= nil then settings.ParametricShadows = toneCurve.shadows end
+    if toneCurve.shadow_split ~= nil then settings.ParametricShadowSplit = toneCurve.shadow_split end
+    if toneCurve.midtone_split ~= nil then settings.ParametricMidtoneSplit = toneCurve.midtone_split end
+    if toneCurve.highlight_split ~= nil then settings.ParametricHighlightSplit = toneCurve.highlight_split end
+
+    local pointCurve = toneCurve.point_curve
+    if type(pointCurve) == "table" then
+        if type(pointCurve.master) == "table" and #pointCurve.master >= 4 then
+            settings.ToneCurvePV2012 = pointCurve.master
+        end
+        if type(pointCurve.red) == "table" and #pointCurve.red >= 4 then
+            settings.ToneCurvePV2012Red = pointCurve.red
+        end
+        if type(pointCurve.green) == "table" and #pointCurve.green >= 4 then
+            settings.ToneCurvePV2012Green = pointCurve.green
+        end
+        if type(pointCurve.blue) == "table" and #pointCurve.blue >= 4 then
+            settings.ToneCurvePV2012Blue = pointCurve.blue
+        end
+        if settings.ToneCurvePV2012 or settings.ToneCurvePV2012Red or settings.ToneCurvePV2012Green or settings.ToneCurvePV2012Blue then
+            settings.EnableToneCurve = true
+            settings.ToneCurveName2012 = "Custom"
+        end
+    end
     return settings
 end
 
@@ -519,12 +540,25 @@ end
 local function focusPhotoInDevelop(photo, warnings)
     local catalog = LrApplication.activeCatalog()
     local ok, err = LrTasks.pcall(function()
-        catalog:setActiveSources({ catalog.kAllPhotos })
-        LrTasks.sleep(0.2)
         catalog:setSelectedPhotos(photo, { photo })
         LrApplicationView.switchToModule("develop")
         LrTasks.sleep(0.2)
     end)
+    if not ok then
+        -- Fallback for cases where the current source doesn't contain the photo.
+        local fallbackOk, fallbackErr = LrTasks.pcall(function()
+            catalog:setActiveSources({ catalog.kAllPhotos })
+            LrTasks.sleep(0.2)
+            catalog:setSelectedPhotos(photo, { photo })
+            LrApplicationView.switchToModule("develop")
+            LrTasks.sleep(0.2)
+        end)
+        if fallbackOk then
+            appendWarning(warnings, "Photo was not available in the current source; temporarily switched to All Photos for mask application.")
+            return true
+        end
+        err = fallbackErr
+    end
     if not ok then
         appendWarning(warnings, "Could not switch Lightroom to the Develop module for mask application: " .. tostring(err))
         return false
@@ -825,53 +859,7 @@ local function applyMaskEdits(photo, recipe, warnings)
         return false, nil, idOrErrWithHint or idOrErrNoHint
     end
 
-    local function createMaskWithMode(modeToken)
-        local ok, idOrErr = LrTasks.pcall(function()
-            return LrDevelopController.createNewMask(modeToken)
-        end)
-        if ok then
-            return true, extractMaskId(idOrErr), nil
-        end
-        return false, nil, idOrErr
-    end
-
-    local function createManualMaskForKind(maskKind)
-        local key = string.lower(tostring(maskKind or ""))
-        local modeCandidates = MANUAL_MASK_MODE_CANDIDATES[key]
-        if not modeCandidates or #modeCandidates == 0 then
-            return false, nil, "no manual mask mode candidates"
-        end
-        local lastErr = nil
-        for _, modeToken in ipairs(modeCandidates) do
-            local selectedTool = false
-            if type(LrDevelopController.selectMaskTool) == "function" then
-                local okSelect = LrTasks.pcall(function()
-                    LrDevelopController.selectMaskTool(modeToken)
-                end)
-                selectedTool = okSelect == true
-            end
-            local created, createdMaskId, createErr = createMaskWithMode(modeToken)
-            if created then
-                log:trace("DevelopEditManager.applyMaskEdits create manual mask kind=" .. tostring(maskKind) .. " mode=" .. tostring(modeToken) .. " selectedTool=" .. tostring(selectedTool) .. " createdMaskId=" .. tostring(createdMaskId))
-                return true, createdMaskId, nil
-            end
-            lastErr = createErr
-            log:trace("DevelopEditManager.applyMaskEdits manual create failed kind=" .. tostring(maskKind) .. " mode=" .. tostring(modeToken) .. " err=" .. tostring(createErr))
-        end
-        return false, nil, lastErr
-    end
-
     local function createMaskForKind(maskKind)
-        local normalizedKind = string.lower(tostring(maskKind or ""))
-        if MANUAL_MASK_MODE_CANDIDATES[normalizedKind] ~= nil then
-            local manualCreated, manualMaskId, manualErr = createManualMaskForKind(normalizedKind)
-            if manualCreated then
-                return true, manualMaskId, nil
-            end
-            appendWarning(warnings, "Mask kind '" .. tostring(maskKind) .. "' manual creation failed; attempting AI/brush fallback.")
-            log:trace("DevelopEditManager.applyMaskEdits manual create failed kind=" .. tostring(maskKind) .. " err=" .. tostring(manualErr))
-        end
-
         local toolCandidates = getAiMaskToolCandidates(maskKind)
         local lastAiErr = nil
         for _, toolToken in ipairs(toolCandidates) do
@@ -1026,6 +1014,17 @@ local function applyMaskEdits(photo, recipe, warnings)
             log:error("DevelopEditManager.applyMaskEdits mask failed: " .. tostring(maskKind) .. " err=" .. tostring(err))
         end
     end
+
+    -- Leave masking UI so users return to normal Develop controls.
+    if type(LrDevelopController.selectTool) == "function" then
+        local okExit, exitErr = LrTasks.pcall(function()
+            LrDevelopController.selectTool("loupe")
+        end)
+        if not okExit then
+            log:trace("DevelopEditManager.applyMaskEdits: could not exit masking mode: " .. tostring(exitErr))
+        end
+    end
+
     log:trace("DevelopEditManager.applyMaskEdits: done")
     return true
 end

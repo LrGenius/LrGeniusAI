@@ -26,10 +26,23 @@ GLOBAL_FIELD_RANGES: Dict[str, Dict[str, float]] = {
     "vibrance": {"min": -100.0, "max": 100.0},
     "saturation": {"min": -100.0, "max": 100.0},
     "sharpening": {"min": 0.0, "max": 150.0},
+    "sharpen_radius": {"min": 0.5, "max": 3.0},
+    "sharpen_detail": {"min": 0.0, "max": 100.0},
+    "sharpen_masking": {"min": 0.0, "max": 100.0},
     "noise_reduction": {"min": 0.0, "max": 100.0},
+    "noise_reduction_detail": {"min": 0.0, "max": 100.0},
+    "noise_reduction_contrast": {"min": 0.0, "max": 100.0},
     "color_noise_reduction": {"min": 0.0, "max": 100.0},
+    "color_noise_reduction_detail": {"min": 0.0, "max": 100.0},
+    "color_noise_reduction_smoothness": {"min": 0.0, "max": 100.0},
     "vignette": {"min": -100.0, "max": 100.0},
+    "vignette_midpoint": {"min": 0.0, "max": 100.0},
+    "vignette_roundness": {"min": -100.0, "max": 100.0},
+    "vignette_feather": {"min": 0.0, "max": 100.0},
+    "vignette_highlights": {"min": 0.0, "max": 100.0},
     "grain": {"min": 0.0, "max": 100.0},
+    "grain_size": {"min": 0.0, "max": 100.0},
+    "grain_roughness": {"min": 0.0, "max": 100.0},
 }
 
 MASK_ADJUSTMENT_RANGES: Dict[str, Dict[str, float]] = {
@@ -144,6 +157,31 @@ def _build_global_schema() -> Dict[str, Any]:
             "lights": _number_schema(-100.0, 100.0),
             "darks": _number_schema(-100.0, 100.0),
             "shadows": _number_schema(-100.0, 100.0),
+            "shadow_split": _number_schema(0.0, 100.0),
+            "midtone_split": _number_schema(0.0, 100.0),
+            "highlight_split": _number_schema(0.0, 100.0),
+            "point_curve": {
+                "type": "object",
+                "properties": {
+                    "master": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 255.0),
+                    },
+                    "red": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 255.0),
+                    },
+                    "green": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 255.0),
+                    },
+                    "blue": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 255.0),
+                    },
+                },
+                "additionalProperties": False,
+            },
         },
         "additionalProperties": False,
     }
@@ -291,11 +329,25 @@ def _normalize_global_settings(global_settings: Any) -> Dict[str, Any]:
 
     tone_curve = global_settings.get("tone_curve")
     if isinstance(tone_curve, dict):
-        normalized_curve: Dict[str, float] = {}
+        normalized_curve: Dict[str, Any] = {}
         for key in ("highlights", "lights", "darks", "shadows"):
             clamped = _clamp_number(tone_curve.get(key), -100.0, 100.0)
             if clamped is not None:
                 normalized_curve[key] = clamped
+        for key in ("shadow_split", "midtone_split", "highlight_split"):
+            clamped = _clamp_number(tone_curve.get(key), 0.0, 100.0)
+            if clamped is not None:
+                normalized_curve[key] = clamped
+
+        point_curve = tone_curve.get("point_curve")
+        if isinstance(point_curve, dict):
+            normalized_point_curve: Dict[str, List[int]] = {}
+            for channel in ("master", "red", "green", "blue"):
+                normalized_points = _normalize_point_curve_points(point_curve.get(channel))
+                if normalized_points:
+                    normalized_point_curve[channel] = normalized_points
+            if normalized_point_curve:
+                normalized_curve["point_curve"] = normalized_point_curve
         if normalized_curve:
             normalized["tone_curve"] = normalized_curve
 
@@ -361,6 +413,43 @@ def _normalize_global_settings(global_settings: Any) -> Dict[str, Any]:
             normalized["lens_corrections"] = normalized_lens
 
     return normalized
+
+
+def _normalize_point_curve_points(value: Any) -> List[int]:
+    if not isinstance(value, list) or len(value) < 2:
+        return []
+
+    # Accept either flat [x1, y1, x2, y2, ...] or [{x,y}, ...] / [[x,y], ...].
+    points: List[int] = []
+    if value and isinstance(value[0], (dict, list, tuple)):
+        for item in value:
+            x_val = None
+            y_val = None
+            if isinstance(item, dict):
+                x_val = item.get("x")
+                y_val = item.get("y")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                x_val = item[0]
+                y_val = item[1]
+            x = _clamp_number(x_val, 0.0, 255.0)
+            y = _clamp_number(y_val, 0.0, 255.0)
+            if x is None or y is None:
+                continue
+            points.append(int(round(x)))
+            points.append(int(round(y)))
+    else:
+        for numeric in value:
+            clamped = _clamp_number(numeric, 0.0, 255.0)
+            if clamped is None:
+                continue
+            points.append(int(round(clamped)))
+
+    # Need at least two points and an even number of entries.
+    if len(points) % 2 == 1:
+        points = points[:-1]
+    if len(points) < 4:
+        return []
+    return points
 
 
 def _normalize_masks(masks: Any, warnings: List[str]) -> List[Dict[str, Any]]:

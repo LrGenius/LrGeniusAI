@@ -11,6 +11,23 @@ class NormalizeEditRecipeTests(unittest.TestCase):
                 "exposure": 9,
                 "contrast": -120,
                 "temperature": "5600",
+                "vignette": -40,
+                "vignette_feather": 120,
+                "sharpen_radius": 4.0,
+                "noise_reduction_detail": 85,
+                "grain_size": 33,
+                "tone_curve": {
+                    "highlights": 30,
+                    "shadow_split": -5,
+                    "midtone_split": 50,
+                    "highlight_split": 150,
+                    "point_curve": {
+                        "master": [0, 0, 64, 56, 128, 136, 255, 255],
+                        "red": [{"x": 0, "y": 0}, {"x": 255, "y": 250}],
+                        "green": [[0, 3], [255, 255]],
+                        "blue": [0, 0, 255],  # odd length should be trimmed/invalid
+                    },
+                },
                 "lens_corrections": {
                     "enable_profile_corrections": True,
                     "remove_chromatic_aberration": False,
@@ -38,6 +55,19 @@ class NormalizeEditRecipeTests(unittest.TestCase):
         self.assertEqual(recipe["global"]["exposure"], 5.0)
         self.assertEqual(recipe["global"]["contrast"], -100.0)
         self.assertEqual(recipe["global"]["temperature"], 5600.0)
+        self.assertEqual(recipe["global"]["vignette"], -40.0)
+        self.assertEqual(recipe["global"]["vignette_feather"], 100.0)
+        self.assertEqual(recipe["global"]["sharpen_radius"], 3.0)
+        self.assertEqual(recipe["global"]["noise_reduction_detail"], 85.0)
+        self.assertEqual(recipe["global"]["grain_size"], 33.0)
+        self.assertEqual(recipe["global"]["tone_curve"]["highlights"], 30.0)
+        self.assertEqual(recipe["global"]["tone_curve"]["shadow_split"], 0.0)
+        self.assertEqual(recipe["global"]["tone_curve"]["midtone_split"], 50.0)
+        self.assertEqual(recipe["global"]["tone_curve"]["highlight_split"], 100.0)
+        self.assertEqual(recipe["global"]["tone_curve"]["point_curve"]["master"], [0, 0, 64, 56, 128, 136, 255, 255])
+        self.assertEqual(recipe["global"]["tone_curve"]["point_curve"]["red"], [0, 0, 255, 250])
+        self.assertEqual(recipe["global"]["tone_curve"]["point_curve"]["green"], [0, 3, 255, 255])
+        self.assertNotIn("blue", recipe["global"]["tone_curve"]["point_curve"])
         self.assertTrue(recipe["global"]["lens_corrections"]["enable_profile_corrections"])
         self.assertEqual(len(recipe["masks"]), 1)
         self.assertEqual(recipe["masks"][0]["kind"], "subject")
@@ -50,7 +80,6 @@ class NormalizeEditRecipeTests(unittest.TestCase):
         self.assertEqual(recipe["global"], {})
         self.assertEqual(recipe["masks"], [])
         self.assertTrue(recipe["warnings"])
-
 
 if __name__ == "__main__":
     unittest.main()
