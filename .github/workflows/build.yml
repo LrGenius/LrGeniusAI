@@ -3,15 +3,15 @@ name: Build LrGeniusAI Plugin and Server
 on:
   push:
     branches:
-      - dev
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
 
 jobs:
   build-and-release:
-    # Run on dev for build validation and on version tags for releases.
-    if: github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v')
+    # Run on main for build validation and on version tags for releases.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -231,6 +231,17 @@ jobs:
           COLD_START_SECONDS=$(python -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$START_TS" "$END_TS")
           echo "Measured cold start to /ping: ${COLD_START_SECONDS}s"
 
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
+            TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/python.exe"
+          else
+            TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/bin/python"
+          fi
+
+          "$TEST_PY" "server/test/api_test_client.py" \
+            --base-url "http://127.0.0.1:19819" \
+            --iterations 120 \
+            --timeout 5
+
           curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
 
       - name: Relocation import test
@@ -259,7 +270,7 @@ jobs:
           retention-days: 1
 
   build-plugin-only:
-    if: github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     name: Build Plugin Only
 

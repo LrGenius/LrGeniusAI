@@ -1,6 +1,6 @@
 <div align="center">
   <h1>🌟 LrGeniusAI</h1>
-  <p><b>A smart Lightroom Classic plugin for AI-powered tagging, describing, and semantic image search.</b></p>
+  <p><b>A smart Lightroom Classic plugin for AI-powered tagging, describing, semantic search, and develop edits.</b></p>
   
   [![Lua](https://img.shields.io/badge/Lua-2C2D72?style=for-the-badge&logo=lua&logoColor=white)]()
   [![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)]()
@@ -12,7 +12,7 @@
 
 ## 📖 About the Project
 
-**LrGeniusAI** brings the power of modern Large Language Models (LLMs) directly into Adobe Lightroom Classic. It analyzes your photos, automatically generates accurate tags and detailed descriptions, and lets you rediscover your library with a semantic free-text search using natural language.
+**LrGeniusAI** brings the power of modern Large Language Models (LLMs) directly into Adobe Lightroom Classic. It analyzes your photos, automatically generates accurate tags and detailed descriptions, creates AI-guided Lightroom develop edit recipes, and lets you rediscover your library with semantic free-text search using natural language.
 
 Whether you prefer running local models to ensure maximum privacy or want to leverage powerful cloud APIs, LrGeniusAI seamlessly adapts to your photography workflow.
 
@@ -21,9 +21,10 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 ## ✨ Core Features
 
 - **🤖 AI-Powered Tagging & Describing:** Uses advanced LLMs to accurately recognize image content, generate metadata, and provide detailed descriptions of your photos.
+- **🎛️ AI Lightroom Edit (Develop):** Generates a structured Lightroom edit recipe per photo (global adjustments and optional masks) and can apply it directly in Develop mode. Includes per-photo review, style presets, style strength, composition/crop mode, and per-photo instruction overrides.
 - **🔍 Semantic Free-Text Search (Advanced Search):** Find images naturally through descriptive queries (e.g., *"Red sports car parked in front of a garage"* or *"Sunset over the mountains"*). LrGeniusAI automatically creates a relevance-sorted Collection in Lightroom based on your prompt.
 - **📸 Image Culling:** Group similar photos into bursts or near-duplicate stacks, automatically pick the strongest frames, and create Lightroom collections for picks, alternates, reject candidates, and optional duplicates.
-- **☁️ Local & Cloud Models:** Full support for local AI models via **Ollama** and **LM Studio**, as well as integration with cloud providers like **Google Gemini** and **Vertex AI**.
+- **☁️ Local & Cloud Models:** Full support for local AI models via **Ollama** and **LM Studio**, as well as integration with cloud providers like **ChatGPT/OpenAI**, **Google Gemini**, and **Vertex AI**.
 - **🎨 Customizable Prompts & Temperature Control:** System prompts for the AI can be added, edited, and deleted directly within the Lightroom Plug-In Manager. Use the temperature slider to control whether the AI should be highly creative or strictly consistent.
 - **📝 Photo Context (Contextual Info):** Provide manual hints to the AI before analysis (e.g., names of people or specific background details) that aren't immediately obvious from the image itself. This can be done via a popup dialog or directly in Lightroom's metadata panel.
 - **🗄️ Custom Python Backend & Database:** The plugin utilizes a high-performance local server (`geniusai-server`). Existing metadata from your Lightroom catalog can easily be imported prior to the first AI analysis.
@@ -38,7 +39,11 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
    - The backend now starts automatically from Lightroom.
    - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required with the micromamba-based release package.
    - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
-4. Select your photos in the library and choose from the menu: **Library -> Plug-in Extras -> Analyze & Index photos**.
+4. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
+   - **Analyze & Index Photos...** for tags/descriptions/search index
+   - **AI Edit Photos...** to generate and apply Lightroom develop edits
+   - **Advanced Search...** for semantic free-text search
+5. For AI Edit, start with defaults, keep **Review each proposed edit before applying it** enabled, and tune style via **Overall look** + **Style strength**.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
 
