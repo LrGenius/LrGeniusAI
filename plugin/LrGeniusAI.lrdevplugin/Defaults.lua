@@ -72,6 +72,12 @@ Defaults.editIntentPresets = {
     { title = "Custom", value = "custom", instruction = "" },
 }
 Defaults.defaultEditStyleStrength = 0.5
+Defaults.defaultCompositionMode = "subtle"
+Defaults.compositionModes = {
+    { title = "No crop", value = "none" },
+    { title = "Subtle crop", value = "subtle" },
+    { title = "Aggressive crop", value = "aggressive" },
+}
 
 Defaults.catalogWriteAccessOptions = {
     timeout = 60,  -- seconds

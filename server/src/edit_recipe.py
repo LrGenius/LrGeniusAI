@@ -642,7 +642,8 @@ def filter_edit_recipe_by_controls(recipe: Dict[str, Any], controls: Dict[str, b
         )
     if not controls.get("adjust_lens_corrections", True):
         _drop(["lens_corrections"])
-    if not controls.get("allow_auto_crop", True):
+    composition_mode = str(controls.get("composition_mode", "subtle")).lower()
+    if composition_mode == "none" or not controls.get("allow_auto_crop", True):
         _drop(["crop"])
 
     masks = filtered.get("masks")

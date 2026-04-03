@@ -122,6 +122,7 @@ class EditGenerationRequest:
     adjust_effects: bool = True
     adjust_lens_corrections: bool = True
     allow_auto_crop: bool = True
+    composition_mode: str = "subtle"
     ollama_base_url: Optional[str] = None
     lmstudio_base_url: Optional[str] = None
 
@@ -366,6 +367,14 @@ class LLMProviderBase(ABC):
             base_prompt += "* Do not use `lens_corrections`\n"
         if not request.allow_auto_crop:
             base_prompt += "* Do not use `crop`\n"
+        else:
+            composition_mode = str(request.composition_mode or "subtle").lower()
+            if composition_mode == "none":
+                base_prompt += "* Do not use `crop`\n"
+            elif composition_mode == "subtle":
+                base_prompt += "* If using `crop`, keep it subtle: preserve overall framing and avoid aggressive trims\n"
+            elif composition_mode == "aggressive":
+                base_prompt += "* Crop may be assertive when composition clearly improves; keep key subjects and avoid awkward cutoffs\n"
 
         context_additions: List[str] = []
         if request.edit_intent:

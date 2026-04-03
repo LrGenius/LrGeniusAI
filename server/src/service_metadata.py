@@ -305,6 +305,7 @@ class AnalysisService:
             adjust_effects=options.get('adjust_effects', True),
             adjust_lens_corrections=options.get('adjust_lens_corrections', True),
             allow_auto_crop=options.get('allow_auto_crop', True),
+            composition_mode=options.get('composition_mode', 'subtle'),
             ollama_base_url=options.get('ollama_base_url'),
             lmstudio_base_url=options.get('lmstudio_base_url'),
         )
@@ -327,6 +328,7 @@ class AnalysisService:
                         "adjust_effects": request.adjust_effects,
                         "adjust_lens_corrections": request.adjust_lens_corrections,
                         "allow_auto_crop": request.allow_auto_crop,
+                        "composition_mode": request.composition_mode,
                     },
                 )
             if not response.success:

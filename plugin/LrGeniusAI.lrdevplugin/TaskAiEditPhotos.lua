@@ -67,6 +67,15 @@ local function buildEditIntentPresetItems()
     return items
 end
 
+local function hasCompositionModeValue(value)
+    for _, item in ipairs(Defaults.compositionModes or {}) do
+        if item.value == value then
+            return true
+        end
+    end
+    return false
+end
+
 local function showPhotoInstructionDialog(ctx, photo)
     local f = LrView.osFactory()
     local bind = LrView.bind
@@ -161,6 +170,11 @@ local function showAiEditDialog(ctx)
     props.adjustEffects = prefs.aiEditAdjustEffects ~= false
     props.adjustLensCorrections = prefs.aiEditAdjustLensCorrections ~= false
     props.allowAutoCrop = prefs.aiEditAllowAutoCrop ~= false
+    props.compositionModes = Defaults.compositionModes or {}
+    props.compositionMode = prefs.aiEditCompositionMode or Defaults.defaultCompositionMode or "subtle"
+    if not hasCompositionModeValue(props.compositionMode) then
+        props.compositionMode = Defaults.defaultCompositionMode or "subtle"
+    end
     props.submitGPS = prefs.aiEditSubmitGPS or false
     props.submitKeywords = prefs.aiEditSubmitKeywords ~= false
     props.submitFolderName = prefs.aiEditSubmitFolderName or false
@@ -492,6 +506,17 @@ local function showAiEditDialog(ctx)
                     title = "Allow AI auto crop",
                 },
             },
+            f:row {
+                f:static_text {
+                    title = "Composition mode:",
+                    width = share "labelWidth",
+                },
+                f:popup_menu {
+                    value = bind "compositionMode",
+                    items = bind "compositionModes",
+                    width = 300,
+                },
+            },
         },
         f:group_box {
             title = "Context",
@@ -555,6 +580,7 @@ local function showAiEditDialog(ctx)
     prefs.aiEditAdjustEffects = props.adjustEffects
     prefs.aiEditAdjustLensCorrections = props.adjustLensCorrections
     prefs.aiEditAllowAutoCrop = props.allowAutoCrop
+    prefs.aiEditCompositionMode = props.compositionMode
     prefs.aiEditSubmitGPS = props.submitGPS
     prefs.aiEditSubmitKeywords = props.submitKeywords
     prefs.aiEditSubmitFolderName = props.submitFolderName
@@ -592,6 +618,7 @@ local function showAiEditDialog(ctx)
         adjust_effects = props.adjustEffects,
         adjust_lens_corrections = props.adjustLensCorrections,
         allow_auto_crop = props.allowAutoCrop,
+        composition_mode = props.compositionMode,
         applyMasks = props.applyMasks,
         reviewBeforeApply = props.reviewBeforeApply,
         submit_gps = props.submitGPS,
@@ -685,6 +712,7 @@ LrTasks.startAsyncTask(function()
             .. " effects=" .. tostring(options.adjust_effects)
             .. " lens=" .. tostring(options.adjust_lens_corrections)
             .. " crop=" .. tostring(options.allow_auto_crop)
+            .. " composition=" .. tostring(options.composition_mode)
         )
 
         local photos, status = PhotoSelector.getPhotosInScope(options.scope)

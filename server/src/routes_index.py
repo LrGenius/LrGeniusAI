@@ -142,6 +142,10 @@ def _extract_options(data):
     if allow_auto_crop_val is None:
         allow_auto_crop_val = 'true'
     options['allow_auto_crop'] = str(allow_auto_crop_val).lower() == 'true'
+    composition_mode = str(data.get('composition_mode', 'subtle')).lower().strip()
+    if composition_mode not in ('none', 'subtle', 'aggressive'):
+        composition_mode = 'subtle'
+    options['composition_mode'] = composition_mode
     # Optional capture time from Lightroom catalog.
     # `date_time_unix` is a float seconds-since-epoch value; `date_time` is an
     # ISO/W3C string kept for backwards compatibility.

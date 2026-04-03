@@ -154,7 +154,8 @@ class NormalizeEditRecipeTests(unittest.TestCase):
                 "adjust_detail": False,
                 "adjust_effects": False,
                 "adjust_lens_corrections": False,
-                "allow_auto_crop": False,
+                "allow_auto_crop": True,
+                "composition_mode": "none",
             },
         )
 
