@@ -15,10 +15,23 @@ local GLOBAL_KEY_MAP = {
     vibrance = "Vibrance",
     saturation = "Saturation",
     sharpening = "Sharpness",
+    sharpen_radius = "SharpenRadius",
+    sharpen_detail = "SharpenDetail",
+    sharpen_masking = "SharpenEdgeMasking",
     noise_reduction = "LuminanceSmoothing",
+    noise_reduction_detail = "LuminanceNoiseReductionDetail",
+    noise_reduction_contrast = "LuminanceNoiseReductionContrast",
     color_noise_reduction = "ColorNoiseReduction",
+    color_noise_reduction_detail = "ColorNoiseReductionDetail",
+    color_noise_reduction_smoothness = "ColorNoiseReductionSmoothness",
     vignette = "PostCropVignetteAmount",
+    vignette_midpoint = "PostCropVignetteMidpoint",
+    vignette_roundness = "PostCropVignetteRoundness",
+    vignette_feather = "PostCropVignetteFeather",
+    vignette_highlights = "PostCropVignetteHighlightContrast",
     grain = "GrainAmount",
+    grain_size = "GrainSize",
+    grain_roughness = "GrainFrequency",
 }
 
 local MASK_KEY_CANDIDATES = {
@@ -39,6 +52,21 @@ local MASK_KEY_CANDIDATES = {
     moire = { "local_Moire" },
 }
 
+local AI_MASK_TOOL_CANDIDATES = {
+    subject = { "subject", "selectSubject", "person" },
+    sky = { "sky", "selectSky" },
+    people = { "people", "person" },
+    person = { "person", "people" },
+    object = { "object", "objects" },
+    objects = { "objects", "object" },
+    background = { "background", "subject", "selectSubject" },
+}
+
+local MANUAL_MASK_MODE_CANDIDATES = {
+    linear_gradient = { "linearGradient", "lineargradient", "linear" },
+    radial_gradient = { "radialGradient", "radialgradient", "radial" },
+}
+
 local HSL_LABELS = {
     red = "Red",
     orange = "Orange",
@@ -49,6 +77,101 @@ local HSL_LABELS = {
     purple = "Purple",
     magenta = "Magenta",
 }
+
+local ADDITIVE_GLOBAL_KEYS = {
+    Exposure2012 = true,
+    Contrast2012 = true,
+    Highlights2012 = true,
+    Shadows2012 = true,
+    Whites2012 = true,
+    Blacks2012 = true,
+    Temp = true,
+    Tint = true,
+    Texture = true,
+    Clarity2012 = true,
+    Dehaze = true,
+    Vibrance = true,
+    Saturation = true,
+    Sharpness = true,
+    SharpenRadius = true,
+    SharpenDetail = true,
+    SharpenEdgeMasking = true,
+    LuminanceSmoothing = true,
+    LuminanceNoiseReductionDetail = true,
+    LuminanceNoiseReductionContrast = true,
+    ColorNoiseReduction = true,
+    ColorNoiseReductionDetail = true,
+    ColorNoiseReductionSmoothness = true,
+    PostCropVignetteAmount = true,
+    PostCropVignetteMidpoint = true,
+    PostCropVignetteRoundness = true,
+    PostCropVignetteFeather = true,
+    PostCropVignetteHighlightContrast = true,
+    GrainAmount = true,
+    GrainSize = true,
+    GrainFrequency = true,
+    SplitToningShadowHue = true,
+    SplitToningShadowSaturation = true,
+    SplitToningHighlightHue = true,
+    SplitToningHighlightSaturation = true,
+    SplitToningBalance = true,
+    ParametricHighlights = true,
+    ParametricLights = true,
+    ParametricDarks = true,
+    ParametricShadows = true,
+}
+
+local DEVELOP_VALUE_BOUNDS = {
+    Exposure2012 = { min = -5, max = 5 },
+    Contrast2012 = { min = -100, max = 100 },
+    Highlights2012 = { min = -100, max = 100 },
+    Shadows2012 = { min = -100, max = 100 },
+    Whites2012 = { min = -100, max = 100 },
+    Blacks2012 = { min = -100, max = 100 },
+    Temp = { min = 2000, max = 50000 },
+    Tint = { min = -150, max = 150 },
+    Texture = { min = -100, max = 100 },
+    Clarity2012 = { min = -100, max = 100 },
+    Dehaze = { min = -100, max = 100 },
+    Vibrance = { min = -100, max = 100 },
+    Saturation = { min = -100, max = 100 },
+    Sharpness = { min = 0, max = 150 },
+    SharpenRadius = { min = 0.5, max = 3.0 },
+    SharpenDetail = { min = 0, max = 100 },
+    SharpenEdgeMasking = { min = 0, max = 100 },
+    LuminanceSmoothing = { min = 0, max = 100 },
+    LuminanceNoiseReductionDetail = { min = 0, max = 100 },
+    LuminanceNoiseReductionContrast = { min = 0, max = 100 },
+    ColorNoiseReduction = { min = 0, max = 100 },
+    ColorNoiseReductionDetail = { min = 0, max = 100 },
+    ColorNoiseReductionSmoothness = { min = 0, max = 100 },
+    PostCropVignetteAmount = { min = -100, max = 100 },
+    PostCropVignetteMidpoint = { min = 0, max = 100 },
+    PostCropVignetteRoundness = { min = -100, max = 100 },
+    PostCropVignetteFeather = { min = 0, max = 100 },
+    PostCropVignetteHighlightContrast = { min = 0, max = 100 },
+    GrainAmount = { min = 0, max = 100 },
+    GrainSize = { min = 0, max = 100 },
+    GrainFrequency = { min = 0, max = 100 },
+    SplitToningShadowHue = { min = 0, max = 360, wrap = true },
+    SplitToningShadowSaturation = { min = 0, max = 100 },
+    SplitToningHighlightHue = { min = 0, max = 360, wrap = true },
+    SplitToningHighlightSaturation = { min = 0, max = 100 },
+    SplitToningBalance = { min = -100, max = 100 },
+    ParametricHighlights = { min = -100, max = 100 },
+    ParametricLights = { min = -100, max = 100 },
+    ParametricDarks = { min = -100, max = 100 },
+    ParametricShadows = { min = -100, max = 100 },
+}
+
+for _, label in pairs(HSL_LABELS) do
+    DEVELOP_VALUE_BOUNDS["HueAdjustment" .. label] = { min = -100, max = 100 }
+    DEVELOP_VALUE_BOUNDS["SaturationAdjustment" .. label] = { min = -100, max = 100 }
+    DEVELOP_VALUE_BOUNDS["LuminanceAdjustment" .. label] = { min = -100, max = 100 }
+    ADDITIVE_GLOBAL_KEYS["HueAdjustment" .. label] = true
+    ADDITIVE_GLOBAL_KEYS["SaturationAdjustment" .. label] = true
+    ADDITIVE_GLOBAL_KEYS["LuminanceAdjustment" .. label] = true
+end
 
 local function appendWarning(warnings, text)
     if warnings and text and text ~= "" then
@@ -177,7 +300,7 @@ local function buildLensCorrectionSettings(lensCorrections, warnings)
         settings.EnableLensCorrections = lensCorrections.enable_profile_corrections
     end
     if lensCorrections.remove_chromatic_aberration ~= nil then
-        appendWarning(warnings, "Chromatic aberration removal is not currently mapped by the Lightroom plugin and was ignored.")
+        settings.AutoLateralCA = lensCorrections.remove_chromatic_aberration
     end
     return settings
 end
@@ -186,6 +309,48 @@ local function mergeSettings(target, source)
     for key, value in pairs(source or {}) do
         target[key] = value
     end
+end
+
+local function normalizeDevelopValue(key, value)
+    if type(value) ~= "number" then
+        return value
+    end
+    local bounds = DEVELOP_VALUE_BOUNDS[key]
+    if not bounds then
+        return value
+    end
+    if bounds.wrap then
+        local span = bounds.max - bounds.min
+        if span <= 0 then
+            return value
+        end
+        local shifted = value - bounds.min
+        local wrapped = shifted - math.floor(shifted / span) * span
+        return bounds.min + wrapped
+    end
+    if value < bounds.min then
+        return bounds.min
+    end
+    if value > bounds.max then
+        return bounds.max
+    end
+    return value
+end
+
+local function mergeGlobalDevelopSettings(currentSettings, aiSettings)
+    local merged = {}
+    for key, value in pairs(aiSettings or {}) do
+        if ADDITIVE_GLOBAL_KEYS[key] and type(value) == "number" then
+            local baseValue = currentSettings and currentSettings[key]
+            if type(baseValue) ~= "number" then
+                baseValue = 0
+            end
+            merged[key] = normalizeDevelopValue(key, baseValue + value)
+        else
+            merged[key] = normalizeDevelopValue(key, value)
+        end
+    end
+    return merged
 end
 
 local function formatGlobalSettings(globalSettings)
@@ -297,6 +462,10 @@ function DevelopEditManager.persistEditRecipe(photo, response, warnings, status)
     local recipeJson = recipeJsonOrErr
 
     local warningText = #allWarnings > 0 and table.concat(allWarnings, "\n") or ""
+    if #warningText > 500 then
+        warningText = string.sub(warningText, 1, 500)
+        appendWarning(allWarnings, "Warnings were truncated for Lightroom metadata field size limits.")
+    end
     log:trace("DevelopEditManager.persistEditRecipe: warningText length=" .. tostring(#warningText))
     local runDate = (type(response) == "table" and (response.edit_rundate or response.ai_rundate)) or ""
     if runDate == "" then
@@ -371,10 +540,21 @@ local function applyGlobalDevelopSettings(photo, recipe, warnings)
         return true
     end
 
+    local mergedSettings = developSettings
+    local okCurrent, currentOrErr = LrTasks.pcall(function()
+        return photo:getDevelopSettings()
+    end)
+    if okCurrent and type(currentOrErr) == "table" then
+        mergedSettings = mergeGlobalDevelopSettings(currentOrErr, developSettings)
+    else
+        appendWarning(warnings, "Could not read current develop settings for additive merge; AI edits were applied directly.")
+        log:warn("DevelopEditManager.applyGlobalDevelopSettings current settings unavailable: " .. tostring(currentOrErr))
+    end
+
     local catalog = LrApplication.activeCatalog()
     local ok, err = LrTasks.pcall(function()
         catalog:withWriteAccessDo("Apply AI Lightroom develop settings", function()
-            photo:applyDevelopSettings(developSettings)
+            photo:applyDevelopSettings(mergedSettings)
         end, Defaults.catalogWriteAccessOptions)
     end)
     if not ok then
@@ -389,7 +569,6 @@ end
 local function supportsMaskAutomation()
     return type(LrDevelopController) == "table"
         and type(LrDevelopController.createNewMask) == "function"
-        and type(LrDevelopController.setValue) == "function"
 end
 
 local function applyMaskEdits(photo, recipe, warnings)
@@ -413,6 +592,112 @@ local function applyMaskEdits(photo, recipe, warnings)
         LrTasks.pcall(function()
             LrDevelopController.goToMasking()
         end)
+    end
+
+    local function findMaskGroup(settings)
+        if type(settings) ~= "table" then
+            return nil, nil
+        end
+        if type(settings.MaskGroup) == "table" then
+            return "MaskGroup", settings.MaskGroup
+        end
+        if type(settings.MaskGroupBasedCorrections) == "table" then
+            return "MaskGroupBasedCorrections", settings.MaskGroupBasedCorrections
+        end
+        return nil, nil
+    end
+
+    local function logMaskedDevelopSnapshot(stageLabel)
+        local ok, settingsOrErr = LrTasks.pcall(function()
+            return photo:getDevelopSettings()
+        end)
+        if not ok or type(settingsOrErr) ~= "table" then
+            log:trace("DevelopEditManager.applyMaskEdits snapshot(" .. tostring(stageLabel) .. "): no develop settings")
+            return
+        end
+        local groupKey, masks = findMaskGroup(settingsOrErr)
+        if type(masks) ~= "table" then
+            local maskLikeKeys = {}
+            for key, value in pairs(settingsOrErr) do
+                if type(key) == "string" and string.find(key, "Mask") and type(value) == "table" then
+                    table.insert(maskLikeKeys, key)
+                end
+            end
+            table.sort(maskLikeKeys)
+            log:trace("DevelopEditManager.applyMaskEdits snapshot(" .. tostring(stageLabel) .. "): no mask group found; mask-like keys=" .. tostring(table.concat(maskLikeKeys, ",")))
+            return
+        end
+        local dump = ""
+        local okDump, dumpOrErr = LrTasks.pcall(function()
+            return Util.dumpTable(masks)
+        end)
+        if okDump and type(dumpOrErr) == "string" then
+            dump = dumpOrErr
+        end
+        if #dump > 1800 then
+            dump = string.sub(dump, 1, 1800) .. "...(truncated)"
+        end
+        log:trace("DevelopEditManager.applyMaskEdits snapshot(" .. tostring(stageLabel) .. "): group=" .. tostring(groupKey) .. " maskCount=" .. tostring(#masks) .. " masks=" .. tostring(dump))
+    end
+
+    local function applyMaskAdjustmentsViaDevelopSettings(maskKind, adjustments)
+        if type(adjustments) ~= "table" then
+            return false, "no adjustments"
+        end
+        local catalog = LrApplication.activeCatalog()
+        local ok, err = LrTasks.pcall(function()
+            catalog:withWriteAccessDo("Apply AI mask adjustments via develop settings", function()
+                local settings = photo:getDevelopSettings()
+                local _, maskGroup = findMaskGroup(settings)
+                if type(maskGroup) ~= "table" or #maskGroup == 0 then
+                    error("mask group not available in develop settings")
+                end
+
+                -- Newly created mask is typically appended; target the latest one.
+                local targetMask = maskGroup[#maskGroup]
+                if type(targetMask) ~= "table" then
+                    error("last mask entry is not a table")
+                end
+                local correction = targetMask.Correction
+                if type(correction) ~= "table" then
+                    correction = targetMask.correction
+                end
+                if type(correction) ~= "table" then
+                    correction = targetMask.Adjustments
+                end
+                if type(correction) ~= "table" then
+                    correction = targetMask.adjustments
+                end
+                if type(correction) ~= "table" then
+                    correction = {}
+                    targetMask.Correction = correction
+                end
+
+                for key, value in pairs(adjustments) do
+                    local candidates = MASK_KEY_CANDIDATES[key]
+                    local written = false
+                    if candidates and #candidates > 0 then
+                        for _, candidate in ipairs(candidates) do
+                            correction[candidate] = value
+                            written = true
+                        end
+                    end
+                    if not written then
+                        appendWarning(warnings, "Mask adjustment '" .. tostring(key) .. "' is not currently supported and was ignored.")
+                    end
+                end
+
+                photo:applyDevelopSettings(settings)
+                if type(photo.updateAISettings) == "function" then
+                    photo:updateAISettings()
+                end
+            end, Defaults.catalogWriteAccessOptions)
+        end)
+        if not ok then
+            return false, err
+        end
+        log:trace("DevelopEditManager.applyMaskEdits applied adjustments via develop settings for mask kind=" .. tostring(maskKind))
+        return true, nil
     end
 
     local function readMaskList()
@@ -472,98 +757,269 @@ local function applyMaskEdits(photo, recipe, warnings)
         return ok == true
     end
 
-    local function createMaskForKind(maskKind)
-        -- SDK-valid top-level types: brush, gradient, radialGradient, rangeMask, aiSelection
-        -- Map semantic recipe kinds to aiSelection and provide hint where possible.
-        local okAiWithHint, errAiWithHint = LrTasks.pcall(function()
-            LrDevelopController.createNewMask("aiSelection", maskKind)
+    local function getSelectedMaskId()
+        if type(LrDevelopController.getSelectedMask) ~= "function" then
+            return nil
+        end
+        local ok, selectedOrErr = LrTasks.pcall(function()
+            return LrDevelopController.getSelectedMask()
         end)
-        if okAiWithHint then
+        if not ok then
+            return nil
+        end
+        local selectedDump = ""
+        local okDump, dumpOrErr = LrTasks.pcall(function()
+            return Util.dumpTable(selectedOrErr)
+        end)
+        if okDump and type(dumpOrErr) == "string" then
+            selectedDump = dumpOrErr
+            if #selectedDump > 800 then
+                selectedDump = string.sub(selectedDump, 1, 800) .. "...(truncated)"
+            end
+        end
+        log:trace("DevelopEditManager.applyMaskEdits selectedMask raw=" .. tostring(selectedDump))
+        return extractMaskId(selectedOrErr)
+    end
+
+    local function getAiMaskToolCandidates(maskKind)
+        local key = string.lower(tostring(maskKind or ""))
+        local mapped = AI_MASK_TOOL_CANDIDATES[key]
+        if mapped and #mapped > 0 then
+            return mapped
+        end
+        return { key }
+    end
+
+    local function selectAiMaskTool(toolToken)
+        if type(LrDevelopController.selectMaskTool) ~= "function" then
+            return false, "selectMaskTool unavailable"
+        end
+        local okOneArg, errOneArg = LrTasks.pcall(function()
+            LrDevelopController.selectMaskTool(toolToken)
+        end)
+        if okOneArg then
             return true, nil
         end
-
-        local okAiFallback, errAiFallback = LrTasks.pcall(function()
-            LrDevelopController.createNewMask("aiSelection")
+        local okTwoArgs, errTwoArgs = LrTasks.pcall(function()
+            LrDevelopController.selectMaskTool("aiSelection", toolToken)
         end)
-        if okAiFallback then
-            if type(LrDevelopController.selectMaskTool) == "function" then
-                -- Best-effort; ignore failures because SDK behavior differs by version.
-                LrTasks.pcall(function()
-                    LrDevelopController.selectMaskTool(maskKind)
-                end)
-            end
+        if okTwoArgs then
             return true, nil
+        end
+        return false, errTwoArgs or errOneArg
+    end
+
+    local function createAiSelectionMask(toolToken)
+        local okWithHint, idOrErrWithHint = LrTasks.pcall(function()
+            return LrDevelopController.createNewMask("aiSelection", toolToken)
+        end)
+        if okWithHint then
+            return true, extractMaskId(idOrErrWithHint), nil
+        end
+        local okNoHint, idOrErrNoHint = LrTasks.pcall(function()
+            return LrDevelopController.createNewMask("aiSelection")
+        end)
+        if okNoHint then
+            return true, extractMaskId(idOrErrNoHint), nil
+        end
+        return false, nil, idOrErrWithHint or idOrErrNoHint
+    end
+
+    local function createMaskWithMode(modeToken)
+        local ok, idOrErr = LrTasks.pcall(function()
+            return LrDevelopController.createNewMask(modeToken)
+        end)
+        if ok then
+            return true, extractMaskId(idOrErr), nil
+        end
+        return false, nil, idOrErr
+    end
+
+    local function createManualMaskForKind(maskKind)
+        local key = string.lower(tostring(maskKind or ""))
+        local modeCandidates = MANUAL_MASK_MODE_CANDIDATES[key]
+        if not modeCandidates or #modeCandidates == 0 then
+            return false, nil, "no manual mask mode candidates"
+        end
+        local lastErr = nil
+        for _, modeToken in ipairs(modeCandidates) do
+            local selectedTool = false
+            if type(LrDevelopController.selectMaskTool) == "function" then
+                local okSelect = LrTasks.pcall(function()
+                    LrDevelopController.selectMaskTool(modeToken)
+                end)
+                selectedTool = okSelect == true
+            end
+            local created, createdMaskId, createErr = createMaskWithMode(modeToken)
+            if created then
+                log:trace("DevelopEditManager.applyMaskEdits create manual mask kind=" .. tostring(maskKind) .. " mode=" .. tostring(modeToken) .. " selectedTool=" .. tostring(selectedTool) .. " createdMaskId=" .. tostring(createdMaskId))
+                return true, createdMaskId, nil
+            end
+            lastErr = createErr
+            log:trace("DevelopEditManager.applyMaskEdits manual create failed kind=" .. tostring(maskKind) .. " mode=" .. tostring(modeToken) .. " err=" .. tostring(createErr))
+        end
+        return false, nil, lastErr
+    end
+
+    local function createMaskForKind(maskKind)
+        local normalizedKind = string.lower(tostring(maskKind or ""))
+        if MANUAL_MASK_MODE_CANDIDATES[normalizedKind] ~= nil then
+            local manualCreated, manualMaskId, manualErr = createManualMaskForKind(normalizedKind)
+            if manualCreated then
+                return true, manualMaskId, nil
+            end
+            appendWarning(warnings, "Mask kind '" .. tostring(maskKind) .. "' manual creation failed; attempting AI/brush fallback.")
+            log:trace("DevelopEditManager.applyMaskEdits manual create failed kind=" .. tostring(maskKind) .. " err=" .. tostring(manualErr))
+        end
+
+        local toolCandidates = getAiMaskToolCandidates(maskKind)
+        local lastAiErr = nil
+        for _, toolToken in ipairs(toolCandidates) do
+            local selectedTool, selectErr = selectAiMaskTool(toolToken)
+            if not selectedTool then
+                lastAiErr = selectErr
+            end
+            local created, createdMaskId, createErr = createAiSelectionMask(toolToken)
+            if created then
+                log:trace("DevelopEditManager.applyMaskEdits create mask kind=" .. tostring(maskKind) .. " using ai tool token=" .. tostring(toolToken) .. " selectedTool=" .. tostring(selectedTool) .. " createdMaskId=" .. tostring(createdMaskId))
+                return true, createdMaskId, nil
+            end
+            lastAiErr = createErr or lastAiErr
+            log:trace("DevelopEditManager.applyMaskEdits ai create failed kind=" .. tostring(maskKind) .. " token=" .. tostring(toolToken) .. " err=" .. tostring(createErr))
         end
 
         local okBrush, errBrush = LrTasks.pcall(function()
-            LrDevelopController.createNewMask("brush")
+            return LrDevelopController.createNewMask("brush")
         end)
         if okBrush then
             appendWarning(warnings, "Mask kind '" .. tostring(maskKind) .. "' fell back to brush; refine manually.")
-            return true, nil
+            return true, extractMaskId(errBrush), nil
         end
 
-        return false, errAiFallback or errAiWithHint or errBrush
+        return false, nil, lastAiErr or errBrush
+    end
+
+    local function waitForMaskId(beforeMasks, immediateMaskId)
+        if immediateMaskId then
+            return immediateMaskId
+        end
+        for _ = 1, 12 do
+            local masksAfter = readMaskList()
+            local newMaskId = findNewMaskId(beforeMasks, masksAfter)
+            if newMaskId then
+                return newMaskId
+            end
+            local selectedMaskId = getSelectedMaskId()
+            if selectedMaskId then
+                return selectedMaskId
+            end
+            if #masksAfter > 0 then
+                local lastId = extractMaskId(masksAfter[#masksAfter])
+                if lastId then
+                    return lastId
+                end
+            end
+            LrTasks.sleep(0.1)
+        end
+        return nil
     end
 
     for _, mask in ipairs(masks) do
         local maskKind = tostring(mask.kind or "")
         local ok, err = LrTasks.pcall(function()
+            logMaskedDevelopSnapshot("before_" .. maskKind)
             local masksBefore = readMaskList()
-            local created, createErr = createMaskForKind(maskKind)
+            local created, createdMaskId, createErr = createMaskForKind(maskKind)
             if not created then
                 error("createNewMask failed: " .. tostring(createErr))
             end
-            local masksAfter = readMaskList()
-            local newMaskId = findNewMaskId(masksBefore, masksAfter)
+            local newMaskId = waitForMaskId(masksBefore, createdMaskId)
+            local hasMaskContext = false
             if newMaskId then
                 local selected = selectMaskById(newMaskId)
+                hasMaskContext = selected or type(LrDevelopController.selectMask) ~= "function"
                 log:trace("DevelopEditManager.applyMaskEdits created mask kind=" .. tostring(maskKind) .. " newMaskId=" .. tostring(newMaskId) .. " selectOk=" .. tostring(selected))
             else
+                hasMaskContext = false
                 log:trace("DevelopEditManager.applyMaskEdits created mask kind=" .. tostring(maskKind) .. " but could not identify new mask id")
             end
+            logMaskedDevelopSnapshot("after_create_" .. maskKind)
+
+            -- AI mask generation can complete asynchronously; give LR a moment.
+            LrTasks.sleep(0.35)
 
             -- Best-effort to ensure local adjustment context is active.
             LrTasks.pcall(function()
-                LrDevelopController.setValue("local_Amount", 1)
+                LrDevelopController.setValue("local_Amount", 100)
             end)
-            if mask.invert and type(LrDevelopController.toggleInvertMaskTool) == "function" then
+            local shouldInvert = mask.invert or (string.lower(maskKind) == "background")
+            if shouldInvert and type(LrDevelopController.toggleInvertMaskTool) == "function" then
                 LrDevelopController.toggleInvertMaskTool()
             end
-            for key, value in pairs(mask.adjustments or {}) do
-                local candidates = MASK_KEY_CANDIDATES[key]
-                if candidates and #candidates > 0 then
-                    local applied = false
-                    local lastErr = nil
-                    for _, candidate in ipairs(candidates) do
-                        local setOk, setErr = LrTasks.pcall(function()
-                            LrDevelopController.setValue(candidate, value)
-                        end)
-                        if setOk then
-                            applied = true
-                            local readBack = nil
-                            if type(LrDevelopController.getValue) == "function" then
-                                local rbOk, rbVal = LrTasks.pcall(function()
-                                    return LrDevelopController.getValue(candidate)
-                                end)
-                                if rbOk then
-                                    readBack = rbVal
+            local controllerAppliedCount = 0
+            if type(LrDevelopController.setValue) == "function" then
+                for key, value in pairs(mask.adjustments or {}) do
+                    local candidates = MASK_KEY_CANDIDATES[key]
+                    if candidates and #candidates > 0 then
+                        local applied = false
+                        local lastErr = nil
+                        for _, candidate in ipairs(candidates) do
+                            local setOk, setErr = LrTasks.pcall(function()
+                                LrDevelopController.setValue(candidate, value)
+                            end)
+                            if setOk then
+                                local readBack = nil
+                                local readBackOk = false
+                                if type(LrDevelopController.getValue) == "function" then
+                                    local rbOk, rbVal = LrTasks.pcall(function()
+                                        return LrDevelopController.getValue(candidate)
+                                    end)
+                                    if rbOk then
+                                        readBack = rbVal
+                                        readBackOk = true
+                                    end
                                 end
+                                -- Lightroom may apply local mask adjustments even when getValue() cannot
+                                -- read the local slider (returns nil on some SDK versions).
+                                applied = hasMaskContext
+                                if hasMaskContext then
+                                    controllerAppliedCount = controllerAppliedCount + 1
+                                end
+                                if readBackOk then
+                                    log:trace("DevelopEditManager.applyMaskEdits applied " .. tostring(key) .. " via " .. tostring(candidate) .. "=" .. tostring(value) .. " readBack=" .. tostring(readBack))
+                                else
+                                    log:trace("DevelopEditManager.applyMaskEdits applied " .. tostring(key) .. " via " .. tostring(candidate) .. "=" .. tostring(value) .. " readBack=unavailable")
+                                end
+                                if not hasMaskContext then
+                                    log:trace("DevelopEditManager.applyMaskEdits mask context missing while setting " .. tostring(candidate) .. "; treating as unverified")
+                                end
+                                break
+                            else
+                                lastErr = setErr
+                                log:trace("DevelopEditManager.applyMaskEdits candidate failed " .. tostring(key) .. " via " .. tostring(candidate) .. ": " .. tostring(setErr))
                             end
-                            log:trace("DevelopEditManager.applyMaskEdits applied " .. tostring(key) .. " via " .. tostring(candidate) .. "=" .. tostring(value) .. " readBack=" .. tostring(readBack))
-                            break
-                        else
-                            lastErr = setErr
-                            log:trace("DevelopEditManager.applyMaskEdits candidate failed " .. tostring(key) .. " via " .. tostring(candidate) .. ": " .. tostring(setErr))
                         end
+                        if not applied then
+                            appendWarning(warnings, "Mask adjustment '" .. tostring(key) .. "' could not be applied for " .. maskKind .. ": " .. tostring(lastErr or "unknown error"))
+                        end
+                    else
+                        appendWarning(warnings, "Mask adjustment '" .. tostring(key) .. "' is not currently supported and was ignored.")
                     end
-                    if not applied then
-                        appendWarning(warnings, "Mask adjustment '" .. tostring(key) .. "' could not be applied for " .. maskKind .. ": " .. tostring(lastErr or "unknown error"))
-                    end
-                else
-                    appendWarning(warnings, "Mask adjustment '" .. tostring(key) .. "' is not currently supported and was ignored.")
+                end
+            else
+                log:trace("DevelopEditManager.applyMaskEdits: LrDevelopController.setValue unavailable; relying on develop-settings fallback")
+            end
+
+            -- Avoid clobbering controller-applied local slider values with a stale
+            -- develop-settings snapshot. Only run the fallback when controller writes
+            -- were not successfully applied.
+            if controllerAppliedCount == 0 or not hasMaskContext then
+                local fallbackOk, fallbackErr = applyMaskAdjustmentsViaDevelopSettings(maskKind, mask.adjustments or {})
+                if not fallbackOk then
+                    appendWarning(warnings, "Mask adjustments for '" .. maskKind .. "' could not be persisted via develop settings: " .. tostring(fallbackErr))
                 end
             end
+            logMaskedDevelopSnapshot("after_adjust_" .. maskKind)
         end)
         if not ok then
             appendWarning(warnings, "Mask '" .. maskKind .. "' could not be applied: " .. tostring(err))
