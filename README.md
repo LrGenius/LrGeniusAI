@@ -37,7 +37,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 2. Extract the ZIP file and add the plugin via the **Plug-in Manager** in Lightroom Classic.
 3. **Backend Server Setup (First Launch):**
    - The backend now starts automatically from Lightroom.
-   - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required with the micromamba-based release package.
+   - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required with the current release package.
    - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
 4. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
    - **Analyze & Index Photos...** for tags/descriptions/search index
