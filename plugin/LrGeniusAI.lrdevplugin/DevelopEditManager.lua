@@ -291,6 +291,7 @@ local function buildToneCurveSettings(toneCurve)
     if toneCurve.highlight_split ~= nil then settings.ParametricHighlightSplit = toneCurve.highlight_split end
 
     local pointCurve = toneCurve.point_curve
+    local extendedPointCurve = toneCurve.extended_point_curve
     if type(pointCurve) == "table" then
         if type(pointCurve.master) == "table" and #pointCurve.master >= 4 then
             settings.ToneCurvePV2012 = pointCurve.master
@@ -304,10 +305,49 @@ local function buildToneCurveSettings(toneCurve)
         if type(pointCurve.blue) == "table" and #pointCurve.blue >= 4 then
             settings.ToneCurvePV2012Blue = pointCurve.blue
         end
-        if settings.ToneCurvePV2012 or settings.ToneCurvePV2012Red or settings.ToneCurvePV2012Green or settings.ToneCurvePV2012Blue then
-            settings.EnableToneCurve = true
-            settings.ToneCurveName2012 = "Custom"
+    end
+
+    if type(extendedPointCurve) == "table" then
+        if type(extendedPointCurve.master) == "table" and #extendedPointCurve.master >= 4 then
+            settings.ExtendedToneCurvePV2012 = extendedPointCurve.master
         end
+        if type(extendedPointCurve.red) == "table" and #extendedPointCurve.red >= 4 then
+            settings.ExtendedToneCurvePV2012Red = extendedPointCurve.red
+        end
+        if type(extendedPointCurve.green) == "table" and #extendedPointCurve.green >= 4 then
+            settings.ExtendedToneCurvePV2012Green = extendedPointCurve.green
+        end
+        if type(extendedPointCurve.blue) == "table" and #extendedPointCurve.blue >= 4 then
+            settings.ExtendedToneCurvePV2012Blue = extendedPointCurve.blue
+        end
+    end
+
+    -- Lightroom versions differ in which curve keys they honor on apply.
+    -- Provide both standard and extended PV2012 keys when possible.
+    if settings.ToneCurvePV2012 and settings.ExtendedToneCurvePV2012 == nil then
+        settings.ExtendedToneCurvePV2012 = settings.ToneCurvePV2012
+    end
+    if settings.ToneCurvePV2012Red and settings.ExtendedToneCurvePV2012Red == nil then
+        settings.ExtendedToneCurvePV2012Red = settings.ToneCurvePV2012Red
+    end
+    if settings.ToneCurvePV2012Green and settings.ExtendedToneCurvePV2012Green == nil then
+        settings.ExtendedToneCurvePV2012Green = settings.ToneCurvePV2012Green
+    end
+    if settings.ToneCurvePV2012Blue and settings.ExtendedToneCurvePV2012Blue == nil then
+        settings.ExtendedToneCurvePV2012Blue = settings.ToneCurvePV2012Blue
+    end
+
+    if settings.ToneCurvePV2012
+        or settings.ToneCurvePV2012Red
+        or settings.ToneCurvePV2012Green
+        or settings.ToneCurvePV2012Blue
+        or settings.ExtendedToneCurvePV2012
+        or settings.ExtendedToneCurvePV2012Red
+        or settings.ExtendedToneCurvePV2012Green
+        or settings.ExtendedToneCurvePV2012Blue then
+        settings.EnableToneCurve = true
+        settings.ToneCurveName2012 = "Custom"
+        settings.ToneCurveName = "Custom"
     end
     return settings
 end

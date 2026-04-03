@@ -27,6 +27,10 @@ class NormalizeEditRecipeTests(unittest.TestCase):
                         "green": [[0, 3], [255, 255]],
                         "blue": [0, 0, 255],  # odd length should be trimmed/invalid
                     },
+                    "extended_point_curve": {
+                        "master": [0, 0, 84, 68, 130, 147, 183, 193, 448, 448],
+                        "red": [{"x": 0, "y": 0}, {"x": 512, "y": 490}],
+                    },
                 },
                 "lens_corrections": {
                     "enable_profile_corrections": True,
@@ -68,6 +72,8 @@ class NormalizeEditRecipeTests(unittest.TestCase):
         self.assertEqual(recipe["global"]["tone_curve"]["point_curve"]["red"], [0, 0, 255, 250])
         self.assertEqual(recipe["global"]["tone_curve"]["point_curve"]["green"], [0, 3, 255, 255])
         self.assertNotIn("blue", recipe["global"]["tone_curve"]["point_curve"])
+        self.assertEqual(recipe["global"]["tone_curve"]["extended_point_curve"]["master"], [0, 0, 84, 68, 130, 147, 183, 193, 448, 448])
+        self.assertEqual(recipe["global"]["tone_curve"]["extended_point_curve"]["red"], [0, 0, 512, 490])
         self.assertTrue(recipe["global"]["lens_corrections"]["enable_profile_corrections"])
         self.assertEqual(len(recipe["masks"]), 1)
         self.assertEqual(recipe["masks"][0]["kind"], "subject")

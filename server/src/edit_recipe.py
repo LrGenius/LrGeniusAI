@@ -182,6 +182,28 @@ def _build_global_schema() -> Dict[str, Any]:
                 },
                 "additionalProperties": False,
             },
+            "extended_point_curve": {
+                "type": "object",
+                "properties": {
+                    "master": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 4096.0),
+                    },
+                    "red": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 4096.0),
+                    },
+                    "green": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 4096.0),
+                    },
+                    "blue": {
+                        "type": "array",
+                        "items": _number_schema(0.0, 4096.0),
+                    },
+                },
+                "additionalProperties": False,
+            },
         },
         "additionalProperties": False,
     }
@@ -343,11 +365,21 @@ def _normalize_global_settings(global_settings: Any) -> Dict[str, Any]:
         if isinstance(point_curve, dict):
             normalized_point_curve: Dict[str, List[int]] = {}
             for channel in ("master", "red", "green", "blue"):
-                normalized_points = _normalize_point_curve_points(point_curve.get(channel))
+                normalized_points = _normalize_point_curve_points(point_curve.get(channel), 0.0, 255.0)
                 if normalized_points:
                     normalized_point_curve[channel] = normalized_points
             if normalized_point_curve:
                 normalized_curve["point_curve"] = normalized_point_curve
+
+        extended_point_curve = tone_curve.get("extended_point_curve")
+        if isinstance(extended_point_curve, dict):
+            normalized_extended_curve: Dict[str, List[int]] = {}
+            for channel in ("master", "red", "green", "blue"):
+                normalized_points = _normalize_point_curve_points(extended_point_curve.get(channel), 0.0, 4096.0)
+                if normalized_points:
+                    normalized_extended_curve[channel] = normalized_points
+            if normalized_extended_curve:
+                normalized_curve["extended_point_curve"] = normalized_extended_curve
         if normalized_curve:
             normalized["tone_curve"] = normalized_curve
 
@@ -415,7 +447,7 @@ def _normalize_global_settings(global_settings: Any) -> Dict[str, Any]:
     return normalized
 
 
-def _normalize_point_curve_points(value: Any) -> List[int]:
+def _normalize_point_curve_points(value: Any, minimum: float, maximum: float) -> List[int]:
     if not isinstance(value, list) or len(value) < 2:
         return []
 
@@ -431,15 +463,15 @@ def _normalize_point_curve_points(value: Any) -> List[int]:
             elif isinstance(item, (list, tuple)) and len(item) >= 2:
                 x_val = item[0]
                 y_val = item[1]
-            x = _clamp_number(x_val, 0.0, 255.0)
-            y = _clamp_number(y_val, 0.0, 255.0)
+            x = _clamp_number(x_val, minimum, maximum)
+            y = _clamp_number(y_val, minimum, maximum)
             if x is None or y is None:
                 continue
             points.append(int(round(x)))
             points.append(int(round(y)))
     else:
         for numeric in value:
-            clamped = _clamp_number(numeric, 0.0, 255.0)
+            clamped = _clamp_number(numeric, minimum, maximum)
             if clamped is None:
                 continue
             points.append(int(round(clamped)))

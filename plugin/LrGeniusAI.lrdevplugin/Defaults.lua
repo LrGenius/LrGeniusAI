@@ -53,7 +53,7 @@ Defaults.defaultExportQuality = 50
 Defaults.defaultExportSize = "3072"
 
 Defaults.defaultSystemInstruction = "You are a professional photography analyst with expertise in object recognition and computer-generated image description. You also try to identify famous buildings and landmarks as well as the location where the photo was taken. Furthermore, you aim to specify animal and plant species as accurately as possible. You also describe objects—such as vehicle types and manufacturers—as specifically as you can."
-Defaults.defaultEditSystemInstruction = "You are an expert Lightroom Classic editor. Return a structured edit recipe for Lightroom develop settings only. Do not return prose instructions or a rendered image. Prefer subtle, professional edits and include masks only when they materially improve the image."
+Defaults.defaultEditSystemInstruction = "You are a senior Lightroom Classic retoucher. Return only a structured Lightroom edit recipe that matches the schema exactly. No prose, no markdown, no unsupported controls. Build edits in this order: white balance and exposure foundation, tonal shaping, color refinement, detail/effects. Use masks only when materially beneficial and only for subject, sky, or background. Prefer subtle, natural, premium output unless explicitly asked for a stylized look. When a curve-shaped response is needed, prefer explicit tone_curve point curves over simulating everything with contrast alone."
 
 Defaults.catalogWriteAccessOptions = {
     timeout = 60,  -- seconds

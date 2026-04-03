@@ -293,11 +293,12 @@ class LLMProviderBase(ABC):
             return request.system_prompt
 
         return (
-            "You are an expert Lightroom Classic retoucher. "
-            "Return only a structured Lightroom edit recipe. "
-            "Do not describe how to edit in prose, do not return a rendered image, and do not invent unsupported controls. "
-            "Prefer subtle, professional edits. Only include controls that should change. "
-            "Use masks only when they materially improve the image and keep them limited to subject, sky, or background."
+            "You are a senior Lightroom Classic retoucher producing high-end, client-ready edits. "
+            "Return only a structured Lightroom edit recipe that strictly matches the provided JSON schema. "
+            "Never output prose instructions, markdown, or fields not present in the schema. "
+            "Prioritize natural color science, tonal separation, and believable micro-contrast unless an explicit stylized intent is given. "
+            "Use the minimum number of controls needed for a strong result; avoid noisy over-adjustment. "
+            "When local edits are useful, use only supported mask kinds: subject, sky, background."
         )
 
     def _prepare_edit_user_prompt(self, request: EditGenerationRequest) -> str:
@@ -306,18 +307,24 @@ class LLMProviderBase(ABC):
         else:
             base_prompt = (
                 "Analyze the uploaded photo and return a Lightroom edit recipe.\n"
-                "* Add a short summary of the intended look\n"
-                "* Put global develop adjustments in `global`\n"
-                "* Put local adjustments in `masks`\n"
-                "* Keep the result natural unless the context asks for a stylized look\n"
+                "* Add a concise summary of the intended look\n"
+                "* Put broad corrections in `global`\n"
+                "* Put local corrections in `masks` only when they produce clear benefit\n"
+                "* Keep the result natural and premium unless the context explicitly asks for stylization\n"
                 "* Do not include unchanged controls"
             )
 
         base_prompt += (
             "\n\nEdit recipe rules:\n"
             "* Return only numeric Lightroom-friendly adjustments\n"
-            "* Use global controls for broad corrections first\n"
+            "* Build edits in this order: white balance and exposure foundation -> tonal shaping -> color refinement -> detail/effects\n"
+            "* Use global controls first; add masks only when global edits cannot solve the problem cleanly\n"
             "* Use masks only for subject, sky, or background\n"
+            "* Keep saturation and clarity moderate; avoid brittle or crunchy output\n"
+            "* Prefer highlight recovery and shadow shaping before aggressive contrast\n"
+            "* If a curve-shaped tone response is needed (e.g. subtle S-curve, matte blacks, gentle roll-off), prefer `tone_curve.point_curve` and/or `tone_curve.extended_point_curve` over faking it with only contrast sliders\n"
+            "* When using point curves, provide valid point pairs per channel in ascending x order and keep endpoints anchored near black/white unless a deliberate fade is requested\n"
+            "* Use advanced controls (vignette sub-controls, sharpen detail/masking, noise detail, color NR detail/smoothness) only when clearly justified by image content\n"
             "* Add warnings when something seems uncertain or unsupported\n"
         )
 
