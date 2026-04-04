@@ -109,6 +109,19 @@ jobs:
             PY_EXE="$SERVER_ENV_DIR/bin/python"
           fi
 
+          # macOS standalone python can depend on libpython via @rpath.
+          # Ensure the dylib is bundled inside env/lib for portable artifacts.
+          if [ "${{ matrix.os_name }}" == "macos" ]; then
+            PY_DYLIB="$("$PY_EXE" -c "import os, sysconfig; print(os.path.join(sysconfig.get_config_var('LIBDIR') or '', sysconfig.get_config_var('LDLIBRARY') or ''))")"
+            if [ -z "${PY_DYLIB}" ] || [ ! -f "${PY_DYLIB}" ]; then
+              echo "Error: could not locate libpython dylib from interpreter metadata."
+              exit 1
+            fi
+            mkdir -p "$SERVER_ENV_DIR/lib"
+            cp -f "${PY_DYLIB}" "$SERVER_ENV_DIR/lib/"
+            echo "Bundled libpython dylib: $(basename "${PY_DYLIB}")"
+          fi
+
           # Fast-fail on macOS before expensive installs if the relocatable
           # venv still points to a runner-local Framework Python.
           if [ "${{ matrix.os_name }}" == "macos" ]; then
