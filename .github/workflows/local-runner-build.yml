@@ -43,7 +43,10 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
         with:
-          enable-cache: true
+          # Self-hosted runners already keep a local disk cache; GitHub cache
+          # restore can choke on absolute cache paths here.
+          enable-cache: false
+          cache-local-path: /Users/bm/.cache/uv
 
       - name: Build backend runtime
         shell: bash
