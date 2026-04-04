@@ -28,3 +28,4 @@ run.bat
 
 models/
 data/
+.venv/

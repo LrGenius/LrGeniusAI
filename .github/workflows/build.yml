@@ -10,8 +10,7 @@ on:
 
 jobs:
   build-and-release:
-    # Run on main for build validation and on version tags for releases.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -78,16 +77,13 @@ jobs:
           EOF
           echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
 
-      - name: Setup micromamba
-        uses: mamba-org/setup-micromamba@v2
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
         with:
-          environment-name: geniusai_server
-          environment-file: server/environment.yml
-          cache-environment: true
-          init-shell: bash
+          enable-cache: true
 
-      - name: Build micromamba backend runtime
-        shell: bash -el {0}
+      - name: Build backend runtime
+        shell: bash
         run: |
           set -euo pipefail
           BUILD_DIR="build"
@@ -96,24 +92,32 @@ jobs:
           SERVER_ENV_DIR="$SERVER_DIR/env"
           mkdir -p "$SERVER_APP_DIR"
 
-          # Build the runtime env directly at target prefix.
-          # This avoids conda-pack conflicts when pip-installed packages
-          # modify conda-managed metadata.
-          micromamba create -y -p "$SERVER_ENV_DIR" -f server/environment.yml
+          uv venv --python 3.12 --relocatable "$SERVER_ENV_DIR"
 
-          # Sanity check: backend import path expects torch.testing to exist.
           if [ "${{ matrix.os_name }}" == "windows" ]; then
-            PY_EXE="$SERVER_ENV_DIR/python.exe"
+            PY_EXE="$SERVER_ENV_DIR/Scripts/python.exe"
           else
             PY_EXE="$SERVER_ENV_DIR/bin/python"
           fi
+
+          uv pip install --python "$PY_EXE" -r server/requirements-desktop.txt
+
+          # Windows ships CPU-only (config.py hardcodes TORCH_DEVICE="cpu").
+          # Default pip wheel bundles ~600MB of CUDA runtime we never use.
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
+            echo "Replacing CUDA torch with CPU-only build..."
+            uv pip install --python "$PY_EXE" \
+              torch==2.5.1+cpu torchvision==0.20.1+cpu \
+              --index-url https://download.pytorch.org/whl/cpu \
+              --reinstall --no-deps
+          fi
+
           "$PY_EXE" -c "import torch, torch.testing; print('torch ok', torch.__version__)"
-          "$PY_EXE" -m pip check
-          "$PY_EXE" -c "import sys; sys.path.insert(0, 'server'); import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
+          uv pip check --python "$PY_EXE"
+          "$PY_EXE" -c "import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
 
           echo "Copying backend source files..."
           cp -r server/src "$SERVER_APP_DIR/"
-          cp -r server/open_clip "$SERVER_APP_DIR/"
 
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             {
@@ -122,7 +126,7 @@ jobs:
               echo 'set "SCRIPT_DIR=%~dp0"'
               echo 'set "KMP_DUPLICATE_LIB_OK=TRUE"'
               echo 'set "PYTHONPATH=%SCRIPT_DIR%app;%PYTHONPATH%"'
-              echo 'call "%SCRIPT_DIR%env\python.exe" "%SCRIPT_DIR%app\src\geniusai_server.py" %*'
+              echo 'call "%SCRIPT_DIR%env\Scripts\python.exe" "%SCRIPT_DIR%app\src\geniusai_server.py" %*'
             } > "$SERVER_DIR/lrgenius-server.cmd"
           else
             {
@@ -139,8 +143,6 @@ jobs:
               echo '    xattr -dr com.apple.quarantine "$SCRIPT_DIR/env" 2>/dev/null || true'
               echo '    xattr -d com.apple.quarantine "$SCRIPT_DIR" 2>/dev/null || true'
               echo '  fi'
-              echo '  # Relocated envs lose absolute rpaths; help dyld find torch libs.'
-              echo '  export DYLD_LIBRARY_PATH="$SCRIPT_DIR/env/lib/python3.12/site-packages/torch/lib:$SCRIPT_DIR/env/lib:${DYLD_LIBRARY_PATH:-}"'
               echo 'fi'
               echo 'exec "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/app/src/geniusai_server.py" "$@"'
             } > "$SERVER_DIR/lrgenius-server"
@@ -166,8 +168,38 @@ jobs:
             fi
           fi
 
+      - name: Shrink build before upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV_DIR="build/lrgenius-server/env"
+          echo "=== Size before cleanup ==="
+          du -sh build/ || true
+
+          find "$ENV_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find "$ENV_DIR" -name "*.pyc" -delete 2>/dev/null || true
+          # Keep .dist-info dirs: entry_points.txt is needed at runtime
+          # (opentelemetry discovers its context backend via entry_points).
+          # Strip only the large bookkeeping files inside each .dist-info.
+          find "$ENV_DIR" -path "*.dist-info/RECORD" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/INSTALLER" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/REQUESTED" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/LICENSE*" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/NOTICE*" -delete 2>/dev/null || true
+          find "$ENV_DIR" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+
+          find "$ENV_DIR" -type d -name "tests" -path "*/site-packages/*/tests" -exec rm -rf {} + 2>/dev/null || true
+          find "$ENV_DIR" -type d -name "test"  -path "*/site-packages/*/test"  -exec rm -rf {} + 2>/dev/null || true
+
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
+            find "$ENV_DIR" -name "*.pdb" -delete 2>/dev/null || true
+          fi
+
+          echo "=== Size after cleanup ==="
+          du -sh build/ || true
+
       - name: Smoke test packaged backend and log cold start
-        shell: bash -el {0}
+        shell: bash
         run: |
           set -euo pipefail
           DB_DIR="$RUNNER_TEMP/lrgenius-smoke-db"
@@ -232,7 +264,7 @@ jobs:
           echo "Measured cold start to /ping: ${COLD_START_SECONDS}s"
 
           if [ "${{ matrix.os_name }}" == "windows" ]; then
-            TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/python.exe"
+            TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/Scripts/python.exe"
           else
             TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/bin/python"
           fi
@@ -245,18 +277,15 @@ jobs:
           curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
 
       - name: Relocation import test
-        shell: bash -el {0}
+        shell: bash
         run: |
           set -euo pipefail
           RELOCATED="$RUNNER_TEMP/relocated-server"
           cp -a build/lrgenius-server "$RELOCATED"
           if [ "${{ matrix.os_name }}" == "windows" ]; then
-            PY="$RELOCATED/env/python.exe"
+            PY="$RELOCATED/env/Scripts/python.exe"
           else
             PY="$RELOCATED/env/bin/python"
-            if [ "$(uname -s)" = "Darwin" ]; then
-              export DYLD_LIBRARY_PATH="$RELOCATED/env/lib/python3.12/site-packages/torch/lib:$RELOCATED/env/lib:${DYLD_LIBRARY_PATH:-}"
-            fi
           fi
           export PYTHONPATH="$RELOCATED/app:${PYTHONPATH:-}"
           "$PY" -c "import torch, torchvision; print('relocation ok', torch.__version__, torchvision.__version__)"
@@ -268,9 +297,10 @@ jobs:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
           path: build/
           retention-days: 1
+          compression-level: 9
 
   build-plugin-only:
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     name: Build Plugin Only
 
@@ -449,7 +479,7 @@ jobs:
           cat >> release_notes.md << 'NOTES'
 
           ## Desktop backend startup
-          - The bundled micromamba-based backend starts automatically from Lightroom.
+          - The bundled backend starts automatically from Lightroom.
           - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required for this package.
           - Optional manual troubleshooting start:
             - Windows: `lrgenius-server/lrgenius-server.cmd`

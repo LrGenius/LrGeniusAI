@@ -27,18 +27,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App (src) + lokales open_clip
+# App source
 COPY src /app/src
-COPY open_clip /app/open_clip
 
-# Damit beim Start "config" und "open_clip" gefunden werden
+# Ensure app modules are importable at runtime
 ENV PYTHONPATH=/app:/app/src
 
 # Remote-Zugriff: Server auf allen Interfaces binden
 ENV GENIUSAI_HOST=0.0.0.0
 ENV GENIUSAI_PORT=19819
 
-# Modell-Caches (open_clip/Hugging Face + InsightFace) – Volume mounten, damit Downloads persistent sind
+# Model caches (Hugging Face + InsightFace) – keep persistent via mounted volume
 ENV HF_HOME=/models/huggingface
 ENV INSIGHTFACE_ROOT=/models/insightface
 ENV CLOUDSDK_CONFIG=/root/.config/gcloud

@@ -11,6 +11,7 @@ env
 # Docs / Meta
 *.md
 environment.yml
+requirements-desktop.txt
 
 # Nicht für Laufzeit nötig
 model_scripts

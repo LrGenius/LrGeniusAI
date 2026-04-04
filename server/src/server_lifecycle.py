@@ -1,7 +1,7 @@
 import os
 import time
 import signal
-from config import DB_PATH, logger, IMAGE_MODEL_ID, TORCH_DEVICE
+from config import DB_PATH, logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
 import open_clip
 from open_clip_compat import wrap_tokenizer
 import threading
@@ -25,6 +25,14 @@ IDLE_UNLOAD_SECONDS = 30 * 60  # 30 minutes
 _last_used = None
 _model_lock = threading.RLock()
 _unloader_thread = None
+
+
+def _get_open_clip_tokenizer():
+    """Resolve tokenizer across open_clip_torch and older forks."""
+    try:
+        return open_clip.get_tokenizer(IMAGE_MODEL_ID)
+    except Exception:
+        return open_clip.get_tokenizer(CLIP_MODEL_NAME)
 
 
 def _set_last_used():
@@ -68,13 +76,28 @@ def load_model():
                     weights_file = os.path.join(cached_model_dir, 'open_clip_model.safetensors')
 
                     if os.path.isfile(config_file) and os.path.isfile(weights_file):
-                        local_model_uri = f"local-dir:{cached_model_dir}"
-                        logger.info(f"Loading OpenCLIP model from bundled directory: {cached_model_dir}")
-                        model_obj, _, proc = open_clip.create_model_and_transforms(
-                            local_model_uri,
-                            pretrained=None
-                        )
-                        tok = open_clip.get_tokenizer(local_model_uri)
+                        logger.info(f"Loading OpenCLIP model from cached directory: {cached_model_dir}")
+
+                        # Preferred path for pip-installed open_clip_torch:
+                        # use known architecture name + local checkpoint path.
+                        try:
+                            model_obj, _, proc = open_clip.create_model_and_transforms(
+                                CLIP_MODEL_NAME,
+                                pretrained=weights_file,
+                            )
+                            tok = _get_open_clip_tokenizer()
+                        except Exception:
+                            # Backward compatibility for older vendored open_clip forks.
+                            local_model_uri = f"local-dir:{cached_model_dir}"
+                            model_obj, _, proc = open_clip.create_model_and_transforms(
+                                local_model_uri,
+                                pretrained=None
+                            )
+                            try:
+                                tok = open_clip.get_tokenizer(local_model_uri)
+                            except Exception:
+                                tok = _get_open_clip_tokenizer()
+
                         _set_last_used()
                         logger.info("Loaded OpenCLIP model (lazy)")
                     else:
@@ -95,6 +118,23 @@ def load_model():
 
             except Exception as e:
                 logger.warning(f"Failed to load OpenCLIP model from local cache. This can happen if the model is not fully downloaded, is corrupted, or if there is a configuration issue. The error was: {e}", exc_info=True)
+                logger.info("Falling back to loading OpenCLIP model via hf-hub")
+                model_obj, _, proc = open_clip.create_model_and_transforms(
+                    CLIP_MODEL_NAME,
+                    pretrained=f"hf-hub:{IMAGE_MODEL_ID}",
+                )
+                tok = _get_open_clip_tokenizer()
+                try:
+                    model_obj.to(TORCH_DEVICE)
+                    logger.info(f"Text and vision model moved to {TORCH_DEVICE}")
+                except Exception as move_exc:
+                    logger.warning(f"Failed to move text and vision model to {TORCH_DEVICE}: {move_exc}.")
+
+                model = model_obj
+                processor = proc
+                tokenizer = wrap_tokenizer(tok)
+                _set_last_used()
+                logger.info("Loaded OpenCLIP model via hf-hub fallback")
 
         except Exception as e:
             logger.error(f"Failed to load OpenCLIP model (lazy): {e}", exc_info=True)
