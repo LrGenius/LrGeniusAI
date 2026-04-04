@@ -14,7 +14,7 @@ on:
         default: false
         type: boolean
       save_local_artifact:
-        description: "Save build zip on runner filesystem"
+        description: "Save build directory on runner filesystem"
         required: false
         default: true
         type: boolean
@@ -213,12 +213,10 @@ jobs:
           LOCAL_DIR="${{ inputs.local_artifact_dir }}"
           LOCAL_DIR="${LOCAL_DIR/#\~/$HOME}"
           mkdir -p "$LOCAL_DIR"
-          ARTIFACT_NAME="LrGeniusAI-local-macos-arm64-${GITHUB_RUN_NUMBER}.zip"
+          ARTIFACT_NAME="LrGeniusAI-local-macos-arm64-${GITHUB_RUN_NUMBER}"
           ARTIFACT_PATH="$LOCAL_DIR/$ARTIFACT_NAME"
-          (
-            cd build
-            zip -r "$ARTIFACT_PATH" .
-          )
+          rm -rf "$ARTIFACT_PATH"
+          cp -a build "$ARTIFACT_PATH"
           echo "Local artifact saved:"
           echo "$ARTIFACT_PATH"
 
