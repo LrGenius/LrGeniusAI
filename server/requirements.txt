@@ -26,3 +26,4 @@ waitress
 insightface
 onnxruntime
 scikit-learn
+open_clip_torch
