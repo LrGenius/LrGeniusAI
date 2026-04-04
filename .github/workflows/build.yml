@@ -368,11 +368,20 @@ jobs:
           fi
           rm -rf "$RELOCATED"
 
+      - name: Pack artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR="artifact-payload"
+          ARTIFACT_TAR="lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}.tar"
+          mkdir -p "$ARTIFACT_DIR"
+          tar -C build -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
+
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
-          path: build/
+          path: artifact-payload/lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}.tar
           retention-days: 1
           compression-level: 9
 
@@ -426,11 +435,20 @@ jobs:
           mkdir -p "$BUILD_DIR"
           cp -r plugin/LrGeniusAI.lrdevplugin "$BUILD_DIR/"
 
+      - name: Pack plugin-only artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR="artifact-payload"
+          ARTIFACT_TAR="lrgenius-ai-plugin-docker-backend.tar"
+          mkdir -p "$ARTIFACT_DIR"
+          tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
+
       - name: Upload plugin-only artifact
         uses: actions/upload-artifact@v6
         with:
           name: lrgenius-ai-plugin-docker-backend
-          path: build-plugin-only/
+          path: artifact-payload/lrgenius-ai-plugin-docker-backend.tar
           retention-days: 1
 
   build-docker-images:
@@ -509,6 +527,16 @@ jobs:
           VERSION=${{ github.ref_name }}
           
           cd artifacts
+
+          for ARTIFACT_DIR in lrgenius-ai-windows-x64 lrgenius-ai-macos-arm64 lrgenius-ai-plugin-docker-backend; do
+            if [ -d "$ARTIFACT_DIR" ]; then
+              TAR_PATH="$(echo "$ARTIFACT_DIR"/*.tar)"
+              if [ -f "$TAR_PATH" ]; then
+                tar -xf "$TAR_PATH" -C "$ARTIFACT_DIR"
+                rm -f "$TAR_PATH"
+              fi
+            fi
+          done
 
           # actions/download-artifact normalizes permissions, so restore macOS executable bits before zipping.
           if [ -d "lrgenius-ai-macos-arm64" ]; then
