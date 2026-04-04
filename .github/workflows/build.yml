@@ -92,12 +92,32 @@ jobs:
           SERVER_ENV_DIR="$SERVER_DIR/env"
           mkdir -p "$SERVER_APP_DIR"
 
-          uv venv --python 3.12 --relocatable "$SERVER_ENV_DIR"
+          # On macOS, force uv-managed Python so packaged env does not link against
+          # runner-specific /Library/Frameworks/Python.framework paths.
+          if [ "${{ matrix.os_name }}" == "macos" ]; then
+            uv python install 3.12
+            UV_MANAGED_PY="$(uv python find 3.12)"
+            echo "Using uv-managed Python for relocatable venv: $UV_MANAGED_PY"
+            uv venv --python "$UV_MANAGED_PY" --relocatable "$SERVER_ENV_DIR"
+          else
+            uv venv --python 3.12 --relocatable "$SERVER_ENV_DIR"
+          fi
 
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             PY_EXE="$SERVER_ENV_DIR/Scripts/python.exe"
           else
             PY_EXE="$SERVER_ENV_DIR/bin/python"
+          fi
+
+          # Fast-fail on macOS before expensive installs if the relocatable
+          # venv still points to a runner-local Framework Python.
+          if [ "${{ matrix.os_name }}" == "macos" ]; then
+            echo "Validating packaged python linkage..."
+            if otool -L "$PY_EXE" | grep -E -q '/Library/Frameworks/Python\.framework/Versions/.+/Python'; then
+              echo "Error: packaged python is linked to /Library/Frameworks/Python.framework"
+              otool -L "$PY_EXE"
+              exit 1
+            fi
           fi
 
           uv pip install --python "$PY_EXE" -r server/requirements-desktop.txt
