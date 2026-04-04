@@ -114,11 +114,10 @@ jobs:
 
           "$PY_EXE" -c "import torch, torch.testing; print('torch ok', torch.__version__)"
           uv pip check --python "$PY_EXE"
-          "$PY_EXE" -c "import sys; sys.path.insert(0, 'server'); import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
+          "$PY_EXE" -c "import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
 
           echo "Copying backend source files..."
           cp -r server/src "$SERVER_APP_DIR/"
-          cp -r server/open_clip "$SERVER_APP_DIR/"
 
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             {
