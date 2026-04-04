@@ -168,6 +168,7 @@ jobs:
           "$PY_EXE" -c "import torch, torch.testing; print('torch ok', torch.__version__)"
           uv pip check --python "$PY_EXE"
           "$PY_EXE" -c "import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
+          "$PY_EXE" -c "import torch, torchvision; from torchvision.ops import nms; b=torch.tensor([[0.,0.,1.,1.],[0.,0.,2.,2.]], dtype=torch.float32); s=torch.tensor([0.9,0.8], dtype=torch.float32); print('torchvision nms op ok', nms(b, s, 0.5).tolist())"
 
           echo "Copying backend source files..."
           cp -r server/src "$SERVER_APP_DIR/"
@@ -187,7 +188,10 @@ jobs:
               echo 'set -euo pipefail'
               echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"'
               echo 'export KMP_DUPLICATE_LIB_OK=TRUE'
+              echo 'export PYTHONHOME="$SCRIPT_DIR/env"'
+              echo 'export PYTHONNOUSERSITE=1'
               echo 'export PYTHONPATH="$SCRIPT_DIR/app:${PYTHONPATH:-}"'
+              echo 'export DYLD_LIBRARY_PATH="$SCRIPT_DIR/env/lib:$SCRIPT_DIR/env/lib/python3.12/site-packages/torch/lib:${DYLD_LIBRARY_PATH:-}"'
               echo ''
               echo '# macOS release ZIPs can lose execute bits and carry quarantine.'
               echo 'if [ "$(uname -s)" = "Darwin" ]; then'
