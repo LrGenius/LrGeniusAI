@@ -124,6 +124,16 @@ jobs:
           } > "$SERVER_DIR/lrgenius-server"
           chmod +x "$SERVER_DIR/lrgenius-server"
 
+          # Keep artifacts portable if uploaded via GitHub artifact service.
+          echo "Normalizing macOS runtime (dereferencing symlinks)..."
+          RESOLVED_ENV="${SERVER_ENV_DIR}.resolved"
+          mkdir -p "$RESOLVED_ENV"
+          rsync -aL "$SERVER_ENV_DIR/" "$RESOLVED_ENV/"
+          rm -rf "$SERVER_ENV_DIR"
+          mv "$RESOLVED_ENV" "$SERVER_ENV_DIR"
+          PY_EXE="$SERVER_ENV_DIR/bin/python3.12"
+          "$PY_EXE" -c "import torch, torchvision; from torchvision.ops import nms; b=torch.tensor([[0.,0.,1.,1.],[0.,0.,2.,2.]], dtype=torch.float32); s=torch.tensor([0.9,0.8], dtype=torch.float32); print('post-normalize nms ok', nms(b, s, 0.5).tolist())"
+
       - name: Prepare plugin files
         shell: bash
         run: |
