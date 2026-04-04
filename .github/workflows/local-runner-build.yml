@@ -1,0 +1,169 @@
+name: Local Runner Build (macOS ARM64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_smoke_tests:
+        description: "Run backend smoke/API tests (slower)"
+        required: false
+        default: false
+        type: boolean
+      upload_artifact:
+        description: "Upload build artifact"
+        required: false
+        default: true
+        type: boolean
+      python_version:
+        description: "Python version for uv venv"
+        required: false
+        default: "3.12"
+        type: string
+
+jobs:
+  build-local-macos:
+    name: Build on local macOS runner
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Build backend runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR="build"
+          SERVER_DIR="$BUILD_DIR/lrgenius-server"
+          SERVER_APP_DIR="$SERVER_DIR/app"
+          SERVER_ENV_DIR="$SERVER_DIR/env"
+          mkdir -p "$SERVER_APP_DIR"
+
+          uv python install "${{ inputs.python_version }}"
+          UV_MANAGED_PY="$(uv python find "${{ inputs.python_version }}")"
+          echo "Using uv-managed Python: $UV_MANAGED_PY"
+          uv venv --python "$UV_MANAGED_PY" --relocatable "$SERVER_ENV_DIR"
+          PY_EXE="$SERVER_ENV_DIR/bin/python"
+
+          # Bundle libpython dylib for portable artifact startup.
+          PY_DYLIB="$("$PY_EXE" -c "import os, sysconfig; print(os.path.join(sysconfig.get_config_var('LIBDIR') or '', sysconfig.get_config_var('LDLIBRARY') or ''))")"
+          if [ -z "${PY_DYLIB}" ] || [ ! -f "${PY_DYLIB}" ]; then
+            echo "Error: could not locate libpython dylib from interpreter metadata."
+            exit 1
+          fi
+          mkdir -p "$SERVER_ENV_DIR/lib"
+          cp -f "${PY_DYLIB}" "$SERVER_ENV_DIR/lib/"
+          echo "Bundled libpython dylib: $(basename "${PY_DYLIB}")"
+
+          # Fast-fail if linked against Framework Python.
+          if otool -L "$PY_EXE" | grep -E -q '/Library/Frameworks/Python\.framework/Versions/.+/Python'; then
+            echo "Error: packaged python is linked to /Library/Frameworks/Python.framework"
+            otool -L "$PY_EXE"
+            exit 1
+          fi
+
+          uv pip install --python "$PY_EXE" -r server/requirements-desktop.txt
+          uv pip check --python "$PY_EXE"
+          "$PY_EXE" -c "import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
+
+          cp -r server/src "$SERVER_APP_DIR/"
+
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -euo pipefail'
+            echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"'
+            echo 'export KMP_DUPLICATE_LIB_OK=TRUE'
+            echo 'export PYTHONPATH="$SCRIPT_DIR/app:${PYTHONPATH:-}"'
+            echo ''
+            echo 'if [ "$(uname -s)" = "Darwin" ]; then'
+            echo '  chmod +x "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/env/bin/python3" "$SCRIPT_DIR/env/bin/python3.12" 2>/dev/null || true'
+            echo '  if command -v xattr >/dev/null 2>&1; then'
+            echo '    xattr -dr com.apple.quarantine "$SCRIPT_DIR/env" 2>/dev/null || true'
+            echo '    xattr -d com.apple.quarantine "$SCRIPT_DIR" 2>/dev/null || true'
+            echo '  fi'
+            echo 'fi'
+            echo 'exec "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/app/src/geniusai_server.py" "$@"'
+          } > "$SERVER_DIR/lrgenius-server"
+          chmod +x "$SERVER_DIR/lrgenius-server"
+
+      - name: Prepare plugin files
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR="build"
+          PLUGIN_DIR="$BUILD_DIR/LrGeniusAI.lrplugin"
+          mkdir -p "$PLUGIN_DIR"
+          cp plugin/LrGeniusAI.lrdevplugin/*.lua "$PLUGIN_DIR/"
+          cp plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt "$PLUGIN_DIR/"
+
+      - name: Shrink build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV_DIR="build/lrgenius-server/env"
+          find "$ENV_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find "$ENV_DIR" -name "*.pyc" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/RECORD" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/INSTALLER" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/REQUESTED" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/LICENSE*" -delete 2>/dev/null || true
+          find "$ENV_DIR" -path "*.dist-info/NOTICE*" -delete 2>/dev/null || true
+          find "$ENV_DIR" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+          find "$ENV_DIR" -type d -name "tests" -path "*/site-packages/*/tests" -exec rm -rf {} + 2>/dev/null || true
+          find "$ENV_DIR" -type d -name "test"  -path "*/site-packages/*/test"  -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Smoke test packaged backend
+        if: ${{ inputs.run_smoke_tests }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_DIR="$RUNNER_TEMP/lrgenius-smoke-db"
+          DB_PATH="$DB_DIR/lrgenius.db"
+          SMOKE_STDOUT="$DB_DIR/smoke-backend.out"
+          mkdir -p "$DB_DIR"
+          URL="http://127.0.0.1:19819/ping"
+          "build/lrgenius-server/lrgenius-server" --db-path "$DB_PATH" >"$SMOKE_STDOUT" 2>&1 &
+          BACKEND_PID=$!
+
+          READY=0
+          for i in $(seq 1 300); do
+            if curl -sf "$URL" | grep -q "pong"; then
+              READY=1
+              break
+            fi
+            if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+              echo "Backend process exited before /ping became ready."
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "Smoke test failed: /ping did not return pong in time."
+            if [ -f "$SMOKE_STDOUT" ]; then
+              tail -n 150 "$SMOKE_STDOUT" || true
+            fi
+            exit 1
+          fi
+
+          TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/bin/python"
+          "$TEST_PY" "server/test/api_test_client.py" \
+            --base-url "http://127.0.0.1:19819" \
+            --iterations 60 \
+            --timeout 5
+          curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
+
+      - name: Upload artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: lrgenius-ai-local-macos-arm64-${{ github.run_number }}
+          path: build/
+          retention-days: 3
+          compression-level: 6
