@@ -1,0 +1,54 @@
+name: Bug report
+description: Report something that is not working as expected
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, please attach **log files** when relevant (see below). Redact API keys or other secrets before uploading.
+
+        ### Lightroom plugin — `LrGeniusAI.log`
+
+        The plugin always logs to a file. Location depends on **Lightroom Classic major version** and OS:
+
+        | OS | Lightroom Classic 14+ | Older Lightroom Classic |
+        |----|-------------------------|-------------------------|
+        | **macOS** | `~/Library/Logs/Adobe/Lightroom/LrClassicLogs/LrGeniusAI.log` | `~/Documents/LrClassicLogs/LrGeniusAI.log` |
+        | **Windows** | `%LOCALAPPDATA%\Adobe\Lightroom\Logs\LrClassicLogs\LrGeniusAI.log` | `%USERPROFILE%\Documents\LrClassicLogs\LrGeniusAI.log` |
+
+        **Tip:** In **LrGeniusAI → Plugin Manager → LrGeniusAI Settings**, use **Copy Log Files to Desktop** to gather `LrGeniusAI.log`, optional Ollama logs, and `lrgenius-server.log` from beside your catalog. **Show Log File** opens the plugin log in Finder / Explorer.
+
+        ### Optional — Ollama (if you use local Ollama)
+
+        - **macOS:** `~/.ollama/logs/server.log`
+        - **Windows:** `%LOCALAPPDATA%\ollama\server.log`
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Short description of the bug and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Versions and setup help narrow down the issue.
+      placeholder: |
+        - OS (macOS / Windows + version):
+        - Lightroom Classic version:
+        - LrGenius AI plugin version (if known):
+        - Backend (Docker / standalone):
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Paste relevant log excerpts here, or describe which log files you attached. For UI issues, a screenshot helps.
+    validations:
+      required: false
