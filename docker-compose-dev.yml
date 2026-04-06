@@ -1,17 +1,17 @@
-# geniusai-server using the published GHCR image (same backend as a GitHub release).
-# Tag format matches CI: <release-tag>-x64 or <release-tag>-aarch64
-# (see .github/workflows/build.yml → build-docker-images).
+# geniusai-server built from ./server (local backend development).
+# The image embeds version_info.py from your working tree; use a release-matching
+# plugin or dev placeholders as usual.
 #
-# Usage:
-#   echo 'LRGENIUS_IMAGE_TAG=v1.2.3-x64' > .env   # amd64; use v1.2.3-aarch64 on arm64
-#   docker compose up -d
-#
-# Stop:  docker compose down
-# Logs:  docker compose logs -f geniusai-server
+# Start: docker compose -f docker-compose-dev.yml up -d --build
+# Stop:  docker compose -f docker-compose-dev.yml down
+# Logs:  docker compose -f docker-compose-dev.yml logs -f geniusai-server
 
 services:
   geniusai-server:
-    image: ghcr.io/lrgenius/lrgeniusai:${LRGENIUS_IMAGE_TAG:?set LRGENIUS_IMAGE_TAG in .env — see header comment}
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: geniusai-server:dev
     container_name: geniusai-server
     restart: unless-stopped
     ports:

@@ -471,6 +471,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Same as build-and-release: bake release tag into version_info.py so /version and
+      # /version/check match the plugin from the same tag. Without this, the image keeps
+      # the repo's dev placeholder and users see plugin/server version mismatch.
+      - name: Update backend version info from tag
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          BUILD_DATE=$(date +%Y%m%d)
+          VERSION_FILE="server/src/version_info.py"
+          cat > "$VERSION_FILE" <<EOF
+          BACKEND_VERSION = "${VERSION}"
+          BACKEND_RELEASE_TAG = "v${VERSION}"
+          BACKEND_BUILD = ${BUILD_DATE}
+          EOF
+          echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
+
       - name: Prepare image name
         id: image-name
         shell: bash
