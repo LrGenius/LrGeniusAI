@@ -39,9 +39,9 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 
     -- When appending, merge resolved values with existing catalog metadata
     if options.appendMetadata then
-        local existingTitle = photo:getRawMetadata('title') or ""
-        local existingCaption = photo:getRawMetadata('caption') or ""
-        local existingAltText = photo:getRawMetadata('altTextAccessibility') or ""
+        local existingTitle = photo:getFormattedMetadata('title') or ""
+        local existingCaption = photo:getFormattedMetadata('caption') or ""
+        local existingAltText = photo:getFormattedMetadata('altTextAccessibility') or ""
         if existingTitle ~= "" and title and title ~= "" then
             title = existingTitle .. "\n\n" .. title
         end
