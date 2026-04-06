@@ -2,6 +2,65 @@
 -- Handles reading and writing metadata from/to the Lightroom catalog.
 
 MetadataManager = {}
+local createKeywordSafely
+
+-- Session cache bucket for nil parent (cannot use nil as table key).
+local KEYWORD_CACHE_ROOT = {}
+
+local function keywordCacheGet(sessionCache, parent, name)
+    if not sessionCache or type(name) ~= "string" or name == "" then
+        return nil
+    end
+    local bucket = parent and sessionCache[parent] or sessionCache[KEYWORD_CACHE_ROOT]
+    return bucket and bucket[name]
+end
+
+local function keywordCachePut(sessionCache, parent, name, keywordObj)
+    if not sessionCache or not keywordObj or type(name) ~= "string" or name == "" then
+        return
+    end
+    local key = parent or KEYWORD_CACHE_ROOT
+    if not sessionCache[key] then
+        sessionCache[key] = {}
+    end
+    sessionCache[key][name] = keywordObj
+end
+
+---
+-- Finds a keyword already on the photo with this name and parent (avoids LrKeyword:getChildren()
+-- when the SDK hits a format bug there).
+--
+local function findKeywordOnPhotoForParent(photo, parent, targetName)
+    if not photo or type(targetName) ~= "string" or targetName == "" then
+        return nil
+    end
+    local ok, result = LrTasks.pcall(function()
+        local raw = photo:getRawMetadata("keywords") or {}
+        for _, kw in pairs(raw) do
+            if kw and kw.getName and kw.getParent then
+                local okN, n = LrTasks.pcall(function()
+                    return kw:getName()
+                end)
+                local okP, p = LrTasks.pcall(function()
+                    return kw:getParent()
+                end)
+                if okN and okP and n == targetName then
+                    if parent == nil and p == nil then
+                        return kw
+                    end
+                    if parent ~= nil and p == parent then
+                        return kw
+                    end
+                end
+            end
+        end
+        return nil
+    end)
+    if ok then
+        return result
+    end
+    return nil
+end
 
 ---
 -- Applies the AI-generated metadata to the photo.
@@ -69,34 +128,32 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
         end
     end, Defaults.catalogWriteAccessOptions)
 
-    -- Save keywords
+    -- Save keywords (sessionCache avoids LrKeyword:getChildren() when the SDK errors there)
     log:trace("Saving keywords to catalog")
     if saveKeywords and keywords ~= nil and type(keywords) == 'table' and prefs.generateKeywords then
+        local keywordSessionCache = {}
         local topKeyword = nil
         if prefs.useKeywordHierarchy and options.useTopLevelKeyword then
             catalog:withWriteAccessDo("$$$/lrc-ai-assistant/AnalyzeImageTask/saveTopKeyword=Save AI generated keywords", function()
-                topKeyword = catalog:createKeyword(options.topLevelKeyword or "LrGeniusAI", { Defaults.topLevelKeywordSynonym }, false, nil, true)
-                photo:addKeyword(topKeyword) -- Add top-level keyword to photo. To see the number of tagged photos in keyword list (Gerald Uhl)
+                topKeyword = createKeywordSafely(catalog, options.topLevelKeyword or "LrGeniusAI", { Defaults.topLevelKeywordSynonym }, false, nil, keywordSessionCache)
+                if topKeyword then
+                    local okAdd, errAdd = LrTasks.pcall(function()
+                        photo:addKeyword(topKeyword) -- Add top-level keyword to photo. To see the number of tagged photos in keyword list (Gerald Uhl)
+                    end)
+                    if not okAdd then
+                        log:error("Failed to add top-level keyword to photo: " .. tostring(errAdd))
+                    end
+                end
             end)
             -- Keep track of used top-level keywords
             if not Util.table_contains(prefs.knownTopLevelKeywords, options.topLevelKeyword) then
                 table.insert(prefs.knownTopLevelKeywords, options.topLevelKeyword)
             end
         end
-        -- When appending, build set of existing keyword names so we only add new ones
         local existingKeywordNames = nil
-        if options.appendMetadata then
-            existingKeywordNames = {}
-            local rawKeywords = photo:getRawMetadata('keywords') or {}
-            for _, kw in ipairs(rawKeywords) do
-                if kw and kw.getName then
-                    existingKeywordNames[kw:getName()] = true
-                end
-            end
-        end
         local currentTopLevelKeyword = options.useTopLevelKeyword and (options.topLevelKeyword or "LrGeniusAI") or nil
         catalog:withWriteAccessDo("$$$/lrc-ai-assistant/AnalyzeImageTask/saveTopKeyword=Save AI generated keywords", function()
-            MetadataManager.addKeywordRecursively(photo, keywords, topKeyword, existingKeywordNames, currentTopLevelKeyword)
+            MetadataManager.addKeywordRecursively(photo, keywords, topKeyword, existingKeywordNames, currentTopLevelKeyword, keywordSessionCache)
         end, Defaults.catalogWriteAccessOptions)
     end
 
@@ -112,11 +169,14 @@ end
 ---
 -- Returns an existing child keyword by name under the given parent.
 -- If parent is nil, searches top-level keywords.
+-- Uses session cache and photo keyword list before LrKeyword:getChildren(), which can error in some SDK/catalog cases.
+-- @param photo LrPhoto|nil
 -- @param catalog The active LrCatalog object.
+-- @param sessionCache table|nil Optional cache parent -> name -> LrKeyword for this applyMetadata pass.
 -- @param parent Optional parent LrKeyword object.
 -- @param keywordName The keyword name to find.
 -- @return LrKeyword|nil
-local function findKeywordByNameInParent(catalog, parent, keywordName)
+local function findKeywordByNameInParent(photo, catalog, sessionCache, parent, keywordName)
     if not catalog or type(keywordName) ~= "string" then
         return nil
     end
@@ -125,23 +185,66 @@ local function findKeywordByNameInParent(catalog, parent, keywordName)
         return nil
     end
 
-    local siblings = nil
-    if parent and parent.getChildren then
-        siblings = parent:getChildren()
-    else
-        siblings = catalog:getKeywords()
+    local cached = keywordCacheGet(sessionCache, parent, target)
+    if cached then
+        return cached
     end
+
+    local onPhoto = findKeywordOnPhotoForParent(photo, parent, target)
+    if onPhoto then
+        keywordCachePut(sessionCache, parent, target, onPhoto)
+        return onPhoto
+    end
+
+    -- Fetch children via pcall: SDK can throw (e.g. bad argument to 'format' inside getChildren).
+    local fetchKey = parent or KEYWORD_CACHE_ROOT
+    if sessionCache and sessionCache._keywordFetchFailed and sessionCache._keywordFetchFailed[fetchKey] then
+        return nil
+    end
+
+    local okFetch, siblingsOrErr = LrTasks.pcall(function()
+        if parent and parent.getChildren then
+            return parent:getChildren()
+        end
+        return catalog:getKeywords()
+    end)
+    if not okFetch then
+        if sessionCache then
+            sessionCache._keywordFetchFailed = sessionCache._keywordFetchFailed or {}
+            sessionCache._keywordFetchFailed[fetchKey] = true
+            sessionCache._keywordFetchLogged = sessionCache._keywordFetchLogged or {}
+            if not sessionCache._keywordFetchLogged[fetchKey] then
+                sessionCache._keywordFetchLogged[fetchKey] = true
+                log:trace("findKeywordByNameInParent: getChildren/getKeywords failed, using cache/photo only: " .. tostring(siblingsOrErr))
+            end
+        else
+            log:trace("findKeywordByNameInParent: getChildren/getKeywords failed, using cache/photo only: " .. tostring(siblingsOrErr))
+        end
+        return nil
+    end
+    local siblings = siblingsOrErr
 
     if type(siblings) ~= "table" then
         return nil
     end
 
-    for _, sibling in ipairs(siblings) do
-        if sibling and sibling.getName and sibling:getName() == target then
-            return sibling
+    local found = nil
+    for _, sibling in pairs(siblings) do
+        if sibling and type(sibling.getName) == "function" then
+            local okName, nameOrErr = LrTasks.pcall(function()
+                return sibling:getName()
+            end)
+            if okName and nameOrErr == target then
+                found = sibling
+                break
+            end
         end
     end
-    return nil
+
+    if found then
+        keywordCachePut(sessionCache, parent, target, found)
+    end
+    return found
 end
 
 ---
@@ -206,14 +309,64 @@ local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
 end
 
 ---
+-- Sanitizes a synonym list to a flat array of non-empty strings.
+-- @param synonyms table|nil
+-- @return table
+local function sanitizeSynonyms(synonyms)
+    if type(synonyms) ~= "table" then
+        return {}
+    end
+    local cleaned = {}
+    for _, synonym in ipairs(synonyms) do
+        if type(synonym) == "string" then
+            local synonymText = Util.trim(synonym)
+            if synonymText ~= "" then
+                table.insert(cleaned, synonymText)
+            end
+        end
+    end
+    return cleaned
+end
+
+---
+-- Creates a Lightroom keyword safely and returns nil on failure.
+-- @param catalog LrCatalog
+-- @param keywordName string
+-- @param synonyms table|nil
+-- @param includeOnExport boolean
+-- @param parent LrKeyword|nil
+-- @return LrKeyword|nil
+createKeywordSafely = function(catalog, keywordName, synonyms, includeOnExport, parent, sessionCache)
+    if type(keywordName) ~= "string" then
+        return nil
+    end
+    local cleanName = Util.trim(keywordName)
+    if cleanName == "" then
+        return nil
+    end
+
+    local cleanSynonyms = sanitizeSynonyms(synonyms)
+    local ok, keywordOrErr = LrTasks.pcall(function()
+        return catalog:createKeyword(cleanName, cleanSynonyms, includeOnExport, parent, true)
+    end)
+    if not ok then
+        log:error("Failed to create keyword '" .. tostring(cleanName) .. "': " .. tostring(keywordOrErr))
+        return nil
+    end
+    keywordCachePut(sessionCache, parent, cleanName, keywordOrErr)
+    return keywordOrErr
+end
+
+---
 -- Recursively adds keywords to a photo, creating parent keywords as needed.
 -- @param photo The LrPhoto object.
 -- @param keywordSubTable A table of keywords, possibly nested.
 -- @param parent The parent LrKeyword object for the current level.
 -- @param existingKeywordNames Optional set of keyword names already on the photo (append mode).
 -- @param currentTopLevelKeyword Optional top-level keyword for this task (avoids prefs race in parallel jobs).
+-- @param sessionCache Optional table: parent -> keyword name -> LrKeyword (same pass as applyMetadata).
 --
-function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, existingKeywordNames, currentTopLevelKeyword)
+function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, existingKeywordNames, currentTopLevelKeyword, sessionCache)
     local function parseKeywordLeaf(leafValue)
         if type(leafValue) == "string" then
             local keywordName = Util.trim(leafValue)
@@ -247,35 +400,40 @@ function MetadataManager.addKeywordRecursively(photo, keywordSubTable, parent, e
     local addKeywords = {}
     local reservedTopLevel = currentTopLevelKeyword or prefs.topLevelKeyword
     for key, value in pairs(keywordSubTable) do
-        -- log:trace("Processing keyword key: " .. tostring(key) .. " value: " .. tostring(value))
         local keyword
         if type(key) == 'string' and key ~= "" and key ~= "None" and key ~= "none" and prefs.useKeywordHierarchy then
-            keyword = photo.catalog:createKeyword(key, {}, false, parent, true)
+            keyword = createKeywordSafely(photo.catalog, key, {}, false, parent, sessionCache)
         elseif type(key) == 'number' and value then
             local keywordName, keywordSynonyms = parseKeywordLeaf(value)
             if not keywordName or keywordName == "" or keywordName == "None" or keywordName == "none" then
                 -- Skip invalid keyword leafs
-            elseif existingKeywordNames and existingKeywordNames[keywordName] then
-                -- Append mode: skip keyword that already exists on photo
             elseif not Util.table_contains(addKeywords, keywordName) then
                 if keywordName == "Ollama" or keywordName == "LMStudio" or keywordName == "Google Gemini" or keywordName == "ChatGPT" or keywordName == reservedTopLevel then
                     log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
                 else
                     local currentParent = prefs.useKeywordHierarchy and parent or nil
-                    keyword = findKeywordByNameInParent(photo.catalog, currentParent, keywordName)
+                    keyword = findKeywordByNameInParent(photo, photo.catalog, sessionCache, currentParent, keywordName)
                     if keyword then
                         mergeKeywordSynonyms(keyword, keywordSynonyms)
                     else
-                        keyword = photo.catalog:createKeyword(keywordName, keywordSynonyms, true, currentParent, true)
+                        keyword = createKeywordSafely(photo.catalog, keywordName, keywordSynonyms, true, currentParent, sessionCache)
                         mergeKeywordSynonyms(keyword, keywordSynonyms)
                     end
-                    photo:addKeyword(keyword)
-                    table.insert(addKeywords, keywordName)
+                    if keyword then
+                        local okAdd, errAdd = LrTasks.pcall(function()
+                            photo:addKeyword(keyword)
+                        end)
+                        if okAdd then
+                            table.insert(addKeywords, keywordName)
+                        else
+                            log:error("Failed to add keyword '" .. tostring(keywordName) .. "' to photo: " .. tostring(errAdd))
+                        end
+                    end
                 end
             end
         end
         if type(value) == 'table' and not isKeywordLeafObject(value) then
-            MetadataManager.addKeywordRecursively(photo, value, keyword, existingKeywordNames, currentTopLevelKeyword)
+            MetadataManager.addKeywordRecursively(photo, value, keyword, existingKeywordNames, currentTopLevelKeyword, sessionCache)
         end
     end
 end
