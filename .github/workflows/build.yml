@@ -173,7 +173,9 @@ jobs:
             fi
           fi
 
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
+          # Bundled uv-managed / copied standalone interpreters are marked externally managed;
+          # same as macOS, Windows needs --break-system-packages to install deps into the tree.
+          if [ "${{ matrix.os_name }}" == "macos" ] || [ "${{ matrix.os_name }}" == "windows" ]; then
             uv pip install --python "$PY_EXE" --break-system-packages -r server/requirements-desktop.txt
           else
             uv pip install --python "$PY_EXE" -r server/requirements-desktop.txt
@@ -183,7 +185,7 @@ jobs:
           # Default pip wheel bundles ~600MB of CUDA runtime we never use.
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             echo "Replacing CUDA torch with CPU-only build..."
-            uv pip install --python "$PY_EXE" \
+            uv pip install --python "$PY_EXE" --break-system-packages \
               torch==2.5.1+cpu torchvision==0.20.1+cpu \
               --index-url https://download.pytorch.org/whl/cpu \
               --reinstall --no-deps
