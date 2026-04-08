@@ -47,6 +47,30 @@ def _needs_unload():
     return delta.total_seconds() >= IDLE_UNLOAD_SECONDS
 
 
+def is_model_cached() -> bool:
+    """Check if the model is bundled or cached locally without downloading."""
+    global model
+    with _model_lock:
+        if model is not None:
+            return True
+        
+        try:
+            cached_model_file = hf_hub_download(
+                repo_id=IMAGE_MODEL_ID,
+                filename="open_clip_model.safetensors",
+                local_files_only=True
+            )
+            cached_model_dir = os.path.dirname(cached_model_file)
+            if os.path.isdir(cached_model_dir):
+                config_file = os.path.join(cached_model_dir, 'open_clip_config.json')
+                weights_file = os.path.join(cached_model_dir, 'open_clip_model.safetensors')
+                if os.path.isfile(config_file) and os.path.isfile(weights_file):
+                    return True
+            return False
+        except Exception:
+            return False
+
+
 def load_model():
     """Load the OpenCLIP model (idempotent)."""
     global model, processor, tokenizer
