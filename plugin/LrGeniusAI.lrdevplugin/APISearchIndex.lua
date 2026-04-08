@@ -1353,6 +1353,8 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
         disabledForRun = false,
     }
     
+    local errorMessages = {}
+
     local analyzeWorker = function()
         while #photoToProcessStack > 0 do
             if progressScope:isCanceled() then break end
@@ -1453,10 +1455,12 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                         stats.success = stats.success + 1
                     else
                         stats.failed = stats.failed + 1
+                        table.insert(errorMessages, tostring(indexResponse or "Unknown"))
                         log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown"))
                     end
                 else
                     stats.failed = stats.failed + 1
+                    table.insert(errorMessages, "Could not compute photo ID: " .. tostring(photoIdErr))
                     log:error("Failed to compute photo ID for " .. filename .. ": " .. tostring(photoIdErr))
                 end
                 
@@ -1523,7 +1527,21 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
         status = "somefailed"
     end
     
-    return status, stats.processed, stats.failed, processedPhotos
+    local combinedError
+    if #errorMessages > 0 then
+        local uniqueErrors = {}
+        local errorList = {}
+        for _, msg in ipairs(errorMessages) do
+            if not uniqueErrors[msg] then
+                uniqueErrors[msg] = true
+                table.insert(errorList, msg)
+                if #errorList >= 5 then break end
+            end
+        end
+        combinedError = table.concat(errorList, "\n")
+    end
+
+    return status, stats.processed, stats.failed, processedPhotos, combinedError
 end
 
 ---

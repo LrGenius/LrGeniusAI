@@ -729,7 +729,7 @@ LrTasks.startAsyncTask(function()
 
         log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
 
-        status, processed, failed, processedPhotos = SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
+        status, processed, failed, processedPhotos, combinedError = SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
 
         if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog then
             log:trace("Saving metadata for processed photos...")
@@ -837,16 +837,30 @@ LrTasks.startAsyncTask(function()
                 LOC "$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."
             )
         elseif status == "allfailed" then
-            LrDialogs.message(
-                LOC "$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed",
-                LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
-            )
+            if combinedError then
+                ErrorHandler.handleError(
+                    LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
+                    combinedError
+                )
+            else
+                LrDialogs.message(
+                    LOC "$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed",
+                    LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
+                )
+            end
         elseif status == "somefailed" then
             local successCount = processed - failed
-            LrDialogs.message(
-                LOC "$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors",
-                LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.", successCount, processed, failed)
-            )
+            if combinedError then
+                ErrorHandler.handleError(
+                    LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.", successCount, processed, failed),
+                    combinedError
+                )
+            else
+                LrDialogs.message(
+                    LOC "$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors",
+                    LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.", successCount, processed, failed)
+                )
+            end
         else -- success
             LrDialogs.message(
                 LOC "$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed",

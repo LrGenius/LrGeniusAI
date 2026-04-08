@@ -731,6 +731,7 @@ LrTasks.startAsyncTask(function()
         local successCount = 0
         local skippedCount = 0
         local errorCount = 0
+        local errorMessages = {}
         local reuseContext = false
         local sharedContext = ""
 
@@ -764,6 +765,7 @@ LrTasks.startAsyncTask(function()
             local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
             if not photoId then
                 log:error("Failed to resolve photo ID for " .. fileName .. ": " .. tostring(photoIdErr))
+                table.insert(errorMessages, fileName .. ": " .. tostring(photoIdErr))
                 errorCount = errorCount + 1
                 continueProcessing = false
             else
@@ -776,6 +778,7 @@ LrTasks.startAsyncTask(function()
                 local exportedPath = SearchIndexAPI.exportPhotoForIndexing(photo)
                 if not exportedPath then
                     log:error("Failed to export photo for AI edit generation: " .. fileName)
+                    table.insert(errorMessages, fileName .. ": export failed")
                     errorCount = errorCount + 1
                     continueProcessing = false
                 end
@@ -792,13 +795,23 @@ LrTasks.startAsyncTask(function()
                     end)
                     if not ok then
                         log:error("AI edit generation threw for " .. fileName .. ": " .. tostring(apiOk))
+                        table.insert(errorMessages, fileName .. ": exception thrown: " .. tostring(apiOk))
                         errorCount = errorCount + 1
                         continueProcessing = false
                     else
                         response = apiResponse
                     end
                     if continueProcessing and (not apiOk or not response or type(response) ~= "table" or response.status ~= "success") then
+                        local errMsg = "Unknown error"
+                        if not apiOk then
+                            errMsg = tostring(apiResponse)
+                        elseif type(response) == "string" then
+                            errMsg = response
+                        elseif response and response.error then
+                            errMsg = response.error
+                        end
                         log:error("AI edit generation failed for " .. fileName .. ": apiOk=" .. tostring(apiOk) .. " responseType=" .. tostring(type(response)) .. " response=" .. tostring(response))
+                        table.insert(errorMessages, fileName .. ": " .. errMsg)
                         errorCount = errorCount + 1
                         continueProcessing = false
                     else
@@ -814,6 +827,7 @@ LrTasks.startAsyncTask(function()
                 end)
                 if not okPersist then
                     log:error("Persist generated recipe threw for " .. fileName .. ": " .. tostring(persistErr))
+                    table.insert(errorMessages, fileName .. ": could not persist recipe: " .. tostring(persistErr))
                     errorCount = errorCount + 1
                     continueProcessing = false
                 end
@@ -848,6 +862,7 @@ LrTasks.startAsyncTask(function()
                         successCount = successCount + 1
                     else
                         errorCount = errorCount + 1
+                        table.insert(errorMessages, fileName .. ": failed to apply recipe")
                     end
                     if warnings and #warnings > 0 then
                         log:warn("AI edit warnings for " .. fileName .. ": " .. table.concat(warnings, " | "))
@@ -857,13 +872,35 @@ LrTasks.startAsyncTask(function()
         end
 
         progressScope:done()
-        LrDialogs.message(
-            "AI Lightroom Edit",
-            "Applied edits to " .. tostring(successCount) .. " photo(s).\n" ..
-            "Skipped: " .. tostring(skippedCount) .. "\n" ..
-            "Errors: " .. tostring(errorCount),
-            "info"
-        )
+
+        if errorCount > 0 then
+            local uniqueErrors = {}
+            local errorList = {}
+            for _, msg in ipairs(errorMessages) do
+                if not uniqueErrors[msg] then
+                    uniqueErrors[msg] = true
+                    table.insert(errorList, "- " .. msg)
+                    if #errorList >= 5 then break end
+                end
+            end
+            
+            local combinedError = "Applied edits to " .. tostring(successCount) .. " photo(s).\nSkipped: " .. tostring(skippedCount) .. "\nErrors: " .. tostring(errorCount) .. "\n\nError details:\n"
+            if #errorList > 0 then
+                combinedError = combinedError .. table.concat(errorList, "\n")
+            end
+            if #errorMessages > 5 then
+                combinedError = combinedError .. "\n... and " .. tostring(#errorMessages - 5) .. " more errors"
+            end
+
+            ErrorHandler.handleError("AI Edit Completed with Errors", combinedError)
+        else
+            LrDialogs.message(
+                "AI Lightroom Edit",
+                "Applied edits to " .. tostring(successCount) .. " photo(s).\n" ..
+                "Skipped: " .. tostring(skippedCount),
+                "info"
+            )
+        end
         log:info("AI Edit task completed. success=" .. tostring(successCount) .. " skipped=" .. tostring(skippedCount) .. " errors=" .. tostring(errorCount))
     end)
 end)
