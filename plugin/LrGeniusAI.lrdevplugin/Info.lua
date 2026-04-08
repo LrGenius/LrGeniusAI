@@ -60,11 +60,6 @@ return {
 			title = LOC "$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images...",
 			file = "TaskFindSimilarImages.lua",
 		},
-		{ separator = true },
-		{
-			title = "Developer: Run Automated Tests...",
-			file = "TaskAutomatedTests.lua",
-		},
 	},
 
 	LrExportMenuItems = {
@@ -103,6 +98,13 @@ return {
 		{
 			title = LOC "$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images...",
 			file = "TaskFindSimilarImages.lua",
+		},
+	},
+
+	LrHelpMenuItems = {
+		{
+			title = "Developer: Run Automated Tests...",
+			file = "TaskAutomatedTests.lua",
 		},
 	},
 
