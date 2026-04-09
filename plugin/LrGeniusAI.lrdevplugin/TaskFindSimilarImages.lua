@@ -231,6 +231,15 @@ LrTasks.startAsyncTask(function()
             return
         end
 
+        -- If the server returned a warning (e.g. reference photo not indexed), show it and stop.
+        if result and result.warning then
+            LrDialogs.message(
+                LOC "$$$/LrGeniusAI/FindSimilarImages/NotIndexedTitle=Photo not indexed",
+                result.warning
+            )
+            return
+        end
+
         local results = (result and result.results) and result.results or {}
         if #results == 0 then
             log:warn("Find similar images: 0 results for photo_id=%s scope=%s phash_max_hamming=%s", photoId, options.searchScope, phashMaxHammingFromStrictness(options.phashStrictness))

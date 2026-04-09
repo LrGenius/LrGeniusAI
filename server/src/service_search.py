@@ -287,7 +287,10 @@ def find_similar_images(
 
     similarity_mode: "phash" = near-duplicates by perceptual hash (optionally ranked by CLIP);
                     "clip" = semantically similar by embedding (k-NN).
-    Returns list of {"photo_id", "phash_distance", "clip_distance"} sorted by similarity.
+    Returns (results, warning) where:
+      - results: list of {"photo_id", "phash_distance", "clip_distance"} sorted by similarity.
+      - warning: str with a user-facing message when the reference photo cannot be processed,
+                 or None on success.
     """
     if similarity_mode == "clip":
         return chroma_service.find_similar_to_photo_by_clip(

@@ -392,6 +392,7 @@
 "$$$/LrGeniusAI/FindSimilarImages/SearchError=Find similar failed"
 "$$$/LrGeniusAI/FindSimilarImages/NoResultsTitle=No similar images"
 "$$$/LrGeniusAI/FindSimilarImages/NoResultsMessage=No similar images found. The photo may not be indexed yet, or no other photos are similar enough. Run 'Analyze & Index' to ensure perceptual hashes are computed."
+"$$$/LrGeniusAI/FindSimilarImages/NotIndexedTitle=Photo not indexed"
 "$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalog=Not in catalog"
 "$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalogMessage=Similar photos were found in the index but are not in the current catalog."
 "$$$/LrGeniusAI/FindSimilarImages/CollectionSetName=Similar Images"

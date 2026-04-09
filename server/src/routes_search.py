@@ -152,7 +152,7 @@ def find_similar_route():
         catalog_id or "(none)",
     )
     try:
-        results = service_search.find_similar_images(
+        results, warning = service_search.find_similar_images(
             photo_id=str(photo_id).strip(),
             scope_photo_ids=scope_photo_ids,
             max_results=max_results,
@@ -162,7 +162,10 @@ def find_similar_route():
             catalog_id=catalog_id,
         )
         logger.info("find_similar: returning %s results", len(results))
-        return jsonify({"results": results})
+        response = {"results": results}
+        if warning:
+            response["warning"] = warning
+        return jsonify(response)
     except Exception as e:
         logger.error("Error during find_similar: %s", str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500

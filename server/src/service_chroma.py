@@ -1211,14 +1211,16 @@ def find_similar_to_photo(
         catalog_id: Optional catalog filter for scope when scope_photo_ids is None.
 
     Returns:
-        List of dicts: [{"photo_id": str, "phash_distance": int, "clip_distance": float or None}, ...]
-        sorted by phash_distance then clip_distance. Excludes the reference photo_id.
+        Tuple of (results, warning):
+          - results: List of dicts [{"photo_id", "phash_distance", "clip_distance"}, ...]
+            sorted by phash_distance then clip_distance. Excludes the reference photo_id.
+          - warning: str if the reference photo could not be found/indexed, else None.
     """
     _ensure_initialized()
     photo_id = _normalize_photo_id(photo_id)
     if not photo_id:
         logger.warning("find_similar_to_photo: empty or invalid photo_id")
-        return []
+        return [], "empty or invalid photo_id"
 
     scope_source = "scope_photo_ids (%s)" % len(scope_photo_ids) if scope_photo_ids is not None else ("catalog_id=%s" % (catalog_id or "all"))
     logger.info(
@@ -1229,12 +1231,12 @@ def find_similar_to_photo(
     target_data = get_image(photo_id, catalog_id=catalog_id)
     if not target_data or not target_data.get("ids"):
         logger.warning("find_similar_to_photo: reference photo_id %s not found or not in catalog", photo_id)
-        return []
+        return [], "This photo is not in the search index. Run 'Analyze & Index' first."
     target_meta = (target_data.get("metadatas") or [None])[0] or {}
     target_phash = _phash_to_int(target_meta.get("cull_phash") or target_meta.get("phash"))
     if target_phash is None:
         logger.warning("find_similar_to_photo: reference photo_id %s has no phash; run Analyze & Index first", photo_id)
-        return []
+        return [], "This photo has no perceptual hash. Run 'Analyze & Index' first."
 
     target_embedding = None
     if use_clip:
@@ -1254,7 +1256,7 @@ def find_similar_to_photo(
 
     logger.info("find_similar_to_photo: %s candidate photo(s) to compare", len(candidate_ids))
     if not candidate_ids:
-        return []
+        return [], None
 
     results = []
     for start in range(0, len(candidate_ids), FIND_SIMILAR_BATCH_SIZE):
@@ -1283,38 +1285,42 @@ def find_similar_to_photo(
     results.sort(key=lambda r: (r["phash_distance"], r["clip_distance"] if r["clip_distance"] is not None else float("inf")))
     out = results[:max_results]
     logger.info("find_similar_to_photo: %s similar photo(s) found (phash_distance <= %s)", len(out), phash_max_hamming)
-    return out
+    return out, None
 
 
 def find_similar_to_photo_by_clip(photo_id, scope_photo_ids=None, max_results=100, catalog_id=None):
     """
     Find indexed photos semantically similar to the given photo by CLIP embedding (k-NN).
-    Returns list of {"photo_id", "phash_distance": None, "clip_distance"} sorted by clip_distance.
-    Excludes the reference photo_id.
+
+    Returns:
+        Tuple of (results, warning):
+          - results: List of {"photo_id", "phash_distance": None, "clip_distance"} sorted by clip_distance.
+            Excludes the reference photo_id.
+          - warning: str if the reference photo could not be found/indexed, else None.
     """
     _ensure_initialized()
     photo_id = _normalize_photo_id(photo_id)
     if not photo_id:
         logger.warning("find_similar_to_photo_by_clip: empty or invalid photo_id")
-        return []
+        return [], "empty or invalid photo_id"
 
     target_data = get_image(photo_id, catalog_id=catalog_id)
     if not target_data or not target_data.get("ids"):
         logger.warning("find_similar_to_photo_by_clip: reference photo_id %s not found or not in catalog", photo_id)
-        return []
+        return [], "This photo is not in the search index. Run 'Analyze & Index' first."
     first_emb = _first_result_item(target_data.get("embeddings"))
     if first_emb is None:
         logger.warning("find_similar_to_photo_by_clip: reference photo_id %s has no embedding; run Analyze & Index with embeddings", photo_id)
-        return []
+        return [], "This photo has no image embedding. Run 'Analyze & Index' with embeddings enabled."
     query_embedding = _embedding_to_array(first_emb)
     if query_embedding is None:
-        return []
+        return [], None
 
     where_clause = None
     if scope_photo_ids is not None and len(scope_photo_ids) > 0:
         ids_list = [str(pid).strip() for pid in scope_photo_ids if pid and str(pid).strip() != photo_id]
         if not ids_list:
-            return []
+            return [], None
         where_clause = {"photo_id": {"$in": ids_list}}
 
     n_fetch = max_results + 1
@@ -1328,7 +1334,7 @@ def find_similar_to_photo_by_clip(photo_id, scope_photo_ids=None, max_results=10
     dist0 = result.get("distances") and result["distances"][0]
     if not ids0 or not dist0:
         logger.info("find_similar_to_photo_by_clip: no results from query")
-        return []
+        return [], None
     out = []
     for i, pid in enumerate(ids0):
         if pid == photo_id:
@@ -1339,7 +1345,7 @@ def find_similar_to_photo_by_clip(photo_id, scope_photo_ids=None, max_results=10
         if len(out) >= max_results:
             break
     logger.info("find_similar_to_photo_by_clip: %s similar photo(s) found by CLIP", len(out))
-    return out
+    return out, None
 
 
 # --- Face embeddings collection API ---
