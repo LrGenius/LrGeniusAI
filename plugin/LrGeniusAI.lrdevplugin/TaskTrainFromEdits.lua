@@ -5,17 +5,37 @@
 
 require "DevelopEditManager"
 
-local function showTrainDialog(ctx, photoCount)
+local function showTrainDialog(ctx)
     local f = LrView.osFactory()
     local bind = LrView.bind
     local props = LrBinding.makePropertyTable(ctx)
 
     props.label = prefs.trainingLabel or ""
     props.summary = prefs.trainingSummary or ""
+    props.scope = prefs.trainingScope or "selected"
 
     local contents = f:column {
         bind_to_object = props,
         spacing = f:control_spacing(),
+        f:group_box {
+            title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/Scope=Scope",
+            fill_horizontal = 1,
+            f:row {
+                f:static_text {
+                    title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/Scope=Scope",
+                    width = 150,
+                },
+                f:popup_menu {
+                    value = bind 'scope',
+                    width = 300,
+                    items = {
+                        { title = LOC "$$$/LrGeniusAI/common/ScopeSelected=Selected photos only", value = 'selected' },
+                        { title = LOC "$$$/LrGeniusAI/common/ScopeView=Current view", value = 'view' },
+                        { title = LOC "$$$/LrGeniusAI/common/ScopeAll=Entire Catalog", value = 'all' },
+                    },
+                },
+            },
+        },
         f:group_box {
             title = LOC "$$$/LrGeniusAI/Training/StyleGroup=Edit Style",
             fill_horizontal = 1,
@@ -44,14 +64,6 @@ local function showTrainDialog(ctx, photoCount)
         },
         f:row {
             f:static_text {
-                title = string.format(
-                    LOC "$$$/LrGeniusAI/Training/PhotoCount=%d photo(s) will be saved as training examples.",
-                    photoCount
-                ),
-            },
-        },
-        f:row {
-            f:static_text {
                 title = LOC "$$$/LrGeniusAI/Training/DialogHint=Hint: Only select photos that you have manually edited. The AI will learn your style from these examples.",
                 font = "italic",
             },
@@ -70,10 +82,12 @@ local function showTrainDialog(ctx, photoCount)
 
     prefs.trainingLabel = props.label
     prefs.trainingSummary = props.summary
+    prefs.trainingScope = props.scope
 
     return {
         label = props.label,
         summary = props.summary,
+        scope = props.scope,
     }
 end
 
@@ -87,12 +101,17 @@ LrTasks.startAsyncTask(function()
             return
         end
 
-        local catalog = LrApplication.activeCatalog()
-        local selectedPhotos = catalog:getTargetPhotos()
-        if not selectedPhotos or #selectedPhotos == 0 then
+        local options = showTrainDialog(ctx)
+        if not options then
+            log:info("Train task cancelled by user")
+            return
+        end
+
+        local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(options.scope)
+        if not photosToProcess or #photosToProcess == 0 then
             LrDialogs.message(
                 LOC "$$$/LrGeniusAI/Training/NoPhotosTitle=No Photos",
-                LOC "$$$/LrGeniusAI/Training/NoPhotosMsg=Please select one or more photos first.",
+                LOC "$$$/LrGeniusAI/Training/NoPhotosMsg=No photos found in the selected scope.",
                 "info"
             )
             return
@@ -100,7 +119,7 @@ LrTasks.startAsyncTask(function()
 
         -- Filter photos: only RAW or DNG formats.
         local photos = {}
-        for _, photo in ipairs(selectedPhotos) do
+        for _, photo in ipairs(photosToProcess) do
             local fmt = photo:getRawMetadata("fileFormat")
             
             -- Only include RAW or DNG.
@@ -112,15 +131,9 @@ LrTasks.startAsyncTask(function()
         if #photos == 0 then
             LrDialogs.message(
                 LOC "$$$/LrGeniusAI/Training/NoValidPhotosTitle=No Valid Training Photos",
-                LOC "$$$/LrGeniusAI/Training/NoValidPhotosMsg=None of the selected photos match the training criteria (must be RAW/DNG format and have manual adjustments). JPEGs, TIFFs, and unedited photos are excluded.",
+                LOC "$$$/LrGeniusAI/Training/NoValidPhotosMsg=None of the photos in the selected scope match the training criteria (must be RAW or DNG format). JPEGs, TIFFs, and other formats are excluded.",
                 "info"
             )
-            return
-        end
-
-        local options = showTrainDialog(ctx, #photos)
-        if not options then
-            log:info("Train task cancelled by user")
             return
         end
 
