@@ -418,6 +418,7 @@
 "$$$/LrGeniusAI/Training/RefreshCount" = "Refresh count"
 "$$$/LrGeniusAI/Training/SaveButton" = "Save Examples"
 "$$$/LrGeniusAI/Training/SavedExamples" = "Saved training examples:"
+"$$$/LrGeniusAI/Training/LearnedCameras" = "Learned Cameras:"
 "$$$/LrGeniusAI/Training/SectionHint" = "The Style Engine learns your aesthetic from your own edits. Save 10+ examples to activate high-precision matching."
 "$$$/LrGeniusAI/Training/SectionTitle" = "My Style Profile"
 "$$$/LrGeniusAI/Training/Status/Active" = "ACTIVE - High precision matching"

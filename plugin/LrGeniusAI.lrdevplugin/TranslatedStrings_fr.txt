@@ -418,6 +418,7 @@
 "$$$/LrGeniusAI/Training/RefreshCount" = "Rafraîchir le compteur"
 "$$$/LrGeniusAI/Training/SaveButton" = "Enregistrer les exemples"
 "$$$/LrGeniusAI/Training/SavedExamples" = "Exemples enregistrés :"
+"$$$/LrGeniusAI/Training/LearnedCameras" = "Appareils Appris :"
 "$$$/LrGeniusAI/Training/SectionHint" = "Le moteur de style apprend votre esthétique à partir de vos propres éditions. Enregistrez 10+ exemples pour activer le matching haute précision."
 "$$$/LrGeniusAI/Training/SectionTitle" = "Mon Profil de Style"
 "$$$/LrGeniusAI/Training/Status/Active" = "ACTIF - Matching haute précision"

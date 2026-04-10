@@ -610,6 +610,28 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                 },
                 f:row {
                     f:static_text {
+                        title = LOC "$$$/LrGeniusAI/Training/LearnedCameras=Learned Cameras:",
+                        width = share 'labelWidth'
+                    },
+                    f:static_text {
+                        title = bind { key = 'styleStats', transform = function(s)
+                            if not s or not s.camera_distribution then return "..." end
+                            local sorted = {}
+                            for k, v in pairs(s.camera_distribution) do
+                                table.insert(sorted, { name = k, count = v })
+                            end
+                            table.sort(sorted, function(a, b) return a.count > b.count end)
+                            local top = {}
+                            for i = 1, math.min(2, #sorted) do
+                                table.insert(top, string.format("%s (%d)", sorted[i].name, sorted[i].count))
+                            end
+                            return #top > 0 and table.concat(top, ", ") or "None yet"
+                        end },
+                        font = "<system/italic>",
+                    },
+                },
+                f:row {
+                    f:static_text {
                         title = LOC "$$$/LrGeniusAI/Training/StyleDNA=Style DNA (Average):",
                         width = share 'labelWidth'
                     },

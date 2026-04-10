@@ -466,7 +466,8 @@ function Util.copyLogfilesToDesktop(extraInfo)
     local status, err2 = LrTasks.pcall(function()
         log:trace("Fetching server-side logs via API...")
         local remoteLogs, err = SearchIndexAPI.getRemoteLogs()
-        if remoteLogs then
+        log:trace("Remote logs result type: " .. type(remoteLogs))
+        if remoteLogs and type(remoteLogs) == 'table' then
             log:trace("Successfully fetched server-side logs")
             
             local url = prefs.backendServerUrl or ""

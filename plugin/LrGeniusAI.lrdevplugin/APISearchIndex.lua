@@ -3000,6 +3000,7 @@ function SearchIndexAPI.getRemoteLogs()
     local url = getBaseUrl() .. ENDPOINTS.LOGS
     log:trace("Fetching remote logs from: " .. url)
     local response, err = _request('GET', url, nil, 30)
+    log:trace("getRemoteLogs: _request returned type=" .. type(response))
     if not response then
         log:error("Failed to fetch remote logs: " .. tostring(err))
         return nil, err

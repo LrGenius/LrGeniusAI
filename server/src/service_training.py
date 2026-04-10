@@ -479,6 +479,7 @@ def get_training_stats() -> Dict[str, Any]:
     scene_dist: Dict[str, int] = {}
     focal_dist: Dict[str, int] = {}
     tod_dist: Dict[str, int] = {}
+    camera_dist: Dict[str, int] = {}
     exp_means: List[float] = []
     exp_contrasts: List[float] = []
     exp_colorfulness: List[float] = []
@@ -495,6 +496,9 @@ def get_training_stats() -> Dict[str, Any]:
 
         tod = meta.get("time_of_day_bucket", "unknown")
         tod_dist[tod] = tod_dist.get(tod, 0) + 1
+
+        cam = meta.get("camera_model", meta.get("camera_make", "unknown"))
+        camera_dist[cam] = camera_dist.get(cam, 0) + 1
 
         if "exp_luminance_mean" in meta:
             exp_means.append(float(meta["exp_luminance_mean"]))
@@ -527,6 +531,7 @@ def get_training_stats() -> Dict[str, Any]:
         "scene_distribution": scene_dist,
         "focal_buckets": focal_dist,
         "time_of_day": tod_dist,
+        "camera_distribution": camera_dist,
         "exposure": exposure_stats,
     }
 
