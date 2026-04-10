@@ -1201,6 +1201,7 @@ function DevelopEditManager.showValidationDialog(context, photo, response, optio
 
     local f = LrView.osFactory()
     local bind = LrView.bind
+    local share = LrView.share
     local props = LrBinding.makePropertyTable(context)
     props.applyGlobal = next(recipe.global or {}) ~= nil
     props.applyMasks = (options and options.applyMasks ~= false) and ((recipe.masks and #recipe.masks > 0) or false)
