@@ -687,34 +687,10 @@ local function enrichPhotoOptions(photo, baseOptions, userContext)
         photoOptions.capture_time = datetime -- Unix timestamp for style engine
     end
 
-    -- Add EXIF fields for style engine matching
-    local okExif, errExif = LrTasks.pcall(function()
-        local fl = photo:getRawMetadata("focalLength")
-        if type(fl) == "number" then photoOptions.focal_length = fl end
-
-        local cameraMake = photo:getRawMetadata("cameraMaker")
-        if type(cameraMake) == "string" and cameraMake ~= "" then
-            photoOptions.camera_make = cameraMake
-        end
-
-        local cameraModel = photo:getRawMetadata("cameraModel")
-        if type(cameraModel) == "string" and cameraModel ~= "" then
-            photoOptions.camera_model = cameraModel
-        end
-
-        local iso = photo:getRawMetadata("isoSpeedRating")
-        if type(iso) == "number" then photoOptions.iso = iso end
-
-        local aperture = photo:getRawMetadata("aperture")
-        if type(aperture) == "number" then photoOptions.aperture = aperture end
-
-        local shutterSpeed = photo:getFormattedMetadata("shutterSpeed")
-        if type(shutterSpeed) == "string" and shutterSpeed ~= "" then
-            photoOptions.shutter_speed = shutterSpeed
-        end
-    end)
-    if not okExif then
-        log:warn("enrichPhotoOptions: could not read EXIF data: " .. tostring(errExif))
+    -- Add EXIF fields for style engine matching using standardized utility.
+    local exif = Util.getPhotoExif(photo)
+    for k, v in pairs(exif) do
+        photoOptions[k] = v
     end
     photoOptions.user_context = userContext or photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
     log:trace("enrichPhotoOptions: done submit_gps=" .. tostring(photoOptions.submit_gps) .. " submit_keywords=" .. tostring(photoOptions.submit_keywords) .. " submit_folder_names=" .. tostring(photoOptions.submit_folder_names) .. " user_context_len=" .. tostring(type(photoOptions.user_context) == "string" and #photoOptions.user_context or 0))

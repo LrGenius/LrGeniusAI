@@ -169,6 +169,47 @@ local function safeGetFormattedMetadata(photo, key)
     return nil
 end
 
+---
+-- Extracts standardized EXIF metadata from a photo for use by the backend.
+-- Handles robustness for newer RAW formats (like .CR3) where raw metadata might be elusive.
+-- @param photo LrPhoto The photo object.
+-- @return table Map of EXIF fields (capture_time, focal_length, camera_make, camera_model, iso, aperture, shutter_speed).
+--
+function Util.getPhotoExif(photo)
+    local exif = {}
+
+    -- Focal Length (raw number)
+    local fl = safeGetRawMetadata(photo, "focalLength")
+    if type(fl) == "number" then exif.focal_length = fl end
+
+    -- Capture Time (Unix timestamp)
+    local dt = safeGetRawMetadata(photo, "dateTime")
+    if type(dt) == "number" then exif.capture_time = dt end
+
+    -- Camera Make & Model
+    -- Prefer formatted metadata for camera info as it is often more reliably populated 
+    -- for modern proprietary RAW formats (CR3, etc.) in the SDK.
+    local make = safeGetFormattedMetadata(photo, "cameraMaker") or safeGetRawMetadata(photo, "cameraMaker")
+    if type(make) == "string" and make ~= "" then exif.camera_make = make end
+
+    local model = safeGetFormattedMetadata(photo, "cameraModel") or safeGetRawMetadata(photo, "cameraModel")
+    if type(model) == "string" and model ~= "" then exif.camera_model = model end
+
+    -- ISO
+    local iso = safeGetRawMetadata(photo, "isoSpeedRating")
+    if type(iso) == "number" then exif.iso = iso end
+
+    -- Aperture
+    local ap = safeGetRawMetadata(photo, "aperture")
+    if type(ap) == "number" then exif.aperture = ap end
+
+    -- Shutter Speed (formatted string e.g. "1/200")
+    local ss = safeGetFormattedMetadata(photo, "shutterSpeed")
+    if type(ss) == "string" and ss ~= "" then exif.shutter_speed = ss end
+
+    return exif
+end
+
 function Util.computeStableMetadataPhotoId(photo)
     if not photo then
         return nil, "Photo is nil"

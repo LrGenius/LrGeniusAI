@@ -184,17 +184,17 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                 },
             },
             f:group_box {
-                width = share 'groupBoxWidth',
+                width = share 'groupBoxWidth', 600,
                 title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/ApiKeys=API keys",
                 f:row {
                     f:static_text {
                         title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/GoogleApiKey=Google API key",
                         -- alignment = 'right',
-                        width = share 'labelWidth'
+                        width = share 'labelWidth', 200
                     },
                     f:edit_field {
                         value = bind 'geminiApiKey',
-                        width = share 'inputWidth',
+                        width = share 'inputWidth', 300,
                         width_in_chars = 30,
                     },
                     f:push_button {
@@ -202,7 +202,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         action = function(button) 
                             LrHttp.openUrlInBrowser("https://aistudio.google.com/app/apikey")                           
                         end,
-                        width = share 'apiButtonWidth',
+                        width = share 'apiButtonWidth', 120,
                     },
                 },
                 f:row {
@@ -574,6 +574,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                         title = bind 'styleReadyText',
                         text_color = bind 'styleReadyColor',
                         font = "<system/bold>",
+                        width = 350,
                     },
                 },
                 f:row {
@@ -583,6 +584,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                     },
                     f:static_text {
                         title = bind { key = 'trainingCount', transform = function(v) return tostring(v or 0) end },
+                        width = 350,
                     },
                 },
                 f:row {
@@ -606,6 +608,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                             return #top > 0 and table.concat(top, ", ") or "None yet"
                         end },
                         font = "<system/italic>",
+                        width = 350,
                     },
                 },
                 f:row {
@@ -628,6 +631,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                             return #top > 0 and table.concat(top, ", ") or "None yet"
                         end },
                         font = "<system/italic>",
+                        width = 350,
                     },
                 },
                 f:row {
@@ -645,6 +649,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                             if e.mean_colorfulness then table.insert(parts, string.format("Color: %.0f%%", e.mean_colorfulness * 100)) end
                             return #parts > 0 and table.concat(parts, " | ") or "..."
                         end },
+                        width = 350,
                     },
                 },
                 f:row {

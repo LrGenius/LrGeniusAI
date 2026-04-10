@@ -142,7 +142,7 @@ def _tod_proximity(query_tod: str, candidate_tod: str) -> float:
 # Composite scoring
 # ---------------------------------------------------------------------------
 
-def _composite_score(
+def calculate_composite_score(
     clip_sim: float,
     query_exposure: Dict[str, float],
     candidate: Dict[str, Any],
@@ -171,7 +171,7 @@ def _composite_score(
 # Recipe interpolation
 # ---------------------------------------------------------------------------
 
-def _interpolate_recipes(
+def interpolate_recipes(
     winners: List[Tuple[Dict[str, Any], float]],
 ) -> Dict[str, Any]:
     """Weighted blend of canonical develop settings from the top-K winners.
@@ -207,7 +207,7 @@ def _interpolate_recipes(
 # RAW-adaptive exposure compensation
 # ---------------------------------------------------------------------------
 
-def _adaptive_compensation(
+def adaptive_compensation(
     recipe: Dict[str, Any],
     query_exposure: Dict[str, float],
     winners: List[Tuple[Dict[str, Any], float]],
@@ -435,7 +435,7 @@ def generate_style_edit(
     scored: List[Tuple[Dict[str, Any], float]] = []
     for candidate in candidates:
         clip_sim = _clip_distance_to_similarity(candidate.get("distance", 1.0))
-        score = _composite_score(
+        score = calculate_composite_score(
             clip_sim=clip_sim,
             query_exposure=query_exposure,
             candidate=candidate,
@@ -463,12 +463,12 @@ def generate_style_edit(
         for ex, _ in winners
     ]
 
-    blended = _interpolate_recipes(winners)
+    blended = interpolate_recipes(winners)
 
     # -----------------------------------------------------------------------
     # Step 6: RAW-adaptive compensation
     # -----------------------------------------------------------------------
-    blended = _adaptive_compensation(blended, query_exposure, winners)
+    blended = adaptive_compensation(blended, query_exposure, winners)
 
     # -----------------------------------------------------------------------
     # Step 7: Build summary from top example labels

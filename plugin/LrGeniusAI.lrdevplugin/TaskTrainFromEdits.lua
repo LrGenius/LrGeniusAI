@@ -183,44 +183,10 @@ LrTasks.startAsyncTask(function()
                 table.insert(errorMessages, fileName .. ": " .. tostring(photoIdErr))
                 errorCount = errorCount + 1
             else
-                -- Collect EXIF metadata for richer style matching.
-                local exifOptions = {
-                    label   = options.label,
-                    summary = options.summary,
-                }
-                local okExif = LrTasks.pcall(function()
-                    local fl = photo:getRawMetadata("focalLength")
-                    if type(fl) == "number" then exifOptions.focal_length = fl end
-
-                    local dateTime = photo:getRawMetadata("dateTime")
-                    if type(dateTime) == "number" then
-                        exifOptions.capture_time = dateTime
-                    end
-
-                    local cameraMake = photo:getRawMetadata("cameraMaker")
-                    if type(cameraMake) == "string" and cameraMake ~= "" then
-                        exifOptions.camera_make = cameraMake
-                    end
-
-                    local cameraModel = photo:getRawMetadata("cameraModel")
-                    if type(cameraModel) == "string" and cameraModel ~= "" then
-                        exifOptions.camera_model = cameraModel
-                    end
-
-                    local iso = photo:getRawMetadata("isoSpeedRating")
-                    if type(iso) == "number" then exifOptions.iso = iso end
-
-                    local aperture = photo:getRawMetadata("aperture")
-                    if type(aperture) == "number" then exifOptions.aperture = aperture end
-
-                    local shutterSpeed = photo:getFormattedMetadata("shutterSpeed")
-                    if type(shutterSpeed) == "string" and shutterSpeed ~= "" then
-                        exifOptions.shutter_speed = shutterSpeed
-                    end
-                end)
-                if not okExif then
-                    log:warn("Could not read EXIF from " .. fileName .. " (non-fatal)")
-                end
+                -- Collect EXIF metadata for richer style matching using standardized utility.
+                local exifOptions = Util.getPhotoExif(photo)
+                exifOptions.label = options.label
+                exifOptions.summary = options.summary
 
                 -- Export a JPEG thumbnail for CLIP embedding + exposure analysis.
                 local exportedPath = SearchIndexAPI.exportPhotoForIndexing(photo)
