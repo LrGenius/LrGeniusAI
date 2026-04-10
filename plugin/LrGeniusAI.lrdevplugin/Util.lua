@@ -462,82 +462,56 @@ function Util.copyLogfilesToDesktop(extraInfo)
         ErrorHandler.showError(LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/logfileNotFound=Logfile not found", logFilePath)
     end
 
-    local ollamaLogfilePath = Util.getOllamaLogfilePath()
-    if LrFileUtils.exists(ollamaLogfilePath) then
-        LrFileUtils.copy(ollamaLogfilePath, LrPathUtils.child(folder, 'ollama.log'))
-    else
-        log:trace("Ollama log file not found at: " .. ollamaLogfilePath)
-    end
-
-    -- Fetch remote logs from backend
+    -- Server logs (backend, Ollama, LM Studio) are ALWAYS fetched via API
     LrTasks.pcall(function()
+        log:trace("Fetching server-side logs via API...")
         local remoteLogs, err = SearchIndexAPI.getRemoteLogs()
         if remoteLogs then
-            log:trace("Successfully fetched remote logs from backend")
-            if remoteLogs.backend then
-                local filename = "lrgenius-server.log"
-                -- If it's a remote server, prefix the filename with the hostname to be clear
-                local url = prefs.backendServerUrl or ""
-                local host = url:match("://([^:/]+)") or url:match("^([^:/]+)")
-                if host and host ~= "127.0.0.1" and host ~= "localhost" then
-                    filename = host .. "-lrgenius-server.log"
-                end
+            log:trace("Successfully fetched server-side logs")
+            
+            local url = prefs.backendServerUrl or ""
+            local host = url:match("://([^:/]+)") or url:match("^([^:/]+)")
+            local prefix = ""
+            if host and host ~= "127.0.0.1" and host ~= "localhost" then
+                prefix = host .. "-"
+            end
 
-                local remoteBackendPath = LrPathUtils.child(folder, filename)
-                local f = io.open(remoteBackendPath, "w")
+            if remoteLogs.backend then
+                local filename = prefix .. "lrgenius-server.log"
+                local path = LrPathUtils.child(folder, filename)
+                local f = io.open(path, "w")
                 if f then
                     f:write(remoteLogs.backend)
                     f:close()
-                    log:trace("Saved remote backend logs to: " .. filename .. " (" .. tostring(#remoteLogs.backend) .. " bytes)")
+                    log:trace("Saved backend log: " .. filename)
                 end
             end
+            
             if remoteLogs.ollama then
-                local filename = "remote-ollama.log"
-                local url = prefs.backendServerUrl or ""
-                local host = url:match("://([^:/]+)") or url:match("^([^:/]+)")
-                if host and host ~= "127.0.0.1" and host ~= "localhost" then
-                    filename = host .. "-ollama.log"
-                end
-                
-                local remoteOllamaPath = LrPathUtils.child(folder, filename)
-                local f = io.open(remoteOllamaPath, "w")
+                local filename = prefix .. "ollama.log"
+                local path = LrPathUtils.child(folder, filename)
+                local f = io.open(path, "w")
                 if f then
                     f:write(remoteLogs.ollama)
                     f:close()
-                    log:trace("Saved remote Ollama logs to: " .. filename .. " (" .. tostring(#remoteLogs.ollama) .. " bytes)")
+                    log:trace("Saved Ollama log: " .. filename)
                 end
             end
+            
             if remoteLogs.lmstudio then
-                local filename = "remote-lmstudio.log"
-                local url = prefs.backendServerUrl or ""
-                local host = url:match("://([^:/]+)") or url:match("^([^:/]+)")
-                if host and host ~= "127.0.0.1" and host ~= "localhost" then
-                    filename = host .. "-lmstudio.log"
-                end
-
-                local remoteLmStudioPath = LrPathUtils.child(folder, filename)
-                local f = io.open(remoteLmStudioPath, "w")
+                local filename = prefix .. "lmstudio.log"
+                local path = LrPathUtils.child(folder, filename)
+                local f = io.open(path, "w")
                 if f then
                     f:write(remoteLogs.lmstudio)
                     f:close()
-                    log:trace("Saved remote LM Studio logs to: " .. filename .. " (" .. tostring(#remoteLogs.lmstudio) .. " bytes)")
+                    log:trace("Saved LM Studio log: " .. filename)
                 end
             end
         else
-            log:warn("Could not fetch remote logs: " .. (err or "unknown error"))
+            log:warn("Could not fetch server logs via API: " .. (err or "unknown error"))
         end
     end)
-
-    -- Local server log (only if backend is likely local or setting is specific)
-    local isLocalBackend = SearchIndexAPI.isBackendOnLocalhost()
-    if isLocalBackend then
-        local lrgeniusClipLogfilePath = LrPathUtils.child(LrPathUtils.parent(LrApplication.activeCatalog():getPath()), "lrgenius-server.log")
-        if LrFileUtils.exists(lrgeniusClipLogfilePath) then
-            LrFileUtils.copy(lrgeniusClipLogfilePath, LrPathUtils.child(folder, 'local-lrgenius-server.log'))
-        else
-            log:trace("Local lrgenius-server log file not found at: " .. lrgeniusClipLogfilePath)
-        end
-    end
 
     if LrFileUtils.exists(filePath) then
         LrShell.revealInShell(filePath)
