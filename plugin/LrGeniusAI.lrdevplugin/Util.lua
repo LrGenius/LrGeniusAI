@@ -463,7 +463,7 @@ function Util.copyLogfilesToDesktop(extraInfo)
     end
 
     -- Server logs (backend, Ollama, LM Studio) are ALWAYS fetched via API
-    LrTasks.pcall(function()
+    local status, err2 = LrTasks.pcall(function()
         log:trace("Fetching server-side logs via API...")
         local remoteLogs, err = SearchIndexAPI.getRemoteLogs()
         if remoteLogs then
@@ -512,6 +512,9 @@ function Util.copyLogfilesToDesktop(extraInfo)
             log:warn("Could not fetch server logs via API: " .. (err or "unknown error"))
         end
     end)
+    if not status then
+        log:error("Error in copyLogfilesToDesktop async task: " .. tostring(err2))
+    end
 
     if LrFileUtils.exists(filePath) then
         LrShell.revealInShell(filePath)
