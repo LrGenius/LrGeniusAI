@@ -2746,6 +2746,7 @@ function SearchIndexAPI.startClipDownload()
 end
 
 
+local lastClipReadyStatus = nil
 function SearchIndexAPI.isClipReady()
     local url = getBaseUrl() .. ENDPOINTS.CLIP_STATUS
     local res, err = _request('GET', url)
@@ -2755,11 +2756,19 @@ function SearchIndexAPI.isClipReady()
         return false, errStr
     end
     if res ~= nil then
-        if res.clip == "ready" then
-            log:trace("CLIP model is ready")
+        local currentStatus = res.clip
+        if currentStatus ~= lastClipReadyStatus then
+            if currentStatus == "ready" then
+                log:trace("CLIP model is ready")
+            else
+                log:trace("CLIP model is not ready: " .. tostring(res.message or "no message"))
+            end
+            lastClipReadyStatus = currentStatus
+        end
+        
+        if currentStatus == "ready" then
             return true, res.message
         else
-            log:trace("CLIP model is not ready")
             return false, res.message
         end
     end

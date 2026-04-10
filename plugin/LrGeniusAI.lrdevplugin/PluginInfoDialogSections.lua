@@ -9,7 +9,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
     LrTasks.startAsyncTask(function (context)
             propertyTable.clipReady = SearchIndexAPI.isClipReady()
             while propertyTable.keepChecksRunning  do
-                LrTasks.sleep(1)
+                LrTasks.sleep(5)
                 propertyTable.clipReady = SearchIndexAPI.isClipReady()
             end
         end
