@@ -1550,6 +1550,9 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                 if #errorList >= 5 then break end
             end
         end
+        combinedError = table.concat(errorList, "\n")
+    end
+
     local combinedWarnings
     if #warningsList > 0 then
         local uniqueWarnings = {}
