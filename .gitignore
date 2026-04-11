@@ -7,3 +7,4 @@ models/
 server/gcloud/
 
 docker-compose.yml
+mempalace_data/
