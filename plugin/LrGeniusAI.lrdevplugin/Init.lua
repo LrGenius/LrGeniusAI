@@ -239,9 +239,9 @@ end
 
 LrTasks.startAsyncTask(function()
     -- Check if onboarding is needed
-    if not prefs.onboardingCompleted then
-        OnboardingWizard.show()
-    end
+    -- if not prefs.onboardingCompleted then
+    --     OnboardingWizard.show()
+    -- end
 
     if SearchIndexAPI.startServer() then
         SearchIndexAPI.checkServerHealth()
