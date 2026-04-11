@@ -97,6 +97,8 @@
 "$$$/LrGeniusAI/ClipDownload/Error" = "Fehler beim Herunterladen des CLIP-Modells: ^1"
 "$$$/LrGeniusAI/ClipDownload/ErrorTitle" = "Fehler beim CLIP-Download"
 "$$$/LrGeniusAI/ClipDownload/ProgressTitle" = "Downloade CLIP-KI-Modell für die erweiterte Suche"
+"$$$/LrGeniusAI/ClipDownload/SuccessTitle" = "CLIP Download"
+"$$$/LrGeniusAI/ClipDownload/SuccessMessage" = "CLIP Modell erfolgreich heruntergeladen."
 "$$$/LrGeniusAI/CullTask/Alternates" = "Alternativen"
 "$$$/LrGeniusAI/CullTask/CompletionMessage" = "Culling-Sammlungen für ^1 Gruppen erstellt. Auswahlen: ^2, Alternativen: ^3, Ablehnungen: ^4. Duplikatgruppen: ^5. Preset: ^6."
 "$$$/LrGeniusAI/CullTask/CompletionTitle" = "Culling abgeschlossen"

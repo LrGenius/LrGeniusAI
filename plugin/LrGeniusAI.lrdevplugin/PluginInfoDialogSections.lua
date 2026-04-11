@@ -83,6 +83,52 @@ function PluginInfoDialogSections.startDialog(propertyTable)
     
     updateStats()
     propertyTable.refreshStyleStats = updateStats
+
+    -- System Health monitoring
+    propertyTable.healthStatus = "healthy"
+    propertyTable.healthIssues = ""
+    propertyTable.healthColor = { 0, 0.8, 0 }
+    
+    local function updateHealth()
+        LrTasks.startAsyncTask(function()
+            local health = SearchIndexAPI.getDetailedHealth()
+            local status = "healthy"
+            local issues = {}
+            local color = { 0, 0.8, 0 }
+            
+            if not health.backend then
+                status = "critical"
+                table.insert(issues, LOC "$$$/LrGeniusAI/Health/BackendFailed")
+                color = { 0.8, 0, 0 }
+            end
+            if not health.clip and prefs.useClip then
+                if status ~= "critical" then 
+                    status = "warning" 
+                    color = { 0.8, 0.8, 0 }
+                end
+                table.insert(issues, LOC "$$$/LrGeniusAI/Health/ClipMissing")
+            end
+            if not health.gemini and not health.chatgpt and not health.ollama and not health.lmstudio then
+                if status ~= "critical" then 
+                    status = "warning" 
+                    color = { 0.8, 0.8, 0 }
+                end
+                table.insert(issues, LOC "$$$/LrGeniusAI/Health/ApiKeysMissing")
+            end
+            
+            propertyTable.healthStatus = status
+            propertyTable.healthIssues = table.concat(issues, "; ")
+            propertyTable.healthColor = color
+        end)
+    end
+
+    updateHealth()
+    LrTasks.startAsyncTask(function()
+        while propertyTable.keepChecksRunning do
+            LrTasks.sleep(10)
+            updateHealth()
+        end
+    end)
 end
 
 function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
@@ -175,6 +221,40 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 
             title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/header=LrGeniusAI configuration",
 
+            f:row {
+                f:static_text {
+                    title = LOC "$$$/LrGeniusAI/Health/SummaryTitle",
+                    font = "<system/bold>",
+                    width = share 'labelWidth',
+                },
+                f:static_text {
+                    title = bind {
+                        key = 'healthStatus',
+                        transform = function(v)
+                            if v == "healthy" then return LOC "$$$/LrGeniusAI/Health/StatusHealthy" end
+                            if v == "warning" then return LOC "$$$/LrGeniusAI/Health/StatusWarning" end
+                            return LOC "$$$/LrGeniusAI/Health/StatusCritical"
+                        end
+                    },
+                    text_color = bind 'healthColor',
+                },
+                f:push_button {
+                    title = LOC "$$$/LrGeniusAI/Health/RunWizard",
+                    action = function() OnboardingWizard.show(true) end,
+                },
+            },
+            f:row {
+                visible = bind {
+                    key = 'healthIssues',
+                    transform = function(v) return v ~= "" end
+                },
+                f:spacer { width = share 'labelWidth' },
+                f:static_text {
+                    title = bind 'healthIssues',
+                    text_color = bind 'healthColor',
+                    size = "small",
+                },
+            },
             f:row {
                 f:push_button {
                     title = LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/Docs=Read documentation online",

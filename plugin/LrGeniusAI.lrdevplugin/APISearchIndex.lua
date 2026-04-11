@@ -2040,6 +2040,17 @@ function SearchIndexAPI.startServer(opts)
         end
 
         log:trace("Search index server did not become ready within timeout")
+        
+        -- Diagnose failure
+        local diag = SearchIndexAPI.diagnoseStartupFailure()
+        if diag.binaryMissing then
+            log:error(LOC "$$$/LrGeniusAI/Diagnostics/BinaryMissing")
+        elseif diag.portBusy then
+            log:error(LOC "$$$/LrGeniusAI/Diagnostics/PortBusy")
+        end
+        if diagnostics.logSnippet then
+            log:error(LOC "$$$/LrGeniusAI/Diagnostics/LogSnippet" .. "\n" .. diagnostics.logSnippet)
+        end
         return false
     end)
 
@@ -2735,6 +2746,7 @@ function SearchIndexAPI.startClipDownload()
                 elseif status.status == "completed" then
                     log:trace("CLIP model download completed")
                     progressScope:done()
+                    LrDialogs.message(LOC "$$$/LrGeniusAI/ClipDownload/SuccessTitle=CLIP Download", LOC "$$$/LrGeniusAI/ClipDownload/SuccessMessage=CLIP model downloaded successfully.")
                     break
                 elseif status.status == "error" or (status.error and status.error ~= "null" and status.error ~= "") then
                     local error_msg = status.error or "Unknown download error"
@@ -2829,6 +2841,94 @@ function SearchIndexAPI.checkServerHealth()
     end
 
     return true
+end
+
+function SearchIndexAPI.diagnoseStartupFailure()
+    local results = {
+        binaryMissing = false,
+        portBusy = false,
+        logSnippet = nil
+    }
+    
+    -- 1. Check binary existence
+    local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
+    local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
+    if WIN_ENV then
+        local serverLauncherCmd = serverBinary .. ".cmd"
+        local serverExe = serverBinary .. ".exe"
+        if LrFileUtils.exists(serverLauncherCmd) then
+            serverBinary = serverLauncherCmd
+        else
+            serverBinary = serverExe
+        end
+    end
+    
+    if not LrFileUtils.exists(serverBinary) then
+        results.binaryMissing = true
+        return results
+    end
+    
+    -- 2. Check port 19819 (Mac only for now)
+    if MAC_ENV then
+        local status, output = LrTasks.pcall(function()
+            return LrTasks.execute("bash -c \"lsof -i :19819 | grep LISTEN\"")
+        end)
+        if status and output and output ~= "" then
+            results.portBusy = true
+        end
+    end
+    
+    -- 3. Check logs for errors
+    local logPath = LrPathUtils.child(getServerControlDir(), "lrgenius-server.log")
+    if LrFileUtils.exists(logPath) then
+        local f = io.open(logPath, "r")
+        if f then
+            local content = f:read("*all")
+            f:close()
+            local lines = {}
+            for line in content:gmatch("[^\r\n]+") do
+                table.insert(lines, line)
+            end
+            local start = math.max(1, #lines - 10)
+            local snippet = {}
+            for i = start, #lines do
+                table.insert(snippet, lines[i])
+            end
+            results.logSnippet = table.concat(snippet, "\n")
+        end
+    end
+    
+    return results
+end
+
+function SearchIndexAPI.getDetailedHealth()
+    local health = {
+        backend = SearchIndexAPI.pingServer() == true,
+        clip = SearchIndexAPI.isClipReady() == true,
+        gemini = not Util.nilOrEmpty(prefs.geminiApiKey),
+        chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
+        ollama = false, 
+        lmstudio = false,
+    }
+    
+    -- Try to ping local LLMs if they are not default localhost but maybe they are
+    if not Util.nilOrEmpty(prefs.ollamaBaseUrl) then
+        local url = prefs.ollamaBaseUrl .. "/api/tags"
+        local res, hdrs = LrHttp.get(url, nil, 1000)
+        local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
+        if status == 200 then health.ollama = true end
+    end
+    
+    if not Util.nilOrEmpty(prefs.lmstudioBaseUrl) then
+        local baseUrl = prefs.lmstudioBaseUrl
+        if not baseUrl:match("^https?://") then baseUrl = "http://" .. baseUrl end
+        local url = baseUrl .. "/v1/models"
+        local res, hdrs = LrHttp.get(url, nil, 1000)
+        local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
+        if status == 200 then health.lmstudio = true end
+    end
+    
+    return health
 end
 
 -- ---------------------------------------------------------------------------

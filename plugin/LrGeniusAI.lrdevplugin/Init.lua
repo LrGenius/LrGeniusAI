@@ -24,6 +24,10 @@ _G.LrSystemInfo = import 'LrSystemInfo'
 _G.LrApplicationView = import 'LrApplicationView'
 _G.LrDevelopController = import 'LrDevelopController'
 
+_G.WIN_ENV = LrSystemInfo.osName() == 'windows'
+_G.MAC_ENV = LrSystemInfo.osName() == 'macintosh'
+
+
 _G.JSON = require "JSON"
 
 require "Util"
@@ -224,7 +228,25 @@ if prefs.periodicalUpdateCheck then
     end)
 end
 
+require "MetadataManager"
+require "KeywordConfigProvider"
+require "PromptConfigProvider"
+require "UpdateCheck"
+require "ErrorHandler"
+require "APISearchIndex"
+require "PhotoSelector"
+require "OnboardingWizard"
+
+if prefs.onboardingCompleted == nil then
+    -- Do not set to false yet, let the wizard trigger
+end
+
 LrTasks.startAsyncTask(function()
+    -- Check if onboarding is needed
+    if not prefs.onboardingCompleted then
+        OnboardingWizard.show()
+    end
+
     if SearchIndexAPI.startServer() then
         SearchIndexAPI.checkServerHealth()
         if prefs.useClip then
@@ -233,11 +255,3 @@ LrTasks.startAsyncTask(function()
     end
 end)
 
-
-require "MetadataManager"
-require "KeywordConfigProvider"
-require "PromptConfigProvider"
-require "UpdateCheck"
-require "ErrorHandler"
-require "APISearchIndex"
-require "PhotoSelector"

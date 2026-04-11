@@ -97,6 +97,8 @@
 "$$$/LrGeniusAI/ClipDownload/Error" = "Erreur de téléchargement CLIP : ^1"
 "$$$/LrGeniusAI/ClipDownload/ErrorTitle" = "Erreur de téléchargement"
 "$$$/LrGeniusAI/ClipDownload/ProgressTitle" = "Téléchargement du modèle IA pour la recherche avancée"
+"$$$/LrGeniusAI/ClipDownload/SuccessTitle" = "Téléchargement CLIP"
+"$$$/LrGeniusAI/ClipDownload/SuccessMessage" = "Modèle CLIP téléchargé avec succès."
 "$$$/LrGeniusAI/CullTask/Alternates" = "Alternatives"
 "$$$/LrGeniusAI/CullTask/CompletionMessage" = "Collections de tri créées pour ^1 groupes. Retenues : ^2, Alternatives : ^3, Rejetées : ^4. Groupes de doublons : ^5. Préréglage : ^6."
 "$$$/LrGeniusAI/CullTask/CompletionTitle" = "Tri terminé"
