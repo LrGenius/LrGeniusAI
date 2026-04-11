@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/build.yml'
+      - 'server/**'
+      - 'installers/**'
+      - 'scripts/**'
     tags:
       - 'v*'
   workflow_dispatch:
