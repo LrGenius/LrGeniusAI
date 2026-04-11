@@ -23,13 +23,16 @@ import service_chroma as chroma_service
 PERSON_NAMES_FILENAME = "person_names.json"
 
 
-def _person_names_path() -> str:
+def _person_names_path() -> Optional[str]:
+    from config import DB_PATH
+    if not DB_PATH:
+        return None
     return os.path.join(DB_PATH, PERSON_NAMES_FILENAME)
 
 
 def _load_person_names() -> Dict[str, str]:
     path = _person_names_path()
-    if not os.path.isfile(path):
+    if not path or not os.path.isfile(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -41,6 +44,9 @@ def _load_person_names() -> Dict[str, str]:
 
 def _save_person_names(names: Dict[str, str]) -> None:
     path = _person_names_path()
+    if not path:
+        logger.warning("Attempted to save person names but DB_PATH is not set yet.")
+        return
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(names, f, ensure_ascii=False, indent=2)

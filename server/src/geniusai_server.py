@@ -174,7 +174,7 @@ if __name__ == "__main__":
     logger.info("LrGenius Server version %s (build %s)", version_info.get("backend_version", "?"), version_info.get("backend_build", "?"))
     logger.info("LrGenius Server starting...")
     logger.info(f"Python: {sys.version.split()[0]}")
-    logger.info(f"Database Path: {config.DB_PATH or 'Idle (waiting for plugin initialize)'}")
+    logger.info(f"Database Path: {DB_PATH or 'Idle (waiting for plugin initialize)'}")
     logger.info("=" * 60)
     
     # Optional one-shot ID migration for deployed databases.

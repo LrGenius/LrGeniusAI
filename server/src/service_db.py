@@ -8,7 +8,12 @@ from datetime import datetime
 from config import logger, DB_PATH
 
 # Ordner für serverseitig aufgehobene Backups: Docker /data/db/backups, Standalone <db-path>/backups
-BACKUPS_DIR = os.path.join(DB_PATH, "backups")
+def _get_backups_dir():
+    from config import DB_PATH
+    if not DB_PATH:
+        return None
+    return os.path.join(DB_PATH, "backups")
+
 import service_chroma as chroma_service
 import service_persons as persons_service
 
@@ -38,7 +43,7 @@ def get_database_stats(catalog_id=None) -> dict:
 
 def build_backup_zip() -> tuple[str, str]:
     """Create a temporary ZIP containing all persistent DB files."""
-    if not os.path.isdir(DB_PATH):
+    if not DB_PATH or not os.path.isdir(DB_PATH):
         raise FileNotFoundError(f"Database path does not exist or is not a directory: {DB_PATH}")
 
     backup_name = f"lrgeniusai-backend-backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
@@ -63,13 +68,15 @@ def build_backup_zip() -> tuple[str, str]:
     logger.info("Created DB backup zip at %s with %s files from %s", zip_path, included_files, DB_PATH)
 
     # Kopie serverseitig aufbewahren (Docker: /data/db/backups, Standalone: <db-path>/backups)
-    try:
-        os.makedirs(BACKUPS_DIR, exist_ok=True)
-        persistent_path = os.path.join(BACKUPS_DIR, backup_name)
-        shutil.copy2(zip_path, persistent_path)
-        logger.info("DB backup saved server-side to %s", persistent_path)
-    except Exception as e:
-        logger.warning("Could not save backup to %s: %s", BACKUPS_DIR, e)
+    backups_dir = _get_backups_dir()
+    if backups_dir:
+        try:
+            os.makedirs(backups_dir, exist_ok=True)
+            persistent_path = os.path.join(backups_dir, backup_name)
+            shutil.copy2(zip_path, persistent_path)
+            logger.info("DB backup saved server-side to %s", persistent_path)
+        except Exception as e:
+            logger.warning("Could not save backup to %s: %s", backups_dir, e)
 
     return zip_path, backup_name
 
@@ -87,18 +94,19 @@ def prune_old_backups(max_keep: int = 10) -> int:
     if max_keep <= 0:
         max_keep = 1
 
-    if not os.path.isdir(BACKUPS_DIR):
+    backups_dir = _get_backups_dir()
+    if not backups_dir or not os.path.isdir(backups_dir):
         return 0
 
     try:
         entries = [
-            os.path.join(BACKUPS_DIR, name)
-            for name in os.listdir(BACKUPS_DIR)
+            os.path.join(backups_dir, name)
+            for name in os.listdir(backups_dir)
             if name.lower().endswith(".zip")
-            and os.path.isfile(os.path.join(BACKUPS_DIR, name))
+            and os.path.isfile(os.path.join(backups_dir, name))
         ]
     except Exception as e:
-        logger.warning("Could not list backups in %s: %s", BACKUPS_DIR, e)
+        logger.warning("Could not list backups in %s: %s", backups_dir, e)
         return 0
 
     if len(entries) <= max_keep:
@@ -117,7 +125,7 @@ def prune_old_backups(max_keep: int = 10) -> int:
         except Exception as e:
             logger.warning("Could not remove old backup %s: %s", path, e)
     if deleted > 0:
-        logger.info("Pruned %s old backups in %s, kept %s newest.", deleted, BACKUPS_DIR, max_keep)
+        logger.info("Pruned %s old backups in %s, kept %s newest.", deleted, backups_dir, max_keep)
     return deleted
 
 

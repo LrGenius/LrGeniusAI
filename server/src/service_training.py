@@ -60,12 +60,17 @@ def _ensure_initialized() -> None:
     if _training_collection is not None:
         return
 
+    import config
+    if not config.DB_PATH:
+        logger.debug("edit_training initialization skipped: DB_PATH not set yet.")
+        return
+
     import chromadb
     from chromadb.config import Settings
 
-    logger.info("Initializing edit_training ChromaDB collection (lazy)…")
+    logger.info("Initializing edit_training ChromaDB collection (lazy at %s)…", config.DB_PATH)
     _chroma_client = chromadb.PersistentClient(
-        path=DB_PATH,
+        path=config.DB_PATH,
         settings=Settings(anonymized_telemetry=False),
     )
     try:
