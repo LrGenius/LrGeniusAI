@@ -20,6 +20,53 @@ def shutdown():
     return jsonify({"status": "Server is shutting down..."})
 
 
+@server_bp.route('/restart', methods=['POST'])
+def restart():
+    """ 
+    Gracefully shut down the server. 
+    If running as an OS service (launchd/Windows Service), it will be automatically restarted. 
+    """
+    logger.info("Restart request received via API")
+    server_lifecycle.request_shutdown()
+    return jsonify({"status": "Restarting..."})
+
+
+@server_bp.route('/initialize', methods=['POST'])
+def initialize():
+    """
+    Called by the Lightroom plugin to 'attach' the running service to a specific catalog.
+    JSON: { "db_path": "/path/to/catalog/folder/lrgenius.db" }
+    """
+    data = request.get_json(silent=True) or {}
+    db_path = data.get("db_path")
+    if not db_path:
+        return jsonify({"error": "db_path is required"}), 400
+    
+    import config
+    import service_chroma
+    
+    prev_db_path = config.DB_PATH
+    if prev_db_path == db_path:
+        return jsonify({"status": "already_initialized", "db_path": db_path})
+    
+    logger.info(f"Initializing/Switching catalog database: {db_path}")
+    
+    config.DB_PATH = db_path
+    # Re-initialize logger if needed (it will use the new DB_PATH for the next start, 
+    # but for now we focus on the database connection).
+    
+    service_chroma.reset_chroma_client()
+    # Trigger lazy re-initialization on next use or do it now:
+    try:
+        service_chroma._ensure_initialized()
+        server_lifecycle.write_ok_file()
+        server_lifecycle.write_pid_file()
+        return jsonify({"status": "success", "db_path": db_path})
+    except Exception as e:
+        logger.error(f"Failed to initialize database at {db_path}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 
 @server_bp.route('/models', methods=['GET', 'POST'])
 def list_models():

@@ -7,7 +7,7 @@ import torch
 
 # --- Argument Parsing ---
 parser = argparse.ArgumentParser(description='LrGenius Server')
-parser.add_argument('--db-path', type=str, help='Path to the ChromaDB database folder', required=True)
+parser.add_argument('--db-path', type=str, help='Path to the ChromaDB database folder', required=False)
 parser.add_argument('--debug', action='store_true', help='Enable debug mode with auto-reloading and debug log level')
 args = parser.parse_args()
 
@@ -233,7 +233,16 @@ def get_available_culling_presets() -> list[str]:
 CULLING_CONFIG = get_culling_config("default")
 
 # --- Logger Setup ---
-LOG_PATH = os.path.join(os.path.dirname(DB_PATH) or ".", "lrgenius-server.log")
+if DB_PATH:
+    LOG_PATH = os.path.join(os.path.dirname(DB_PATH) or ".", "lrgenius-server.log")
+else:
+    # Use a global service log path if no catalog DB is attached yet.
+    if sys.platform == "darwin":  # macOS
+        LOG_PATH = os.path.expanduser("~/Library/Logs/LrGeniusAI/lrgenius-server.log")
+    elif sys.platform == "win32":  # Windows
+        LOG_PATH = os.path.join(os.environ.get("LOCALAPPDATA", ""), "LrGeniusAI", "logs", "lrgenius-server.log")
+    else:
+        LOG_PATH = os.path.join(os.getcwd(), "lrgenius-server.log")
 
 try:
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)

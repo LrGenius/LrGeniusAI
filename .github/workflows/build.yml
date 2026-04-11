@@ -309,6 +309,28 @@ jobs:
           echo "=== Size after cleanup ==="
           du -sh build/ || true
 
+      - name: Build macOS installer
+        if: matrix.os_name == 'macos'
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Building macOS .pkg installer..."
+          chmod +x installers/macos/build_pkg.sh
+          ./installers/macos/build_pkg.sh "$VERSION" "${{ matrix.arch }}"
+
+      - name: Build Windows installer
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Building Windows .exe installer with Inno Setup..."
+          # Inno Setup is pre-installed on windows-latest
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          "$ISCC" /DAppVersion="$VERSION" installers/windows/setup.iss
+          mv installers/windows/Output/*.exe .
+
       - name: Smoke test packaged backend and log cold start
         shell: bash
         run: |
@@ -430,7 +452,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
-          path: artifact-payload/lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}.tar
+          path: |
+            artifact-payload/lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}.tar
+            *.pkg
+            *.exe
           retention-days: 1
           compression-level: 9
 
@@ -704,6 +729,8 @@ jobs:
             artifacts/LrGeniusAI-windows-x64-${{ github.ref_name }}.zip
             artifacts/LrGeniusAI-macos-arm64-${{ github.ref_name }}.zip
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
+            artifacts/lrgenius-ai-macos-arm64/*.pkg
+            artifacts/lrgenius-ai-windows-x64/*.exe
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: false

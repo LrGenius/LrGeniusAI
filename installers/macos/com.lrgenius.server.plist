@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lrgenius.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/LrGeniusAI/backend/lrgenius-server</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Library/Logs/LrGeniusAI/service.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Logs/LrGeniusAI/service.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>KMP_DUPLICATE_LIB_OK</key>
+        <string>TRUE</string>
+    </dict>
+</dict>
+</plist>

@@ -244,27 +244,40 @@ def get_tokenizer():
     return tokenizer
 
 def get_db_dir():
-    return os.path.dirname(DB_PATH)
+    from config import DB_PATH
+    return os.path.dirname(DB_PATH) if DB_PATH else None
 
 def write_pid_file():
-    pid_file = os.path.join(get_db_dir(), "lrgenius-server.pid")
+    db_dir = get_db_dir()
+    if not db_dir:
+        return
+    pid_file = os.path.join(db_dir, "lrgenius-server.pid")
     with open(pid_file, "w") as f:
         f.write(str(os.getpid()))
 
 def remove_pid_file():
-    pid_file = os.path.join(get_db_dir(), "lrgenius-server.pid")
+    db_dir = get_db_dir()
+    if not db_dir:
+        return
+    pid_file = os.path.join(db_dir, "lrgenius-server.pid")
     try:
         os.remove(pid_file)
     except FileNotFoundError:
         pass
 
 def write_ok_file():
-    ok_file = os.path.join(get_db_dir(), "lrgenius-server.OK")
+    db_dir = get_db_dir()
+    if not db_dir:
+        return
+    ok_file = os.path.join(db_dir, "lrgenius-server.OK")
     with open(ok_file, "w") as f:
         f.write("OK\n")
 
 def remove_ok_file():
-    ok_file = os.path.join(get_db_dir(), "lrgenius-server.OK")
+    db_dir = get_db_dir()
+    if not db_dir:
+        return
+    ok_file = os.path.join(db_dir, "lrgenius-server.OK")
     try:
         os.remove(ok_file)
     except FileNotFoundError:

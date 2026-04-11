@@ -1909,6 +1909,48 @@ function SearchIndexAPI.shutdownServer(opts)
     return SearchIndexAPI.killServer({ killMode = "force", forceWaitSeconds = opts.forceWaitSeconds or 10 })
 end
 
+function SearchIndexAPI.restartBackend()
+    local url = getBaseUrl() .. "/server/restart"
+    log:info("Requesting backend restart via API")
+    local response, err = _request("POST", url, {}, 5)
+    if err then
+        log:error("Failed to request backend restart: " .. tostring(err))
+        return false, err
+    end
+    
+    -- Wait a bit and then ping until back
+    LrTasks.sleep(2)
+    local deadline = LrDate.currentTime() + 60
+    while LrDate.currentTime() < deadline do
+        if SearchIndexAPI.pingServer() then
+            log:info("Backend restarted successfully")
+            local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+            SearchIndexAPI.initializeCatalog(dbPath)
+            return true
+        end
+        LrTasks.sleep(1)
+    end
+    return false, "Restart timeout"
+end
+
+function SearchIndexAPI.initializeCatalog(dbPath)
+    if not dbPath then
+        dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+    end
+    
+    local url = getBaseUrl() .. "/server/initialize"
+    log:info("Initializing catalog database at backend: " .. tostring(dbPath))
+    local response, err = _request("POST", url, { db_path = dbPath }, 10)
+    
+    if response and (response.status == "success" or response.status == "already_initialized") then
+        log:info("Backend initialized successfully for database: " .. tostring(dbPath))
+        return true
+    else
+        log:error("Failed to initialize backend for catalog: " .. tostring(err or (response and response.error) or "Unknown error"))
+        return false, err or (response and response.error)
+    end
+end
+
 function SearchIndexAPI.killServer(opts)
     opts = opts or {}
     local killMode = opts.killMode or "force" -- "force" => SIGKILL on unix
@@ -1970,8 +2012,12 @@ function SearchIndexAPI.startServer(opts)
     local lockStaleSeconds = opts.lockStaleSeconds or 120
 
     if SearchIndexAPI.pingServer() then
-        log:trace("Search index server is already running")
-        return true
+        log:trace("Search index server is already running, triggering initialization")
+        local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+        if SearchIndexAPI.initializeCatalog(dbPath) then
+            return true
+        end
+        return false
     end
 
     local url = getBaseUrl()
@@ -1985,6 +2031,8 @@ function SearchIndexAPI.startServer(opts)
         return false
     end
 
+    local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+
     -- Make sure we don't leave the lock behind on early returns.
     local ok, startResult = LrTasks.pcall(function()
         -- If pid/OK are stale, clean them before starting.
@@ -1993,34 +2041,43 @@ function SearchIndexAPI.startServer(opts)
             cleanupServerPidAndOkFiles()
         end
 
-        local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
-        local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
-        if WIN_ENV then
-            local serverLauncherCmd = serverBinary .. ".cmd"
-            local serverExe = serverBinary .. ".exe"
-            if LrFileUtils.exists(serverLauncherCmd) then
-                serverBinary = serverLauncherCmd
-            else
-                serverBinary = serverExe
+        -- Check standard system locations first (if installed via PKG/EXE)
+        local serverBinary = nil
+        if MAC_ENV then
+            serverBinary = "/Applications/LrGeniusAI/backend/lrgenius-server"
+        elseif WIN_ENV then
+            serverBinary = "C:\\Program Files\\LrGeniusAI\\backend\\lrgenius-server.cmd"
+        end
+
+        -- Fallback to plugin-local binary (development or old installs)
+        if not serverBinary or not LrFileUtils.exists(serverBinary) then
+            local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
+            serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
+            if WIN_ENV then
+                local serverLauncherCmd = serverBinary .. ".cmd"
+                local serverExe = serverBinary .. ".exe"
+                if LrFileUtils.exists(serverLauncherCmd) then
+                    serverBinary = serverLauncherCmd
+                else
+                    serverBinary = serverExe
+                end
             end
         end
 
         if not LrFileUtils.exists(serverBinary) then
-            log:error(serverBinary .. " not found. Not trying to start server")
+            log:error(tostring(serverBinary) .. " not found. Not trying to start server")
             return false
         end
 
         local startServerCmd = nil
+        local serverDir = LrPathUtils.parent(serverBinary)
         if WIN_ENV then
-            -- Keep KMP_DUPLICATE_LIB_OK to avoid OpenMP conflicts with Python ML runtime stacks.
             local envCmd = "set KMP_DUPLICATE_LIB_OK=TRUE &&"
-            local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
             local innerCmd = envCmd .. " \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
             startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" cmd /c \"" .. innerCmd .. "\""
         else
             local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
-            -- Use bash explicitly so startup does not depend on execute bits surviving ZIP extraction.
-            startServerCmd = envPrefix .. "bash \"" .. tostring(serverBinary) .. "\" --db-path \"" .. LrPathUtils.child(getServerControlDir(), "lrgenius.db") .. "\""
+            startServerCmd = envPrefix .. "bash \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
         end
 
         log:trace("Trying to start search index server with command: " .. tostring(startServerCmd))
@@ -2033,13 +2090,16 @@ function SearchIndexAPI.startServer(opts)
         while LrDate.currentTime() < deadline do
             if SearchIndexAPI.pingServer() then
                 log:trace("Search index server is running")
-                SearchIndexAPI.checkServerHealth()
-                return true
+                -- Initialize with current catalog
+                if SearchIndexAPI.initializeCatalog(dbPath) then
+                    SearchIndexAPI.checkServerHealth()
+                    return true
+                end
             end
             LrTasks.sleep(0.5)
         end
 
-        log:trace("Search index server did not become ready within timeout")
+        log:trace("Search index server did not become ready or initialize within timeout")
         
         -- Diagnose failure
         local diag = SearchIndexAPI.diagnoseStartupFailure()

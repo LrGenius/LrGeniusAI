@@ -478,6 +478,24 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
                             end)
                         end,
                     },
+                    f:push_button {
+                        title = LOC "$$$/LrGeniusAI/PluginInfo/RestartBackend=Restart Backend",
+                        action = function(button)
+                            LrTasks.startAsyncTask(function()
+                                local progressScope = LrProgressScope({
+                                    title = LOC "$$$/LrGeniusAI/PluginInfo/Restarting=Restarting...",
+                                    functionContext = nil,
+                                })
+                                local ok, err = SearchIndexAPI.restartBackend()
+                                progressScope:done()
+                                if ok then
+                                    LrDialogs.message(LOC "$$$/LrGeniusAI/PluginInfo/RestartBackend=Restart Backend", LOC "$$$/LrGeniusAI/PluginInfo/RestartSuccess=Backend restarted successfully.")
+                                else
+                                    LrDialogs.message(LOC "$$$/LrGeniusAI/PluginInfo/RestartBackend=Restart Backend", LOC("$$$/LrGeniusAI/PluginInfo/RestartFailed=Failed to restart backend: ^1", tostring(err)), "critical")
+                                end
+                            end)
+                        end,
+                    },
                 },
             },
             f:group_box {

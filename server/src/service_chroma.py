@@ -122,8 +122,13 @@ def _ensure_initialized():
     if chroma_client is not None:
         return
     
-    logger.info("Initializing ChromaDB client (lazy)...")
-    chroma_client = chromadb.PersistentClient(path=DB_PATH, settings=Settings(anonymized_telemetry=False))
+    import config
+    if not config.DB_PATH:
+        logger.debug("ChromaDB initialization skipped: DB_PATH not set yet.")
+        return
+
+    logger.info(f"Initializing ChromaDB client at {config.DB_PATH} (lazy)...")
+    chroma_client = chromadb.PersistentClient(path=config.DB_PATH, settings=Settings(anonymized_telemetry=False))
     
     # Initialize image_embeddings collection
     try:
@@ -148,6 +153,16 @@ def _ensure_initialized():
     except Exception:
         vertex_collection = chroma_client.create_collection(name="image_embeddings_vertex")
         logger.info("Created new ChromaDB image_embeddings_vertex collection.")
+
+
+def reset_chroma_client():
+    """Reset the global ChromaDB client and collections so they can be re-initialized with a new DB_PATH."""
+    global chroma_client, collection, face_collection, vertex_collection
+    logger.info("Resetting ChromaDB client for re-initialization.")
+    chroma_client = None
+    collection = None
+    face_collection = None
+    vertex_collection = None
 
 
 def add_image(photo_id, embedding, metadata, *, legacy_uuid=None, catalog_id=None):
