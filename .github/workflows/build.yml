@@ -328,7 +328,7 @@ jobs:
           echo "Building Windows .exe installer with Inno Setup..."
           # Inno Setup is pre-installed on windows-latest
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
-          "$ISCC" /DAppVersion="$VERSION" installers/windows/setup.iss
+          MSYS_NO_PATHCONV=1 "$ISCC" /DAppVersion="$VERSION" installers/windows/setup.iss
           mv installers/windows/Output/*.exe .
 
       - name: Smoke test packaged backend and log cold start
