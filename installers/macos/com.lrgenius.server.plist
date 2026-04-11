@@ -6,7 +6,7 @@
     <string>com.lrgenius.server</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/LrGeniusAI/backend/lrgenius-server</string>
+        <string>/Applications/LrGeniusAI/Server/lrgenius-server</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

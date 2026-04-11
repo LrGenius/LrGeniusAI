@@ -13,22 +13,38 @@ INSTALLER_NAME="LrGeniusAI-macos-${ARCH}-${VERSION}.pkg"
 ROOT_DIR="pkg_root"
 SCRIPTS_DIR="pkg_scripts"
 rm -rf "$ROOT_DIR" "$SCRIPTS_DIR"
-mkdir -p "$ROOT_DIR/Applications/LrGeniusAI/backend"
+mkdir -p "$ROOT_DIR/Applications/LrGeniusAI/Server"
 mkdir -p "$ROOT_DIR/Library/Application Support/Adobe/Lightroom/Modules"
 mkdir -p "$ROOT_DIR/Library/LaunchAgents"
 mkdir -p "$SCRIPTS_DIR"
 
 # 1. Copy Backend
 echo "Copying backend..."
-cp -a build/lrgenius-server/. "$ROOT_DIR/Applications/LrGeniusAI/backend/"
+cp -a build/lrgenius-server/. "$ROOT_DIR/Applications/LrGeniusAI/Server/"
 
 # 2. Copy Plugin
 echo "Copying plugin..."
 cp -a build/LrGeniusAI.lrplugin "$ROOT_DIR/Library/Application Support/Adobe/Lightroom/Modules/LrGeniusAI.lrplugin"
 
-# 3. Copy LaunchAgent Plist
-echo "Copying launchd plist..."
 cp installers/macos/com.lrgenius.server.plist "$ROOT_DIR/Library/LaunchAgents/"
+
+# 3.5 Create Uninstaller app
+echo "Creating uninstaller..."
+UNINSTALL_APP_PATH="$ROOT_DIR/Applications/LrGeniusAI/Uninstall LrGeniusAI.app"
+UNINSTALL_SCRIPT="
+set currentUser to (do shell script \"stat -f '%u' /dev/console\")
+display dialog \"Are you sure you want to uninstall LrGeniusAI? This will remove the server, plugin, and all associated logs.\" with title \"Uninstall LrGeniusAI\" with icon caution buttons {\"Cancel\", \"Uninstall\"} default button \"Cancel\"
+if button returned of result is \"Uninstall\" then
+    try
+        do shell script \"launchctl asuser \" & currentUser & \" launchctl unload /Library/LaunchAgents/com.lrgenius.server.plist 2>/dev/null || true; rm -f /Library/LaunchAgents/com.lrgenius.server.plist; rm -rf '/Library/Application Support/Adobe/Lightroom/Modules/LrGeniusAI.lrplugin'; rm -rf /Library/Logs/LrGeniusAI; rm -rf /Applications/LrGeniusAI\" with administrator privileges
+        display dialog \"LrGeniusAI has been successfully uninstalled.\" with title \"Uninstall LrGeniusAI\" buttons {\"OK\"} default button \"OK\"
+    on error errMsg
+        display dialog \"Uninstallation failed: \" & errMsg with title \"Uninstall LrGeniusAI\" buttons {\"OK\"} default button \"OK\" with icon stop
+    end try
+end if
+"
+# Use osacompile to create the .app in the pkg_root
+osacompile -o "$UNINSTALL_APP_PATH" -e "$UNINSTALL_SCRIPT"
 
 # 4. Create postinstall script to load the service
 cat > "$SCRIPTS_DIR/postinstall" <<EOF
