@@ -2061,7 +2061,7 @@ function SearchIndexAPI.startServer(opts)
         -- Check standard system locations first (if installed via PKG/EXE)
         local serverBinary = nil
         if MAC_ENV then
-            serverBinary = "/Applications/LrGeniusAI/backend/lrgenius-server"
+            serverBinary = "/Applications/LrGeniusAI/Server/lrgenius-server"
         elseif WIN_ENV then
             serverBinary = "C:\\Program Files\\LrGeniusAI\\backend\\lrgenius-server.cmd"
         end
@@ -2091,7 +2091,17 @@ function SearchIndexAPI.startServer(opts)
         if WIN_ENV then
             -- The .cmd launcher handles environment variables and uses pythonw.exe for invisible execution.
             startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
+        elseif MAC_ENV then
+            if serverBinary:match("^/Applications") then
+                -- System install: use launchctl to trigger the system-wide service
+                startServerCmd = "launchctl kickstart -k gui/$(id -u)/com.lrgenius.server"
+            else
+                -- Local/Dev fallback
+                local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
+                startServerCmd = envPrefix .. "bash \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
+            end
         else
+            -- Unknown platform fallback
             local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
             startServerCmd = envPrefix .. "bash \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
         end
