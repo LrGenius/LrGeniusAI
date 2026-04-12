@@ -7,6 +7,24 @@ Welcome to LrGeniusAI! This guide will walk you through setting up the plugin, i
 To begin, you must install both the Lightroom Classic plugin frontend and the Python backend server. These components communicate locally to process your images without freezing the Lightroom UI. 
 Please refer to the high-level installation instructions on the [root `README.md`](Project-README) or the detailed steps in the [`plugin/README.md`](Plugin-README).
 
+### ⚠️ Bypassing Security Warnings (Unsigned Installers)
+
+Because LrGeniusAI is an open-source project and the current installers are not code-signed, your operating system will likely flag them as "untrusted" or "malicious". This is a standard security precaution for any third-party software that has not been notarized by Microsoft or Apple.
+
+#### Windows (SmartScreen)
+When you run the installer or the backend `.cmd` file, you may see a "Windows protected your PC" dialog.
+1. Click **More info**.
+2. Click **Run anyway**.
+
+#### macOS (Gatekeeper)
+When you try to open the `.pkg` installer or the backend binary:
+1. **Right-click** (or Control-click) the file in Finder.
+2. Select **Open** from the menu.
+3. In the dialog that appears, click **Open** again.
+4. If it still fails, go to `System Settings -> Privacy & Security`, scroll down to the "Security" section, and click **Open Anyway**.
+
+---
+
 ## 2. Configure Plugin
 
 Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:

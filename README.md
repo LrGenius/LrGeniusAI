@@ -36,8 +36,10 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 1. Download the latest release from the [GitHub Releases page](https://github.com/LrGenius/LrGeniusAI/releases).
 2. Extract the ZIP file and add the plugin via the **Plug-in Manager** in Lightroom Classic.
 3. **Backend Server Setup (First Launch):**
-   - The backend now starts automatically from Lightroom.
-   - The previous SmartScreen/Gatekeeper manual unblock steps are no longer required with the current release package.
+   - The backend starts automatically from Lightroom.
+   - **Bypassing Security Warnings:** Because the installers are currently not code-signed, you will see warnings from **Windows SmartScreen** or **macOS Gatekeeper**.
+     - **Windows:** Click *More info* -> *Run anyway*.
+     - **macOS:** Right-click the `.pkg` -> *Open* -> *Open anyway*.
    - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
 4. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
    - **Analyze & Index Photos...** for tags/descriptions/search index
@@ -170,14 +172,22 @@ Then follow the remote bootstrap flow shown by `gcloud` on a second trusted mach
 
 ---
 
+## ⚖️ License
+
+The LrGeniusAI core, plugin, and backend are released under the **GNU Affero General Public License v3 (AGPL-3.0)**. 
+
+This project is built on the belief that AI tooling for creatives should remain open, transparent, and community-driven. See the [LICENSE](LICENSE) file for the full license text.
+
+
 ## 🛠️ Tech Stack
 
-- **Frontend / Lightroom Plugin:** Lua
+- **Frontend / Lightroom Plugin:** Lua (Lightroom SDK)
 - **Backend / Server:** Python (`geniusai-server`) / FastAPI / Flask
-- **AI & Embedding:** Open-CLIP (SigLIP2), PyTorch, ONNX
+- **AI & Embedding:** Open-CLIP (SigLIP2), PyTorch, ONNX Runtime
 - **Identity & Faces:** InsightFace
-- **Database:** ChromaDB (Vector), SQLite (Metadata)
+- **Database:** ChromaDB (Vector Search), SQLite (Metadata & Cache)
 - **Supported Interfaces:** Google Gemini, Vertex AI, ChatGPT/OpenAI, Ollama, LM-Studio
+
 
 ---
 

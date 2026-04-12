@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 - docs: add privacy policy document outlining local-first data handling practices
 - Add GNU AGPL v3 license
+- docs: update documentation with specific bypass instructions for Windows SmartScreen and macOS Gatekeeper warnings
 - refactor: update shutdown logic to unload resources from both local and remote backends
 - feat: add /unload API endpoint to free model and collection memory without stopping the server fix: JSON decode error popups in a loop in plug-in manager while backend not ready.
 - fix: update Windows installer architecture compatibility and improve build artifact output handling

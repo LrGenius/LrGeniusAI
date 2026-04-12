@@ -206,3 +206,10 @@ When multiple Lightroom catalogs use the same remote backend, the server **never
 - **No physical deletion**: Removing a photo from a catalog only removes that catalog’s id from the photo’s **catalog_ids**.
 - **Catalog-scoped reads**: When **catalog_id** is sent, search, stats, get/ids, and related endpoints filter to photos that have that catalog in **catalog_ids**.
 - **Backward compatibility**: Requests without **catalog_id** are unchanged (no catalog filter).
+
+---
+
+## ⚖️ License
+
+The LrGeniusAI core and backend server are released under the **GNU Affero General Public License v3 (AGPL-3.0)**. 
+Project license details can be found in the root [LICENSE](../LICENSE) file.

@@ -226,7 +226,16 @@ If you migrated from legacy UUID-based IDs to `photo_id`:
 
 ---
 
+---
+
+## ⚖️ License
+
+The LrGeniusAI plugin is released under the **GNU Affero General Public License v3 (AGPL-3.0)**. 
+
+---
+
 ## Documentation
 
-- Help: [https://lrgenius.com/help/](https://lrgenius.com/help/)
-- Repository: [https://github.com/LrGenius/LrGeniusAI](https://github.com/LrGenius/LrGeniusAI)
+- **Website/Help:** [https://lrgenius.com/help/](https://lrgenius.com/help/) (updated for v2.13.0)
+- **GitHub Wiki:** [https://github.com/LrGenius/LrGeniusAI/wiki](https://github.com/LrGenius/LrGeniusAI/wiki)
+- **Repository:** [https://github.com/LrGenius/LrGeniusAI](https://github.com/LrGenius/LrGeniusAI)

@@ -16,6 +16,13 @@ A detailed report of the errors will be attached to the dialog, enabling you to 
 
 ## Common Issues
 
+### 0. Installer & Security Warnings (SmartScreen / Gatekeeper)
+
+Since LrGeniusAI installers are not currently code-signed, your OS may block them.
+
+- **Symptom**: "Windows protected your PC" or "LrGeniusAI.pkg cannot be opened because it is from an unidentified developer".
+- **Resolution**: Refer to the [Getting Started](Getting-Started#%E2%9A%A0%EF%B8%8F-bypassing-security-warnings-unsigned-installers) guide for OS-specific bypass steps. This is a one-time requirement during installation.
+
 ### 1. Missing OpenCLIP Model
 
 When you first launch the backend, it may need to download the selected OpenCLIP model to generate vector embeddings for semantic search. If the model hasn't finished downloading or could not be downloaded (e.g., due to network issues):
