@@ -401,6 +401,8 @@ def process_image_task(
         compute_metadata = options.get('compute_metadata', False)
         compute_faces = options.get('compute_faces', False)
         compute_vertexai = options.get('compute_vertexai', False)
+        vertex_project_id = options.get('vertex_project_id')
+        vertex_location = options.get('vertex_location')
 
         logger.info(f"Starting batch processing of {total_images} images...")
         logger.info(f"regenerate_metadata={regenerate_metadata}, compute_embeddings={compute_embeddings}, "
