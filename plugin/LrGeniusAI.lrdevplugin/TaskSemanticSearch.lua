@@ -128,7 +128,7 @@ LrTasks.startAsyncTask(function()
         local props = showAdvancedSearchDialog(context)
         if props == nil then return end
 
-        local results
+        local results, err
         local collectionName
         local catalog = LrApplication.activeCatalog()
 
@@ -169,10 +169,18 @@ LrTasks.startAsyncTask(function()
             if #searchOptions.metadataFields == 0 and props.searchInMetadata then
                 searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
             end
-            results = SearchIndexAPI.searchIndex(props.searchTerm, qualitySort, photosToSearch, searchOptions)
+            results, err = SearchIndexAPI.searchIndex(props.searchTerm, qualitySort, photosToSearch, searchOptions)
             local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
+            local resCount = 0
+            if type(results) == "table" then
+                if results.results then 
+                    resCount = #results.results
+                else
+                    resCount = #results
+                end
+            end
             log:trace("Semantic search completed. term=" .. tostring(props.searchTerm) ..
-                " results=" .. tostring(type(results) == "table" and #results or 0) ..
+                " results=" .. tostring(resCount) ..
                 " elapsedMs=" .. tostring(elapsedMs))
             collectionName = string.format("'%s' @ %s", props.searchTerm, LrDate.timeToW3CDate(LrDate.currentTime()))
 
@@ -222,7 +230,16 @@ LrTasks.startAsyncTask(function()
             )
         end
 
-        if type(results) ~= "table" or #results == 0 then
+        local finalResults = {}
+        if type(results) == "table" then
+            if results.results and type(results.results) == "table" then
+                finalResults = results.results
+            else
+                finalResults = results
+            end
+        end
+
+        if #finalResults == 0 then
             LrDialogs.message(LOC "$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results", LOC "$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
             return
         end
@@ -230,7 +247,7 @@ LrTasks.startAsyncTask(function()
         -- Build a list of photo IDs once and resolve them in batch for better performance.
         local resolveStartedAt = LrDate.currentTime()
         local photoIds = {}
-        for _, result in ipairs(results) do
+        for _, result in ipairs(finalResults) do
             if type(result) == "table" then
                 local resultPhotoId = result.photo_id or result.uuid
                 if resultPhotoId then
