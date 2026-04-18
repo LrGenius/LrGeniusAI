@@ -17,7 +17,7 @@ Defaults.topLevelKeywordSynonym = "LrGeniusAI Top-Level Keyword"
 
 Defaults.defaultGenerateLanguage = "English"
 
-Defaults.generateLanguages = { "English", "German", "French", "Spanish", "Italian" }
+Defaults.generateLanguages = { "English", "German", "French", "Spanish", "Italian", "Norwegian" }
 Defaults.defaultBilingualKeywords = false
 Defaults.defaultKeywordSecondaryLanguage = "English"
 
