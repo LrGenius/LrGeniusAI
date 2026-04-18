@@ -722,7 +722,7 @@ LrTasks.startAsyncTask(function()
                     end
                 end
                 LrApplication.activeCatalog():withPrivateWriteAccessDo(function()
-                    photo:setPropertyForPlugin(_PLUGIN, 'photoContext', options.user_context)
+                    photo:setPropertyForPlugin(_PLUGIN, 'photoContext', contextData)
                 end)
             end
         end

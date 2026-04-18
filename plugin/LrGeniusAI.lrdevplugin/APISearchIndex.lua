@@ -1423,7 +1423,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                         -- Also send Unix timestamp (seconds since 1970-01-01 UTC)
                         photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
                     end
-                    photoOptions.user_context = catalog:getPropertyForPlugin(_PLUGIN, 'photoContext') or ""
+                    photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, 'photoContext') or ""
                     photoOptions.photo_id = photoId
 
                     local success, indexResponse

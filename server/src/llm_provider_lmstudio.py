@@ -101,6 +101,33 @@ class LMStudioProvider(LLMProviderBase):
             title = content.get("title") if request.generate_title else None
             alt_text = content.get("alt_text") if request.generate_alt_text else None
          
+            # Token usage reporting
+            input_tokens = 0
+            output_tokens = 0
+            try:
+                # 1. Try to get usage from the response object directly (lms 0.4.x+)
+                stats = getattr(response, "stats", None) or getattr(response, "usage", None)
+                if stats:
+                    input_tokens = getattr(stats, "prompt_tokens", 0) or getattr(stats, "input_tokens", 0)
+                    output_tokens = getattr(stats, "completion_tokens", 0) or getattr(stats, "output_tokens", 0)
+                
+                # 2. Fallback: Manual tokenization for accuracy
+                if input_tokens == 0 and hasattr(model, "tokenize"):
+                    # For input, we should tokenize the full prompt as seen by the model
+                    try:
+                        # model.apply_prompt_template(chat) returns the raw string if available
+                        full_prompt = model.apply_prompt_template(chat) if hasattr(model, "apply_prompt_template") else user_prompt
+                        input_tokens = len(model.tokenize(full_prompt))
+                    except Exception:
+                        input_tokens = len(model.tokenize(user_prompt))
+                
+                if output_tokens == 0 and hasattr(model, "tokenize") and isinstance(content, dict):
+                    output_tokens = len(model.tokenize(json.dumps(content)))
+                
+                logger.info(f"LM Studio token usage for {request.uuid}: input={input_tokens}, output={output_tokens}")
+            except Exception as usage_err:
+                logger.debug(f"Could not calculate LM Studio token usage: {usage_err}")
+
             return MetadataGenerationResponse(
                 uuid=request.uuid,
                 success=True,
@@ -108,8 +135,8 @@ class LMStudioProvider(LLMProviderBase):
                 caption=caption,
                 title=title,
                 alt_text=alt_text,
-                input_tokens=0,
-                output_tokens=0
+                input_tokens=input_tokens,
+                output_tokens=output_tokens
             )
             
         except Exception as e:
@@ -137,12 +164,33 @@ class LMStudioProvider(LLMProviderBase):
                 raise ValueError(f"Unexpected response type from LM Studio: {type(content)}")
 
             recipe = self._normalize_edit_recipe(content)
+            # Token usage reporting
+            input_tokens = 0
+            output_tokens = 0
+            try:
+                stats = getattr(response, "stats", None) or getattr(response, "usage", None)
+                if stats:
+                    input_tokens = getattr(stats, "prompt_tokens", 0) or getattr(stats, "input_tokens", 0)
+                    output_tokens = getattr(stats, "completion_tokens", 0) or getattr(stats, "output_tokens", 0)
+                
+                if input_tokens == 0 and hasattr(model, "tokenize"):
+                    try:
+                        full_prompt = model.apply_prompt_template(chat) if hasattr(model, "apply_prompt_template") else user_prompt
+                        input_tokens = len(model.tokenize(full_prompt))
+                    except Exception:
+                        input_tokens = len(model.tokenize(user_prompt))
+                
+                if output_tokens == 0 and hasattr(model, "tokenize"):
+                    output_tokens = len(model.tokenize(json.dumps(content)))
+            except Exception:
+                pass
+
             return EditGenerationResponse(
                 uuid=request.uuid,
                 success=True,
                 recipe=recipe,
-                input_tokens=0,
-                output_tokens=0,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
         except Exception as e:
             logger.error(f"Error generating edit recipe with LM Studio: {e}", exc_info=True)

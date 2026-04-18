@@ -258,16 +258,16 @@ class LLMProviderBase(ABC):
                 if keywords_str:
                     context_additions.append(f"Some keywords are: {keywords_str}")
         
-        if request.user_context:
-            context_additions.append(f"Some context for this photo: {request.user_context}")
+        if request.user_context and str(request.user_context).strip() != "":
+            context_additions.append(f"Context: {request.user_context}")
         
         if request.submit_folder_names and request.folder_names:
-            # Check if folder names contain alphabetic characters (not just numbers/special chars)
+            # Check if folder names contain alphabetic characters (ignore pure numbers or special chars)
             if any(c.isalpha() for c in request.folder_names):
-                context_additions.append(f"This photo is located in the following folders: {request.folder_names}")
+                context_additions.append(f"Folders: {request.folder_names}")
         
-        if request.date_time and request.date_time != "":
-            context_additions.append(f"This photo was taken on: {request.date_time}")
+        if request.date_time and str(request.date_time).strip() != "":
+            context_additions.append(f"Capture Time: {request.date_time}")
         
         # Add keyword hierarchy information if provided
         if request.generate_keywords and request.keyword_categories:
