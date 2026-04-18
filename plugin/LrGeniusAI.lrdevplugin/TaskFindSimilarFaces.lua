@@ -169,6 +169,15 @@ LrTasks.startAsyncTask(function()
             ErrorHandler.handleError(LOC "$$$/LrGeniusAI/FindSimilarFaces/DetectError=Face detection failed", err)
             return
         end
+        
+        if detectResp and detectResp.warning then
+            LrDialogs.message(
+                LOC "$$$/LrGeniusAI/common/BackendWarning=Backend Warning",
+                detectResp.warning,
+                "warning"
+            )
+        end
+        
         local faces = (detectResp and detectResp.faces) and detectResp.faces or {}
         if #faces == 0 then
             LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoFacesTitle=No faces found", LOC "$$$/LrGeniusAI/FindSimilarFaces/NoFacesMessage=No faces were detected on this photo.")
@@ -179,9 +188,15 @@ LrTasks.startAsyncTask(function()
 
         -- Resolve person names for each face (quick query per face, then look up name)
         local personsResp, _ = SearchIndexAPI.getPersons()
+        if personsResp and personsResp.warning then
+            log:warn("getPersons warning during face resolution: " .. tostring(personsResp.warning))
+        end
         local persons = (personsResp and personsResp.persons) and personsResp.persons or {}
         for i, face in ipairs(faces) do
             local qResp, _ = SearchIndexAPI.queryFacesByImage(imageBase64, i - 1, 1)
+            if qResp and qResp.warning then
+                log:warn("queryFacesByImage warning during face resolution (idx " .. tostring(i-1) .. "): " .. tostring(qResp.warning))
+            end
             local qResults = (qResp and qResp.results) and qResp.results or {}
             if qResults[1] and qResults[1].person_id then
                 local name = getPersonNameForId(qResults[1].person_id, persons)
@@ -219,6 +234,11 @@ LrTasks.startAsyncTask(function()
         local photoIds = {}
         if personId and personId ~= "" then
             local personResp, personErr = SearchIndexAPI.getPhotosForPerson(personId)
+            
+            if personResp and personResp.warning then
+                log:warn("getPhotosForPerson warning: " .. tostring(personResp.warning))
+            end
+            
             if not personErr and personResp and (personResp.photo_ids or personResp.photo_uuids) then
                 photoIds = personResp.photo_ids or personResp.photo_uuids
             end

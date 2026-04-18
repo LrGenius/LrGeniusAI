@@ -58,6 +58,15 @@ local function loadPersonsFromServer()
     if err then
         return {}, (LOC "$$$/LrGeniusAI/People/LoadError=Could not load persons. Check server connection. Try 'Cluster faces' or close and reopen.")
     end
+    
+    if resp and resp.warning then
+        LrDialogs.message(
+            LOC "$$$/LrGeniusAI/common/BackendWarning=Backend Warning",
+            resp.warning,
+            "warning"
+        )
+    end
+    
     local persons = (resp and resp.persons) and resp.persons or {}
     sortPersonsForDisplay(persons)
     return persons, nil
@@ -218,6 +227,15 @@ local function showPeopleDialog(ctx, persons, loadError)
                         ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/ClusterError=Face clustering failed", err)
                         return
                     end
+                    
+                    if clusterResp and clusterResp.warning then
+                        LrDialogs.message(
+                            LOC "$$$/LrGeniusAI/common/BackendWarning=Backend Warning",
+                            clusterResp.warning,
+                            "warning"
+                        )
+                    end
+                    
                     LrDialogs.message(LOC "$$$/LrGeniusAI/People/ClusterDone=Clustering done",
                         LOC("$$$/LrGeniusAI/People/ClusterSummaryAndReopen=^1 persons, ^2 faces. Close this dialog and open 'People...' again to see the updated list.", tostring(clusterResp and clusterResp.person_count or 0), tostring(clusterResp and clusterResp.face_count or 0)))
                 end,
@@ -355,6 +373,11 @@ local function unionPhotoIdsForEntries(entries)
                 ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/GetPhotosError=Could not get photos for person", err or "No data")
                 return nil
             end
+            
+            if resp and resp.warning then
+                log:warn("GetPhotosForPerson warning: " .. tostring(resp.warning))
+            end
+            
             local ids = photoIdsFromPersonResponse(resp)
             for _, photoId in ipairs(ids) do
                 if not seen[photoId] then
