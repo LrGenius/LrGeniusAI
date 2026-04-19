@@ -497,7 +497,8 @@ class LLMProviderBase(ABC):
                     "type": "array",
                     "items": self._keyword_leaf_item_schema(request_bilingual=bilingual)
                 }
-            schema["required"].append(category_name)
+            if category_name not in schema["required"]:
+                schema["required"].append(category_name)
         
         return schema
 
@@ -514,7 +515,7 @@ class LLMProviderBase(ABC):
                     "items": {"type": "string"}
                 }
             },
-            "required": ["name"],
+            "required": ["name", "synonyms"],
             "additionalProperties": False
         }
     
@@ -585,7 +586,8 @@ class LLMProviderBase(ABC):
                             "type": "array",
                             "items": self._keyword_leaf_item_schema(request.bilingual_keywords)
                         }
-                        keywords_schema["required"].append(category)
+                        if category not in keywords_schema["required"]:
+                            keywords_schema["required"].append(category)
                 schema["properties"]["keywords"] = keywords_schema
             else:
                 # Simple keyword array

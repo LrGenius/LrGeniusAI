@@ -98,11 +98,13 @@ def _build_hsl_schema() -> Dict[str, Any]:
                 "saturation": _number_schema(-100.0, 100.0),
                 "luminance": _number_schema(-100.0, 100.0),
             },
+            "required": ["hue", "saturation", "luminance"],
             "additionalProperties": False,
         }
     return {
         "type": "object",
         "properties": properties,
+        "required": list(HSL_CHANNELS),
         "additionalProperties": False,
     }
 
@@ -116,6 +118,7 @@ def _build_color_grading_schema() -> Dict[str, Any]:
                 key: _number_schema(bounds["min"], bounds["max"])
                 for key, bounds in COLOR_GRADING_RANGES.items()
             },
+            "required": list(COLOR_GRADING_RANGES.keys()),
             "additionalProperties": False,
         }
     properties["global"] = {
@@ -124,13 +127,16 @@ def _build_color_grading_schema() -> Dict[str, Any]:
             "hue": _number_schema(0.0, 360.0),
             "saturation": _number_schema(0.0, 100.0),
         },
+        "required": ["hue", "saturation"],
         "additionalProperties": False,
     }
     properties["blending"] = _number_schema(0.0, 100.0)
     properties["balance"] = _number_schema(-100.0, 100.0)
+    required = ["shadows", "midtones", "highlights", "global", "blending", "balance"]
     return {
         "type": "object",
         "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
@@ -147,6 +153,7 @@ def _build_global_schema() -> Dict[str, Any]:
             "temperature": _number_schema(2000.0, 50000.0),
             "tint": _number_schema(-150.0, 150.0),
         },
+        "required": ["temperature", "tint"],
         "additionalProperties": False,
     }
     properties["crop"] = {
@@ -158,6 +165,7 @@ def _build_global_schema() -> Dict[str, Any]:
             "bottom": _number_schema(0.0, 1.0),
             "angle": _number_schema(-45.0, 45.0),
         },
+        "required": ["left", "right", "top", "bottom", "angle"],
         "additionalProperties": False,
     }
     properties["color_grading"] = _build_color_grading_schema()
@@ -191,6 +199,7 @@ def _build_global_schema() -> Dict[str, Any]:
                         "items": _number_schema(0.0, 255.0),
                     },
                 },
+                "required": ["master", "red", "green", "blue"],
                 "additionalProperties": False,
             },
             "extended_point_curve": {
@@ -213,14 +222,34 @@ def _build_global_schema() -> Dict[str, Any]:
                         "items": _number_schema(0.0, 4096.0),
                     },
                 },
+                "required": ["master", "red", "green", "blue"],
                 "additionalProperties": False,
             },
         },
+        "required": [
+            "highlights",
+            "lights",
+            "darks",
+            "shadows",
+            "shadow_split",
+            "midtone_split",
+            "highlight_split",
+            "point_curve",
+            "extended_point_curve",
+        ],
         "additionalProperties": False,
     }
+    required = list(GLOBAL_FIELD_RANGES.keys()) + [
+        "hsl",
+        "white_balance",
+        "crop",
+        "color_grading",
+        "tone_curve",
+    ]
     return {
         "type": "object",
         "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
@@ -242,10 +271,11 @@ def _build_mask_schema() -> Dict[str, Any]:
             "adjustments": {
                 "type": "object",
                 "properties": adjustment_properties,
+                "required": list(MASK_ADJUSTMENT_RANGES.keys()),
                 "additionalProperties": False,
             },
         },
-        "required": ["kind", "adjustments"],
+        "required": ["kind", "name", "invert", "adjustments"],
         "additionalProperties": False,
     }
 
@@ -313,7 +343,11 @@ def _convert_openai_schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
             result["maximum"] = schema["maximum"]
         return result
 
-    return deepcopy(schema)
+    # Standard fallback - but Gemini doesn't support additionalProperties
+    result = deepcopy(schema)
+    if isinstance(result, dict):
+        result.pop("additionalProperties", None)
+    return result
 
 
 GEMINI_EDIT_RECIPE_SCHEMA = _convert_openai_schema_to_gemini(OPENAI_EDIT_RECIPE_SCHEMA)
