@@ -702,67 +702,54 @@ function Util.extractAllKeywords(hierarchicalTable)
     local meta = {}
     local orderedIds = {}
     local keywordCounter = 0
+    local seenKeywords = {}
 
     local function recurse(tbl, currentPath)
         iterateDeterministic(tbl, function(key, value)
-            local nextPath = currentPath
             local keyIsString = type(key) == "string"
             
-            -- Check if value is a leaf or a sub-hierarchy
-            if type(value) == "table" and not isKeywordLeafObject(value) then
-                -- Check for empty table which often signifies a leaf node represented by the key
-                local hasChildren = false
-                for _ in pairs(value) do
-                    hasChildren = true
-                    break
-                end
-
-                if not hasChildren and keyIsString then
-                    -- It's an empty table leaf, use key as keyword
-                    local keywordName = Util.trim(key)
-                    if keywordName ~= "" then
+            -- Defensive: ignore string keys that are purely numeric, as they are likely
+            -- leaked indices from JSON conversion or previous processing.
+            local isNumericKey = keyIsString and (tonumber(key) ~= nil)
+            
+            if isKeywordLeafObject(value) or type(value) == "string" then
+                -- It's a leaf value (string or leaf object)
+                local keywordName, synonyms = sanitizeKeywordLeaf(value)
+                if keywordName and keywordName ~= "" then
+                    -- Determine the category path for this keyword
+                    local finalPath = currentPath
+                    if keyIsString and not isNumericKey and keywordName ~= key then
+                        -- If the key is a string and different from the name, 
+                        -- it's likely a parent/category name
+                        if finalPath == "" then
+                            finalPath = key
+                        else
+                            finalPath = finalPath .. " > " .. key
+                        end
+                    end
+                    
+                    -- Deduplication: prevent adding same keyword name under same path
+                    local dedupeKey = finalPath .. "//" .. keywordName
+                    if not seenKeywords[dedupeKey] then
                         keywordCounter = keywordCounter + 1
                         local keywordId = "kw_" .. tostring(keywordCounter)
                         result[keywordId] = keywordName
-                        meta[keywordId] = { synonyms = {}, path = currentPath }
+                        meta[keywordId] = { synonyms = synonyms, path = finalPath }
                         table.insert(orderedIds, keywordId)
+                        seenKeywords[dedupeKey] = true
                     end
-                else
-                    -- It's a sub-hierarchy
-                    local subPath = currentPath
-                    if keyIsString then
-                        if subPath == "" then
-                            subPath = key
-                        else
-                            subPath = subPath .. " > " .. key
-                        end
-                    end
-                    recurse(value, subPath)
                 end
-                return
-            end
-
-            -- It's a leaf value (string or leaf object)
-            local keywordName, synonyms = sanitizeKeywordLeaf(value)
-            if keywordName and keywordName ~= "" then
-                keywordCounter = keywordCounter + 1
-                local keywordId = "kw_" .. tostring(keywordCounter)
-                result[keywordId] = keywordName
-                
-                -- Determine the path for this keyword
-                local finalPath = currentPath
-                if keyIsString and keywordName ~= key then
-                    -- If the key is a string and different from the name, 
-                    -- it's likely a parent/category name
-                    if finalPath == "" then
-                        finalPath = key
+            elseif type(value) == "table" then
+                -- It's a sub-hierarchy
+                local subPath = currentPath
+                if keyIsString and not isNumericKey then
+                    if subPath == "" then
+                        subPath = key
                     else
-                        finalPath = finalPath .. " > " .. key
+                        subPath = subPath .. " > " .. key
                     end
                 end
-
-                meta[keywordId] = { synonyms = synonyms, path = finalPath }
-                table.insert(orderedIds, keywordId)
+                recurse(value, subPath)
             end
         end)
     end
