@@ -50,7 +50,7 @@ def get_all_tags():
     tags = run_command("git tag --sort=v:refname")
     if not tags:
         return []
-    return tags.split('\n')
+    return [t for t in tags.split('\n') if t.strip()]
 
 def get_commits(range_str):
     return run_command(f'git log {range_str} --pretty=format:"- %s" --no-merges')
@@ -120,17 +120,29 @@ def main():
     def normalize(v): return v.lstrip('v')
     missing_tags = [t for t in all_tags if normalize(t) not in [normalize(rv) for rv in recorded_versions]]
 
+    new_entries = []
+    
+    # Check for unreleased changes since the last tag regardless of missing tags
+    latest_tag = all_tags[-1]
+    unreleased_commits = get_commits(f"{latest_tag}..HEAD")
+    if unreleased_commits and not os.getenv('GITHUB_REF_TYPE') == 'tag':
+        print(f"Detected unreleased changes since {latest_tag}. Generating preview...")
+        date = datetime.now().strftime("%Y-%m-%d")
+        tag = "Unreleased"
+        if not api_key:
+            entry = f"## [{tag}] - {date}\n\n{unreleased_commits}"
+        else:
+            entry = generate_ai_notes(api_key, tag, unreleased_commits, date)
+        
+        print("\n--- BEGIN GENERATED CHANGELOG (UNRELEASED PREVIEW) ---")
+        print(entry)
+        print("--- END GENERATED CHANGELOG ---\n")
+
     if not missing_tags:
-        print("CHANGELOG.md is up to date.")
-        # We still might want to generate release_notes.md if we are on a tag
-        current_tag = os.getenv('GITHUB_REF_NAME')
-        if current_tag and os.path.exists(CHANGELOG_FILE):
-             # Extract the latest entry for release_notes.md
-             pass
+        print("CHANGELOG.md is up to date with existing tags.")
     else:
         print(f"Found {len(missing_tags)} missing versions. Generating...")
         
-        new_entries = []
         for i, tag in enumerate(missing_tags):
             date = get_tag_date(tag)
             
@@ -150,44 +162,48 @@ def main():
                 print(f"Generating AI notes for {tag} ({i+1}/{len(missing_tags)})...")
                 entry = generate_ai_notes(api_key, tag, commits, date)
             
+            print(f"\n--- BEGIN GENERATED CHANGELOG ({tag}) ---")
+            print(entry)
+            print("--- END GENERATED CHANGELOG ---\n")
+            
             new_entries.append(entry)
 
         # Update CHANGELOG.md
-        if not os.path.exists(CHANGELOG_FILE):
-            content = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n"
-            # Reverse for bootstrap: latest at the top
-            content += "\n\n".join(reversed(new_entries))
-            with open(CHANGELOG_FILE, "w") as f:
-                f.write(content)
-        else:
-            with open(CHANGELOG_FILE, "r") as f:
-                current_content = f.read()
+        if new_entries:
+            if not os.path.exists(CHANGELOG_FILE):
+                content = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n"
+                # Reverse for bootstrap: latest at the top
+                content += "\n\n".join(reversed(new_entries))
+                with open(CHANGELOG_FILE, "w") as f:
+                    f.write(content)
+            else:
+                with open(CHANGELOG_FILE, "r") as f:
+                    current_content = f.read()
+                
+                # Find the position after the header
+                header_end = current_content.find("\n\n") + 2
+                if header_end < 2: header_end = 0
+                
+                # Insert new entries after header
+                updated_content = (
+                    current_content[:header_end] + 
+                    "\n\n".join(reversed(new_entries)) + 
+                    "\n\n" + 
+                    current_content[header_end:]
+                )
+                with open(CHANGELOG_FILE, "w") as f:
+                    f.write(updated_content)
             
-            # Find the position after the header
-            header_end = current_content.find("\n\n") + 2
-            if header_end < 2: header_end = 0
-            
-            # Insert new entries after header
-            updated_content = (
-                current_content[:header_end] + 
-                "\n\n".join(reversed(new_entries)) + 
-                "\n\n" + 
-                current_content[header_end:]
-            )
-            with open(CHANGELOG_FILE, "w") as f:
-                f.write(updated_content)
-        
-        print(f"Updated {CHANGELOG_FILE}")
+            print(f"Updated {CHANGELOG_FILE}")
 
     # Always generate release_notes.md for the current run (GitHub Release body)
     # We take the latest section from CHANGELOG.md or the one we just generated
-    current_tag = os.getenv('GITHUB_REF_NAME') or (all_tags[-1] if all_tags else None)
-    if current_tag:
-        # Simplest way: just grab the latest AI notes generated or read from file
+    current_tag = os.getenv('GITHUB_REF_NAME')
+    if current_tag and os.path.exists(CHANGELOG_FILE):
         with open(CHANGELOG_FILE, "r") as f:
             content = f.read()
         
-        # Extract the first ## section
+        # Extract the first ## section matching the current tag
         match = re.search(r"(##\s*\[?" + re.escape(current_tag) + r".*?)(?=\n##|$)", content, re.DOTALL)
         if match:
             latest_notes = match.group(1).strip()

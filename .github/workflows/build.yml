@@ -532,6 +532,14 @@ jobs:
           mkdir -p "$ARTIFACT_DIR"
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
+      - name: Show recent changes
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pip install google-genai
+          python3 scripts/generate_release_notes.py
+
       - name: Upload plugin-only artifact
         uses: actions/upload-artifact@v6
         with:
@@ -721,6 +729,17 @@ jobs:
         run: |
           pip install google-genai
           python3 scripts/generate_release_notes.py
+
+      - name: Commit and push CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
+          git push origin HEAD:main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release
         uses: softprops/action-gh-release@v2
