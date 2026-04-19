@@ -1330,11 +1330,32 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
     end
     local catalog = LrApplication.activeCatalog()
     local allPhotos = catalog:getAllPhotos()
+    local totalPhotos = #allPhotos
     local photoIds = {}
-    for _, photo in ipairs(allPhotos) do
+
+    -- Hash phase dominates wall time (~6ms per photo); report progress against
+    -- photo count so the UI doesn't sit at 0% for minutes on large catalogs.
+    if progressScope then
+        progressScope:setPortionComplete(0, totalPhotos)
+        progressScope:setCaption(LOC(
+            "$$$/LrGeniusAI/SearchIndexAPI/claimingPhotosPreparing=Preparing ^1 photos for this catalog...",
+            tostring(totalPhotos)))
+    end
+    local progressStride = math.max(50, math.floor(totalPhotos / 200))
+    for i, photo in ipairs(allPhotos) do
+        if progressScope and progressScope:isCanceled() then
+            progressScope:done()
+            return false, "canceled", nil
+        end
         local photoId, _ = getPhotoIdForPhoto(photo)
         if photoId then
             photoIds[#photoIds + 1] = photoId
+        end
+        if progressScope and (i % progressStride == 0 or i == totalPhotos) then
+            progressScope:setPortionComplete(i, totalPhotos)
+            progressScope:setCaption(LOC(
+                "$$$/LrGeniusAI/SearchIndexAPI/claimingPhotosPreparingCount=Preparing ^1 of ^2 photos...",
+                tostring(i), tostring(totalPhotos)))
         end
     end
     if #photoIds == 0 then
@@ -1352,7 +1373,6 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
                 return false, "canceled", nil
             end
             local batchNum = math.floor((startIdx - 1) / batchSize) + 1
-            progressScope:setPortionComplete(batchNum - 1, totalBatches)
             progressScope:setCaption(LOC("$$$/LrGeniusAI/SearchIndexAPI/claimingPhotosBatch=Claiming photos... batch ^1/^2", tostring(batchNum), tostring(totalBatches)))
         end
         local stopIdx = math.min(startIdx + batchSize - 1, #photoIds)
@@ -1374,7 +1394,7 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
         end
     end
     if progressScope then
-        progressScope:setPortionComplete(totalBatches, totalBatches)
+        progressScope:setPortionComplete(totalPhotos, totalPhotos)
     end
     return true, nil, { claimed = totalClaimed, errors = totalErrors }
 end
