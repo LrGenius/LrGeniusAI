@@ -178,20 +178,20 @@ def get_logs():
     """
     Returns backend logs and optionally local Ollama logs if accessible.
     """
-    logger.trace("GET /logs request received")
+    logger.debug("GET /logs request received")
     logs = {}
     
     # 1. Backend logs
     if os.path.isfile(LOG_PATH):
         try:
-            logger.trace(f"Reading backend logs from: {LOG_PATH}")
+            logger.debug(f"Reading backend logs from: {LOG_PATH}")
             with open(LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
                 # Return last 1MB of logs to avoid huge response
                 f.seek(0, 2)
                 size = f.tell()
                 f.seek(max(0, size - 1024 * 1024))
                 logs["backend"] = f.read()
-            logger.trace("Successfully read backend logs")
+            logger.debug("Successfully read backend logs")
         except Exception as e:
             logger.error(f"Failed to read backend logs: {e}")
             logs["backend_error"] = str(e)
@@ -202,12 +202,12 @@ def get_logs():
         "/root/.ollama/logs/server.log",
         r"C:\Users\%USERNAME%\AppData\Local\ollama\server.log",
     ]
-    logger.trace("Searching for Ollama logs...")
+    logger.debug("Searching for Ollama logs...")
     for p in ollama_log_paths:
         p = os.path.expandvars(p)
         if os.path.isfile(p):
             try:
-                logger.trace(f"Found Ollama logs at: {p}")
+                logger.debug(f"Found Ollama logs at: {p}")
                 with open(p, "r", encoding="utf-8", errors="ignore") as f:
                     f.seek(0, 2)
                     size = f.tell()
@@ -222,12 +222,12 @@ def get_logs():
         os.path.expanduser("~/Library/Logs/LM Studio/main.log"),
         r"%APPDATA%\LM Studio\logs\main.log",
     ]
-    logger.trace("Searching for LM Studio logs...")
+    logger.debug("Searching for LM Studio logs...")
     for p in lmstudio_log_paths:
         p = os.path.expandvars(p)
         if os.path.isfile(p):
             try:
-                logger.trace(f"Found LM Studio logs at: {p}")
+                logger.debug(f"Found LM Studio logs at: {p}")
                 with open(p, "r", encoding="utf-8", errors="ignore") as f:
                     f.seek(0, 2)
                     size = f.tell()
@@ -237,7 +237,7 @@ def get_logs():
             except Exception as e:
                 logger.warning(f"Failed to read LM Studio log at {p}: {e}")
 
-    logger.trace(f"Log fetch complete. Found: {list(logs.keys())}")
+    logger.debug(f"Log fetch complete. Found: {list(logs.keys())}")
     return jsonify(logs)
 
 
@@ -246,7 +246,7 @@ def get_raw_log(log_type):
     """
     Returns the raw log file for the specified type (backend, ollama, lmstudio).
     """
-    logger.trace(f"GET /logs/raw/{log_type} request received")
+    logger.debug(f"GET /logs/raw/{log_type} request received")
     
     path = None
     if log_type == "backend":
