@@ -230,6 +230,8 @@ local function findKeywordByNameInParent(photo, catalog, sessionCache, parent, k
         if okFallback and fallbackResult then
             keywordCachePut(sessionCache, parent, target, fallbackResult)
             return fallbackResult
+        elseif not okFallback then
+            log:trace("findKeywordByNameInParent: createKeyword fallback also failed: " .. tostring(fallbackResult))
         end
         return nil
     end
@@ -271,8 +273,18 @@ local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
         return
     end
 
-    local keywordName = keywordObj:getName() or ""
-    local existing = keywordObj:getSynonyms() or {}
+    local okName, keywordName = LrTasks.pcall(function() return keywordObj:getName() or "" end)
+    if not okName then
+        log:trace("mergeKeywordSynonyms: getName failed, skipping synonyms for this node: " .. tostring(keywordName))
+        return 
+    end
+
+    local okSyn, existing = LrTasks.pcall(function() return keywordObj:getSynonyms() or {} end)
+    if not okSyn then
+        log:trace("mergeKeywordSynonyms: getSynonyms failed, skipping synonyms for this node: " .. tostring(existing))
+        return
+    end
+
     local merged = {}
     local seen = {}
 
@@ -469,51 +481,48 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
     local kwVal, kwMeta, orderedIds = Util.extractAllKeywords(keywords or {})
     propertyTable.keywordsMeta = kwMeta
     
-    -- Initialize flat properties for bindings
+    -- Initialize flat properties with full paths for bindings
     for _, id in ipairs(orderedIds) do
-        propertyTable['keywordsSel.' .. id] = true
-        propertyTable['keywordsVal.' .. id] = kwVal[id] or ""
+        local fullPath = kwVal[id] or ""
+        local prefix = kwMeta[id].path
+        if prefix and prefix ~= "" then
+            fullPath = prefix .. " > " .. fullPath
+        end
+        propertyTable['keywordsSel_' .. id] = true
+        propertyTable['keywordsVal_' .. id] = fullPath
     end
     
     propertyTable.title = title or ""
     propertyTable.caption = caption or ""
     propertyTable.altText = altText or ""
 
-    propertyTable.saveKeywords = keywords ~= nil and type(keywords) == 'table' and options.applyKeywords ~= false
-    propertyTable.saveTitle = title ~= nil and title ~= "" and options.applyTitle ~= false
-    propertyTable.saveCaption = caption ~= nil and caption ~= "" and options.applyCaption ~= false
-    propertyTable.saveAltText = altText ~= nil and altText ~= "" and options.applyAltText ~= false
+    propertyTable.saveKeywords = keywords ~= nil and type(keywords) == 'table'
+    -- By default, save if data is present, regardless of pre-flight options
+    propertyTable.saveTitle = title ~= nil and title ~= ""
+    propertyTable.saveCaption = caption ~= nil and caption ~= ""
+    propertyTable.saveAltText = altText ~= nil and altText ~= ""
 
     local keywordRows = {
         spacing = 2,
     }
 
     for _, id in ipairs(orderedIds) do
-        local path = propertyTable.keywordsMeta[id].path
         table.insert(keywordRows, f:row {
             f:checkbox { 
-                value = bind('keywordsSel.' .. id), 
+                value = bind('keywordsSel_' .. id), 
                 visible = bind 'saveKeywords' 
             },
-            f:column {
-                spacing = 0,
-                f:static_text {
-                    title = path,
-                    size = "small",
-                    text_color = { 0.5, 0.5, 0.5 },
-                    visible = path ~= "" and path ~= nil
-                },
-                f:edit_field {
-                    value = bind('keywordsVal.' .. id),
-                    width_in_chars = 40,
-                    immediate = true,
-                    enabled = bind 'saveKeywords'
-                },
-            }
+            f:edit_field {
+                value = bind('keywordsVal_' .. id),
+                width_in_chars = 45, -- Enough for long paths
+                immediate = true,
+                enabled = bind 'saveKeywords'
+            },
         })
     end
 
     local dialogView = f:row {
+        bind_to_object = propertyTable,
         spacing = 20,
         f:column {
             width = 250,
@@ -543,7 +552,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
                         title = LOC "$$$/LrGeniusAI/MetadataManager/SelectAll=Select All",
                         action = function()
                             for _, id in ipairs(orderedIds) do
-                                propertyTable['keywordsSel.' .. id] = true
+                                propertyTable['keywordsSel_' .. id] = true
                             end
                         end
                     },
@@ -551,7 +560,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
                         title = LOC "$$$/LrGeniusAI/MetadataManager/DeselectAll=Deselect All",
                         action = function()
                             for _, id in ipairs(orderedIds) do
-                                propertyTable['keywordsSel.' .. id] = false
+                                propertyTable['keywordsSel_' .. id] = false
                             end
                         end
                     },
@@ -563,7 +572,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
                 },
                 f:scrolled_view {
                     height = 250,
-                    width = 450,
+                    width = 560,
                     f:column(keywordRows)
                 },
             },
@@ -631,14 +640,17 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
     local results = {}
     local validatedKeywords = {}
     if propertyTable.saveKeywords then
-        -- Sync flat properties back to tables for Util.rebuildTableFromKeywords
-        local finalKwVal = {}
-        local finalKwSel = {}
+        -- Construct a new hierarchical table from the full path strings
+        local pathsWithMeta = {}
         for _, id in ipairs(orderedIds) do
-            finalKwVal[id] = propertyTable['keywordsVal.' .. id]
-            finalKwSel[id] = propertyTable['keywordsSel.' .. id]
+            if propertyTable['keywordsSel_' .. id] then
+                table.insert(pathsWithMeta, {
+                    path = propertyTable['keywordsVal_' .. id],
+                    synonyms = kwMeta[id] and kwMeta[id].synonyms or {}
+                })
+            end
         end
-        validatedKeywords = Util.rebuildTableFromKeywords(keywords, finalKwVal, finalKwSel, propertyTable.keywordsMeta)
+        validatedKeywords = Util.buildHierarchyFromPaths(pathsWithMeta)
     end
 
     results.keywords = validatedKeywords

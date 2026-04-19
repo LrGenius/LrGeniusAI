@@ -691,7 +691,7 @@ end
 -- Keeps an optional metadata map with synonyms for structured leaves.
 --
 -- @param hierarchicalTable The original table with categories.
--- @return table keywordsVal, table keywordsMeta
+-- @return table keywordsVal, table keywordsMeta, table orderedIds
 --
 function Util.extractAllKeywords(hierarchicalTable)
     if hierarchicalTable == nil or type(hierarchicalTable) ~= "table" then
@@ -706,25 +706,62 @@ function Util.extractAllKeywords(hierarchicalTable)
     local function recurse(tbl, currentPath)
         iterateDeterministic(tbl, function(key, value)
             local nextPath = currentPath
-            if type(key) == "string" then
-                if nextPath == "" then
-                    nextPath = key
-                else
-                    nextPath = nextPath .. " > " .. key
-                end
-            end
-
+            local keyIsString = type(key) == "string"
+            
+            -- Check if value is a leaf or a sub-hierarchy
             if type(value) == "table" and not isKeywordLeafObject(value) then
-                recurse(value, nextPath)
+                -- Check for empty table which often signifies a leaf node represented by the key
+                local hasChildren = false
+                for _ in pairs(value) do
+                    hasChildren = true
+                    break
+                end
+
+                if not hasChildren and keyIsString then
+                    -- It's an empty table leaf, use key as keyword
+                    local keywordName = Util.trim(key)
+                    if keywordName ~= "" then
+                        keywordCounter = keywordCounter + 1
+                        local keywordId = "kw_" .. tostring(keywordCounter)
+                        result[keywordId] = keywordName
+                        meta[keywordId] = { synonyms = {}, path = currentPath }
+                        table.insert(orderedIds, keywordId)
+                    end
+                else
+                    -- It's a sub-hierarchy
+                    local subPath = currentPath
+                    if keyIsString then
+                        if subPath == "" then
+                            subPath = key
+                        else
+                            subPath = subPath .. " > " .. key
+                        end
+                    end
+                    recurse(value, subPath)
+                end
                 return
             end
 
+            -- It's a leaf value (string or leaf object)
             local keywordName, synonyms = sanitizeKeywordLeaf(value)
             if keywordName and keywordName ~= "" then
                 keywordCounter = keywordCounter + 1
                 local keywordId = "kw_" .. tostring(keywordCounter)
                 result[keywordId] = keywordName
-                meta[keywordId] = { synonyms = synonyms, path = currentPath }
+                
+                -- Determine the path for this keyword
+                local finalPath = currentPath
+                if keyIsString and keywordName ~= key then
+                    -- If the key is a string and different from the name, 
+                    -- it's likely a parent/category name
+                    if finalPath == "" then
+                        finalPath = key
+                    else
+                        finalPath = finalPath .. " > " .. key
+                    end
+                end
+
+                meta[keywordId] = { synonyms = synonyms, path = finalPath }
                 table.insert(orderedIds, keywordId)
             end
         end)
@@ -800,6 +837,62 @@ function Util.rebuildTableFromKeywords(originalTable, keywordsVal, keywordsSel, 
     end
 
     return recurse(originalTable)
+end
+
+---
+-- Splits a string into a table based on a delimiter.
+-- @param str The string to split.
+-- @param delimiter The delimiter string.
+-- @return table of parts
+--
+function Util.split(str, delimiter)
+    local result = {}
+    local from = 1
+    local delim_from, delim_to = string.find(str, delimiter, from, true)
+    while delim_from do
+        table.insert(result, string.sub(str, from, delim_from - 1))
+        from = delim_to + 1
+        delim_from, delim_to = string.find(str, delimiter, from, true)
+    end
+    table.insert(result, string.sub(str, from))
+    return result
+end
+
+---
+-- Builds a hierarchical keyword table from a list of full path strings.
+-- Each item in pathsWithMeta should be { path = "A > B > C", synonyms = { ... } }
+-- @param pathsWithMeta table list of paths and synonyms.
+-- @return hierarchical table
+--
+function Util.buildHierarchyFromPaths(pathsWithMeta)
+    local root = {}
+    for _, item in ipairs(pathsWithMeta) do
+        local parts = Util.split(item.path, ">")
+        if #parts > 0 then
+            local current = root
+            for i = 1, #parts - 1 do
+                local catName = Util.trim(parts[i])
+                if catName ~= "" then
+                    if current[catName] == nil then
+                        current[catName] = {}
+                    end
+                    current = current[catName]
+                end
+            end
+            
+            local leafName = Util.trim(parts[#parts])
+            if leafName ~= "" then
+                local leafNode
+                if item.synonyms and #item.synonyms > 0 then
+                    leafNode = { name = leafName, synonyms = item.synonyms }
+                else
+                    leafNode = leafName
+                end
+                table.insert(current, leafNode)
+            end
+        end
+    end
+    return root
 end
 
 --- 

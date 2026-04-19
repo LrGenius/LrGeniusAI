@@ -268,7 +268,6 @@ LrTasks.startAsyncTask(function()
                         result, validatedData = MetadataManager.showValidationDialog(ctx, photo, retrievedData, options)
                         
                         if result == "ok" then
-                            successCount = successCount + 1
                             if validatedData ~= nil and validatedData.skipFromHere then
                                 skipValidation = true
                             end
