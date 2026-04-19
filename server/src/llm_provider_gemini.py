@@ -105,6 +105,7 @@ class GeminiProvider(LLMProviderBase):
 
             # Build a typed GenerateContentConfig from our generation_config dict
             config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
                 response_mime_type=generation_config.get("response_mime_type"),
                 response_schema=generation_config.get("response_schema"),
                 temperature=generation_config.get("temperature"),
