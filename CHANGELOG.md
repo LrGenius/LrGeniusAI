@@ -1,5 +1,121 @@
 # Changelog
 
+## [v2.13.6] - 2023-10-27
+
+### Features
+* **Log Management:** Implemented streaming log downloads to prevent memory exhaustion and increased server startup timeouts.
+* **Schema Validation:** Enforced strict schema validation by adding required fields and stripping `additionalProperties` to ensure full Gemini compatibility.
+* **CI/CD:** Automated `CHANGELOG.md` updates and added unreleased change previews to the release notes generation script.
+
+### Fixes
+* **Memory Management:** Resolved a memory leak in the log fetch mechanism (#108).
+* **Schema Compliance:** Implemented recursive schema validation to ensure strict OpenAI compliance (#110).
+
+### Architecture/Refactoring
+* **Keyword Hierarchy:** Simplified recursion logic and implemented deduplication for keyword paths.
+* **UI/UX:** Enhanced keyword hierarchy extraction and updated the validation dialog to support full-path keyword editing.
+* **Diagnostics:** Improved server log diagnostics with enhanced logging, optimized timeouts, and improved UI feedback.
+* **Logging:** Upgraded log levels from `trace` to `debug` in log retrieval routes.
+
+### Documentation
+* Updated setup documentation to reflect new GitHub repository locations.
+
+## [v2.13.5] - 2023-10-27
+
+### Fixes
+* **Build System:** Replaced escaped string literals with heredoc syntax in the uninstaller AppleScript generation script to improve maintainability and prevent character encoding issues.
+
+## [v2.13.4] - 2023-10-27
+
+### Features
+* **LM Studio Integration:** Implemented token tracking and refined prompt context formatting.
+* **API Diagnostics:** Added logging and UI display for backend warnings returned during face detection, clustering, and person management tasks.
+* **Localization:** Added Norwegian to the supported generation languages list.
+
+### Fixes
+* **Context Retrieval:** Resolved logic errors in photo context retrieval (#100).
+* **Semantic Search:** Updated parsing logic to handle nested search result structures and corrected result counting (#105).
+* **Metadata Management:** Fixed `addKeywordRecursively` catalog passing and implemented a robust fallback mechanism for keyword lookups.
+
+### Architecture/Refactoring
+* **Directory Migration:** Migrated plugin installation and backend execution paths to user-specific directories on macOS and Windows to improve permission handling and compliance (#99).
+
+## [v2.13.3] - 2023-10-27
+
+### Features
+* **Batch Processing:** Added `vertex_project_id` and `vertex_location` configuration options to the batch processing service to support custom Google Cloud Vertex AI deployments.
+
+### Architecture/Refactoring
+* **Initialization Logic:** Introduced `isLocalBackend` helper utility to gate catalog initialization and server startup processes, ensuring cleaner separation between local and cloud-based execution environments.
+
+### Documentation
+* **Security & Compliance:** Updated installation documentation to include instructions for bypassing security warnings on unsigned installers.
+* **Licensing:** Added AGPL-3.0 license details and clarified permission requirements for plugin deployment.
+
+## [v2.13.2] - 2023-10-27
+
+### Architecture/Refactoring
+*   **Database Initialization:** Enhanced robustness of the database startup sequence by implementing strict null-checks and custom error handling to prevent initialization failures.
+
+## [v2.13.1] - 2023-10-27
+
+### Fixes
+* **macOS:** Updated server path and implemented `launchctl` integration to ensure reliable system-wide service execution.
+* **Database:** Added null checks for uninitialized database collections across all services to prevent runtime exceptions.
+* **Training Service:** Corrected argument naming inconsistencies to ensure proper parameter passing.
+
+### Architecture/Refactoring
+* **Windows:** Migrated backend execution to `pythonw.exe` to enable silent, background process management.
+* **Repository:** Consolidated `.gitignore` rules into the root directory and removed redundant server-specific ignore files.
+
+### Documentation/Chore
+* **CI/CD:** Optimized build workflow triggers to execute only on relevant directory changes.
+* **Repository:** Cleaned up legacy entries and added `entities.json`, `mempalace.yaml`, and `mempalace_data/` to `.gitignore`.
+
+## [v2.13.0-pre2] - 2026-04-11
+
+No technical changes detected.
+
+## [v2.13.0-pre1] - 2023-10-27
+
+### Features
+* **Backend:** Renamed `backend` directory to `Server` to align with project naming conventions.
+* **Deployment:** Added an automated uninstaller application to the macOS installation package.
+* **CI/CD:** Implemented automated release note generation and integrated documentation updates into the CI build workflow.
+
+### Fixes
+* **Installation:** Enhanced service lifecycle management in `postinstall` and `preinstall` scripts; added robust user detection and automated process cleanup to prevent installation conflicts.
+
+### Architecture/Refactoring
+* **CI/CD:** Removed redundant zip artifact generation from the GitHub release workflow to optimize build times.
+
+## [v2.13.0] - 2024-05-22
+
+### Features
+*   **Training & Styles:** Added support for saving/applying custom user edit styles, training photo validation, and scope selection (selected photos, current view, or catalog).
+*   **API & Backend:** Added `/unload` endpoint for memory management, dynamic database initialization, and server restart/init endpoints.
+*   **Diagnostics & Logging:** Implemented remote log collection, trace logging for API requests, and system health diagnostics. Added camera distribution tracking and style engine dashboard.
+*   **UI/UX:** Implemented full localization support, added application icons, and integrated an onboarding wizard with health checks.
+*   **Installation:** Added automated uninstaller for macOS and updated Windows installer architecture compatibility.
+*   **Integration:** Added `LrView` share import to `DevelopEditManager`.
+
+### Fixes
+*   **Stability:** Resolved JSON decode error loops in plugin manager and wrapped Ollama provider initialization in try-blocks to prevent startup crashes.
+*   **Networking:** Fixed `LrHttp.get` timeout parameter application by passing nil headers.
+*   **Performance:** Moved log file copy operations to asynchronous tasks to prevent UI blocking and throttled CLIP status polling.
+*   **Installer:** Disabled MSYS path conversion in Inno Setup to resolve path resolution errors.
+*   **Error Handling:** Improved error reporting by concatenating error lists and added robust error handling for log retrieval and export tasks.
+
+### Architecture/Refactoring
+*   **Backend:** Standardized `DB_PATH` handling, unified server log collection via API, and improved resource unloading logic for local/remote backends.
+*   **HTTP/Requests:** Replaced `pcall` with `LrTasks.pcall` and improved HTTP request robustness.
+*   **Model Management:** Implemented granular, file-by-file model downloading for improved progress tracking.
+*   **Codebase:** Standardized EXIF extraction, updated UI layout constraints, and modernized the style engine test suite.
+
+### Documentation
+*   **Compliance:** Added GNU AGPL v3 license and privacy policy document regarding local-first data handling.
+*   **Technical:** Updated tech stack documentation, added Credits wiki, and included automated release note generation workflows.
+
 All notable changes to this project will be documented in this file.
 
 ## [v2.13.0-pre] - 2026-04-11
