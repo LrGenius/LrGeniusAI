@@ -260,7 +260,8 @@ class ChatGPTProvider(LLMProviderBase):
     def _prepare_openai_response_format(self, request: MetadataGenerationRequest) -> Dict[str, Any]:
         """Prepare OpenAI-style response format with JSON schema"""
         schema = self._prepare_response_structure(request)
-        schema["additionalProperties"] = False
+        # Ensure the schema is strictly compliant with OpenAI requirements
+        schema = self._make_schema_strict(schema)
         
         return {
             "type": "json_schema",
@@ -273,7 +274,9 @@ class ChatGPTProvider(LLMProviderBase):
 
     def _prepare_openai_edit_response_format(self) -> Dict[str, Any]:
         schema = self._prepare_edit_response_structure()
-        schema["additionalProperties"] = False
+        # Ensure the schema is strictly compliant with OpenAI requirements
+        schema = self._make_schema_strict(schema)
+        
         return {
             "type": "json_schema",
             "json_schema": {
@@ -282,6 +285,46 @@ class ChatGPTProvider(LLMProviderBase):
                 "strict": True
             }
         }
+
+    def _make_schema_strict(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Recursively modify a JSON schema to be strictly compliant with OpenAI Requirements:
+        1. Every object must have additionalProperties: False
+        2. Every property defined in 'properties' must be in the 'required' list
+        """
+        # If it's not a dict, we can't process it as a schema object
+        if not isinstance(schema, dict):
+            return schema
+
+        schema_type = schema.get("type")
+
+        # Handle objects
+        if schema_type == "object" or "properties" in schema:
+            schema["type"] = "object"  # Ensure type is set
+            schema["additionalProperties"] = False
+            
+            properties = schema.get("properties", {})
+            if properties:
+                # Initialize required list if missing
+                if "required" not in schema:
+                    schema["required"] = []
+                
+                # All properties must be in required
+                for prop_name in properties.keys():
+                    if prop_name not in schema["required"]:
+                        schema["required"].append(prop_name)
+                
+                # Recursively process each property
+                for prop_name, prop_schema in properties.items():
+                    schema["properties"][prop_name] = self._make_schema_strict(prop_schema)
+        
+        # Handle arrays
+        elif schema_type == "array" or "items" in schema:
+            schema["type"] = "array"  # Ensure type is set
+            if "items" in schema:
+                schema["items"] = self._make_schema_strict(schema["items"])
+
+        return schema
     
     def list_available_models(self) -> list:
         """
