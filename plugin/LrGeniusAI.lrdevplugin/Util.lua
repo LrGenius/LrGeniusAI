@@ -48,7 +48,7 @@ local function dumpHelper(val, indent, seen)
         local next_indent = indent .. "  "
         if is_array then
             for _, v in ipairs(val) do
-                table.insert(parts, next_indent .. dumpHelper(v, next_indent, Util.deepcopy(seen)))
+                table.insert(parts, next_indent .. dumpHelper(v, next_indent, seen))
             end
             return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
         else -- It's a dictionary-like table
@@ -62,7 +62,7 @@ local function dumpHelper(val, indent, seen)
             for _, k in ipairs(sorted_keys) do
                 local v = val[k]
                 local key_str = (type(k) == "string" and not k:match("^[A-Za-z_][A-Za-z0-9_]*$")) and ('["' .. k .. '"]') or tostring(k)
-                table.insert(parts, next_indent .. key_str .. " = " .. dumpHelper(v, next_indent, Util.deepcopy(seen)))
+                table.insert(parts, next_indent .. key_str .. " = " .. dumpHelper(v, next_indent, seen))
             end
             return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
         end

@@ -969,11 +969,12 @@ local function grok_string(self, text, start, options)
 
    local i = start + 1 -- +1 to bypass the initial quote
    local text_len = text:len()
-   local VALUE = ""
+   local VALUE_BUFF = {}
+   local VALUE_BUFF_INDEX = 1
    while i <= text_len do
       local c = text:sub(i,i)
       if c == '"' then
-         return VALUE, i + 1
+         return table.concat(VALUE_BUFF), i + 1
       end
       if c ~= '\\' then
          
@@ -1003,7 +1004,8 @@ local function grok_string(self, text, start, options)
          end
 
 
-         VALUE = VALUE .. next_character
+         VALUE_BUFF[VALUE_BUFF_INDEX] = next_character
+         VALUE_BUFF_INDEX = VALUE_BUFF_INDEX + 1
          i = i + byte_count
 
       else
@@ -1021,7 +1023,8 @@ local function grok_string(self, text, start, options)
          end
 
          if backslash_escape_conversion[next_byte] then
-            VALUE = VALUE .. backslash_escape_conversion[next_byte]
+            VALUE_BUFF[VALUE_BUFF_INDEX] = backslash_escape_conversion[next_byte]
+            VALUE_BUFF_INDEX = VALUE_BUFF_INDEX + 1
             i = i + 1
          else
             --
@@ -1045,7 +1048,8 @@ local function grok_string(self, text, start, options)
                      -- not a proper low, so we'll just leave the first codepoint as is and spit it out.
                   end
                end
-               VALUE = VALUE .. unicode_codepoint_as_utf8(codepoint)
+               VALUE_BUFF[VALUE_BUFF_INDEX] = unicode_codepoint_as_utf8(codepoint)
+               VALUE_BUFF_INDEX = VALUE_BUFF_INDEX + 1
 
             elseif options.strictParsing then
                --local next_byte = text:match('^\\(.)', i) printf("NEXT[%s]", next_byte);
@@ -1065,7 +1069,7 @@ local function grok_string(self, text, start, options)
                   next_character = text:match('^(.[\128-\191])', i)
                elseif byte_count == 3 then
                   next_character = text:match('^(.[\128-\191][\128-\191])', i)
-               elseif byte_count == 3 then
+               elseif byte_count == 4 then
                   next_character = text:match('^(.[\128-\191][\128-\191][\128-\191])', i)
                end
 
@@ -1075,7 +1079,8 @@ local function grok_string(self, text, start, options)
                   return nil, start -- in case the error method doesn't abort, return something sensible
                end
 
-               VALUE = VALUE .. next_character
+               VALUE_BUFF[VALUE_BUFF_INDEX] = next_character
+               VALUE_BUFF_INDEX = VALUE_BUFF_INDEX + 1
                i = i + byte_count
             end
          end
