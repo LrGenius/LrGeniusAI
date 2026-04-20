@@ -15,13 +15,12 @@ Enhanced with multi-criteria features:
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from config import DB_PATH, logger
+from config import logger
 
 # Lazy ChromaDB globals – initialized on first use.
 _chroma_client = None

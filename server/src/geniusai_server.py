@@ -4,7 +4,6 @@ import threading
 import time
 from flask import Flask, jsonify
 from waitress import serve
-import datetime
 import json
 
 # Import modularized components

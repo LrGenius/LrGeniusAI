@@ -4,7 +4,6 @@ Handles provider selection, initialization, and orchestration.
 Uses lazy loading - providers are only initialized when needed.
 """
 from typing import Dict, List, Optional, Any
-import os
 from llm_provider_base import (
     LLMProviderBase, 
     EditGenerationRequest,
@@ -17,11 +16,10 @@ from llm_provider_lmstudio import LMStudioProvider
 from llm_provider_chatgpt import ChatGPTProvider
 from llm_provider_gemini import GeminiProvider
 from edit_recipe import filter_edit_recipe_by_controls
-from config import logger, DEFAULT_METADATA_PROVIDER, DEFAULT_METADATA_LANGUAGE, DEFAULT_KEYWORD_CATEGORIES
+from config import logger, DEFAULT_METADATA_PROVIDER, DEFAULT_METADATA_LANGUAGE
 import service_training as training_service
-from PIL import Image, ExifTags
+from PIL import Image
 import io
-from datetime import datetime
 import torch
 import torch.nn.functional as F
 from config import TORCH_DEVICE

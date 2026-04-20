@@ -6,8 +6,6 @@ import os
 import service_chroma as chroma_service
 from config import logger
 from service_index import process_image_task, get_photo_ids_needing_processing
-import service_face as face_service
-import service_persons as persons_service
 import base64
 import json
 

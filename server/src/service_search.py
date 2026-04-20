@@ -1,4 +1,3 @@
-import numpy as np
 
 import service_chroma as chroma_service
 import service_vertexai as vertexai_service

@@ -3,7 +3,7 @@ Gemini Provider for metadata generation using Google Generative AI API
 """
 import json
 import time
-from typing import Dict, Any, Union, List
+from typing import Dict, Any
 from llm_provider_base import (
     LLMProviderBase,
     EditGenerationRequest,
@@ -122,7 +122,7 @@ class GeminiProvider(LLMProviderBase):
                     config=config,
                 )
                 logger.debug("Gemini metadata response received")
-            except TimeoutError as te:
+            except TimeoutError:
                 error_msg = f"Gemini request timed out after {self.timeout}s"
                 logger.warning(error_msg)
                 return MetadataGenerationResponse(
@@ -217,11 +217,11 @@ class GeminiProvider(LLMProviderBase):
             
             # Handle DeadlineExceeded (504 errors)
             if "DeadlineExceeded" in error_type or "504" in error_str:
-                logger.warning(f"Gemini API deadline exceeded (timeout) for metadata generation")
+                logger.warning("Gemini API deadline exceeded (timeout) for metadata generation")
                 return MetadataGenerationResponse(
                     uuid=request.uuid,
                     success=False,
-                    error=f"Gemini API timeout (504 Deadline Exceeded). Try again later or use a different provider."
+                    error="Gemini API timeout (504 Deadline Exceeded). Try again later or use a different provider."
                 )
             
             # Handle rate limiting

@@ -128,7 +128,7 @@ def load_model():
                         _set_last_used()
                         logger.info("Loaded OpenCLIP model (lazy)")
                     else:
-                        logger.warning(f"Bundled model directory exists but required files missing")
+                        logger.warning("Bundled model directory exists but required files missing")
                         logger.warning(f"Config file exists: {os.path.isfile(config_file)}")
                         logger.warning(f"Weights file exists: {os.path.isfile(weights_file)}")
                         raise FileNotFoundError("Bundled model files incomplete")
@@ -274,7 +274,6 @@ def get_tokenizer():
     return tokenizer
 
 def get_db_dir():
-    from config import DB_PATH
     return os.path.dirname(DB_PATH) if DB_PATH else None
 
 def write_pid_file():

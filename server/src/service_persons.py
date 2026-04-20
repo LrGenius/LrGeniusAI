@@ -24,7 +24,6 @@ PERSON_NAMES_FILENAME = "person_names.json"
 
 
 def _person_names_path() -> Optional[str]:
-    from config import DB_PATH
     if not DB_PATH:
         return None
     return os.path.join(DB_PATH, PERSON_NAMES_FILENAME)

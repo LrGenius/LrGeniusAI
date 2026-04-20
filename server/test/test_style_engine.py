@@ -1,7 +1,6 @@
 import sys
 import os
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -10,8 +9,7 @@ from service_style_engine import (
     calculate_composite_score, 
     interpolate_recipes, 
     generate_style_edit,
-    StyleEngineResult,
-    MIN_TRAINING_EXAMPLES
+    StyleEngineResult
 )
 
 def test_calculate_composite_score():

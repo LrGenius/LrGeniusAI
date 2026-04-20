@@ -1,4 +1,3 @@
-import pytest
 
 from src.version_info import BACKEND_VERSION, BACKEND_RELEASE_TAG, BACKEND_BUILD
 

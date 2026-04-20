@@ -1,4 +1,3 @@
-import pytest
 from src.config import _deep_merge_dict, get_culling_config, BASE_CULLING_CONFIG
 
 def test_deep_merge_dict():

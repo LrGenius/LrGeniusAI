@@ -82,7 +82,7 @@ class LMStudioProvider(LLMProviderBase):
                 response_schema = self._prepare_response_structure(request)
                 
                 # Make request to LM Studio
-                logger.debug(f"Sending request to LM Studio")
+                logger.debug("Sending request to LM Studio")
 
                 chat = lms.Chat(system_prompt)
                 chat.add_user_message(user_prompt, images=[image_handle])

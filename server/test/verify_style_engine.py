@@ -1,8 +1,7 @@
 import sys
 import os
 import unittest
-from unittest.mock import MagicMock, patch
-import json
+from unittest.mock import patch
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
@@ -10,8 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "s
 from service_style_engine import (
     calculate_composite_score, 
     interpolate_recipes, 
-    generate_style_edit,
-    StyleEngineResult
+    generate_style_edit
 )
 
 class TestStyleEngineLogic(unittest.TestCase):

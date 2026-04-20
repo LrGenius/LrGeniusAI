@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 
-import numpy as np
 from flask import Blueprint, jsonify, request
 from PIL import Image
 import io
