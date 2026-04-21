@@ -734,10 +734,33 @@ LrTasks.startAsyncTask(function()
 
         log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
 
+        -- When validation is disabled, apply metadata inline as each photo's analysis returns
+        -- so keywords/title/caption land on photos progressively instead of all at the end.
+        -- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
+        local usedInlineApply = false
+        if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
+            usedInlineApply = true
+            options.onPhotoAnalyzed = function(photo, photoId, scope)
+                local response = SearchIndexAPI.getPhotoData(photoId)
+                if response and response.metadata then
+                    MetadataManager.applyMetadata(photo, response, nil, {
+                        applyKeywords = props.generateKeywords,
+                        applyTitle = props.generateTitle,
+                        applyCaption = props.generateCaption,
+                        applyAltText = props.generateAltText,
+                        useTopLevelKeyword = props.useTopLevelKeyword,
+                        topLevelKeyword = props.topLevelKeyword,
+                        appendMetadata = props.appendMetadata,
+                    })
+                    SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false)
+                end
+            end
+        end
+
         local status, processed, failed, processedPhotos, combinedError, combinedWarnings
         status, processed, failed, processedPhotos, combinedError, combinedWarnings = SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
 
-        if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog then
+        if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
             log:trace("Saving metadata for processed photos...")
             local savedCount = 0
             local skippedCount = 0

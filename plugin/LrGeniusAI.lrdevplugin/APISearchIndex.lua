@@ -1460,6 +1460,11 @@ end
 -- @param selectedPhotos table Array of LrPhoto objects to process.
 -- @param progressScope LrProgressScope Progress scope for UI updates.
 -- @param options table Processing options (tasks, provider, language, temperature, etc.).
+--                Optional options.onPhotoAnalyzed(photo, photoId, progressScope): if provided,
+--                invoked inside the worker loop immediately after each photo is successfully
+--                analyzed. Lets callers write metadata per-photo as the batch progresses
+--                instead of waiting for all photos to finish. Errors in the callback are
+--                caught with LrTasks.pcall and logged; the batch continues.
 -- @param closeProgressScope boolean|nil When false, does not call :done() on the scope (caller must close).
 -- @return string status Status: "success", "canceled", "somefailed", or "allfailed".
 -- @return number processed Number of photos processed.
@@ -1608,6 +1613,14 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                         if indexResponse and indexResponse.warnings and #indexResponse.warnings > 0 then
                             for _, w in ipairs(indexResponse.warnings) do
                                 table.insert(warningsList, w)
+                            end
+                        end
+                        if options.onPhotoAnalyzed then
+                            local okCb, cbErr = LrTasks.pcall(function()
+                                options.onPhotoAnalyzed(photo, photoId, progressScope)
+                            end)
+                            if not okCb then
+                                log:error("onPhotoAnalyzed callback failed for " .. filename .. ": " .. tostring(cbErr))
                             end
                         end
                     else
