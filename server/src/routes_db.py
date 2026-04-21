@@ -5,10 +5,10 @@ from config import logger
 import service_db
 
 
-db_bp = Blueprint('db', __name__)
+db_bp = Blueprint("db", __name__)
 
 
-@db_bp.route('/db/stats', methods=['GET'])
+@db_bp.route("/db/stats", methods=["GET"])
 def database_stats():
     """
     Return database statistics: indexed photos, faces, persons, and metadata/embedding counts.
@@ -19,7 +19,7 @@ def database_stats():
         "persons": { "total" }
     }
     """
-    catalog_id = request.args.get('catalog_id')
+    catalog_id = request.args.get("catalog_id")
     try:
         return jsonify(service_db.get_database_stats(catalog_id=catalog_id))
     except Exception as e:
@@ -27,7 +27,7 @@ def database_stats():
         return jsonify({"error": str(e)}), 500
 
 
-@db_bp.route('/db/backup', methods=['GET'])
+@db_bp.route("/db/backup", methods=["GET"])
 def backup_database():
     try:
         zip_path, backup_name = service_db.build_backup_zip()
@@ -39,7 +39,9 @@ def backup_database():
             except FileNotFoundError:
                 pass
             except Exception as e:
-                logger.warning("Could not remove temporary backup zip %s: %s", zip_path, e)
+                logger.warning(
+                    "Could not remove temporary backup zip %s: %s", zip_path, e
+                )
             return response
 
         return send_file(
@@ -54,7 +56,7 @@ def backup_database():
         return jsonify({"error": str(e)}), 500
 
 
-@db_bp.route('/db/migrate-photo-ids', methods=['POST'])
+@db_bp.route("/db/migrate-photo-ids", methods=["POST"])
 def migrate_photo_ids():
     """Migrate existing Chroma IDs from legacy uuid to new photo_id values."""
     try:

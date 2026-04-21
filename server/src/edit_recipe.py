@@ -5,6 +5,7 @@ This module defines the canonical edit contract used between the LLM backend
 and the Lightroom plugin. The schema stays provider-agnostic while the plugin
 maps canonical fields onto Lightroom-specific develop keys.
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -382,7 +383,9 @@ def _normalize_warning_list(value: Any) -> List[str]:
     return warnings
 
 
-def _normalize_crop_settings(crop: Any, warnings: List[str] | None = None) -> Dict[str, float]:
+def _normalize_crop_settings(
+    crop: Any, warnings: List[str] | None = None
+) -> Dict[str, float]:
     if not isinstance(crop, dict):
         return {}
 
@@ -423,12 +426,16 @@ def _normalize_crop_settings(crop: Any, warnings: List[str] | None = None) -> Di
     bottom = normalized_crop.get("bottom")
     if left is not None and right is not None and left >= right:
         if warnings is not None:
-            warnings.append("Ignored crop: left edge was not smaller than right edge after normalization.")
+            warnings.append(
+                "Ignored crop: left edge was not smaller than right edge after normalization."
+            )
         normalized_crop.pop("left", None)
         normalized_crop.pop("right", None)
     if top is not None and bottom is not None and top >= bottom:
         if warnings is not None:
-            warnings.append("Ignored crop: top edge was not smaller than bottom edge after normalization.")
+            warnings.append(
+                "Ignored crop: top edge was not smaller than bottom edge after normalization."
+            )
         normalized_crop.pop("top", None)
         normalized_crop.pop("bottom", None)
 
@@ -443,7 +450,9 @@ def _normalize_crop_settings(crop: Any, warnings: List[str] | None = None) -> Di
     return normalized_crop
 
 
-def _normalize_global_settings(global_settings: Any, warnings: List[str] | None = None) -> Dict[str, Any]:
+def _normalize_global_settings(
+    global_settings: Any, warnings: List[str] | None = None
+) -> Dict[str, Any]:
     if not isinstance(global_settings, dict):
         return {}
 
@@ -451,14 +460,18 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
     for field_name, bounds in GLOBAL_FIELD_RANGES.items():
         if field_name not in global_settings:
             continue
-        clamped = _clamp_number(global_settings.get(field_name), bounds["min"], bounds["max"])
+        clamped = _clamp_number(
+            global_settings.get(field_name), bounds["min"], bounds["max"]
+        )
         if clamped is not None:
             normalized[field_name] = clamped
 
     white_balance = global_settings.get("white_balance")
     if isinstance(white_balance, dict):
         if "temperature" not in normalized:
-            clamped_temp = _clamp_number(white_balance.get("temperature"), 2000.0, 50000.0)
+            clamped_temp = _clamp_number(
+                white_balance.get("temperature"), 2000.0, 50000.0
+            )
             if clamped_temp is not None:
                 normalized["temperature"] = clamped_temp
         if "tint" not in normalized:
@@ -472,7 +485,9 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
         if normalized_crop:
             normalized["crop"] = normalized_crop
         elif warnings is not None:
-            warnings.append("Ignored crop: no supported crop fields were returned by the model.")
+            warnings.append(
+                "Ignored crop: no supported crop fields were returned by the model."
+            )
 
     tone_curve = global_settings.get("tone_curve")
     if isinstance(tone_curve, dict):
@@ -490,7 +505,9 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
         if isinstance(point_curve, dict):
             normalized_point_curve: Dict[str, List[int]] = {}
             for channel in ("master", "red", "green", "blue"):
-                normalized_points = _normalize_point_curve_points(point_curve.get(channel), 0.0, 255.0)
+                normalized_points = _normalize_point_curve_points(
+                    point_curve.get(channel), 0.0, 255.0
+                )
                 if normalized_points:
                     normalized_point_curve[channel] = normalized_points
             if normalized_point_curve:
@@ -500,7 +517,9 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
         if isinstance(extended_point_curve, dict):
             normalized_extended_curve: Dict[str, List[int]] = {}
             for channel in ("master", "red", "green", "blue"):
-                normalized_points = _normalize_point_curve_points(extended_point_curve.get(channel), 0.0, 4096.0)
+                normalized_points = _normalize_point_curve_points(
+                    extended_point_curve.get(channel), 0.0, 4096.0
+                )
                 if normalized_points:
                     normalized_extended_curve[channel] = normalized_points
             if normalized_extended_curve:
@@ -534,7 +553,9 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
                 continue
             normalized_region: Dict[str, float] = {}
             for key, bounds in COLOR_GRADING_RANGES.items():
-                clamped = _clamp_number(region_data.get(key), bounds["min"], bounds["max"])
+                clamped = _clamp_number(
+                    region_data.get(key), bounds["min"], bounds["max"]
+                )
                 if clamped is not None:
                     normalized_region[key] = clamped
             if normalized_region:
@@ -543,8 +564,13 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
         global_region = color_grading.get("global")
         if isinstance(global_region, dict):
             normalized_global_region: Dict[str, float] = {}
-            for key, bounds in {"hue": {"min": 0.0, "max": 360.0}, "saturation": {"min": 0.0, "max": 100.0}}.items():
-                clamped = _clamp_number(global_region.get(key), bounds["min"], bounds["max"])
+            for key, bounds in {
+                "hue": {"min": 0.0, "max": 360.0},
+                "saturation": {"min": 0.0, "max": 100.0},
+            }.items():
+                clamped = _clamp_number(
+                    global_region.get(key), bounds["min"], bounds["max"]
+                )
                 if clamped is not None:
                     normalized_global_region[key] = clamped
             if normalized_global_region:
@@ -562,7 +588,9 @@ def _normalize_global_settings(global_settings: Any, warnings: List[str] | None 
     return normalized
 
 
-def _normalize_point_curve_points(value: Any, minimum: float, maximum: float) -> List[int]:
+def _normalize_point_curve_points(
+    value: Any, minimum: float, maximum: float
+) -> List[int]:
     if not isinstance(value, list) or len(value) < 2:
         return []
 
@@ -611,7 +639,9 @@ def _normalize_masks(masks: Any, warnings: List[str]) -> List[Dict[str, Any]]:
 
         kind = _normalize_text(mask.get("kind")).lower()
         if kind not in MASK_KINDS:
-            warnings.append(f"Ignored mask #{index + 1}: unsupported kind '{kind or 'unknown'}'.")
+            warnings.append(
+                f"Ignored mask #{index + 1}: unsupported kind '{kind or 'unknown'}'."
+            )
             continue
 
         raw_adjustments = mask.get("adjustments")
@@ -623,12 +653,16 @@ def _normalize_masks(masks: Any, warnings: List[str]) -> List[Dict[str, Any]]:
         for field_name, bounds in MASK_ADJUSTMENT_RANGES.items():
             if field_name not in raw_adjustments:
                 continue
-            clamped = _clamp_number(raw_adjustments.get(field_name), bounds["min"], bounds["max"])
+            clamped = _clamp_number(
+                raw_adjustments.get(field_name), bounds["min"], bounds["max"]
+            )
             if clamped is not None:
                 normalized_adjustments[field_name] = clamped
 
         if not normalized_adjustments:
-            warnings.append(f"Ignored mask '{kind}': no supported adjustments were returned.")
+            warnings.append(
+                f"Ignored mask '{kind}': no supported adjustments were returned."
+            )
             continue
 
         normalized_mask = {
@@ -668,7 +702,9 @@ def normalize_edit_recipe(parsed_data: Any) -> Dict[str, Any]:
     return normalized
 
 
-def filter_edit_recipe_by_controls(recipe: Dict[str, Any], controls: Dict[str, bool]) -> Dict[str, Any]:
+def filter_edit_recipe_by_controls(
+    recipe: Dict[str, Any], controls: Dict[str, bool]
+) -> Dict[str, Any]:
     if not isinstance(recipe, dict):
         return recipe
 
@@ -744,7 +780,14 @@ def filter_edit_recipe_by_controls(recipe: Dict[str, Any], controls: Dict[str, b
         if not controls.get("adjust_white_balance", True):
             allowed_mask_adjustments -= {"temperature", "tint"}
         if not controls.get("adjust_basic_tone", True):
-            allowed_mask_adjustments -= {"exposure", "contrast", "highlights", "shadows", "whites", "blacks"}
+            allowed_mask_adjustments -= {
+                "exposure",
+                "contrast",
+                "highlights",
+                "shadows",
+                "whites",
+                "blacks",
+            }
         if not controls.get("adjust_presence", True):
             allowed_mask_adjustments -= {"texture", "clarity", "dehaze"}
         if not controls.get("adjust_color_mix", True):
@@ -759,7 +802,9 @@ def filter_edit_recipe_by_controls(recipe: Dict[str, Any], controls: Dict[str, b
             adjustments = mask.get("adjustments")
             if not isinstance(adjustments, dict):
                 continue
-            kept_adjustments = {k: v for k, v in adjustments.items() if k in allowed_mask_adjustments}
+            kept_adjustments = {
+                k: v for k, v in adjustments.items() if k in allowed_mask_adjustments
+            }
             if not kept_adjustments:
                 continue
             next_mask = deepcopy(mask)

@@ -11,7 +11,9 @@ class _HFTokenizerWrapper:
     def __init__(self, inner):
         self._inner = inner
 
-    def __call__(self, texts: Union[str, List[str]], context_length: Optional[int] = None) -> torch.Tensor:
+    def __call__(
+        self, texts: Union[str, List[str]], context_length: Optional[int] = None
+    ) -> torch.Tensor:
         if isinstance(texts, str):
             texts = [texts]
         ctx = context_length or self._inner.context_length
@@ -29,9 +31,10 @@ class _HFTokenizerWrapper:
             truncation=True,
         )
         input_ids = encoded.input_ids
-        if getattr(self._inner, "strip_sep_token", False) and getattr(
-            self._inner.tokenizer, "sep_token_id", None
-        ) is not None:
+        if (
+            getattr(self._inner, "strip_sep_token", False)
+            and getattr(self._inner.tokenizer, "sep_token_id", None) is not None
+        ):
             input_ids = torch.where(
                 input_ids == self._inner.tokenizer.sep_token_id,
                 torch.zeros_like(input_ids),
@@ -77,7 +80,10 @@ def wrap_tokenizer(tok):
         return None
     try:
         from open_clip.tokenizer import HFTokenizer
-        if isinstance(tok, HFTokenizer) and not hasattr(tok.tokenizer, "batch_encode_plus"):
+
+        if isinstance(tok, HFTokenizer) and not hasattr(
+            tok.tokenizer, "batch_encode_plus"
+        ):
             return _HFTokenizerWrapper(tok)
     except Exception:
         pass

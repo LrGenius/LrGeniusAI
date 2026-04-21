@@ -11,7 +11,11 @@ def get_backend_version_info() -> dict:
     }
 
 
-def check_plugin_backend_version(plugin_version: str | None, plugin_build: int | None = None, plugin_release_tag: str | None = None) -> dict:
+def check_plugin_backend_version(
+    plugin_version: str | None,
+    plugin_build: int | None = None,
+    plugin_release_tag: str | None = None,
+) -> dict:
     backend = get_backend_version_info()
     normalized_backend = _normalize_version(backend["backend_version"])
     normalized_plugin = _normalize_version(plugin_version)
@@ -29,7 +33,9 @@ def check_plugin_backend_version(plugin_version: str | None, plugin_build: int |
     # Dev fallback:
     # Local development uses placeholder versions in Info.lua and backend defaults.
     # Allow this combination so development setups are not blocked.
-    if _is_dev_backend(backend["backend_version"], backend["backend_release_tag"]) and _is_default_dev_plugin(normalized_plugin):
+    if _is_dev_backend(
+        backend["backend_version"], backend["backend_release_tag"]
+    ) and _is_default_dev_plugin(normalized_plugin):
         return {
             **backend,
             "plugin_version": plugin_version,
@@ -40,7 +46,9 @@ def check_plugin_backend_version(plugin_version: str | None, plugin_build: int |
         }
 
     compatible = normalized_plugin == normalized_backend
-    reason = "exact version match" if compatible else "plugin and backend version differ"
+    reason = (
+        "exact version match" if compatible else "plugin and backend version differ"
+    )
 
     return {
         **backend,

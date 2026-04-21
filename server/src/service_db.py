@@ -9,13 +9,14 @@ import tempfile
 import zipfile
 from datetime import datetime
 
+
 # Ordner für serverseitig aufgehobene Backups: Docker /data/db/backups, Standalone <db-path>/backups
 def _get_backups_dir():
     from config import DB_PATH
+
     if not DB_PATH:
         return None
     return os.path.join(DB_PATH, "backups")
-
 
 
 def get_database_stats(catalog_id=None) -> dict:
@@ -44,18 +45,26 @@ def get_database_stats(catalog_id=None) -> dict:
 def build_backup_zip() -> tuple[str, str]:
     """Create a temporary ZIP containing all persistent DB files."""
     if not DB_PATH or not os.path.isdir(DB_PATH):
-        raise FileNotFoundError(f"Database path does not exist or is not a directory: {DB_PATH}")
+        raise FileNotFoundError(
+            f"Database path does not exist or is not a directory: {DB_PATH}"
+        )
 
-    backup_name = f"lrgeniusai-backend-backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    backup_name = (
+        f"lrgeniusai-backend-backup-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    )
     fd, zip_path = tempfile.mkstemp(prefix="lrgeniusai-backup-", suffix=".zip")
     os.close(fd)
 
     root_parent = os.path.dirname(DB_PATH)
     included_files = 0
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    with zipfile.ZipFile(
+        zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+    ) as archive:
         for current_root, dirs, files in os.walk(DB_PATH):
             # Do not include the backups directory in the backup (avoid self-embedding and runaway size)
-            dirs[:] = [d for d in dirs if not (current_root == DB_PATH and d == "backups")]
+            dirs[:] = [
+                d for d in dirs if not (current_root == DB_PATH and d == "backups")
+            ]
             files.sort()
             for filename in files:
                 full_path = os.path.join(current_root, filename)
@@ -65,7 +74,12 @@ def build_backup_zip() -> tuple[str, str]:
                 archive.write(full_path, arcname=archive_name)
                 included_files += 1
 
-    logger.info("Created DB backup zip at %s with %s files from %s", zip_path, included_files, DB_PATH)
+    logger.info(
+        "Created DB backup zip at %s with %s files from %s",
+        zip_path,
+        included_files,
+        DB_PATH,
+    )
 
     # Kopie serverseitig aufbewahren (Docker: /data/db/backups, Standalone: <db-path>/backups)
     backups_dir = _get_backups_dir()
@@ -125,7 +139,12 @@ def prune_old_backups(max_keep: int = 10) -> int:
         except Exception as e:
             logger.warning("Could not remove old backup %s: %s", path, e)
     if deleted > 0:
-        logger.info("Pruned %s old backups in %s, kept %s newest.", deleted, backups_dir, max_keep)
+        logger.info(
+            "Pruned %s old backups in %s, kept %s newest.",
+            deleted,
+            backups_dir,
+            max_keep,
+        )
     return deleted
 
 

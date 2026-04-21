@@ -3,6 +3,7 @@ Google Vertex AI Multimodal Embeddings for images and text.
 Used optionally in parallel to SigLIP2 embeddings; stored in a separate ChromaDB collection.
 Config: vertex_project_id and vertex_location from Lightroom plugin or env vars.
 """
+
 import base64
 import os
 from typing import List, Optional
@@ -29,8 +30,14 @@ def _detect_mime_type(image_bytes: bytes) -> str:
 
 def _resolve_config(vertex_project_id=None, vertex_location=None):
     """Resolve project and location from options or environment."""
-    project = (vertex_project_id or "").strip() or os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEX_PROJECT_ID")
-    location = (vertex_location or "").strip() or os.environ.get("VERTEX_LOCATION", "us-central1")
+    project = (
+        (vertex_project_id or "").strip()
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("VERTEX_PROJECT_ID")
+    )
+    location = (vertex_location or "").strip() or os.environ.get(
+        "VERTEX_LOCATION", "us-central1"
+    )
     return project, location
 
 
@@ -41,7 +48,9 @@ def _get_vertex_client_and_endpoint(vertex_project_id=None, vertex_location=None
     if not project and _last_vertex_config:
         project, location = _last_vertex_config
     if not project:
-        logger.warning("Vertex AI: Project ID not set (plugin preferences or GOOGLE_CLOUD_PROJECT); Vertex embeddings disabled.")
+        logger.warning(
+            "Vertex AI: Project ID not set (plugin preferences or GOOGLE_CLOUD_PROJECT); Vertex embeddings disabled."
+        )
         return None
     key = (project, location)
     if key in _vertex_client_cache:
@@ -95,7 +104,9 @@ def _to_plain_python(value):
             if kind == "bool_value":
                 return bool(value.bool_value)
             if kind == "struct_value":
-                return {k: _to_plain_python(v) for k, v in value.struct_value.fields.items()}
+                return {
+                    k: _to_plain_python(v) for k, v in value.struct_value.fields.items()
+                }
             if kind == "list_value":
                 return [_to_plain_python(v) for v in value.list_value.values]
         except Exception:
@@ -105,6 +116,7 @@ def _to_plain_python(value):
     if hasattr(value, "DESCRIPTOR"):
         try:
             from google.protobuf import json_format
+
             return json_format.MessageToDict(value)
         except Exception:
             pass
@@ -140,15 +152,21 @@ def _extract_embedding(prediction_value, field_name: str) -> Optional[List[float
 
 def is_available(vertex_project_id=None, vertex_location=None) -> bool:
     """Return True if Vertex AI embeddings can be used (project configured and model loadable)."""
-    return _get_vertex_client_and_endpoint(vertex_project_id, vertex_location) is not None
+    return (
+        _get_vertex_client_and_endpoint(vertex_project_id, vertex_location) is not None
+    )
 
 
-def get_image_embeddings(image_bytes_list: List[bytes], vertex_project_id=None, vertex_location=None) -> List[Optional[List[float]]]:
+def get_image_embeddings(
+    image_bytes_list: List[bytes], vertex_project_id=None, vertex_location=None
+) -> List[Optional[List[float]]]:
     """
     Generate Vertex AI image embeddings for a list of images.
     One request per image (API limit). Returns one embedding per input; None on failure.
     """
-    client_and_endpoint = _get_vertex_client_and_endpoint(vertex_project_id, vertex_location)
+    client_and_endpoint = _get_vertex_client_and_endpoint(
+        vertex_project_id, vertex_location
+    )
     if client_and_endpoint is None:
         return [None] * len(image_bytes_list)
     client, endpoint = client_and_endpoint
@@ -162,19 +180,31 @@ def get_image_embeddings(image_bytes_list: List[bytes], vertex_project_id=None, 
                 "mimeType": _detect_mime_type(img_bytes),
             }
             instance = struct_pb2.Value(
-                struct_value=struct_pb2.Struct(fields={
-                    "image": struct_pb2.Value(
-                        struct_value=struct_pb2.Struct(fields={
-                            "bytesBase64Encoded": struct_pb2.Value(string_value=image_obj["bytesBase64Encoded"]),
-                            "mimeType": struct_pb2.Value(string_value=image_obj["mimeType"]),
-                        })
-                    )
-                })
+                struct_value=struct_pb2.Struct(
+                    fields={
+                        "image": struct_pb2.Value(
+                            struct_value=struct_pb2.Struct(
+                                fields={
+                                    "bytesBase64Encoded": struct_pb2.Value(
+                                        string_value=image_obj["bytesBase64Encoded"]
+                                    ),
+                                    "mimeType": struct_pb2.Value(
+                                        string_value=image_obj["mimeType"]
+                                    ),
+                                }
+                            )
+                        )
+                    }
+                )
             )
             parameters = struct_pb2.Value(
-                struct_value=struct_pb2.Struct(fields={
-                    "dimension": struct_pb2.Value(number_value=float(VERTEX_EMBEDDING_DIM))
-                })
+                struct_value=struct_pb2.Struct(
+                    fields={
+                        "dimension": struct_pb2.Value(
+                            number_value=float(VERTEX_EMBEDDING_DIM)
+                        )
+                    }
+                )
             )
 
             response = client.predict(
@@ -183,13 +213,16 @@ def get_image_embeddings(image_bytes_list: List[bytes], vertex_project_id=None, 
                 parameters=parameters,
             )
             if response.predictions:
-                image_embedding = _extract_embedding(response.predictions[0], "imageEmbedding")
+                image_embedding = _extract_embedding(
+                    response.predictions[0], "imageEmbedding"
+                )
             else:
                 image_embedding = None
 
             if image_embedding:
                 # Normalize for cosine similarity (Chroma uses L2 distance)
                 import numpy as np
+
                 vec = np.array(image_embedding, dtype=np.float32)
                 norm = np.linalg.norm(vec)
                 if norm > 1e-6:
@@ -198,31 +231,42 @@ def get_image_embeddings(image_bytes_list: List[bytes], vertex_project_id=None, 
             else:
                 results.append(None)
         except Exception as e:
-            logger.warning("Vertex embedding failed for image %s: %s", i, e, exc_info=True)
+            logger.warning(
+                "Vertex embedding failed for image %s: %s", i, e, exc_info=True
+            )
             results.append(None)
     return results
 
 
-def get_text_embedding(text: str, vertex_project_id=None, vertex_location=None) -> Optional[List[float]]:
+def get_text_embedding(
+    text: str, vertex_project_id=None, vertex_location=None
+) -> Optional[List[float]]:
     """
     Generate Vertex AI text embedding for a search query.
     Used when searching with the Vertex collection.
     """
-    client_and_endpoint = _get_vertex_client_and_endpoint(vertex_project_id, vertex_location)
+    client_and_endpoint = _get_vertex_client_and_endpoint(
+        vertex_project_id, vertex_location
+    )
     if client_and_endpoint is None or not text or not text.strip():
         return None
     client, endpoint = client_and_endpoint
     from google.protobuf import struct_pb2
+
     try:
         instance = struct_pb2.Value(
-            struct_value=struct_pb2.Struct(fields={
-                "text": struct_pb2.Value(string_value=text.strip())
-            })
+            struct_value=struct_pb2.Struct(
+                fields={"text": struct_pb2.Value(string_value=text.strip())}
+            )
         )
         parameters = struct_pb2.Value(
-            struct_value=struct_pb2.Struct(fields={
-                "dimension": struct_pb2.Value(number_value=float(VERTEX_EMBEDDING_DIM))
-            })
+            struct_value=struct_pb2.Struct(
+                fields={
+                    "dimension": struct_pb2.Value(
+                        number_value=float(VERTEX_EMBEDDING_DIM)
+                    )
+                }
+            )
         )
         response = client.predict(
             endpoint=endpoint,
@@ -230,11 +274,14 @@ def get_text_embedding(text: str, vertex_project_id=None, vertex_location=None) 
             parameters=parameters,
         )
         if response.predictions:
-            text_embedding = _extract_embedding(response.predictions[0], "textEmbedding")
+            text_embedding = _extract_embedding(
+                response.predictions[0], "textEmbedding"
+            )
         else:
             text_embedding = None
         if text_embedding:
             import numpy as np
+
             vec = np.array(text_embedding, dtype=np.float32)
             norm = np.linalg.norm(vec)
             if norm > 1e-6:

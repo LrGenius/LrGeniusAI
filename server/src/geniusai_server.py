@@ -63,7 +63,9 @@ def _start_faces_cluster_scheduler() -> None:
       GENIUSAI_FACES_CLUSTER_LINKAGE    ("complete" | "average"; default: "complete")
     """
     if not _bool_env("GENIUSAI_FACES_CLUSTER_ENABLED", default=False):
-        logger.info("Faces cluster scheduler disabled (GENIUSAI_FACES_CLUSTER_ENABLED not set).")
+        logger.info(
+            "Faces cluster scheduler disabled (GENIUSAI_FACES_CLUSTER_ENABLED not set)."
+        )
         return
 
     try:
@@ -84,7 +86,11 @@ def _start_faces_cluster_scheduler() -> None:
         except ValueError:
             min_faces = None
 
-    linkage = (os.environ.get("GENIUSAI_FACES_CLUSTER_LINKAGE", "complete") or "complete").strip().lower()
+    linkage = (
+        (os.environ.get("GENIUSAI_FACES_CLUSTER_LINKAGE", "complete") or "complete")
+        .strip()
+        .lower()
+    )
     if linkage not in ("complete", "average"):
         linkage = "complete"
 
@@ -147,12 +153,16 @@ def _start_housekeeping_scheduler() -> None:
         while True:
             try:
                 zip_path, backup_name = service_db.build_backup_zip()
-                logger.info("Periodic DB backup created: %s (%s)", backup_name, zip_path)
+                logger.info(
+                    "Periodic DB backup created: %s (%s)", backup_name, zip_path
+                )
                 service_db.prune_old_backups(max_keep=max_keep)
                 try:
                     os.remove(zip_path)
                 except OSError as e:
-                    logger.warning("Could not remove temporary backup zip %s: %s", zip_path, e)
+                    logger.warning(
+                        "Could not remove temporary backup zip %s: %s", zip_path, e
+                    )
             except Exception as e:
                 logger.error("Periodic DB backup failed: %s", e, exc_info=True)
             time.sleep(interval)
@@ -160,25 +170,35 @@ def _start_housekeeping_scheduler() -> None:
     t = threading.Thread(target=_loop, name="db-backup-scheduler", daemon=True)
     t.start()
 
+
 @app.errorhandler(500)
 def handle_internal_server_error(e):
     logger.error(f"Internal Server Error: {e}")
     return jsonify({"error": "Internal Server Error"}), 500
 
+
 if __name__ == "__main__":
     version_info = get_backend_version_info()
     logger.info("=" * 60)
-    logger.info("LrGenius Server version %s (build %s)", version_info.get("backend_version", "?"), version_info.get("backend_build", "?"))
+    logger.info(
+        "LrGenius Server version %s (build %s)",
+        version_info.get("backend_version", "?"),
+        version_info.get("backend_build", "?"),
+    )
     logger.info("LrGenius Server starting...")
     logger.info(f"Python: {sys.version.split()[0]}")
     logger.info(f"Database Path: {DB_PATH or 'Idle (waiting for plugin initialize)'}")
     logger.info("=" * 60)
-    
+
     # Optional one-shot ID migration for deployed databases.
     # Set GENIUSAI_MIGRATION_FILE to a JSON list/object with mappings.
     migration_file = os.environ.get("GENIUSAI_MIGRATION_FILE", "").strip()
     if migration_file and DB_PATH:
-        migration_path = migration_file if os.path.isabs(migration_file) else os.path.join(DB_PATH, migration_file)
+        migration_path = (
+            migration_file
+            if os.path.isabs(migration_file)
+            else os.path.join(DB_PATH, migration_file)
+        )
         try:
             with open(migration_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
@@ -190,19 +210,21 @@ if __name__ == "__main__":
 
     # Mark server as ready for startup scripts
     server_lifecycle.write_ok_file()
-    
+
     # Write PID for lifecycle management
     server_lifecycle.write_pid_file()
 
     # Start optional background schedulers (housekeeping, clustering)
     _start_housekeeping_scheduler()
     _start_faces_cluster_scheduler()
-    
+
     host = os.environ.get("GENIUSAI_HOST", "127.0.0.1")
     port = int(os.environ.get("GENIUSAI_PORT", "19819"))
     try:
         if args.debug:
-            logger.info(f"Starting Flask development server in debug mode on http://{host}:{port}")
+            logger.info(
+                f"Starting Flask development server in debug mode on http://{host}:{port}"
+            )
             app.run(debug=True, host=host, port=port)
         else:
             logger.info(f"Starting production server on http://{host}:{port}")

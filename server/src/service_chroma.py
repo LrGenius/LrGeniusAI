@@ -11,9 +11,12 @@ collection = None
 face_collection = None
 vertex_collection = None
 
+
 class DatabaseNotReadyError(Exception):
     """Raised when a database modification is attempted but the DB_PATH is not yet set."""
+
     pass
+
 
 # InsightFace embeddings are 512-dimensional
 FACE_EMBEDDING_DIM = 512
@@ -128,15 +131,18 @@ def _ensure_initialized():
     global chroma_client, collection, face_collection, vertex_collection
     if chroma_client is not None:
         return
-    
+
     import config
+
     if not config.DB_PATH:
         logger.debug("ChromaDB initialization skipped: DB_PATH not set yet.")
         return
 
     logger.info(f"Initializing ChromaDB client at {config.DB_PATH} (lazy)...")
-    chroma_client = chromadb.PersistentClient(path=config.DB_PATH, settings=Settings(anonymized_telemetry=False))
-    
+    chroma_client = chromadb.PersistentClient(
+        path=config.DB_PATH, settings=Settings(anonymized_telemetry=False)
+    )
+
     # Initialize image_embeddings collection
     try:
         collection = chroma_client.get_collection(name="image_embeddings")
@@ -158,7 +164,9 @@ def _ensure_initialized():
         vertex_collection = chroma_client.get_collection(name="image_embeddings_vertex")
         logger.info("Loaded existing ChromaDB image_embeddings_vertex collection.")
     except Exception:
-        vertex_collection = chroma_client.create_collection(name="image_embeddings_vertex")
+        vertex_collection = chroma_client.create_collection(
+            name="image_embeddings_vertex"
+        )
         logger.info("Created new ChromaDB image_embeddings_vertex collection.")
 
 
@@ -183,6 +191,7 @@ def unload_collections():
     face_collection = None
     vertex_collection = None
     import gc
+
     gc.collect()
     logger.info("Unloaded ChromaDB collections.")
 
@@ -193,7 +202,7 @@ def add_image(photo_id, embedding, metadata, *, legacy_uuid=None, catalog_id=Non
     embedding may be None for metadata-only records; in that case we add
     a dummy zero vector with the expected dimensionality (1152) to satisfy
     ChromaDB's requirements while still allowing metadata-only storage.
-    
+
     Note: Metadata-only entries are marked with has_embedding=False in their
     metadata and are filtered out of semantic search results in service_search.py.
     They can still be found via metadata keyword searches.
@@ -202,7 +211,9 @@ def add_image(photo_id, embedding, metadata, *, legacy_uuid=None, catalog_id=Non
     """
     _ensure_initialized()
     if collection is None:
-        raise DatabaseNotReadyError("Cannot add image: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot add image: database not initialized (DB_PATH missing)."
+        )
     photo_id = _normalize_photo_id(photo_id, legacy_uuid)
     if not photo_id:
         raise ValueError("photo_id is required")
@@ -214,19 +225,28 @@ def add_image(photo_id, embedding, metadata, *, legacy_uuid=None, catalog_id=Non
             # Add metadata-only record with a dummy zero embedding
             # The collection expects 1152-dimensional embeddings (from vision model)
             dummy_embedding = np.zeros(1152, dtype=np.float32).tolist()
-            collection.add(embeddings=[dummy_embedding], metadatas=[metadata], ids=[photo_id])
+            collection.add(
+                embeddings=[dummy_embedding], metadatas=[metadata], ids=[photo_id]
+            )
         else:
             collection.add(embeddings=[embedding], metadatas=[metadata], ids=[photo_id])
     except Exception as e:
         # Surface a helpful log message and re-raise so callers can decide what to do.
-        logger.error(f"Failed to add image {photo_id} to ChromaDB (embedding provided: {embedding is not None}): {e}", exc_info=True)
+        logger.error(
+            f"Failed to add image {photo_id} to ChromaDB (embedding provided: {embedding is not None}): {e}",
+            exc_info=True,
+        )
         raise
 
 
-def update_image(photo_id, metadata, embedding=None, *, legacy_uuid=None, catalog_id=None):
+def update_image(
+    photo_id, metadata, embedding=None, *, legacy_uuid=None, catalog_id=None
+):
     _ensure_initialized()
     if collection is None:
-        raise DatabaseNotReadyError("Cannot update image: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot update image: database not initialized (DB_PATH missing)."
+        )
     photo_id = _normalize_photo_id(photo_id, legacy_uuid)
     if not photo_id:
         raise ValueError("photo_id is required")
@@ -270,11 +290,24 @@ def delete_image(photo_id, *, legacy_uuid=None):
 
 
 # Keys that hold AI-generated metadata; cleared by clear_image_metadata so the photo stays indexed.
-AI_METADATA_KEYS = frozenset({
-    "title", "caption", "keywords", "alt_text",
-    "model", "run_date", "tokens_used", "flattened_keywords",
-    "edit_recipe", "edit_summary", "edit_warnings", "edit_model", "edit_provider", "edit_run_date",
-})
+AI_METADATA_KEYS = frozenset(
+    {
+        "title",
+        "caption",
+        "keywords",
+        "alt_text",
+        "model",
+        "run_date",
+        "tokens_used",
+        "flattened_keywords",
+        "edit_recipe",
+        "edit_summary",
+        "edit_warnings",
+        "edit_model",
+        "edit_provider",
+        "edit_run_date",
+    }
+)
 
 
 def clear_image_metadata(photo_id, *, legacy_uuid=None):
@@ -293,7 +326,9 @@ def clear_image_metadata(photo_id, *, legacy_uuid=None):
     # Main collection: get current, strip AI fields, update (keep embedding)
     data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
     if not data or not data.get("ids"):
-        logger.debug("clear_image_metadata: photo_id %s not in main collection", photo_id)
+        logger.debug(
+            "clear_image_metadata: photo_id %s not in main collection", photo_id
+        )
         return False
     meta = dict(data["metadatas"][0]) if data.get("metadatas") else {}
     embedding = _first_result_item(data.get("embeddings"))
@@ -306,7 +341,9 @@ def clear_image_metadata(photo_id, *, legacy_uuid=None):
         collection.update(ids=[photo_id], metadatas=[meta])
     # Vertex collection: same if present
     try:
-        vdata = vertex_collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+        vdata = vertex_collection.get(
+            ids=[photo_id], include=["metadatas", "embeddings"]
+        )
         if vdata and vdata.get("ids"):
             vmeta = dict(vdata["metadatas"][0]) if vdata.get("metadatas") else {}
             vemb = _first_result_item(vdata.get("embeddings"))
@@ -314,7 +351,9 @@ def clear_image_metadata(photo_id, *, legacy_uuid=None):
                 vmeta.pop(key, None)
             vmeta = _ensure_photo_metadata(photo_id, vmeta, legacy_uuid=legacy_uuid)
             if vemb is not None:
-                vertex_collection.update(ids=[photo_id], metadatas=[vmeta], embeddings=[vemb])
+                vertex_collection.update(
+                    ids=[photo_id], metadatas=[vmeta], embeddings=[vemb]
+                )
             else:
                 vertex_collection.update(ids=[photo_id], metadatas=[vmeta])
     except Exception as e:
@@ -324,11 +363,14 @@ def clear_image_metadata(photo_id, *, legacy_uuid=None):
 
 # --- Vertex AI image embeddings collection API ---
 
+
 def add_vertex_image(photo_id, embedding, metadata=None, *, legacy_uuid=None):
     """Add or overwrite Vertex AI embedding for an image."""
     _ensure_initialized()
     if vertex_collection is None:
-        raise DatabaseNotReadyError("Cannot add vertex image: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot add vertex image: database not initialized (DB_PATH missing)."
+        )
     photo_id = _normalize_photo_id(photo_id, legacy_uuid)
     if not photo_id:
         raise ValueError("photo_id is required")
@@ -337,23 +379,31 @@ def add_vertex_image(photo_id, embedding, metadata=None, *, legacy_uuid=None):
     metadata = _ensure_photo_metadata(photo_id, metadata, legacy_uuid=legacy_uuid)
     existing = vertex_collection.get(ids=[photo_id], include=[])
     if existing and existing.get("ids"):
-        vertex_collection.update(ids=[photo_id], embeddings=[embedding], metadatas=[metadata])
+        vertex_collection.update(
+            ids=[photo_id], embeddings=[embedding], metadatas=[metadata]
+        )
     else:
-        vertex_collection.add(ids=[photo_id], embeddings=[embedding], metadatas=[metadata])
+        vertex_collection.add(
+            ids=[photo_id], embeddings=[embedding], metadatas=[metadata]
+        )
 
 
 def update_vertex_image(photo_id, embedding=None, metadata=None, *, legacy_uuid=None):
     """Update Vertex AI embedding and/or metadata for an existing document."""
     _ensure_initialized()
     if vertex_collection is None:
-        raise DatabaseNotReadyError("Cannot update vertex image: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot update vertex image: database not initialized (DB_PATH missing)."
+        )
     photo_id = _normalize_photo_id(photo_id, legacy_uuid)
     if not photo_id:
         raise ValueError("photo_id is required")
     if metadata is not None:
         metadata = _ensure_photo_metadata(photo_id, metadata, legacy_uuid=legacy_uuid)
     if embedding is not None and metadata is not None:
-        vertex_collection.update(ids=[photo_id], embeddings=[embedding], metadatas=[metadata])
+        vertex_collection.update(
+            ids=[photo_id], embeddings=[embedding], metadatas=[metadata]
+        )
     elif embedding is not None:
         vertex_collection.update(ids=[photo_id], embeddings=[embedding])
     elif metadata is not None:
@@ -368,7 +418,7 @@ def get_vertex_image(photo_id, *, legacy_uuid=None):
     photo_id = _normalize_photo_id(photo_id, legacy_uuid)
     if not photo_id:
         return {"ids": [], "metadatas": [], "embeddings": []}
-    return vertex_collection.get(ids=[photo_id], include=['metadatas', 'embeddings'])
+    return vertex_collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
 
 
 def delete_vertex_image(photo_id, *, legacy_uuid=None):
@@ -415,7 +465,12 @@ def query_vertex_images(query_embedding, n_results, where_clause=None, catalog_i
             n_results=min(n_fetch, STATS_GET_LIMIT),
             include=["metadatas", "distances"],
         )
-        if not catalog_id or not result or not result.get("ids") or not result["ids"][0]:
+        if (
+            not catalog_id
+            or not result
+            or not result.get("ids")
+            or not result["ids"][0]
+        ):
             return result
         allowed = set(get_all_image_ids(catalog_id=catalog_id))
         ids0 = result["ids"][0]
@@ -452,7 +507,12 @@ def query_images(query_embedding, n_results, where_clause=None, catalog_id=None)
             n_results=min(n_fetch, STATS_GET_LIMIT),
             include=["metadatas", "distances"],
         )
-        if not catalog_id or not result or not result.get("ids") or not result["ids"][0]:
+        if (
+            not catalog_id
+            or not result
+            or not result.get("ids")
+            or not result["ids"][0]
+        ):
             return result
         catalog_id_str = str(catalog_id).strip()
         keep = []
@@ -472,6 +532,7 @@ def query_images(query_embedding, n_results, where_clause=None, catalog_id=None)
     except Exception as e:
         logger.error(f"Error querying images: {e}", exc_info=True)
         return {"ids": [[]], "distances": [[]], "metadatas": [[]]}
+
 
 def get_image_count():
     """Return total number of indexed images (photos) in the collection."""
@@ -598,18 +659,29 @@ def sync_claim(catalog_id, photo_ids):
                 if emb is not None:
                     update_ids.append(pid)
                     update_metadatas.append(meta)
-                    update_embeddings.append(emb if not isinstance(emb, np.ndarray) else emb.tolist())
+                    update_embeddings.append(
+                        emb if not isinstance(emb, np.ndarray) else emb.tolist()
+                    )
                 else:
                     no_emb_ids.append(pid)
                     no_emb_metadatas.append(meta)
             if update_ids:
-                collection.update(ids=update_ids, metadatas=update_metadatas, embeddings=update_embeddings)
+                collection.update(
+                    ids=update_ids,
+                    metadatas=update_metadatas,
+                    embeddings=update_embeddings,
+                )
                 claimed += len(update_ids)
             if no_emb_ids:
                 collection.update(ids=no_emb_ids, metadatas=no_emb_metadatas)
                 claimed += len(no_emb_ids)
         except Exception as e:
-            logger.warning("sync_claim batch failed for chunk %s..%s: %s", start, start + len(chunk), e)
+            logger.warning(
+                "sync_claim batch failed for chunk %s..%s: %s",
+                start,
+                start + len(chunk),
+                e,
+            )
             errors += len(chunk)
     return {"claimed": claimed, "errors": errors}
 
@@ -647,7 +719,7 @@ def sync_cleanup(catalog_id, active_photo_ids):
 
 def get_all_image_ids(has_embedding=None, catalog_id=None):
     """Get all image IDs, optionally filtered by embedding status and/or catalog_id.
-    
+
     Args:
         has_embedding: If True, only return IDs with real embeddings.
                       If False, only return IDs with dummy embeddings.
@@ -728,7 +800,9 @@ def _phash_hamming_distance(left_hash, right_hash):
     return int((left_hash ^ right_hash).bit_count())
 
 
-def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, culling_config=None):
+def _derive_grouping_thresholds(
+    phash_threshold, clip_threshold, time_delta, culling_config=None
+):
     culling_config = culling_config or CULLING_CONFIG
     try:
         time_window_seconds = max(0, int(time_delta))
@@ -747,19 +821,28 @@ def _derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, cul
         phash_hamming_threshold = int(culling_config["grouping"]["phash_hamming_auto"])
     else:
         try:
-            phash_hamming_threshold = int(max(0.0, min(float(phash_threshold), culling_config["grouping"]["phash_max"])))
+            phash_hamming_threshold = int(
+                max(
+                    0.0,
+                    min(
+                        float(phash_threshold), culling_config["grouping"]["phash_max"]
+                    ),
+                )
+            )
         except (TypeError, ValueError):
-            phash_hamming_threshold = int(culling_config["grouping"]["phash_hamming_auto"])
+            phash_hamming_threshold = int(
+                culling_config["grouping"]["phash_hamming_auto"]
+            )
 
     phash_max = culling_config["grouping"]["phash_max"]
     normalized = max(0.0, min(float(phash_hamming_threshold), phash_max)) / phash_max
-    duplicate_distance_threshold = (
-        culling_config["grouping"]["duplicate_distance_min"]
-        + (normalized * culling_config["grouping"]["duplicate_distance_span"])
-    )
+    duplicate_distance_threshold = culling_config["grouping"][
+        "duplicate_distance_min"
+    ] + (normalized * culling_config["grouping"]["duplicate_distance_span"])
 
     duplicate_time_window_seconds = max(
-        time_window_seconds * culling_config["grouping"]["duplicate_time_window_multiplier"],
+        time_window_seconds
+        * culling_config["grouping"]["duplicate_time_window_multiplier"],
         culling_config["grouping"]["duplicate_time_window_min_seconds"],
     )
     return (
@@ -821,7 +904,10 @@ def _rank_group_records(component_records, group_type, culling_config=None):
         technical_score = _extract_culling_metric(
             metadata,
             "cull_technical_score",
-            (0.5 * sharpness) + (0.3 * exposure) + (0.1 * (1.0 - noise_penalty)) + (0.1 * (1.0 - clipping_penalty)),
+            (0.5 * sharpness)
+            + (0.3 * exposure)
+            + (0.1 * (1.0 - noise_penalty))
+            + (0.1 * (1.0 - clipping_penalty)),
         )
         aesthetic_score = _extract_culling_metric(metadata, "cull_aesthetic", 0.0)
         face_count = int(_safe_float((metadata or {}).get("cull_face_count"), 0) or 0)
@@ -835,64 +921,82 @@ def _rank_group_records(component_records, group_type, culling_config=None):
             "cull_face_score",
             (
                 (
-                    culling_config["face_metrics"]["score_weight_sharpness"] * face_sharpness
-                    + culling_config["face_metrics"]["score_weight_prominence"] * face_prominence
-                    + culling_config["face_metrics"]["score_weight_visibility"] * face_visibility
-                    + culling_config["face_metrics"]["score_weight_eye_openness"] * eye_openness
-                    + culling_config["face_metrics"]["score_weight_occlusion"] * (1.0 - occlusion_penalty)
-                ) / max(
+                    culling_config["face_metrics"]["score_weight_sharpness"]
+                    * face_sharpness
+                    + culling_config["face_metrics"]["score_weight_prominence"]
+                    * face_prominence
+                    + culling_config["face_metrics"]["score_weight_visibility"]
+                    * face_visibility
+                    + culling_config["face_metrics"]["score_weight_eye_openness"]
+                    * eye_openness
+                    + culling_config["face_metrics"]["score_weight_occlusion"]
+                    * (1.0 - occlusion_penalty)
+                )
+                / max(
                     1e-6,
                     culling_config["face_metrics"]["score_weight_sharpness"]
                     + culling_config["face_metrics"]["score_weight_prominence"]
                     + culling_config["face_metrics"]["score_weight_visibility"]
                     + culling_config["face_metrics"]["score_weight_eye_openness"]
-                    + culling_config["face_metrics"]["score_weight_occlusion"]
+                    + culling_config["face_metrics"]["score_weight_occlusion"],
                 )
             ),
         )
         blink_penalty = _extract_culling_metric(metadata, "cull_blink_penalty", 1.0)
 
-        scored_records.append({
-            **record,
-            "cull_sharpness": sharpness,
-            "cull_exposure": exposure,
-            "cull_noise": noise_penalty,
-            "cull_highlight_clip": highlight_clip,
-            "cull_shadow_clip": shadow_clip,
-            "cull_technical_score": technical_score,
-            "cull_aesthetic": aesthetic_score,
-            "cull_face_count": face_count,
-            "cull_face_sharpness": face_sharpness,
-            "cull_face_prominence": face_prominence,
-            "cull_face_visibility": face_visibility,
-            "cull_face_score": face_score,
-            "cull_occlusion": occlusion_penalty,
-            "cull_eye_openness": eye_openness,
-            "cull_blink_penalty": blink_penalty,
-        })
+        scored_records.append(
+            {
+                **record,
+                "cull_sharpness": sharpness,
+                "cull_exposure": exposure,
+                "cull_noise": noise_penalty,
+                "cull_highlight_clip": highlight_clip,
+                "cull_shadow_clip": shadow_clip,
+                "cull_technical_score": technical_score,
+                "cull_aesthetic": aesthetic_score,
+                "cull_face_count": face_count,
+                "cull_face_sharpness": face_sharpness,
+                "cull_face_prominence": face_prominence,
+                "cull_face_visibility": face_visibility,
+                "cull_face_score": face_score,
+                "cull_occlusion": occlusion_penalty,
+                "cull_eye_openness": eye_openness,
+                "cull_blink_penalty": blink_penalty,
+            }
+        )
 
     group_has_faces = any(item["cull_face_count"] > 0 for item in scored_records)
     for item in scored_records:
         if group_has_faces:
             if item["cull_face_count"] > 0:
                 weighted_score = (
-                    culling_config["ranking"]["face_group_weight_technical"] * item["cull_technical_score"]
-                    + culling_config["ranking"]["face_group_weight_face"] * item["cull_face_score"]
-                    + culling_config["ranking"]["face_group_weight_aesthetic"] * item["cull_aesthetic"]
+                    culling_config["ranking"]["face_group_weight_technical"]
+                    * item["cull_technical_score"]
+                    + culling_config["ranking"]["face_group_weight_face"]
+                    * item["cull_face_score"]
+                    + culling_config["ranking"]["face_group_weight_aesthetic"]
+                    * item["cull_aesthetic"]
                 )
                 weight_sum = (
                     culling_config["ranking"]["face_group_weight_technical"]
                     + culling_config["ranking"]["face_group_weight_face"]
                     + culling_config["ranking"]["face_group_weight_aesthetic"]
                 )
-                item["cull_score"] = max(0.0, min(1.0, weighted_score / max(1e-6, weight_sum)))
+                item["cull_score"] = max(
+                    0.0, min(1.0, weighted_score / max(1e-6, weight_sum))
+                )
                 item["cull_score"] = max(
                     0.0,
                     min(
                         1.0,
-                        item["cull_score"] - (
-                            culling_config["ranking"]["face_group_blink_penalty_weight"] * item["cull_blink_penalty"]
-                            + culling_config["ranking"]["face_group_occlusion_penalty_weight"] * item["cull_occlusion"]
+                        item["cull_score"]
+                        - (
+                            culling_config["ranking"]["face_group_blink_penalty_weight"]
+                            * item["cull_blink_penalty"]
+                            + culling_config["ranking"][
+                                "face_group_occlusion_penalty_weight"
+                            ]
+                            * item["cull_occlusion"]
                         ),
                     ),
                 )
@@ -901,25 +1005,33 @@ def _rank_group_records(component_records, group_type, culling_config=None):
                 item["cull_score"] = max(
                     0.0,
                     (
-                        culling_config["ranking"]["face_missing_technical_weight"] * item["cull_technical_score"]
-                    ) - culling_config["ranking"]["face_missing_penalty"],
+                        culling_config["ranking"]["face_missing_technical_weight"]
+                        * item["cull_technical_score"]
+                    )
+                    - culling_config["ranking"]["face_missing_penalty"],
                 )
         else:
-            weighted_score = (
-                item["cull_technical_score"]
-                + (culling_config["ranking"]["no_face_group_weight_aesthetic"] * item["cull_aesthetic"])
+            weighted_score = item["cull_technical_score"] + (
+                culling_config["ranking"]["no_face_group_weight_aesthetic"]
+                * item["cull_aesthetic"]
             )
-            weight_sum = 1.0 + culling_config["ranking"]["no_face_group_weight_aesthetic"]
-            item["cull_score"] = max(0.0, min(1.0, weighted_score / max(1e-6, weight_sum)))
+            weight_sum = (
+                1.0 + culling_config["ranking"]["no_face_group_weight_aesthetic"]
+            )
+            item["cull_score"] = max(
+                0.0, min(1.0, weighted_score / max(1e-6, weight_sum))
+            )
 
-    scored_records.sort(key=lambda item: (
-        -item["cull_score"],
-        -item["cull_face_score"],
-        -item["cull_sharpness"],
-        -item["cull_exposure"],
-        item["cull_noise"],
-        item["photo_id"],
-    ))
+    scored_records.sort(
+        key=lambda item: (
+            -item["cull_score"],
+            -item["cull_face_score"],
+            -item["cull_sharpness"],
+            -item["cull_exposure"],
+            item["cull_noise"],
+            item["photo_id"],
+        )
+    )
 
     if not scored_records:
         return []
@@ -934,37 +1046,60 @@ def _rank_group_records(component_records, group_type, culling_config=None):
         reason_codes = []
         if item["cull_sharpness"] < culling_config["ranking"]["reason_blur_threshold"]:
             reason_codes.append("blurred")
-        if item["cull_exposure"] < culling_config["ranking"]["reason_exposure_threshold"]:
+        if (
+            item["cull_exposure"]
+            < culling_config["ranking"]["reason_exposure_threshold"]
+        ):
             if item["cull_shadow_clip"] >= item["cull_highlight_clip"]:
                 reason_codes.append("underexposed")
             else:
                 reason_codes.append("overexposed")
-        if item["cull_aesthetic"] < culling_config["ranking"]["reason_low_aesthetic_threshold"] and item["cull_aesthetic"] < max(0.0, max_aesthetic - 0.08):
+        if item["cull_aesthetic"] < culling_config["ranking"][
+            "reason_low_aesthetic_threshold"
+        ] and item["cull_aesthetic"] < max(0.0, max_aesthetic - 0.08):
             reason_codes.append("low_aesthetic")
-        if index == 1 and len(scored_records) > 1 and item["cull_sharpness"] >= (
-            max_sharpness - culling_config["ranking"]["reason_sharpest_delta"]
+        if (
+            index == 1
+            and len(scored_records) > 1
+            and item["cull_sharpness"]
+            >= (max_sharpness - culling_config["ranking"]["reason_sharpest_delta"])
         ):
             reason_codes.append("sharpest_in_group")
         if group_has_faces:
             if item["cull_face_count"] == 0:
                 reason_codes.append("no_face_detected_in_group")
-            elif item["cull_face_score"] >= (
-                max_face_score - culling_config["ranking"]["reason_best_face_delta"]
-            ) and index == 1:
+            elif (
+                item["cull_face_score"]
+                >= (
+                    max_face_score - culling_config["ranking"]["reason_best_face_delta"]
+                )
+                and index == 1
+            ):
                 reason_codes.append("best_face_quality")
             elif item["cull_face_score"] < max(
                 0.0,
                 max_face_score - culling_config["ranking"]["reason_weak_face_delta"],
             ):
                 reason_codes.append("weak_face_quality")
-            if item["cull_occlusion"] > culling_config["ranking"]["reason_occlusion_threshold"]:
+            if (
+                item["cull_occlusion"]
+                > culling_config["ranking"]["reason_occlusion_threshold"]
+            ):
                 reason_codes.append("possible_occlusion")
-            if item["cull_eye_openness"] >= max(
-                0.0,
-                max_eye_openness - culling_config["ranking"]["reason_eyes_open_delta"],
-            ) and index == 1:
+            if (
+                item["cull_eye_openness"]
+                >= max(
+                    0.0,
+                    max_eye_openness
+                    - culling_config["ranking"]["reason_eyes_open_delta"],
+                )
+                and index == 1
+            ):
                 reason_codes.append("eyes_open_best")
-            elif item["cull_blink_penalty"] > culling_config["ranking"]["reason_possible_blink_threshold"]:
+            elif (
+                item["cull_blink_penalty"]
+                > culling_config["ranking"]["reason_possible_blink_threshold"]
+            ):
                 reason_codes.append("possible_blink")
         if index > 1 and group_type != "single":
             reason_codes.append("near_duplicate_weaker")
@@ -972,23 +1107,31 @@ def _rank_group_records(component_records, group_type, culling_config=None):
         reject_candidate = False
         if len(scored_records) > 1:
             reject_candidate = (
-                item["cull_score"] <= max(0.0, winner_score - culling_config["ranking"]["reject_score_delta"])
-                or item["cull_sharpness"] < culling_config["ranking"]["reason_blur_threshold"]
-                or item["cull_exposure"] < culling_config["ranking"]["reject_exposure_threshold"]
+                item["cull_score"]
+                <= max(
+                    0.0, winner_score - culling_config["ranking"]["reject_score_delta"]
+                )
+                or item["cull_sharpness"]
+                < culling_config["ranking"]["reason_blur_threshold"]
+                or item["cull_exposure"]
+                < culling_config["ranking"]["reject_exposure_threshold"]
                 or (
                     group_has_faces
                     and item["cull_face_count"] > 0
-                    and item["cull_face_score"] < culling_config["ranking"]["reject_face_score_threshold"]
+                    and item["cull_face_score"]
+                    < culling_config["ranking"]["reject_face_score_threshold"]
                 )
                 or (
                     group_has_faces
                     and item["cull_face_count"] > 0
-                    and item["cull_blink_penalty"] > culling_config["ranking"]["reject_blink_penalty_threshold"]
+                    and item["cull_blink_penalty"]
+                    > culling_config["ranking"]["reject_blink_penalty_threshold"]
                 )
                 or (
                     group_has_faces
                     and item["cull_face_count"] > 0
-                    and item["cull_occlusion"] > culling_config["ranking"]["reject_occlusion_threshold"]
+                    and item["cull_occlusion"]
+                    > culling_config["ranking"]["reject_occlusion_threshold"]
                 )
             )
 
@@ -1001,7 +1144,9 @@ def _rank_group_records(component_records, group_type, culling_config=None):
     return scored_records
 
 
-def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, culling_preset="default"):
+def group_and_sort_images(
+    uuids, phash_threshold, clip_threshold, time_delta, culling_preset="default"
+):
     """
     Group indexed images into stable similarity clusters for culling workflows.
 
@@ -1017,7 +1162,13 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
 
     culling_config = get_culling_config(culling_preset)
 
-    phash_hamming_threshold, duplicate_distance_threshold, burst_distance_threshold, duplicate_time_window_seconds, time_window_seconds = _derive_grouping_thresholds(
+    (
+        phash_hamming_threshold,
+        duplicate_distance_threshold,
+        burst_distance_threshold,
+        duplicate_time_window_seconds,
+        time_window_seconds,
+    ) = _derive_grouping_thresholds(
         phash_threshold, clip_threshold, time_delta, culling_config=culling_config
     )
 
@@ -1038,22 +1189,30 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
     for idx, photo_id in enumerate(raw.get("ids", [])):
         metadata_list = raw.get("metadatas", [])
         embedding_list = raw.get("embeddings", [])
-        metadata_by_id[photo_id] = metadata_list[idx] if idx < len(metadata_list) else {}
-        embedding_by_id[photo_id] = embedding_list[idx] if idx < len(embedding_list) else None
+        metadata_by_id[photo_id] = (
+            metadata_list[idx] if idx < len(metadata_list) else {}
+        )
+        embedding_by_id[photo_id] = (
+            embedding_list[idx] if idx < len(embedding_list) else None
+        )
 
     records = []
     for photo_id in unique_photo_ids:
         metadata = metadata_by_id.get(photo_id, {}) or {}
         capture_time = _safe_float(metadata.get("capture_time"))
         filename = str(metadata.get("filename") or "")
-        records.append({
-            "photo_id": photo_id,
-            "filename": filename,
-            "capture_time": capture_time,
-            "embedding": _embedding_to_array(embedding_by_id.get(photo_id)),
-            "phash": _phash_to_int(metadata.get("cull_phash") or metadata.get("phash")),
-            "metadata": metadata,
-        })
+        records.append(
+            {
+                "photo_id": photo_id,
+                "filename": filename,
+                "capture_time": capture_time,
+                "embedding": _embedding_to_array(embedding_by_id.get(photo_id)),
+                "phash": _phash_to_int(
+                    metadata.get("cull_phash") or metadata.get("phash")
+                ),
+                "metadata": metadata,
+            }
+        )
 
     records.sort(key=_record_sort_key)
 
@@ -1070,16 +1229,20 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
             time_gap = None
             if left["capture_time"] is not None and right["capture_time"] is not None:
                 time_gap = abs(right["capture_time"] - left["capture_time"])
-                if time_gap > duplicate_time_window_seconds and distance is None and phash_distance is None:
+                if (
+                    time_gap > duplicate_time_window_seconds
+                    and distance is None
+                    and phash_distance is None
+                ):
                     break
 
             is_near_duplicate = (
                 (
-                    (phash_distance is not None and phash_distance <= phash_hamming_threshold)
-                    or (distance is not None and distance <= duplicate_distance_threshold)
+                    phash_distance is not None
+                    and phash_distance <= phash_hamming_threshold
                 )
-                and (time_gap is None or time_gap <= duplicate_time_window_seconds)
-            )
+                or (distance is not None and distance <= duplicate_distance_threshold)
+            ) and (time_gap is None or time_gap <= duplicate_time_window_seconds)
             is_burst_neighbor = (
                 distance is not None
                 and distance <= burst_distance_threshold
@@ -1094,7 +1257,9 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
             right_id = right["photo_id"]
             adjacency[left_id].add(right_id)
             adjacency[right_id].add(left_id)
-            edge_kinds[tuple(sorted((left_id, right_id)))] = "near_duplicate" if is_near_duplicate else "burst"
+            edge_kinds[tuple(sorted((left_id, right_id)))] = (
+                "near_duplicate" if is_near_duplicate else "burst"
+            )
 
     groups = []
     visited = set()
@@ -1119,11 +1284,17 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
                     stack.append(neighbor_id)
 
         component_id_set = set(component_ids)
-        component_records = [item for item in records if item["photo_id"] in component_id_set]
+        component_records = [
+            item for item in records if item["photo_id"] in component_id_set
+        ]
         component_records.sort(key=_record_sort_key)
 
         group_photo_ids = [item["photo_id"] for item in component_records]
-        capture_times = [item["capture_time"] for item in component_records if item["capture_time"] is not None]
+        capture_times = [
+            item["capture_time"]
+            for item in component_records
+            if item["capture_time"] is not None
+        ]
         time_span_seconds = 0.0
         if len(capture_times) >= 2:
             time_span_seconds = float(max(capture_times) - min(capture_times))
@@ -1141,7 +1312,9 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
                     pair_distances.append(round(distance, 4))
                 if phash_distance is not None:
                     pair_phash_distances.append(phash_distance)
-                edge_type = edge_kinds.get(tuple(sorted((left["photo_id"], right["photo_id"]))))
+                edge_type = edge_kinds.get(
+                    tuple(sorted((left["photo_id"], right["photo_id"])))
+                )
                 if edge_type:
                     group_edge_types.add(edge_type)
 
@@ -1154,107 +1327,127 @@ def group_and_sort_images(uuids, phash_threshold, clip_threshold, time_delta, cu
         else:
             group_type = "near_duplicate"
 
-        ranked_records = _rank_group_records(component_records, group_type, culling_config=culling_config)
+        ranked_records = _rank_group_records(
+            component_records, group_type, culling_config=culling_config
+        )
         group_id = f"group_{group_counter:04d}"
-        winner_photo_id = ranked_records[0]["photo_id"] if ranked_records else group_photo_ids[0]
-        alternate_photo_ids = [item["photo_id"] for item in ranked_records[1:] if not item["cull_reject_candidate"]]
-        reject_candidate_photo_ids = [item["photo_id"] for item in ranked_records if item["cull_reject_candidate"]]
+        winner_photo_id = (
+            ranked_records[0]["photo_id"] if ranked_records else group_photo_ids[0]
+        )
+        alternate_photo_ids = [
+            item["photo_id"]
+            for item in ranked_records[1:]
+            if not item["cull_reject_candidate"]
+        ]
+        reject_candidate_photo_ids = [
+            item["photo_id"] for item in ranked_records if item["cull_reject_candidate"]
+        ]
 
         for ranked in ranked_records:
             updated_metadata = dict(ranked["metadata"] or {})
-            updated_metadata.update({
-                "cull_group_id": group_id,
-                "cull_group_size": len(group_photo_ids),
-                "cull_group_rank": ranked["cull_group_rank"],
-                "cull_group_winner": ranked["cull_group_winner"],
-                "cull_score": round(ranked["cull_score"], 4),
-                "cull_reject_candidate": ranked["cull_reject_candidate"],
-                "cull_reason_codes": json.dumps(ranked["cull_reason_codes"]),
-                "cull_explanation": ranked["cull_explanation"],
-                "cull_sharpness": round(ranked["cull_sharpness"], 4),
-                "cull_exposure": round(ranked["cull_exposure"], 4),
-                "cull_noise": round(ranked["cull_noise"], 4),
-                "cull_highlight_clip": round(ranked["cull_highlight_clip"], 4),
-                "cull_shadow_clip": round(ranked["cull_shadow_clip"], 4),
-                "cull_technical_score": round(ranked["cull_technical_score"], 4),
-                "cull_aesthetic": round(ranked["cull_aesthetic"], 4),
-                "cull_face_count": int(ranked["cull_face_count"]),
-                "cull_face_sharpness": round(ranked["cull_face_sharpness"], 4),
-                "cull_face_prominence": round(ranked["cull_face_prominence"], 4),
-                "cull_face_visibility": round(ranked["cull_face_visibility"], 4),
-                "cull_face_score": round(ranked["cull_face_score"], 4),
-                "cull_occlusion": round(ranked["cull_occlusion"], 4),
-                "cull_eye_openness": round(ranked["cull_eye_openness"], 4),
-                "cull_blink_penalty": round(ranked["cull_blink_penalty"], 4),
-            })
+            updated_metadata.update(
+                {
+                    "cull_group_id": group_id,
+                    "cull_group_size": len(group_photo_ids),
+                    "cull_group_rank": ranked["cull_group_rank"],
+                    "cull_group_winner": ranked["cull_group_winner"],
+                    "cull_score": round(ranked["cull_score"], 4),
+                    "cull_reject_candidate": ranked["cull_reject_candidate"],
+                    "cull_reason_codes": json.dumps(ranked["cull_reason_codes"]),
+                    "cull_explanation": ranked["cull_explanation"],
+                    "cull_sharpness": round(ranked["cull_sharpness"], 4),
+                    "cull_exposure": round(ranked["cull_exposure"], 4),
+                    "cull_noise": round(ranked["cull_noise"], 4),
+                    "cull_highlight_clip": round(ranked["cull_highlight_clip"], 4),
+                    "cull_shadow_clip": round(ranked["cull_shadow_clip"], 4),
+                    "cull_technical_score": round(ranked["cull_technical_score"], 4),
+                    "cull_aesthetic": round(ranked["cull_aesthetic"], 4),
+                    "cull_face_count": int(ranked["cull_face_count"]),
+                    "cull_face_sharpness": round(ranked["cull_face_sharpness"], 4),
+                    "cull_face_prominence": round(ranked["cull_face_prominence"], 4),
+                    "cull_face_visibility": round(ranked["cull_face_visibility"], 4),
+                    "cull_face_score": round(ranked["cull_face_score"], 4),
+                    "cull_occlusion": round(ranked["cull_occlusion"], 4),
+                    "cull_eye_openness": round(ranked["cull_eye_openness"], 4),
+                    "cull_blink_penalty": round(ranked["cull_blink_penalty"], 4),
+                }
+            )
             metadata_updates.append((ranked["photo_id"], updated_metadata))
 
-        groups.append({
-            "group_id": group_id,
-            "group_type": group_type,
-            "group_size": len(group_photo_ids),
-            "primary_photo_id": group_photo_ids[0],
-            "photo_ids": group_photo_ids,
-            "winner_photo_id": winner_photo_id,
-            "alternate_photo_ids": alternate_photo_ids,
-            "reject_candidate_photo_ids": reject_candidate_photo_ids,
-            "photos": [
-                {
-                    "photo_id": item["photo_id"],
-                    "rank": item["cull_group_rank"],
-                    "cull_score": round(item["cull_score"], 4),
-                    "winner": item["cull_group_winner"],
-                    "reject_candidate": item["cull_reject_candidate"],
-                    "reason_codes": item["cull_reason_codes"],
-                    "explanation": item["cull_explanation"],
-                    "metrics": {
-                        "sharpness": round(item["cull_sharpness"], 4),
-                        "exposure": round(item["cull_exposure"], 4),
-                        "noise": round(item["cull_noise"], 4),
-                        "highlight_clip": round(item["cull_highlight_clip"], 4),
-                        "shadow_clip": round(item["cull_shadow_clip"], 4),
-                        "technical_score": round(item["cull_technical_score"], 4),
-                        "aesthetic": round(item["cull_aesthetic"], 4),
-                        "face_count": int(item["cull_face_count"]),
-                        "face_sharpness": round(item["cull_face_sharpness"], 4),
-                        "face_prominence": round(item["cull_face_prominence"], 4),
-                        "face_visibility": round(item["cull_face_visibility"], 4),
-                        "face_score": round(item["cull_face_score"], 4),
-                        "occlusion": round(item["cull_occlusion"], 4),
-                        "eye_openness": round(item["cull_eye_openness"], 4),
-                        "blink_penalty": round(item["cull_blink_penalty"], 4),
+        groups.append(
+            {
+                "group_id": group_id,
+                "group_type": group_type,
+                "group_size": len(group_photo_ids),
+                "primary_photo_id": group_photo_ids[0],
+                "photo_ids": group_photo_ids,
+                "winner_photo_id": winner_photo_id,
+                "alternate_photo_ids": alternate_photo_ids,
+                "reject_candidate_photo_ids": reject_candidate_photo_ids,
+                "photos": [
+                    {
+                        "photo_id": item["photo_id"],
+                        "rank": item["cull_group_rank"],
+                        "cull_score": round(item["cull_score"], 4),
+                        "winner": item["cull_group_winner"],
+                        "reject_candidate": item["cull_reject_candidate"],
+                        "reason_codes": item["cull_reason_codes"],
+                        "explanation": item["cull_explanation"],
+                        "metrics": {
+                            "sharpness": round(item["cull_sharpness"], 4),
+                            "exposure": round(item["cull_exposure"], 4),
+                            "noise": round(item["cull_noise"], 4),
+                            "highlight_clip": round(item["cull_highlight_clip"], 4),
+                            "shadow_clip": round(item["cull_shadow_clip"], 4),
+                            "technical_score": round(item["cull_technical_score"], 4),
+                            "aesthetic": round(item["cull_aesthetic"], 4),
+                            "face_count": int(item["cull_face_count"]),
+                            "face_sharpness": round(item["cull_face_sharpness"], 4),
+                            "face_prominence": round(item["cull_face_prominence"], 4),
+                            "face_visibility": round(item["cull_face_visibility"], 4),
+                            "face_score": round(item["cull_face_score"], 4),
+                            "occlusion": round(item["cull_occlusion"], 4),
+                            "eye_openness": round(item["cull_eye_openness"], 4),
+                            "blink_penalty": round(item["cull_blink_penalty"], 4),
+                        },
+                    }
+                    for item in ranked_records
+                ],
+                "min_capture_time": min(capture_times) if capture_times else None,
+                "max_capture_time": max(capture_times) if capture_times else None,
+                "time_span_seconds": round(time_span_seconds, 3),
+                "debug": {
+                    "culling_preset": culling_preset,
+                    "thresholds": {
+                        "phash_hamming_threshold": phash_hamming_threshold,
+                        "duplicate_distance": round(duplicate_distance_threshold, 4),
+                        "burst_distance": round(burst_distance_threshold, 4),
+                        "duplicate_time_window_seconds": duplicate_time_window_seconds,
+                        "time_window_seconds": time_window_seconds,
                     },
-                }
-                for item in ranked_records
-            ],
-            "min_capture_time": min(capture_times) if capture_times else None,
-            "max_capture_time": max(capture_times) if capture_times else None,
-            "time_span_seconds": round(time_span_seconds, 3),
-            "debug": {
-                "culling_preset": culling_preset,
-                "thresholds": {
-                    "phash_hamming_threshold": phash_hamming_threshold,
-                    "duplicate_distance": round(duplicate_distance_threshold, 4),
-                    "burst_distance": round(burst_distance_threshold, 4),
-                    "duplicate_time_window_seconds": duplicate_time_window_seconds,
-                    "time_window_seconds": time_window_seconds,
+                    "pairwise_distances": pair_distances,
+                    "pairwise_phash_distances": pair_phash_distances,
+                    "edge_types": sorted(group_edge_types),
                 },
-                "pairwise_distances": pair_distances,
-                "pairwise_phash_distances": pair_phash_distances,
-                "edge_types": sorted(group_edge_types),
-            },
-        })
+            }
+        )
         group_counter += 1
 
-    groups.sort(key=lambda group: (
-        group["min_capture_time"] is None,
-        group["min_capture_time"] if group["min_capture_time"] is not None else float("inf"),
-        group["primary_photo_id"],
-    ))
+    groups.sort(
+        key=lambda group: (
+            group["min_capture_time"] is None,
+            group["min_capture_time"]
+            if group["min_capture_time"] is not None
+            else float("inf"),
+            group["primary_photo_id"],
+        )
+    )
 
     if metadata_updates:
         if collection is None:
-            raise DatabaseNotReadyError("Cannot update metadata: database not initialized (DB_PATH missing).")
+            raise DatabaseNotReadyError(
+                "Cannot update metadata: database not initialized (DB_PATH missing)."
+            )
         update_ids = [photo_id for photo_id, _ in metadata_updates]
         update_metadatas = [metadata for _, metadata in metadata_updates]
         collection.update(ids=update_ids, metadatas=update_metadatas)
@@ -1310,20 +1503,36 @@ def find_similar_to_photo(
         logger.warning("find_similar_to_photo: empty or invalid photo_id")
         return [], "empty or invalid photo_id"
 
-    scope_source = "scope_photo_ids (%s)" % len(scope_photo_ids) if scope_photo_ids is not None else ("catalog_id=%s" % (catalog_id or "all"))
+    scope_source = (
+        "scope_photo_ids (%s)" % len(scope_photo_ids)
+        if scope_photo_ids is not None
+        else ("catalog_id=%s" % (catalog_id or "all"))
+    )
     logger.info(
         "find_similar_to_photo: photo_id=%s max_results=%s phash_max_hamming=%s use_clip=%s scope=%s",
-        photo_id, max_results, phash_max_hamming, use_clip, scope_source,
+        photo_id,
+        max_results,
+        phash_max_hamming,
+        use_clip,
+        scope_source,
     )
 
     target_data = get_image(photo_id, catalog_id=catalog_id)
     if not target_data or not target_data.get("ids"):
-        logger.warning("find_similar_to_photo: reference photo_id %s not found or not in catalog", photo_id)
+        logger.warning(
+            "find_similar_to_photo: reference photo_id %s not found or not in catalog",
+            photo_id,
+        )
         return [], "This photo is not in the search index. Run 'Analyze & Index' first."
     target_meta = (target_data.get("metadatas") or [None])[0] or {}
-    target_phash = _phash_to_int(target_meta.get("cull_phash") or target_meta.get("phash"))
+    target_phash = _phash_to_int(
+        target_meta.get("cull_phash") or target_meta.get("phash")
+    )
     if target_phash is None:
-        logger.warning("find_similar_to_photo: reference photo_id %s has no phash; run Analyze & Index first", photo_id)
+        logger.warning(
+            "find_similar_to_photo: reference photo_id %s has no phash; run Analyze & Index first",
+            photo_id,
+        )
         return [], "This photo has no perceptual hash. Run 'Analyze & Index' first."
 
     target_embedding = None
@@ -1337,12 +1546,18 @@ def find_similar_to_photo(
     )
 
     if scope_photo_ids is not None:
-        candidate_ids = [str(pid).strip() for pid in scope_photo_ids if pid and str(pid).strip() != photo_id]
+        candidate_ids = [
+            str(pid).strip()
+            for pid in scope_photo_ids
+            if pid and str(pid).strip() != photo_id
+        ]
     else:
         candidate_ids = get_all_image_ids(catalog_id=catalog_id)
         candidate_ids = [pid for pid in candidate_ids if pid != photo_id]
 
-    logger.info("find_similar_to_photo: %s candidate photo(s) to compare", len(candidate_ids))
+    logger.info(
+        "find_similar_to_photo: %s candidate photo(s) to compare", len(candidate_ids)
+    )
     if not candidate_ids:
         return [], None
 
@@ -1356,7 +1571,11 @@ def find_similar_to_photo(
         for idx, pid in enumerate(ids_list):
             meta = metas[idx] if idx < len(metas) else {}
             cand_phash = _phash_to_int(meta.get("cull_phash") or meta.get("phash"))
-            phash_dist = _phash_hamming_distance(target_phash, cand_phash) if cand_phash is not None else None
+            phash_dist = (
+                _phash_hamming_distance(target_phash, cand_phash)
+                if cand_phash is not None
+                else None
+            )
             if phash_dist is None or phash_dist > phash_max_hamming:
                 continue
             clip_dist = None
@@ -1364,19 +1583,32 @@ def find_similar_to_photo(
                 cand_emb = _embedding_to_array(embs[idx] if idx < len(embs) else None)
                 if cand_emb is not None:
                     clip_dist = _cosine_distance(target_embedding, cand_emb)
-            results.append({
-                "photo_id": pid,
-                "phash_distance": phash_dist,
-                "clip_distance": clip_dist,
-            })
+            results.append(
+                {
+                    "photo_id": pid,
+                    "phash_distance": phash_dist,
+                    "clip_distance": clip_dist,
+                }
+            )
 
-    results.sort(key=lambda r: (r["phash_distance"], r["clip_distance"] if r["clip_distance"] is not None else float("inf")))
+    results.sort(
+        key=lambda r: (
+            r["phash_distance"],
+            r["clip_distance"] if r["clip_distance"] is not None else float("inf"),
+        )
+    )
     out = results[:max_results]
-    logger.info("find_similar_to_photo: %s similar photo(s) found (phash_distance <= %s)", len(out), phash_max_hamming)
+    logger.info(
+        "find_similar_to_photo: %s similar photo(s) found (phash_distance <= %s)",
+        len(out),
+        phash_max_hamming,
+    )
     return out, None
 
 
-def find_similar_to_photo_by_clip(photo_id, scope_photo_ids=None, max_results=100, catalog_id=None):
+def find_similar_to_photo_by_clip(
+    photo_id, scope_photo_ids=None, max_results=100, catalog_id=None
+):
     """
     Find indexed photos semantically similar to the given photo by CLIP embedding (k-NN).
 
@@ -1396,19 +1628,32 @@ def find_similar_to_photo_by_clip(photo_id, scope_photo_ids=None, max_results=10
 
     target_data = get_image(photo_id, catalog_id=catalog_id)
     if not target_data or not target_data.get("ids"):
-        logger.warning("find_similar_to_photo_by_clip: reference photo_id %s not found or not in catalog", photo_id)
+        logger.warning(
+            "find_similar_to_photo_by_clip: reference photo_id %s not found or not in catalog",
+            photo_id,
+        )
         return [], "This photo is not in the search index. Run 'Analyze & Index' first."
     first_emb = _first_result_item(target_data.get("embeddings"))
     if first_emb is None:
-        logger.warning("find_similar_to_photo_by_clip: reference photo_id %s has no embedding; run Analyze & Index with embeddings", photo_id)
-        return [], "This photo has no image embedding. Run 'Analyze & Index' with embeddings enabled."
+        logger.warning(
+            "find_similar_to_photo_by_clip: reference photo_id %s has no embedding; run Analyze & Index with embeddings",
+            photo_id,
+        )
+        return (
+            [],
+            "This photo has no image embedding. Run 'Analyze & Index' with embeddings enabled.",
+        )
     query_embedding = _embedding_to_array(first_emb)
     if query_embedding is None:
         return [], None
 
     where_clause = None
     if scope_photo_ids is not None and len(scope_photo_ids) > 0:
-        ids_list = [str(pid).strip() for pid in scope_photo_ids if pid and str(pid).strip() != photo_id]
+        ids_list = [
+            str(pid).strip()
+            for pid in scope_photo_ids
+            if pid and str(pid).strip() != photo_id
+        ]
         if not ids_list:
             return [], None
         where_clause = {"photo_id": {"$in": ids_list}}
@@ -1431,16 +1676,23 @@ def find_similar_to_photo_by_clip(photo_id, scope_photo_ids=None, max_results=10
             continue
         d = dist0[i] if i < len(dist0) else None
         if d is not None:
-            out.append({"photo_id": pid, "phash_distance": None, "clip_distance": float(d)})
+            out.append(
+                {"photo_id": pid, "phash_distance": None, "clip_distance": float(d)}
+            )
         if len(out) >= max_results:
             break
-    logger.info("find_similar_to_photo_by_clip: %s similar photo(s) found by CLIP", len(out))
+    logger.info(
+        "find_similar_to_photo_by_clip: %s similar photo(s) found by CLIP", len(out)
+    )
     return out, None
 
 
 # --- Face embeddings collection API ---
 
-def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id="", extra_metadata=None):
+
+def add_face(
+    face_id, embedding, photo_uuid, thumbnail_b64, person_id="", extra_metadata=None
+):
     """
     Add a single face to the face_embeddings collection.
 
@@ -1453,21 +1705,37 @@ def add_face(face_id, embedding, photo_uuid, thumbnail_b64, person_id="", extra_
     """
     _ensure_initialized()
     if face_collection is None:
-        raise DatabaseNotReadyError("Cannot add face: database not initialized (DB_PATH missing).")
-    metadata = {"photo_id": photo_uuid, "photo_uuid": photo_uuid, "thumbnail": thumbnail_b64, "person_id": person_id}
+        raise DatabaseNotReadyError(
+            "Cannot add face: database not initialized (DB_PATH missing)."
+        )
+    metadata = {
+        "photo_id": photo_uuid,
+        "photo_uuid": photo_uuid,
+        "thumbnail": thumbnail_b64,
+        "person_id": person_id,
+    }
     if extra_metadata:
         metadata.update(extra_metadata)
     face_collection.add(ids=[face_id], embeddings=[embedding], metadatas=[metadata])
 
 
-def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_ids=None, extra_metadatas=None):
+def add_faces_batch(
+    face_ids,
+    embeddings,
+    photo_uuids,
+    thumbnails_b64,
+    person_ids=None,
+    extra_metadatas=None,
+):
     """
     Add multiple faces in one call. All lists must have the same length.
     person_ids: optional list of person_id (default "" for each).
     """
     _ensure_initialized()
     if face_collection is None:
-        raise DatabaseNotReadyError("Cannot add faces batch: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot add faces batch: database not initialized (DB_PATH missing)."
+        )
     if not face_ids:
         return
     if person_ids is None:
@@ -1475,7 +1743,9 @@ def add_faces_batch(face_ids, embeddings, photo_uuids, thumbnails_b64, person_id
     if extra_metadatas is None:
         extra_metadatas = [{}] * len(face_ids)
     metadatas = []
-    for pu, tb, pid, extra_meta in zip(photo_uuids, thumbnails_b64, person_ids, extra_metadatas):
+    for pu, tb, pid, extra_meta in zip(
+        photo_uuids, thumbnails_b64, person_ids, extra_metadatas
+    ):
         metadata = {"photo_id": pu, "photo_uuid": pu, "thumbnail": tb, "person_id": pid}
         if extra_meta:
             metadata.update(extra_meta)
@@ -1533,7 +1803,9 @@ def update_face_metadatas(face_ids, metadatas):
     """
     _ensure_initialized()
     if face_collection is None:
-        raise DatabaseNotReadyError("Cannot update face metadatas: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot update face metadatas: database not initialized (DB_PATH missing)."
+        )
     if not face_ids or len(face_ids) != len(metadatas):
         return
     for i in range(0, len(face_ids), FACE_UPDATE_BATCH_SIZE):
@@ -1548,10 +1820,14 @@ def has_faces_for_photo(photo_uuid):
     if face_collection is None:
         return False
     try:
-        result = face_collection.get(where={"photo_id": photo_uuid}, include=[], limit=1)
+        result = face_collection.get(
+            where={"photo_id": photo_uuid}, include=[], limit=1
+        )
         if len(result.get("ids", [])) > 0:
             return True
-        legacy = face_collection.get(where={"photo_uuid": photo_uuid}, include=[], limit=1)
+        legacy = face_collection.get(
+            where={"photo_uuid": photo_uuid}, include=[], limit=1
+        )
         return len(legacy.get("ids", [])) > 0
     except Exception as e:
         logger.warning(f"Could not check faces for {photo_uuid}: {e}")
@@ -1567,10 +1843,10 @@ def faces_checked_for_photo(photo_uuid):
     if has_faces_for_photo(photo_uuid):
         return True
     try:
-        img = collection.get(ids=[photo_uuid], include=['metadatas'])
-        if img and img.get('metadatas') and img['metadatas']:
-            meta = img['metadatas'][0]
-            return meta.get('faces_checked', False)
+        img = collection.get(ids=[photo_uuid], include=["metadatas"])
+        if img and img.get("metadatas") and img["metadatas"]:
+            meta = img["metadatas"][0]
+            return meta.get("faces_checked", False)
     except Exception as e:
         logger.warning(f"Could not check faces_checked for {photo_uuid}: {e}")
     return False
@@ -1580,13 +1856,15 @@ def set_faces_checked(photo_uuid):
     """Mark that face detection was run for this photo (e.g. no faces found)."""
     _ensure_initialized()
     if collection is None:
-        raise DatabaseNotReadyError("Cannot set faces checked: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot set faces checked: database not initialized (DB_PATH missing)."
+        )
     try:
-        img = collection.get(ids=[photo_uuid], include=['metadatas'])
-        if not img or not img.get('ids'):
+        img = collection.get(ids=[photo_uuid], include=["metadatas"])
+        if not img or not img.get("ids"):
             return
-        meta = (img.get('metadatas') or [{}])[0].copy()
-        meta['faces_checked'] = True
+        meta = (img.get("metadatas") or [{}])[0].copy()
+        meta["faces_checked"] = True
         collection.update(ids=[photo_uuid], metadatas=[meta])
     except Exception as e:
         logger.warning(f"Could not set faces_checked for {photo_uuid}: {e}")
@@ -1596,7 +1874,9 @@ def delete_faces_by_photo_uuid(photo_uuid):
     """Remove all face entries that belong to the given photo UUID."""
     _ensure_initialized()
     if face_collection is None:
-        raise DatabaseNotReadyError("Cannot delete faces: database not initialized (DB_PATH missing).")
+        raise DatabaseNotReadyError(
+            "Cannot delete faces: database not initialized (DB_PATH missing)."
+        )
     try:
         face_collection.delete(where={"photo_id": photo_uuid})
     except Exception:
@@ -1608,7 +1888,14 @@ def delete_faces_by_photo_uuid(photo_uuid):
         logger.warning(f"Delete faces for photo_uuid={photo_uuid}: {e}")
 
 
-def migrate_photo_ids(id_mappings, *, update_faces=True, update_vertex=True, overwrite=False, dry_run=False):
+def migrate_photo_ids(
+    id_mappings,
+    *,
+    update_faces=True,
+    update_vertex=True,
+    overwrite=False,
+    dry_run=False,
+):
     """Migrate existing DB entries from old IDs (uuid) to new photo_id values.
 
     Args:
@@ -1666,31 +1953,49 @@ def migrate_photo_ids(id_mappings, *, update_faces=True, update_vertex=True, ove
                     elif dry_run:
                         summary["migrated"] += 1
                     else:
-                        old_metadata = _first_result_item(old_rec.get("metadatas"), {}) or {}
+                        old_metadata = (
+                            _first_result_item(old_rec.get("metadatas"), {}) or {}
+                        )
                         old_embedding = _first_result_item(old_rec.get("embeddings"))
                         merged_metadata = dict(old_metadata)
                         merged_metadata[LEGACY_UUID_FIELD] = old_id
                         merged_metadata[PHOTO_ID_FIELD] = new_id
 
                         if new_rec and new_rec.get("ids"):
-                            update_image(new_id, merged_metadata, embedding=old_embedding)
+                            update_image(
+                                new_id, merged_metadata, embedding=old_embedding
+                            )
                         else:
-                            add_image(new_id, old_embedding, merged_metadata, legacy_uuid=old_id)
+                            add_image(
+                                new_id,
+                                old_embedding,
+                                merged_metadata,
+                                legacy_uuid=old_id,
+                            )
                         delete_image(old_id)
 
                         if update_vertex:
                             old_v = get_vertex_image(old_id)
                             if old_v and old_v.get("ids"):
                                 old_v_emb = _first_result_item(old_v.get("embeddings"))
-                                old_v_meta = _first_result_item(old_v.get("metadatas"), {}) or {}
+                                old_v_meta = (
+                                    _first_result_item(old_v.get("metadatas"), {}) or {}
+                                )
                                 old_v_meta = _ensure_photo_metadata(new_id, old_v_meta)
                                 old_v_meta[LEGACY_UUID_FIELD] = old_id
                                 if old_v_emb is not None:
-                                    add_vertex_image(new_id, old_v_emb, old_v_meta, legacy_uuid=old_id)
+                                    add_vertex_image(
+                                        new_id,
+                                        old_v_emb,
+                                        old_v_meta,
+                                        legacy_uuid=old_id,
+                                    )
                                     delete_vertex_image(old_id)
 
                         if update_faces:
-                            face_data = face_collection.get(where={"photo_uuid": old_id}, include=["metadatas"])
+                            face_data = face_collection.get(
+                                where={"photo_uuid": old_id}, include=["metadatas"]
+                            )
                             face_ids = face_data.get("ids", []) or []
                             metas = face_data.get("metadatas", []) or []
                             if face_ids and metas:
@@ -1704,7 +2009,13 @@ def migrate_photo_ids(id_mappings, *, update_faces=True, update_vertex=True, ove
 
                         summary["migrated"] += 1
             except Exception as e:
-                logger.error("Failed to migrate photo ID %s -> %s: %s", old_id, new_id, e, exc_info=True)
+                logger.error(
+                    "Failed to migrate photo ID %s -> %s: %s",
+                    old_id,
+                    new_id,
+                    e,
+                    exc_info=True,
+                )
                 summary["errors"] += 1
 
         if idx == 1 or idx % progress_interval == 0 or idx == total_requested:
@@ -1738,4 +2049,3 @@ def query_faces(query_embedding, n_results, where_clause=None):
     except Exception as e:
         logger.error(f"Error querying face_embeddings: {e}", exc_info=True)
         return {"ids": [[]], "distances": [[]], "metadatas": [[]]}
-

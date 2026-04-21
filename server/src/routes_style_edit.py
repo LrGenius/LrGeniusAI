@@ -9,6 +9,7 @@ When the training set is too small or confidence is too low and
 ``use_llm_fallback=true``, the request is transparently forwarded to
 the regular LLM-backed edit pipeline (re-using existing few-shot injection).
 """
+
 from __future__ import annotations
 
 
@@ -30,6 +31,7 @@ def _get_clip_embedding(photo_id: str):
         existing = chroma_service.get_image(photo_id)
         if existing and existing.get("ids") and existing.get("embeddings"):
             import numpy as np
+
             raw_emb = existing["embeddings"][0]
             if raw_emb is not None:
                 emb_arr = np.asarray(raw_emb, dtype=np.float32)
@@ -61,9 +63,17 @@ def style_edit():
     options = _extract_options(request.form)
 
     if not images or not photo_ids or len(images) != len(photo_ids):
-        return jsonify({"error": "Mismatch between number of images and photo IDs, or no images provided"}), 400
+        return jsonify(
+            {
+                "error": "Mismatch between number of images and photo IDs, or no images provided"
+            }
+        ), 400
     if len(images) != 1:
-        return jsonify({"error": "The /style_edit endpoint currently supports exactly one photo per request"}), 400
+        return jsonify(
+            {
+                "error": "The /style_edit endpoint currently supports exactly one photo per request"
+            }
+        ), 400
 
     file = images[0]
     photo_id = photo_ids[0]
@@ -71,7 +81,11 @@ def style_edit():
         return jsonify({"error": "Missing file or photo_id"}), 400
 
     image_bytes = file.read()
-    use_llm_fallback = request.form.get("use_llm_fallback", "false").lower() in ("1", "true", "yes")
+    use_llm_fallback = request.form.get("use_llm_fallback", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     focal_length: float | None = None
     try:
@@ -107,7 +121,9 @@ def style_edit():
     # -------------------------------------------------------------------
     # LLM fallback when style engine couldn't produce a confident result
     # -------------------------------------------------------------------
-    if (result.engine == "none" or result.confidence < CONFIDENCE_LOW) and use_llm_fallback:
+    if (
+        result.engine == "none" or result.confidence < CONFIDENCE_LOW
+    ) and use_llm_fallback:
         logger.info(
             "Style engine confidence %.3f below threshold for photo_id=%s, falling back to LLM",
             result.confidence,
@@ -118,24 +134,32 @@ def style_edit():
 
         # Inject training examples as few-shot context in the LLM request
         if clip_embedding is not None:
-            training_examples = training_service.query_similar_training_examples(clip_embedding, n_results=3)
+            training_examples = training_service.query_similar_training_examples(
+                clip_embedding, n_results=3
+            )
         else:
             training_examples = []
         options["use_training_style"] = False  # already handled above
         options["_injected_training_examples"] = training_examples
 
         analysis_service = get_analysis_service()
-        llm_response = analysis_service.generate_edit_recipe_single(photo_id, image_bytes, options)
+        llm_response = analysis_service.generate_edit_recipe_single(
+            photo_id, image_bytes, options
+        )
 
         if not llm_response.success or not llm_response.recipe:
-            return jsonify({
-                "status": "error",
-                "engine": "llm",
-                "error": llm_response.error or "LLM edit generation failed",
-            }), 500
+            return jsonify(
+                {
+                    "status": "error",
+                    "engine": "llm",
+                    "error": llm_response.error or "LLM edit generation failed",
+                }
+            ), 500
 
         _persist_edit_recipe(photo_id, file.filename, llm_response.recipe, options)
-        payload = _success_payload(photo_id, llm_response.recipe, options, warning=llm_response.warning)
+        payload = _success_payload(
+            photo_id, llm_response.recipe, options, warning=llm_response.warning
+        )
         payload["engine"] = "llm"
         payload["confidence"] = round(result.confidence, 3)
         payload["matched_examples"] = result.matched_count
@@ -148,25 +172,29 @@ def style_edit():
     # Style engine had no result and fallback disabled — return error
     # -------------------------------------------------------------------
     if result.engine == "none":
-        return jsonify({
-            "status": "error",
-            "engine": "none",
-            "confidence": 0.0,
-            "matched_examples": 0,
-            "error": result.warning or "Style engine could not produce a result.",
-        }), 422  # Unprocessable – not a server error, just insufficient data
+        return jsonify(
+            {
+                "status": "error",
+                "engine": "none",
+                "confidence": 0.0,
+                "matched_examples": 0,
+                "error": result.warning or "Style engine could not produce a result.",
+            }
+        ), 422  # Unprocessable – not a server error, just insufficient data
 
     # -------------------------------------------------------------------
     # Successful style engine result
     # -------------------------------------------------------------------
     if not result.recipe:
-        return jsonify({
-            "status": "error",
-            "engine": "style",
-            "confidence": round(result.confidence, 3),
-            "matched_examples": result.matched_count,
-            "error": "Style engine returned an empty recipe.",
-        }), 500
+        return jsonify(
+            {
+                "status": "error",
+                "engine": "style",
+                "confidence": round(result.confidence, 3),
+                "matched_examples": result.matched_count,
+                "error": "Style engine returned an empty recipe.",
+            }
+        ), 500
 
     _persist_edit_recipe(photo_id, file.filename, result.recipe, options)
 

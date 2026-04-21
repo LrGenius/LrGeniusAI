@@ -20,6 +20,7 @@ When confidence is below the threshold and LLM fallback is enabled, the
 caller should fall back to the usual LLM path with training examples as
 few-shot context.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,14 +33,14 @@ import service_training as training_service
 # Tunable weights (can be made user-configurable later via config / prefs)
 # ---------------------------------------------------------------------------
 
-WEIGHT_CLIP = 0.50       # CLIP visual similarity
-WEIGHT_EXPOSURE = 0.25   # Exposure state proximity
-WEIGHT_SCENE = 0.15      # Scene-type tag overlap
+WEIGHT_CLIP = 0.50  # CLIP visual similarity
+WEIGHT_EXPOSURE = 0.25  # Exposure state proximity
+WEIGHT_SCENE = 0.15  # Scene-type tag overlap
 WEIGHT_TIME_OF_DAY = 0.10  # Time-of-day / lighting cue
 
 # Confidence thresholds
-CONFIDENCE_GOOD = 0.70    # ≥ this → style engine output direct, no warning
-CONFIDENCE_LOW = 0.45     # < this → LLM fallback recommended
+CONFIDENCE_GOOD = 0.70  # ≥ this → style engine output direct, no warning
+CONFIDENCE_LOW = 0.45  # < this → LLM fallback recommended
 
 # Interpolation: number of top examples to blend
 TOP_K_BLEND = 3
@@ -54,6 +55,7 @@ MIN_TRAINING_EXAMPLES = 5
 # Distance → similarity conversion
 # ---------------------------------------------------------------------------
 
+
 def _clip_distance_to_similarity(distance: float) -> float:
     """Convert ChromaDB L2 distance (squared) to cosine similarity proxy.
 
@@ -66,6 +68,7 @@ def _clip_distance_to_similarity(distance: float) -> float:
 # ---------------------------------------------------------------------------
 # Exposure proximity scoring
 # ---------------------------------------------------------------------------
+
 
 def _exposure_proximity(
     query: Dict[str, float],
@@ -95,6 +98,7 @@ def _exposure_proximity(
 # Scene-type tag overlap scoring
 # ---------------------------------------------------------------------------
 
+
 def _scene_overlap(
     query_tags: List[str],
     candidate_tags: List[str],
@@ -120,6 +124,7 @@ def _scene_overlap(
 
 _TOD_ORDER = ["dawn", "morning", "afternoon", "evening", "night", "unknown"]
 
+
 def _tod_proximity(query_tod: str, candidate_tod: str) -> float:
     """Score proximity of time-of-day buckets.  Adjacent buckets score 0.5, same = 1.0."""
     if query_tod == "unknown" or candidate_tod == "unknown":
@@ -141,6 +146,7 @@ def _tod_proximity(query_tod: str, candidate_tod: str) -> float:
 # Composite scoring
 # ---------------------------------------------------------------------------
 
+
 def calculate_composite_score(
     clip_sim: float,
     query_exposure: Dict[str, float],
@@ -151,12 +157,19 @@ def calculate_composite_score(
     """Compute weighted composite match score for one candidate."""
     exp_score = _exposure_proximity(
         query_exposure,
-        {k: candidate.get(k, 0.0) for k in (
-            "exp_luminance_mean", "exp_contrast", "exp_warmth_proxy",
-        )},
+        {
+            k: candidate.get(k, 0.0)
+            for k in (
+                "exp_luminance_mean",
+                "exp_contrast",
+                "exp_warmth_proxy",
+            )
+        },
     )
     scene_score = _scene_overlap(query_scene_tags, candidate.get("scene_tags", []))
-    tod_score = _tod_proximity(query_tod, candidate.get("time_of_day_bucket", "unknown"))
+    tod_score = _tod_proximity(
+        query_tod, candidate.get("time_of_day_bucket", "unknown")
+    )
 
     return (
         WEIGHT_CLIP * clip_sim
@@ -169,6 +182,7 @@ def calculate_composite_score(
 # ---------------------------------------------------------------------------
 # Recipe interpolation
 # ---------------------------------------------------------------------------
+
 
 def interpolate_recipes(
     winners: List[Tuple[Dict[str, Any], float]],
@@ -206,6 +220,7 @@ def interpolate_recipes(
 # RAW-adaptive exposure compensation
 # ---------------------------------------------------------------------------
 
+
 def adaptive_compensation(
     recipe: Dict[str, Any],
     query_exposure: Dict[str, float],
@@ -229,8 +244,7 @@ def adaptive_compensation(
         for ex, score in winners
     )
     avg_train_contrast = sum(
-        ex.get("exp_contrast", 0.5) * (score / total_weight)
-        for ex, score in winners
+        ex.get("exp_contrast", 0.5) * (score / total_weight) for ex, score in winners
     )
 
     query_lum = query_exposure.get("exp_luminance_mean", 0.5)
@@ -239,7 +253,9 @@ def adaptive_compensation(
     # Luminance delta → small exposure correction
     lum_delta = query_lum - avg_train_lum
     # Scale: 0.1 luminance unit ≈ 0.5 EV
-    exposure_correction = -lum_delta * 5.0  # subtract because brighter photo needs less exposure push
+    exposure_correction = (
+        -lum_delta * 5.0
+    )  # subtract because brighter photo needs less exposure push
     exposure_correction = max(-1.5, min(1.5, exposure_correction))
 
     # Contrast delta → small contrast correction
@@ -304,7 +320,9 @@ _TONE_CURVE_KEYS = {
 }
 
 
-def _canonical_to_edit_recipe(canonical: Dict[str, Any], summary: str = "") -> Dict[str, Any]:
+def _canonical_to_edit_recipe(
+    canonical: Dict[str, Any], summary: str = ""
+) -> Dict[str, Any]:
     """Convert canonical key/value dict to the edit recipe format used by the plugin."""
     global_settings: Dict[str, Any] = {}
 
@@ -332,8 +350,10 @@ def _canonical_to_edit_recipe(canonical: Dict[str, Any], summary: str = "") -> D
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 class StyleEngineResult:
     """Result from the style engine."""
+
     def __init__(
         self,
         recipe: Dict[str, Any],
@@ -449,7 +469,7 @@ def generate_style_edit(
     # -----------------------------------------------------------------------
     # Step 4: Compute confidence from best candidate scores
     # -----------------------------------------------------------------------
-    #top_scores = [s for _, s in scored[:TOP_K_BLEND]]
+    # top_scores = [s for _, s in scored[:TOP_K_BLEND]]
 
     best_score = scored[0][1] if scored else 0.0
     confidence = round(best_score, 3)
@@ -473,14 +493,19 @@ def generate_style_edit(
     # -----------------------------------------------------------------------
     # Step 7: Build summary from top example labels
     # -----------------------------------------------------------------------
-    labels = list(set(
-        ex.get("label") or ex.get("summary") or ""
-        for ex, _ in winners if (ex.get("label") or ex.get("summary"))
-    ))
+    labels = list(
+        set(
+            ex.get("label") or ex.get("summary") or ""
+            for ex, _ in winners
+            if (ex.get("label") or ex.get("summary"))
+        )
+    )
     summary_parts = []
     if labels:
         summary_parts.append("Style: " + " / ".join(labels[:2]))
-    summary_parts.append(f"Matched {len(winners)} of {training_count} examples (confidence {confidence:.0%})")
+    summary_parts.append(
+        f"Matched {len(winners)} of {training_count} examples (confidence {confidence:.0%})"
+    )
     summary = " — ".join(summary_parts)
 
     recipe = _canonical_to_edit_recipe(blended, summary=summary)

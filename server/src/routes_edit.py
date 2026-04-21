@@ -22,14 +22,24 @@ def _has_items(values) -> bool:
         return False
 
 
-def _persist_edit_recipe(photo_id: str, filename: str | None, recipe: dict, options: dict) -> None:
+def _persist_edit_recipe(
+    photo_id: str, filename: str | None, recipe: dict, options: dict
+) -> None:
     catalog_id = options.get("catalog_id")
     existing = chroma_service.get_image(photo_id)
     existing_has_ids = existing is not None and _has_items(existing.get("ids"))
-    existing_has_metadatas = existing is not None and _has_items(existing.get("metadatas"))
-    existing_has_embeddings = existing is not None and _has_items(existing.get("embeddings"))
+    existing_has_metadatas = existing is not None and _has_items(
+        existing.get("metadatas")
+    )
+    existing_has_embeddings = existing is not None and _has_items(
+        existing.get("embeddings")
+    )
 
-    existing_meta = dict(existing["metadatas"][0]) if existing_has_ids and existing_has_metadatas else {}
+    existing_meta = (
+        dict(existing["metadatas"][0])
+        if existing_has_ids and existing_has_metadatas
+        else {}
+    )
     existing_embedding = None
     if existing_has_ids and existing_has_embeddings:
         try:
@@ -42,22 +52,34 @@ def _persist_edit_recipe(photo_id: str, filename: str | None, recipe: dict, opti
         metadata["filename"] = filename
     metadata["edit_recipe"] = json.dumps(recipe, ensure_ascii=False)
     metadata["edit_summary"] = recipe.get("summary", "")
-    metadata["edit_warnings"] = json.dumps(recipe.get("warnings", []), ensure_ascii=False)
-    metadata["edit_model"] = options.get("model") or metadata.get("edit_model") or metadata.get("model")
+    metadata["edit_warnings"] = json.dumps(
+        recipe.get("warnings", []), ensure_ascii=False
+    )
+    metadata["edit_model"] = (
+        options.get("model") or metadata.get("edit_model") or metadata.get("model")
+    )
     if options.get("provider"):
         metadata["edit_provider"] = options["provider"]
     metadata["edit_run_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     metadata.setdefault("provider", options.get("provider"))
     metadata.setdefault("model", options.get("model"))
-    metadata.setdefault("has_embedding", bool(existing_meta.get("has_embedding", False)))
+    metadata.setdefault(
+        "has_embedding", bool(existing_meta.get("has_embedding", False))
+    )
 
     if existing_has_ids:
-        chroma_service.update_image(photo_id, metadata, embedding=existing_embedding, catalog_id=catalog_id)
+        chroma_service.update_image(
+            photo_id, metadata, embedding=existing_embedding, catalog_id=catalog_id
+        )
     else:
-        chroma_service.add_image(photo_id, existing_embedding, metadata, catalog_id=catalog_id)
+        chroma_service.add_image(
+            photo_id, existing_embedding, metadata, catalog_id=catalog_id
+        )
 
 
-def _success_payload(photo_id: str, recipe: dict, options: dict, warning: str | None = None) -> dict:
+def _success_payload(
+    photo_id: str, recipe: dict, options: dict, warning: str | None = None
+) -> dict:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     payload = {
         "status": "success",
@@ -82,9 +104,17 @@ def generate_edit_recipe():
     options = _extract_options(request.form)
 
     if not images or not photo_ids or len(images) != len(photo_ids):
-        return jsonify({"error": "Mismatch between number of images and photo IDs, or no images provided"}), 400
+        return jsonify(
+            {
+                "error": "Mismatch between number of images and photo IDs, or no images provided"
+            }
+        ), 400
     if len(images) != 1:
-        return jsonify({"error": "The /edit endpoint currently supports exactly one photo per request"}), 400
+        return jsonify(
+            {
+                "error": "The /edit endpoint currently supports exactly one photo per request"
+            }
+        ), 400
 
     file = images[0]
     photo_id = photo_ids[0]
@@ -92,12 +122,18 @@ def generate_edit_recipe():
         return jsonify({"error": "Missing file or photo_id"}), 400
 
     analysis_service = get_analysis_service()
-    response = analysis_service.generate_edit_recipe_single(photo_id, file.read(), options)
+    response = analysis_service.generate_edit_recipe_single(
+        photo_id, file.read(), options
+    )
     if not response.success or not response.recipe:
-        return jsonify({"status": "error", "error": response.error or "Edit generation failed"}), 500
+        return jsonify(
+            {"status": "error", "error": response.error or "Edit generation failed"}
+        ), 500
 
     _persist_edit_recipe(photo_id, file.filename, response.recipe, options)
-    payload = _success_payload(photo_id, response.recipe, options, warning=response.warning)
+    payload = _success_payload(
+        photo_id, response.recipe, options, warning=response.warning
+    )
     payload["input_tokens"] = response.input_tokens
     payload["output_tokens"] = response.output_tokens
     return jsonify(payload), 200
@@ -112,16 +148,24 @@ def generate_edit_recipe_base64():
     filename = data.get("filename")
 
     if not image_b64 or not photo_id or not filename:
-        return jsonify({"error": "Missing required fields: image, photo_id, filename"}), 400
+        return jsonify(
+            {"error": "Missing required fields: image, photo_id, filename"}
+        ), 400
 
     options = _extract_options(data)
     analysis_service = get_analysis_service()
-    response = analysis_service.generate_edit_recipe_single(photo_id, base64.b64decode(image_b64.encode("ascii")), options)
+    response = analysis_service.generate_edit_recipe_single(
+        photo_id, base64.b64decode(image_b64.encode("ascii")), options
+    )
     if not response.success or not response.recipe:
-        return jsonify({"status": "error", "error": response.error or "Edit generation failed"}), 500
+        return jsonify(
+            {"status": "error", "error": response.error or "Edit generation failed"}
+        ), 500
 
     _persist_edit_recipe(photo_id, filename, response.recipe, options)
-    payload = _success_payload(photo_id, response.recipe, options, warning=response.warning)
+    payload = _success_payload(
+        photo_id, response.recipe, options, warning=response.warning
+    )
     payload["input_tokens"] = response.input_tokens
     payload["output_tokens"] = response.output_tokens
     return jsonify(payload), 200

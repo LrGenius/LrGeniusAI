@@ -3,6 +3,7 @@ Face detection and embedding service using InsightFace.
 Provides face detection, 512-dim embeddings, thumbnails, and lightweight
 face-quality metadata for indexing and culling.
 """
+
 from __future__ import annotations
 
 import io
@@ -26,8 +27,11 @@ def _get_face_app():
         return _face_app
     try:
         from insightface.app import FaceAnalysis
+
         root = os.environ.get("INSIGHTFACE_ROOT", os.path.expanduser("~/.insightface"))
-        _face_app = FaceAnalysis(name="buffalo_l", root=root, providers=["CPUExecutionProvider"])
+        _face_app = FaceAnalysis(
+            name="buffalo_l", root=root, providers=["CPUExecutionProvider"]
+        )
         _face_app.prepare(ctx_id=0, det_size=(640, 640))
         logger.info("InsightFace FaceAnalysis (buffalo_l) loaded.")
         return _face_app
@@ -44,6 +48,7 @@ def unload_face_app():
     logger.info("Unloading InsightFace FaceAnalysis model...")
     _face_app = None
     import gc
+
     gc.collect()
     logger.info("Unloaded InsightFace model.")
 
@@ -71,7 +76,9 @@ def _compute_face_sharpness(crop_rgb: np.ndarray) -> float:
     return max(0.0, min(1.0, variance / (variance + denominator)))
 
 
-def _compute_eye_openness_proxy(crop_rgb: np.ndarray, bbox_list: List[int], keypoints) -> float:
+def _compute_eye_openness_proxy(
+    crop_rgb: np.ndarray, bbox_list: List[int], keypoints
+) -> float:
     """
     Lightweight proxy for eye openness using vertical gradient energy near eye landmarks.
     This is not a full landmark-based blink detector, but works as a cheap signal.
@@ -99,7 +106,9 @@ def _compute_eye_openness_proxy(crop_rgb: np.ndarray, bbox_list: List[int], keyp
     patch_ratio = CULLING_CONFIG["face_metrics"]["eye_patch_ratio"]
     patch_radius_min = CULLING_CONFIG["face_metrics"]["eye_patch_radius_min"]
     patch_radius_max = CULLING_CONFIG["face_metrics"]["eye_patch_radius_max"]
-    patch_radius = int(max(patch_radius_min, min(patch_radius_max, round(face_span * patch_ratio))))
+    patch_radius = int(
+        max(patch_radius_min, min(patch_radius_max, round(face_span * patch_ratio)))
+    )
     eye_scores = []
 
     # InsightFace 5-point format starts with left and right eye.
@@ -125,15 +134,21 @@ def _compute_eye_openness_proxy(crop_rgb: np.ndarray, bbox_list: List[int], keyp
     return float(sum(eye_scores) / len(eye_scores))
 
 
-def _compute_occlusion_proxy(det_score: float, center_proximity: float, eye_openness: float) -> float:
+def _compute_occlusion_proxy(
+    det_score: float, center_proximity: float, eye_openness: float
+) -> float:
     return max(
         0.0,
         min(
             1.0,
-            1.0 - (
-                CULLING_CONFIG["face_metrics"]["occlusion_det_weight"] * max(0.0, min(1.0, det_score))
-                + CULLING_CONFIG["face_metrics"]["occlusion_center_weight"] * max(0.0, min(1.0, center_proximity))
-                + CULLING_CONFIG["face_metrics"]["occlusion_eye_weight"] * max(0.0, min(1.0, eye_openness))
+            1.0
+            - (
+                CULLING_CONFIG["face_metrics"]["occlusion_det_weight"]
+                * max(0.0, min(1.0, det_score))
+                + CULLING_CONFIG["face_metrics"]["occlusion_center_weight"]
+                * max(0.0, min(1.0, center_proximity))
+                + CULLING_CONFIG["face_metrics"]["occlusion_eye_weight"]
+                * max(0.0, min(1.0, eye_openness))
             ),
         ),
     )
@@ -193,30 +208,42 @@ def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
                 bbox_list = [x1, y1, x2, y2]
                 area_ratio = max(0.0, min(1.0, ((x2 - x1) * (y2 - y1)) / image_area))
                 sharpness = _compute_face_sharpness(crop)
-                eye_openness = _compute_eye_openness_proxy(crop, bbox_list, getattr(face, "kps", None))
+                eye_openness = _compute_eye_openness_proxy(
+                    crop, bbox_list, getattr(face, "kps", None)
+                )
                 center_x = (x1 + x2) / 2.0
                 center_y = (y1 + y2) / 2.0
                 offset_x = abs((center_x / max(1.0, image_width)) - 0.5) * 2.0
                 offset_y = abs((center_y / max(1.0, image_height)) - 0.5) * 2.0
-                center_proximity = max(0.0, min(1.0, 1.0 - ((offset_x + offset_y) / 2.0)))
-                thumb = Image.fromarray(crop).resize((112, 112), Image.Resampling.LANCZOS)
+                center_proximity = max(
+                    0.0, min(1.0, 1.0 - ((offset_x + offset_y) / 2.0))
+                )
+                thumb = Image.fromarray(crop).resize(
+                    (112, 112), Image.Resampling.LANCZOS
+                )
                 buf = io.BytesIO()
                 thumb.save(buf, format="JPEG", quality=85)
-                thumbnail_b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+                thumbnail_b64 = base64.standard_b64encode(buf.getvalue()).decode(
+                    "ascii"
+                )
                 det_score = float(getattr(face, "det_score", 0.0) or 0.0)
-                occlusion = _compute_occlusion_proxy(det_score, center_proximity, eye_openness)
+                occlusion = _compute_occlusion_proxy(
+                    det_score, center_proximity, eye_openness
+                )
 
-        results.append({
-            "embedding": emb,
-            "thumbnail": thumbnail_b64,
-            "bbox": bbox_list,
-            "area_ratio": round(area_ratio, 4),
-            "sharpness": round(sharpness, 4),
-            "det_score": float(getattr(face, "det_score", 0.0) or 0.0),
-            "center_proximity": round(center_proximity, 4),
-            "eye_openness": round(eye_openness, 4),
-            "blink_penalty": round(max(0.0, min(1.0, 1.0 - eye_openness)), 4),
-            "occlusion": round(occlusion, 4),
-        })
+        results.append(
+            {
+                "embedding": emb,
+                "thumbnail": thumbnail_b64,
+                "bbox": bbox_list,
+                "area_ratio": round(area_ratio, 4),
+                "sharpness": round(sharpness, 4),
+                "det_score": float(getattr(face, "det_score", 0.0) or 0.0),
+                "center_proximity": round(center_proximity, 4),
+                "eye_openness": round(eye_openness, 4),
+                "blink_penalty": round(max(0.0, min(1.0, 1.0 - eye_openness)), 4),
+                "occlusion": round(occlusion, 4),
+            }
+        )
 
     return results

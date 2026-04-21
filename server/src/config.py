@@ -6,17 +6,23 @@ import os
 import torch
 
 # In windowless environments (like pythonw.exe on Windows), sys.stdout and sys.stderr are None.
-# We redirect them to devnull to prevent crashes in libraries (logging, traceback, etc.) 
+# We redirect them to devnull to prevent crashes in libraries (logging, traceback, etc.)
 # that attempt to write to them.
 if sys.stdout is None:
-    sys.stdout = open(os.devnull, 'w')
+    sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:
-    sys.stderr = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, "w")
 
 # --- Argument Parsing ---
-parser = argparse.ArgumentParser(description='LrGenius Server')
-parser.add_argument('--db-path', type=str, help='Path to the ChromaDB database folder', required=False)
-parser.add_argument('--debug', action='store_true', help='Enable debug mode with auto-reloading and debug log level')
+parser = argparse.ArgumentParser(description="LrGenius Server")
+parser.add_argument(
+    "--db-path", type=str, help="Path to the ChromaDB database folder", required=False
+)
+parser.add_argument(
+    "--debug",
+    action="store_true",
+    help="Enable debug mode with auto-reloading and debug log level",
+)
 args = parser.parse_args()
 
 # --- Constants ---
@@ -36,8 +42,7 @@ else:
     TORCH_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-
-CLIP_MODEL_NAME="ViT-SO400M-16-SigLIP2-384"
+CLIP_MODEL_NAME = "ViT-SO400M-16-SigLIP2-384"
 IMAGE_MODEL_ID = "timm/" + CLIP_MODEL_NAME
 
 
@@ -64,8 +69,15 @@ DEFAULT_METADATA_PROVIDER = "ollama"
 # Metadata Generation Settings
 DEFAULT_METADATA_LANGUAGE = "English"
 DEFAULT_KEYWORD_CATEGORIES = [
-    "People", "Activities", "Objects", "Locations", "Events", 
-    "Colors", "Mood", "Technical", "Composition"
+    "People",
+    "Activities",
+    "Objects",
+    "Locations",
+    "Events",
+    "Colors",
+    "Mood",
+    "Technical",
+    "Composition",
 ]
 
 LMSTUDIO_HOST = "localhost:1234"
@@ -240,38 +252,47 @@ def get_available_culling_presets() -> list[str]:
 
 CULLING_CONFIG = get_culling_config("default")
 
+
 # --- Logger Setup ---
 def get_current_log_path() -> str:
     """Returns the log path based on the current DB_PATH, or the default if not set."""
     if DB_PATH:
         # Use dynamic DB_PATH context if available
         return os.path.join(os.path.dirname(DB_PATH) or ".", "lrgenius-server.log")
-        
+
     # Default paths determined at startup
     if sys.platform == "darwin":  # macOS
         return os.path.expanduser("~/Library/Logs/LrGeniusAI/lrgenius-server.log")
     elif sys.platform == "win32":  # Windows
-        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "LrGeniusAI", "logs", "lrgenius-server.log")
+        return os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "LrGeniusAI",
+            "logs",
+            "lrgenius-server.log",
+        )
     else:
         return os.path.join(os.getcwd(), "lrgenius-server.log")
 
+
 LOG_PATH = get_current_log_path()
+
 
 def update_log_path(new_db_path: str):
     """Updates the global LOG_PATH and potentially reconfigures logging handlers."""
     global DB_PATH, LOG_PATH
     DB_PATH = new_db_path
     LOG_PATH = get_current_log_path()
-    
+
     # Ensure directory exists
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     except Exception:
         pass
-    
-    # Optional: We could reconfigure logging here, but for now we'll 
+
+    # Optional: We could reconfigure logging here, but for now we'll
     # at least ensure endpoints find the right file.
     logger.info(f"Log path context updated to: {LOG_PATH}")
+
 
 try:
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -280,10 +301,12 @@ except Exception:
 
 log_level = logging.DEBUG if args.debug else logging.INFO
 
+
 # When running locally (not in Docker), on every start create a new log file and keep N backups.
 # In Docker we keep a single file so container logs stay simple.
 def _is_running_in_docker() -> bool:
     return os.path.exists("/.dockerenv") or os.environ.get("container") == "docker"
+
 
 def _rotate_log_on_startup(log_path: str, backup_count: int) -> None:
     """Shift existing log files: .log -> .log.1, .log.1 -> .log.2, ...; remove .log.backup_count."""
@@ -312,6 +335,7 @@ def _rotate_log_on_startup(log_path: str, backup_count: int) -> None:
     except OSError:
         pass
 
+
 def _file_log_handler():
     if _is_running_in_docker():
         return logging.FileHandler(LOG_PATH, encoding="utf-8")
@@ -323,6 +347,7 @@ def _file_log_handler():
     backup_count = max(1, min(backup_count, 20))
     _rotate_log_on_startup(LOG_PATH, backup_count)
     return logging.FileHandler(LOG_PATH, encoding="utf-8")
+
 
 # Configure logging with UTF-8 encoding to handle Unicode characters
 handlers = [_file_log_handler()]

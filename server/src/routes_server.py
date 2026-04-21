@@ -7,40 +7,41 @@ from config import logger
 from service_metadata import get_analysis_service
 import service_version
 
-server_bp = Blueprint('server', __name__)
+server_bp = Blueprint("server", __name__)
 
-@server_bp.route('/ping', methods=['GET'])
+
+@server_bp.route("/ping", methods=["GET"])
 def ping():
-    #logger.info("Ping request received")
+    # logger.info("Ping request received")
     return "pong"
 
 
-@server_bp.route('/shutdown', methods=['POST'])
+@server_bp.route("/shutdown", methods=["POST"])
 def shutdown():
     server_lifecycle.request_shutdown()
     return jsonify({"status": "Server is shutting down..."})
 
 
-@server_bp.route('/unload', methods=['POST'])
+@server_bp.route("/unload", methods=["POST"])
 def unload():
-    """ Unload models and collections from memory without stopping the server. """
+    """Unload models and collections from memory without stopping the server."""
     logger.info("Unload request received via API")
     server_lifecycle.unload_all_resources()
     return jsonify({"status": "Resources unloaded successfully."})
 
 
-@server_bp.route('/restart', methods=['POST'])
+@server_bp.route("/restart", methods=["POST"])
 def restart():
-    """ 
-    Gracefully shut down the server. 
-    If running as an OS service (launchd/Windows Service), it will be automatically restarted. 
+    """
+    Gracefully shut down the server.
+    If running as an OS service (launchd/Windows Service), it will be automatically restarted.
     """
     logger.info("Restart request received via API")
     server_lifecycle.request_shutdown()
     return jsonify({"status": "Restarting..."})
 
 
-@server_bp.route('/initialize', methods=['POST'])
+@server_bp.route("/initialize", methods=["POST"])
 def initialize():
     """
     Called by the Lightroom plugin to 'attach' the running service to a specific catalog.
@@ -50,20 +51,20 @@ def initialize():
     db_path = data.get("db_path")
     if not db_path:
         return jsonify({"error": "db_path is required"}), 400
-    
+
     import config
     import service_chroma
-    
+
     prev_db_path = config.DB_PATH
     if prev_db_path == db_path:
         return jsonify({"status": "already_initialized", "db_path": db_path})
-    
+
     logger.info(f"Initializing/Switching catalog database: {db_path}")
-    
+
     config.update_log_path(db_path)
     # Re-initialize logger if needed
     # but for now we focus on the database connection).
-    
+
     service_chroma.reset_chroma_client()
     # Trigger lazy re-initialization on next use or do it now:
     try:
@@ -76,20 +77,19 @@ def initialize():
         return jsonify({"error": str(e)}), 500
 
 
-
-@server_bp.route('/models', methods=['GET', 'POST'])
+@server_bp.route("/models", methods=["GET", "POST"])
 def list_models():
     """
     Returns all available multimodal models from all providers.
-    
+
     Dynamically checks availability of Ollama and LM Studio on each request.
     Always filters for multimodal (vision-capable) models only.
-    
-    POST JSON: { 
+
+    POST JSON: {
         openai_apikey?: str,  # Optional OpenAI API key for ChatGPT models
         gemini_apikey?: str   # Optional Gemini API key for Gemini models
     }
-    
+
     Returns: {
         "models": {
             "qwen": ["model1", "model2"],
@@ -101,21 +101,21 @@ def list_models():
     }
     """
     # Parse API keys and options from request
-    if request.method == 'POST':
+    if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        openai_apikey = data.get('openai_apikey')
-        gemini_apikey = data.get('gemini_apikey')
-        ollama_base_url = data.get('ollama_base_url')
-        lmstudio_base_url = data.get('lmstudio_base_url')
+        openai_apikey = data.get("openai_apikey")
+        gemini_apikey = data.get("gemini_apikey")
+        ollama_base_url = data.get("ollama_base_url")
+        lmstudio_base_url = data.get("lmstudio_base_url")
     else:
         # Support GET for backward compatibility
-        openai_apikey = request.args.get('openai_apikey')
-        gemini_apikey = request.args.get('gemini_apikey')
-        ollama_base_url = request.args.get('ollama_base_url')
-        lmstudio_base_url = request.args.get('lmstudio_base_url')
+        openai_apikey = request.args.get("openai_apikey")
+        gemini_apikey = request.args.get("gemini_apikey")
+        ollama_base_url = request.args.get("ollama_base_url")
+        lmstudio_base_url = request.args.get("lmstudio_base_url")
 
     logger.info("Models request received - checking all providers")
-    
+
     try:
         # Get all available multimodal models
         # This will dynamically re-check Ollama and LM Studio availability
@@ -131,12 +131,12 @@ def list_models():
         return jsonify({"error": str(e)}), 500
 
 
-@server_bp.route('/version', methods=['GET'])
+@server_bp.route("/version", methods=["GET"])
 def version():
     return jsonify(service_version.get_backend_version_info())
 
 
-@server_bp.route('/version/check', methods=['POST'])
+@server_bp.route("/version/check", methods=["POST"])
 def version_check():
     data = request.get_json(silent=True) or {}
     plugin_version = data.get("plugin_version")
@@ -150,19 +150,21 @@ def version_check():
     )
     return jsonify(result), 200
 
-@server_bp.route('/health', methods=['GET'])
+
+@server_bp.route("/health", methods=["GET"])
 def health():
     """Return health status of various backend components."""
     health_data = {}
-    
+
     # Model health (CLIP)
     health_data.update(server_lifecycle.get_health_status())
-    
+
     # LLM Provider health
     health_data.update(get_analysis_service().get_health_status())
-    
+
     # Add face model status (simplified for now)
     import service_face
+
     try:
         service_face._get_face_app()
         health_data["face_model"] = "loaded"
@@ -174,14 +176,14 @@ def health():
     return jsonify(health_data)
 
 
-@server_bp.route('/logs', methods=['GET'])
+@server_bp.route("/logs", methods=["GET"])
 def get_logs():
     """
     Returns backend logs and optionally local Ollama logs if accessible.
     """
     logger.debug("GET /logs request received")
     logs = {}
-    
+
     # 1. Backend logs
     log_path = config.LOG_PATH
     if os.path.isfile(log_path):
@@ -197,7 +199,7 @@ def get_logs():
         except Exception as e:
             logger.error(f"Failed to read backend logs: {e}")
             logs["backend_error"] = str(e)
-            
+
     # 2. Try to find Ollama logs on the server's machine
     ollama_log_paths = [
         os.path.expanduser("~/.ollama/logs/server.log"),
@@ -213,7 +215,7 @@ def get_logs():
                 with open(p, "r", encoding="utf-8", errors="ignore") as f:
                     f.seek(0, 2)
                     size = f.tell()
-                    f.seek(max(0, size - 512 * 1024)) # Last 512KB
+                    f.seek(max(0, size - 512 * 1024))  # Last 512KB
                     logs["ollama"] = f.read()
                 break
             except Exception as e:
@@ -243,13 +245,13 @@ def get_logs():
     return jsonify(logs)
 
 
-@server_bp.route('/logs/raw/<log_type>', methods=['GET'])
+@server_bp.route("/logs/raw/<log_type>", methods=["GET"])
 def get_raw_log(log_type):
     """
     Returns the raw log file for the specified type (backend, ollama, lmstudio).
     """
     logger.debug(f"GET /logs/raw/{log_type} request received")
-    
+
     path = None
     if log_type == "backend":
         path = config.LOG_PATH
@@ -274,10 +276,8 @@ def get_raw_log(log_type):
             if os.path.isfile(p):
                 path = p
                 break
-    
+
     if path and os.path.isfile(path):
-        return send_file(path, mimetype='text/plain')
-    
+        return send_file(path, mimetype="text/plain")
+
     return jsonify({"error": f"Log file for {log_type} not found"}), 404
-
-

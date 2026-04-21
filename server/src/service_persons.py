@@ -6,6 +6,7 @@ Distance scale: API accepts cosine distance (1 - cosine_similarity), same as Imm
 - Immich default 0.7, typical range 0.4–0.8 (higher = merge more).
 - Converted to L2 for sklearn: L2 = sqrt(2 * cosine_distance) for unit vectors.
 """
+
 from __future__ import annotations
 
 import json
@@ -107,12 +108,12 @@ def run_clustering(
     # Cosine distance -> L2 for unit vectors: L2 = sqrt(2 * cos_dist)
     l2_threshold = math.sqrt(2.0 * float(distance_threshold))
     agg_linkage = "complete" if linkage != "average" else "average"
-    
+
     data = chroma_service.get_all_faces(include_embeddings=True)
     if not data or not data.get("ids"):
         logger.info("No faces to cluster (or service not initialized).")
         return {"person_count": 0, "face_count": 0, "updated": 0, "unassigned": 0}
-        
+
     ids = data.get("ids", [])
     embeddings = data.get("embeddings", [])
     metadatas = data.get("metadatas", [])
@@ -125,7 +126,9 @@ def run_clustering(
     n = len(ids)
 
     if n == 1:
-        labels = [0] if min_faces_per_person is None or min_faces_per_person <= 1 else [-1]
+        labels = (
+            [0] if min_faces_per_person is None or min_faces_per_person <= 1 else [-1]
+        )
     else:
         if min_faces_per_person is not None and min_faces_per_person >= 2:
             clustering = DBSCAN(
@@ -196,12 +199,14 @@ def run_clustering(
         else:
             person_id = label_to_person.get(lb, f"person_{next_new_idx}")
         new_meta = dict(meta or {})
-        new_meta.update({
-            "photo_id": meta.get("photo_id", meta.get("photo_uuid", "")),
-            "photo_uuid": meta.get("photo_uuid", meta.get("photo_id", "")),
-            "thumbnail": meta.get("thumbnail", ""),
-            "person_id": person_id,
-        })
+        new_meta.update(
+            {
+                "photo_id": meta.get("photo_id", meta.get("photo_uuid", "")),
+                "photo_uuid": meta.get("photo_uuid", meta.get("photo_id", "")),
+                "thumbnail": meta.get("thumbnail", ""),
+                "person_id": person_id,
+            }
+        )
         new_metadatas.append(new_meta)
 
     chroma_service.update_face_metadatas(ids, new_metadatas)
@@ -226,7 +231,7 @@ def list_persons() -> List[Dict[str, Any]]:
     data = chroma_service.get_all_faces(include_embeddings=False)
     if not data or not data.get("ids"):
         return []
-        
+
     ids = data.get("ids", [])
     metadatas = data.get("metadatas", [])
 
@@ -239,25 +244,35 @@ def list_persons() -> List[Dict[str, Any]]:
         if pid == "":
             pid = "_unassigned"
         if pid not in by_person:
-            by_person[pid] = {"person_id": pid if pid != "_unassigned" else "", "face_ids": [], "photo_ids": set()}
+            by_person[pid] = {
+                "person_id": pid if pid != "_unassigned" else "",
+                "face_ids": [],
+                "photo_ids": set(),
+            }
         by_person[pid]["face_ids"].append(ids[i] if i < len(ids) else "")
-        by_person[pid]["photo_ids"].add(meta.get("photo_id", meta.get("photo_uuid", "")))
+        by_person[pid]["photo_ids"].add(
+            meta.get("photo_id", meta.get("photo_uuid", ""))
+        )
 
     result = []
+
     def _sort_key(item):
         pid, info = item[0], item[1]
         photo_count = len(info["photo_ids"])
         if pid == "_unassigned" or pid == "person_unassigned":
             return (1, 0, pid)  # unassigned at end
         return (0, -photo_count, pid)  # most photos first
+
     for pid, info in sorted(by_person.items(), key=_sort_key):
         person_id = info["person_id"]
-        result.append({
-            "person_id": person_id,
-            "name": names.get(person_id, "") if person_id else "",
-            "face_count": len(info["face_ids"]),
-            "photo_count": len(info["photo_ids"]),
-        })
+        result.append(
+            {
+                "person_id": person_id,
+                "name": names.get(person_id, "") if person_id else "",
+                "face_count": len(info["face_ids"]),
+                "photo_count": len(info["photo_ids"]),
+            }
+        )
     return result
 
 
@@ -271,7 +286,7 @@ def get_photo_ids_for_person(person_id: str) -> List[str]:
     data = chroma_service.get_all_faces(include_embeddings=False)
     if not data or not data.get("ids"):
         return []
-        
+
     metadatas = data.get("metadatas", [])
     photo_ids = set()
     for meta in metadatas or []:

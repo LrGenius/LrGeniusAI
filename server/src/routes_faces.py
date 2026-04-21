@@ -6,10 +6,10 @@ import service_persons as persons_service
 import base64
 
 
-faces_bp = Blueprint('faces', __name__)
+faces_bp = Blueprint("faces", __name__)
 
 
-@faces_bp.route('/faces/detect', methods=['POST'])
+@faces_bp.route("/faces/detect", methods=["POST"])
 def detect_faces_in_image():
     """
     Detect all faces in an image and return thumbnails for selection.
@@ -38,7 +38,7 @@ def detect_faces_in_image():
     return jsonify({"status": "ok", "faces": result_faces}), 200
 
 
-@faces_bp.route('/faces/query', methods=['POST'])
+@faces_bp.route("/faces/query", methods=["POST"])
 def query_faces_by_image():
     """
     Find indexed faces similar to the face(s) in the given image.
@@ -70,7 +70,14 @@ def query_faces_by_image():
     distances = result.get("distances", [[]])[0]
     metadatas = result.get("metadatas", [[]])[0]
     results = [
-        {"face_id": fid, "photo_id": m.get("photo_id") or m.get("photo_uuid"), "photo_uuid": m.get("photo_uuid") or m.get("photo_id"), "thumbnail": m.get("thumbnail", ""), "person_id": m.get("person_id", ""), "distance": d}
+        {
+            "face_id": fid,
+            "photo_id": m.get("photo_id") or m.get("photo_uuid"),
+            "photo_uuid": m.get("photo_uuid") or m.get("photo_id"),
+            "thumbnail": m.get("thumbnail", ""),
+            "person_id": m.get("person_id", ""),
+            "distance": d,
+        }
         for fid, m, d in zip(ids, metadatas or [], distances or [])
     ]
     return jsonify({"status": "ok", "results": results}), 200
@@ -78,7 +85,8 @@ def query_faces_by_image():
 
 # --- Person grouping (cluster + name) ---
 
-@faces_bp.route('/faces/cluster', methods=['POST'])
+
+@faces_bp.route("/faces/cluster", methods=["POST"])
 def cluster_faces():
     """
     Run clustering on all face embeddings and assign person_id to each face.
@@ -111,7 +119,7 @@ def cluster_faces():
         return jsonify({"error": str(e)}), 500
 
 
-@faces_bp.route('/faces/persons', methods=['GET'])
+@faces_bp.route("/faces/persons", methods=["GET"])
 def list_persons():
     """List all persons (cluster groups) with name, face_count, photo_count (no thumbnails)."""
     logger.info("List persons request received")
@@ -123,19 +131,21 @@ def list_persons():
         return jsonify({"error": str(e)}), 500
 
 
-@faces_bp.route('/faces/persons/<person_id>/thumbnail', methods=['GET'])
+@faces_bp.route("/faces/persons/<person_id>/thumbnail", methods=["GET"])
 def get_person_thumbnail(person_id):
     """Return base64 JPEG thumbnail for one face of this person (lazy load for UI)."""
     logger.info("Get person thumbnail request received for person_id=%s", person_id)
     try:
         thumb = persons_service.get_person_thumbnail_b64(person_id)
-        return jsonify({"status": "ok", "person_id": person_id, "thumbnail": thumb}), 200
+        return jsonify(
+            {"status": "ok", "person_id": person_id, "thumbnail": thumb}
+        ), 200
     except Exception as e:
         logger.error(f"Get person thumbnail failed: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
-@faces_bp.route('/faces/persons/<person_id>', methods=['PUT'])
+@faces_bp.route("/faces/persons/<person_id>", methods=["PUT"])
 def set_person_name_route(person_id):
     """Set display name for a person. Body: { \"name\": \"Alice\" }."""
     logger.info("Set person name request received for person_id=%s", person_id)
@@ -145,19 +155,28 @@ def set_person_name_route(person_id):
         name = str(name)
     try:
         persons_service.set_person_name(person_id, name)
-        return jsonify({"status": "ok", "person_id": person_id, "name": name.strip()}), 200
+        return jsonify(
+            {"status": "ok", "person_id": person_id, "name": name.strip()}
+        ), 200
     except Exception as e:
         logger.error(f"Set person name failed: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
-@faces_bp.route('/faces/persons/<person_id>/photos', methods=['GET'])
+@faces_bp.route("/faces/persons/<person_id>/photos", methods=["GET"])
 def get_photos_for_person(person_id):
     """Get list of photo IDs that contain this person."""
     logger.info("Get photos for person request received for person_id=%s", person_id)
     try:
         photo_ids = persons_service.get_photo_ids_for_person(person_id)
-        return jsonify({"status": "ok", "person_id": person_id, "photo_ids": photo_ids, "photo_uuids": photo_ids}), 200
+        return jsonify(
+            {
+                "status": "ok",
+                "person_id": person_id,
+                "photo_ids": photo_ids,
+                "photo_uuids": photo_ids,
+            }
+        ), 200
     except Exception as e:
         logger.error(f"Get photos for person failed: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

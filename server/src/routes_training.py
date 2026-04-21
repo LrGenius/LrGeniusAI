@@ -10,6 +10,7 @@ GET  /training/stats    – Return aggregate style-profile statistics
 DELETE /training/<id>   – Remove one training example by photo_id
 DELETE /training        – Clear all training examples
 """
+
 from __future__ import annotations
 
 import json
@@ -56,21 +57,22 @@ def _compute_clip_embedding(image_bytes: bytes):
 # POST /training/add
 # ---------------------------------------------------------------------------
 
+
 @training_bp.route("/training/add", methods=["POST"])
 def add_training_example():
     """Accept a multipart/form-data upload with:
-        - photo_id          (form field, required)
-        - develop_settings  (form field, JSON string, required)
-        - image             (file, optional – used to compute CLIP embedding + exposure/scene metrics)
-        - label             (form field, optional)
-        - summary           (form field, optional)
-        - focal_length      (form field, float mm, optional)
-        - capture_time      (form field, float unix timestamp, optional)
-        - camera_make       (form field, string, optional)
-        - camera_model      (form field, string, optional)
-        - iso               (form field, float, optional)
-        - aperture          (form field, float, optional)
-        - shutter_speed     (form field, string, optional)
+    - photo_id          (form field, required)
+    - develop_settings  (form field, JSON string, required)
+    - image             (file, optional – used to compute CLIP embedding + exposure/scene metrics)
+    - label             (form field, optional)
+    - summary           (form field, optional)
+    - focal_length      (form field, float mm, optional)
+    - capture_time      (form field, float unix timestamp, optional)
+    - camera_make       (form field, string, optional)
+    - camera_model      (form field, string, optional)
+    - iso               (form field, float, optional)
+    - aperture          (form field, float, optional)
+    - shutter_speed     (form field, string, optional)
     """
     photo_id = request.form.get("photo_id", "").strip()
     if not photo_id:
@@ -160,10 +162,17 @@ def add_training_example():
         count = training_service.get_training_count()
         response_data = {"status": "ok", "photo_id": photo_id, "total_count": count}
         if image_file and embedding is None:
-            response_data["warning"] = "Could not compute CLIP embedding for training example. AI style prediction may be less accurate."
+            response_data["warning"] = (
+                "Could not compute CLIP embedding for training example. AI style prediction may be less accurate."
+            )
         return jsonify(response_data), 200
     except Exception as exc:
-        logger.error("Failed to add training example photo_id=%s: %s", photo_id, exc, exc_info=True)
+        logger.error(
+            "Failed to add training example photo_id=%s: %s",
+            photo_id,
+            exc,
+            exc_info=True,
+        )
         return jsonify({"error": str(exc)}), 500
 
 
@@ -171,11 +180,14 @@ def add_training_example():
 # GET /training/list
 # ---------------------------------------------------------------------------
 
+
 @training_bp.route("/training/list", methods=["GET"])
 def list_training_examples():
     try:
         examples = training_service.list_training_examples()
-        return jsonify({"status": "ok", "examples": examples, "count": len(examples)}), 200
+        return jsonify(
+            {"status": "ok", "examples": examples, "count": len(examples)}
+        ), 200
     except Exception as exc:
         logger.error("Failed to list training examples: %s", exc, exc_info=True)
         return jsonify({"error": str(exc)}), 500
@@ -184,6 +196,7 @@ def list_training_examples():
 # ---------------------------------------------------------------------------
 # GET /training/stats
 # ---------------------------------------------------------------------------
+
 
 @training_bp.route("/training/stats", methods=["GET"])
 def get_training_stats():
@@ -200,6 +213,7 @@ def get_training_stats():
 # GET /training/count
 # ---------------------------------------------------------------------------
 
+
 @training_bp.route("/training/count", methods=["GET"])
 def get_training_count():
     try:
@@ -214,22 +228,33 @@ def get_training_count():
 # DELETE /training/<photo_id>
 # ---------------------------------------------------------------------------
 
+
 @training_bp.route("/training/<path:photo_id>", methods=["DELETE"])
 def delete_training_example(photo_id: str):
     try:
         deleted = training_service.delete_training_example(photo_id)
         if deleted:
             count = training_service.get_training_count()
-            return jsonify({"status": "ok", "photo_id": photo_id, "total_count": count}), 200
-        return jsonify({"error": f"No training example found for photo_id={photo_id}"}), 404
+            return jsonify(
+                {"status": "ok", "photo_id": photo_id, "total_count": count}
+            ), 200
+        return jsonify(
+            {"error": f"No training example found for photo_id={photo_id}"}
+        ), 404
     except Exception as exc:
-        logger.error("Failed to delete training example photo_id=%s: %s", photo_id, exc, exc_info=True)
+        logger.error(
+            "Failed to delete training example photo_id=%s: %s",
+            photo_id,
+            exc,
+            exc_info=True,
+        )
         return jsonify({"error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------------------
 # DELETE /training  (clear all)
 # ---------------------------------------------------------------------------
+
 
 @training_bp.route("/training", methods=["DELETE"])
 def clear_training_examples():

@@ -1,24 +1,29 @@
-
 from flask import Blueprint, jsonify
 from server_lifecycle import is_model_cached
 from service_clip import start_download_clip_model, get_download_status
 from config import logger
 
-clip_bp = Blueprint('clip', __name__)
+clip_bp = Blueprint("clip", __name__)
 
-@clip_bp.route('/clip/status', methods=['GET'])
+
+@clip_bp.route("/clip/status", methods=["GET"])
 def clip_cached():
     try:
         if is_model_cached():
-            return jsonify({"clip": "ready", "message": "CLIP model is loaded and ready."})
+            return jsonify(
+                {"clip": "ready", "message": "CLIP model is loaded and ready."}
+            )
         else:
-            return jsonify({"clip": "not_ready", "message": "CLIP model is not loaded."})           
-        
+            return jsonify(
+                {"clip": "not_ready", "message": "CLIP model is not loaded."}
+            )
+
     except Exception as e:
         logger.error(f"Error checking CLIP model status: {e}", exc_info=True)
         return jsonify({"clip": "not_ready", "message": str(e)})
-    
-@clip_bp.route('/clip/download/start', methods=['POST'])
+
+
+@clip_bp.route("/clip/download/start", methods=["POST"])
 def download_clip_model_start():
     logger.info("Download CLIP model request received")
 
@@ -29,7 +34,8 @@ def download_clip_model_start():
         logger.error(f"Error while starting to download CLIP model: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@clip_bp.route('/clip/download/status', methods=['GET'])
+
+@clip_bp.route("/clip/download/status", methods=["GET"])
 def download_clip_model_status():
     logger.info("Download CLIP model status request received")
 
@@ -37,7 +43,7 @@ def download_clip_model_status():
         status = get_download_status()
         return jsonify(status)
     except Exception as e:
-        logger.error(f"Error while getting download status for CLIP model: {e}", exc_info=True)
+        logger.error(
+            f"Error while getting download status for CLIP model: {e}", exc_info=True
+        )
         return jsonify({"error": str(e)}), 500
-        
-

@@ -12,6 +12,7 @@ Enhanced with multi-criteria features:
   - EXIF-based categorical fields (focal-length bucket, time-of-day, camera)
   - Statistics endpoint for the style-profile UI
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,9 @@ _chroma_client = None
 _training_collection = None
 
 COLLECTION_NAME = "edit_training"
-EMBEDDING_DIM = 1152  # CLIP ViT-L/14 dimension used by the main image_embeddings collection
+EMBEDDING_DIM = (
+    1152  # CLIP ViT-L/14 dimension used by the main image_embeddings collection
+)
 
 # ---------------------------------------------------------------------------
 # Scene-type probe texts for CLIP zero-shot classification
@@ -54,12 +57,14 @@ _SCENE_THRESHOLD = 0.22  # cosine similarity threshold for a tag to be "present"
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _ensure_initialized() -> None:
     global _chroma_client, _training_collection
     if _training_collection is not None:
         return
 
     import config
+
     if not config.DB_PATH:
         logger.debug("edit_training initialization skipped: DB_PATH not set yet.")
         return
@@ -67,7 +72,9 @@ def _ensure_initialized() -> None:
     import chromadb
     from chromadb.config import Settings
 
-    logger.info("Initializing edit_training ChromaDB collection (lazy at %s)...", config.DB_PATH)
+    logger.info(
+        "Initializing edit_training ChromaDB collection (lazy at %s)...", config.DB_PATH
+    )
     _chroma_client = chromadb.PersistentClient(
         path=config.DB_PATH,
         settings=Settings(anonymized_telemetry=False),
@@ -91,6 +98,7 @@ def _safe_unit(value: float) -> float:
 # ---------------------------------------------------------------------------
 # Exposure metrics (computed from JPEG preview bytes)
 # ---------------------------------------------------------------------------
+
 
 def compute_exposure_metrics(image_bytes: bytes) -> Dict[str, float]:
     """Compute proxy RAW exposure characteristics from an image.
@@ -172,6 +180,7 @@ def compute_exposure_metrics(image_bytes: bytes) -> Dict[str, float]:
 # Scene-type tagging via CLIP zero-shot probing
 # ---------------------------------------------------------------------------
 
+
 def compute_scene_tags(image_embedding: Optional[List[float]]) -> List[str]:
     """Return list of scene-type tag strings present in the image.
 
@@ -193,7 +202,11 @@ def compute_scene_tags(image_embedding: Optional[List[float]]) -> List[str]:
         if clip_model is None or clip_processor is None:
             return []
 
-        img_vec = torch.tensor(image_embedding, dtype=torch.float32).unsqueeze(0).to(TORCH_DEVICE)
+        img_vec = (
+            torch.tensor(image_embedding, dtype=torch.float32)
+            .unsqueeze(0)
+            .to(TORCH_DEVICE)
+        )
         img_vec = F.normalize(img_vec, p=2, dim=1)
 
         tags: List[str] = []
@@ -224,10 +237,12 @@ def _get_clip_tokenize():
     """Retrieve open_clip tokenizer (lazy import)."""
     try:
         import open_clip
+
         return open_clip.get_tokenizer("ViT-L-14")
     except Exception:
         try:
             import clip
+
             return clip.tokenize
         except Exception:
             return None
@@ -236,6 +251,7 @@ def _get_clip_tokenize():
 # ---------------------------------------------------------------------------
 # EXIF / catalog field bucketing
 # ---------------------------------------------------------------------------
+
 
 def focal_length_bucket(focal_length_mm: Optional[float]) -> str:
     """Map focal length in mm to a categorical bucket."""
@@ -308,7 +324,9 @@ _LR_TO_CANONICAL: Dict[str, str] = {
 }
 
 
-def normalize_develop_settings_for_style(develop_settings: Dict[str, Any]) -> Dict[str, float]:
+def normalize_develop_settings_for_style(
+    develop_settings: Dict[str, Any],
+) -> Dict[str, float]:
     """Convert raw LR develop settings dict to canonical float form for interpolation."""
     canonical: Dict[str, float] = {}
     for lr_key, canon_key in _LR_TO_CANONICAL.items():
@@ -321,6 +339,7 @@ def normalize_develop_settings_for_style(develop_settings: Dict[str, Any]) -> Di
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def add_training_example(
     photo_id: str,
@@ -360,7 +379,9 @@ def add_training_example(
     """
     _ensure_initialized()
     if _training_collection is None:
-        logger.warning("add_training_example skipped: service not initialized (DB_PATH missing).")
+        logger.warning(
+            "add_training_example skipped: service not initialized (DB_PATH missing)."
+        )
         return
     if not photo_id:
         raise ValueError("photo_id is required")
@@ -409,11 +430,17 @@ def add_training_example(
     # Upsert: update if already present, add otherwise.
     existing = _training_collection.get(ids=[photo_id], include=[])
     if existing and existing.get("ids"):
-        _training_collection.update(ids=[photo_id], embeddings=[emb], metadatas=[metadata])
-        logger.info("Updated training example photo_id=%s scene_tags=%s", photo_id, scene_tags)
+        _training_collection.update(
+            ids=[photo_id], embeddings=[emb], metadatas=[metadata]
+        )
+        logger.info(
+            "Updated training example photo_id=%s scene_tags=%s", photo_id, scene_tags
+        )
     else:
         _training_collection.add(ids=[photo_id], embeddings=[emb], metadatas=[metadata])
-        logger.info("Added training example photo_id=%s scene_tags=%s", photo_id, scene_tags)
+        logger.info(
+            "Added training example photo_id=%s scene_tags=%s", photo_id, scene_tags
+        )
 
 
 def delete_training_example(photo_id: str) -> bool:
@@ -454,17 +481,19 @@ def list_training_examples() -> List[Dict[str, Any]]:
     examples = []
     for i, pid in enumerate(ids):
         meta = dict(metadatas[i]) if i < len(metadatas) else {}
-        examples.append({
-            "photo_id": pid,
-            "filename": meta.get("filename", ""),
-            "label": meta.get("label", ""),
-            "summary": meta.get("summary", ""),
-            "captured_at": meta.get("captured_at", ""),
-            "has_embedding": bool(meta.get("has_embedding", False)),
-            "focal_length_bucket": meta.get("focal_length_bucket", "unknown"),
-            "time_of_day_bucket": meta.get("time_of_day_bucket", "unknown"),
-            "scene_tags": _safe_json_list(meta.get("scene_tags", "[]")),
-        })
+        examples.append(
+            {
+                "photo_id": pid,
+                "filename": meta.get("filename", ""),
+                "label": meta.get("label", ""),
+                "summary": meta.get("summary", ""),
+                "captured_at": meta.get("captured_at", ""),
+                "has_embedding": bool(meta.get("has_embedding", False)),
+                "focal_length_bucket": meta.get("focal_length_bucket", "unknown"),
+                "time_of_day_bucket": meta.get("time_of_day_bucket", "unknown"),
+                "scene_tags": _safe_json_list(meta.get("scene_tags", "[]")),
+            }
+        )
     examples.sort(key=lambda x: x["captured_at"], reverse=True)
     return examples
 
@@ -544,9 +573,13 @@ def get_training_stats() -> Dict[str, Any]:
     if exp_means:
         exposure_stats["mean_luminance"] = round(sum(exp_means) / len(exp_means), 3)
     if exp_contrasts:
-        exposure_stats["mean_contrast"] = round(sum(exp_contrasts) / len(exp_contrasts), 3)
+        exposure_stats["mean_contrast"] = round(
+            sum(exp_contrasts) / len(exp_contrasts), 3
+        )
     if exp_colorfulness:
-        exposure_stats["mean_colorfulness"] = round(sum(exp_colorfulness) / len(exp_colorfulness), 3)
+        exposure_stats["mean_colorfulness"] = round(
+            sum(exp_colorfulness) / len(exp_colorfulness), 3
+        )
 
     return {
         "count": count,
@@ -611,24 +644,26 @@ def query_similar_training_examples(
         except (ValueError, TypeError):
             canonical_settings = {}
 
-        examples.append({
-            "photo_id": pid,
-            "develop_settings": dev_settings,
-            "canonical_settings": canonical_settings,
-            "label": meta.get("label", ""),
-            "filename": meta.get("filename", ""),
-            "summary": meta.get("summary", ""),
-            "distance": float(distances[i]) if i < len(distances) else 1.0,
-            "scene_tags": _safe_json_list(meta.get("scene_tags", "[]")),
-            "exp_luminance_mean": float(meta.get("exp_luminance_mean", 0.5)),
-            "exp_contrast": float(meta.get("exp_contrast", 0.0)),
-            "exp_colorfulness": float(meta.get("exp_colorfulness", 0.0)),
-            "exp_warmth_proxy": float(meta.get("exp_warmth_proxy", 0.5)),
-            "exp_highlight_ratio": float(meta.get("exp_highlight_ratio", 0.0)),
-            "exp_shadow_ratio": float(meta.get("exp_shadow_ratio", 0.0)),
-            "focal_length_bucket": meta.get("focal_length_bucket", "unknown"),
-            "time_of_day_bucket": meta.get("time_of_day_bucket", "unknown"),
-        })
+        examples.append(
+            {
+                "photo_id": pid,
+                "develop_settings": dev_settings,
+                "canonical_settings": canonical_settings,
+                "label": meta.get("label", ""),
+                "filename": meta.get("filename", ""),
+                "summary": meta.get("summary", ""),
+                "distance": float(distances[i]) if i < len(distances) else 1.0,
+                "scene_tags": _safe_json_list(meta.get("scene_tags", "[]")),
+                "exp_luminance_mean": float(meta.get("exp_luminance_mean", 0.5)),
+                "exp_contrast": float(meta.get("exp_contrast", 0.0)),
+                "exp_colorfulness": float(meta.get("exp_colorfulness", 0.0)),
+                "exp_warmth_proxy": float(meta.get("exp_warmth_proxy", 0.5)),
+                "exp_highlight_ratio": float(meta.get("exp_highlight_ratio", 0.0)),
+                "exp_shadow_ratio": float(meta.get("exp_shadow_ratio", 0.0)),
+                "focal_length_bucket": meta.get("focal_length_bucket", "unknown"),
+                "time_of_day_bucket": meta.get("time_of_day_bucket", "unknown"),
+            }
+        )
     return examples
 
 
@@ -649,6 +684,7 @@ def clear_all_training_examples() -> int:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
 
 def _safe_json_list(value: Any) -> List[str]:
     """Safely decode a JSON string to a list, returning [] on failure."""

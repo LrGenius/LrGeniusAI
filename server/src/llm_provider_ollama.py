@@ -1,6 +1,7 @@
 """
 Ollama Provider for metadata generation using the official Ollama Python SDK
 """
+
 import json
 from typing import Dict, Any, Optional
 
@@ -24,11 +25,11 @@ class OllamaProvider(LLMProviderBase):
     Provider for Ollama local inference.
     Uses Ollama's chat completion API with vision models.
     """
-    
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.base_url = config.get('base_url', OLLAMA_BASE_URL)
-        self.timeout = config.get('timeout', 120)
+        self.base_url = config.get("base_url", OLLAMA_BASE_URL)
+        self.timeout = config.get("timeout", 120)
         # Initialize Ollama client targeting the configured host
         try:
             self.client = Client(host=self.base_url) if Client else None
@@ -36,14 +37,16 @@ class OllamaProvider(LLMProviderBase):
             # Defer failures to is_available/generate methods
             logger.warning(f"Failed to initialize Ollama client: {e}")
             self.client = None  # type: ignore[assignment]
-    
+
     def is_available(self) -> bool:
         """Check if Ollama server is reachable with a short timeout"""
         try:
             if Client is None:
-                logger.warning("Ollama SDK not installed. Please install 'ollama' Python package.")
+                logger.warning(
+                    "Ollama SDK not installed. Please install 'ollama' Python package."
+                )
                 return False
-            
+
             # Use a specialized client with a very short timeout for the health check
             # to avoid blocking the backend server if Ollama is down/slow.
             temp_client = Client(host=self.base_url, timeout=2.0)
@@ -52,19 +55,21 @@ class OllamaProvider(LLMProviderBase):
         except Exception as e:
             logger.warning(f"Ollama not available at {self.base_url}: {e}")
             return False
-    
+
     def _get_client(self, base_url_override: Optional[str] = None):
         """Get Ollama client, using base_url_override when provided (e.g. from request)."""
         url = base_url_override or self.base_url
         return Client(host=url) if Client else None
 
-    def generate_metadata(self, request: MetadataGenerationRequest) -> MetadataGenerationResponse:
+    def generate_metadata(
+        self, request: MetadataGenerationRequest
+    ) -> MetadataGenerationResponse:
         """
         Generate metadata using Ollama API.
-        
+
         Args:
             request: MetadataGenerationRequest with image and options
-            
+
         Returns:
             MetadataGenerationResponse with generated metadata
         """
@@ -75,7 +80,7 @@ class OllamaProvider(LLMProviderBase):
                     success=False,
                     error="Ollama SDK not installed. Please install the 'ollama' Python package.",
                 )
-            client = self._get_client(getattr(request, 'ollama_base_url', None))
+            client = self._get_client(getattr(request, "ollama_base_url", None))
 
             # Convert image to base64
             image_b64 = self._image_to_base64(request.image_data)
@@ -111,11 +116,15 @@ class OllamaProvider(LLMProviderBase):
                 content = message.get("content")
             else:
                 message = getattr(result, "message", None)
-                content = getattr(message, "content", None) if message is not None else None
+                content = (
+                    getattr(message, "content", None) if message is not None else None
+                )
             if not content:
                 error_msg = "Empty response content from Ollama"
                 logger.error(error_msg)
-                return MetadataGenerationResponse(uuid=request.uuid, success=False, error=error_msg)
+                return MetadataGenerationResponse(
+                    uuid=request.uuid, success=False, error=error_msg
+                )
 
             logger.debug(f"Ollama raw response: {content}")
 
@@ -123,10 +132,14 @@ class OllamaProvider(LLMProviderBase):
             parsed_data = json.loads(content)
 
             # Extract metadata
-            keywords = self._normalize_keywords_structure(parsed_data.get("keywords", []))
+            keywords = self._normalize_keywords_structure(
+                parsed_data.get("keywords", [])
+            )
             caption = parsed_data.get("caption") if request.generate_caption else None
             title = parsed_data.get("title") if request.generate_title else None
-            alt_text = parsed_data.get("alt_text") if request.generate_alt_text else None
+            alt_text = (
+                parsed_data.get("alt_text") if request.generate_alt_text else None
+            )
 
             return MetadataGenerationResponse(
                 uuid=request.uuid,
@@ -154,7 +167,9 @@ class OllamaProvider(LLMProviderBase):
                 error=str(e),
             )
 
-    def generate_edit_recipe(self, request: EditGenerationRequest) -> EditGenerationResponse:
+    def generate_edit_recipe(
+        self, request: EditGenerationRequest
+    ) -> EditGenerationResponse:
         try:
             if Client is None:
                 return EditGenerationResponse(
@@ -188,9 +203,15 @@ class OllamaProvider(LLMProviderBase):
                 content = message.get("content")
             else:
                 message = getattr(result, "message", None)
-                content = getattr(message, "content", None) if message is not None else None
+                content = (
+                    getattr(message, "content", None) if message is not None else None
+                )
             if not content:
-                return EditGenerationResponse(uuid=request.uuid, success=False, error="Empty response content from Ollama")
+                return EditGenerationResponse(
+                    uuid=request.uuid,
+                    success=False,
+                    error="Empty response content from Ollama",
+                )
 
             recipe = self._normalize_edit_recipe(json.loads(content))
             return EditGenerationResponse(
@@ -202,18 +223,24 @@ class OllamaProvider(LLMProviderBase):
             )
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse edit JSON from Ollama response: {e}")
-            return EditGenerationResponse(uuid=request.uuid, success=False, error=f"JSON parsing error: {str(e)}")
+            return EditGenerationResponse(
+                uuid=request.uuid, success=False, error=f"JSON parsing error: {str(e)}"
+            )
         except Exception as e:
-            logger.error(f"Error generating edit recipe with Ollama: {e}", exc_info=True)
-            return EditGenerationResponse(uuid=request.uuid, success=False, error=str(e))
+            logger.error(
+                f"Error generating edit recipe with Ollama: {e}", exc_info=True
+            )
+            return EditGenerationResponse(
+                uuid=request.uuid, success=False, error=str(e)
+            )
 
     def list_available_models(self) -> list:
         """
         List available Ollama models using Ollama API.
-        
+
         Args:
             only_multimodal: If True, return only vision-capable models
-            
+
         Returns:
             List of model identifiers
         """
