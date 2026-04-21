@@ -266,10 +266,14 @@ class AnalysisService:
         
         # Diagnostic logging for prompt context
         ctx_summary = []
-        if request.existing_keywords: ctx_summary.append(f"{len(request.existing_keywords)} keywords")
-        if request.folder_names: ctx_summary.append(f"{len(request.folder_names)} folders")
-        if request.user_context: ctx_summary.append(f"context ({len(str(request.user_context))} chars)")
-        if request.gps_coordinates: ctx_summary.append("GPS")
+        if request.existing_keywords:
+            ctx_summary.append(f"{len(request.existing_keywords)} keywords")
+        if request.folder_names:
+            ctx_summary.append(f"{len(request.folder_names)} folders")
+        if request.user_context:
+            ctx_summary.append(f"context ({len(str(request.user_context))} chars)")
+        if request.gps_coordinates:
+            ctx_summary.append("GPS")
         if ctx_summary:
             logger.info(f"Context for {uuid}: {', '.join(ctx_summary)}")
         else:
