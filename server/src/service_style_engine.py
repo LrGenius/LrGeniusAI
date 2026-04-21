@@ -449,7 +449,8 @@ def generate_style_edit(
     # -----------------------------------------------------------------------
     # Step 4: Compute confidence from best candidate scores
     # -----------------------------------------------------------------------
-    top_scores = [s for _, s in scored[:TOP_K_BLEND]]
+    #top_scores = [s for _, s in scored[:TOP_K_BLEND]]
+
     best_score = scored[0][1] if scored else 0.0
     confidence = round(best_score, 3)
 
