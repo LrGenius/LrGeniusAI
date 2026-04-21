@@ -117,7 +117,7 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
             f:push_button {
                 title = LOC "$$$/LrGeniusAI/PromptConfig/Add=Add",
                 action = function(button)
-                    local newName = PromptConfigProvider.addPrompt()
+                    local newName = PromptConfigProvider.addPrompt(propertyTable)
                     if newName ~= nil then
                         LrDialogs.stopModalWithResult(dropDown, "cancel")
                         PromptConfigProvider.showPromptConfigDialog(propertyTable)
@@ -127,7 +127,7 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
             f:push_button {
                 title = LOC "$$$/LrGeniusAI/PromptConfig/Delete=Delete",
                 action = function(button)
-                    PromptConfigProvider.deletePrompt(propertyTable.prompt)
+                    PromptConfigProvider.deletePrompt(propertyTable)
                     LrDialogs.stopModalWithResult(dropDown, "cancel")
                     PromptConfigProvider.showPromptConfigDialog(propertyTable)
                 end,
