@@ -61,7 +61,8 @@ local function dumpHelper(val, indent, seen)
 
             for _, k in ipairs(sorted_keys) do
                 local v = val[k]
-                local key_str = (type(k) == "string" and not k:match("^[A-Za-z_][A-Za-z0-9_]*$")) and ('["' .. k .. '"]') or tostring(k)
+                local key_str = (type(k) == "string" and not k:match("^[A-Za-z_][A-Za-z0-9_]*$")) and ('["' .. k .. '"]') or
+                tostring(k)
                 table.insert(parts, next_indent .. key_str .. " = " .. dumpHelper(v, next_indent, seen))
             end
             return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
@@ -135,7 +136,6 @@ function Util.string_split(s, delimiter)
     return t
 end
 
-
 function Util.encodePhotoToBase64(filePath)
     local file = io.open(filePath, "rb")
     if not file then
@@ -187,7 +187,7 @@ function Util.getPhotoExif(photo)
     if type(dt) == "number" then exif.capture_time = dt end
 
     -- Camera Make & Model
-    -- Prefer formatted metadata for camera info as it is often more reliably populated 
+    -- Prefer formatted metadata for camera info as it is often more reliably populated
     -- for modern proprietary RAW formats (CR3, etc.) in the SDK.
     local make = safeGetFormattedMetadata(photo, "cameraMaker") or safeGetRawMetadata(photo, "cameraMaker")
     if type(make) == "string" and make ~= "" then exif.camera_make = make end
@@ -355,7 +355,8 @@ function Util.getGlobalPhotoIdForPhoto(photo, options)
     local originalFilePath = photo:getRawMetadata("path")
     local attributes, attrErr = getFileAttributes(originalFilePath)
     if not attributes then
-        log:error("getGlobalPhotoIdForPhoto: file attributes unavailable for photo path=" .. tostring(originalFilePath) .. " err=" .. tostring(attrErr))
+        log:error("getGlobalPhotoIdForPhoto: file attributes unavailable for photo path=" ..
+        tostring(originalFilePath) .. " err=" .. tostring(attrErr))
         return nil, attrErr
     end
 
@@ -386,10 +387,12 @@ function Util.getGlobalPhotoIdForPhoto(photo, options)
     }
 
     if not globalPhotoId then
-        log:warn("getGlobalPhotoIdForPhoto: stable metadata id failed, falling back to partial hash for " .. tostring(originalFilePath) .. " err=" .. tostring(idErr))
+        log:warn("getGlobalPhotoIdForPhoto: stable metadata id failed, falling back to partial hash for " ..
+        tostring(originalFilePath) .. " err=" .. tostring(idErr))
         local fallbackId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
         if not fallbackId then
-            log:error("getGlobalPhotoIdForPhoto: failed for " .. tostring(originalFilePath) .. " err=" .. tostring(metadataOrErr))
+            log:error("getGlobalPhotoIdForPhoto: failed for " ..
+            tostring(originalFilePath) .. " err=" .. tostring(metadataOrErr))
             return nil, metadataOrErr
         end
         if type(metadataOrErr) ~= "table" then
@@ -404,7 +407,8 @@ function Util.getGlobalPhotoIdForPhoto(photo, options)
     catalog:withPrivateWriteAccessDo(function()
         photo:setPropertyForPlugin(_PLUGIN, "globalPhotoId", globalPhotoId)
         photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize", tostring(metadata.fileSize or ""))
-        photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate", tostring(metadata.fileModificationDate or ""))
+        photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate",
+            tostring(metadata.fileModificationDate or ""))
         photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm", tostring(metadata.algorithm or STABLE_ID_ALGO))
     end)
 
@@ -440,7 +444,8 @@ end
 function Util.getLogfilePath()
     local filename = "LrGeniusAI.log"
     local macPath14 = LrPathUtils.getStandardFilePath('home') .. "/Library/Logs/Adobe/Lightroom/LrClassicLogs/"
-    local winPath14 = LrPathUtils.getStandardFilePath('home') .. "\\AppData\\Local\\Adobe\\Lightroom\\Logs\\LrClassicLogs\\"
+    local winPath14 = LrPathUtils.getStandardFilePath('home') ..
+    "\\AppData\\Local\\Adobe\\Lightroom\\Logs\\LrClassicLogs\\"
     local macPathOld = LrPathUtils.getStandardFilePath('documents') .. "/LrClassicLogs/"
     local winPathOld = LrPathUtils.getStandardFilePath('documents') .. "\\LrClassicLogs\\"
 
@@ -475,15 +480,19 @@ function Util.copyLogfilesToDesktop(extraInfo)
         canCancel = true,
     })
 
-    local folder = LrPathUtils.child(LrPathUtils.getStandardFilePath('desktop'), "LrGenius_" .. LrDate.timeToIsoDate(LrDate.currentTime()))
+    local folderName = "LrGenius_" .. Util.formatTimestampSafe(LrDate.currentTime())
+    local folder = LrPathUtils.child(LrPathUtils.getStandardFilePath('desktop'), folderName)
     if LrFileUtils.exists(folder) then
         log:trace("Removing pre-existing report folder: " .. folder)
         LrFileUtils.moveToTrash(folder)
     end
-    
-    if progressScope:isCanceled() then progressScope:done() return end
+
+    if progressScope:isCanceled() then
+        progressScope:done()
+        return
+    end
     progressScope:setPortionComplete(0.1, 1)
-    
+
     log:trace("Creating report folder: " .. folder)
     LrFileUtils.createDirectory(folder)
 
@@ -493,7 +502,7 @@ function Util.copyLogfilesToDesktop(extraInfo)
         if f then
             f:write("LrGeniusAI Error Report\n")
             f:write("======================\n\n")
-            f:write("Date: " .. LrDate.timeToIsoDate(LrDate.currentTime()) .. "\n")
+            f:write("Date: " .. Util.formatTimestampSafe(LrDate.currentTime()) .. "\n")
             if extraInfo.error then f:write("Error: " .. tostring(extraInfo.error) .. "\n") end
             if extraInfo.details then f:write("Details: " .. tostring(extraInfo.details) .. "\n") end
             f:write("\nSystem Info:\n")
@@ -503,53 +512,74 @@ function Util.copyLogfilesToDesktop(extraInfo)
         end
     end
 
-    if progressScope:isCanceled() then progressScope:done() return end
+    if progressScope:isCanceled() then
+        progressScope:done()
+        return
+    end
     progressScope:setPortionComplete(0.3, 1)
 
     local filePath = LrPathUtils.child(folder, 'LrGeniusAI.log')
     local logFilePath = Util.getLogfilePath()
     if LrFileUtils.exists(logFilePath) then
         log:trace("Copying local logfile: " .. logFilePath)
-        LrFileUtils.copy(logFilePath, filePath)
+        -- On Windows, LrFileUtils.copy can fail if the file is locked by the logger.
+        -- Reading the file content via LrFileUtils.readFile is more robust.
+        local content = LrFileUtils.readFile(logFilePath)
+        if content then
+            local f = io.open(filePath, "wb")
+            if f then
+                f:write(content)
+                f:close()
+            else
+                -- Fallback to copy if file handle fails
+                LrFileUtils.copy(logFilePath, filePath)
+            end
+        else
+            -- Fallback to copy if read fails
+            LrFileUtils.copy(logFilePath, filePath)
+        end
     else
         log:warn("Logfile not found: " .. tostring(logFilePath))
         -- Don't show error here, just continue as we might have server logs
     end
 
-    if progressScope:isCanceled() then progressScope:done() return end
+    if progressScope:isCanceled() then
+        progressScope:done()
+        return
+    end
     progressScope:setPortionComplete(0.5, 1)
     progressScope:setCaption(LOC "$$$/LrGeniusAI/Util/FetchingServerLogs=Fetching server-side logs via API...")
 
     -- Use the new streaming method to download logs directly to disk, avoiding memory spikes
     local url = tostring(prefs.backendServerUrl or "")
-    local host = url:match("://([^:/]+)") or url:match("^([^:/]+)")
+    local host = (url:match("://([^:/]+)") or url:match("^([^:/]+)") or ""):lower()
     local prefix = ""
-    if host and host ~= "127.0.0.1" and host ~= "localhost" and host ~= "" then
-        prefix = tostring(host) .. "-"
+    if host ~= "" and host ~= "127.0.0.1" and host ~= "localhost" then
+        prefix = host .. "-"
     end
 
     local logFiles = {
-        { type = "backend", filename = "lrgenius-server.log" },
-        { type = "ollama", filename = "ollama.log" },
+        { type = "backend",  filename = "lrgenius-server.log" },
+        { type = "ollama",   filename = "ollama.log" },
         { type = "lmstudio", filename = "lmstudio.log" },
     }
 
     log:trace("Fetching server-side logs via streaming API...")
     for i, logInfo in ipairs(logFiles) do
         if progressScope:isCanceled() then break end
-        
+
         local targetName = prefix .. logInfo.filename
         local targetPath = LrPathUtils.child(folder, targetName)
-        
+
         progressScope:setCaption(LOC("$$$/LrGeniusAI/Util/FetchingLog=Fetching ^1...", logInfo.filename))
         local success = SearchIndexAPI.downloadRawLog(logInfo.type, targetPath)
-        
+
         if success then
             log:trace("Successfully streamed log: " .. logInfo.filename)
         else
             log:trace("Log not available or fetch failed: " .. logInfo.filename)
         end
-        
+
         progressScope:setPortionComplete(0.5 + (i / #logFiles) * 0.4, 1)
     end
 
@@ -560,7 +590,8 @@ function Util.copyLogfilesToDesktop(extraInfo)
     if LrFileUtils.exists(folder) then
         LrShell.revealInShell(folder)
     else
-        ErrorHandler.showError(LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/logfileCopyFailed=Logfile copy failed", folder)
+        ErrorHandler.showError(LOC "$$$/lrc-ai-assistant/PluginInfoDialogSections/logfileCopyFailed=Logfile copy failed",
+            folder)
     end
 end
 
@@ -578,7 +609,6 @@ function Util.getOllamaLogfilePath()
 end
 
 function Util.deepcopy(o, seen)
-
     seen = seen or {}
     if o == nil then return nil end
     if seen[o] then return seen[o] end
@@ -591,15 +621,12 @@ function Util.deepcopy(o, seen)
         for k, v in next, o, nil do
             no[Util.deepcopy(k, seen)] = Util.deepcopy(v, seen)
         end
-    setmetatable(no, Util.deepcopy(getmetatable(o), seen))
+        setmetatable(no, Util.deepcopy(getmetatable(o), seen))
     else
         no = o
     end
     return no
-
 end
-
-
 
 ---
 -- Returns true if a table is a keyword leaf object.
@@ -687,11 +714,11 @@ function Util.extractAllKeywords(hierarchicalTable)
     local function recurse(tbl, currentPath)
         iterateDeterministic(tbl, function(key, value)
             local keyIsString = type(key) == "string"
-            
+
             -- Defensive: ignore string keys that are purely numeric, as they are likely
             -- leaked indices from JSON conversion or previous processing.
             local isNumericKey = keyIsString and (tonumber(key) ~= nil)
-            
+
             if isKeywordLeafObject(value) or type(value) == "string" then
                 -- It's a leaf value (string or leaf object)
                 local keywordName, synonyms = sanitizeKeywordLeaf(value)
@@ -699,7 +726,7 @@ function Util.extractAllKeywords(hierarchicalTable)
                     -- Determine the category path for this keyword
                     local finalPath = currentPath
                     if keyIsString and not isNumericKey and keywordName ~= key then
-                        -- If the key is a string and different from the name, 
+                        -- If the key is a string and different from the name,
                         -- it's likely a parent/category name
                         if finalPath == "" then
                             finalPath = key
@@ -707,7 +734,7 @@ function Util.extractAllKeywords(hierarchicalTable)
                             finalPath = finalPath .. " > " .. key
                         end
                     end
-                    
+
                     -- Deduplication: prevent adding same keyword name under same path
                     local dedupeKey = finalPath .. "//" .. keywordName
                     if not seenKeywords[dedupeKey] then
@@ -846,7 +873,7 @@ function Util.buildHierarchyFromPaths(pathsWithMeta)
                     current = current[catName]
                 end
             end
-            
+
             local leafName = Util.trim(parts[#parts])
             if leafName ~= "" then
                 local leafNode
@@ -862,7 +889,7 @@ function Util.buildHierarchyFromPaths(pathsWithMeta)
     return root
 end
 
---- 
+---
 -- Converts an LrKeyword object to a string representing its full hierarchy.
 -- Format: Parent-Keyword>Parent-Keyword>...>Keyword
 -- @param keyword The LrKeyword object.
@@ -877,7 +904,6 @@ function Util.keywordToHierarchyString(keyword)
     end
     return table.concat(parts, ">")
 end
-
 
 ---
 -- Converts a hierarchy string (Parent-Keyword>...>Keyword) into a hierarchy of LrKeyword objects.
@@ -968,11 +994,11 @@ function Util.keywordTableToStringList(keywordTable)
 end
 
 function Util.get_keys(t)
-  local keys={}
-  for key,_ in pairs(t) do
-    table.insert(keys, key)
-  end
-  return keys
+    local keys = {}
+    for key, _ in pairs(t) do
+        table.insert(keys, key)
+    end
+    return keys
 end
 
 function Util.waitForServerDialog(options)
@@ -1124,10 +1150,10 @@ end
 
 function Util.showDiagnosticFailureDialog(diag)
     local f = LrView.osFactory()
-    
+
     local message = LOC "$$$/LrGeniusAI/Health/BackendCritical=The local backend server is not running and could not be started."
     local hint = ""
-    
+
     if diag.binaryMissing then
         hint = LOC "$$$/LrGeniusAI/Diagnostics/BinaryMissingHint=Please reinstall the LrGeniusAI plugin or check if your antivirus has quarantined the 'lrgenius-server' file."
     elseif diag.portBusy then
@@ -1135,7 +1161,7 @@ function Util.showDiagnosticFailureDialog(diag)
     else
         hint = LOC "$$$/LrGeniusAI/Onboarding/BackendHint=If the server fails to start, check if another application is using port 19819 or if your firewall is blocking it."
     end
-    
+
     local contents = f:column {
         spacing = f:control_spacing(),
         f:static_text {
@@ -1152,10 +1178,11 @@ function Util.showDiagnosticFailureDialog(diag)
             width_in_chars = 60,
         },
     }
-    
+
     if diag.logSnippet then
         table.insert(contents, f:spacer { height = 10 })
-        table.insert(contents, f:static_text { title = LOC "$$$/LrGeniusAI/Diagnostics/LogSnippet=Recent server errors:" })
+        table.insert(contents,
+            f:static_text { title = LOC "$$$/LrGeniusAI/Diagnostics/LogSnippet=Recent server errors:" })
         table.insert(contents, f:edit_field {
             value = diag.logSnippet,
             width_in_chars = 60,
@@ -1163,14 +1190,14 @@ function Util.showDiagnosticFailureDialog(diag)
             enabled = false,
         })
     end
-    
+
     local result = LrDialogs.presentModalDialog {
         title = LOC "$$$/LrGeniusAI/Health/DialogTitle=LrGeniusAI System Check",
         contents = contents,
         actionVerb = LOC "$$$/LrGeniusAI/Health/OpenWizard=Run Setup Wizard",
         cancelVerb = LOC "$$$/LrGeniusAI/common/Close=Close",
     }
-    
+
     if result == 'ok' then
         OnboardingWizard.show(true)
     end
@@ -1185,43 +1212,43 @@ function Util.checkPluginHealth(options)
         issues = {},
         diagnostics = nil
     }
-    
+
     if not health.backend then
         report.healthy = false
         report.critical = true
         report.diagnostics = SearchIndexAPI.diagnoseStartupFailure()
-        table.insert(report.issues, { 
-            title = LOC "$$$/LrGeniusAI/Health/BackendFailed=Backend server is not reachable.", 
+        table.insert(report.issues, {
+            title = LOC "$$$/LrGeniusAI/Health/BackendFailed=Backend server is not reachable.",
             hint = LOC "$$$/LrGeniusAI/Health/BackendCritical=The local backend server is not running and could not be started.",
-            critical = true 
+            critical = true
         })
     end
-    
+
     if not health.clip and (options.requireClip or prefs.useClip) then
         report.healthy = false
-        table.insert(report.issues, { 
-            title = LOC "$$$/LrGeniusAI/Health/ClipMissing=CLIP model for semantic search is missing.", 
+        table.insert(report.issues, {
+            title = LOC "$$$/LrGeniusAI/Health/ClipMissing=CLIP model for semantic search is missing.",
             hint = LOC "$$$/LrGeniusAI/Health/ClipMissingHint=Semantic search and some indexing features will be disabled. You can download the model in the Setup Wizard.",
-            critical = false 
+            critical = false
         })
     end
-    
+
     if not health.gemini and not health.chatgpt and not health.ollama and not health.lmstudio then
         report.healthy = false
-        table.insert(report.issues, { 
-            title = LOC "$$$/LrGeniusAI/Health/ApiKeysMissing=No AI providers configured for AI generation.", 
+        table.insert(report.issues, {
+            title = LOC "$$$/LrGeniusAI/Health/ApiKeysMissing=No AI providers configured for AI generation.",
             hint = LOC "$$$/LrGeniusAI/Health/ApiKeysMissingHint=You need to configure Gemini or ChatGPT API keys (or a local provider) to generate keywords and descriptions.",
-            critical = options.requireProviders == true 
+            critical = options.requireProviders == true
         })
         if options.requireProviders then report.critical = true end
     end
-    
+
     return report
 end
 
 function Util.showHealthIssuesDialog(report)
     local f = LrView.osFactory()
-    
+
     local contents = f:column {
         spacing = f:control_spacing(),
         f:static_text {
@@ -1229,7 +1256,7 @@ function Util.showHealthIssuesDialog(report)
             font = "<system/bold>",
         },
     }
-    
+
     for _, issue in ipairs(report.issues) do
         table.insert(contents, f:row {
             f:static_text {
@@ -1247,7 +1274,7 @@ function Util.showHealthIssuesDialog(report)
             }
         })
     end
-    
+
     local result = LrDialogs.presentModalDialog {
         title = LOC "$$$/LrGeniusAI/Health/DialogTitle=LrGeniusAI System Check",
         contents = contents,
@@ -1255,7 +1282,7 @@ function Util.showHealthIssuesDialog(report)
         cancelVerb = LOC "$$$/LrGeniusAI/common/Cancel=Cancel",
         otherVerb = not report.critical and LOC "$$$/LrGeniusAI/Health/OpenWizard=Run Setup Wizard" or nil,
     }
-    
+
     if result == 'ok' then
         if report.critical then
             OnboardingWizard.show(true)
@@ -1267,10 +1294,9 @@ function Util.showHealthIssuesDialog(report)
         OnboardingWizard.show(true)
         return false
     end
-    
+
     return false
 end
-
 
 ---
 -- Adds a photo to the "Rejected AI Descriptions" collection (under set "LrGeniusAI").
