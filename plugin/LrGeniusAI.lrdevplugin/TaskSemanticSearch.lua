@@ -46,17 +46,17 @@ local function showAdvancedSearchDialog(ctx)
                 title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchIn=Search in",
                 f:column {
                     spacing = f:control_spacing(),
-                    f:row {
-                        f:checkbox { value = bind('searchInSemanticSiglip') },
-                        f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)" },
+                    f:checkbox {
+                        value = bind('searchInSemanticSiglip'),
+                        title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)",
                     },
-                    f:row {
-                        f:checkbox { value = bind('searchInSemanticVertex') },
-                        f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)" },
+                    f:checkbox {
+                        value = bind('searchInSemanticVertex'),
+                        title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)",
                     },
-                    f:row {
-                        f:checkbox { value = bind('searchInMetadata') },
-                        f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata" },
+                    f:checkbox {
+                        value = bind('searchInMetadata'),
+                        title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata",
                     },
                     f:column {
                         spacing = 2,
@@ -64,30 +64,34 @@ local function showAdvancedSearchDialog(ctx)
                         f:row {
                             fill_horizontal = 1,
                             f:static_text { width = 20 },
-                            f:row {
-                                f:checkbox { value = bind('searchInMetadataKeywords'), enabled = bind('searchInMetadata') },
-                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataKeywords=Keywords" },
+                            f:checkbox {
+                                value = bind('searchInMetadataKeywords'),
+                                enabled = bind('searchInMetadata'),
+                                title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataKeywords=Keywords",
                             },
                         },
                         f:row {
                             f:static_text { width = 20 },
-                            f:row {
-                                f:checkbox { value = bind('searchInMetadataCaption'), enabled = bind('searchInMetadata') },
-                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataCaption=Caption" },
+                            f:checkbox {
+                                value = bind('searchInMetadataCaption'),
+                                enabled = bind('searchInMetadata'),
+                                title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataCaption=Caption",
                             },
                         },
                         f:row {
                             f:static_text { width = 20 },
-                            f:row {
-                                f:checkbox { value = bind('searchInMetadataTitle'), enabled = bind('searchInMetadata') },
-                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataTitle=Title" },
+                            f:checkbox {
+                                value = bind('searchInMetadataTitle'),
+                                enabled = bind('searchInMetadata'),
+                                title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataTitle=Title",
                             },
                         },
                         f:row {
                             f:static_text { width = 20 },
-                            f:row {
-                                f:checkbox { value = bind('searchInMetadataAltText'), enabled = bind('searchInMetadata') },
-                                f:static_text { title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataAltText=Alt text" },
+                            f:checkbox {
+                                value = bind('searchInMetadataAltText'),
+                                enabled = bind('searchInMetadata'),
+                                title = LOC "$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadataAltText=Alt text",
                             },
                         },
                     },

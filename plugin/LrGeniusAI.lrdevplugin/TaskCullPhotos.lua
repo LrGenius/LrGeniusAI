@@ -66,13 +66,9 @@ local function showCullDialog(ctx)
                     width = 260,
                 },
             },
-            f:row {
-                f:checkbox {
-                    value = bind 'createDuplicatesCollection',
-                },
-                f:static_text {
-                    title = LOC "$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection",
-                },
+            f:checkbox {
+                value = bind 'createDuplicatesCollection',
+                title = LOC "$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection",
             },
         },
     }

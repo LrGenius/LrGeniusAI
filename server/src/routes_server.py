@@ -2,7 +2,8 @@ import os
 from flask import Blueprint, jsonify, request, send_file
 
 import server_lifecycle
-from config import logger, LOG_PATH
+import config
+from config import logger
 from service_metadata import get_analysis_service
 import service_version
 
@@ -59,8 +60,8 @@ def initialize():
     
     logger.info(f"Initializing/Switching catalog database: {db_path}")
     
-    config.DB_PATH = db_path
-    # Re-initialize logger if needed (it will use the new DB_PATH for the next start, 
+    config.update_log_path(db_path)
+    # Re-initialize logger if needed
     # but for now we focus on the database connection).
     
     service_chroma.reset_chroma_client()
@@ -182,10 +183,11 @@ def get_logs():
     logs = {}
     
     # 1. Backend logs
-    if os.path.isfile(LOG_PATH):
+    log_path = config.LOG_PATH
+    if os.path.isfile(log_path):
         try:
-            logger.debug(f"Reading backend logs from: {LOG_PATH}")
-            with open(LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            logger.debug(f"Reading backend logs from: {log_path}")
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
                 # Return last 1MB of logs to avoid huge response
                 f.seek(0, 2)
                 size = f.tell()
@@ -250,7 +252,7 @@ def get_raw_log(log_type):
     
     path = None
     if log_type == "backend":
-        path = LOG_PATH
+        path = config.LOG_PATH
     elif log_type == "ollama":
         ollama_log_paths = [
             os.path.expanduser("~/.ollama/logs/server.log"),

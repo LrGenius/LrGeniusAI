@@ -63,41 +63,21 @@ local function showRetrieveMetadataDialog(ctx)
             fill_horizontal = 1,
             f:column {
                 spacing = f:control_spacing(),
-                f:row {
-                    f:checkbox {
-                        value = bind 'applyKeywords',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
-                        title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Keywords=Keywords",
-                    },
+                f:checkbox {
+                    value = bind 'applyKeywords',
+                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Keywords=Keywords",
                 },
-                f:row {
-                    f:checkbox {
-                        value = bind 'applyTitle',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
-                        title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Title=Title",
-                    },
+                f:checkbox {
+                    value = bind 'applyTitle',
+                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Title=Title",
                 },
-                f:row {
-                    f:checkbox {
-                        value = bind 'applyCaption',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
-                        title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Caption=Caption",
-                    },
+                f:checkbox {
+                    value = bind 'applyCaption',
+                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Caption=Caption",
                 },
-                f:row {
-                    f:checkbox {
-                        value = bind 'applyAltText',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
-                        title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AltText=Alt Text",
-                    },
+                f:checkbox {
+                    value = bind 'applyAltText',
+                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AltText=Alt Text",
                 },
             },
         },
@@ -106,13 +86,9 @@ local function showRetrieveMetadataDialog(ctx)
         f:group_box {
             title = LOC "$$$/LrGeniusAI/RetrieveMetadata/Validation=Validation",
             fill_horizontal = 1,
-            f:row {
-                f:checkbox {
-                    value = bind 'enableValidation',
-                },
-                f:static_text {
-                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/EnableValidation=Review data before applying to catalog",
-                },
+            f:checkbox {
+                value = bind 'enableValidation',
+                title = LOC "$$$/LrGeniusAI/RetrieveMetadata/EnableValidation=Review data before applying to catalog",
             },
         },
 
@@ -120,13 +96,9 @@ local function showRetrieveMetadataDialog(ctx)
         f:group_box {
             title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AppendOption=Apply Options",
             fill_horizontal = 1,
-            f:row {
-                f:checkbox {
-                    value = bind 'appendMetadata',
-                },
-                f:static_text {
-                    title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AppendMetadata=Append metadata (do not overwrite existing)",
-                },
+            f:checkbox {
+                value = bind 'appendMetadata',
+                title = LOC "$$$/LrGeniusAI/RetrieveMetadata/AppendMetadata=Append metadata (do not overwrite existing)",
             },
         },
 

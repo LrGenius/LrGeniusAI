@@ -582,11 +582,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
                 f:row {
                     f:checkbox {
                         value = bind 'saveTitle',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
                         title = LOC "$$$/lrc-ai-assistant/AnalyzeImageTask/SaveTitle=Save title",
-                        width = share 'labelWidth',
                     },
                     f:edit_field {
                         value = bind 'title',
@@ -598,11 +594,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
                 f:row {
                     f:checkbox {
                         value = bind 'saveCaption',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
                         title = LOC "$$$/lrc-ai-assistant/AnalyzeImageTask/SaveCaption=Save caption",
-                        width = share 'labelWidth',
                     },
                     f:edit_field {
                         value = bind 'caption',
@@ -614,11 +606,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
                 f:row {
                     f:checkbox {
                         value = bind 'saveAltText',
-                        width = share 'checkboxWidth',
-                    },
-                    f:static_text {
                         title = LOC "$$$/lrc-ai-assistant/AnalyzeImageTask/SaveAltText=Save alt text",
-                        width = share 'labelWidth',
                     },
                     f:edit_field {
                         value = bind 'altText',

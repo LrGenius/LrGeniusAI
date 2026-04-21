@@ -241,16 +241,37 @@ def get_available_culling_presets() -> list[str]:
 CULLING_CONFIG = get_culling_config("default")
 
 # --- Logger Setup ---
-if DB_PATH:
-    LOG_PATH = os.path.join(os.path.dirname(DB_PATH) or ".", "lrgenius-server.log")
-else:
-    # Use a global service log path if no catalog DB is attached yet.
+def get_current_log_path() -> str:
+    """Returns the log path based on the current DB_PATH, or the default if not set."""
+    if DB_PATH:
+        # Use dynamic DB_PATH context if available
+        return os.path.join(os.path.dirname(DB_PATH) or ".", "lrgenius-server.log")
+        
+    # Default paths determined at startup
     if sys.platform == "darwin":  # macOS
-        LOG_PATH = os.path.expanduser("~/Library/Logs/LrGeniusAI/lrgenius-server.log")
+        return os.path.expanduser("~/Library/Logs/LrGeniusAI/lrgenius-server.log")
     elif sys.platform == "win32":  # Windows
-        LOG_PATH = os.path.join(os.environ.get("LOCALAPPDATA", ""), "LrGeniusAI", "logs", "lrgenius-server.log")
+        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "LrGeniusAI", "logs", "lrgenius-server.log")
     else:
-        LOG_PATH = os.path.join(os.getcwd(), "lrgenius-server.log")
+        return os.path.join(os.getcwd(), "lrgenius-server.log")
+
+LOG_PATH = get_current_log_path()
+
+def update_log_path(new_db_path: str):
+    """Updates the global LOG_PATH and potentially reconfigures logging handlers."""
+    global DB_PATH, LOG_PATH
+    DB_PATH = new_db_path
+    LOG_PATH = get_current_log_path()
+    
+    # Ensure directory exists
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    except Exception:
+        pass
+    
+    # Optional: We could reconfigure logging here, but for now we'll 
+    # at least ensure endpoints find the right file.
+    logger.info(f"Log path context updated to: {LOG_PATH}")
 
 try:
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
