@@ -5,7 +5,7 @@ SearchIndexAPI = {}
 
 local function getBaseUrl()
     local url = (prefs and prefs.backendServerUrl) and prefs.backendServerUrl or ""
-    url = url:gsub("^%s*(.-)%s*$", "%1")  -- trim whitespace
+    url = url:gsub("^%s*(.-)%s*$", "%1") -- trim whitespace
     if url == "" then
         return "http://127.0.0.1:19819"
     end
@@ -50,7 +50,7 @@ local ENDPOINTS = {
     CHECK_UNPROCESSED = "/index/check-unprocessed",
     FACES_CLUSTER = "/faces/cluster",
     FACES_PERSONS = "/faces/persons",
-    FACES_PERSON_PHOTOS = "/faces/persons",  -- suffix /<id>/photos
+    FACES_PERSON_PHOTOS = "/faces/persons", -- suffix /<id>/photos
     FACES_DETECT = "/faces/detect",
     FACES_QUERY = "/faces/query",
     MIGRATE_PHOTO_IDS = "/db/migrate-photo-ids",
@@ -60,32 +60,33 @@ local ENDPOINTS = {
     TRAINING_ADD = "/training/add",
     TRAINING_LIST = "/training/list",
     TRAINING_COUNT = "/training/count",
-    TRAINING_DELETE = "/training",  -- DELETE /training/<photo_id>
-    TRAINING_CLEAR = "/training",   -- DELETE /training (all)
+    TRAINING_DELETE = "/training", -- DELETE /training/<photo_id>
+    TRAINING_CLEAR = "/training",  -- DELETE /training (all)
     TRAINING_STATS = "/training/stats",
     STYLE_EDIT = "/style_edit",
     LOGS = "/logs",
+    LOGS_RAW = "/logs/raw",
     INITIALIZE = "/initialize",
     RESTART = "/restart",
     HEALTH = "/health",
 }
 
 local EXPORT_SETTINGS = {
-        LR_export_destinationType = 'specificFolder',
-        LR_export_useSubfolder = false,
-        LR_format = 'JPEG',
-        LR_jpeg_quality = tonumber(prefs.exportQuality) or 60,
-        LR_minimizeEmbeddedMetadata = false,
-        LR_outputSharpeningOn = false,
-        LR_size_doConstrain = true,
-        LR_size_maxHeight = tonumber(prefs.exportSize) or 1024,
-        LR_size_resizeType = 'longEdge',
-        LR_size_units = 'pixels',
-        LR_collisionHandling = 'rename',
-        LR_includeVideoFiles = false,
-        LR_removeLocationMetadata = true,
-        LR_embeddedMetadataOption = "all",
-    }
+    LR_export_destinationType = 'specificFolder',
+    LR_export_useSubfolder = false,
+    LR_format = 'JPEG',
+    LR_jpeg_quality = tonumber(prefs.exportQuality) or 60,
+    LR_minimizeEmbeddedMetadata = false,
+    LR_outputSharpeningOn = false,
+    LR_size_doConstrain = true,
+    LR_size_maxHeight = tonumber(prefs.exportSize) or 1024,
+    LR_size_resizeType = 'longEdge',
+    LR_size_units = 'pixels',
+    LR_collisionHandling = 'rename',
+    LR_includeVideoFiles = false,
+    LR_removeLocationMetadata = true,
+    LR_embeddedMetadataOption = "all",
+}
 
 
 -- Forward declarations for private helper functions
@@ -119,7 +120,9 @@ local CATALOG_DB_MIGRATIONS = {
         id = "claim_photos_v1",
         run = function(progressScope)
             local ok, err, result = SearchIndexAPI.claimPhotosForCatalog(progressScope)
-            local msg = (ok and result and (result.claimed or 0) >= 0) and (LOC("$$$/LrGeniusAI/SearchIndexAPI/PhotosClaimedCount=^1 photos claimed for this catalog.", tostring(result.claimed or 0))) or nil
+            local msg = (ok and result and (result.claimed or 0) >= 0) and
+                (LOC("$$$/LrGeniusAI/SearchIndexAPI/PhotosClaimedCount=^1 photos claimed for this catalog.", tostring(result.claimed or 0))) or
+                nil
             return ok, err, msg
         end,
     },
@@ -208,11 +211,11 @@ end
 local function stripInProgressMarkers(raw)
     if not raw or raw == "" then return "" end
     local cleaned = raw:gsub(MIGRATION_IN_PROGRESS_PREFIX .. ":%d+", "")
-                       :gsub(MIGRATION_IN_PROGRESS_PREFIX, "")
-                       :gsub(",+", ",")
-                       :gsub("^,", "")
-                       :gsub(",$", "")
-                       :gsub("^%s*(.-)%s*$", "%1")
+        :gsub(MIGRATION_IN_PROGRESS_PREFIX, "")
+        :gsub(",+", ",")
+        :gsub("^,", "")
+        :gsub(",$", "")
+        :gsub("^%s*(.-)%s*$", "%1")
     return cleaned
 end
 
@@ -309,12 +312,17 @@ local function ensureDbMigrationsDone()
                     end)
                     log:info("Catalog DB migration completed: " .. tostring(m.id))
                     if userMessage and userMessage ~= "" then
-                        LrDialogs.message(LOC "$$$/LrGeniusAI/PluginInfo/ClaimPhotosTitle=Claim photos", userMessage, "info")
+                        LrDialogs.message(LOC "$$$/LrGeniusAI/PluginInfo/ClaimPhotosTitle=Claim photos", userMessage,
+                            "info")
                     end
                 else
                     log:warn("Catalog DB migration failed: " .. tostring(m.id) .. " - " .. tostring(err))
                     if m.id == "claim_photos_v1" then
-                        LrDialogs.message(LOC "$$$/LrGeniusAI/PluginInfo/ClaimPhotosFailed=Claim photos failed", tostring(err or LOC "$$$/LrGeniusAI/common/UnknownError=Unknown error") .. "\n\n" .. LOC "$$$/LrGeniusAI/SearchIndexAPI/ClaimPhotosRetryHint=You can try again from Plug-in Manager → LrGeniusAI → Backend Server → Claim photos for this catalog.", "critical")
+                        LrDialogs.message(LOC "$$$/LrGeniusAI/PluginInfo/ClaimPhotosFailed=Claim photos failed",
+                            tostring(err or LOC "$$$/LrGeniusAI/common/UnknownError=Unknown error") ..
+                            "\n\n" ..
+                            LOC "$$$/LrGeniusAI/SearchIndexAPI/ClaimPhotosRetryHint=You can try again from Plug-in Manager → LrGeniusAI → Backend Server → Claim photos for this catalog.",
+                            "critical")
                     end
                 end
                 if progressScope then
@@ -467,7 +475,8 @@ function SearchIndexAPI.findPhotosByPhotoIds(photoIds)
             if photo then
                 table.insert(photos, photo)
             else
-                log:warn("findPhotosByPhotoIds: Photo with UUID " .. tostring(photoId) .. " not found in catalog (non-global IDs).")
+                log:warn("findPhotosByPhotoIds: Photo with UUID " ..
+                    tostring(photoId) .. " not found in catalog (non-global IDs).")
             end
         end
         return photos
@@ -510,7 +519,6 @@ end
 -- @return string|nil The path to the exported JPEG file, or nil on failure.
 --
 function SearchIndexAPI.exportPhotoForIndexing(photo)
-
     if photo == nil then
         log:error("exportPhotoForIndexing: photo is nil. Probably it got deleted in the meantime.")
         return nil
@@ -521,7 +529,7 @@ function SearchIndexAPI.exportPhotoForIndexing(photo)
     local catalog = LrApplication.activeCatalog()
 
     EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
-   
+
     local exportSession = LrExportSession({
         photosToExport = { photo },
         exportSettings = EXPORT_SETTINGS
@@ -529,7 +537,8 @@ function SearchIndexAPI.exportPhotoForIndexing(photo)
 
     for _, rendition in exportSession:renditions() do
         local success, path = rendition:waitForRender()
-        log:trace("Export completed for photo: " .. photoName .. " Success: " .. tostring(success) .. " Path: " .. tostring(path))
+        log:trace("Export completed for photo: " ..
+            photoName .. " Success: " .. tostring(success) .. " Path: " .. tostring(path))
         if success then -- Export successful
             return path
         else
@@ -559,7 +568,8 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
         local photo = photos[photoIndex]
         if photo ~= nil then
             local photoName = LrPathUtils.leafName(photo:getFormattedMetadata('fileName'))
-            log:trace("Export completed for photo: " .. photoName .. " Success: " .. tostring(success) .. " Path: " .. tostring(path))
+            log:trace("Export completed for photo: " ..
+                photoName .. " Success: " .. tostring(success) .. " Path: " .. tostring(path))
             if success then
                 photoPaths[photo] = path
             else
@@ -573,7 +583,6 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
     end
     return photoPaths
 end
-
 
 ---
 -- Gets a JPEG thumbnail from Lightroom's preview system (must be called from LrTasks async context).
@@ -593,7 +602,8 @@ function SearchIndexAPI.getJpegThumbnailForPhoto(photo, minWidth, minHeight, req
     local errResult = nil
     local done = false
     local callbackCount = 0
-    local timeoutSeconds = tonumber(requestState and requestState.timeoutSeconds) or tonumber(prefs and prefs.previewThumbnailTimeoutSeconds) or 12
+    local timeoutSeconds = tonumber(requestState and requestState.timeoutSeconds) or
+        tonumber(prefs and prefs.previewThumbnailTimeoutSeconds) or 12
     local deadline = LrDate.currentTime() + timeoutSeconds
 
     local callback = function(jpegData, err)
@@ -629,14 +639,14 @@ function SearchIndexAPI.getJpegThumbnailForPhoto(photo, minWidth, minHeight, req
     end
 
     if not done then
-        return nil, string.format("Thumbnail request timed out after %.1fs (callbacks=%d)", timeoutSeconds, callbackCount)
+        return nil,
+            string.format("Thumbnail request timed out after %.1fs (callbacks=%d)", timeoutSeconds, callbackCount)
     end
     if result and type(result) == "string" and #result > 0 then
         return result, nil
     end
     return nil, errResult or "No thumbnail data"
 end
-
 
 ---
 -- Analyzes and indexes a single photo using base64-encoded JPEG (e.g. from requestJpegThumbnail).
@@ -687,7 +697,8 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
         prompt = options.prompt,
         keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
         bilingual_keywords = tostring(options.bilingual_keywords or false),
-        keyword_secondary_language = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English",
+        keyword_secondary_language = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or
+            "English",
         date_time = options.date_time,
         ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
         lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
@@ -718,7 +729,6 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
     log:error("Unexpected response status (base64): " .. tostring(response.status))
     return false, "Unexpected response status"
 end
-
 
 ---
 -- Unified function to analyze and index photos with metadata and embeddings.
@@ -807,7 +817,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
         table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
     end
     if options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl) then
-        table.insert(mimeChunks, { name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl })
+        table.insert(mimeChunks,
+            { name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl })
     end
 
     table.insert(mimeChunks, {
@@ -824,7 +835,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
         return false, err or "Unknown error"
     end
     if type(response) ~= "table" then
-        log:error("AI edit recipe response has unexpected type: " .. tostring(type(response)) .. " value=" .. tostring(response))
+        log:error("AI edit recipe response has unexpected type: " ..
+            tostring(type(response)) .. " value=" .. tostring(response))
         return false, "Invalid response type from /edit endpoint: " .. tostring(type(response))
     end
     if response.status == "success" then
@@ -835,7 +847,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 end
 
 function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
-    if filepath == nil then 
+    if filepath == nil then
         log:error("JPEG is nil")
         return false, "No image data provided"
     end
@@ -847,12 +859,12 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     local filename = LrPathUtils.leafName(filepath)
 
     options = options or {}
-    
+
     local url = getBaseUrl() .. ENDPOINTS.INDEX
 
     -- Prepare multipart content chunks
     local mimeChunks = {}
-    
+
     -- Add form fields
     table.insert(mimeChunks, { name = "photo_id", value = photoId })
     local cid = getCatalogId()
@@ -860,7 +872,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
         table.insert(mimeChunks, { name = "catalog_id", value = cid })
     end
     table.insert(mimeChunks, { name = "tasks", value = JSON:encode(options.tasks or {}) })
-    
+
     if options.provider then
         table.insert(mimeChunks, { name = "provider", value = options.provider })
     end
@@ -870,22 +882,22 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     if options.api_key then
         table.insert(mimeChunks, { name = "api_key", value = options.api_key })
     end
-    
+
     table.insert(mimeChunks, { name = "language", value = options.language or prefs.generateLanguage or "English" })
     table.insert(mimeChunks, { name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) })
     table.insert(mimeChunks, { name = "replace_ss", value = tostring(options.replace_ss or false) })
-    
+
     -- Metadata generation options
     table.insert(mimeChunks, { name = "generate_keywords", value = tostring(options.generate_keywords or false) })
     table.insert(mimeChunks, { name = "generate_caption", value = tostring(options.generate_caption or false) })
     table.insert(mimeChunks, { name = "generate_title", value = tostring(options.generate_title or false) })
     table.insert(mimeChunks, { name = "generate_alt_text", value = tostring(options.generate_alt_text or false) })
-    
+
     -- Context options
     table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
     table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
     table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
-    
+
     if options.user_context then
         table.insert(mimeChunks, { name = "user_context", value = options.user_context })
     end
@@ -901,11 +913,16 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     if options.prompt then
         table.insert(mimeChunks, { name = "prompt", value = options.prompt })
     end
-    
+
     table.insert(mimeChunks, { name = "keyword_categories", value = JSON:encode(options.keyword_categories or {}) })
     table.insert(mimeChunks, { name = "bilingual_keywords", value = tostring(options.bilingual_keywords or false) })
-    table.insert(mimeChunks, { name = "keyword_secondary_language", value = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English" })
-    
+    table.insert(mimeChunks,
+        {
+            name = "keyword_secondary_language",
+            value = options.keyword_secondary_language or
+                (prefs and prefs.keywordSecondaryLanguage) or "English"
+        })
+
     if options.date_time then
         table.insert(mimeChunks, { name = "date_time", value = options.date_time })
     end
@@ -913,7 +930,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
         table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
     end
     if options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl) then
-        table.insert(mimeChunks, { name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl })
+        table.insert(mimeChunks,
+            { name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl })
     end
     if options.vertex_project_id and options.vertex_project_id ~= "" then
         table.insert(mimeChunks, { name = "vertex_project_id", value = options.vertex_project_id })
@@ -924,7 +942,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 
     -- Regeneration control: if false, server will only fill missing fields
     table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
-    
+
     -- Add file
     table.insert(mimeChunks, {
         name = "image",
@@ -932,8 +950,10 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
         filePath = filepath,
         contentType = "image/jpeg"
     })
-    
-    log:trace("Analyzing and indexing photo: " .. filename .. " with id " .. photoId .. " and tasks: " .. (options.tasks and table.concat(options.tasks, ", ") or "none"))
+
+    log:trace("Analyzing and indexing photo: " ..
+        filename ..
+        " with id " .. photoId .. " and tasks: " .. (options.tasks and table.concat(options.tasks, ", ") or "none"))
 
     local response, err = _requestMultipart(url, mimeChunks, 720)
 
@@ -946,7 +966,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     if response.status == "processed" then
         local success_count = response.success_count or 0
         local failure_count = response.failure_count or 0
-        
+
         if success_count > 0 then
             log:trace("Successfully processed photo: " .. filename)
             return true, response
@@ -960,9 +980,6 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
     end
 end
 
-
-
-
 ---
 -- Builds a URL with optional query parameters.
 --
@@ -973,7 +990,7 @@ local function buildUrlWithParams(baseUrl, params)
             table.insert(queryParts, key .. "=" .. tostring(value))
         end
     end
-    
+
     if #queryParts > 0 then
         return baseUrl .. "?" .. table.concat(queryParts, "&")
     else
@@ -1149,7 +1166,7 @@ function SearchIndexAPI.getPhotoData(photoId)
         log:error("getPhotoData: photo_id is required")
         return nil
     end
-    
+
     local url = getBaseUrl() .. "/get"
     local body = { photo_id = photoId }
     local cid = getCatalogId()
@@ -1158,13 +1175,13 @@ function SearchIndexAPI.getPhotoData(photoId)
     end
 
     log:trace("Retrieving photo data for photo_id: " .. photoId)
-    
+
     local result, err = _request('POST', url, body)
     if err then
         log:error("Failed to retrieve photo data: " .. err)
         return nil
     end
-    
+
     if result and result.status == "success" then
         log:trace("Successfully retrieved photo data for photo_id: " .. photoId)
         return result
@@ -1243,7 +1260,8 @@ function SearchIndexAPI.findSimilarImages(photoId, options)
     if cid then
         body.catalog_id = cid
     end
-    log:info("findSimilarImages: photo_id=%s max_results=%s phash_max_hamming=%s scope=%s", photoId, body.max_results, body.phash_max_hamming, body.scope_photo_ids and (#body.scope_photo_ids .. " ids") or "all")
+    log:info("findSimilarImages: photo_id=%s max_results=%s phash_max_hamming=%s scope=%s", photoId, body.max_results,
+        body.phash_max_hamming, body.scope_photo_ids and (#body.scope_photo_ids .. " ids") or "all")
     local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.FIND_SIMILAR, body, 120)
     if err then
         log:error("findSimilarImages failed: " .. tostring(err))
@@ -1325,7 +1343,9 @@ function SearchIndexAPI.syncCleanup()
         end
         if i % updateInterval == 0 or i == #allPhotos then
             progressScope:setPortionComplete(i, #allPhotos)
-            progressScope:setCaption(LOC "$$$/LrGeniusAI/SearchIndexAPI/cleaningIndexProgress=Cleaning index. Photo ^1/^2", tostring(i), tostring(#allPhotos))
+            progressScope:setCaption(
+                LOC "$$$/LrGeniusAI/SearchIndexAPI/cleaningIndexProgress=Cleaning index. Photo ^1/^2", tostring(i),
+                tostring(#allPhotos))
         end
     end
 
@@ -1356,7 +1376,8 @@ function SearchIndexAPI.syncCleanup()
         end
     end
     progressScope:done()
-    log:info("syncCleanup finished: " .. tostring(#photoIds) .. " photos in catalog, " .. tostring(disassociated) .. " disassociated")
+    log:info("syncCleanup finished: " ..
+        tostring(#photoIds) .. " photos in catalog, " .. tostring(disassociated) .. " disassociated")
     return true
 end
 
@@ -1422,7 +1443,9 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
                 return false, "canceled", nil
             end
             local batchNum = math.floor((startIdx - 1) / batchSize) + 1
-            progressScope:setCaption(LOC("$$$/LrGeniusAI/SearchIndexAPI/claimingPhotosBatch=Claiming photos... batch ^1/^2", tostring(batchNum), tostring(totalBatches)))
+            progressScope:setCaption(LOC(
+                "$$$/LrGeniusAI/SearchIndexAPI/claimingPhotosBatch=Claiming photos... batch ^1/^2", tostring(batchNum),
+                tostring(totalBatches)))
         end
         local stopIdx = math.min(startIdx + batchSize - 1, #photoIds)
         local batch = {}
@@ -1485,7 +1508,8 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
     options = options or {}
     local shouldCloseScope = (closeProgressScope ~= false)
 
-    progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...", #selectedPhotos, options.model or "AI"))
+    progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...",
+        #selectedPhotos, options.model or "AI"))
     progressScope:setPortionComplete(0, numPhotos)
 
     local photoToProcessStack = {}
@@ -1508,7 +1532,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
         consecutiveTimeouts = 0,
         disabledForRun = false,
     }
-    
+
     local errorMessages = {}
     local warningsList = {}
 
@@ -1516,15 +1540,16 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
         while #photoToProcessStack > 0 do
             if progressScope:isCanceled() then break end
             if not keepRunning then break end
-            
+
             local photo = table.remove(photoToProcessStack, 1)
             if photo ~= nil then
-                
                 local filename = photo:getFormattedMetadata("fileName")
                 local hashStart = LrDate.currentTime()
                 local photoId, photoIdErr = getPhotoIdForPhoto(photo)
                 if photoId then
-                    log:trace("Using photo_id for " .. filename .. " (hashing_ms=" .. tostring(math.floor((LrDate.currentTime() - hashStart) * 1000)) .. ")")
+                    log:trace("Using photo_id for " ..
+                        filename ..
+                        " (hashing_ms=" .. tostring(math.floor((LrDate.currentTime() - hashStart) * 1000)) .. ")")
 
                     -- Prepare analysis options with photo-specific context
                     local photoOptions = {}
@@ -1570,13 +1595,16 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                     local leafName = LrPathUtils.leafName(filename or "photo.jpg")
 
                     if usePreviewThumbnails then
-                        local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(photo, thumbnailSize, thumbnailSize, previewRequestState)
+                        local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(photo, thumbnailSize,
+                            thumbnailSize, previewRequestState)
                         if jpegData and #jpegData > 0 then
                             previewRequestState.consecutiveTimeouts = 0
                             log:trace("Using Lightroom preview for " .. filename)
-                            success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, leafName, photoOptions)
+                            success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData,
+                                leafName, photoOptions)
                         else
-                            log:trace("Preview unavailable for " .. filename .. ", falling back to export: " .. tostring(thumbErr))
+                            log:trace("Preview unavailable for " ..
+                                filename .. ", falling back to export: " .. tostring(thumbErr))
                             if thumbErr and string.find(thumbErr, "timed out", 1, true) then
                                 previewRequestState.consecutiveTimeouts = previewRequestState.consecutiveTimeouts + 1
                                 if previewRequestState.consecutiveTimeouts >= previewRequestState.disableAfterConsecutiveTimeouts then
@@ -1603,7 +1631,8 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                         local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
                         if exportedPhotoPath then
                             log:trace("Using exported JPEG for " .. filename)
-                            success, indexResponse = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath, photoOptions)
+                            success, indexResponse = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath,
+                                photoOptions)
                             LrFileUtils.delete(exportedPhotoPath)
                         end
                     end
@@ -1626,16 +1655,17 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
                     else
                         stats.failed = stats.failed + 1
                         table.insert(errorMessages, tostring(indexResponse or "Unknown"))
-                        log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown"))
+                        log:error("Failed to analyze/index photo: " ..
+                            filename .. " Error: " .. (indexResponse or "Unknown"))
                     end
                 else
                     stats.failed = stats.failed + 1
                     table.insert(errorMessages, "Could not compute photo ID: " .. tostring(photoIdErr))
                     log:error("Failed to compute photo ID for " .. filename .. ": " .. tostring(photoIdErr))
                 end
-                
 
-                
+
+
                 stats.processed = stats.processed + 1
                 table.insert(processedPhotos, photo)
                 progressScope:setPortionComplete(stats.processed, numPhotos)
@@ -1696,7 +1726,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
     else
         status = "somefailed"
     end
-    
+
     local combinedError
     if #errorMessages > 0 then
         local uniqueErrors = {}
@@ -1753,7 +1783,7 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
     local metadataBatch = {}
 
     for i, photo in ipairs(photosToProcess) do
-        if photo ~= nil then 
+        if photo ~= nil then
             if progressScope:isCanceled() then
                 break
             end
@@ -1769,7 +1799,8 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
             if type(metadata.photo_id) ~= "string" or metadata.photo_id == "" then
                 stats.failed = stats.failed + 1
                 stats.processed = stats.processed + 1
-                log:error("Skipping metadata import for photo due to missing photo_id: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
+                log:error("Skipping metadata import for photo due to missing photo_id: " ..
+                    (photo:getFormattedMetadata("fileName") or "unknown"))
                 progressScope:setPortionComplete(stats.processed, numPhotos)
             else
                 table.insert(metadataBatch, metadata)
@@ -1822,8 +1853,6 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
     return status, stats.processed, stats.failed
 end
 
-
-
 function SearchIndexAPI.pingServer()
     local url = getBaseUrl() .. "/ping"
     local result, hdrs = LrHttp.get(url)
@@ -1849,7 +1878,8 @@ function SearchIndexAPI.downloadDatabaseBackup()
         canCreateDirectories = true,
         requiredFileType = "zip",
     })
-    log:info("downloadDatabaseBackup: save panel returned type=" .. tostring(type(outputPath)) .. " value=" .. tostring(outputPath))
+    log:info("downloadDatabaseBackup: save panel returned type=" ..
+        tostring(type(outputPath)) .. " value=" .. tostring(outputPath))
 
     if not outputPath or outputPath == "" then
         log:info("Database backup download canceled by user")
@@ -1888,7 +1918,8 @@ function SearchIndexAPI.downloadDatabaseBackup()
             local ok, decoded = LrTasks.pcall(function()
                 return JSON:decode(responseBody)
             end)
-            log:info("downloadDatabaseBackup: error response JSON decode ok=" .. tostring(ok) .. ", decodedType=" .. tostring(type(decoded)))
+            log:info("downloadDatabaseBackup: error response JSON decode ok=" ..
+                tostring(ok) .. ", decodedType=" .. tostring(type(decoded)))
             if ok and type(decoded) == "table" and decoded.error then
                 err = err .. " - " .. tostring(decoded.error)
             end
@@ -1910,7 +1941,8 @@ function SearchIndexAPI.downloadDatabaseBackup()
     if dataToWrite == nil then
         dataToWrite = ""
     elseif type(dataToWrite) ~= "string" then
-        log:warn("downloadDatabaseBackup: responseBody is not a string, converting via tostring. type=" .. tostring(type(dataToWrite)))
+        log:warn("downloadDatabaseBackup: responseBody is not a string, converting via tostring. type=" ..
+            tostring(type(dataToWrite)))
         dataToWrite = tostring(dataToWrite)
     end
 
@@ -1931,7 +1963,8 @@ function SearchIndexAPI.downloadDatabaseBackup()
         return false, err
     end
 
-    log:info("Database backup downloaded successfully: " .. outputPath .. " (writtenBytes=" .. tostring(#dataToWrite) .. ")")
+    log:info("Database backup downloaded successfully: " ..
+        outputPath .. " (writtenBytes=" .. tostring(#dataToWrite) .. ")")
     return true, outputPath
 end
 
@@ -2088,7 +2121,7 @@ function SearchIndexAPI.restartBackend()
         log:error("Failed to request backend restart: " .. tostring(err))
         return false, err
     end
-    
+
     -- Wait a bit and then ping until back
     LrTasks.sleep(2)
     local deadline = LrDate.currentTime() + 60
@@ -2113,16 +2146,17 @@ function SearchIndexAPI.initializeCatalog(dbPath)
     if not dbPath then
         dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
     end
-    
+
     local url = getBaseUrl() .. ENDPOINTS.INITIALIZE
     log:info("Initializing catalog database at backend: " .. tostring(dbPath))
     local response, err = _request("POST", url, { db_path = dbPath }, 10)
-    
+
     if response and (response.status == "success" or response.status == "already_initialized") then
         log:info("Backend initialized successfully for database: " .. tostring(dbPath))
         return true
     else
-        log:error("Failed to initialize backend for catalog: " .. tostring(err or (response and response.error) or "Unknown error"))
+        log:error("Failed to initialize backend for catalog: " ..
+            tostring(err or (response and response.error) or "Unknown error"))
         return false, err or (response and response.error)
     end
 end
@@ -2248,7 +2282,8 @@ function SearchIndexAPI.startServer(opts)
         local serverDir = LrPathUtils.parent(serverBinary)
         if WIN_ENV then
             -- The .cmd launcher handles environment variables and uses pythonw.exe for invisible execution.
-            startServerCmd = "start /b /d \"" .. serverDir .. "\" \"\" \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
+            startServerCmd = "start /b /d \"" ..
+                serverDir .. "\" \"\" \"" .. tostring(serverBinary) .. "\" --db-path \"" .. dbPath .. "\""
         elseif MAC_ENV then
             if serverBinary:match("^/Applications") then
                 -- System install: use launchctl to trigger the system-wide service
@@ -2284,7 +2319,7 @@ function SearchIndexAPI.startServer(opts)
         end
 
         log:trace("Search index server did not become ready or initialize within timeout")
-        
+
         -- Diagnose failure
         local diag = SearchIndexAPI.diagnoseStartupFailure()
         if diag.binaryMissing then
@@ -2309,10 +2344,14 @@ function SearchIndexAPI.startServer(opts)
 end
 
 _requestMultipart = function(url, mimeChunks, timeout)
-    log:trace("_requestMultipart start: url=" .. tostring(url) .. " timeout=" .. tostring(timeout) .. " chunks=" .. tostring(type(mimeChunks) == "table" and #mimeChunks or "n/a"))
+    log:trace("_requestMultipart start: url=" ..
+        tostring(url) ..
+        " timeout=" .. tostring(timeout) .. " chunks=" .. tostring(type(mimeChunks) == "table" and #mimeChunks or "n/a"))
     local result, hdrs = LrHttp.postMultipart(url, mimeChunks, nil, timeout)
-    log:trace("_requestMultipart raw return: resultType=" .. tostring(type(result)) .. " resultLen=" .. tostring(type(result) == "string" and #result or "n/a") .. " hdrsType=" .. tostring(type(hdrs)))
-    
+    log:trace("_requestMultipart raw return: resultType=" ..
+        tostring(type(result)) ..
+        " resultLen=" .. tostring(type(result) == "string" and #result or "n/a") .. " hdrsType=" .. tostring(type(hdrs)))
+
     -- hdrs kann Tabelle mit .status oder (in einigen LR-Versionen) direkt die Status-Nummer sein
     local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
     log:trace("_requestMultipart interpreted status: " .. tostring(status))
@@ -2325,7 +2364,9 @@ _requestMultipart = function(url, mimeChunks, timeout)
                 log:error("_requestMultipart JSON decode failed: " .. tostring(decodedOrErr))
                 return nil, "Invalid JSON response from server"
             end
-            log:trace("_requestMultipart decode success: decodedType=" .. tostring(type(decodedOrErr)) .. " hasStatus=" .. tostring(type(decodedOrErr) == "table" and decodedOrErr.status or "n/a"))
+            log:trace("_requestMultipart decode success: decodedType=" ..
+                tostring(type(decodedOrErr)) ..
+                " hasStatus=" .. tostring(type(decodedOrErr) == "table" and decodedOrErr.status or "n/a"))
             return decodedOrErr
         end
         log:trace("_requestMultipart success with empty body")
@@ -2360,7 +2401,8 @@ _request = function(method, url, body, timeout, options)
                 result, hdrs = LrHttp.get(tostring(url))
             end
         else
-            result, hdrs = LrHttp.post(tostring(url), bodyString or "", { { field = "Content-Type", value = "application/json" } }, method, timeout)
+            result, hdrs = LrHttp.post(tostring(url), bodyString or "",
+                { { field = "Content-Type", value = "application/json" } }, method, timeout)
         end
     end)
 
@@ -2381,7 +2423,8 @@ _request = function(method, url, body, timeout, options)
                 return decoded
             else
                 local snippet = tostring(result):sub(1, 1000)
-                log:error("_request: JSON decode failed: " .. tostring(decoded) .. " | URL: " .. tostring(url) .. " | Raw Snippet: " .. snippet)
+                log:error("_request: JSON decode failed: " ..
+                    tostring(decoded) .. " | URL: " .. tostring(url) .. " | Raw Snippet: " .. snippet)
                 return nil, "JSON decode failed: " .. tostring(decoded)
             end
         end
@@ -2433,7 +2476,8 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
         if lookupProgressScope and not lookupProgressScope:isCanceled() then
             lookupProgressScope:setPortionComplete(current, total)
             lookupProgressScope:setCaption(
-                LOC("$$$/LrGeniusAI/AnalyzeAndIndex/LookupProgress=Looking up which photos need processing... ^1/^2", tostring(current), tostring(total)))
+                LOC("$$$/LrGeniusAI/AnalyzeAndIndex/LookupProgress=Looking up which photos need processing... ^1/^2",
+                    tostring(current), tostring(total)))
         end
     end
 
@@ -2533,7 +2577,6 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
     end
     return true, photosToProcess
 end
-
 
 ---
 -- Run face clustering to group similar faces into persons.
@@ -2650,7 +2693,7 @@ end
 
 function SearchIndexAPI.saveThumbnail(uuid, faceIndex, base64Data)
     local tempDir = LrPathUtils.getStandardFilePath('temp')
-    local tempFile = LrPathUtils.child(tempDir, uuid .. "_" .. faceIndex ..  ".jpg")
+    local tempFile = LrPathUtils.child(tempDir, uuid .. "_" .. faceIndex .. ".jpg")
     local f = io.open(tempFile, "wb")
     if f then
         f:write(LrStringUtils.decodeBase64(base64Data))
@@ -2660,6 +2703,7 @@ function SearchIndexAPI.saveThumbnail(uuid, faceIndex, base64Data)
     end
     return nil
 end
+
 ---
 -- Retrieves all available multimodal models from all providers.
 -- Always filters to vision-capable models only.
@@ -2669,8 +2713,8 @@ end
 -- @return table|nil Response from server with format: { models = { qwen = {...}, ollama = {...}, ... } }
 function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
     local url = getBaseUrl() .. ENDPOINTS.MODELS
-    local body = { 
-        openai_apikey = openaiApiKey, 
+    local body = {
+        openai_apikey = openaiApiKey,
         gemini_apikey = geminiApiKey,
         ollama_base_url = (prefs and prefs.ollamaBaseUrl) or nil,
         lmstudio_base_url = (prefs and prefs.lmstudioBaseUrl) or nil,
@@ -2687,21 +2731,32 @@ end
 -- @return boolean success
 function SearchIndexAPI.downloadRawLog(logType, targetPath)
     if not logType or not targetPath then return false end
-    
-    local url = getBaseUrl() .. "/logs/raw/" .. tostring(logType)
+
+    local url = getBaseUrl() .. ENDPOINTS.LOGS_RAW .. "/" .. tostring(logType)
     log:trace("Downloading raw " .. logType .. " log from: " .. url)
-    
-    local ok, hdrs = LrTasks.pcall(function()
-        return LrHttp.get(url, nil, 60, targetPath)
+
+    local ok, res, hdrs = LrTasks.pcall(function()
+        return LrHttp.get(url, nil, 60)
     end)
-    
-    if ok and hdrs and (hdrs == 200 or (type(hdrs) == 'table' and hdrs.status == 200)) then
-        log:trace("Successfully downloaded raw log to: " .. targetPath)
-        return true
+
+    -- Status can be in hdrs.status (table) or hdrs itself (number) depending on LR version
+    local status = (type(hdrs) == 'table' and hdrs.status) or (type(hdrs) == 'number' and hdrs) or nil
+
+    if ok and status == 200 and res then
+        local f, err = io.open(targetPath, "wb")
+        if f then
+            f:write(res)
+            f:close()
+            log:trace("Successfully downloaded and saved raw log to: " .. targetPath)
+            return true
+        else
+            log:error("Failed to open target path for writing: " .. tostring(err))
+        end
     else
-        log:error("Failed to download raw log: " .. tostring(hdrs))
-        return false
+        log:error("Failed to download raw log: status=" ..
+            tostring(status) .. " ok=" .. tostring(ok) .. " hdrsType=" .. type(hdrs))
     end
+    return false
 end
 
 ---
@@ -2834,7 +2889,8 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
 
         if err then
             progressScope:done()
-            log:error("migratePhotoIdsFromCatalog: batch failed at " .. tostring(startIdx) .. "-" .. tostring(stopIdx) .. " err=" .. tostring(err))
+            log:error("migratePhotoIdsFromCatalog: batch failed at " ..
+                tostring(startIdx) .. "-" .. tostring(stopIdx) .. " err=" .. tostring(err))
             return false, "Migration request failed: " .. tostring(err)
         end
 
@@ -2881,7 +2937,6 @@ function SearchIndexAPI.migratePhotoIdsFromCatalog()
     return errorTotal == 0, msg
 end
 
-
 ---
 -- Generates hash-based global photo IDs for all photos in the current catalog
 -- and writes them to the catalog-only plugin fields, without touching the backend.
@@ -2915,7 +2970,8 @@ function SearchIndexAPI.generateGlobalPhotoIdsForCatalog()
     for i, photo in ipairs(photos) do
         if progressScope:isCanceled() then
             progressScope:done()
-            log:info("generateGlobalPhotoIdsForCatalog: canceled by user at " .. tostring(i) .. "/" .. tostring(totalPhotos))
+            log:info("generateGlobalPhotoIdsForCatalog: canceled by user at " ..
+                tostring(i) .. "/" .. tostring(totalPhotos))
             return false, "Photo-ID generation canceled."
         end
 
@@ -2961,10 +3017,7 @@ function SearchIndexAPI.generateGlobalPhotoIdsForCatalog()
     return errors == 0, msg
 end
 
-
-
 function SearchIndexAPI.startClipDownload()
-
     if SearchIndexAPI.isClipReady() then
         log:trace("CLIP model is already cached")
         return
@@ -2997,7 +3050,8 @@ function SearchIndexAPI.startClipDownload()
             if err then
                 ErrorHandler.handleError("Error downloading CLIP model", err)
                 if progressScope ~= nil then
-                    progressScope:setCaption(LOC "$$$/LrGeniusAI/ClipDownload/Error=Error downloading CLIP model: ^1", err)
+                    progressScope:setCaption(LOC "$$$/LrGeniusAI/ClipDownload/Error=Error downloading CLIP model: ^1",
+                        err)
                     progressScope:done()
                 end
                 break
@@ -3012,11 +3066,13 @@ function SearchIndexAPI.startClipDownload()
                 elseif status.status == "completed" then
                     log:trace("CLIP model download completed")
                     progressScope:done()
-                    LrDialogs.message(LOC "$$$/LrGeniusAI/ClipDownload/SuccessTitle=CLIP Download", LOC "$$$/LrGeniusAI/ClipDownload/SuccessMessage=CLIP model downloaded successfully.")
+                    LrDialogs.message(LOC "$$$/LrGeniusAI/ClipDownload/SuccessTitle=CLIP Download",
+                        LOC "$$$/LrGeniusAI/ClipDownload/SuccessMessage=CLIP model downloaded successfully.")
                     break
                 elseif status.status == "error" or (status.error and status.error ~= "null" and status.error ~= "") then
                     local error_msg = status.error or "Unknown download error"
-                    ErrorHandler.handleError(LOC "$$$/LrGeniusAI/ClipDownload/ErrorTitle=Error downloading CLIP model", error_msg)
+                    ErrorHandler.handleError(LOC "$$$/LrGeniusAI/ClipDownload/ErrorTitle=Error downloading CLIP model",
+                        error_msg)
                     progressScope:done()
                     break
                 end
@@ -3026,7 +3082,6 @@ function SearchIndexAPI.startClipDownload()
         end
     end)
 end
-
 
 local lastClipReadyStatus = nil
 function SearchIndexAPI.isClipReady()
@@ -3047,7 +3102,7 @@ function SearchIndexAPI.isClipReady()
             end
             lastClipReadyStatus = currentStatus
         end
-        
+
         if currentStatus == "ready" then
             return true, res.message
         else
@@ -3092,7 +3147,8 @@ function SearchIndexAPI.checkServerHealth()
             if status == "available" or status == "registered" then
                 hasAvailable = true
             elseif status == "failed" then
-                table.insert(failedProviders, provider .. ": " .. (res.llm_errors and res.llm_errors[provider] or "unknown error"))
+                table.insert(failedProviders,
+                    provider .. ": " .. (res.llm_errors and res.llm_errors[provider] or "unknown error"))
             end
         end
 
@@ -3115,7 +3171,7 @@ function SearchIndexAPI.diagnoseStartupFailure()
         portBusy = false,
         logSnippet = nil
     }
-    
+
     -- 1. Check binary existence
     local serverDir = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), "lrgenius-server")
     local serverBinary = LrPathUtils.child(serverDir, "lrgenius-server")
@@ -3128,12 +3184,12 @@ function SearchIndexAPI.diagnoseStartupFailure()
             serverBinary = serverExe
         end
     end
-    
+
     if not LrFileUtils.exists(serverBinary) then
         results.binaryMissing = true
         return results
     end
-    
+
     -- 2. Check port 19819 (Mac only for now)
     if MAC_ENV then
         local status, output = LrTasks.pcall(function()
@@ -3143,7 +3199,7 @@ function SearchIndexAPI.diagnoseStartupFailure()
             results.portBusy = true
         end
     end
-    
+
     -- 3. Check logs for errors
     local logPath = LrPathUtils.child(getServerControlDir(), "lrgenius-server.log")
     if LrFileUtils.exists(logPath) then
@@ -3163,7 +3219,7 @@ function SearchIndexAPI.diagnoseStartupFailure()
             results.logSnippet = table.concat(snippet, "\n")
         end
     end
-    
+
     return results
 end
 
@@ -3173,10 +3229,10 @@ function SearchIndexAPI.getDetailedHealth()
         clip = SearchIndexAPI.isClipReady() == true,
         gemini = not Util.nilOrEmpty(prefs.geminiApiKey),
         chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
-        ollama = false, 
+        ollama = false,
         lmstudio = false,
     }
-    
+
     -- Try to ping local LLMs if they are not default localhost but maybe they are
     if not Util.nilOrEmpty(prefs.ollamaBaseUrl) then
         local url = prefs.ollamaBaseUrl .. "/api/tags"
@@ -3184,7 +3240,7 @@ function SearchIndexAPI.getDetailedHealth()
         local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
         if status == 200 then health.ollama = true end
     end
-    
+
     if not Util.nilOrEmpty(prefs.lmstudioBaseUrl) then
         local baseUrl = prefs.lmstudioBaseUrl
         if not baseUrl:match("^https?://") then baseUrl = "http://" .. baseUrl end
@@ -3193,7 +3249,7 @@ function SearchIndexAPI.getDetailedHealth()
         local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
         if status == 200 then health.lmstudio = true end
     end
-    
+
     return health
 end
 
@@ -3410,9 +3466,9 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
             table.insert(mimeChunks, { name = key, value = tostring(value) })
         end
     end
-    addEditOpt("provider",  options.provider)
-    addEditOpt("model",     options.model)
-    addEditOpt("language",  options.language)
+    addEditOpt("provider", options.provider)
+    addEditOpt("model", options.model)
+    addEditOpt("language", options.language)
     addEditOpt("temperature", options.temperature)
     addEditOpt("include_masks", options.include_masks)
     addEditOpt("adjust_white_balance", options.adjust_white_balance)
