@@ -88,7 +88,7 @@ if [ -n "\$CURRENT_USER" ] && [ "\$CURRENT_USER" -ne 0 ]; then
     if [ -d "\$CURRENT_USER_HOME" ]; then
         PLUGIN_TARGET_DIR="\$CURRENT_USER_HOME/Library/Application Support/Adobe/Lightroom/Modules"
         echo "Relocating plugin to \$PLUGIN_TARGET_DIR"
-        mkdir -p "\$PLUGIN_TARGET_DIR"
+        sudo -u "\$CURRENT_USER_NAME" mkdir -p "\$PLUGIN_TARGET_DIR"
         # Remove existing if any to ensure clean copy
         rm -rf "\$PLUGIN_TARGET_DIR/LrGeniusAI.lrplugin"
         cp -a "/Applications/LrGeniusAI/PluginInstallTemp/LrGeniusAI.lrplugin" "\$PLUGIN_TARGET_DIR/"
