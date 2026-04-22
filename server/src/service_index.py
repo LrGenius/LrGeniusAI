@@ -452,6 +452,9 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
         ):
             needing_processing.append(uuid)
 
+    # Clear existing_records to prevent memory accumulation
+    existing_records.clear()
+
     return needing_processing
 
 
@@ -502,8 +505,8 @@ def process_image_task(
         existing_records = {}
         if not regenerate_metadata:
             logger.info(
-                "Checking existing records to determine what needs generation..."
-            )
+                 "Checking existing records to determine what needs generation..."
+             )
             for _, uuid, _ in image_triplets:
                 existing_record = chroma_service.get_image(uuid, catalog_id=catalog_id)
                 if existing_record and existing_record["ids"]:
@@ -511,9 +514,10 @@ def process_image_task(
                         existing_record["metadatas"][0]
                         if existing_record["metadatas"]
                         else {}
-                    )
-
+                     )
+        
         # Determine what actually needs to be computed for each image
+        # Clear existing_records after use to prevent memory accumulation across batches
         images_needing_embeddings = []
         images_needing_metadata = []
         images_needing_faces = []
@@ -571,7 +575,10 @@ def process_image_task(
         logger.info(
             f"Generation needed: {len(images_needing_embeddings)} embeddings, "
             f"{len(images_needing_metadata)} metadata, {len(images_needing_faces)} faces, {len(images_needing_vertexai)} vertexai"
-        )
+         )
+
+        # Clear existing_records after use to prevent memory accumulation across batches
+        existing_records.clear()
 
         # If nothing needs to be generated and we're not regenerating, skip work.
         # When regenerate_metadata is True we must not early-return: new images (no entry yet)
