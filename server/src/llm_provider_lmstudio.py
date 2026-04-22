@@ -161,7 +161,7 @@ class LMStudioProvider(LLMProviderBase):
                 model = client.llm.model(request.model)
                 system_prompt = self._prepare_edit_system_prompt(request)
                 user_prompt = self._prepare_edit_user_prompt(request)
-                response_schema = self._prepare_openai_edit_response_format()
+                response_schema = self._prepare_edit_response_structure()
 
                 chat = lms.Chat(system_prompt)
                 chat.add_user_message(user_prompt, images=[image_handle])
@@ -205,30 +205,6 @@ class LMStudioProvider(LLMProviderBase):
         except Exception as e:
             logger.error(f"Error generating edit recipe with LM Studio: {e}", exc_info=True)
             return EditGenerationResponse(uuid=request.uuid, success=False, error=str(e))
-    
-    def _prepare_openai_response_format(self, request: MetadataGenerationRequest) -> Dict[str, Any]:
-        """Prepare OpenAI-style response format with JSON schema"""
-        schema = self._prepare_response_structure(request)
-        
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "metadata_response",
-                "schema": schema,
-                "strict": True
-            }
-        }
-
-    def _prepare_openai_edit_response_format(self) -> Dict[str, Any]:
-        schema = self._prepare_edit_response_structure()
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "lightroom_edit_recipe",
-                "schema": schema,
-                "strict": True
-            }
-        }
     
     def list_available_models(self) -> list:
         """
