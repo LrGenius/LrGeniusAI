@@ -624,7 +624,7 @@ jobs:
   # with ghcr.io/.../lrgeniusai:latest (amd64 and arm64 clients resolve correctly).
   publish-docker-manifest:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-docker-images]
+    needs: [build-docker-images, create-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
