@@ -741,7 +741,7 @@ LrTasks.startAsyncTask(function()
                         topLevelKeyword = props.topLevelKeyword,
                         appendMetadata = props.appendMetadata,
                     })
-                    SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false)
+                    SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
                 end
             end
         end

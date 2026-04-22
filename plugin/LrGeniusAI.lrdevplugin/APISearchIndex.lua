@@ -1762,8 +1762,12 @@ end
 -- @param photosToProcess table Array of LrPhoto.
 -- @param progressScope LrProgressScope Progress scope for UI updates.
 -- @param closeProgressScope boolean|nil When false, does not call :done() on the scope (caller must close).
+-- @param updateProgress boolean|nil When false, does not write to the scope's caption or portion-complete.
+--                Use when sharing a scope with an outer loop that already tracks progress (e.g. the
+--                per-photo onPhotoAnalyzed callback in analyzeAndIndexSelectedPhotos). Cancellation
+--                is still honoured. Default: true (preserves legacy behaviour).
 --
-function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, closeProgressScope)
+function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, closeProgressScope, updateProgress)
     local numPhotos = #photosToProcess
     if numPhotos == 0 then
         return "success", 0, 0
@@ -1774,9 +1778,12 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
     end
 
     local shouldCloseScope = (closeProgressScope ~= false)
+    local shouldUpdateProgress = (updateProgress ~= false)
 
-    progressScope:setCaption(LOC "$$$/LrGeniusAI/ImportMetadata/ProgressTitle=Importing metadata for photos...")
-    progressScope:setPortionComplete(0, numPhotos)
+    if shouldUpdateProgress then
+        progressScope:setCaption(LOC "$$$/LrGeniusAI/ImportMetadata/ProgressTitle=Importing metadata for photos...")
+        progressScope:setPortionComplete(0, numPhotos)
+    end
 
     local stats = { processed = 0, success = 0, failed = 0 }
     local batchSize = 50 -- Send metadata in batches
@@ -1801,7 +1808,9 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
                 stats.processed = stats.processed + 1
                 log:error("Skipping metadata import for photo due to missing photo_id: " ..
                     (photo:getFormattedMetadata("fileName") or "unknown"))
-                progressScope:setPortionComplete(stats.processed, numPhotos)
+                if shouldUpdateProgress then
+                    progressScope:setPortionComplete(stats.processed, numPhotos)
+                end
             else
                 table.insert(metadataBatch, metadata)
             end
@@ -1823,11 +1832,13 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
             end
 
             stats.processed = stats.processed + 1
-            progressScope:setPortionComplete(stats.processed, numPhotos)
-            progressScope:setCaption(
-                LOC("$$$/LrGeniusAI/ImportMetadata/Processing=Importing metadata... ^1/^2 (^3 failed)",
-                    stats.processed, numPhotos, stats.failed)
-            )
+            if shouldUpdateProgress then
+                progressScope:setPortionComplete(stats.processed, numPhotos)
+                progressScope:setCaption(
+                    LOC("$$$/LrGeniusAI/ImportMetadata/Processing=Importing metadata... ^1/^2 (^3 failed)",
+                        stats.processed, numPhotos, stats.failed)
+                )
+            end
         else
             log:error("Photo is nil in importMetadataFromCatalog, probably it got deleted in the meantime.")
         end
