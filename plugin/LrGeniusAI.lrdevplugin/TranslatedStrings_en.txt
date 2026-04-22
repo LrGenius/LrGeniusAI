@@ -510,7 +510,7 @@
 "$$$/LrGeniusAI/common/Unknown" = "unknown"
 "$$$/LrGeniusAI/common/UnknownError" = "Unknown error"
 
-"$$$/LrGeniusAI/Onboarding/WizardTitle" = "LrGeniusAI Setup Wizard"
+"$$$/LrGeniusAI/Onboarding/WizardTitle" = "LrGeniusAI Setup"
 "$$$/LrGeniusAI/Onboarding/WelcomeTitle" = "Welcome to LrGeniusAI!"
 "$$$/LrGeniusAI/Onboarding/WelcomeMessage" = "Thank you for choosing LrGeniusAI. This wizard will guide you through the initial setup to ensure everything is running smoothly."
 "$$$/LrGeniusAI/Onboarding/Next" = "Next"
