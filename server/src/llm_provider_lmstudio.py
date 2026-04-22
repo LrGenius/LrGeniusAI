@@ -255,9 +255,13 @@ class LMStudioProvider(LLMProviderBase):
                 output_tokens=output_tokens,
             )
         except Exception as e:
-            logger.error(f"Error generating edit recipe with LM Studio: {e}", exc_info=True)
-            return EditGenerationResponse(uuid=request.uuid, success=False, error=str(e))
-    
+            logger.error(
+                f"Error generating edit recipe with LM Studio: {e}", exc_info=True
+            )
+            return EditGenerationResponse(
+                uuid=request.uuid, success=False, error=str(e)
+            )
+
     def list_available_models(self) -> list:
         """
         List available LM Studio models using the lmstudio-python library.

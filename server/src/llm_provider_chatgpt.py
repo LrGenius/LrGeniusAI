@@ -354,10 +354,11 @@ class ChatGPTProvider(LLMProviderBase):
         # SDK-based filtering commented out as it returns too many irrelevant models
         vision_models = [
             "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-5",
-            "gpt-5-mini",
             "gpt-5-nano",
+            "gpt-5-mini",
+            "gpt-5",
+            "gpt-5.4-nano",
+            "gpt-5.4-mini",
             "gpt-5.4",
             "gpt-5.4-pro",
         ]
