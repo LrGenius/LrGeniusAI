@@ -8,268 +8,327 @@
 
 --- Save face thumbnail (base64) to temp file. Sets face.thumbnail_path.
 local function saveFaceThumbnail(face, index)
-    local thumb = face and face.thumbnail
-    if not thumb or thumb == "" then
-        face.thumbnail_path = nil
-        return
-    end
-    local tempDir = LrPathUtils.getStandardFilePath('temp')
-    local tempFile = LrPathUtils.child(tempDir, "lrgenius_face_" .. tostring(index) .. ".jpg")
-    local f = io.open(tempFile, "wb")
-    if f then
-        f:write(LrStringUtils.decodeBase64(thumb))
-        f:close()
-        face.thumbnail_path = tempFile
-    else
-        face.thumbnail_path = nil
-    end
+	local thumb = face and face.thumbnail
+	if not thumb or thumb == "" then
+		face.thumbnail_path = nil
+		return
+	end
+	local tempDir = LrPathUtils.getStandardFilePath("temp")
+	local tempFile = LrPathUtils.child(tempDir, "lrgenius_face_" .. tostring(index) .. ".jpg")
+	local f = io.open(tempFile, "wb")
+	if f then
+		f:write(LrStringUtils.decodeBase64(thumb))
+		f:close()
+		face.thumbnail_path = tempFile
+	else
+		face.thumbnail_path = nil
+	end
 end
 
 local function saveFaceThumbnails(faces)
-    if not faces then return end
-    for i, face in ipairs(faces) do
-        saveFaceThumbnail(face, i)
-    end
+	if not faces then
+		return
+	end
+	for i, face in ipairs(faces) do
+		saveFaceThumbnail(face, i)
+	end
 end
 
 --- Resolve person name from person_id using persons list. Returns display name or nil.
 local function getPersonNameForId(personId, persons)
-    if not personId or personId == "" or not persons then return nil end
-    for _, p in ipairs(persons) do
-        if p.person_id == personId then
-            local name = (p.name and p.name ~= "") and p.name or nil
-            return name
-        end
-    end
-    return nil
+	if not personId or personId == "" or not persons then
+		return nil
+	end
+	for _, p in ipairs(persons) do
+		if p.person_id == personId then
+			local name = (p.name and p.name ~= "") and p.name or nil
+			return name
+		end
+	end
+	return nil
 end
 
 --- Show dialog with detected faces. Returns selected face index (1-based) or nil if canceled.
 local function showFaceSelectionDialog(context, faces)
-    local f = LrView.osFactory()
-    local bind = LrView.bind
+	local f = LrView.osFactory()
+	local bind = LrView.bind
 
-    local props = LrBinding.makePropertyTable(context)
-    props.faces = faces
-    props.selectedFaceIndex = (#faces > 0) and 1 or 0
+	local props = LrBinding.makePropertyTable(context)
+	props.faces = faces
+	props.selectedFaceIndex = (#faces > 0) and 1 or 0
 
-    local listRows = {}
-    for i, face in ipairs(faces) do
-        local label
-        if face.person_name and face.person_name ~= "" then
-            label = LOC("$$$/LrGeniusAI/FindSimilarFaces/FaceWithName=Face ^1 (^2)", tostring(i), face.person_name)
-        else
-            label = LOC("$$$/LrGeniusAI/FindSimilarFaces/FaceNumber=Face ^1", tostring(i))
-        end
-        local thumbView = (face.thumbnail_path and face.thumbnail_path ~= "") and f:picture { value = face.thumbnail_path, width = 48, height = 48 } or f:spacer { width = 48, height = 48 }
-        listRows[#listRows + 1] = f:row {
-            spacing = f:control_spacing(),
-            f:radio_button { value = bind "selectedFaceIndex", checked_value = i, title = "" },
-            thumbView,
-            f:static_text { title = label },
-        }
-    end
+	local listRows = {}
+	for i, face in ipairs(faces) do
+		local label
+		if face.person_name and face.person_name ~= "" then
+			label = LOC("$$$/LrGeniusAI/FindSimilarFaces/FaceWithName=Face ^1 (^2)", tostring(i), face.person_name)
+		else
+			label = LOC("$$$/LrGeniusAI/FindSimilarFaces/FaceNumber=Face ^1", tostring(i))
+		end
+		local thumbView = (face.thumbnail_path and face.thumbnail_path ~= "")
+				and f:picture({ value = face.thumbnail_path, width = 48, height = 48 })
+			or f:spacer({ width = 48, height = 48 })
+		listRows[#listRows + 1] = f:row({
+			spacing = f:control_spacing(),
+			f:radio_button({ value = bind("selectedFaceIndex"), checked_value = i, title = "" }),
+			thumbView,
+			f:static_text({ title = label }),
+		})
+	end
 
-    local listScroller = f:scrolled_view {
-        horizontal_scroller = false,
-        vertical_scroller = true,
-        width = 320,
-        height = 200,
-        f:column { unpack(listRows) },
-    }
+	local listScroller = f:scrolled_view({
+		horizontal_scroller = false,
+		vertical_scroller = true,
+		width = 320,
+		height = 200,
+		f:column({ unpack(listRows) }),
+	})
 
-    local contents = f:column {
-        bind_to_object = props,
-        spacing = f:control_spacing(),
-        fill_horizontal = 1,
-        f:static_text {
-            title = LOC "$$$/LrGeniusAI/FindSimilarFaces/SelectFace=Select the face to search for:",
-            font = "<system/bold>",
-        },
-        listScroller,
-    }
+	local contents = f:column({
+		bind_to_object = props,
+		spacing = f:control_spacing(),
+		fill_horizontal = 1,
+		f:static_text({
+			title = LOC("$$$/LrGeniusAI/FindSimilarFaces/SelectFace=Select the face to search for:"),
+			font = "<system/bold>",
+		}),
+		listScroller,
+	})
 
-    local result = LrDialogs.presentModalDialog {
-        title = LOC "$$$/LrGeniusAI/FindSimilarFaces/WindowTitle=Find Similar Faces",
-        contents = contents,
-        actionVerb = LOC "$$$/LrGeniusAI/FindSimilarFaces/Search=Search",
-        cancelVerb = LOC "$$$/LrGeniusAI/common/Cancel=Cancel",
-    }
-    if result == "cancel" then return nil end
-    return props.selectedFaceIndex
+	local result = LrDialogs.presentModalDialog({
+		title = LOC("$$$/LrGeniusAI/FindSimilarFaces/WindowTitle=Find Similar Faces"),
+		contents = contents,
+		actionVerb = LOC("$$$/LrGeniusAI/FindSimilarFaces/Search=Search"),
+		cancelVerb = LOC("$$$/LrGeniusAI/common/Cancel=Cancel"),
+	})
+	if result == "cancel" then
+		return nil
+	end
+	return props.selectedFaceIndex
 end
 
 -- Create collection from photo IDs and show in Library (same pattern as TaskPeople doShowInLibrary).
 local function createCollectionFromPhotoIds(photoIds, collectionName)
-    local catalog = LrApplication.activeCatalog()
-    local photos = SearchIndexAPI.findPhotosByPhotoIds(photoIds)
-    if #photos == 0 then
-        LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoPhotosInCatalog=Not in catalog", LOC "$$$/LrGeniusAI/FindSimilarFaces/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog.")
-        return
-    end
+	local catalog = LrApplication.activeCatalog()
+	local photos = SearchIndexAPI.findPhotosByPhotoIds(photoIds)
+	if #photos == 0 then
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotosInCatalog=Not in catalog"),
+			LOC(
+				"$$$/LrGeniusAI/FindSimilarFaces/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog."
+			)
+		)
+		return
+	end
 
-    local collectionSet, collection
-    catalog:withWriteAccessDo("Create Collection Set", function()
-        collectionSet = catalog:createCollectionSet(LOC "$$$/LrGeniusAI/People/CollectionSetName=People", nil, true)
-    end, Defaults.catalogWriteAccessOptions)
-    if not collectionSet then
-        ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/CollectionSetError=Collection set error", LOC "$$$/LrGeniusAI/People/CollectionSetErrorMessage=Could not create collection set for people.")
-        return
-    end
+	local collectionSet, collection
+	catalog:withWriteAccessDo("Create Collection Set", function()
+		collectionSet = catalog:createCollectionSet(LOC("$$$/LrGeniusAI/People/CollectionSetName=People"), nil, true)
+	end, Defaults.catalogWriteAccessOptions)
+	if not collectionSet then
+		ErrorHandler.handleError(
+			LOC("$$$/LrGeniusAI/People/CollectionSetError=Collection set error"),
+			LOC("$$$/LrGeniusAI/People/CollectionSetErrorMessage=Could not create collection set for people.")
+		)
+		return
+	end
 
-    catalog:withWriteAccessDo("Create Collection", function()
-        collection = catalog:createCollection(collectionName, collectionSet, false)
-    end, Defaults.catalogWriteAccessOptions)
-    if not collection then
-        ErrorHandler.handleError(LOC "$$$/LrGeniusAI/People/CollectionError=Collection error", LOC "$$$/LrGeniusAI/People/CollectionErrorMessage=Could not create collection for this person.")
-        return
-    end
+	catalog:withWriteAccessDo("Create Collection", function()
+		collection = catalog:createCollection(collectionName, collectionSet, false)
+	end, Defaults.catalogWriteAccessOptions)
+	if not collection then
+		ErrorHandler.handleError(
+			LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"),
+			LOC("$$$/LrGeniusAI/People/CollectionErrorMessage=Could not create collection for this person.")
+		)
+		return
+	end
 
-    catalog:withWriteAccessDo("Add Photos to Collection", function()
-        collection:addPhotos(photos)
-    end, Defaults.catalogWriteAccessOptions)
+	catalog:withWriteAccessDo("Add Photos to Collection", function()
+		collection:addPhotos(photos)
+	end, Defaults.catalogWriteAccessOptions)
 
-    catalog:setActiveSources({collection})
-    LrApplicationView.gridView()
-    LrDialogs.message(LOC "$$$/LrGeniusAI/People/Done=Done", LOC("$$$/LrGeniusAI/People/CollectionCreated=^1 photo(s) added to collection \"^2\".", tostring(#photos), collectionName))
+	catalog:setActiveSources({ collection })
+	LrApplicationView.gridView()
+	LrDialogs.message(
+		LOC("$$$/LrGeniusAI/People/Done=Done"),
+		LOC(
+			'$$$/LrGeniusAI/People/CollectionCreated=^1 photo(s) added to collection "^2".',
+			tostring(#photos),
+			collectionName
+		)
+	)
 end
 
 LrTasks.startAsyncTask(function()
-    LrFunctionContext.callWithContext("TaskFindSimilarFaces", function(context)
-        if not Util.waitForServerDialog() then return end
+	LrFunctionContext.callWithContext("TaskFindSimilarFaces", function(context)
+		if not Util.waitForServerDialog() then
+			return
+		end
 
-        local catalog = LrApplication.activeCatalog()
-        local targetPhotos = catalog:getTargetPhotos()
-        if not targetPhotos or #targetPhotos == 0 then
-            LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoPhotoTitle=No photo selected", LOC "$$$/LrGeniusAI/FindSimilarFaces/NoPhotoMessage=Please select a single photo in the Library.")
-            return
-        end
-        if #targetPhotos > 1 then
-            LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoTitle=Select one photo", LOC "$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoMessage=Please select exactly one photo to find similar faces.")
-            return
-        end
+		local catalog = LrApplication.activeCatalog()
+		local targetPhotos = catalog:getTargetPhotos()
+		if not targetPhotos or #targetPhotos == 0 then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotoTitle=No photo selected"),
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotoMessage=Please select a single photo in the Library.")
+			)
+			return
+		end
+		if #targetPhotos > 1 then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoTitle=Select one photo"),
+				LOC(
+					"$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoMessage=Please select exactly one photo to find similar faces."
+				)
+			)
+			return
+		end
 
-        local photo = targetPhotos[1]
-        local path = SearchIndexAPI.exportPhotoForIndexing(photo)
-        if not path or not LrFileUtils.exists(path) then
-            ErrorHandler.handleError(LOC "$$$/LrGeniusAI/FindSimilarFaces/ExportError=Export failed", "Could not export photo for face detection.")
-            return
-        end
+		local photo = targetPhotos[1]
+		local path = SearchIndexAPI.exportPhotoForIndexing(photo)
+		if not path or not LrFileUtils.exists(path) then
+			ErrorHandler.handleError(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/ExportError=Export failed"),
+				"Could not export photo for face detection."
+			)
+			return
+		end
 
-        local imageBase64 = Util.encodePhotoToBase64(path)
-        LrFileUtils.delete(path)
-        if not imageBase64 then
-            ErrorHandler.handleError(LOC "$$$/LrGeniusAI/FindSimilarFaces/ExportError=Export failed", "Could not read exported image.")
-            return
-        end
+		local imageBase64 = Util.encodePhotoToBase64(path)
+		LrFileUtils.delete(path)
+		if not imageBase64 then
+			ErrorHandler.handleError(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/ExportError=Export failed"),
+				"Could not read exported image."
+			)
+			return
+		end
 
-        -- 1) Detect faces
-        local detectResp, err = SearchIndexAPI.detectFacesInImage(imageBase64)
-        if err then
-            ErrorHandler.handleError(LOC "$$$/LrGeniusAI/FindSimilarFaces/DetectError=Face detection failed", err)
-            return
-        end
-        
-        if detectResp and detectResp.warning then
-            LrDialogs.message(
-                LOC "$$$/LrGeniusAI/common/BackendWarning=Backend Warning",
-                detectResp.warning,
-                "warning"
-            )
-        end
-        
-        local faces = (detectResp and detectResp.faces) and detectResp.faces or {}
-        if #faces == 0 then
-            LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoFacesTitle=No faces found", LOC "$$$/LrGeniusAI/FindSimilarFaces/NoFacesMessage=No faces were detected on this photo.")
-            return
-        end
+		-- 1) Detect faces
+		local detectResp, err = SearchIndexAPI.detectFacesInImage(imageBase64)
+		if err then
+			ErrorHandler.handleError(LOC("$$$/LrGeniusAI/FindSimilarFaces/DetectError=Face detection failed"), err)
+			return
+		end
 
-        saveFaceThumbnails(faces)
+		if detectResp and detectResp.warning then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"),
+				detectResp.warning,
+				"warning"
+			)
+		end
 
-        -- Resolve person names for each face (quick query per face, then look up name)
-        local personsResp, _ = SearchIndexAPI.getPersons()
-        if personsResp and personsResp.warning then
-            log:warn("getPersons warning during face resolution: " .. tostring(personsResp.warning))
-        end
-        local persons = (personsResp and personsResp.persons) and personsResp.persons or {}
-        for i, face in ipairs(faces) do
-            local qResp, _ = SearchIndexAPI.queryFacesByImage(imageBase64, i - 1, 1)
-            if qResp and qResp.warning then
-                log:warn("queryFacesByImage warning during face resolution (idx " .. tostring(i-1) .. "): " .. tostring(qResp.warning))
-            end
-            local qResults = (qResp and qResp.results) and qResp.results or {}
-            if qResults[1] and qResults[1].person_id then
-                local name = getPersonNameForId(qResults[1].person_id, persons)
-                if name then face.person_name = name end
-            end
-        end
+		local faces = (detectResp and detectResp.faces) and detectResp.faces or {}
+		if #faces == 0 then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoFacesTitle=No faces found"),
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoFacesMessage=No faces were detected on this photo.")
+			)
+			return
+		end
 
-        -- 2) User selects face (1-based index)
-        local selectedIndex = showFaceSelectionDialog(context, faces)
-        if not selectedIndex or selectedIndex < 1 or selectedIndex > #faces then return end
+		saveFaceThumbnails(faces)
 
-        -- 3) Query similar faces (face_index is 0-based)
-        local faceIndex = selectedIndex - 1
-        local queryResp, err = SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, 500)
-        if err then
-            ErrorHandler.handleError(LOC "$$$/LrGeniusAI/FindSimilarFaces/QueryError=Search failed", err)
-            return
-        end
-        if queryResp and queryResp.warning then
-            LrDialogs.message(
-                LOC "$$$/LrGeniusAI/common/BackendWarning=Backend Warning",
-                queryResp.warning,
-                "warning"
-            )
-        end
+		-- Resolve person names for each face (quick query per face, then look up name)
+		local personsResp, _ = SearchIndexAPI.getPersons()
+		if personsResp and personsResp.warning then
+			log:warn("getPersons warning during face resolution: " .. tostring(personsResp.warning))
+		end
+		local persons = (personsResp and personsResp.persons) and personsResp.persons or {}
+		for i, face in ipairs(faces) do
+			local qResp, _ = SearchIndexAPI.queryFacesByImage(imageBase64, i - 1, 1)
+			if qResp and qResp.warning then
+				log:warn(
+					"queryFacesByImage warning during face resolution (idx "
+						.. tostring(i - 1)
+						.. "): "
+						.. tostring(qResp.warning)
+				)
+			end
+			local qResults = (qResp and qResp.results) and qResp.results or {}
+			if qResults[1] and qResults[1].person_id then
+				local name = getPersonNameForId(qResults[1].person_id, persons)
+				if name then
+					face.person_name = name
+				end
+			end
+		end
 
-        local results = (queryResp and queryResp.results) and queryResp.results or {}
-        if #results == 0 then
-            LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces", LOC "$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled.")
-            return
-        end
+		-- 2) User selects face (1-based index)
+		local selectedIndex = showFaceSelectionDialog(context, faces)
+		if not selectedIndex or selectedIndex < 1 or selectedIndex > #faces then
+			return
+		end
 
-        -- 4) Get cluster: prefer person_id from first result, then get all photos for that person
-        local personId = results[1].person_id
-        local photoIds = {}
-        if personId and personId ~= "" then
-            local personResp, personErr = SearchIndexAPI.getPhotosForPerson(personId)
-            
-            if personResp and personResp.warning then
-                log:warn("getPhotosForPerson warning: " .. tostring(personResp.warning))
-            end
-            
-            if not personErr and personResp and (personResp.photo_ids or personResp.photo_uuids) then
-                photoIds = personResp.photo_ids or personResp.photo_uuids
-            end
-        end
-        if #photoIds == 0 then
-            local seen = {}
-            for _, r in ipairs(results) do
-                local photoId = r.photo_id or r.photo_uuid
-                if photoId and not seen[photoId] then
-                    seen[photoId] = true
-                    table.insert(photoIds, photoId)
-                end
-            end
-        end
+		-- 3) Query similar faces (face_index is 0-based)
+		local faceIndex = selectedIndex - 1
+		local queryResp
+		queryResp, err = SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, 500)
+		if err then
+			ErrorHandler.handleError(LOC("$$$/LrGeniusAI/FindSimilarFaces/QueryError=Search failed"), err)
+			return
+		end
+		if queryResp and queryResp.warning then
+			LrDialogs.message(LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"), queryResp.warning, "warning")
+		end
 
-        if #photoIds == 0 then
-            LrDialogs.message(LOC "$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces", LOC "$$$/LrGeniusAI/FindSimilarFaces/NoPhotosForFace=No photos found for this face.")
-            return
-        end
+		local results = (queryResp and queryResp.results) and queryResp.results or {}
+		if #results == 0 then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces"),
+				LOC(
+					"$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled."
+				)
+			)
+			return
+		end
 
-        -- Collection name: use person name when available (same as People "Show in Library")
-        local personDisplayName
-        if personId and personId ~= "" then
-            local personsResp2, _ = SearchIndexAPI.getPersons()
-            local personsList = (personsResp2 and personsResp2.persons) and personsResp2.persons or {}
-            personDisplayName = getPersonNameForId(personId, personsList)
-        end
-        if not personDisplayName or personDisplayName == "" then
-            personDisplayName = LOC "$$$/LrGeniusAI/FindSimilarFaces/SimilarFaces=Similar Faces"
-        end
-        local collectionName = string.format("%s @ %s", personDisplayName, LrDate.timeToW3CDate(LrDate.currentTime()))
-        createCollectionFromPhotoIds(photoIds, collectionName)
-    end)
+		-- 4) Get cluster: prefer person_id from first result, then get all photos for that person
+		local personId = results[1].person_id
+		local photoIds = {}
+		if personId and personId ~= "" then
+			local personResp, personErr = SearchIndexAPI.getPhotosForPerson(personId)
+
+			if personResp and personResp.warning then
+				log:warn("getPhotosForPerson warning: " .. tostring(personResp.warning))
+			end
+
+			if not personErr and personResp and (personResp.photo_ids or personResp.photo_uuids) then
+				photoIds = personResp.photo_ids or personResp.photo_uuids
+			end
+		end
+		if #photoIds == 0 then
+			local seen = {}
+			for _, r in ipairs(results) do
+				local photoId = r.photo_id or r.photo_uuid
+				if photoId and not seen[photoId] then
+					seen[photoId] = true
+					table.insert(photoIds, photoId)
+				end
+			end
+		end
+
+		if #photoIds == 0 then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces"),
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotosForFace=No photos found for this face.")
+			)
+			return
+		end
+
+		-- Collection name: use person name when available (same as People "Show in Library")
+		local personDisplayName
+		if personId and personId ~= "" then
+			local personsResp2, _ = SearchIndexAPI.getPersons()
+			local personsList = (personsResp2 and personsResp2.persons) and personsResp2.persons or {}
+			personDisplayName = getPersonNameForId(personId, personsList)
+		end
+		if not personDisplayName or personDisplayName == "" then
+			personDisplayName = LOC("$$$/LrGeniusAI/FindSimilarFaces/SimilarFaces=Similar Faces")
+		end
+		local collectionName = string.format("%s @ %s", personDisplayName, LrDate.timeToW3CDate(LrDate.currentTime()))
+		createCollectionFromPhotoIds(photoIds, collectionName)
+	end)
 end)

@@ -624,7 +624,7 @@ jobs:
   # with ghcr.io/.../lrgeniusai:latest (amd64 and arm64 clients resolve correctly).
   publish-docker-manifest:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-docker-images]
+    needs: [build-docker-images, create-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -737,6 +737,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
           git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
+          git fetch origin main
+          git rebase --autostash origin/main
           git push origin HEAD:main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

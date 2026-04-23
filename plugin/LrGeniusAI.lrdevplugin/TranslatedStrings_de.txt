@@ -509,7 +509,7 @@
 "$$$/LrGeniusAI/common/Temperature" = "Temperatur:"
 "$$$/LrGeniusAI/common/Unknown" = "unbekannt"
 "$$$/LrGeniusAI/common/UnknownError" = "Unbekannter Fehler"
-"$$$/LrGeniusAI/Onboarding/WizardTitle" = "LrGeniusAI Einrichtungs-Assistent"
+"$$$/LrGeniusAI/Onboarding/WizardTitle" = "LrGeniusAI Einrichtung"
 "$$$/LrGeniusAI/Onboarding/WelcomeTitle" = "Willkommen bei LrGeniusAI!"
 "$$$/LrGeniusAI/Onboarding/WelcomeMessage" = "Vielen Dank, dass Sie sich für LrGeniusAI entschieden haben. Dieser Assistent wird Sie durch die Ersteinrichtung führen, um sicherzustellen, dass alles reibungslos läuft."
 "$$$/LrGeniusAI/Onboarding/Next" = "Weiter"
