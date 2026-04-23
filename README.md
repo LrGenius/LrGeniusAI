@@ -191,6 +191,26 @@ This project is built on the belief that AI tooling for creatives should remain 
 
 ---
 
+## 🛠️ Development
+
+To ensure code consistency, this project uses `pre-commit` hooks for automatic formatting and linting.
+
+### Setting up Pre-commit Hooks
+
+1. Install `pre-commit`:
+   ```bash
+   pip install pre-commit
+   ```
+   *Or via Homebrew on macOS:* `brew install pre-commit`
+
+2. Install the git hooks:
+   ```bash
+   pre-commit install
+   ```
+
+Now, every time you commit, `ruff` (for Python) and `stylua` (for Lua) will automatically format and check your code.
+
+
 ## 🤝 Credits
 
 Developed with a passion for photography and IT by:

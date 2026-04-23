@@ -1,0 +1,18 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.15.11
+    hooks:
+      # Run the linter.
+      - id: ruff
+        args: [ --fix, --ignore, E741 ]
+        files: ^server/
+      # Run the formatter.
+      - id: ruff-format
+        files: ^server/
+
+  - repo: https://github.com/JohnnyMorganz/StyLua
+    rev: v2.4.1
+    hooks:
+      - id: stylua-github
+        files: ^plugin/LrGeniusAI.lrdevplugin/
