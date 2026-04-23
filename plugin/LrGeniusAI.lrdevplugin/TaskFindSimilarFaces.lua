@@ -264,7 +264,8 @@ LrTasks.startAsyncTask(function()
 
 		-- 3) Query similar faces (face_index is 0-based)
 		local faceIndex = selectedIndex - 1
-		local queryResp, err = SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, 500)
+		local queryResp
+		queryResp, err = SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, 500)
 		if err then
 			ErrorHandler.handleError(LOC("$$$/LrGeniusAI/FindSimilarFaces/QueryError=Search failed"), err)
 			return

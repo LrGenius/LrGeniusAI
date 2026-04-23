@@ -54,8 +54,6 @@ function UpdateCheck.checkForNewVersionInBackground()
 						LOC("$$$/LrGeniusAI/UpdateCheck/NewVersionAvailableTitle=New Version Available"),
 						"info"
 					)
-				else
-					-- LrDialogs.message("You're on the latest plugin version: " .. UpdateCheck.releaseTagName)
 				end
 			end
 		else

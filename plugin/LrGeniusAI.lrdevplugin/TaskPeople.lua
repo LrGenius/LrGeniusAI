@@ -594,9 +594,7 @@ LrTasks.startAsyncTask(function()
 				doShowInLibrary(pending.entries, pending.matchMode)
 				return
 			end
-			if r == "reset" then
-				-- Dialog erneut öffnen; Namen kommen weiter aus persons (nur nach Save geändert).
-			else
+			if r ~= "reset" then
 				break
 			end
 		end

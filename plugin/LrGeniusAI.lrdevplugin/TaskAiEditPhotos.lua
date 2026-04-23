@@ -651,7 +651,7 @@ local function showAiEditDialog(ctx)
 	prefs.editPrompts = props.prompts
 	prefs.editPrompt = props.prompt
 
-	local providerFromKey, modelFromKey = nil, nil
+	local providerFromKey, modelFromKey
 	local sep = props.modelKey and string.find(props.modelKey, "::", 1, true) or nil
 	if sep then
 		providerFromKey = string.sub(props.modelKey, 1, sep - 1)
@@ -822,7 +822,7 @@ LrTasks.startAsyncTask(function()
 				.. tostring(options.composition_mode)
 		)
 
-		local photos, status = PhotoSelector.getPhotosInScope(options.scope)
+		local photos = PhotoSelector.getPhotosInScope(options.scope)
 		if not photos or #photos == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos"),

@@ -34,13 +34,11 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 			return nil, "No active source"
 		end
 		local addedPhotos = {}
-		local containsAllPhotos = false
 
 		for _, source in ipairs(sources) do
 			if type(source) == "string" then
 				if source == "kAllPhotos" then
 					photosToProcess = filterPhotos(catalog:getAllPhotos())
-					containsAllPhotos = true
 					break -- No need to process other sources
 				elseif source == "kPreviousImport" then
 					local previousImport = filterPhotos(catalog:getPreviousImport())
@@ -88,7 +86,7 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 	elseif scope == "all" then
 		photosToProcess = filterPhotos(catalog:getAllPhotos())
 	elseif scope == "missing" then
-		local success = false
+		local success
 		success, photosToProcess = SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressScope)
 		status = success and "ok" or "indexerror"
 	end

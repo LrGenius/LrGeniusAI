@@ -211,7 +211,7 @@ LrTasks.startAsyncTask(function()
 
 		local scopePhotoIds = nil
 		if options.searchScope == "view" then
-			local scopePhotos, status = PhotoSelector.getPhotosInScope("view")
+			local scopePhotos = PhotoSelector.getPhotosInScope("view")
 			if not scopePhotos or #scopePhotos == 0 then
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),

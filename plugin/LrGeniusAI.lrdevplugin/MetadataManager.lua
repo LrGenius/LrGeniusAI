@@ -477,43 +477,43 @@ function MetadataManager.addKeywordRecursively(
 			keyword = createKeywordSafely(catalog, key, {}, false, parent, sessionCache)
 		elseif type(key) == "number" and value then
 			local keywordName, keywordSynonyms = parseKeywordLeaf(value)
-			if not keywordName or keywordName == "" or keywordName == "None" or keywordName == "none" then
-				-- Skip invalid keyword leafs
-			elseif not Util.table_contains(addKeywords, keywordName) then
-				if
-					keywordName == "Ollama"
-					or keywordName == "LMStudio"
-					or keywordName == "Google Gemini"
-					or keywordName == "ChatGPT"
-					or keywordName == reservedTopLevel
-				then
-					log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
-				else
-					local currentParent = prefs.useKeywordHierarchy and parent or nil
-					keyword = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, keywordName)
-					if keyword then
-						mergeKeywordSynonyms(keyword, keywordSynonyms)
+			if keywordName and keywordName ~= "" and keywordName ~= "None" and keywordName ~= "none" then
+				if not Util.table_contains(addKeywords, keywordName) then
+					if
+						keywordName == "Ollama"
+						or keywordName == "LMStudio"
+						or keywordName == "Google Gemini"
+						or keywordName == "ChatGPT"
+						or keywordName == reservedTopLevel
+					then
+						log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
 					else
-						keyword = createKeywordSafely(
-							catalog,
-							keywordName,
-							keywordSynonyms,
-							true,
-							currentParent,
-							sessionCache
-						)
-						mergeKeywordSynonyms(keyword, keywordSynonyms)
-					end
-					if keyword then
-						local okAdd, errAdd = LrTasks.pcall(function()
-							photo:addKeyword(keyword)
-						end)
-						if okAdd then
-							table.insert(addKeywords, keywordName)
+						local currentParent = prefs.useKeywordHierarchy and parent or nil
+						keyword = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, keywordName)
+						if keyword then
+							mergeKeywordSynonyms(keyword, keywordSynonyms)
 						else
-							log:error(
-								"Failed to add keyword '" .. tostring(keywordName) .. "' to photo: " .. tostring(errAdd)
+							keyword = createKeywordSafely(
+								catalog,
+								keywordName,
+								keywordSynonyms,
+								true,
+								currentParent,
+								sessionCache
 							)
+							mergeKeywordSynonyms(keyword, keywordSynonyms)
+						end
+						if keyword then
+							local okAdd, errAdd = LrTasks.pcall(function()
+								photo:addKeyword(keyword)
+							end)
+							if okAdd then
+								table.insert(addKeywords, keywordName)
+							else
+								log:error(
+									"Failed to add keyword '" .. tostring(keywordName) .. "' to photo: " .. tostring(errAdd)
+								)
+							end
 						end
 					end
 				end
@@ -536,7 +536,6 @@ end
 function MetadataManager.showValidationDialog(ctx, photo, response, options)
 	local f = LrView.osFactory()
 	local bind = LrView.bind
-	local share = LrView.share
 
 	local title = response.metadata.title
 	local caption = response.metadata.caption

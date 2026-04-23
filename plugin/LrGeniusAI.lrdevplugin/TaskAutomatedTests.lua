@@ -4,8 +4,7 @@
 local LrTasks = import("LrTasks")
 local LrDialogs = import("LrDialogs")
 local LrFunctionContext = import("LrFunctionContext")
-local LrHttp = import("LrHttp")
-local LrPathUtils = import("LrPathUtils")
+
 
 require("JSON")
 require("Util")

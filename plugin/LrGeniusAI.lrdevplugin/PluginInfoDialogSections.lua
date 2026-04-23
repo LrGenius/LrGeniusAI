@@ -23,7 +23,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.usePreviewThumbnails = (prefs.usePreviewThumbnails ~= false)
 
 	propertyTable.promptTitles = {}
-	for title, prompt in pairs(prefs.prompts) do
+	for title in pairs(prefs.prompts) do
 		table.insert(propertyTable.promptTitles, { title = title, value = title })
 	end
 
@@ -54,7 +54,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	local function updateStats()
 		LrTasks.startAsyncTask(function()
-			local stats, err = SearchIndexAPI.getTrainingStats()
+			local stats = SearchIndexAPI.getTrainingStats()
 			if stats then
 				propertyTable.styleStats = stats
 				propertyTable.trainingCount = stats.count or 0
@@ -694,7 +694,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:push_button({
 						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/add=Add"),
 						action = function(button)
-							local newName = PromptConfigProvider.addPrompt(propertyTable)
+							PromptConfigProvider.addPrompt(propertyTable)
 						end,
 					}),
 					f:push_button({

@@ -17,7 +17,6 @@ end
 
 function ErrorHandler.customErrorDialog(errorMessage, detailedInfo)
 	local f = LrView.osFactory()
-	local bind = LrView.bind
 	local share = LrView.share
 
 	local dialogView = f:column({

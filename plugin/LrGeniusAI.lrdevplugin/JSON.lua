@@ -1054,7 +1054,7 @@ local function grok_string(self, text, start, options)
 						if lo_surrogate then
 							i = i + 6 -- bypass the low surrogate we just read
 							codepoint = 0x2400 + (codepoint - 0xD800) * 0x400 + tonumber(lo_surrogate, 16)
-						else
+						-- else
 							-- not a proper low, so we'll just leave the first codepoint as is and spit it out.
 						end
 					end
@@ -1137,7 +1137,8 @@ local function grok_object(self, text, start, options)
 
 		i = skip_whitespace(text, i + 1)
 
-		local new_val, new_i = grok_one(self, text, i, options)
+		local new_val
+		new_val, new_i = grok_one(self, text, i, options)
 
 		VALUE[key] = new_val
 

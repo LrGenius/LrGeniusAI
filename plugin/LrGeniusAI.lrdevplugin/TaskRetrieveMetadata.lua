@@ -174,7 +174,7 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- Get photos based on scope
-		local photos, status = PhotoSelector.getPhotosInScope(options.scope)
+		local photos = PhotoSelector.getPhotosInScope(options.scope)
 		if not photos or #photos == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/RetrieveMetadata/NoPhotos=No Photos"),

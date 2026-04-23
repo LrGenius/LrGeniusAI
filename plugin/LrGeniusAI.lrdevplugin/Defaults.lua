@@ -163,7 +163,6 @@ Defaults.credits = {
 }
 
 Defaults.copyrightString = ""
-local f = LrView.osFactory()
 for _, credit in ipairs(Defaults.credits) do
 	Defaults.copyrightString = Defaults.copyrightString .. string.format("%s (%s)\n", credit.name, credit.url)
 end

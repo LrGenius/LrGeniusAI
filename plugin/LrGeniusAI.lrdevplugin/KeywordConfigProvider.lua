@@ -3,11 +3,10 @@ KeywordConfigProvider = {}
 function KeywordConfigProvider.showKeywordCategoryDialog()
 	local f = LrView.osFactory()
 	local bind = LrView.bind
-	local share = LrView.share
 
 	local propertyTable = {}
 
-	local keywords = {}
+	local keywords
 	-- keywords = Defaults.defaultKeywordCategories
 	if prefs.keywordCategories ~= nil and type(prefs.keywordCategories) == "table" then
 		keywords = prefs.keywordCategories

@@ -109,7 +109,7 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(options.scope)
+		local photosToProcess = PhotoSelector.getPhotosInScope(options.scope)
 		if not photosToProcess or #photosToProcess == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/Training/NoPhotosTitle=No Photos"),
@@ -169,7 +169,7 @@ LrTasks.startAsyncTask(function()
 			progressScope:setPortionComplete(index - 1, #photos)
 
 			-- Read current develop settings.
-			local developSettings = nil
+			local developSettings
 			local okGet, devOrErr = LrTasks.pcall(function()
 				return photo:getDevelopSettings()
 			end)

@@ -90,7 +90,7 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 	local share = LrView.share
 
 	propertyTable.promptTitles = {}
-	for title, prompt in pairs(prefs.prompts) do
+	for title in pairs(prefs.prompts) do
 		table.insert(propertyTable.promptTitles, { title = title, value = title })
 	end
 
@@ -177,7 +177,6 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 	if result == "ok" then
 		prefs.prompts = propertyTable.prompts
 		prefs.prompt = propertyTable.prompt
-	elseif result == "cancel" then
 	elseif result == "other" then
 		prefs.prompts = { Default = Defaults.defaultSystemInstruction }
 		prefs.prompt = "Default"

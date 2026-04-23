@@ -1058,7 +1058,7 @@ function Util.keywordTableToStringList(keywordTable)
 	local result = {}
 
 	local function recurse(tbl, path)
-		for k, v in pairs(tbl) do
+		for _, v in pairs(tbl) do
 			if type(v) == "string" then
 				table.insert(result, v)
 			elseif type(v) == "table" then
@@ -1134,7 +1134,7 @@ function Util.waitForServerDialog(options)
 	local result = false
 
 	LrFunctionContext.callWithContext("WaitForServerContext", function(waitContext)
-		local canceled = false
+
 
 		local progressScope = LrDialogs.showModalProgressDialog({
 			title = LOC("$$$/lrc-ai-assistant/WaitForServer/title=LrGeniusAI"),
@@ -1145,7 +1145,7 @@ function Util.waitForServerDialog(options)
 
 		local elapsedTime = 0
 		local timeout = 120 -- 120 seconds timeout
-		local restartAttempted = false
+
 		while not progressScope:isCanceled() and elapsedTime < timeout do
 			if SearchIndexAPI.pingServer() then
 				local compatible, versionMessage = SearchIndexAPI.ensureVersionCompatibility()
@@ -1163,8 +1163,7 @@ function Util.waitForServerDialog(options)
 
 				-- If we found a mismatch after the server started (likely a stale backend),
 				-- restart it once and re-check.
-				if SearchIndexAPI.isBackendOnLocalhost() and not restartAttempted then
-					restartAttempted = true
+				if SearchIndexAPI.isBackendOnLocalhost() then
 					log:trace("Backend version mismatch detected after ping; restarting local backend once.")
 
 					LrTasks.pcall(function()
@@ -1227,7 +1226,7 @@ function Util.showDiagnosticFailureDialog(diag)
 
 	local message =
 		LOC("$$$/LrGeniusAI/Health/BackendCritical=The local backend server is not running and could not be started.")
-	local hint = ""
+	local hint
 
 	if diag.binaryMissing then
 		hint = LOC(

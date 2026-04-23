@@ -31,7 +31,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- Metadata generation options
 	props.temperature = prefs.temperature or 0.1
 	props.promptTitles = {}
-	for title, prompt in pairs(prefs.prompts) do
+	for title in pairs(prefs.prompts) do
 		table.insert(props.promptTitles, { title = title, value = title })
 	end
 
@@ -602,7 +602,6 @@ end
 local function showPhotoContextDialog(photo)
 	local f = LrView.osFactory()
 	local bind = LrView.bind
-	local share = LrView.share
 
 	local props = {}
 	props.skipFromHere = SkipPhotoContextDialog
@@ -811,7 +810,7 @@ LrTasks.startAsyncTask(function()
 			functionContext = context,
 		})
 
-		local status, processed, failed, processedPhotos
+
 
 		-- Get photos to process
 		-- For scope 'missing', pass task options so backend checks which photos need the selected tasks
@@ -863,11 +862,10 @@ LrTasks.startAsyncTask(function()
 			local skipFromHere = false
 			local contextData = ""
 			for _, photo in ipairs(photosToProcess) do
-				local result = ""
 				if not skipFromHere then
+					local result
 					result, contextData, skipFromHere = showPhotoContextDialog(photo)
-					if result == "ok" then
-					elseif result == "cancel" then
+					if result == "cancel" then
 						log:trace(
 							"User canceled photo context dialog for photo: "
 								.. (photo:getFormattedMetadata("fileName") or "unknown")
@@ -933,7 +931,7 @@ LrTasks.startAsyncTask(function()
 					log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
 
 					if props.enableValidation and props.enableMetadata and response and response.metadata then
-						local result, validatedData = nil, nil
+						local result, validatedData
 
 						if not skipFromHere then
 							-- Show validation dialog

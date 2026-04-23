@@ -236,9 +236,9 @@ if prefs.periodicalUpdateCheck then
 	end)
 end
 
-if prefs.onboardingCompleted == nil then
-	-- Do not set to false yet, let the wizard trigger
-end
+-- if prefs.onboardingCompleted == nil then
+-- 	Do not set to false yet, let the wizard trigger
+-- end
 
 LrTasks.startAsyncTask(function()
 	-- Check if onboarding is needed

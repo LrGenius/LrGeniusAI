@@ -897,8 +897,8 @@ local function applyMaskEdits(photo, recipe, warnings)
 			log:trace("DevelopEditManager.applyMaskEdits snapshot(" .. tostring(stageLabel) .. "): no develop settings")
 			return
 		end
-		local groupKey, masks = findMaskGroup(settingsOrErr)
-		if type(masks) ~= "table" then
+		local groupKey, groupMasks = findMaskGroup(settingsOrErr)
+		if type(groupMasks) ~= "table" then
 			local maskLikeKeys = {}
 			for key, value in pairs(settingsOrErr) do
 				if type(key) == "string" and string.find(key, "Mask") and type(value) == "table" then
@@ -930,7 +930,7 @@ local function applyMaskEdits(photo, recipe, warnings)
 				.. "): group="
 				.. tostring(groupKey)
 				.. " maskCount="
-				.. tostring(#masks)
+				.. tostring(#groupMasks)
 				.. " masks="
 				.. tostring(dump)
 		)
@@ -1212,7 +1212,7 @@ local function applyMaskEdits(photo, recipe, warnings)
 				error("createNewMask failed: " .. tostring(createErr))
 			end
 			local newMaskId = waitForMaskId(masksBefore, createdMaskId)
-			local hasMaskContext = false
+			local hasMaskContext
 			if newMaskId then
 				local selected = selectMaskById(newMaskId)
 				hasMaskContext = selected or type(LrDevelopController.selectMask) ~= "function"
