@@ -1134,8 +1134,6 @@ function Util.waitForServerDialog(options)
 	local result = false
 
 	LrFunctionContext.callWithContext("WaitForServerContext", function(waitContext)
-
-
 		local progressScope = LrDialogs.showModalProgressDialog({
 			title = LOC("$$$/lrc-ai-assistant/WaitForServer/title=LrGeniusAI"),
 			caption = LOC("$$$/lrc-ai-assistant/WaitForServer/caption=Waiting for LrGeniusAI database to load..."),

@@ -5,7 +5,6 @@ local LrTasks = import("LrTasks")
 local LrDialogs = import("LrDialogs")
 local LrFunctionContext = import("LrFunctionContext")
 
-
 require("JSON")
 require("Util")
 require("APISearchIndex")

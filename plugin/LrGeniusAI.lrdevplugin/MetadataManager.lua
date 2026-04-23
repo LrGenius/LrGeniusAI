@@ -511,7 +511,10 @@ function MetadataManager.addKeywordRecursively(
 								table.insert(addKeywords, keywordName)
 							else
 								log:error(
-									"Failed to add keyword '" .. tostring(keywordName) .. "' to photo: " .. tostring(errAdd)
+									"Failed to add keyword '"
+										.. tostring(keywordName)
+										.. "' to photo: "
+										.. tostring(errAdd)
 								)
 							end
 						end

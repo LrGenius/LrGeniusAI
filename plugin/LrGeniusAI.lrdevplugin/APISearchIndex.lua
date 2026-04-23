@@ -560,7 +560,6 @@ function SearchIndexAPI.exportPhotoForIndexing(photo)
 	local tempDir = LrPathUtils.getStandardFilePath("temp")
 	local photoName = LrPathUtils.leafName(photo:getFormattedMetadata("fileName"))
 
-
 	EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
 
 	local exportSession = LrExportSession({
@@ -1751,7 +1750,6 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 							else
 								previewRequestState.consecutiveTimeouts = 0
 							end
-
 						end
 					end
 
@@ -3379,7 +3377,10 @@ function SearchIndexAPI.startClipDownload()
 						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=CLIP model downloaded successfully.")
 					)
 					break
-				elseif loopStatus.status == "error" or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "") then
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
 					local error_msg = loopStatus.error or "Unknown download error"
 					ErrorHandler.handleError(
 						LOC("$$$/LrGeniusAI/ClipDownload/ErrorTitle=Error downloading CLIP model"),

@@ -810,8 +810,6 @@ LrTasks.startAsyncTask(function()
 			functionContext = context,
 		})
 
-
-
 		-- Get photos to process
 		-- For scope 'missing', pass task options so backend checks which photos need the selected tasks
 		local taskOptionsForScope = (props.scope == "missing")
