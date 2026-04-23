@@ -738,7 +738,7 @@ jobs:
           git add CHANGELOG.md
           git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]" || echo "No changes to commit"
           git fetch origin main
-          git rebase origin/main
+          git rebase --autostash origin/main
           git push origin HEAD:main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
