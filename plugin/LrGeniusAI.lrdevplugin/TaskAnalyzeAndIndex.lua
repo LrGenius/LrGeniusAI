@@ -810,8 +810,6 @@ LrTasks.startAsyncTask(function()
 			functionContext = context,
 		})
 
-		local status, processed, failed, processedPhotos
-
 		-- Get photos to process
 		-- For scope 'missing', pass task options so backend checks which photos need the selected tasks
 		local taskOptionsForScope = (props.scope == "missing")
@@ -862,11 +860,10 @@ LrTasks.startAsyncTask(function()
 			local skipFromHere = false
 			local contextData = ""
 			for _, photo in ipairs(photosToProcess) do
-				local result = ""
+				local result
 				if not skipFromHere then
 					result, contextData, skipFromHere = showPhotoContextDialog(photo)
-					if result == "ok" then
-					elseif result == "cancel" then
+					if result == "cancel" then
 						log:trace(
 							"User canceled photo context dialog for photo: "
 								.. (photo:getFormattedMetadata("fileName") or "unknown")
@@ -932,7 +929,7 @@ LrTasks.startAsyncTask(function()
 					log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
 
 					if props.enableValidation and props.enableMetadata and response and response.metadata then
-						local result, validatedData = nil, nil
+						local result, validatedData
 
 						if not skipFromHere then
 							-- Show validation dialog
