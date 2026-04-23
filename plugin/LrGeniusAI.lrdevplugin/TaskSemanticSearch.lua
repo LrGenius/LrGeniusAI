@@ -62,7 +62,9 @@ local function showAdvancedSearchDialog(ctx)
 					spacing = f:control_spacing(),
 					f:checkbox({
 						value = bind("searchInSemanticSiglip"),
-						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)"),
+						title = LOC(
+							"$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)"
+						),
 					}),
 					f:checkbox({
 						value = bind("searchInSemanticVertex"),
@@ -164,7 +166,9 @@ LrTasks.startAsyncTask(function()
 				if status == "Invalid view" then
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
-						LOC("$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection or collection set is selected.")
+						LOC(
+							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection or collection set is selected."
+						)
 					)
 				else
 					LrDialogs.message(
@@ -262,7 +266,9 @@ LrTasks.startAsyncTask(function()
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteria=No Search Criteria"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term or select a quality filter.")
+				LOC(
+					"$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term or select a quality filter."
+				)
 			)
 			return
 		end
@@ -347,7 +353,9 @@ LrTasks.startAsyncTask(function()
 			if collectionSet == nil then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/AdvancedSearchTask/collectionSetErrorTitle=Collection Set Error"),
-					LOC("$$$/LrGeniusAI/AdvancedSearchTask/collectionSetErrorMessage=Failed to create or find collection set for search results.")
+					LOC(
+						"$$$/LrGeniusAI/AdvancedSearchTask/collectionSetErrorMessage=Failed to create or find collection set for search results."
+					)
 				)
 				return
 			end
@@ -359,7 +367,9 @@ LrTasks.startAsyncTask(function()
 			if collection == nil then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/AdvancedSearchTask/collectionErrorTitle=Collection Error"),
-					LOC("$$$/LrGeniusAI/AdvancedSearchTask/collectionErrorMessage=Failed to create collection for search results.")
+					LOC(
+						"$$$/LrGeniusAI/AdvancedSearchTask/collectionErrorMessage=Failed to create collection for search results."
+					)
 				)
 				return
 			end
@@ -381,12 +391,16 @@ LrTasks.startAsyncTask(function()
 			if collection == nil then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/AdvancedSearchTask/collectionErrorTitle=Collection Error"),
-					LOC("$$$/LrGeniusAI/AdvancedSearchTask/collectionErrorMessage=Failed to create collection for search results.")
+					LOC(
+						"$$$/LrGeniusAI/AdvancedSearchTask/collectionErrorMessage=Failed to create collection for search results."
+					)
 				)
 			elseif #collection:getPhotos() > 0 then
 				LrDialogs.messageWithDoNotShow({
 					message = LOC("$$$/LrGeniusAI/AdvancedSearchTask/successTitle=Search Completed"),
-					info = LOC("$$$/LrGeniusAI/AdvancedSearchTask/sortOrder=Please set the sort order to 'Custom Order' to see the results in the correct order."),
+					info = LOC(
+						"$$$/LrGeniusAI/AdvancedSearchTask/sortOrder=Please set the sort order to 'Custom Order' to see the results in the correct order."
+					),
 					actionPrefKey = "LrGeniusAI_AdvancedSearch_SortOrder",
 				})
 			end

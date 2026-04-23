@@ -66,7 +66,10 @@ local function showCullDialog(ctx)
 							title = LOC("$$$/LrGeniusAI/CullTask/PresetStreet=Street (technical-focused)"),
 							value = "street",
 						},
-						{ title = LOC("$$$/LrGeniusAI/CullTask/PresetEvent=Event (people + moments)"), value = "event" },
+						{
+							title = LOC("$$$/LrGeniusAI/CullTask/PresetEvent=Event (people + moments)"),
+							value = "event",
+						},
 						{
 							title = LOC("$$$/LrGeniusAI/CullTask/PresetSports=Sports (motion-tolerant)"),
 							value = "sports",
@@ -77,7 +80,9 @@ local function showCullDialog(ctx)
 			}),
 			f:checkbox({
 				value = bind("createDuplicatesCollection"),
-				title = LOC("$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection"),
+				title = LOC(
+					"$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection"
+				),
 			}),
 		}),
 	})
@@ -161,7 +166,9 @@ LrTasks.startAsyncTask(function()
 			if status == "Invalid view" then
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
-					LOC("$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected.")
+					LOC(
+						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
+					)
 				)
 			else
 				LrDialogs.message(
@@ -187,7 +194,9 @@ LrTasks.startAsyncTask(function()
 		if #photoIds == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/CullTask/NoPhotoIdsTitle=No usable photos"),
-				LOC("$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=No usable photo IDs could be computed for the selected photos.")
+				LOC(
+					"$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=No usable photo IDs could be computed for the selected photos."
+				)
 			)
 			return
 		end

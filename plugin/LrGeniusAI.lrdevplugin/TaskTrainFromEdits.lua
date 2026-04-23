@@ -64,7 +64,9 @@ local function showTrainDialog(ctx)
 		}),
 		f:row({
 			f:static_text({
-				title = LOC("$$$/LrGeniusAI/Training/DialogHint=Hint: Only select photos that you have manually edited. The AI will learn your style from these examples."),
+				title = LOC(
+					"$$$/LrGeniusAI/Training/DialogHint=Hint: Only select photos that you have manually edited. The AI will learn your style from these examples."
+				),
 				font = "italic",
 			}),
 		}),
@@ -131,7 +133,9 @@ LrTasks.startAsyncTask(function()
 		if #photos == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/Training/NoValidPhotosTitle=No Valid Training Photos"),
-				LOC("$$$/LrGeniusAI/Training/NoValidPhotosMsg=None of the photos in the selected scope match the training criteria (must be RAW or DNG format). JPEGs, TIFFs, and other formats are excluded."),
+				LOC(
+					"$$$/LrGeniusAI/Training/NoValidPhotosMsg=None of the photos in the selected scope match the training criteria (must be RAW or DNG format). JPEGs, TIFFs, and other formats are excluded."
+				),
 				"info"
 			)
 			return

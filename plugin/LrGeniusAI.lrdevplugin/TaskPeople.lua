@@ -64,9 +64,9 @@ local function loadPersonsFromServer()
 	local resp, err = SearchIndexAPI.getPersons()
 	if err then
 		return {},
-			(
-				LOC("$$$/LrGeniusAI/People/LoadError=Could not load persons. Check server connection. Try 'Cluster faces' or close and reopen.")
-			)
+			(LOC(
+				"$$$/LrGeniusAI/People/LoadError=Could not load persons. Check server connection. Try 'Cluster faces' or close and reopen."
+			))
 	end
 
 	if resp and resp.warning then
@@ -136,7 +136,9 @@ local function showPeopleDialog(ctx, persons, loadError)
 	if #persons == 0 then
 		peopleListBlock = f:static_text({
 			title = loadError
-				or LOC("$$$/LrGeniusAI/People/NoPersons=No persons yet. Run 'Cluster faces' after indexing photos with face embeddings."),
+				or LOC(
+					"$$$/LrGeniusAI/People/NoPersons=No persons yet. Run 'Cluster faces' after indexing photos with face embeddings."
+				),
 		})
 		listScroller = peopleListBlock
 	else
@@ -261,7 +263,9 @@ local function showPeopleDialog(ctx, persons, loadError)
 					if #sel == 0 then
 						LrDialogs.message(
 							LOC("$$$/LrGeniusAI/People/NoLibrarySelectionTitle=No people selected"),
-							LOC("$$$/LrGeniusAI/People/NoLibrarySelectionMessage=Check Library on one or more people, then try again.")
+							LOC(
+								"$$$/LrGeniusAI/People/NoLibrarySelectionMessage=Check Library on one or more people, then try again."
+							)
 						)
 						return
 					end
@@ -297,7 +301,9 @@ local function showPeopleDialog(ctx, persons, loadError)
 		}),
 
 		f:static_text({
-			title = LOC("$$$/LrGeniusAI/People/ListTitle=Check Library for people to include, then Show in Library. Edit names; Save (OK) writes to the server, Reset reverts edits, Cancel closes without saving."),
+			title = LOC(
+				"$$$/LrGeniusAI/People/ListTitle=Check Library for people to include, then Show in Library. Edit names; Save (OK) writes to the server, Reset reverts edits, Cancel closes without saving."
+			),
 			font = "<system/bold>",
 		}),
 

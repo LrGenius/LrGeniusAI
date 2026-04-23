@@ -114,7 +114,9 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 	if #photos == 0 then
 		LrDialogs.message(
 			LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotosInCatalog=Not in catalog"),
-			LOC("$$$/LrGeniusAI/FindSimilarFaces/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog.")
+			LOC(
+				"$$$/LrGeniusAI/FindSimilarFaces/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog."
+			)
 		)
 		return
 	end
@@ -176,7 +178,9 @@ LrTasks.startAsyncTask(function()
 		if #targetPhotos > 1 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoTitle=Select one photo"),
-				LOC("$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoMessage=Please select exactly one photo to find similar faces.")
+				LOC(
+					"$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoMessage=Please select exactly one photo to find similar faces."
+				)
 			)
 			return
 		end
@@ -273,7 +277,9 @@ LrTasks.startAsyncTask(function()
 		if #results == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces"),
-				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled.")
+				LOC(
+					"$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled."
+				)
 			)
 			return
 		end

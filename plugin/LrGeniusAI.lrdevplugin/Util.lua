@@ -1230,14 +1230,17 @@ function Util.showDiagnosticFailureDialog(diag)
 	local hint = ""
 
 	if diag.binaryMissing then
-		hint =
-			LOC("$$$/LrGeniusAI/Diagnostics/BinaryMissingHint=Please reinstall the LrGeniusAI plugin or check if your antivirus has quarantined the 'lrgenius-server' file.")
+		hint = LOC(
+			"$$$/LrGeniusAI/Diagnostics/BinaryMissingHint=Please reinstall the LrGeniusAI plugin or check if your antivirus has quarantined the 'lrgenius-server' file."
+		)
 	elseif diag.portBusy then
-		hint =
-			LOC("$$$/LrGeniusAI/Diagnostics/PortBusyHint=Please close other applications like Ollama or another instance of Lightroom that might be using this port.")
+		hint = LOC(
+			"$$$/LrGeniusAI/Diagnostics/PortBusyHint=Please close other applications like Ollama or another instance of Lightroom that might be using this port."
+		)
 	else
-		hint =
-			LOC("$$$/LrGeniusAI/Onboarding/BackendHint=If the server fails to start, check if another application is using port 19819 or if your firewall is blocking it.")
+		hint = LOC(
+			"$$$/LrGeniusAI/Onboarding/BackendHint=If the server fails to start, check if another application is using port 19819 or if your firewall is blocking it."
+		)
 	end
 
 	local contents = f:column({
@@ -1302,7 +1305,9 @@ function Util.checkPluginHealth(options)
 		report.diagnostics = SearchIndexAPI.diagnoseStartupFailure()
 		table.insert(report.issues, {
 			title = LOC("$$$/LrGeniusAI/Health/BackendFailed=Backend server is not reachable."),
-			hint = LOC("$$$/LrGeniusAI/Health/BackendCritical=The local backend server is not running and could not be started."),
+			hint = LOC(
+				"$$$/LrGeniusAI/Health/BackendCritical=The local backend server is not running and could not be started."
+			),
 			critical = true,
 		})
 	end
@@ -1311,7 +1316,9 @@ function Util.checkPluginHealth(options)
 		report.healthy = false
 		table.insert(report.issues, {
 			title = LOC("$$$/LrGeniusAI/Health/ClipMissing=CLIP model for semantic search is missing."),
-			hint = LOC("$$$/LrGeniusAI/Health/ClipMissingHint=Semantic search and some indexing features will be disabled. You can download the model in the Setup Wizard."),
+			hint = LOC(
+				"$$$/LrGeniusAI/Health/ClipMissingHint=Semantic search and some indexing features will be disabled. You can download the model in the Setup Wizard."
+			),
 			critical = false,
 		})
 	end
@@ -1320,7 +1327,9 @@ function Util.checkPluginHealth(options)
 		report.healthy = false
 		table.insert(report.issues, {
 			title = LOC("$$$/LrGeniusAI/Health/ApiKeysMissing=No AI providers configured for AI generation."),
-			hint = LOC("$$$/LrGeniusAI/Health/ApiKeysMissingHint=You need to configure Gemini or ChatGPT API keys (or a local provider) to generate keywords and descriptions."),
+			hint = LOC(
+				"$$$/LrGeniusAI/Health/ApiKeysMissingHint=You need to configure Gemini or ChatGPT API keys (or a local provider) to generate keywords and descriptions."
+			),
 			critical = options.requireProviders == true,
 		})
 		if options.requireProviders then
@@ -1337,7 +1346,9 @@ function Util.showHealthIssuesDialog(report)
 	local contents = f:column({
 		spacing = f:control_spacing(),
 		f:static_text({
-			title = LOC("$$$/LrGeniusAI/Health/IssuesFound=We found some issues that might prevent the plugin from working correctly:"),
+			title = LOC(
+				"$$$/LrGeniusAI/Health/IssuesFound=We found some issues that might prevent the plugin from working correctly:"
+			),
 			font = "<system/bold>",
 		}),
 	})

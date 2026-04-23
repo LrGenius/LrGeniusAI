@@ -117,7 +117,9 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 	if #photos == 0 then
 		LrDialogs.message(
 			LOC("$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalog=Not in catalog"),
-			LOC("$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalogMessage=Similar photos were found in the index but are not in the current catalog.")
+			LOC(
+				"$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalogMessage=Similar photos were found in the index but are not in the current catalog."
+			)
 		)
 		return
 	end
@@ -133,7 +135,9 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 	if not collectionSet then
 		ErrorHandler.handleError(
 			LOC("$$$/LrGeniusAI/FindSimilarImages/CollectionSetError=Collection set error"),
-			LOC("$$$/LrGeniusAI/FindSimilarImages/CollectionSetErrorMessage=Could not create collection set for similar images.")
+			LOC(
+				"$$$/LrGeniusAI/FindSimilarImages/CollectionSetErrorMessage=Could not create collection set for similar images."
+			)
 		)
 		return
 	end
@@ -183,7 +187,9 @@ LrTasks.startAsyncTask(function()
 		if #targetPhotos > 1 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarImages/SinglePhotoTitle=Select one photo"),
-				LOC("$$$/LrGeniusAI/FindSimilarImages/SinglePhotoMessage=Please select exactly one photo to find similar images.")
+				LOC(
+					"$$$/LrGeniusAI/FindSimilarImages/SinglePhotoMessage=Please select exactly one photo to find similar images."
+				)
 			)
 			return
 		end
@@ -209,7 +215,9 @@ LrTasks.startAsyncTask(function()
 			if not scopePhotos or #scopePhotos == 0 then
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
-					LOC("$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected.")
+					LOC(
+						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
+					)
 				)
 				return
 			end
@@ -263,7 +271,9 @@ LrTasks.startAsyncTask(function()
 			)
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarImages/NoResultsTitle=No similar images"),
-				LOC("$$$/LrGeniusAI/FindSimilarImages/NoResultsMessage=No similar images found. The photo may not be indexed yet, or no other photos are similar enough. Run 'Analyze & Index' to ensure perceptual hashes are computed.")
+				LOC(
+					"$$$/LrGeniusAI/FindSimilarImages/NoResultsMessage=No similar images found. The photo may not be indexed yet, or no other photos are similar enough. Run 'Analyze & Index' to ensure perceptual hashes are computed."
+				)
 			)
 			return
 		end

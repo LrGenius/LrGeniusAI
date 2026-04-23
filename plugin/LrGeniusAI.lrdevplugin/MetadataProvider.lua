@@ -267,7 +267,9 @@ return {
 		},
 		{
 			id = "globalPhotoIdFileModificationDate",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoIdModificationDate=Global Photo ID File Modification Date"),
+			title = LOC(
+				"$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoIdModificationDate=Global Photo ID File Modification Date"
+			),
 			dataType = "string",
 			readOnly = true,
 			searchable = false,
@@ -290,8 +292,12 @@ return {
 			-- Migration from LrGeniusTagAI
 			if
 				LrDialogs.confirm(
-					LOC("$$$/lrc-ai-assistant/MetadataProvider/MigrationDetected=Migration from LrGeniusTagAI detected."),
-					LOC("$$$/lrc-ai-assistant/MetadataProvider/MigrationMessage=It is recommended to run 'Import Metadata from Catalog' from the LrGeniusAI menu to import AI-generated keywords into the new database of LrGeniusAI."),
+					LOC(
+						"$$$/lrc-ai-assistant/MetadataProvider/MigrationDetected=Migration from LrGeniusTagAI detected."
+					),
+					LOC(
+						"$$$/lrc-ai-assistant/MetadataProvider/MigrationMessage=It is recommended to run 'Import Metadata from Catalog' from the LrGeniusAI menu to import AI-generated keywords into the new database of LrGeniusAI."
+					),
 					LOC("$$$/lrc-ai-assistant/MetadataProvider/MigrationRunNow=Run now"),
 					LOC("$$$/lrc-ai-assistant/MetadataProvider/MigrationSkip=Skip (Can be run later manually)")
 				) == "ok"
@@ -303,7 +309,9 @@ return {
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 24 then
 			local migrationChoice = LrDialogs.confirm(
 				LOC("$$$/LrGeniusAI/MetadataProvider/MigrationRequiredTitle=Backend ID migration required"),
-				LOC("$$$/LrGeniusAI/MetadataProvider/MigrationRequiredMsg=This update introduces file-based photo_id values (breaking change).\n\nIf you already have an indexed backend database from older versions, run the one-time migration now."),
+				LOC(
+					"$$$/LrGeniusAI/MetadataProvider/MigrationRequiredMsg=This update introduces file-based photo_id values (breaking change).\n\nIf you already have an indexed backend database from older versions, run the one-time migration now."
+				),
 				LOC("$$$/LrGeniusAI/MetadataProvider/RunMigrationNow=Run migration now"),
 				LOC("$$$/LrGeniusAI/common/Later=Later")
 			)
@@ -343,7 +351,9 @@ return {
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/MetadataProvider/MigrationReminderTitle=Migration reminder"),
-					LOC("$$$/LrGeniusAI/MetadataProvider/MigrationReminderMsg=Please run 'Migrate existing DB IDs to photo_id' later from:\nPlug-in Manager -> LrGeniusAI -> Backend Server."),
+					LOC(
+						"$$$/LrGeniusAI/MetadataProvider/MigrationReminderMsg=Please run 'Migrate existing DB IDs to photo_id' later from:\nPlug-in Manager -> LrGeniusAI -> Backend Server."
+					),
 					"info"
 				)
 			end
@@ -352,7 +362,9 @@ return {
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 25 then
 			local migrationChoice = LrDialogs.confirm(
 				LOC("$$$/LrGeniusAI/MetadataProvider/MigrationRecommendedTitle=Backend ID migration recommended"),
-				LOC("$$$/LrGeniusAI/MetadataProvider/MigrationRecommendedMsg=The photo_id algorithm was updated to remain stable when metadata is written to files (for example DNG updates).\n\nPlease run the backend ID migration once so existing indexed data matches the new stable IDs."),
+				LOC(
+					"$$$/LrGeniusAI/MetadataProvider/MigrationRecommendedMsg=The photo_id algorithm was updated to remain stable when metadata is written to files (for example DNG updates).\n\nPlease run the backend ID migration once so existing indexed data matches the new stable IDs."
+				),
 				LOC("$$$/LrGeniusAI/MetadataProvider/RunMigrationNow=Run migration now"),
 				LOC("$$$/LrGeniusAI/common/Later=Later")
 			)

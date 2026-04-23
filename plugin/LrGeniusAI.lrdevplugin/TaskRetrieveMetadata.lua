@@ -97,13 +97,17 @@ local function showRetrieveMetadataDialog(ctx)
 			fill_horizontal = 1,
 			f:checkbox({
 				value = bind("appendMetadata"),
-				title = LOC("$$$/LrGeniusAI/RetrieveMetadata/AppendMetadata=Append metadata (do not overwrite existing)"),
+				title = LOC(
+					"$$$/LrGeniusAI/RetrieveMetadata/AppendMetadata=Append metadata (do not overwrite existing)"
+				),
 			}),
 		}),
 
 		-- Keyword Option
 		f:group_box({
-			title = LOC("$$$/LrGeniusAI/RetrieveMetadata/UseTopLevelKeyword=Use top-level keyword for applied keywords"),
+			title = LOC(
+				"$$$/LrGeniusAI/RetrieveMetadata/UseTopLevelKeyword=Use top-level keyword for applied keywords"
+			),
 			fill_horizontal = 1,
 			f:row({
 				f:checkbox({
@@ -216,7 +220,9 @@ LrTasks.startAsyncTask(function()
 				if not SearchIndexAPI.pingServer() then
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachable=Server Unreachable"),
-						LOC("$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachableMessage=Cannot reach backend server. Please check your connection and try again."),
+						LOC(
+							"$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachableMessage=Cannot reach backend server. Please check your connection and try again."
+						),
 						"error"
 					)
 					log:error("Backend server unreachable during metadata retrieval")

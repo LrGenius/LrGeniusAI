@@ -67,7 +67,9 @@ LrTasks.startAsyncTask(function()
 			if errorStatus == "Invalid view" then
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
-					LOC("$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected.")
+					LOC(
+						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
+					)
 				)
 			else
 				LrDialogs.message(

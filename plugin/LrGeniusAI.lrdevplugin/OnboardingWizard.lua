@@ -44,7 +44,9 @@ function OnboardingWizard.show(manualTrigger)
 							title = LOC("$$$/LrGeniusAI/Onboarding/WelcomeTitle=Welcome to LrGeniusAI!"),
 							fill_horizontal = 1,
 							f:static_text({
-								title = LOC("$$$/LrGeniusAI/Onboarding/WelcomeMessage=Thank you for choosing LrGeniusAI. This wizard will guide you through the initial setup to ensure everything is running smoothly."),
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/WelcomeMessage=Thank you for choosing LrGeniusAI. This wizard will guide you through the initial setup to ensure everything is running smoothly."
+								),
 								width_in_chars = 60,
 								wrap = true,
 							}),
@@ -54,7 +56,9 @@ function OnboardingWizard.show(manualTrigger)
 							title = LOC("$$$/LrGeniusAI/Onboarding/BackendTitle=Backend Server"),
 							fill_horizontal = 1,
 							f:static_text({
-								title = LOC("$$$/LrGeniusAI/Onboarding/BackendDesc=LrGeniusAI requires a local backend server to process your photos. We will attempt to start it now."),
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/BackendDesc=LrGeniusAI requires a local backend server to process your photos. We will attempt to start it now."
+								),
 								width_in_chars = 60,
 								wrap = true,
 							}),
@@ -103,7 +107,9 @@ function OnboardingWizard.show(manualTrigger)
 							}),
 							f:spacer({ height = 5 }),
 							f:static_text({
-								title = LOC("$$$/LrGeniusAI/Onboarding/BackendHint=If the server fails to start, check if another application is using port 19819 or if your firewall is blocking it."),
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/BackendHint=If the server fails to start, check if another application is using port 19819 or if your firewall is blocking it."
+								),
 								size = "small",
 								width_in_chars = 60,
 								wrap = true,
@@ -120,7 +126,9 @@ function OnboardingWizard.show(manualTrigger)
 							title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=AI Providers"),
 							fill_horizontal = 1,
 							f:static_text({
-								title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersDesc=Choose which AI models you want to use for metadata generation and edits."),
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/ProvidersDesc=Choose which AI models you want to use for metadata generation and edits."
+								),
 								width_in_chars = 60,
 								wrap = true,
 							}),
@@ -183,14 +191,18 @@ function OnboardingWizard.show(manualTrigger)
 							title = LOC("$$$/LrGeniusAI/Onboarding/SemanticTitle=Semantic Search"),
 							fill_horizontal = 1,
 							f:static_text({
-								title = LOC("$$$/LrGeniusAI/Onboarding/SemanticDesc=To enable advanced search by content, you need the OpenCLIP AI model. This is a ~4GB download."),
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/SemanticDesc=To enable advanced search by content, you need the OpenCLIP AI model. This is a ~4GB download."
+								),
 								width_in_chars = 60,
 								wrap = true,
 							}),
 							f:spacer({ height = 5 }),
 							f:row({
 								f:checkbox({
-									title = LOC("$$$/LrGeniusAI/Onboarding/ClipAlreadyDownloaded=OpenCLIP model is already available."),
+									title = LOC(
+										"$$$/LrGeniusAI/Onboarding/ClipAlreadyDownloaded=OpenCLIP model is already available."
+									),
 									value = bind("clipReady"),
 									enabled = false,
 								}),
@@ -217,7 +229,9 @@ function OnboardingWizard.show(manualTrigger)
 							title = LOC("$$$/LrGeniusAI/Onboarding/FinishTitle=All Set!"),
 							fill_horizontal = 1,
 							f:static_text({
-								title = LOC("$$$/LrGeniusAI/Onboarding/FinishDesc=Configuration complete. LrGeniusAI is ready to help you manage your Lightroom catalog."),
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/FinishDesc=Configuration complete. LrGeniusAI is ready to help you manage your Lightroom catalog."
+								),
 								width_in_chars = 60,
 								wrap = true,
 							}),

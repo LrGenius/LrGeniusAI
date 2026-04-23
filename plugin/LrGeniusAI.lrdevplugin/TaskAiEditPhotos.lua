@@ -120,7 +120,9 @@ local function showPhotoInstructionDialog(ctx, photo)
 				value = bind("skipFromHere"),
 			}),
 			f:static_text({
-				title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/UseForFollowing=Use these instructions for all following photos."),
+				title = LOC(
+					"$$$/LrGeniusAI/TaskAiEditPhotos/UseForFollowing=Use these instructions for all following photos."
+				),
 			}),
 		}),
 	})
@@ -412,7 +414,9 @@ local function showAiEditDialog(ctx)
 					value = bind("reviewBeforeApply"),
 				}),
 				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/ReviewProposed=Review each proposed edit before applying it"),
+					title = LOC(
+						"$$$/LrGeniusAI/TaskAiEditPhotos/ReviewProposed=Review each proposed edit before applying it"
+					),
 				}),
 			}),
 			f:row({
@@ -428,7 +432,9 @@ local function showAiEditDialog(ctx)
 					value = bind("showPhotoContextDialog"),
 				}),
 				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AllowPerPhoto=Allow per-photo edit instructions before generation"),
+					title = LOC(
+						"$$$/LrGeniusAI/TaskAiEditPhotos/AllowPerPhoto=Allow per-photo edit instructions before generation"
+					),
 				}),
 			}),
 		}),
@@ -451,7 +457,9 @@ local function showAiEditDialog(ctx)
 							value = bind("adjustBasicTone"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustBasicTone=Adjust basic tone (exposure/contrast/highlights/shadows/whites/blacks)"),
+							title = LOC(
+								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustBasicTone=Adjust basic tone (exposure/contrast/highlights/shadows/whites/blacks)"
+							),
 						}),
 					}),
 					f:row({
@@ -459,7 +467,9 @@ local function showAiEditDialog(ctx)
 							value = bind("adjustPresence"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustPresence=Adjust presence (texture/clarity/dehaze)"),
+							title = LOC(
+								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustPresence=Adjust presence (texture/clarity/dehaze)"
+							),
 						}),
 					}),
 					f:row({
@@ -467,7 +477,9 @@ local function showAiEditDialog(ctx)
 							value = bind("adjustColorMix"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustColorMix=Adjust color mix (vibrance/saturation/HSL)"),
+							title = LOC(
+								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustColorMix=Adjust color mix (vibrance/saturation/HSL)"
+							),
 						}),
 					}),
 					f:row({
@@ -503,7 +515,9 @@ local function showAiEditDialog(ctx)
 							value = bind("adjustDetail"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustDetail=Adjust detail (sharpening/noise reduction)"),
+							title = LOC(
+								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustDetail=Adjust detail (sharpening/noise reduction)"
+							),
 						}),
 					}),
 					f:row({
@@ -511,7 +525,9 @@ local function showAiEditDialog(ctx)
 							value = bind("adjustEffects"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustEffects=Adjust effects (vignette/grain)"),
+							title = LOC(
+								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustEffects=Adjust effects (vignette/grain)"
+							),
 						}),
 					}),
 					f:row({
@@ -555,7 +571,9 @@ local function showAiEditDialog(ctx)
 							value = bind("submitKeywords"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SendKeywords=Send existing Lightroom keywords"),
+							title = LOC(
+								"$$$/LrGeniusAI/TaskAiEditPhotos/SendKeywords=Send existing Lightroom keywords"
+							),
 						}),
 					}),
 					f:row({
@@ -582,7 +600,9 @@ local function showAiEditDialog(ctx)
 							value = bind("useTrainingStyle"),
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/Training/UseTrainingCheckbox=Apply my saved edit style (training examples)"),
+							title = LOC(
+								"$$$/LrGeniusAI/Training/UseTrainingCheckbox=Apply my saved edit style (training examples)"
+							),
 						}),
 					}),
 				}),
@@ -676,7 +696,9 @@ local function showAiEditDialog(ctx)
 			options.api_key = prefs.chatgptApiKey
 		else
 			LrDialogs.showError(
-				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences.")
+				LOC(
+					"$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences."
+				)
 			)
 			return nil
 		end
@@ -685,7 +707,9 @@ local function showAiEditDialog(ctx)
 			options.api_key = prefs.geminiApiKey
 		else
 			LrDialogs.showError(
-				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences.")
+				LOC(
+					"$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences."
+				)
 			)
 			return nil
 		end

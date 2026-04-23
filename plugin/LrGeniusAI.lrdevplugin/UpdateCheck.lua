@@ -48,7 +48,9 @@ function UpdateCheck.checkForNewVersionInBackground()
 			if decoded ~= nil then
 				if decoded.tag_name ~= UpdateCheck.releaseTagName then
 					LrDialogs.message(
-						LOC("$$$/LrGeniusAI/UpdateCheck/NewVersionAvailableMsg=A new version of LrGeniusAI is available: ^1. Please visit the releases page to download the latest version."),
+						LOC(
+							"$$$/LrGeniusAI/UpdateCheck/NewVersionAvailableMsg=A new version of LrGeniusAI is available: ^1. Please visit the releases page to download the latest version."
+						),
 						LOC("$$$/LrGeniusAI/UpdateCheck/NewVersionAvailableTitle=New Version Available"),
 						"info"
 					)

@@ -154,7 +154,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 									value = "all",
 								},
 								{
-									title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ScopeMissing=New or unprocessed photos"),
+									title = LOC(
+										"$$$/LrGeniusAI/AnalyzeAndIndex/ScopeMissing=New or unprocessed photos"
+									),
 									value = "missing",
 								},
 							},
@@ -221,7 +223,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 							enabled = props.clipReady,
 						}),
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ClipNotReady=(OpenCLIP model is missing. Please download it in the Plugin Manager)"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/ClipNotReady=(OpenCLIP model is missing. Please download it in the Plugin Manager)"
+							),
 							text_color = LrColor(1, 0, 0),
 							visible = not props.clipReady,
 							size = "small",
@@ -230,19 +234,25 @@ local function showAnalyzeAndIndexDialog(ctx)
 					f:row({
 						f:checkbox({
 							value = bind("enableMetadata"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableMetadata=Generate AI metadata (Keywords, Title, Caption)"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableMetadata=Generate AI metadata (Keywords, Title, Caption)"
+							),
 						}),
 					}),
 					f:row({
 						f:checkbox({
 							value = bind("enableFaces"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Create face embeddings (Find similar people)"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Create face embeddings (Find similar people)"
+							),
 						}),
 					}),
 					f:row({
 						f:checkbox({
 							value = bind("enableVertexAI"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
+							),
 						}),
 					}),
 				}),
@@ -286,7 +296,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 					fill_horizontal = 1,
 					f:row({
 						f:static_text({
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/useKeywordHierarchy=Keyword Hierarchy:"),
+							title = LOC(
+								"$$$/lrc-ai-assistant/PluginInfoDialogSections/useKeywordHierarchy=Keyword Hierarchy:"
+							),
 							width = share("labelWidth"),
 						}),
 						f:checkbox({
@@ -295,7 +307,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:push_button({
 							enabled = bind("useKeywordHierarchy"),
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/editKeywordHierarchy=Edit categories"),
+							title = LOC(
+								"$$$/lrc-ai-assistant/PluginInfoDialogSections/editKeywordHierarchy=Edit categories"
+							),
 							action = function()
 								KeywordConfigProvider.showKeywordCategoryDialog()
 							end,
@@ -310,7 +324,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 					}),
 					f:row({
 						f:static_text({
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/useTopLevelKeyword=Top-level Keyword:"),
+							title = LOC(
+								"$$$/lrc-ai-assistant/PluginInfoDialogSections/useTopLevelKeyword=Top-level Keyword:"
+							),
 							width = share("labelWidth"),
 						}),
 						f:checkbox({ value = bind("useTopLevelKeyword") }),
@@ -390,7 +406,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ContextOptions=AI Context"),
 					fill_horizontal = 1,
 					f:static_text({
-						title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ContextHint=Extra information sent alongside photos to improve AI accuracy."),
+						title = LOC(
+							"$$$/LrGeniusAI/AnalyzeAndIndex/ContextHint=Extra information sent alongside photos to improve AI accuracy."
+						),
 						fill_horizontal = 1,
 					}),
 					f:spacer({ height = 4 }),
@@ -408,7 +426,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:spacer({ width = share("ctxLabelWidth") }),
 						f:checkbox({
 							value = bind("submitKeywords"),
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/submitKeywords=Existing Keywords"),
+							title = LOC(
+								"$$$/lrc-ai-assistant/PluginInfoDialogSections/submitKeywords=Existing Keywords"
+							),
 						}),
 					}),
 					f:row({
@@ -426,7 +446,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:checkbox({
 							value = bind("showPhotoContextDialog"),
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/showPhotoContextDialog=Ask for context before each batch"),
+							title = LOC(
+								"$$$/lrc-ai-assistant/PluginInfoDialogSections/showPhotoContextDialog=Ask for context before each batch"
+							),
 						}),
 					}),
 				}),
@@ -442,7 +464,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:checkbox({
 							value = bind("saveDataToCatalog"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SaveDataToCatalog=Write generated data to Lightroom catalog"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SaveDataToCatalog=Write generated data to Lightroom catalog"
+							),
 						}),
 					}),
 					f:row({
@@ -450,7 +474,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:checkbox({
 							enabled = bind("saveDataToCatalog"),
 							value = bind("enableValidation"),
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/validation=Review/Edit each photo before saving"),
+							title = LOC(
+								"$$$/lrc-ai-assistant/PluginInfoDialogSections/validation=Review/Edit each photo before saving"
+							),
 						}),
 					}),
 					f:separator({ fill_horizontal = 1 }),
@@ -461,7 +487,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:checkbox({
 							value = bind("enableImportBeforeIndex"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableImportBeforeIndex=Import metadata from catalog before indexing"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableImportBeforeIndex=Import metadata from catalog before indexing"
+							),
 						}),
 					}),
 				}),
@@ -477,7 +505,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:radio_button({
 							value = bind("regenerateMetadata"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateMetadata=Regenerate all (overwrite existing AI data)"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateMetadata=Regenerate all (overwrite existing AI data)"
+							),
 							checked_value = true,
 						}),
 					}),
@@ -485,7 +515,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:spacer({ width = share("ctxLabelWidth") }),
 						f:radio_button({
 							value = bind("regenerateMetadata"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SkipExisting=Skip photos with existing data (Default)"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SkipExisting=Skip photos with existing data (Default)"
+							),
 							checked_value = false,
 						}),
 					}),
@@ -497,7 +529,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:checkbox({
 							value = bind("appendMetadata"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AppendMetadata=Append to existing values instead of replacing"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/AppendMetadata=Append to existing values instead of replacing"
+							),
 						}),
 					}),
 				}),
@@ -731,7 +765,9 @@ LrTasks.startAsyncTask(function()
 			log:trace("Added ChatGPT API key to options")
 			if prefs.chatgptApiKey == nil or prefs.chatgptApiKey == "" then
 				LrDialogs.showError(
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences.")
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences."
+					)
 				)
 				return
 			end
@@ -739,7 +775,9 @@ LrTasks.startAsyncTask(function()
 		elseif providerFromKey == "gemini" and prefs then
 			if prefs.geminiApiKey == nil or prefs.geminiApiKey == "" then
 				LrDialogs.showError(
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences.")
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences."
+					)
 				)
 				return
 			end
@@ -751,7 +789,9 @@ LrTasks.startAsyncTask(function()
 			local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
 			if projectId == "" then
 				LrDialogs.showError(
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences.")
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences."
+					)
 				)
 				return
 			end
@@ -795,7 +835,9 @@ LrTasks.startAsyncTask(function()
 			if errorStatus == "Invalid view" then
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
-					LOC("$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected.")
+					LOC(
+						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
+					)
 				)
 			else
 				log:trace(

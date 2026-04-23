@@ -341,7 +341,9 @@ local function ensureDbMigrationsDone()
 							LOC("$$$/LrGeniusAI/PluginInfo/ClaimPhotosFailed=Claim photos failed"),
 							tostring(err or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"))
 								.. "\n\n"
-								.. LOC("$$$/LrGeniusAI/SearchIndexAPI/ClaimPhotosRetryHint=You can try again from Plug-in Manager → LrGeniusAI → Backend Server → Claim photos for this catalog."),
+								.. LOC(
+									"$$$/LrGeniusAI/SearchIndexAPI/ClaimPhotosRetryHint=You can try again from Plug-in Manager → LrGeniusAI → Backend Server → Claim photos for this catalog."
+								),
 							"critical"
 						)
 					end
@@ -2513,7 +2515,9 @@ function SearchIndexAPI.startServer(opts)
 		local diag = SearchIndexAPI.diagnoseStartupFailure()
 		if diag.binaryMissing then
 			log:error(
-				LOC("$$$/LrGeniusAI/Diagnostics/BinaryMissing=The backend server binary is missing from the plugin folder.")
+				LOC(
+					"$$$/LrGeniusAI/Diagnostics/BinaryMissing=The backend server binary is missing from the plugin folder."
+				)
 			)
 		elseif diag.portBusy then
 			log:error(LOC("$$$/LrGeniusAI/Diagnostics/PortBusy=Port 19819 is already in use by another application."))
@@ -3468,7 +3472,9 @@ function SearchIndexAPI.checkServerHealth()
 		if not hasAvailable and next(providers) ~= nil then
 			ErrorHandler.handleError(
 				LOC("$$$/LrGeniusAI/Health/NoProviders=No AI metadata providers are available."),
-				LOC("$$$/LrGeniusAI/Health/NoProvidersDetail=Please configure Ollama, LM Studio, ChatGPT, or Gemini in the plugin preferences.")
+				LOC(
+					"$$$/LrGeniusAI/Health/NoProvidersDetail=Please configure Ollama, LM Studio, ChatGPT, or Gemini in the plugin preferences."
+				)
 			)
 		elseif #failedProviders > 0 then
 			log:warn("Some AI providers failed to initialize: " .. table.concat(failedProviders, ", "))

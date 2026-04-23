@@ -162,7 +162,9 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 						width = share("bottomButtons"),
 					}),
 					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/CopyLogToDesktop=Copy logfiles to Desktop"),
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/CopyLogToDesktop=Copy logfiles to Desktop"
+						),
 						action = function(button)
 							LrTasks.startAsyncTask(function()
 								Util.copyLogfilesToDesktop()
@@ -183,7 +185,9 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 				f:row({
 					f:checkbox({
 						value = bind("periodicalUpdateCheck"),
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/periodUpdateCheck=Periodically check for Updates"),
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/periodUpdateCheck=Periodically check for Updates"
+						),
 					}),
 				}),
 			}),
@@ -244,9 +248,13 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									return LOC("$$$/LrGeniusAI/Health/StatusHealthy=Everything looks good!")
 								end
 								if v == "warning" then
-									return LOC("$$$/LrGeniusAI/Health/StatusWarning=Some features might not work correctly.")
+									return LOC(
+										"$$$/LrGeniusAI/Health/StatusWarning=Some features might not work correctly."
+									)
 								end
-								return LOC("$$$/LrGeniusAI/Health/StatusCritical=Critical issues detected. Plugin cannot function.")
+								return LOC(
+									"$$$/LrGeniusAI/Health/StatusCritical=Critical issues detected. Plugin cannot function."
+								)
 							end,
 						}),
 						text_color = bind("healthColor"),
@@ -357,7 +365,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServerUrl=Backend server URL (IP/hostname)"),
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServerUrl=Backend server URL (IP/hostname)"
+						),
 						alignment = "right",
 						width = share("labelWidth"),
 					}),
@@ -368,7 +378,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				}),
 				f:row({
 					f:push_button({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/GeneratePhotoIds=Generate hash-based photo IDs (catalog only)"),
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/GeneratePhotoIds=Generate hash-based photo IDs (catalog only)"
+						),
 						width = share("longBackendButtonWidth"),
 						action = function(button)
 							LrTasks.startAsyncTask(function()
@@ -433,7 +445,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						action = function(button)
 							LrTasks.startAsyncTask(function()
 								local progressScope = LrProgressScope({
-									title = LOC("$$$/LrGeniusAI/SearchIndexAPI/claimingPhotos=Claiming photos for this catalog..."),
+									title = LOC(
+										"$$$/LrGeniusAI/SearchIndexAPI/claimingPhotos=Claiming photos for this catalog..."
+									),
 									functionContext = nil,
 								})
 								local ok, err, result = SearchIndexAPI.claimPhotosForCatalog(progressScope)
@@ -442,9 +456,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									local msg = result
 											and (LOC("$$$/LrGeniusAI/PluginInfo/ClaimedPrefix=Claimed: ") .. tostring(
 												result.claimed
-											) .. (result.errors and result.errors > 0 and (LOC("$$$/LrGeniusAI/PluginInfo/ClaimedErrors=; errors: ") .. tostring(
-												result.errors
-											)) or ""))
+											) .. (result.errors and result.errors > 0 and (LOC(
+												"$$$/LrGeniusAI/PluginInfo/ClaimedErrors=; errors: "
+											) .. tostring(result.errors)) or ""))
 										or LOC("$$$/LrGeniusAI/common/Done=Done.")
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/ClaimPhotosTitle=Claim photos"),
@@ -542,7 +556,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									if result.compatible then
 										LrDialogs.message(
 											LOC("$$$/LrGeniusAI/PluginInfo/VersionCheckPassed=Version check passed"),
-											LOC("$$$/LrGeniusAI/PluginInfo/VersionMatch=Plugin and backend versions match.\n")
+											LOC(
+												"$$$/LrGeniusAI/PluginInfo/VersionMatch=Plugin and backend versions match.\n"
+											)
 												.. LOC("$$$/LrGeniusAI/PluginInfo/PluginPrefix=Plugin: ")
 												.. pluginTag
 												.. "\n"
@@ -554,7 +570,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									else
 										LrDialogs.message(
 											LOC("$$$/LrGeniusAI/PluginInfo/VersionMismatch=Version mismatch"),
-											LOC("$$$/LrGeniusAI/PluginInfo/VersionDiffer=Plugin and backend versions differ.\n")
+											LOC(
+												"$$$/LrGeniusAI/PluginInfo/VersionDiffer=Plugin and backend versions differ.\n"
+											)
 												.. LOC("$$$/LrGeniusAI/PluginInfo/PluginPrefix=Plugin: ")
 												.. pluginTag
 												.. "\n"
@@ -715,7 +733,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSize=Export size in pixel (long edge)"),
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSize=Export size in pixel (long edge)"
+						),
 						alignment = "right",
 						width = share("labelWidth"),
 					}),
@@ -727,7 +747,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/exportQuality=Export JPEG quality in percent"),
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportQuality=Export JPEG quality in percent"
+						),
 						alignment = "right",
 						width = share("labelWidth"),
 					}),
@@ -749,7 +771,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:spacer({ width = share("labelWidth") }),
 					f:checkbox({
 						value = bind("usePreviewThumbnails"),
-						title = LOC("$$$/LrGeniusAI/PluginInfo/UsePreviewThumbnails=Use Lightroom previews for faster indexing"),
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/UsePreviewThumbnails=Use Lightroom previews for faster indexing"
+						),
 					}),
 				}),
 			}),
@@ -925,7 +949,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						action = function(button)
 							local confirm = LrDialogs.confirm(
 								LOC("$$$/LrGeniusAI/Training/ClearConfirmTitle=Clear Training Examples"),
-								LOC("$$$/LrGeniusAI/Training/ClearConfirmMsg=This will permanently delete all saved training examples. The Style Engine will be reset to Cold Start. Continue?"),
+								LOC(
+									"$$$/LrGeniusAI/Training/ClearConfirmMsg=This will permanently delete all saved training examples. The Style Engine will be reset to Cold Start. Continue?"
+								),
 								LOC("$$$/LrGeniusAI/Training/ClearConfirmOk=Delete All"),
 								LOC("$$$/LrGeniusAI/Training/ClearConfirmCancel=Cancel")
 							)
@@ -936,7 +962,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 										propertyTable.refreshStyleStats()
 										LrDialogs.message(
 											LOC("$$$/LrGeniusAI/Training/ClearedTitle=Training Data Cleared"),
-											LOC("$$$/LrGeniusAI/Training/ClearedMsg=All training examples have been removed."),
+											LOC(
+												"$$$/LrGeniusAI/Training/ClearedMsg=All training examples have been removed."
+											),
 											"info"
 										)
 									else

@@ -58,7 +58,9 @@ function KeywordConfigProvider.showKeywordCategoryDialog()
 	})
 
 	local result = LrDialogs.presentModalDialog({
-		title = LOC("$$$/lrc-ai-assistant/ResponseStructure/ConfigureResponseStructure=Configure data generation and mapping"),
+		title = LOC(
+			"$$$/lrc-ai-assistant/ResponseStructure/ConfigureResponseStructure=Configure data generation and mapping"
+		),
 		contents = dialogView,
 		otherVerb = LOC("$$$/lrc-ai-assistant/ResponseStructure/ResetToDefault=Reset to defaults"),
 	})
@@ -75,7 +77,9 @@ function KeywordConfigProvider.showKeywordCategoryDialog()
 		log:trace(Util.dumpTable(prefs.keywordCategories))
 	elseif result == "other" then
 		local confirm = LrDialogs.confirm(
-			LOC("$$$/lrc-ai-assistant/ResponseStructure/ResetToDefaultKeywordStructure=Reset to default keyword structure?")
+			LOC(
+				"$$$/lrc-ai-assistant/ResponseStructure/ResetToDefaultKeywordStructure=Reset to default keyword structure?"
+			)
 		)
 		if confirm == "ok" then
 			log:trace("Reset keyword categories to default")

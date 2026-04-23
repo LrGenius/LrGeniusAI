@@ -32,7 +32,9 @@ LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("automatedTestsTask", function(ctx)
 		local confirm = LrDialogs.confirm(
 			LOC("$$$/LrGeniusAI/TaskAutomatedTests/RunConfirmTitle=Run Automated Tests?"),
-			LOC("$$$/LrGeniusAI/TaskAutomatedTests/RunConfirmMsg=This will run a series of integrity checks for JSON parsers, utilities, and backend connectivity. Do you want to proceed?"),
+			LOC(
+				"$$$/LrGeniusAI/TaskAutomatedTests/RunConfirmMsg=This will run a series of integrity checks for JSON parsers, utilities, and backend connectivity. Do you want to proceed?"
+			),
 			LOC("$$$/LrGeniusAI/TaskAutomatedTests/RunConfirmOk=Yes, Run Tests"),
 			LOC("$$$/LrGeniusAI/common/Cancel=Cancel")
 		)
