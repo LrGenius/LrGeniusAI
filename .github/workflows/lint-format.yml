@@ -1,17 +1,31 @@
-name: "Python lint/format check"
+name: "Lint/format check"
 on: [push, pull_request]
 jobs:
   format-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - name: Linting
+      - uses: actions/checkout@v4
+      - name: Linting (Python)
         uses: astral-sh/ruff-action@v3
         with:
           args: "check --ignore E741"
           src: "./server"
-      - name: Formatting
+      - name: Formatting (Python)
         uses: astral-sh/ruff-action@v3
         with:
           args: "format --check --diff"
           src: "./server"
+      - name: Formatting (Lua)
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check plugin/LrGeniusAI.lrdevplugin
+      - name: Setup Lua
+        uses: leafo/gh-actions-lua@v10
+      - name: Setup Luarocks
+        uses: leafo/gh-actions-luarocks@v4
+      - name: Install luacheck
+        run: luarocks install luacheck
+      - name: Linting (Lua)
+        run: luacheck plugin/LrGeniusAI.lrdevplugin
