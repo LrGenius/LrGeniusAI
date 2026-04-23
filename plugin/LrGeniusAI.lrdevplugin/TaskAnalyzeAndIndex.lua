@@ -675,356 +675,404 @@ local function showPhotoContextDialog(photo)
 end
 
 LrTasks.startAsyncTask(function()
-    LrFunctionContext.callWithContext("AnalyzeAndIndexTask", function(context)
-        -- Check server connection
-        if not Util.waitForServerDialog() then return end
+	LrFunctionContext.callWithContext("AnalyzeAndIndexTask", function(context)
+		-- Check server connection
+		if not Util.waitForServerDialog() then
+			return
+		end
 
-        -- Show dialog
-        local props = showAnalyzeAndIndexDialog(context)
-        if not props then return end
+		-- Show dialog
+		local props = showAnalyzeAndIndexDialog(context)
+		if not props then
+			return
+		end
 
-        -- Validate that at least one task is selected
-        if not props.enableEmbeddings and not props.enableMetadata and not props.enableFaces and not props.enableVertexAI then
-            LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected=Please select at least one task to perform.")
-            return
-        end
+		-- Validate that at least one task is selected
+		if
+			not props.enableEmbeddings
+			and not props.enableMetadata
+			and not props.enableFaces
+			and not props.enableVertexAI
+		then
+			LrDialogs.showError(
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected=Please select at least one task to perform.")
+			)
+			return
+		end
 
-        -- Build tasks array (task name compute_vertexai → "vertexai" in API)
-        local tasks = {}
-        if props.enableEmbeddings then table.insert(tasks, "embeddings") end
-        if props.enableMetadata then table.insert(tasks, "metadata") end
-        if props.enableFaces then table.insert(tasks, "faces") end
-        if props.enableVertexAI then table.insert(tasks, "vertexai") end
+		-- Build tasks array (task name compute_vertexai → "vertexai" in API)
+		local tasks = {}
+		if props.enableEmbeddings then
+			table.insert(tasks, "embeddings")
+		end
+		if props.enableMetadata then
+			table.insert(tasks, "metadata")
+		end
+		if props.enableFaces then
+			table.insert(tasks, "faces")
+		end
+		if props.enableVertexAI then
+			table.insert(tasks, "vertexai")
+		end
 
-        -- Parse provider and model from unified modelKey (format: provider::model)
-        local providerFromKey, modelFromKey = nil, nil
-        if props.modelKey then
-            local sep = string.find(props.modelKey, "::", 1, true)
-            if sep then
-                providerFromKey = string.sub(props.modelKey, 1, sep - 1)
-                modelFromKey = string.sub(props.modelKey, sep + 2)
-                if modelFromKey == "" then modelFromKey = nil end
-            else
-                providerFromKey = props.modelKey -- fallback
-            end
-        end
+		-- Parse provider and model from unified modelKey (format: provider::model)
+		local providerFromKey, modelFromKey = nil, nil
+		if props.modelKey then
+			local sep = string.find(props.modelKey, "::", 1, true)
+			if sep then
+				providerFromKey = string.sub(props.modelKey, 1, sep - 1)
+				modelFromKey = string.sub(props.modelKey, sep + 2)
+				if modelFromKey == "" then
+					modelFromKey = nil
+				end
+			else
+				providerFromKey = props.modelKey -- fallback
+			end
+		end
 
-        -- Build options for the API
-        local options = {
-            tasks = tasks,
-            provider = providerFromKey,
-            model = modelFromKey,
-            language = props.language,
-            temperature = props.temperature,
-            generate_keywords = props.generateKeywords,
-            generate_caption = props.generateCaption,
-            generate_title = props.generateTitle,
-            generate_alt_text = props.generateAltText,
-            submit_gps = props.submitGPS,
-            submit_keywords = props.submitKeywords,
-            submit_folder_names = props.submitFolderName,
-            submit_user_context = props.showPhotoContextDialog,
-            enableMetadata = props.enableMetadata,
-            enableFaces = props.enableFaces,
-            enableVertexAI = props.enableVertexAI,
-            replace_ss = props.replaceSS,
-            regenerate_metadata = props.regenerateMetadata,
-            prompt = props.selectedPrompt,
-            bilingual_keywords = props.bilingualKeywords,
-            keyword_secondary_language = props.keywordSecondaryLanguage,
-        }
-        if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
-            options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")
-            options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1")) or
-                "us-central1"
-        end
-        -- Add API key for cloud providers if configured
-        if providerFromKey == 'chatgpt' and prefs then
-            log:trace("Added ChatGPT API key to options")
-            if prefs.chatgptApiKey == nil or prefs.chatgptApiKey == '' then
-                LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences.")
-                return
-            end
-            options.api_key = prefs.chatgptApiKey
-        elseif providerFromKey == 'gemini' and prefs then
-            if prefs.geminiApiKey == nil or prefs.geminiApiKey == '' then
-                LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences.")
-                return
-            end
-            log:trace("Added Gemini API key to options")
-            options.api_key = prefs.geminiApiKey
-        end
+		-- Build options for the API
+		local options = {
+			tasks = tasks,
+			provider = providerFromKey,
+			model = modelFromKey,
+			language = props.language,
+			temperature = props.temperature,
+			generate_keywords = props.generateKeywords,
+			generate_caption = props.generateCaption,
+			generate_title = props.generateTitle,
+			generate_alt_text = props.generateAltText,
+			submit_gps = props.submitGPS,
+			submit_keywords = props.submitKeywords,
+			submit_folder_names = props.submitFolderName,
+			submit_user_context = props.showPhotoContextDialog,
+			enableMetadata = props.enableMetadata,
+			enableFaces = props.enableFaces,
+			enableVertexAI = props.enableVertexAI,
+			replace_ss = props.replaceSS,
+			regenerate_metadata = props.regenerateMetadata,
+			prompt = props.selectedPrompt,
+			bilingual_keywords = props.bilingualKeywords,
+			keyword_secondary_language = props.keywordSecondaryLanguage,
+		}
+		if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
+			options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")
+			options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
+				or "us-central1"
+		end
+		-- Add API key for cloud providers if configured
+		if providerFromKey == "chatgpt" and prefs then
+			log:trace("Added ChatGPT API key to options")
+			if prefs.chatgptApiKey == nil or prefs.chatgptApiKey == "" then
+				LrDialogs.showError(
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences."
+					)
+				)
+				return
+			end
+			options.api_key = prefs.chatgptApiKey
+		elseif providerFromKey == "gemini" and prefs then
+			if prefs.geminiApiKey == nil or prefs.geminiApiKey == "" then
+				LrDialogs.showError(
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences."
+					)
+				)
+				return
+			end
+			log:trace("Added Gemini API key to options")
+			options.api_key = prefs.geminiApiKey
+		end
 
-        if props.enableVertexAI and prefs then
-            local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
-            if projectId == "" then
-                LrDialogs.showError(LOC "$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences.")
-                return
-            end
-        end
+		if props.enableVertexAI and prefs then
+			local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
+			if projectId == "" then
+				LrDialogs.showError(
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences."
+					)
+				)
+				return
+			end
+		end
 
-        if prefs.useKeywordHierarchy then
-            if prefs.useCatalogKeywordStructure then
-                options.keyword_categories = MetadataManager.getCatalogKeywordHierarchy()
-            else
-                options.keyword_categories = KeywordConfigProvider.getKeywordCategories()
-            end
-        end
+		if prefs.useKeywordHierarchy then
+			if prefs.useCatalogKeywordStructure then
+				options.keyword_categories = MetadataManager.getCatalogKeywordHierarchy()
+			else
+				options.keyword_categories = KeywordConfigProvider.getKeywordCategories()
+			end
+		end
 
-        -- Create progress scope
-        local progressScope = LrProgressScope({
-            title = LOC "$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle=Processing photos...",
-            functionContext = context,
-        })
+		-- Create progress scope
+		local progressScope = LrProgressScope({
+			title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle=Processing photos..."),
+			functionContext = context,
+		})
 
-        local status, processed, failed, processedPhotos
+		local status, processed, failed, processedPhotos
 
-        -- Get photos to process
-        -- For scope 'missing', pass task options so backend checks which photos need the selected tasks
-        local taskOptionsForScope = (props.scope == "missing") and {
-            enableEmbeddings = props.enableEmbeddings,
-            enableMetadata = props.enableMetadata,
-            enableFaces = props.enableFaces,
-            enableVertexAI = props.enableVertexAI,
-            regenerateMetadata = props.regenerateMetadata
-        } or nil
+		-- Get photos to process
+		-- For scope 'missing', pass task options so backend checks which photos need the selected tasks
+		local taskOptionsForScope = (props.scope == "missing")
+				and {
+					enableEmbeddings = props.enableEmbeddings,
+					enableMetadata = props.enableMetadata,
+					enableFaces = props.enableFaces,
+					enableVertexAI = props.enableVertexAI,
+					regenerateMetadata = props.regenerateMetadata,
+				}
+			or nil
 
-        -- Use the main progress scope for "missing" lookup so the bar resets for import/analysis (nested child scopes complete the parent segment).
-        local lookupScope = (props.scope == "missing") and progressScope or nil
-        local photosToProcess, errorStatus = PhotoSelector.getPhotosInScope(props.scope, taskOptionsForScope, lookupScope)
+		-- Use the main progress scope for "missing" lookup so the bar resets for import/analysis (nested child scopes complete the parent segment).
+		local lookupScope = (props.scope == "missing") and progressScope or nil
+		local photosToProcess, errorStatus =
+			PhotoSelector.getPhotosInScope(props.scope, taskOptionsForScope, lookupScope)
 
-        if photosToProcess == nil or type(photosToProcess) ~= 'table' or #photosToProcess == 0 then
-            progressScope:done()
-            if errorStatus == "Invalid view" then
-                LrDialogs.message(
-                    LOC "$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View",
-                    LOC "$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-                )
-            else
-                log:trace("No photos found to process in scope: " ..
-                    props.scope .. " errorStatus: " .. (errorStatus or "nil"))
-                LrDialogs.message(
-                    LOC "$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found",
-                    LOC "$$$/LrGeniusAI/common/NoPhotosInScope=No photos found in the selected scope."
-                )
-            end
-            return
-        end
+		if photosToProcess == nil or type(photosToProcess) ~= "table" or #photosToProcess == 0 then
+			progressScope:done()
+			if errorStatus == "Invalid view" then
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
+					LOC(
+						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
+					)
+				)
+			else
+				log:trace(
+					"No photos found to process in scope: " .. props.scope .. " errorStatus: " .. (errorStatus or "nil")
+				)
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
+					LOC("$$$/LrGeniusAI/common/NoPhotosInScope=No photos found in the selected scope.")
+				)
+			end
+			return
+		end
 
-        -- Per-photo progress for import and analysis (denominator = photos to process, not 1)
-        progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressCount=^1 photos to process",
-            tostring(#photosToProcess)))
-        progressScope:setPortionComplete(0, #photosToProcess)
+		-- Per-photo progress for import and analysis (denominator = photos to process, not 1)
+		progressScope:setCaption(
+			LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressCount=^1 photos to process", tostring(#photosToProcess))
+		)
+		progressScope:setPortionComplete(0, #photosToProcess)
 
-        -- If photo context dialog is enabled, show it for each photo
-        if props.showPhotoContextDialog and props.enableMetadata then
-            -- Show photo context dialog to gather additional context
-            local skipFromHere = false
-            local contextData = ""
-            for _, photo in ipairs(photosToProcess) do
-                local result = ""
-                if not skipFromHere then
-                    result, contextData, skipFromHere = showPhotoContextDialog(photo)
-                    if result == "ok" then
-                    elseif result == "cancel" then
-                        log:trace("User canceled photo context dialog for photo: " ..
-                            (photo:getFormattedMetadata('fileName') or "unknown"))
-                        progressScope:done()
-                        return
-                    end
-                end
-                LrApplication.activeCatalog():withPrivateWriteAccessDo(function()
-                    photo:setPropertyForPlugin(_PLUGIN, 'photoContext', contextData)
-                end)
-            end
-        end
+		-- If photo context dialog is enabled, show it for each photo
+		if props.showPhotoContextDialog and props.enableMetadata then
+			-- Show photo context dialog to gather additional context
+			local skipFromHere = false
+			local contextData = ""
+			for _, photo in ipairs(photosToProcess) do
+				local result = ""
+				if not skipFromHere then
+					result, contextData, skipFromHere = showPhotoContextDialog(photo)
+					if result == "ok" then
+					elseif result == "cancel" then
+						log:trace(
+							"User canceled photo context dialog for photo: "
+								.. (photo:getFormattedMetadata("fileName") or "unknown")
+						)
+						progressScope:done()
+						return
+					end
+				end
+				LrApplication.activeCatalog():withPrivateWriteAccessDo(function()
+					photo:setPropertyForPlugin(_PLUGIN, "photoContext", contextData)
+				end)
+			end
+		end
 
-        if props.enableImportBeforeIndex then
-            log:trace("Importing existing metadata from catalog before indexing...")
-            SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, false)
-        end
+		if props.enableImportBeforeIndex then
+			log:trace("Importing existing metadata from catalog before indexing...")
+			SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, false)
+		end
 
-        log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
+		log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
 
-        -- When validation is disabled, apply metadata inline as each photo's analysis returns
-        -- so keywords/title/caption land on photos progressively instead of all at the end.
-        -- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
-        local usedInlineApply = false
-        if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
-            usedInlineApply = true
-            options.onPhotoAnalyzed = function(photo, photoId, scope)
-                local response = SearchIndexAPI.getPhotoData(photoId)
-                if response and response.metadata then
-                    MetadataManager.applyMetadata(photo, response, nil, {
-                        applyKeywords = props.generateKeywords,
-                        applyTitle = props.generateTitle,
-                        applyCaption = props.generateCaption,
-                        applyAltText = props.generateAltText,
-                        useTopLevelKeyword = props.useTopLevelKeyword,
-                        topLevelKeyword = props.topLevelKeyword,
-                        appendMetadata = props.appendMetadata,
-                    })
-                    SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
-                end
-            end
-        end
+		-- When validation is disabled, apply metadata inline as each photo's analysis returns
+		-- so keywords/title/caption land on photos progressively instead of all at the end.
+		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
+		local usedInlineApply = false
+		if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
+			usedInlineApply = true
+			options.onPhotoAnalyzed = function(photo, photoId, scope)
+				local response = SearchIndexAPI.getPhotoData(photoId)
+				if response and response.metadata then
+					MetadataManager.applyMetadata(photo, response, nil, {
+						applyKeywords = props.generateKeywords,
+						applyTitle = props.generateTitle,
+						applyCaption = props.generateCaption,
+						applyAltText = props.generateAltText,
+						useTopLevelKeyword = props.useTopLevelKeyword,
+						topLevelKeyword = props.topLevelKeyword,
+						appendMetadata = props.appendMetadata,
+					})
+					SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
+				end
+			end
+		end
 
-        local status, processed, failed, processedPhotos, combinedError, combinedWarnings
-        status, processed, failed, processedPhotos, combinedError, combinedWarnings = SearchIndexAPI
-            .analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
+		local status, processed, failed, processedPhotos, combinedError, combinedWarnings
+		status, processed, failed, processedPhotos, combinedError, combinedWarnings =
+			SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
 
-        if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
-            log:trace("Saving metadata for processed photos...")
-            local savedCount = 0
-            local skippedCount = 0
+		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
+			log:trace("Saving metadata for processed photos...")
+			local savedCount = 0
+			local skippedCount = 0
 
-            local skipFromHere = false
+			local skipFromHere = false
 
-            for _, photo in ipairs(processedPhotos) do
-                -- Process responses if validation is enabled or just save metadata
-                local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
-                if photoId then
-                    local response = SearchIndexAPI.getPhotoData(photoId)
+			for _, photo in ipairs(processedPhotos) do
+				-- Process responses if validation is enabled or just save metadata
+				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
+				if photoId then
+					local response = SearchIndexAPI.getPhotoData(photoId)
 
-                    log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata('fileName') or "unknown"))
-                    log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
+					log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
+					log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
 
-                    if props.enableValidation and props.enableMetadata and response and response.metadata then
-                        local result, validatedData = nil, nil
+					if props.enableValidation and props.enableMetadata and response and response.metadata then
+						local result, validatedData = nil, nil
 
-                        if not skipFromHere then
-                            -- Show validation dialog
-                            result, validatedData = MetadataManager.showValidationDialog(context, photo, response, {
-                                applyKeywords = props.generateKeywords,
-                                applyTitle = props.generateTitle,
-                                applyCaption = props.generateCaption,
-                                applyAltText = props.generateAltText,
-                                appendMetadata = props.appendMetadata,
-                            })
+						if not skipFromHere then
+							-- Show validation dialog
+							result, validatedData = MetadataManager.showValidationDialog(context, photo, response, {
+								applyKeywords = props.generateKeywords,
+								applyTitle = props.generateTitle,
+								applyCaption = props.generateCaption,
+								applyAltText = props.generateAltText,
+								appendMetadata = props.appendMetadata,
+							})
 
-                            if validatedData ~= nil and validatedData.skipFromHere then
-                                log:trace("Skipping validation from here for subsequent photos.")
-                                skipFromHere = true
-                            end
+							if validatedData ~= nil and validatedData.skipFromHere then
+								log:trace("Skipping validation from here for subsequent photos.")
+								skipFromHere = true
+							end
 
-                            if result == "ok" and validatedData then
-                                -- Apply validated metadata
-                                MetadataManager.applyMetadata(photo, response, validatedData, {
-                                    applyKeywords = props.generateKeywords,
-                                    applyTitle = props.generateTitle,
-                                    applyCaption = props.generateCaption,
-                                    applyAltText = props.generateAltText,
-                                    useTopLevelKeyword = props.useTopLevelKeyword,
-                                    topLevelKeyword = props.topLevelKeyword,
-                                    appendMetadata = props.appendMetadata,
-                                })
+							if result == "ok" and validatedData then
+								-- Apply validated metadata
+								MetadataManager.applyMetadata(photo, response, validatedData, {
+									applyKeywords = props.generateKeywords,
+									applyTitle = props.generateTitle,
+									applyCaption = props.generateCaption,
+									applyAltText = props.generateAltText,
+									useTopLevelKeyword = props.useTopLevelKeyword,
+									topLevelKeyword = props.topLevelKeyword,
+									appendMetadata = props.appendMetadata,
+								})
 
-                                -- Overwrite with validated data
-                                log:trace("Reimported validated metadata for photo: " ..
-                                    (photo:getFormattedMetadata('fileName') or "unknown"))
-                                SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
+								-- Overwrite with validated data
+								log:trace(
+									"Reimported validated metadata for photo: "
+										.. (photo:getFormattedMetadata("fileName") or "unknown")
+								)
+								SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
 
-                                savedCount = savedCount + 1
-                            elseif result == "other" then
-                                skippedCount = skippedCount + 1
-                                -- Clear only metadata so the photo stays in the index and can be regenerated later
-                                SearchIndexAPI.removePhotoMetadata(photoId)
-                                Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
-                            elseif result == "cancel" then
-                                break
-                            end
-                        else
-                            -- Validation has been skipped from here on; apply metadata without showing dialog
-                            MetadataManager.applyMetadata(photo, response, nil, {
-                                applyKeywords = props.generateKeywords,
-                                applyTitle = props.generateTitle,
-                                applyCaption = props.generateCaption,
-                                applyAltText = props.generateAltText,
-                                useTopLevelKeyword = props.useTopLevelKeyword,
-                                topLevelKeyword = props.topLevelKeyword,
-                                appendMetadata = props.appendMetadata,
-                            })
+								savedCount = savedCount + 1
+							elseif result == "other" then
+								skippedCount = skippedCount + 1
+								-- Clear only metadata so the photo stays in the index and can be regenerated later
+								SearchIndexAPI.removePhotoMetadata(photoId)
+								Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
+							elseif result == "cancel" then
+								break
+							end
+						else
+							-- Validation has been skipped from here on; apply metadata without showing dialog
+							MetadataManager.applyMetadata(photo, response, nil, {
+								applyKeywords = props.generateKeywords,
+								applyTitle = props.generateTitle,
+								applyCaption = props.generateCaption,
+								applyAltText = props.generateAltText,
+								useTopLevelKeyword = props.useTopLevelKeyword,
+								topLevelKeyword = props.topLevelKeyword,
+								appendMetadata = props.appendMetadata,
+							})
 
-                            log:trace("Applied metadata without validation for photo (skipFromHere active): " ..
-                                (photo:getFormattedMetadata('fileName') or "unknown"))
-                            SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
+							log:trace(
+								"Applied metadata without validation for photo (skipFromHere active): "
+									.. (photo:getFormattedMetadata("fileName") or "unknown")
+							)
+							SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
 
-                            savedCount = savedCount + 1
-                        end
-                    elseif props.enableMetadata and response and response.metadata then
-                        -- Directly save generated metadata without validation
-                        MetadataManager.applyMetadata(photo, response, nil, {
-                            applyKeywords = props.generateKeywords,
-                            applyTitle = props.generateTitle,
-                            applyCaption = props.generateCaption,
-                            applyAltText = props.generateAltText,
-                            useTopLevelKeyword = props.useTopLevelKeyword,
-                            topLevelKeyword = props.topLevelKeyword,
-                            appendMetadata = props.appendMetadata,
-                        })
-                        savedCount = savedCount + 1
-                    end
-                else
-                    log:error("Skipping photo data retrieval due to missing photo_id: " .. tostring(photoIdErr))
-                    skippedCount = skippedCount + 1
-                end
-            end
-        end
+							savedCount = savedCount + 1
+						end
+					elseif props.enableMetadata and response and response.metadata then
+						-- Directly save generated metadata without validation
+						MetadataManager.applyMetadata(photo, response, nil, {
+							applyKeywords = props.generateKeywords,
+							applyTitle = props.generateTitle,
+							applyCaption = props.generateCaption,
+							applyAltText = props.generateAltText,
+							useTopLevelKeyword = props.useTopLevelKeyword,
+							topLevelKeyword = props.topLevelKeyword,
+							appendMetadata = props.appendMetadata,
+						})
+						savedCount = savedCount + 1
+					end
+				else
+					log:error("Skipping photo data retrieval due to missing photo_id: " .. tostring(photoIdErr))
+					skippedCount = skippedCount + 1
+				end
+			end
+		end
 
-        progressScope:done()
+		progressScope:done()
 
-        -- Show completion message based on status
-        if status == "canceled" then
-            LrDialogs.message(
-                LOC "$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled",
-                LOC "$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."
-            )
-        elseif status == "allfailed" then
-            if combinedError then
-                ErrorHandler.handleError(
-                    LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
-                    combinedError
-                )
-            else
-                LrDialogs.message(
-                    LOC "$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed",
-                    LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
-                )
-            end
-        elseif status == "somefailed" then
-            local successCount = processed - failed
-            if combinedError then
-                ErrorHandler.handleError(
-                    LOC(
-                        "$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
-                        successCount, processed, failed),
-                    combinedError
-                )
-            else
-                LrDialogs.message(
-                    LOC "$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors",
-                    LOC(
-                        "$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
-                        successCount, processed, failed)
-                )
-            end
-        else -- success
-            local msg = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
-            if combinedWarnings then
-                msg = msg .. "\n\nWarnings:\n" .. combinedWarnings
-                LrDialogs.message(
-                    LOC "$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings",
-                    msg
-                )
-            else
-                LrDialogs.message(
-                    LOC "$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed",
-                    msg
-                )
-            end
-        end
+		-- Show completion message based on status
+		if status == "canceled" then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
+				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+			)
+		elseif status == "allfailed" then
+			if combinedError then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
+					combinedError
+				)
+			else
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"),
+					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
+				)
+			end
+		elseif status == "somefailed" then
+			local successCount = processed - failed
+			if combinedError then
+				ErrorHandler.handleError(
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
+						successCount,
+						processed,
+						failed
+					),
+					combinedError
+				)
+			else
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"),
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
+						successCount,
+						processed,
+						failed
+					)
+				)
+			end
+		else -- success
+			local msg =
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
+			if combinedWarnings then
+				msg = msg .. "\n\nWarnings:\n" .. combinedWarnings
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
+			else
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)
+			end
+		end
 
-        log:trace("AnalyzeAndIndexTask completed: Status=" ..
-            status .. ", Processed=" .. processed .. ", Failed=" .. failed)
-    end)
+		log:trace(
+			"AnalyzeAndIndexTask completed: Status=" .. status .. ", Processed=" .. processed .. ", Failed=" .. failed
+		)
+	end)
 end)

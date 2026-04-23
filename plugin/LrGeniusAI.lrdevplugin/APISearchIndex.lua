@@ -1901,100 +1901,106 @@ end
 --                is still honoured. Default: true (preserves legacy behaviour).
 --
 function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, closeProgressScope, updateProgress)
-    local numPhotos = #photosToProcess
-    if numPhotos == 0 then
-        return "success", 0, 0
-    end
+	local numPhotos = #photosToProcess
+	if numPhotos == 0 then
+		return "success", 0, 0
+	end
 
-    if not SearchIndexAPI.pingServer() then
-        return "allfailed", numPhotos, numPhotos
-    end
+	if not SearchIndexAPI.pingServer() then
+		return "allfailed", numPhotos, numPhotos
+	end
 
-    local shouldCloseScope = (closeProgressScope ~= false)
-    local shouldUpdateProgress = (updateProgress ~= false)
+	local shouldCloseScope = (closeProgressScope ~= false)
+	local shouldUpdateProgress = (updateProgress ~= false)
 
-    if shouldUpdateProgress then
-        progressScope:setCaption(LOC "$$$/LrGeniusAI/ImportMetadata/ProgressTitle=Importing metadata for photos...")
-        progressScope:setPortionComplete(0, numPhotos)
-    end
+	if shouldUpdateProgress then
+		progressScope:setCaption(LOC("$$$/LrGeniusAI/ImportMetadata/ProgressTitle=Importing metadata for photos..."))
+		progressScope:setPortionComplete(0, numPhotos)
+	end
 
-    local stats = { processed = 0, success = 0, failed = 0 }
-    local batchSize = 50 -- Send metadata in batches
-    local metadataBatch = {}
+	local stats = { processed = 0, success = 0, failed = 0 }
+	local batchSize = 50 -- Send metadata in batches
+	local metadataBatch = {}
 
-    for i, photo in ipairs(photosToProcess) do
-        if photo ~= nil then
-            if progressScope:isCanceled() then
-                break
-            end
+	for i, photo in ipairs(photosToProcess) do
+		if photo ~= nil then
+			if progressScope:isCanceled() then
+				break
+			end
 
-            local photoId = getPhotoIdForPhoto(photo)
-            local metadata = {
-                photo_id = photoId,
-                caption = photo:getFormattedMetadata("caption"),
-                title = photo:getFormattedMetadata("title"),
-                keywords = MetadataManager.getPhotoKeywordHierarchy(photo),
-                alt_text = photo:getFormattedMetadata("altTextAccessibility")
-            }
-            if type(metadata.photo_id) ~= "string" or metadata.photo_id == "" then
-                stats.failed = stats.failed + 1
-                stats.processed = stats.processed + 1
-                log:error("Skipping metadata import for photo due to missing photo_id: " ..
-                    (photo:getFormattedMetadata("fileName") or "unknown"))
-                if shouldUpdateProgress then
-                    progressScope:setPortionComplete(stats.processed, numPhotos)
-                end
-            else
-                table.insert(metadataBatch, metadata)
-            end
+			local photoId = getPhotoIdForPhoto(photo)
+			local metadata = {
+				photo_id = photoId,
+				caption = photo:getFormattedMetadata("caption"),
+				title = photo:getFormattedMetadata("title"),
+				keywords = MetadataManager.getPhotoKeywordHierarchy(photo),
+				alt_text = photo:getFormattedMetadata("altTextAccessibility"),
+			}
+			if type(metadata.photo_id) ~= "string" or metadata.photo_id == "" then
+				stats.failed = stats.failed + 1
+				stats.processed = stats.processed + 1
+				log:error(
+					"Skipping metadata import for photo due to missing photo_id: "
+						.. (photo:getFormattedMetadata("fileName") or "unknown")
+				)
+				if shouldUpdateProgress then
+					progressScope:setPortionComplete(stats.processed, numPhotos)
+				end
+			else
+				table.insert(metadataBatch, metadata)
+			end
 
-            if #metadataBatch > 0 and (#metadataBatch >= batchSize or i == numPhotos) then
-                local importBody = { metadata_items = metadataBatch }
-                local importCid = getCatalogId()
-                if importCid then
-                    importBody.catalog_id = importCid
-                end
-                local response = _request('POST', getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, importBody)
-                if response ~= nil and response.status == "processed" then
-                    stats.success = stats.success + #metadataBatch
-                else
-                    stats.failed = stats.failed + #metadataBatch
-                    log:error("Failed to import metadata batch: " .. (response and response.error or "Unknown error"))
-                end
-                metadataBatch = {} -- Clear the batch
-            end
+			if #metadataBatch > 0 and (#metadataBatch >= batchSize or i == numPhotos) then
+				local importBody = { metadata_items = metadataBatch }
+				local importCid = getCatalogId()
+				if importCid then
+					importBody.catalog_id = importCid
+				end
+				local response = _request("POST", getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, importBody)
+				if response ~= nil and response.status == "processed" then
+					stats.success = stats.success + #metadataBatch
+				else
+					stats.failed = stats.failed + #metadataBatch
+					log:error("Failed to import metadata batch: " .. (response and response.error or "Unknown error"))
+				end
+				metadataBatch = {} -- Clear the batch
+			end
 
-            stats.processed = stats.processed + 1
-            if shouldUpdateProgress then
-                progressScope:setPortionComplete(stats.processed, numPhotos)
-                progressScope:setCaption(
-                    LOC("$$$/LrGeniusAI/ImportMetadata/Processing=Importing metadata... ^1/^2 (^3 failed)",
-                        stats.processed, numPhotos, stats.failed)
-                )
-            end
-        else
-            log:error("Photo is nil in importMetadataFromCatalog, probably it got deleted in the meantime.")
-        end
-    end
+			stats.processed = stats.processed + 1
+			if shouldUpdateProgress then
+				progressScope:setPortionComplete(stats.processed, numPhotos)
+				progressScope:setCaption(
+					LOC(
+						"$$$/LrGeniusAI/ImportMetadata/Processing=Importing metadata... ^1/^2 (^3 failed)",
+						stats.processed,
+						numPhotos,
+						stats.failed
+					)
+				)
+			end
+		else
+			log:error("Photo is nil in importMetadataFromCatalog, probably it got deleted in the meantime.")
+		end
+	end
 
-    if shouldCloseScope then
-        progressScope:done()
-    end
+	if shouldCloseScope then
+		progressScope:done()
+	end
 
-    if progressScope:isCanceled() then
-        return "canceled", stats.processed, stats.failed
-    end
+	if progressScope:isCanceled() then
+		return "canceled", stats.processed, stats.failed
+	end
 
-    local status
-    if stats.failed == 0 then
-        status = "success"
-    elseif stats.failed >= stats.processed and stats.processed > 0 then
-        status = "allfailed"
-    else
-        status = "somefailed"
-    end
+	local status
+	if stats.failed == 0 then
+		status = "success"
+	elseif stats.failed >= stats.processed and stats.processed > 0 then
+		status = "allfailed"
+	else
+		status = "somefailed"
+	end
 
-    return status, stats.processed, stats.failed
+	return status, stats.processed, stats.failed
 end
 
 function SearchIndexAPI.pingServer()
