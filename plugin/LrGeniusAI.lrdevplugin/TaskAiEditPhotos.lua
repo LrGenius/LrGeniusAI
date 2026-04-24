@@ -183,7 +183,6 @@ local function showAiEditDialog(ctx)
 	if not hasCompositionModeValue(props.compositionMode) then
 		props.compositionMode = Defaults.defaultCompositionMode or "subtle"
 	end
-	props.submitGPS = prefs.aiEditSubmitGPS or false
 	props.submitKeywords = prefs.aiEditSubmitKeywords ~= false
 	props.submitFolderName = prefs.aiEditSubmitFolderName or false
 	props.showPhotoContextDialog = prefs.aiEditShowPhotoContextDialog ~= false
@@ -576,14 +575,6 @@ local function showAiEditDialog(ctx)
 							),
 						}),
 					}),
-					f:row({
-						f:checkbox({
-							value = bind("submitGPS"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SendGPS=Send GPS coordinates when available"),
-						}),
-					}),
 				}),
 				f:column({
 					spacing = f:control_spacing(),
@@ -643,7 +634,6 @@ local function showAiEditDialog(ctx)
 	prefs.aiEditAdjustLensCorrections = props.adjustLensCorrections
 	prefs.aiEditAllowAutoCrop = props.allowAutoCrop
 	prefs.aiEditCompositionMode = props.compositionMode
-	prefs.aiEditSubmitGPS = props.submitGPS
 	prefs.aiEditSubmitKeywords = props.submitKeywords
 	prefs.aiEditSubmitFolderName = props.submitFolderName
 	prefs.aiEditShowPhotoContextDialog = props.showPhotoContextDialog
@@ -684,7 +674,6 @@ local function showAiEditDialog(ctx)
 		composition_mode = props.compositionMode,
 		applyMasks = props.applyMasks,
 		reviewBeforeApply = props.reviewBeforeApply,
-		submit_gps = props.submitGPS,
 		submit_keywords = props.submitKeywords,
 		submit_folder_names = props.submitFolderName,
 		showPhotoContextDialog = props.showPhotoContextDialog,
@@ -720,12 +709,6 @@ end
 local function enrichPhotoOptions(photo, baseOptions, userContext)
 	log:trace("enrichPhotoOptions: start for " .. tostring(photo and photo:getFormattedMetadata("fileName") or "nil"))
 	local photoOptions = copyOptions(baseOptions)
-	if photoOptions.submit_gps then
-		local gps = photo:getRawMetadata("gps")
-		if gps then
-			photoOptions.gps_coordinates = gps
-		end
-	end
 	if photoOptions.submit_keywords then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
@@ -754,16 +737,6 @@ local function enrichPhotoOptions(photo, baseOptions, userContext)
 		photoOptions[k] = v
 	end
 	photoOptions.user_context = userContext or photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-	log:trace(
-		"enrichPhotoOptions: done submit_gps="
-			.. tostring(photoOptions.submit_gps)
-			.. " submit_keywords="
-			.. tostring(photoOptions.submit_keywords)
-			.. " submit_folder_names="
-			.. tostring(photoOptions.submit_folder_names)
-			.. " user_context_len="
-			.. tostring(type(photoOptions.user_context) == "string" and #photoOptions.user_context or 0)
-	)
 	return photoOptions
 end
 

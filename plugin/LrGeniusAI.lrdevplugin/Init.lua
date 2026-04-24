@@ -123,10 +123,6 @@ if _G.prefs.submitKeywords == nil then
 	_G.prefs.submitKeywords = true
 end
 
-if _G.prefs.submitGPS == nil then
-	_G.prefs.submitGPS = true
-end
-
 if _G.prefs.temperature == nil then
 	_G.prefs.temperature = Defaults.defaultTemperature
 end

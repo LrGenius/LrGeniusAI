@@ -600,20 +600,17 @@ def process_image_task(
         siglip_model = server_lifecycle.get_model()
         siglip_processor = server_lifecycle.get_processor()
 
-        # Pre-extract EXIF location data for each image when GPS submission is enabled.
+        # Pre-extract EXIF location data for each image (always, when available).
         # Keyed by uuid so it can be passed to analyze_batch for per-image injection.
         exif_location_by_uuid: dict[str, dict | None] = {}
-        if options.get("submit_gps"):
-            for image_bytes, uuid, _ in image_triplets:
-                try:
-                    exif_location_by_uuid[uuid] = exif_service.extract_location_tags(
-                        image_bytes
-                    )
-                except Exception as exc:
-                    logger.debug(
-                        "Could not extract EXIF location for %s: %s", uuid, exc
-                    )
-                    exif_location_by_uuid[uuid] = None
+        for image_bytes, uuid, _ in image_triplets:
+            try:
+                exif_location_by_uuid[uuid] = exif_service.extract_location_tags(
+                    image_bytes
+                )
+            except Exception as exc:
+                logger.debug("Could not extract EXIF location for %s: %s", uuid, exc)
+                exif_location_by_uuid[uuid] = None
 
         try:
             embeddings, metadata_results = analysis_service.analyze_batch(

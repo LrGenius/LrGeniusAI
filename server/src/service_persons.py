@@ -171,7 +171,9 @@ def run_clustering(
     used_old_ids: Set[str] = set()
     label_to_person: Dict[int, str] = {}
 
-    for lb in sorted(new_label_faces.keys(), key=lambda l: -len(new_label_faces[l])):
+    for lb in sorted(
+        new_label_faces.keys(), key=lambda lbl: -len(new_label_faces[lbl])
+    ):
         cluster_faces = new_label_faces[lb]
         best_pid = None
         best_overlap = 0

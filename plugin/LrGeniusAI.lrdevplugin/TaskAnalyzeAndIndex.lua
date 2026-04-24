@@ -96,7 +96,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 	end
 
 	-- Context options
-	props.submitGPS = prefs.submitGPS or false
 	props.submitKeywords = prefs.submitKeywords or false
 	props.submitFolderName = prefs.submitFolderName or false
 	props.showPhotoContextDialog = prefs.showPhotoContextDialog or false
@@ -413,16 +412,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 					}),
 					f:spacer({ height = 4 }),
 					f:row({
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ContextAutoLabel=Automatic:"),
-							width = share("ctxLabelWidth"),
-						}),
-						f:checkbox({
-							value = bind("submitGPS"),
-							title = LOC("$$$/LrGeniusAI/MetadataProvider/GPS=GPS Coordinates"),
-						}),
-					}),
-					f:row({
 						f:spacer({ width = share("ctxLabelWidth") }),
 						f:checkbox({
 							value = bind("submitKeywords"),
@@ -572,7 +561,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 		end
 		prefs.generateLanguage = props.language
 		prefs.temperature = props.temperature
-		prefs.submitGPS = props.submitGPS
 		prefs.submitKeywords = props.submitKeywords
 		prefs.submitFolderName = props.submitFolderName
 		prefs.showPhotoContextDialog = props.showPhotoContextDialog
@@ -741,7 +729,6 @@ LrTasks.startAsyncTask(function()
 			generate_caption = props.generateCaption,
 			generate_title = props.generateTitle,
 			generate_alt_text = props.generateAltText,
-			submit_gps = props.submitGPS,
 			submit_keywords = props.submitKeywords,
 			submit_folder_names = props.submitFolderName,
 			submit_user_context = props.showPhotoContextDialog,

@@ -41,13 +41,11 @@ class MetadataGenerationRequest:
     user_prompt: Optional[str]
 
     # Context flags (whether to include additional context)
-    submit_gps: bool
     submit_keywords: bool
     submit_folder_names: bool
 
     # Optional context data
     existing_keywords: Optional[List[str]]
-    gps_coordinates: Optional[Dict[str, float]]
     # Reverse-geocoded location data extracted from JPEG EXIF/IPTC by the backend.
     # Keys: city, state, country, location, country_code, gps_latitude, gps_longitude
     location_data: Optional[Dict[str, Any]] = None
@@ -107,12 +105,10 @@ class EditGenerationRequest:
     system_prompt: Optional[str]
     user_prompt: Optional[str]
 
-    submit_gps: bool
     submit_keywords: bool
     submit_folder_names: bool
 
     existing_keywords: Optional[List[str]]
-    gps_coordinates: Optional[Dict[str, float]]
     # Reverse-geocoded location data extracted from JPEG EXIF/IPTC by the backend.
     # Keys: city, state, country, location, country_code, gps_latitude, gps_longitude
     location_data: Optional[Dict[str, Any]] = None
@@ -259,18 +255,10 @@ class LLMProviderBase(ABC):
         # Add contextual information if provided and enabled
         context_additions = []
 
-        if request.submit_gps:
-            # Prefer structured reverse-geocoded data (from JPEG IPTC) over raw GPS coordinates
+        if isinstance(request.location_data, dict) and request.location_data:
             from service_exif import format_location_for_prompt
 
-            location_str = None
-            if isinstance(request.location_data, dict) and request.location_data:
-                location_str = format_location_for_prompt(request.location_data)
-            elif isinstance(request.gps_coordinates, dict):
-                lat = request.gps_coordinates.get("latitude")
-                lon = request.gps_coordinates.get("longitude")
-                if lat is not None and lon is not None:
-                    location_str = f"{lat}, {lon}"
+            location_str = format_location_for_prompt(request.location_data)
             if location_str:
                 context_additions.append(f"This photo was taken at: {location_str}")
 
@@ -514,18 +502,10 @@ class LLMProviderBase(ABC):
                 context_additions.append(f"Existing keywords: {keywords_str}")
         if request.submit_folder_names and request.folder_names:
             context_additions.append(f"Folder context: {request.folder_names}")
-        if request.submit_gps:
-            # Prefer structured reverse-geocoded data (from JPEG IPTC) over raw GPS coordinates
+        if isinstance(request.location_data, dict) and request.location_data:
             from service_exif import format_location_for_prompt
 
-            location_str = None
-            if isinstance(request.location_data, dict) and request.location_data:
-                location_str = format_location_for_prompt(request.location_data)
-            elif isinstance(request.gps_coordinates, dict):
-                lat = request.gps_coordinates.get("latitude")
-                lon = request.gps_coordinates.get("longitude")
-                if lat is not None and lon is not None:
-                    location_str = f"{lat}, {lon}"
+            location_str = format_location_for_prompt(request.location_data)
             if location_str:
                 context_additions.append(f"Photo taken in: {location_str}")
         if request.date_time:

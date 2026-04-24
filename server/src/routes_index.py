@@ -56,7 +56,6 @@ def _extract_options(data):
     options["generate_alt_text"] = (
         str(data.get("generate_alt_text", "true")).lower() == "true"
     )
-    options["submit_gps"] = str(data.get("submit_gps", "false")).lower() == "true"
     options["submit_keywords"] = (
         str(data.get("submit_keywords", "false")).lower() == "true"
     )
@@ -78,7 +77,6 @@ def _extract_options(data):
         ]
     else:
         options["existing_keywords"] = None
-    options["gps_coordinates"] = _parse_json_field(data.get("gps_coordinates"))
     options["folder_names"] = data.get("folder_names")
     options["user_context"] = data.get("user_context")
 
