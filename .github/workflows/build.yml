@@ -619,6 +619,7 @@ jobs:
             org.opencontainers.image.version=${{ github.ref_name }}
           provenance: false
           sbom: false
+          generate-summary: false
 
   # Combine per-arch pushes into one multi-arch :latest so `docker compose pull` works
   # with ghcr.io/.../lrgeniusai:latest (amd64 and arm64 clients resolve correctly).
