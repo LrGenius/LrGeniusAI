@@ -56,7 +56,7 @@ class MetadataGenerationRequest:
     # Keyword hierarchy for structured output
     # Can be either a flat list of strings: ["People", "Activities"]
     # Or a nested dict: {"People": {"Family": {}, "Friends": {}}, "Activities": {}}
-    keyword_categories: Optional[Union[List[str], Dict[str, Any]]]
+    keyword_categories: Optional[Union[List[str], Dict[str, Any]]] = None
     bilingual_keywords: bool = False
     keyword_secondary_language: Optional[str] = None
 
