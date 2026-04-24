@@ -346,8 +346,8 @@ class AnalysisService:
             ctx_summary.append(f"{len(request.folder_names)} folders")
         if request.user_context:
             ctx_summary.append(f"context ({len(str(request.user_context))} chars)")
-        if request.gps_coordinates:
-            ctx_summary.append("GPS")
+        if request.location_data:
+            ctx_summary.append("Location")
         if ctx_summary:
             logger.info(f"Context for {uuid}: {', '.join(ctx_summary)}")
         else:
