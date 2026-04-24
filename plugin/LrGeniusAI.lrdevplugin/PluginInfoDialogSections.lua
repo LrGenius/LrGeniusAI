@@ -138,6 +138,40 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 			updateHealth()
 		end
 	end)
+
+	-- Update Check initialization
+	propertyTable.updateStatus = ""
+	propertyTable.updateStatusColor = { 0.7, 0.7, 0.7 }
+	propertyTable.updateButtonTitle = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/UpdateCheck=Check for updates")
+	propertyTable.updateAvailable = false
+	propertyTable.latestReleaseInfo = nil
+
+	local function checkUpdates()
+		LrTasks.startAsyncTask(function()
+			local info = UpdateCheck.getLatestReleaseInfo()
+			if info and info.is_newer then
+				propertyTable.latestReleaseInfo = info
+				propertyTable.updateAvailable = true
+				propertyTable.updateStatus =
+					LOC("$$$/LrGeniusAI/PluginInfo/UpdateAvailable=Update Available: ^1", info.tag_name)
+				propertyTable.updateStatusColor = { 0.1, 0.5, 0.8 }
+				if info.is_code_only then
+					propertyTable.updateButtonTitle = LOC("$$$/LrGeniusAI/UpdateCheck/UpdateNow=Update Now")
+				else
+					propertyTable.updateButtonTitle = LOC("$$$/LrGeniusAI/PluginInfo/DownloadUpdate=Download Update")
+				end
+			else
+				propertyTable.updateStatus = LOC("$$$/LrGeniusAI/PluginInfo/UpToDate=Plugin is up to date")
+				propertyTable.updateStatusColor = { 0.5, 0.5, 0.5 }
+				propertyTable.updateButtonTitle =
+					LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/UpdateCheck=Check for updates")
+				propertyTable.updateAvailable = false
+			end
+		end)
+	end
+
+	checkUpdates()
+	propertyTable.manualCheckUpdates = checkUpdates
 end
 
 function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
@@ -153,6 +187,14 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 				title = LOC("$$$/LrGeniusAI/PluginInfo/Logging=Logging"),
 				width = 600,
 
+				f:row({
+					f:static_text({
+						title = bind("updateStatus"),
+						text_color = bind("updateStatusColor"),
+						width = share("bottomButtons"),
+						alignment = "center",
+					}),
+				}),
 				f:row({
 					f:push_button({
 						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/ShowLogfile=Show logfile"),
@@ -173,11 +215,20 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 						width = share("bottomButtons"),
 					}),
 					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/UpdateCheck=Check for updates"),
+						title = bind("updateButtonTitle"),
 						action = function(button)
-							LrTasks.startAsyncTask(function()
-								UpdateCheck.checkForNewVersion()
-							end)
+							if propertyTable.updateAvailable then
+								if propertyTable.latestReleaseInfo.is_code_only then
+									local tu = require("TaskUpdate")
+									tu.runUpdate(propertyTable.latestReleaseInfo)
+								else
+									LrHttp.openUrlInBrowser(
+										propertyTable.latestReleaseInfo.release_url or UpdateCheck.latestReleaseUrl
+									)
+								end
+							else
+								propertyTable.manualCheckUpdates()
+							end
 						end,
 						width = share("bottomButtons"),
 					}),

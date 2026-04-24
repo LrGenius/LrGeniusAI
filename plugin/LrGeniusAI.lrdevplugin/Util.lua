@@ -1090,6 +1090,13 @@ function Util.waitForServerDialog(options)
 			if not report.healthy then
 				return Util.showHealthIssuesDialog(report)
 			end
+			-- Check for updates via backend if enabled
+			if prefs.periodicalUpdateCheck then
+				LrTasks.startAsyncTask(function()
+					require("UpdateCheck")
+					UpdateCheck.checkForNewVersionInBackground()
+				end)
+			end
 			return true
 		end
 
@@ -1120,6 +1127,13 @@ function Util.waitForServerDialog(options)
 					local report = Util.checkPluginHealth(options)
 					if not report.healthy then
 						return Util.showHealthIssuesDialog(report)
+					end
+					-- Check for updates via backend if enabled
+					if prefs.periodicalUpdateCheck then
+						LrTasks.startAsyncTask(function()
+							require("UpdateCheck")
+							UpdateCheck.checkForNewVersionInBackground()
+						end)
 					end
 					return true
 				end
@@ -1154,6 +1168,13 @@ function Util.waitForServerDialog(options)
 					if not report.healthy then
 						result = Util.showHealthIssuesDialog(report)
 					else
+						-- Check for updates via backend if enabled
+						if prefs.periodicalUpdateCheck then
+							LrTasks.startAsyncTask(function()
+								require("UpdateCheck")
+								UpdateCheck.checkForNewVersionInBackground()
+							end)
+						end
 						result = true
 					end
 					return
@@ -1186,6 +1207,13 @@ function Util.waitForServerDialog(options)
 							if not report.healthy then
 								result = Util.showHealthIssuesDialog(report)
 							else
+								-- Check for updates via backend if enabled
+								if prefs.periodicalUpdateCheck then
+									LrTasks.startAsyncTask(function()
+										require("UpdateCheck")
+										UpdateCheck.checkForNewVersionInBackground()
+									end)
+								end
 								result = true
 							end
 							return
