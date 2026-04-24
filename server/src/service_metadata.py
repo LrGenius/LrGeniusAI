@@ -145,10 +145,16 @@ class AnalysisService:
         image_processor,
         uuids_needing_embeddings=None,
         uuids_needing_metadata=None,
+        exif_location_map: dict | None = None,
     ):
         """
         Analyzes a batch of images, generating embeddings and metadata.
         Only generates data for UUIDs in the corresponding needing_* lists.
+
+        Args:
+            exif_location_map: Optional mapping of uuid → location_data dict
+                (from service_exif.extract_location_tags). When provided, each
+                image's metadata request gets the matching location_data injected.
         """
         uuids = [triplet[1] for triplet in image_triplets]
         image_data = [triplet[0] for triplet in image_triplets]
@@ -205,6 +211,7 @@ class AnalysisService:
                 [t[1] for t in filtered_triplets],
                 [t[0] for t in filtered_triplets],
                 options,
+                exif_location_map=exif_location_map,
             )
             # Reconstruct full results array with None for images that didn't need metadata
             metadata_results = []
@@ -257,14 +264,26 @@ class AnalysisService:
         return embeddings
 
     def _generate_metadata_batch(
-        self, uuids: List[str], image_data: List[bytes], options: dict
+        self,
+        uuids: List[str],
+        image_data: List[bytes],
+        options: dict,
+        exif_location_map: dict | None = None,
     ) -> List[Optional[MetadataGenerationResponse]]:
         """
         Generates metadata for all images in the batch.
         """
         results = []
         for i, uuid in enumerate(uuids):
-            response = self.generate_metadata_single(uuid, image_data[i], options)
+            # Inject per-image EXIF location data without mutating the shared options dict
+            if exif_location_map and uuid in exif_location_map:
+                per_image_options = dict(options)
+                per_image_options["location_data"] = exif_location_map[uuid]
+            else:
+                per_image_options = options
+            response = self.generate_metadata_single(
+                uuid, image_data[i], per_image_options
+            )
             results.append(response)
         return results
 
@@ -309,6 +328,7 @@ class AnalysisService:
             submit_folder_names=options["submit_folder_names"],
             existing_keywords=options.get("existing_keywords"),
             gps_coordinates=options.get("gps_coordinates"),
+            location_data=options.get("location_data"),
             folder_names=options.get("folder_names"),
             user_context=options.get("user_context"),
             keyword_categories=options.get("keyword_categories"),
@@ -383,6 +403,7 @@ class AnalysisService:
             submit_folder_names=options.get("submit_folder_names", False),
             existing_keywords=options.get("existing_keywords"),
             gps_coordinates=options.get("gps_coordinates"),
+            location_data=options.get("location_data"),
             folder_names=options.get("folder_names"),
             user_context=options.get("user_context"),
             system_prompt=options.get("prompt"),

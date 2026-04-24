@@ -5,6 +5,7 @@ from service_metadata import get_analysis_service
 import server_lifecycle as server_lifecycle
 import service_face as face_service
 import service_vertexai as vertexai_service
+import service_exif as exif_service
 import json
 from datetime import datetime as time
 from functools import lru_cache
@@ -599,6 +600,21 @@ def process_image_task(
         siglip_model = server_lifecycle.get_model()
         siglip_processor = server_lifecycle.get_processor()
 
+        # Pre-extract EXIF location data for each image when GPS submission is enabled.
+        # Keyed by uuid so it can be passed to analyze_batch for per-image injection.
+        exif_location_by_uuid: dict[str, dict | None] = {}
+        if options.get("submit_gps"):
+            for image_bytes, uuid, _ in image_triplets:
+                try:
+                    exif_location_by_uuid[uuid] = exif_service.extract_location_tags(
+                        image_bytes
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Could not extract EXIF location for %s: %s", uuid, exc
+                    )
+                    exif_location_by_uuid[uuid] = None
+
         try:
             embeddings, metadata_results = analysis_service.analyze_batch(
                 image_triplets,
@@ -607,6 +623,7 @@ def process_image_task(
                 siglip_processor,
                 images_needing_embeddings,
                 images_needing_metadata,
+                exif_location_map=exif_location_by_uuid or None,
             )
         except Exception as e:
             logger.error(f"Error in analyze_batch: {str(e)}", exc_info=True)

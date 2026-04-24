@@ -84,7 +84,7 @@ local EXPORT_SETTINGS = {
 	LR_size_units = "pixels",
 	LR_collisionHandling = "rename",
 	LR_includeVideoFiles = false,
-	LR_removeLocationMetadata = true,
+	LR_removeLocationMetadata = false,
 	LR_embeddedMetadataOption = "all",
 }
 
