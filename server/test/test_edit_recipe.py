@@ -5,7 +5,7 @@ import os
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from edit_recipe import normalize_edit_recipe, filter_edit_recipe_by_controls
+from utils.edit_recipe import normalize_edit_recipe, filter_edit_recipe_by_controls
 
 
 class NormalizeEditRecipeTests(unittest.TestCase):

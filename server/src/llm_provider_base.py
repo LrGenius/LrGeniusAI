@@ -8,7 +8,7 @@ import io
 
 # Import prompts from config
 from config import METADATA_GENERATION_SYSTEM_PROMPT
-from edit_recipe import OPENAI_EDIT_RECIPE_SCHEMA, normalize_edit_recipe
+from utils.edit_recipe import OPENAI_EDIT_RECIPE_SCHEMA, normalize_edit_recipe
 
 
 @dataclass

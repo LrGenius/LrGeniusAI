@@ -13,7 +13,7 @@ from llm_provider_base import (
     MetadataGenerationResponse,
 )
 from config import logger, DEFAULT_MAX_TOKENS
-from edit_recipe import GEMINI_EDIT_RECIPE_SCHEMA
+from utils.edit_recipe import GEMINI_EDIT_RECIPE_SCHEMA
 
 
 class GeminiProvider(LLMProviderBase):

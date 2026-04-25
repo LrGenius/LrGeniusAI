@@ -3,7 +3,7 @@ import time
 import signal
 from config import DB_PATH, logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
 import open_clip
-from open_clip_compat import wrap_tokenizer
+from utils.open_clip_compat import wrap_tokenizer
 import threading
 import datetime
 import gc
