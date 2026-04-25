@@ -12,7 +12,7 @@ from llm_provider_base import (
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger, LMSTUDIO_HOST
+from config import logger, LMSTUDIO_HOST, DEFAULT_MAX_TOKENS
 
 
 class LMStudioProvider(LLMProviderBase):
@@ -89,10 +89,14 @@ class LMStudioProvider(LLMProviderBase):
                 chat = lms.Chat(system_prompt)
                 chat.add_user_message(user_prompt, images=[image_handle])
 
+                max_tokens = request.max_tokens or DEFAULT_MAX_TOKENS
                 response = model.respond(
                     chat,
                     response_format=response_schema,
-                    config={"temperature": request.temperature},
+                    config={
+                        "temperature": request.temperature,
+                        "maxTokens": max_tokens,
+                    },
                 )
 
             # Extract message content
@@ -198,10 +202,14 @@ class LMStudioProvider(LLMProviderBase):
 
                 chat = lms.Chat(system_prompt)
                 chat.add_user_message(user_prompt, images=[image_handle])
+                max_tokens = request.max_tokens or DEFAULT_MAX_TOKENS
                 response = model.respond(
                     chat,
                     response_format=response_schema,
-                    config={"temperature": request.temperature},
+                    config={
+                        "temperature": request.temperature,
+                        "maxTokens": max_tokens,
+                    },
                 )
 
             content = response.parsed
