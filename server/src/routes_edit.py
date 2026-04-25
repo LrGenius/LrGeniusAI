@@ -6,8 +6,8 @@ from flask import Blueprint, jsonify, request
 
 from config import logger
 from routes_index import _extract_options, _extract_photo_ids
-import service_chroma as chroma_service
-from service_metadata import get_analysis_service
+from services import chroma as chroma_service
+from services.metadata import get_analysis_service
 
 
 edit_bp = Blueprint("edit", __name__)

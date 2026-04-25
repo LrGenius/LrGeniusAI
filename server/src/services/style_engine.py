@@ -27,7 +27,7 @@ import json
 from typing import Any
 
 from config import logger
-import service_training as training_service
+from . import training as training_service
 
 # ---------------------------------------------------------------------------
 # Tunable weights (can be made user-configurable later via config / prefs)

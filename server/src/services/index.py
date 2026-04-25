@@ -1,11 +1,11 @@
 from config import logger, CULLING_CONFIG
-import service_chroma as chroma_service
-from service_chroma import DatabaseNotReadyError
-from service_metadata import get_analysis_service
+from . import chroma as chroma_service
+from .chroma import DatabaseNotReadyError
+from .metadata import get_analysis_service
 import server_lifecycle as server_lifecycle
-import service_face as face_service
-import service_vertexai as vertexai_service
-import service_exif as exif_service
+from . import face as face_service
+from . import vertexai as vertexai_service
+from . import exif as exif_service
 import json
 from datetime import datetime as time
 from functools import lru_cache

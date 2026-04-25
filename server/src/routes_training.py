@@ -20,7 +20,7 @@ from PIL import Image
 import io
 
 from config import logger
-import service_training as training_service
+from services import training as training_service
 
 training_bp = Blueprint("training", __name__)
 

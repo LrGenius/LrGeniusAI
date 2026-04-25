@@ -1,6 +1,6 @@
 import unittest
 
-from service_index import _flatten_keywords
+from services.index import _flatten_keywords
 
 
 class FlattenKeywordsTests(unittest.TestCase):

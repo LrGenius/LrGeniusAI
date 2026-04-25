@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from config import logger
-import service_import as import_service
+from services import import_ as import_service
 
 import_bp = Blueprint("import", __name__)
 

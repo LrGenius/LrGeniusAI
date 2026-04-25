@@ -8,7 +8,7 @@ import json
 
 # Import modularized components
 from config import logger, args, DB_PATH
-from service_version import get_backend_version_info
+from services.version import get_backend_version_info
 
 # Lazy import server_lifecycle to speed up startup
 import server_lifecycle
@@ -24,9 +24,9 @@ from routes_clip import clip_bp
 from routes_faces import faces_bp
 from routes_training import training_bp
 from routes_style_edit import style_edit_bp
-import service_chroma
-import service_persons
-import service_db
+from services import chroma as service_chroma
+from services import persons as service_persons
+from services import db as service_db
 
 app = Flask(__name__)
 logger.info("Flask app created")

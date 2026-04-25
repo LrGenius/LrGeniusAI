@@ -9,8 +9,8 @@ import datetime
 import gc
 import torch
 from huggingface_hub import hf_hub_download
-import service_face
-import service_chroma
+from services import face as service_face
+from services import chroma as service_chroma
 
 
 # Lazy-loadable global model instances

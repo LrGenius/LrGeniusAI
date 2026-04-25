@@ -28,14 +28,14 @@ def stub_providers(mocker):
         mock_instance.generate_metadata.return_value = MetadataGenerationResponse(
             uuid="stub", success=True, keywords={}, caption=None
         )
-        mocker.patch(f"service_metadata.{name}", mock_cls)
+        mocker.patch(f"services.metadata.{name}", mock_cls)
     yield
 
 
 @pytest.fixture
 def service(stub_providers):
     # Import AFTER providers are stubbed so __init__ uses the mocks.
-    from service_metadata import AnalysisService
+    from services.metadata import AnalysisService
 
     return AnalysisService(lazy_load=True)
 
@@ -48,14 +48,14 @@ def test_constructor_registers_all_providers(service):
 
 def test_constructor_marks_failing_provider_as_failed(mocker):
     mocker.patch(
-        "service_metadata.OllamaProvider", side_effect=RuntimeError("ollama dead")
+        "services.metadata.OllamaProvider", side_effect=RuntimeError("ollama dead")
     )
     for name in ("LMStudioProvider", "ChatGPTProvider", "GeminiProvider"):
         mock_cls = mocker.MagicMock()
         mock_cls.return_value.is_available.return_value = True
-        mocker.patch(f"service_metadata.{name}", mock_cls)
+        mocker.patch(f"services.metadata.{name}", mock_cls)
 
-    from service_metadata import AnalysisService
+    from services.metadata import AnalysisService
 
     svc = AnalysisService(lazy_load=True)
     assert "ollama" not in svc.providers
@@ -159,9 +159,9 @@ def test_generate_metadata_single_no_providers_available(mocker):
         "ChatGPTProvider",
         "GeminiProvider",
     ):
-        mocker.patch(f"service_metadata.{name}", side_effect=RuntimeError("nope"))
+        mocker.patch(f"services.metadata.{name}", side_effect=RuntimeError("nope"))
 
-    from service_metadata import AnalysisService
+    from services.metadata import AnalysisService
 
     svc = AnalysisService(lazy_load=True)
     assert svc.providers == {}

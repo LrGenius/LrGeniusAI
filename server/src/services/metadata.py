@@ -18,7 +18,7 @@ from providers.chatgpt import ChatGPTProvider
 from providers.gemini import GeminiProvider
 from utils.edit_recipe import filter_edit_recipe_by_controls
 from config import logger, DEFAULT_METADATA_PROVIDER, DEFAULT_METADATA_LANGUAGE
-import service_training as training_service
+from . import training as training_service
 from PIL import Image
 import io
 import torch

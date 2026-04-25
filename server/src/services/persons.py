@@ -19,7 +19,7 @@ import numpy as np
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
 
 from config import DB_PATH, logger
-import service_chroma as chroma_service
+from . import chroma as chroma_service
 
 PERSON_NAMES_FILENAME = "person_names.json"
 

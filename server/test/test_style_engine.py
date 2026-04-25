@@ -5,7 +5,7 @@ from unittest.mock import patch
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from service_style_engine import (
+from services.style_engine import (
     calculate_composite_score,
     interpolate_recipes,
     generate_style_edit,
@@ -63,7 +63,7 @@ def test_interpolate_recipes():
     assert interpolated.get("contrast") == 30
 
 
-@patch("service_style_engine.training_service")
+@patch("services.style_engine.training_service")
 def test_generate_style_edit_adaptive(mock_training):
     # If training photo was dark (0.2) and target is bright (0.8)
     # The engine should suggest LOWERING exposure relative to what was done to the dark photo
@@ -112,7 +112,7 @@ def test_generate_style_edit_adaptive(mock_training):
     assert final_exposure == -1.0  # 0.5 + (-1.5)
 
 
-@patch("service_style_engine.training_service")
+@patch("services.style_engine.training_service")
 def test_generate_style_edit_not_enough_training(mock_training):
     mock_training.get_training_count.return_value = 2
 

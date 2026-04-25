@@ -4,9 +4,9 @@ from flask import Blueprint, jsonify, request, send_file
 import server_lifecycle
 import config
 from config import logger
-from service_metadata import get_analysis_service
-import service_version
-import service_update
+from services.metadata import get_analysis_service
+from services import version as service_version
+from services import update as service_update
 
 server_bp = Blueprint("server", __name__)
 
@@ -85,7 +85,7 @@ def initialize():
         return jsonify({"error": "db_path is required"}), 400
 
     import config
-    import service_chroma
+    from services import chroma as service_chroma
 
     prev_db_path = config.DB_PATH
     if prev_db_path == db_path:
@@ -195,7 +195,7 @@ def health():
     health_data.update(get_analysis_service().get_health_status())
 
     # Add face model status (simplified for now)
-    import service_face
+    from services import face as service_face
 
     try:
         service_face._get_face_app()

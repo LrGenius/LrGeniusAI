@@ -1,8 +1,8 @@
 from config import logger
-import service_chroma as chroma_service
+from . import chroma as chroma_service
 import json
 from datetime import datetime as time
-from service_index import _flatten_keywords
+from .index import _flatten_keywords
 
 
 def import_metadata_task(

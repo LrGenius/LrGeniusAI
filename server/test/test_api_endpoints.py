@@ -92,7 +92,7 @@ def test_group_similar(client, mocker):
 
 
 def test_cull(client, mocker):
-    mocker.patch("service_search.cull_images", return_value={"groups": []})
+    mocker.patch("services.search.cull_images", return_value={"groups": []})
     response = client.post("/cull", json={"photo_ids": ["id1", "id2"]})
     assert response.status_code == 200
     assert response.get_json() == {"groups": []}
@@ -312,7 +312,7 @@ def test_health(client, mocker):
     mock_service = MagicMock()
     mock_service.get_health_status.return_value = {"llm": "ok"}
     mocker.patch("routes_server.get_analysis_service", return_value=mock_service)
-    mocker.patch("service_face._get_face_app")
+    mocker.patch("services.face._get_face_app")
 
     response = client.get("/health")
     assert response.status_code == 200

@@ -3,9 +3,9 @@ import time
 from collections import deque
 import os
 
-import service_chroma as chroma_service
+from services import chroma as chroma_service
 from config import logger
-from service_index import process_image_task, get_photo_ids_needing_processing
+from services.index import process_image_task, get_photo_ids_needing_processing
 import base64
 import json
 
