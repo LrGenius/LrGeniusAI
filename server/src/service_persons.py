@@ -13,7 +13,7 @@ import json
 import math
 import os
 import re
-from typing import List, Dict, Any, Optional, Set
+from typing import Any
 
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
@@ -24,13 +24,13 @@ import service_chroma as chroma_service
 PERSON_NAMES_FILENAME = "person_names.json"
 
 
-def _person_names_path() -> Optional[str]:
+def _person_names_path() -> str | None:
     if not DB_PATH:
         return None
     return os.path.join(DB_PATH, PERSON_NAMES_FILENAME)
 
 
-def _load_person_names() -> Dict[str, str]:
+def _load_person_names() -> dict[str, str]:
     path = _person_names_path()
     if not path or not os.path.isfile(path):
         return {}
@@ -42,7 +42,7 @@ def _load_person_names() -> Dict[str, str]:
         return {}
 
 
-def _save_person_names(names: Dict[str, str]) -> None:
+def _save_person_names(names: dict[str, str]) -> None:
     path = _person_names_path()
     if not path:
         logger.warning("Attempted to save person names but DB_PATH is not set yet.")
@@ -73,7 +73,7 @@ def get_person_name(person_id: str) -> str:
 _PERSON_ID_RE = re.compile(r"^person_(\d+)$")
 
 
-def _max_person_index(person_faces: Dict[str, Set[str]]) -> int:
+def _max_person_index(person_faces: dict[str, set[str]]) -> int:
     """Return the highest person_N index in the given keys, or -1."""
     max_idx = -1
     for pid in person_faces:
@@ -85,9 +85,9 @@ def _max_person_index(person_faces: Dict[str, Set[str]]) -> int:
 
 def run_clustering(
     distance_threshold: float = 0.5,
-    min_faces_per_person: Optional[int] = None,
+    min_faces_per_person: int | None = None,
     linkage: str = "complete",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Cluster all face embeddings into persons and update face metadata with person_id.
     Uses cosine distance (Immich-compatible scale); converted to L2 internally.
@@ -148,7 +148,7 @@ def run_clustering(
             labels = clustering.fit_predict(X)
 
     # Build old person_id -> face_ids (exclude person_unassigned for matching)
-    old_person_faces: Dict[str, Set[str]] = {}
+    old_person_faces: dict[str, set[str]] = {}
     for i, meta in enumerate(metadatas or []):
         pid = meta.get("person_id", "")
         if not pid or pid == "person_unassigned":
@@ -158,7 +158,7 @@ def run_clustering(
             old_person_faces.setdefault(pid, set()).add(fid)
 
     # Build new label -> face_ids
-    new_label_faces: Dict[int, Set[str]] = {}
+    new_label_faces: dict[int, set[str]] = {}
     for i, lb in enumerate(labels):
         if lb < 0:
             continue
@@ -168,8 +168,8 @@ def run_clustering(
 
     # Match new clusters to existing person_ids by face overlap (stable IDs across re-clusters)
     next_new_idx = _max_person_index(old_person_faces) + 1
-    used_old_ids: Set[str] = set()
-    label_to_person: Dict[int, str] = {}
+    used_old_ids: set[str] = set()
+    label_to_person: dict[int, str] = {}
 
     for lb in sorted(
         new_label_faces.keys(), key=lambda lbl: -len(new_label_faces[lbl])
@@ -225,7 +225,7 @@ def run_clustering(
     }
 
 
-def list_persons() -> List[Dict[str, Any]]:
+def list_persons() -> list[dict[str, Any]]:
     """
     List all persons: for each person_id, return name, face_count, photo_count.
     Thumbnails are not included; use GET /faces/persons/<person_id>/thumbnail.
@@ -238,7 +238,7 @@ def list_persons() -> List[Dict[str, Any]]:
     metadatas = data.get("metadatas", [])
 
     # Group by person_id
-    by_person: Dict[str, Dict[str, Any]] = {}
+    by_person: dict[str, dict[str, Any]] = {}
     names = _load_person_names()
 
     for i, meta in enumerate(metadatas or []):
@@ -283,7 +283,7 @@ def get_person_thumbnail_b64(person_id: str) -> str:
     return chroma_service.get_first_face_thumbnail_for_person(person_id)
 
 
-def get_photo_ids_for_person(person_id: str) -> List[str]:
+def get_photo_ids_for_person(person_id: str) -> list[str]:
     """Return list of photo IDs that contain this person (unique)."""
     data = chroma_service.get_all_faces(include_embeddings=False)
     if not data or not data.get("ids"):
@@ -297,6 +297,6 @@ def get_photo_ids_for_person(person_id: str) -> List[str]:
     return sorted(photo_ids)
 
 
-def get_photo_uuids_for_person(person_id: str) -> List[str]:
+def get_photo_uuids_for_person(person_id: str) -> list[str]:
     # Backward-compatible alias
     return get_photo_ids_for_person(person_id)

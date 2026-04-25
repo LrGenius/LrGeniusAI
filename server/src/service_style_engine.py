@@ -24,7 +24,7 @@ few-shot context.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from config import logger
 import service_training as training_service
@@ -71,14 +71,14 @@ def _clip_distance_to_similarity(distance: float) -> float:
 
 
 def _exposure_proximity(
-    query: Dict[str, float],
-    candidate: Dict[str, float],
+    query: dict[str, float],
+    candidate: dict[str, float],
 ) -> float:
     """Score how closely the candidate's exposure state matches the query.
 
     Compares luminance mean and contrast.  Returns 0..1 where 1 = identical.
     """
-    deltas: List[float] = []
+    deltas: list[float] = []
 
     for key in ("exp_luminance_mean", "exp_contrast", "exp_warmth_proxy"):
         q_val = query.get(key)
@@ -100,8 +100,8 @@ def _exposure_proximity(
 
 
 def _scene_overlap(
-    query_tags: List[str],
-    candidate_tags: List[str],
+    query_tags: list[str],
+    candidate_tags: list[str],
 ) -> float:
     """Jaccard-style overlap between two sets of scene tags.
 
@@ -149,9 +149,9 @@ def _tod_proximity(query_tod: str, candidate_tod: str) -> float:
 
 def calculate_composite_score(
     clip_sim: float,
-    query_exposure: Dict[str, float],
-    candidate: Dict[str, Any],
-    query_scene_tags: List[str],
+    query_exposure: dict[str, float],
+    candidate: dict[str, Any],
+    query_scene_tags: list[str],
     query_tod: str,
 ) -> float:
     """Compute weighted composite match score for one candidate."""
@@ -185,8 +185,8 @@ def calculate_composite_score(
 
 
 def interpolate_recipes(
-    winners: List[Tuple[Dict[str, Any], float]],
-) -> Dict[str, Any]:
+    winners: list[tuple[dict[str, Any], float]],
+) -> dict[str, Any]:
     """Weighted blend of canonical develop settings from the top-K winners.
 
     Args:
@@ -199,7 +199,7 @@ def interpolate_recipes(
     if total_weight <= 0:
         return {}
 
-    blended: Dict[str, float] = {}
+    blended: dict[str, float] = {}
     for example, score in winners:
         weight = score / total_weight
         canonical = example.get("canonical_settings", {})
@@ -222,10 +222,10 @@ def interpolate_recipes(
 
 
 def adaptive_compensation(
-    recipe: Dict[str, Any],
-    query_exposure: Dict[str, float],
-    winners: List[Tuple[Dict[str, Any], float]],
-) -> Dict[str, Any]:
+    recipe: dict[str, Any],
+    query_exposure: dict[str, float],
+    winners: list[tuple[dict[str, Any], float]],
+) -> dict[str, Any]:
     """Adjust the interpolated recipe to compensate for exposure differences.
 
     Example: if the new photo is 0.2 EV brighter than the training examples,
@@ -321,17 +321,17 @@ _TONE_CURVE_KEYS = {
 
 
 def _canonical_to_edit_recipe(
-    canonical: Dict[str, Any], summary: str = ""
-) -> Dict[str, Any]:
+    canonical: dict[str, Any], summary: str = ""
+) -> dict[str, Any]:
     """Convert canonical key/value dict to the edit recipe format used by the plugin."""
-    global_settings: Dict[str, Any] = {}
+    global_settings: dict[str, Any] = {}
 
     for canon_key, recipe_key in _CANONICAL_TO_RECIPE_FIELDS.items():
         if canon_key in canonical:
             global_settings[recipe_key] = canonical[canon_key]
 
     # Build parametric tone_curve if any tone-curve keys are present
-    tone_curve: Dict[str, Any] = {}
+    tone_curve: dict[str, Any] = {}
     for canon_key, tc_key in _TONE_CURVE_KEYS.items():
         if canon_key in canonical:
             tone_curve[tc_key] = canonical[canon_key]
@@ -356,12 +356,12 @@ class StyleEngineResult:
 
     def __init__(
         self,
-        recipe: Dict[str, Any],
+        recipe: dict[str, Any],
         confidence: float,
         matched_count: int,
         engine: str = "style",
-        warning: Optional[str] = None,
-        matched_filenames: Optional[List[str]] = None,
+        warning: str | None = None,
+        matched_filenames: list[str] | None = None,
     ) -> None:
         self.recipe = recipe
         self.confidence = confidence
@@ -375,9 +375,9 @@ def generate_style_edit(
     photo_id: str,
     image_bytes: bytes,
     *,
-    focal_length: Optional[float] = None,
-    capture_time_unix: Optional[float] = None,
-    clip_embedding: Optional[List[float]] = None,
+    focal_length: float | None = None,
+    capture_time_unix: float | None = None,
+    clip_embedding: list[float] | None = None,
     min_confidence: float = CONFIDENCE_LOW,
 ) -> StyleEngineResult:
     """Generate a style-matched edit recipe without an LLM.
@@ -451,7 +451,7 @@ def generate_style_edit(
     # -----------------------------------------------------------------------
     # Step 3: Re-score candidates with composite criteria
     # -----------------------------------------------------------------------
-    scored: List[Tuple[Dict[str, Any], float]] = []
+    scored: list[tuple[dict[str, Any], float]] = []
     for candidate in candidates:
         clip_sim = _clip_distance_to_similarity(candidate.get("distance", 1.0))
         score = calculate_composite_score(
@@ -513,7 +513,7 @@ def generate_style_edit(
     # -----------------------------------------------------------------------
     # Step 8: Attach appropriate warning for low confidence
     # -----------------------------------------------------------------------
-    warning: Optional[str] = None
+    warning: str | None = None
     if confidence < CONFIDENCE_LOW:
         warning = (
             f"Low style match confidence ({confidence:.0%}). "

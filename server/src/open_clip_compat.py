@@ -1,7 +1,6 @@
 # Kompatibilität für pip-open_clip: neuere HF-Tokenizer (z. B. GemmaTokenizer)
 # haben kein batch_encode_plus. Wir wrappen die Instanz und nutzen tokenizer(...).
 
-from typing import List, Union, Optional
 import torch
 
 
@@ -12,7 +11,7 @@ class _HFTokenizerWrapper:
         self._inner = inner
 
     def __call__(
-        self, texts: Union[str, List[str]], context_length: Optional[int] = None
+        self, texts: str | list[str], context_length: int | None = None
     ) -> torch.Tensor:
         if isinstance(texts, str):
             texts = [texts]
@@ -42,7 +41,7 @@ class _HFTokenizerWrapper:
             )
         return input_ids
 
-    def _clips_tokenize(self, texts: List[str], context_length: int) -> torch.Tensor:
+    def _clips_tokenize(self, texts: list[str], context_length: int) -> torch.Tensor:
         enc = self._inner.tokenizer(
             texts,
             add_special_tokens=False,

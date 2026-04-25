@@ -3,7 +3,7 @@ ChatGPT/OpenAI Provider for metadata generation using OpenAI API
 """
 
 import json
-from typing import Dict, Any
+from typing import Any, override
 from llm_provider_base import (
     LLMProviderBase,
     EditGenerationRequest,
@@ -20,7 +20,8 @@ class ChatGPTProvider(LLMProviderBase):
     Supports GPT-4o, GPT-4-turbo, and other vision-capable models.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    @override
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.api_key = config.get("api_key")
         self.timeout = config.get("timeout", 120)
@@ -40,10 +41,12 @@ class ChatGPTProvider(LLMProviderBase):
             logger.error(f"Failed to initialize OpenAI client: {e}")
             self.client = None
 
+    @override
     def is_available(self) -> bool:
         """Check if OpenAI API is configured"""
         return self.client is not None and bool(self.api_key)
 
+    @override
     def generate_metadata(
         self, request: MetadataGenerationRequest
     ) -> MetadataGenerationResponse:
@@ -178,6 +181,7 @@ class ChatGPTProvider(LLMProviderBase):
                 uuid=request.uuid, success=False, error=str(e)
             )
 
+    @override
     def generate_edit_recipe(
         self, request: EditGenerationRequest
     ) -> EditGenerationResponse:
@@ -265,7 +269,7 @@ class ChatGPTProvider(LLMProviderBase):
 
     def _prepare_openai_response_format(
         self, request: MetadataGenerationRequest
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Prepare OpenAI-style response format with JSON schema"""
         schema = self._prepare_response_structure(request)
         # Ensure the schema is strictly compliant with OpenAI requirements
@@ -280,7 +284,7 @@ class ChatGPTProvider(LLMProviderBase):
             },
         }
 
-    def _prepare_openai_edit_response_format(self) -> Dict[str, Any]:
+    def _prepare_openai_edit_response_format(self) -> dict[str, Any]:
         schema = self._prepare_edit_response_structure()
         # Ensure the schema is strictly compliant with OpenAI requirements
         schema = self._make_schema_strict(schema)
@@ -294,7 +298,7 @@ class ChatGPTProvider(LLMProviderBase):
             },
         }
 
-    def _make_schema_strict(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _make_schema_strict(self, schema: dict[str, Any]) -> dict[str, Any]:
         """
         Recursively modify a JSON schema to be strictly compliant with OpenAI Requirements:
         1. Every object must have additionalProperties: False
@@ -336,7 +340,8 @@ class ChatGPTProvider(LLMProviderBase):
 
         return schema
 
-    def list_available_models(self) -> list:
+    @override
+    def list_available_models(self) -> list[str]:
         """
         List available OpenAI models.
 

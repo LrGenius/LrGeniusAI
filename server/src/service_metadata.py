@@ -4,7 +4,7 @@ Handles provider selection, initialization, and orchestration.
 Uses lazy loading - providers are only initialized when needed.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Any
 from llm_provider_base import (
     LLMProviderBase,
     EditGenerationRequest,
@@ -40,9 +40,9 @@ class AnalysisService:
         Args:
             lazy_load: If True, only check availability. Models are loaded on first use.
         """
-        self.providers: Dict[str, LLMProviderBase] = {}
-        self.provider_status: Dict[str, str] = {}
-        self.provider_errors: Dict[str, str] = {}
+        self.providers: dict[str, LLMProviderBase] = {}
+        self.provider_status: dict[str, str] = {}
+        self.provider_errors: dict[str, str] = {}
         self.lazy_load = lazy_load
         self._initialize_providers()
 
@@ -133,7 +133,7 @@ class AnalysisService:
                 f"Metadata service ready with {len(self.providers)} provider(s): {', '.join(self.providers.keys())}"
             )
 
-    def get_available_providers(self) -> List[str]:
+    def get_available_providers(self) -> list[str]:
         """Get list of available provider names"""
         return list(self.providers.keys())
 
@@ -231,8 +231,8 @@ class AnalysisService:
         return embeddings, metadata_results
 
     def _generate_image_embeddings(
-        self, images: List[Image.Image], image_model, image_processor
-    ) -> List[Optional[List[float]]]:
+        self, images: list[Image.Image], image_model, image_processor
+    ) -> list[list[float] | None]:
         """
         Generates embeddings for all images in the batch.
         Errors are handled per image.
@@ -265,11 +265,11 @@ class AnalysisService:
 
     def _generate_metadata_batch(
         self,
-        uuids: List[str],
-        image_data: List[bytes],
+        uuids: list[str],
+        image_data: list[bytes],
         options: dict,
         exif_location_map: dict | None = None,
-    ) -> List[Optional[MetadataGenerationResponse]]:
+    ) -> list[MetadataGenerationResponse | None]:
         """
         Generates metadata for all images in the batch.
         """
@@ -507,15 +507,15 @@ class AnalysisService:
 
     def get_available_models(
         self,
-        openai_apikey: Optional[str] = None,
-        gemini_apikey: Optional[str] = None,
-        ollama_base_url: Optional[str] = None,
-        lmstudio_base_url: Optional[str] = None,
-    ) -> Dict[str, List[str]]:
+        openai_apikey: str | None = None,
+        gemini_apikey: str | None = None,
+        ollama_base_url: str | None = None,
+        lmstudio_base_url: str | None = None,
+    ) -> dict[str, list[str]]:
         """
         Return all available multimodal (vision-capable) models from all providers.
         """
-        result: Dict[str, List[str]] = {}
+        result: dict[str, list[str]] = {}
         for provider_name, provider_instance in self.providers.items():
             try:
                 if provider_name == "chatgpt" and openai_apikey:
@@ -546,7 +546,7 @@ class AnalysisService:
                 result[provider_name] = []
         return result
 
-    def get_health_status(self) -> Dict[str, Any]:
+    def get_health_status(self) -> dict[str, Any]:
         """Return health status of LLM providers."""
         return {
             "llm_providers": self.provider_status,
@@ -555,7 +555,7 @@ class AnalysisService:
 
 
 # Global service instance
-_analysis_service: Optional[AnalysisService] = None
+_analysis_service: AnalysisService | None = None
 
 
 def get_analysis_service() -> AnalysisService:
