@@ -134,19 +134,37 @@ class UpdaterGUI:
             self.update_status(total_files, total_files, "Update complete!")
 
             # Restart backend
-            try:
-                entry_point = backend_root / "src" / "geniusai_server.py"
-                if entry_point.exists():
+            entry_point = backend_root / "src" / "geniusai_server.py"
+            backend_restarted = False
+            if entry_point.exists():
+                try:
                     subprocess.Popen(
-                        [sys.executable, str(entry_point)], start_new_session=True
+                        [sys.executable, str(entry_point)],
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
                     )
-            except Exception:
-                pass
+                    backend_restarted = True
+                except Exception as e:
+                    messagebox.showwarning(
+                        "Backend Restart Failed",
+                        f"The update was applied successfully, but the backend "
+                        f"could not be restarted automatically:\n\n{e}\n\n"
+                        "Please restart Lightroom to activate the new version.",
+                    )
+            else:
+                messagebox.showwarning(
+                    "Backend Not Found",
+                    f"The update was applied successfully, but the backend entry "
+                    f"point was not found at:\n{entry_point}\n\n"
+                    "Please restart Lightroom to activate the new version.",
+                )
 
-            messagebox.showinfo(
-                "Success",
-                "LrGeniusAI has been updated successfully.\nYou can now restart Lightroom.",
-            )
+            if backend_restarted:
+                messagebox.showinfo(
+                    "Success",
+                    "LrGeniusAI has been updated successfully.\nYou can now restart Lightroom.",
+                )
             self.root.destroy()
 
         except Exception as e:
