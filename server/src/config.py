@@ -68,6 +68,7 @@ DEFAULT_METADATA_PROVIDER = "ollama"
 
 # Metadata Generation Settings
 DEFAULT_METADATA_LANGUAGE = "English"
+DEFAULT_MAX_TOKENS = 2048
 DEFAULT_KEYWORD_CATEGORIES = [
     "People",
     "Activities",

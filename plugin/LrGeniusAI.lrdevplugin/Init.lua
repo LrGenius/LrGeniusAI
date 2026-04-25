@@ -127,6 +127,10 @@ if _G.prefs.temperature == nil then
 	_G.prefs.temperature = Defaults.defaultTemperature
 end
 
+if _G.prefs.maxTokens == nil then
+	_G.prefs.maxTokens = Defaults.defaultMaxTokens
+end
+
 if _G.prefs.useKeywordHierarchy == nil then
 	_G.prefs.useKeywordHierarchy = true
 end

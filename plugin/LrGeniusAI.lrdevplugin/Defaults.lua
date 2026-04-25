@@ -22,6 +22,7 @@ Defaults.defaultBilingualKeywords = false
 Defaults.defaultKeywordSecondaryLanguage = "English"
 
 Defaults.defaultTemperature = 0.1
+Defaults.defaultMaxTokens = 2048
 
 Defaults.defaultKeywordCategories = {
 	LOC("$$$/lrc-ai-assistant/Defaults/ResponseStructure/keywords/Activities=Activities"),

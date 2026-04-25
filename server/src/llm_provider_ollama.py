@@ -17,7 +17,7 @@ from llm_provider_base import (
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger, OLLAMA_BASE_URL
+from config import logger, OLLAMA_BASE_URL, DEFAULT_MAX_TOKENS
 
 
 class OllamaProvider(LLMProviderBase):
@@ -109,6 +109,7 @@ class OllamaProvider(LLMProviderBase):
                     "temperature": request.temperature,
                     "top_p": 0.9,
                     "num_keep": -1,
+                    "num_predict": request.max_tokens or DEFAULT_MAX_TOKENS,
                 },
                 stream=False,
             )
@@ -198,6 +199,7 @@ class OllamaProvider(LLMProviderBase):
                     "temperature": request.temperature,
                     "top_p": 0.9,
                     "num_keep": -1,
+                    "num_predict": request.max_tokens or DEFAULT_MAX_TOKENS,
                 },
                 stream=False,
             )

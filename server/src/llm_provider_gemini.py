@@ -12,7 +12,7 @@ from llm_provider_base import (
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger
+from config import logger, DEFAULT_MAX_TOKENS
 from edit_recipe import GEMINI_EDIT_RECIPE_SCHEMA
 
 
@@ -116,6 +116,7 @@ class GeminiProvider(LLMProviderBase):
                 response_mime_type=generation_config.get("response_mime_type"),
                 response_schema=generation_config.get("response_schema"),
                 temperature=generation_config.get("temperature"),
+                max_output_tokens=request.max_tokens or DEFAULT_MAX_TOKENS,
                 thinking_config=thinking_config if thinking_config else None,
             )
 
@@ -337,6 +338,7 @@ class GeminiProvider(LLMProviderBase):
                 response_mime_type=generation_config.get("response_mime_type"),
                 response_schema=generation_config.get("response_schema"),
                 temperature=generation_config.get("temperature"),
+                max_output_tokens=request.max_tokens or DEFAULT_MAX_TOKENS,
                 thinking_config=thinking_config if thinking_config else None,
             )
 

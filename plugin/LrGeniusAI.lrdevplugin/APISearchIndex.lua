@@ -732,6 +732,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 		api_key = options.api_key,
 		language = options.language or (prefs and prefs.generateLanguage) or "English",
 		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
 		replace_ss = tostring(options.replace_ss or false),
 		generate_keywords = tostring(options.generate_keywords or false),
 		generate_caption = tostring(options.generate_caption or false),
@@ -840,6 +841,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 		mimeChunks,
 		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
 	)
+	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
@@ -946,6 +948,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 		mimeChunks,
 		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
 	)
+	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	table.insert(mimeChunks, { name = "replace_ss", value = tostring(options.replace_ss or false) })
 
 	-- Metadata generation options
@@ -3805,6 +3808,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("model", options.model)
 	addEditOpt("language", options.language)
 	addEditOpt("temperature", options.temperature)
+	addEditOpt("max_tokens", options.max_tokens)
 	addEditOpt("include_masks", options.include_masks)
 	addEditOpt("adjust_white_balance", options.adjust_white_balance)
 	addEditOpt("adjust_basic_tone", options.adjust_basic_tone)

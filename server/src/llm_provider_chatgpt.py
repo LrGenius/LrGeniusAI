@@ -11,7 +11,7 @@ from llm_provider_base import (
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger
+from config import logger, DEFAULT_MAX_TOKENS
 
 
 class ChatGPTProvider(LLMProviderBase):
@@ -114,6 +114,7 @@ class ChatGPTProvider(LLMProviderBase):
                 "messages": messages,
                 "response_format": response_format,
                 "temperature": temperature,
+                "max_tokens": request.max_tokens or DEFAULT_MAX_TOKENS,
             }
 
             # GPT-5 models require reasoning_effort
@@ -228,6 +229,7 @@ class ChatGPTProvider(LLMProviderBase):
                 "messages": messages,
                 "response_format": response_format,
                 "temperature": temperature,
+                "max_tokens": request.max_tokens or DEFAULT_MAX_TOKENS,
             }
             if request.model.startswith("gpt-5"):
                 completion_params["reasoning_effort"] = "low"
