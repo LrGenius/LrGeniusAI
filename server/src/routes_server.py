@@ -47,7 +47,15 @@ def update_apply():
     """
     Apply a code-only update from a manifest.
     JSON: { "manifest": {...}, "plugin_path": "/path/to/plugin" }
+    Only accepted from loopback to prevent arbitrary file-write via network.
     """
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "localhost"):
+        logger.warning(f"Rejected /update/apply from non-loopback address: {remote}")
+        return jsonify(
+            {"error": "update endpoint only available on local backend"}
+        ), 403
+
     data = request.get_json(silent=True) or {}
     manifest = data.get("manifest")
     plugin_path = data.get("plugin_path")
@@ -57,10 +65,9 @@ def update_apply():
 
     success, message = service_update.perform_code_update(manifest, plugin_path)
     if success:
-        # Trigger restart after successful update
-        # We use a short delay or just request shutdown
-        logger.info("Update successful, triggering backend restart")
-        server_lifecycle.request_shutdown()
+        # The updater thread handles backend shutdown after spawning the GUI process.
+        # Do NOT call request_shutdown() here — it would race with the response.
+        logger.info("Update process started successfully")
         return jsonify({"status": "success", "message": message})
     else:
         return jsonify({"error": message}), 500

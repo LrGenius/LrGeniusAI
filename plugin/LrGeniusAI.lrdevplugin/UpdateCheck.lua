@@ -20,6 +20,37 @@ UpdateCheck.releaseTagName = "v"
 -- Internal helpers
 -- ─────────────────────────────────────────────────────────────────────────────
 
+--- Parse a semver tag like "v2.15.0" into (major, minor, patch) numbers.
+--- Returns nil, nil, nil if the tag cannot be parsed.
+local function parseSemver(tag)
+	local v = tag:gsub("^v", "")
+	local major, minor, patch = v:match("^(%d+)%.(%d+)%.(%d+)")
+	if major then
+		return tonumber(major), tonumber(minor), tonumber(patch)
+	end
+	return nil, nil, nil
+end
+
+--- Returns true if latestTag is strictly newer than currentTag using semver.
+--- Falls back to string inequality when either tag cannot be parsed.
+local function semverIsNewer(latestTag, currentTag)
+	if latestTag == currentTag then
+		return false
+	end
+	local lMaj, lMin, lPat = parseSemver(latestTag)
+	local cMaj, cMin, cPat = parseSemver(currentTag)
+	if not lMaj or not cMaj then
+		return latestTag ~= currentTag
+	end
+	if lMaj ~= cMaj then
+		return lMaj > cMaj
+	end
+	if lMin ~= cMin then
+		return lMin > cMin
+	end
+	return lPat > cPat
+end
+
 --- Fetch and parse JSON from a URL. Returns decoded table or nil.
 local function fetchJson(url)
 	local response, headers = LrHttp.get(url)
@@ -58,7 +89,7 @@ function UpdateCheck.getLatestReleaseInfo()
 		return nil
 	end
 
-	local isNewer = (tag ~= UpdateCheck.releaseTagName)
+	local isNewer = semverIsNewer(tag, UpdateCheck.releaseTagName)
 
 	-- Look for manifest asset
 	local manifestUrl = nil

@@ -15,9 +15,10 @@ Usage (in CI):
 """
 
 import argparse
+import base64
+import datetime
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -32,11 +33,13 @@ RELEASES_BASE = "https://github.com/{repo}/releases/tag/{tag}"
 
 # Files that must NOT be updated via code-only update because they
 # affect the plugin identity / LR registration and require a full reload.
-EXCLUDE_PLUGIN_FILES = set()
+EXCLUDE_PLUGIN_FILES: set[str] = set()
 
-# Backend files that are intentionally excluded from code-only updates
-# (e.g. version_info.py is baked in at build time; requirements.txt triggers
-#  a full reinstall). These are never shipped in the manifest.
+# version_info.py is excluded from raw URL fetching because the file in the
+# repo at the tag commit still contains dev placeholders — the real values are
+# baked in by CI after checkout and are NOT committed back. Instead, the
+# manifest generator writes the correct content inline (base64-encoded) so the
+# updater can write it directly without a download.
 EXCLUDE_BACKEND_FILES = {"version_info.py"}
 
 
@@ -48,16 +51,22 @@ def sha256_of_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def sha256_of_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def collect_plugin_files(repo: str, tag: str) -> list[dict]:
     entries = []
     for ext in PLUGIN_EXTENSIONS:
-        for path in sorted(PLUGIN_DIR.glob(f"*{ext}")):
-            if path.name in EXCLUDE_PLUGIN_FILES:
+        # rglob picks up files in subdirectories too
+        for path in sorted(PLUGIN_DIR.rglob(f"*{ext}")):
+            rel = path.relative_to(PLUGIN_DIR)
+            if rel.name in EXCLUDE_PLUGIN_FILES:
                 continue
-            url = f"{RAW_BASE.format(repo=repo, tag=tag)}/{PLUGIN_DIR}/{path.name}"
+            url = f"{RAW_BASE.format(repo=repo, tag=tag)}/{PLUGIN_DIR}/{rel.as_posix()}"
             entries.append(
                 {
-                    "path": path.name,
+                    "path": rel.as_posix(),
                     "url": url,
                     "sha256": sha256_of_file(path),
                     "size": path.stat().st_size,
@@ -83,6 +92,25 @@ def collect_backend_files(repo: str, tag: str) -> list[dict]:
                 }
             )
     return entries
+
+
+def make_version_info_entry(version: str, tag: str) -> dict:
+    """
+    Generate a version_info.py entry with the correct release values embedded
+    directly as base64 content (no raw URL, which would serve dev placeholders).
+    """
+    build_date = datetime.date.today().strftime("%Y%m%d")
+    content = (
+        f'BACKEND_VERSION = "{version}"\n'
+        f'BACKEND_RELEASE_TAG = "{tag}"\n'
+        f"BACKEND_BUILD = {build_date}\n"
+    ).encode()
+    return {
+        "path": "version_info.py",
+        "content": base64.b64encode(content).decode(),
+        "sha256": sha256_of_bytes(content),
+        "size": len(content),
+    }
 
 
 def main():
@@ -119,6 +147,9 @@ def main():
 
     plugin_files = collect_plugin_files(repo, tag)
     backend_files = collect_backend_files(repo, tag)
+
+    # Append version_info.py with baked-in release values
+    backend_files.append(make_version_info_entry(version, tag))
 
     total_size = sum(f["size"] for f in plugin_files + backend_files)
 

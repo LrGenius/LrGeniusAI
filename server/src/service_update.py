@@ -7,6 +7,8 @@ import sys
 import time
 from config import logger
 
+_update_in_progress = False
+
 
 def verify_sha256(content: bytes, expected_hash: str) -> bool:
     if not expected_hash:
@@ -19,6 +21,11 @@ def perform_code_update(manifest: dict, plugin_path: str) -> tuple[bool, str]:
     """
     Spawns the external updater GUI process and returns success if it started.
     """
+    global _update_in_progress
+    if _update_in_progress:
+        return False, "An update is already in progress"
+    _update_in_progress = True
+
     try:
         backend_root = Path(__file__).parent.parent
         updater_script = backend_root / "src" / "scripts" / "updater.py"
@@ -57,5 +64,6 @@ def perform_code_update(manifest: dict, plugin_path: str) -> tuple[bool, str]:
         return True, "Update started"
 
     except Exception as e:
+        _update_in_progress = False
         logger.error(f"Error starting update: {e}", exc_info=True)
         return False, str(e)
