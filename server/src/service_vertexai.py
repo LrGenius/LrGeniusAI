@@ -6,14 +6,13 @@ Config: vertex_project_id and vertex_location from Lightroom plugin or env vars.
 
 import base64
 import os
-from typing import List, Optional
 
 from config import logger
 
 # Cache: (project, location) -> (PredictionServiceClient, endpoint_path)
 _vertex_client_cache: dict = {}
 # Last config from an index request; used by search when no explicit config is passed
-_last_vertex_config: Optional[tuple] = None  # (project, location) or None
+_last_vertex_config: tuple | None = None  # (project, location) or None
 VERTEX_EMBEDDING_DIM = 1408
 _VERTEX_MODEL_NAME = "multimodalembedding@001"
 
@@ -133,7 +132,7 @@ def _to_plain_python(value):
         return value
 
 
-def _extract_embedding(prediction_value, field_name: str) -> Optional[List[float]]:
+def _extract_embedding(prediction_value, field_name: str) -> list[float] | None:
     """Extract embedding list from prediction payload across response container types."""
     payload = _to_plain_python(prediction_value)
     if not isinstance(payload, dict):
@@ -158,8 +157,8 @@ def is_available(vertex_project_id=None, vertex_location=None) -> bool:
 
 
 def get_image_embeddings(
-    image_bytes_list: List[bytes], vertex_project_id=None, vertex_location=None
-) -> List[Optional[List[float]]]:
+    image_bytes_list: list[bytes], vertex_project_id=None, vertex_location=None
+) -> list[list[float] | None]:
     """
     Generate Vertex AI image embeddings for a list of images.
     One request per image (API limit). Returns one embedding per input; None on failure.
@@ -172,7 +171,7 @@ def get_image_embeddings(
     client, endpoint = client_and_endpoint
     from google.protobuf import struct_pb2
 
-    results: List[Optional[List[float]]] = []
+    results: list[list[float] | None] = []
     for i, img_bytes in enumerate(image_bytes_list):
         try:
             image_obj = {
@@ -240,7 +239,7 @@ def get_image_embeddings(
 
 def get_text_embedding(
     text: str, vertex_project_id=None, vertex_location=None
-) -> Optional[List[float]]:
+) -> list[float] | None:
     """
     Generate Vertex AI text embedding for a search query.
     Used when searching with the Vertex collection.

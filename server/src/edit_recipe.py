@@ -9,10 +9,10 @@ maps canonical fields onto Lightroom-specific develop keys.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any
 
 
-GLOBAL_FIELD_RANGES: Dict[str, Dict[str, float]] = {
+GLOBAL_FIELD_RANGES: dict[str, dict[str, float]] = {
     "exposure": {"min": -5.0, "max": 5.0},
     "contrast": {"min": -100.0, "max": 100.0},
     "highlights": {"min": -100.0, "max": 100.0},
@@ -46,7 +46,7 @@ GLOBAL_FIELD_RANGES: Dict[str, Dict[str, float]] = {
     "grain_roughness": {"min": 0.0, "max": 100.0},
 }
 
-MASK_ADJUSTMENT_RANGES: Dict[str, Dict[str, float]] = {
+MASK_ADJUSTMENT_RANGES: dict[str, dict[str, float]] = {
     "exposure": {"min": -5.0, "max": 5.0},
     "contrast": {"min": -100.0, "max": 100.0},
     "highlights": {"min": -100.0, "max": 100.0},
@@ -73,7 +73,7 @@ COLOR_GRADING_RANGES = {
 MASK_KINDS = ("subject", "sky", "background")
 
 
-def _number_schema(minimum: float, maximum: float) -> Dict[str, Any]:
+def _number_schema(minimum: float, maximum: float) -> dict[str, Any]:
     return {
         "type": "number",
         "minimum": minimum,
@@ -81,7 +81,7 @@ def _number_schema(minimum: float, maximum: float) -> Dict[str, Any]:
     }
 
 
-def _integer_schema(minimum: int, maximum: int) -> Dict[str, Any]:
+def _integer_schema(minimum: int, maximum: int) -> dict[str, Any]:
     return {
         "type": "integer",
         "minimum": minimum,
@@ -89,8 +89,8 @@ def _integer_schema(minimum: int, maximum: int) -> Dict[str, Any]:
     }
 
 
-def _build_hsl_schema() -> Dict[str, Any]:
-    properties: Dict[str, Any] = {}
+def _build_hsl_schema() -> dict[str, Any]:
+    properties: dict[str, Any] = {}
     for channel in HSL_CHANNELS:
         properties[channel] = {
             "type": "object",
@@ -110,8 +110,8 @@ def _build_hsl_schema() -> Dict[str, Any]:
     }
 
 
-def _build_color_grading_schema() -> Dict[str, Any]:
-    properties: Dict[str, Any] = {}
+def _build_color_grading_schema() -> dict[str, Any]:
+    properties: dict[str, Any] = {}
     for region in ("shadows", "midtones", "highlights"):
         properties[region] = {
             "type": "object",
@@ -142,8 +142,8 @@ def _build_color_grading_schema() -> Dict[str, Any]:
     }
 
 
-def _build_global_schema() -> Dict[str, Any]:
-    properties: Dict[str, Any] = {
+def _build_global_schema() -> dict[str, Any]:
+    properties: dict[str, Any] = {
         field_name: _number_schema(bounds["min"], bounds["max"])
         for field_name, bounds in GLOBAL_FIELD_RANGES.items()
     }
@@ -255,7 +255,7 @@ def _build_global_schema() -> Dict[str, Any]:
     }
 
 
-def _build_mask_schema() -> Dict[str, Any]:
+def _build_mask_schema() -> dict[str, Any]:
     adjustment_properties = {
         field_name: _number_schema(bounds["min"], bounds["max"])
         for field_name, bounds in MASK_ADJUSTMENT_RANGES.items()
@@ -281,7 +281,7 @@ def _build_mask_schema() -> Dict[str, Any]:
     }
 
 
-OPENAI_EDIT_RECIPE_SCHEMA: Dict[str, Any] = {
+OPENAI_EDIT_RECIPE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
@@ -300,10 +300,10 @@ OPENAI_EDIT_RECIPE_SCHEMA: Dict[str, Any] = {
 }
 
 
-def _convert_openai_schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
+def _convert_openai_schema_to_gemini(schema: dict[str, Any]) -> dict[str, Any]:
     schema_type = schema.get("type")
     if schema_type == "object":
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "type": "OBJECT",
             "properties": {},
         }
@@ -372,10 +372,10 @@ def _normalize_text(value: Any) -> str:
     return value.strip()
 
 
-def _normalize_warning_list(value: Any) -> List[str]:
+def _normalize_warning_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    warnings: List[str] = []
+    warnings: list[str] = []
     for item in value:
         text = _normalize_text(item)
         if text:
@@ -384,12 +384,12 @@ def _normalize_warning_list(value: Any) -> List[str]:
 
 
 def _normalize_crop_settings(
-    crop: Any, warnings: List[str] | None = None
-) -> Dict[str, float]:
+    crop: Any, warnings: list[str] | None = None
+) -> dict[str, float]:
     if not isinstance(crop, dict):
         return {}
 
-    normalized_crop: Dict[str, float] = {}
+    normalized_crop: dict[str, float] = {}
 
     # Canonical schema: left/right/top/bottom(+angle)
     has_canonical_edges = False
@@ -451,12 +451,12 @@ def _normalize_crop_settings(
 
 
 def _normalize_global_settings(
-    global_settings: Any, warnings: List[str] | None = None
-) -> Dict[str, Any]:
+    global_settings: Any, warnings: list[str] | None = None
+) -> dict[str, Any]:
     if not isinstance(global_settings, dict):
         return {}
 
-    normalized: Dict[str, Any] = {}
+    normalized: dict[str, Any] = {}
     for field_name, bounds in GLOBAL_FIELD_RANGES.items():
         if field_name not in global_settings:
             continue
@@ -491,7 +491,7 @@ def _normalize_global_settings(
 
     tone_curve = global_settings.get("tone_curve")
     if isinstance(tone_curve, dict):
-        normalized_curve: Dict[str, Any] = {}
+        normalized_curve: dict[str, Any] = {}
         for key in ("highlights", "lights", "darks", "shadows"):
             clamped = _clamp_number(tone_curve.get(key), -100.0, 100.0)
             if clamped is not None:
@@ -503,7 +503,7 @@ def _normalize_global_settings(
 
         point_curve = tone_curve.get("point_curve")
         if isinstance(point_curve, dict):
-            normalized_point_curve: Dict[str, List[int]] = {}
+            normalized_point_curve: dict[str, list[int]] = {}
             for channel in ("master", "red", "green", "blue"):
                 normalized_points = _normalize_point_curve_points(
                     point_curve.get(channel), 0.0, 255.0
@@ -515,7 +515,7 @@ def _normalize_global_settings(
 
         extended_point_curve = tone_curve.get("extended_point_curve")
         if isinstance(extended_point_curve, dict):
-            normalized_extended_curve: Dict[str, List[int]] = {}
+            normalized_extended_curve: dict[str, list[int]] = {}
             for channel in ("master", "red", "green", "blue"):
                 normalized_points = _normalize_point_curve_points(
                     extended_point_curve.get(channel), 0.0, 4096.0
@@ -529,12 +529,12 @@ def _normalize_global_settings(
 
     hsl = global_settings.get("hsl")
     if isinstance(hsl, dict):
-        normalized_hsl: Dict[str, Dict[str, float]] = {}
+        normalized_hsl: dict[str, dict[str, float]] = {}
         for channel in HSL_CHANNELS:
             channel_data = hsl.get(channel)
             if not isinstance(channel_data, dict):
                 continue
-            normalized_channel: Dict[str, float] = {}
+            normalized_channel: dict[str, float] = {}
             for key in ("hue", "saturation", "luminance"):
                 clamped = _clamp_number(channel_data.get(key), -100.0, 100.0)
                 if clamped is not None:
@@ -546,12 +546,12 @@ def _normalize_global_settings(
 
     color_grading = global_settings.get("color_grading")
     if isinstance(color_grading, dict):
-        normalized_grading: Dict[str, Any] = {}
+        normalized_grading: dict[str, Any] = {}
         for region in ("shadows", "midtones", "highlights"):
             region_data = color_grading.get(region)
             if not isinstance(region_data, dict):
                 continue
-            normalized_region: Dict[str, float] = {}
+            normalized_region: dict[str, float] = {}
             for key, bounds in COLOR_GRADING_RANGES.items():
                 clamped = _clamp_number(
                     region_data.get(key), bounds["min"], bounds["max"]
@@ -563,7 +563,7 @@ def _normalize_global_settings(
 
         global_region = color_grading.get("global")
         if isinstance(global_region, dict):
-            normalized_global_region: Dict[str, float] = {}
+            normalized_global_region: dict[str, float] = {}
             for key, bounds in {
                 "hue": {"min": 0.0, "max": 360.0},
                 "saturation": {"min": 0.0, "max": 100.0},
@@ -590,12 +590,12 @@ def _normalize_global_settings(
 
 def _normalize_point_curve_points(
     value: Any, minimum: float, maximum: float
-) -> List[int]:
+) -> list[int]:
     if not isinstance(value, list) or len(value) < 2:
         return []
 
     # Accept either flat [x1, y1, x2, y2, ...] or [{x,y}, ...] / [[x,y], ...].
-    points: List[int] = []
+    points: list[int] = []
     if value and isinstance(value[0], (dict, list, tuple)):
         for item in value:
             x_val = None
@@ -627,11 +627,11 @@ def _normalize_point_curve_points(
     return points
 
 
-def _normalize_masks(masks: Any, warnings: List[str]) -> List[Dict[str, Any]]:
+def _normalize_masks(masks: Any, warnings: list[str]) -> list[dict[str, Any]]:
     if not isinstance(masks, list):
         return []
 
-    normalized_masks: List[Dict[str, Any]] = []
+    normalized_masks: list[dict[str, Any]] = []
     for index, mask in enumerate(masks):
         if not isinstance(mask, dict):
             warnings.append(f"Ignored mask #{index + 1}: expected an object.")
@@ -649,7 +649,7 @@ def _normalize_masks(masks: Any, warnings: List[str]) -> List[Dict[str, Any]]:
             warnings.append(f"Ignored mask '{kind}': adjustments were missing.")
             continue
 
-        normalized_adjustments: Dict[str, float] = {}
+        normalized_adjustments: dict[str, float] = {}
         for field_name, bounds in MASK_ADJUSTMENT_RANGES.items():
             if field_name not in raw_adjustments:
                 continue
@@ -679,8 +679,8 @@ def _normalize_masks(masks: Any, warnings: List[str]) -> List[Dict[str, Any]]:
     return normalized_masks
 
 
-def normalize_edit_recipe(parsed_data: Any) -> Dict[str, Any]:
-    warnings: List[str] = []
+def normalize_edit_recipe(parsed_data: Any) -> dict[str, Any]:
+    warnings: list[str] = []
     if not isinstance(parsed_data, dict):
         return {
             "summary": "",
@@ -703,8 +703,8 @@ def normalize_edit_recipe(parsed_data: Any) -> Dict[str, Any]:
 
 
 def filter_edit_recipe_by_controls(
-    recipe: Dict[str, Any], controls: Dict[str, bool]
-) -> Dict[str, Any]:
+    recipe: dict[str, Any], controls: dict[str, bool]
+) -> dict[str, Any]:
     if not isinstance(recipe, dict):
         return recipe
 
@@ -714,7 +714,7 @@ def filter_edit_recipe_by_controls(
         global_settings = {}
         filtered["global"] = global_settings
 
-    def _drop(keys: List[str]) -> None:
+    def _drop(keys: list[str]) -> None:
         for key in keys:
             global_settings.pop(key, None)
 
@@ -795,7 +795,7 @@ def filter_edit_recipe_by_controls(
         if not controls.get("adjust_detail", True):
             allowed_mask_adjustments -= {"sharpness", "noise", "moire"}
 
-        kept_masks: List[Dict[str, Any]] = []
+        kept_masks: list[dict[str, Any]] = []
         for mask in masks:
             if not isinstance(mask, dict):
                 continue
