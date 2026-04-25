@@ -11,7 +11,7 @@ transformers>=4.46
 tokenizers>=0.22.0
 pillow
 ollama
-lmstudio
+lmstudio>=1.5.0
 google-genai
 google-cloud-aiplatform
 openai

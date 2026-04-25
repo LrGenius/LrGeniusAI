@@ -29,17 +29,10 @@ class LMStudioProvider(LLMProviderBase):
         # lmstudio-python's synchronous API defaults to timing out after ~60s of
         # inactivity when waiting for a response/stream event. Wire our configured
         # timeout through so metadata generation can run longer (e.g. 720s).
-        #
         # Note: this timeout is global to the lmstudio-python sync API.
         try:
-            set_sync_timeout = getattr(lms, "set_sync_api_timeout", None)
-            if callable(set_sync_timeout):
-                set_sync_timeout(self.timeout)
-                logger.info(f"LM Studio sync API timeout set to {self.timeout}s")
-            else:
-                logger.debug(
-                    "lmstudio-python set_sync_api_timeout not available; using SDK default timeout"
-                )
+            lms.set_sync_api_timeout(self.timeout)
+            logger.info(f"LM Studio sync API timeout set to {self.timeout}s")
         except Exception as e:
             logger.warning(
                 f"Failed to set lmstudio-python sync API timeout: {e}", exc_info=True

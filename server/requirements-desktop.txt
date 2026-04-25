@@ -12,7 +12,7 @@ transformers>=4.46
 tokenizers>=0.22.0
 rich
 ollama
-lmstudio
+lmstudio>=1.5.0
 pillow
 google-genai
 google-cloud-aiplatform
