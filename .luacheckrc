@@ -25,7 +25,8 @@ globals = {
     "PromptConfigProvider",
     "SearchIndexAPI",
     "SkipPhotoContextDialog",
-    "DevelopEditManager"
+    "DevelopEditManager",
+    "TaskUpdate"
 }
 
 -- Read-only Lightroom SDK namespaces

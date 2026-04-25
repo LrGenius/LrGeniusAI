@@ -731,6 +731,16 @@ jobs:
           pip install google-genai
           python3 scripts/generate_release_notes.py
 
+      - name: Generate code-only update manifest
+        run: |
+          VERSION="${{ github.ref_name }}"
+          python3 scripts/generate_update_manifest.py \
+            --version "${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --output "update-manifest-${VERSION}.json"
+          echo "Generated update-manifest-${VERSION}.json"
+          cat "update-manifest-${VERSION}.json" | python3 -c "import sys,json; m=json.load(sys.stdin); print(f'Manifest: {m[\"file_counts\"][\"plugin\"]} plugin files, {m[\"file_counts\"][\"backend_src\"]} backend files, {m[\"total_size_bytes\"]//1024} KB total')"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -741,6 +751,7 @@ jobs:
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
             artifacts/lrgenius-ai-macos-arm64/*.pkg
             artifacts/lrgenius-ai-windows-x64/*.exe
+            update-manifest-${{ github.ref_name }}.json
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

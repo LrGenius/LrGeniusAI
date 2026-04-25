@@ -1,0 +1,32 @@
+{
+    "version": "9.9.10",
+    "total_size_bytes": 17470,
+    "file_counts": {
+        "plugin": 2,
+        "backend_src": 1
+    },
+    "files": {
+        "plugin": [
+            {
+                "path": "Info.lua",
+                "url": "http://localhost:8080/plugin/Info.lua",
+                "sha256": "b76aa5cdaee89f1a438522f8fba6634264aeb6bb540226bff9002cb27fab7392",
+                "size_bytes": 3224
+            },
+            {
+                "path": "Init.lua",
+                "url": "http://localhost:8080/plugin/Init.lua",
+                "sha256": "603e035edafc4327a0be45f1e5f5082cc4bff691e4c79d20312cf6303f049873",
+                "size_bytes": 6133
+            }
+        ],
+        "backend_src": [
+            {
+                "path": "geniusai_server.py",
+                "url": "http://localhost:8080/backend_src/geniusai_server.py",
+                "sha256": "581de144dcf336cfde0ffb5278191ffde1d85d84f1a5901e336bdc4c976156ab",
+                "size_bytes": 8113
+            }
+        ]
+    }
+}

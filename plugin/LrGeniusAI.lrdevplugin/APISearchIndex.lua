@@ -69,6 +69,7 @@ local ENDPOINTS = {
 	INITIALIZE = "/initialize",
 	RESTART = "/restart",
 	HEALTH = "/health",
+	UPDATE_APPLY = "/update/apply",
 }
 
 local EXPORT_SETTINGS = {
@@ -3844,3 +3845,26 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	log:error("styleEdit unexpected status: " .. tostring(response.status))
 	return false, response.error or "Unexpected response"
 end
+
+--- Sends the update manifest and plugin path to the backend to perform a code-only update.
+--- @param manifest table
+--- @return boolean success, string|table responseOrError
+function SearchIndexAPI.applyUpdate(manifest)
+	local url = getBaseUrl() .. ENDPOINTS.UPDATE_APPLY
+	local body = {
+		manifest = manifest,
+		plugin_path = LrApplication.currentPlugin().path,
+	}
+
+	log:info("APISearchIndex: Requesting backend to apply code update...")
+	local response, err = _request("POST", url, body, 300) -- Long timeout for many files
+	if not response then
+		return false, err or "Unknown error"
+	end
+	if response.status == "success" then
+		return true, response
+	else
+		return false, response.error or "Update failed"
+	end
+end
+return SearchIndexAPI

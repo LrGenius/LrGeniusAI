@@ -6,6 +6,7 @@ import config
 from config import logger
 from service_metadata import get_analysis_service
 import service_version
+import service_update
 
 server_bp = Blueprint("server", __name__)
 
@@ -39,6 +40,37 @@ def restart():
     logger.info("Restart request received via API")
     server_lifecycle.request_shutdown()
     return jsonify({"status": "Restarting..."})
+
+
+@server_bp.route("/update/apply", methods=["POST"])
+def update_apply():
+    """
+    Apply a code-only update from a manifest.
+    JSON: { "manifest": {...}, "plugin_path": "/path/to/plugin" }
+    Only accepted from loopback to prevent arbitrary file-write via network.
+    """
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "localhost"):
+        logger.warning(f"Rejected /update/apply from non-loopback address: {remote}")
+        return jsonify(
+            {"error": "update endpoint only available on local backend"}
+        ), 403
+
+    data = request.get_json(silent=True) or {}
+    manifest = data.get("manifest")
+    plugin_path = data.get("plugin_path")
+
+    if not manifest or not plugin_path:
+        return jsonify({"error": "manifest and plugin_path are required"}), 400
+
+    success, message = service_update.perform_code_update(manifest, plugin_path)
+    if success:
+        # The updater thread handles backend shutdown after spawning the GUI process.
+        # Do NOT call request_shutdown() here — it would race with the response.
+        logger.info("Update process started successfully")
+        return jsonify({"status": "success", "message": message})
+    else:
+        return jsonify({"error": message}), 500
 
 
 @server_bp.route("/initialize", methods=["POST"])
