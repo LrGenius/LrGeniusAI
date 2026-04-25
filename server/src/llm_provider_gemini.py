@@ -4,7 +4,7 @@ Gemini Provider for metadata generation using Google Generative AI API
 
 import json
 import time
-from typing import Any
+from typing import Any, override
 from llm_provider_base import (
     LLMProviderBase,
     EditGenerationRequest,
@@ -22,6 +22,7 @@ class GeminiProvider(LLMProviderBase):
     Supports Gemini 2.0, Gemini 1.5 Pro, and other vision-capable models.
     """
 
+    @override
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.api_key = config.get("api_key")
@@ -49,10 +50,12 @@ class GeminiProvider(LLMProviderBase):
             logger.error(f"Failed to initialize Gemini client: {e}")
             self.client = None
 
+    @override
     def is_available(self) -> bool:
         """Check if Gemini API is configured"""
         return self.client is not None and bool(self.api_key)
 
+    @override
     def generate_metadata(
         self, request: MetadataGenerationRequest
     ) -> MetadataGenerationResponse:
@@ -292,6 +295,7 @@ class GeminiProvider(LLMProviderBase):
                 uuid=request.uuid, success=False, error=str(e)
             )
 
+    @override
     def generate_edit_recipe(
         self, request: EditGenerationRequest
     ) -> EditGenerationResponse:
@@ -542,6 +546,7 @@ class GeminiProvider(LLMProviderBase):
 
         return text
 
+    @override
     def list_available_models(self) -> list[str]:
         """
         List available Gemini models.
