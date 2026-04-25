@@ -51,40 +51,6 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 
 ---
 
-## ⚠️ Breaking Change: `photo_id` Migration
-
-Recent versions switched the backend identity key from Lightroom catalog UUIDs to file-based `photo_id` values.
-The stable ID algorithm was later adjusted to remain stable when metadata is written to files (for example DNG updates).
-
-If you upgrade from an older version, run a one-time migration to keep existing index/search data usable.
-
-### Recommended migration path (from Lightroom)
-
-1. Open `File -> Plug-in Manager`
-2. Open LrGeniusAI settings
-3. In `Backend Server`, click **Migrate existing DB IDs to photo_id**
-4. Wait until the progress dialog is complete
-
-The migration updates all relevant backend collections:
-
-- main image embeddings
-- vertex embeddings
-- face/person references
-
-### Identity scope note
-
-The current `photo_id` / hash / derived `canonicalId` strategy is more stable than Lightroom catalog UUIDs, but it is still not guaranteed to be 100% cross-catalog safe in every workflow.
-
-Treat backend identity as best-effort and primarily catalog-scoped for now, especially when:
-
-- the same files exist in multiple Lightroom catalogs
-- files were duplicated, re-exported, or rewritten outside Lightroom
-- the plugin had to fall back to partial file hashes because stable metadata IDs were unavailable
-
-If strict cross-catalog identity is important for your workflow, plan for re-indexing or migration checks when moving photos between catalogs or restoring older databases.
-
----
-
 ## ☁️ Google Vertex AI Login (gcloud)
 
 If you want to use Vertex AI with LrGeniusAI, run the login on the machine where `geniusai-server` is running.
@@ -209,6 +175,8 @@ To ensure code consistency, this project uses `pre-commit` hooks for automatic f
    ```
 
 Now, every time you commit, `ruff` (for Python) and `stylua` (for Lua) will automatically format and check your code.
+
+For more detailed information on how to contribute, please see our [CONTRIBUTING.md](CONTRIBUTING.md).
 
 
 ## 🤝 Credits
