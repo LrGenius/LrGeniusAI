@@ -63,6 +63,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.modelKey = prefs.modelKey -- format: "provider::model"
 	props.language = prefs.generateLanguage or "English"
 	props.temperature = prefs.temperature or 0.1
+	props.maxTokens = prefs.maxTokens or Defaults.defaultMaxTokens
 	props.replaceSS = prefs.replaceSS or false
 
 	-- Build model list from server (local providers first)
@@ -193,6 +194,19 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:static_text({
 							title = bind("temperature"),
 							width = 40,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MaxTokens=Max Tokens:"),
+							width = share("labelWidth"),
+						}),
+						f:edit_field({
+							value = bind("maxTokens"),
+							width = 80,
+							min = 256,
+							max = 32768,
+							increment = 256,
 						}),
 					}),
 					f:row({
@@ -561,6 +575,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		end
 		prefs.generateLanguage = props.language
 		prefs.temperature = props.temperature
+		prefs.maxTokens = props.maxTokens
 		prefs.submitKeywords = props.submitKeywords
 		prefs.submitFolderName = props.submitFolderName
 		prefs.showPhotoContextDialog = props.showPhotoContextDialog
@@ -725,6 +740,7 @@ LrTasks.startAsyncTask(function()
 			model = modelFromKey,
 			language = props.language,
 			temperature = props.temperature,
+			max_tokens = props.maxTokens,
 			generate_keywords = props.generateKeywords,
 			generate_caption = props.generateCaption,
 			generate_title = props.generateTitle,
