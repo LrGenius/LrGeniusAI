@@ -4,7 +4,7 @@ LM Studio Provider for metadata generation using the lmstudio-python library
 
 import json
 import lmstudio as lms
-from typing import Dict, Any
+from typing import Any
 from llm_provider_base import (
     LLMProviderBase,
     EditGenerationRequest,
@@ -21,7 +21,7 @@ class LMStudioProvider(LLMProviderBase):
     Uses the lmstudio-python library.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.host = config.get("base_url", LMSTUDIO_HOST)
         self.timeout = config.get("timeout", 720)

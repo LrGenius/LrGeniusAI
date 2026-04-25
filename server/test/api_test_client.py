@@ -7,16 +7,16 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 def call_api(
     base_url: str,
     path: str,
     method: str = "GET",
-    payload: Optional[Dict[str, Any]] = None,
+    payload: dict[str, Any] | None = None,
     timeout: float = 5.0,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     url = f"{base_url.rstrip('/')}{path}"
     data = None
     headers = {}

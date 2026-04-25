@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -36,7 +36,7 @@ EMBEDDING_DIM = (
 # Scene-type probe texts for CLIP zero-shot classification
 # ---------------------------------------------------------------------------
 
-_SCENE_PROBES: Dict[str, str] = {
+_SCENE_PROBES: dict[str, str] = {
     "scene_portrait": "a portrait photo of a person",
     "scene_landscape": "a landscape or nature photo",
     "scene_architecture": "an architectural or building photo",
@@ -87,7 +87,7 @@ def _ensure_initialized() -> None:
         logger.info("Created new edit_training collection.")
 
 
-def _dummy_embedding() -> List[float]:
+def _dummy_embedding() -> list[float]:
     return np.zeros(EMBEDDING_DIM, dtype=np.float32).tolist()
 
 
@@ -100,7 +100,7 @@ def _safe_unit(value: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-def compute_exposure_metrics(image_bytes: bytes) -> Dict[str, float]:
+def compute_exposure_metrics(image_bytes: bytes) -> dict[str, float]:
     """Compute proxy RAW exposure characteristics from an image.
 
     Returns a dict of float metrics (all 0..1 normalized) suitable for
@@ -181,7 +181,7 @@ def compute_exposure_metrics(image_bytes: bytes) -> Dict[str, float]:
 # ---------------------------------------------------------------------------
 
 
-def compute_scene_tags(image_embedding: Optional[List[float]]) -> List[str]:
+def compute_scene_tags(image_embedding: list[float] | None) -> list[str]:
     """Return list of scene-type tag strings present in the image.
 
     Uses the image CLIP embedding compared against pre-computed text embeddings
@@ -209,7 +209,7 @@ def compute_scene_tags(image_embedding: Optional[List[float]]) -> List[str]:
         )
         img_vec = F.normalize(img_vec, p=2, dim=1)
 
-        tags: List[str] = []
+        tags: list[str] = []
         tokenize_fn = getattr(clip_model, "tokenize", None) or _get_clip_tokenize()
         if tokenize_fn is None:
             return []
@@ -253,7 +253,7 @@ def _get_clip_tokenize():
 # ---------------------------------------------------------------------------
 
 
-def focal_length_bucket(focal_length_mm: Optional[float]) -> str:
+def focal_length_bucket(focal_length_mm: float | None) -> str:
     """Map focal length in mm to a categorical bucket."""
     if focal_length_mm is None:
         return "unknown"
@@ -271,7 +271,7 @@ def focal_length_bucket(focal_length_mm: Optional[float]) -> str:
     return "super_tele"
 
 
-def time_of_day_bucket(capture_unix: Optional[float]) -> str:
+def time_of_day_bucket(capture_unix: float | None) -> str:
     """Map a Unix timestamp to a categorical time-of-day bucket (local hour)."""
     if capture_unix is None:
         return "unknown"
@@ -298,7 +298,7 @@ def time_of_day_bucket(capture_unix: Optional[float]) -> str:
 # Mapping from Lightroom develop keys to canonical recipe key names used
 # by edit_recipe.GLOBAL_FIELD_RANGES.  Only numeric sliders that are safe
 # to interpolate are listed here.
-_LR_TO_CANONICAL: Dict[str, str] = {
+_LR_TO_CANONICAL: dict[str, str] = {
     "Exposure2012": "exposure",
     "Contrast2012": "contrast",
     "Highlights2012": "highlights",
@@ -325,10 +325,10 @@ _LR_TO_CANONICAL: Dict[str, str] = {
 
 
 def normalize_develop_settings_for_style(
-    develop_settings: Dict[str, Any],
-) -> Dict[str, float]:
+    develop_settings: dict[str, Any],
+) -> dict[str, float]:
     """Convert raw LR develop settings dict to canonical float form for interpolation."""
-    canonical: Dict[str, float] = {}
+    canonical: dict[str, float] = {}
     for lr_key, canon_key in _LR_TO_CANONICAL.items():
         raw = develop_settings.get(lr_key)
         if raw is not None and isinstance(raw, (int, float)):
@@ -343,20 +343,20 @@ def normalize_develop_settings_for_style(
 
 def add_training_example(
     photo_id: str,
-    develop_settings: Dict[str, Any],
-    embedding: Optional[List[float]],
+    develop_settings: dict[str, Any],
+    embedding: list[float] | None,
     *,
-    label: Optional[str] = None,
-    filename: Optional[str] = None,
-    summary: Optional[str] = None,
-    image_bytes: Optional[bytes] = None,
-    focal_length: Optional[float] = None,
-    capture_time_unix: Optional[float] = None,
-    camera_make: Optional[str] = None,
-    camera_model: Optional[str] = None,
-    iso: Optional[float] = None,
-    aperture: Optional[float] = None,
-    shutter_speed: Optional[str] = None,
+    label: str | None = None,
+    filename: str | None = None,
+    summary: str | None = None,
+    image_bytes: bytes | None = None,
+    focal_length: float | None = None,
+    capture_time_unix: float | None = None,
+    camera_make: str | None = None,
+    camera_model: str | None = None,
+    iso: float | None = None,
+    aperture: float | None = None,
+    shutter_speed: str | None = None,
 ) -> None:
     """Store or overwrite a training example.
 
@@ -386,7 +386,7 @@ def add_training_example(
     if not photo_id:
         raise ValueError("photo_id is required")
 
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "photo_id": photo_id,
         "develop_settings": json.dumps(develop_settings, ensure_ascii=False),
         "canonical_settings": json.dumps(
@@ -470,7 +470,7 @@ def get_training_count() -> int:
     return len(result.get("ids") or [])
 
 
-def list_training_examples() -> List[Dict[str, Any]]:
+def list_training_examples() -> list[dict[str, Any]]:
     """Return all training examples as a list of dicts (no embeddings)."""
     _ensure_initialized()
     if _training_collection is None:
@@ -498,7 +498,7 @@ def list_training_examples() -> List[Dict[str, Any]]:
     return examples
 
 
-def get_training_stats() -> Dict[str, Any]:
+def get_training_stats() -> dict[str, Any]:
     """Return aggregate statistics over all training examples for the style profile UI.
 
     Returns:
@@ -529,13 +529,13 @@ def get_training_stats() -> Dict[str, Any]:
     metadatas = result.get("metadatas") or []
     count = len(ids)
 
-    scene_dist: Dict[str, int] = {}
-    focal_dist: Dict[str, int] = {}
-    tod_dist: Dict[str, int] = {}
-    camera_dist: Dict[str, int] = {}
-    exp_means: List[float] = []
-    exp_contrasts: List[float] = []
-    exp_colorfulness: List[float] = []
+    scene_dist: dict[str, int] = {}
+    focal_dist: dict[str, int] = {}
+    tod_dist: dict[str, int] = {}
+    camera_dist: dict[str, int] = {}
+    exp_means: list[float] = []
+    exp_contrasts: list[float] = []
+    exp_colorfulness: list[float] = []
 
     for meta in metadatas:
         if not isinstance(meta, dict):
@@ -569,7 +569,7 @@ def get_training_stats() -> Dict[str, Any]:
     else:
         readiness = "active"
 
-    exposure_stats: Dict[str, Any] = {}
+    exposure_stats: dict[str, Any] = {}
     if exp_means:
         exposure_stats["mean_luminance"] = round(sum(exp_means) / len(exp_means), 3)
     if exp_contrasts:
@@ -594,9 +594,9 @@ def get_training_stats() -> Dict[str, Any]:
 
 
 def query_similar_training_examples(
-    query_embedding: List[float],
+    query_embedding: list[float],
     n_results: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return up to n_results training examples closest to query_embedding.
 
     Each result dict contains:
@@ -686,7 +686,7 @@ def clear_all_training_examples() -> int:
 # ---------------------------------------------------------------------------
 
 
-def _safe_json_list(value: Any) -> List[str]:
+def _safe_json_list(value: Any) -> list[str]:
     """Safely decode a JSON string to a list, returning [] on failure."""
     if isinstance(value, list):
         return [str(v) for v in value]

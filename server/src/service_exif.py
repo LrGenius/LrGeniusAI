@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import struct
 import io
-from typing import Optional
 
 from config import logger
 
@@ -119,7 +118,7 @@ def _read_iptc_from_jpeg(image_bytes: bytes) -> dict[int, str]:
     return {}
 
 
-def _dms_to_decimal(dms_tuple) -> Optional[float]:
+def _dms_to_decimal(dms_tuple) -> float | None:
     """
     Convert an EXIF DMS tuple (degrees, minutes, seconds) to decimal degrees.
     Each element may be an IFDRational, a tuple (num, den), or a plain number.
@@ -138,7 +137,7 @@ def _dms_to_decimal(dms_tuple) -> Optional[float]:
         return None
 
 
-def _read_gps_from_exif(image_bytes: bytes) -> tuple[Optional[float], Optional[float]]:
+def _read_gps_from_exif(image_bytes: bytes) -> tuple[float | None, float | None]:
     """
     Read GPS latitude and longitude from JPEG EXIF using Pillow.
     Returns (latitude, longitude) as floats, or (None, None) on failure.
@@ -191,7 +190,7 @@ def _read_gps_from_exif(image_bytes: bytes) -> tuple[Optional[float], Optional[f
         return None, None
 
 
-def extract_location_tags(image_bytes: bytes) -> Optional[dict]:
+def extract_location_tags(image_bytes: bytes) -> dict | None:
     """
     Extract all relevant location tags from a JPEG's IPTC/EXIF metadata.
 
@@ -238,7 +237,7 @@ def extract_location_tags(image_bytes: bytes) -> Optional[dict]:
     return result
 
 
-def format_location_for_prompt(location_data: dict) -> Optional[str]:
+def format_location_for_prompt(location_data: dict) -> str | None:
     """
     Format extracted location data into a human-readable string for the LLM prompt.
 

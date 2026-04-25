@@ -3,7 +3,7 @@ Ollama Provider for metadata generation using the official Ollama Python SDK
 """
 
 import json
-from typing import Dict, Any, Optional
+from typing import Any
 
 try:
     from ollama import Client  # type: ignore
@@ -26,7 +26,7 @@ class OllamaProvider(LLMProviderBase):
     Uses Ollama's chat completion API with vision models.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.base_url = config.get("base_url", OLLAMA_BASE_URL)
         self.timeout = config.get("timeout", 120)
@@ -56,7 +56,7 @@ class OllamaProvider(LLMProviderBase):
             logger.warning(f"Ollama not available at {self.base_url}: {e}")
             return False
 
-    def _get_client(self, base_url_override: Optional[str] = None):
+    def _get_client(self, base_url_override: str | None = None):
         """Get Ollama client, using base_url_override when provided (e.g. from request)."""
         url = base_url_override or self.base_url
         return Client(host=url) if Client else None

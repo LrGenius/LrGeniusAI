@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import base64
-from typing import List, Dict, Any
+from typing import Any
 
 import os
 import numpy as np
@@ -77,7 +77,7 @@ def _compute_face_sharpness(crop_rgb: np.ndarray) -> float:
 
 
 def _compute_eye_openness_proxy(
-    crop_rgb: np.ndarray, bbox_list: List[int], keypoints
+    crop_rgb: np.ndarray, bbox_list: list[int], keypoints
 ) -> float:
     """
     Lightweight proxy for eye openness using vertical gradient energy near eye landmarks.
@@ -154,7 +154,7 @@ def _compute_occlusion_proxy(
     )
 
 
-def detect_faces(image_bytes: bytes) -> List[Dict[str, Any]]:
+def detect_faces(image_bytes: bytes) -> list[dict[str, Any]]:
     """
     Detect faces in an image and return embedding, thumbnail, and quality metadata.
 

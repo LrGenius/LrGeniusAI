@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any, Union
+from typing import Any
 from dataclasses import dataclass
 import base64
 from PIL import Image
@@ -21,7 +21,7 @@ class MetadataGenerationRequest:
     # Provider selection and model configuration
     provider: str
     model: str
-    api_key: Optional[str]
+    api_key: str | None
 
     # Generation options (what to generate)
     generate_keywords: bool
@@ -34,35 +34,35 @@ class MetadataGenerationRequest:
 
     # LLM parameters
     temperature: float
-    max_tokens: Optional[int]
+    max_tokens: int | None
 
     # System and user prompts (can override defaults)
-    system_prompt: Optional[str]
-    user_prompt: Optional[str]
+    system_prompt: str | None
+    user_prompt: str | None
 
     # Context flags (whether to include additional context)
     submit_keywords: bool
     submit_folder_names: bool
 
     # Optional context data
-    existing_keywords: Optional[List[str]]
+    existing_keywords: list[str] | None
     # Reverse-geocoded location data extracted from JPEG EXIF/IPTC by the backend.
     # Keys: city, state, country, location, country_code, gps_latitude, gps_longitude
-    location_data: Optional[Dict[str, Any]] = None
-    folder_names: Optional[str] = None
-    user_context: Optional[str] = None
-    date_time: Optional[str] = None
+    location_data: dict[str, Any] | None = None
+    folder_names: str | None = None
+    user_context: str | None = None
+    date_time: str | None = None
 
     # Keyword hierarchy for structured output
     # Can be either a flat list of strings: ["People", "Activities"]
     # Or a nested dict: {"People": {"Family": {}, "Friends": {}}, "Activities": {}}
-    keyword_categories: Optional[Union[List[str], Dict[str, Any]]] = None
+    keyword_categories: list[str] | dict[str, Any] | None = None
     bilingual_keywords: bool = False
-    keyword_secondary_language: Optional[str] = None
+    keyword_secondary_language: str | None = None
 
     # Provider-specific overrides (e.g. Ollama/LM Studio on remote host)
-    ollama_base_url: Optional[str] = None
-    lmstudio_base_url: Optional[str] = None
+    ollama_base_url: str | None = None
+    lmstudio_base_url: str | None = None
 
 
 @dataclass
@@ -73,18 +73,18 @@ class MetadataGenerationResponse:
     success: bool
 
     # Generated metadata
-    keywords: Optional[dict[str, str]] = None
-    caption: Optional[str] = None
-    title: Optional[str] = None
-    alt_text: Optional[str] = None
+    keywords: dict[str, str] | None = None
+    caption: str | None = None
+    title: str | None = None
+    alt_text: str | None = None
 
     # Token usage for tracking
     input_tokens: int = 0
     output_tokens: int = 0
 
     # Error information
-    error: Optional[str] = None
-    warning: Optional[str] = None
+    error: str | None = None
+    warning: str | None = None
 
 
 @dataclass
@@ -96,26 +96,26 @@ class EditGenerationRequest:
 
     provider: str
     model: str
-    api_key: Optional[str]
+    api_key: str | None
 
     language: str
     temperature: float
-    max_tokens: Optional[int]
+    max_tokens: int | None
 
-    system_prompt: Optional[str]
-    user_prompt: Optional[str]
+    system_prompt: str | None
+    user_prompt: str | None
 
     submit_keywords: bool
     submit_folder_names: bool
 
-    existing_keywords: Optional[List[str]]
+    existing_keywords: list[str] | None
     # Reverse-geocoded location data extracted from JPEG EXIF/IPTC by the backend.
     # Keys: city, state, country, location, country_code, gps_latitude, gps_longitude
-    location_data: Optional[Dict[str, Any]] = None
-    folder_names: Optional[str] = None
-    user_context: Optional[str] = None
-    date_time: Optional[str] = None
-    edit_intent: Optional[str] = None
+    location_data: dict[str, Any] | None = None
+    folder_names: str | None = None
+    user_context: str | None = None
+    date_time: str | None = None
+    edit_intent: str | None = None
     style_strength: float = 0.5
     include_masks: bool = True
     adjust_white_balance: bool = True
@@ -130,9 +130,9 @@ class EditGenerationRequest:
     adjust_lens_corrections: bool = True
     allow_auto_crop: bool = True
     composition_mode: str = "subtle"
-    ollama_base_url: Optional[str] = None
-    lmstudio_base_url: Optional[str] = None
-    training_examples: Optional[List[Dict[str, Any]]] = None
+    ollama_base_url: str | None = None
+    lmstudio_base_url: str | None = None
+    training_examples: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -141,11 +141,11 @@ class EditGenerationResponse:
 
     uuid: str
     success: bool
-    recipe: Optional[Dict[str, Any]] = None
+    recipe: dict[str, Any] | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    error: Optional[str] = None
-    warning: Optional[str] = None
+    error: str | None = None
+    warning: str | None = None
 
 
 class LLMProviderBase(ABC):
@@ -154,7 +154,7 @@ class LLMProviderBase(ABC):
     Each provider (Qwen, Ollama, LM Studio, ChatGPT, Gemini) implements this interface.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize provider with configuration.
 
@@ -341,7 +341,7 @@ class LLMProviderBase(ABC):
             "When local edits are useful, use only supported mask kinds: subject, sky, background."
         )
 
-    def _format_training_example(self, idx: int, example: Dict[str, Any]) -> str:
+    def _format_training_example(self, idx: int, example: dict[str, Any]) -> str:
         """Serialise one training example into a compact prompt-friendly string."""
         dev = example.get("develop_settings", {})
         label = example.get("label") or example.get("filename") or f"Example {idx}"
@@ -462,7 +462,7 @@ class LLMProviderBase(ABC):
             elif composition_mode == "aggressive":
                 base_prompt += "* Crop may be assertive when composition clearly improves; keep key subjects and avoid awkward cutoffs\n"
 
-        context_additions: List[str] = []
+        context_additions: list[str] = []
         if request.edit_intent:
             context_additions.append(f"Requested editing intent: {request.edit_intent}")
         strength = request.style_strength
@@ -533,8 +533,8 @@ class LLMProviderBase(ABC):
         return base_prompt
 
     def _build_nested_keyword_schema(
-        self, categories: Dict[str, Any], bilingual: bool = False
-    ) -> Dict[str, Any]:
+        self, categories: dict[str, Any], bilingual: bool = False
+    ) -> dict[str, Any]:
         """
         Recursively build JSON schema for nested keyword categories.
 
@@ -570,7 +570,7 @@ class LLMProviderBase(ABC):
 
         return schema
 
-    def _keyword_leaf_item_schema(self, request_bilingual: bool) -> Dict[str, Any]:
+    def _keyword_leaf_item_schema(self, request_bilingual: bool) -> dict[str, Any]:
         if not request_bilingual:
             return {"type": "string"}
 
@@ -585,8 +585,8 @@ class LLMProviderBase(ABC):
         }
 
     def _flatten_keyword_categories(
-        self, categories: Union[List[str], Dict[str, Any]]
-    ) -> List[str]:
+        self, categories: list[str] | dict[str, Any]
+    ) -> list[str]:
         """
         Flatten nested keyword categories to a simple list.
         Used for context in the prompt if needed.
@@ -613,7 +613,7 @@ class LLMProviderBase(ABC):
 
     def _prepare_response_structure(
         self, request: MetadataGenerationRequest
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Prepare JSON schema for structured output.
         Different providers have different formats (OpenAI vs Gemini).
@@ -671,7 +671,7 @@ class LLMProviderBase(ABC):
 
     def _normalize_keyword_leaf(
         self, value: Any
-    ) -> Optional[Union[str, Dict[str, Any]]]:
+    ) -> str | dict[str, Any] | None:
         if isinstance(value, str):
             keyword = value.strip()
             return keyword or None
@@ -685,7 +685,7 @@ class LLMProviderBase(ABC):
             normalized = {"name": keyword_name}
             synonyms = value.get("synonyms")
             if isinstance(synonyms, list):
-                cleaned_synonyms: List[str] = []
+                cleaned_synonyms: list[str] = []
                 seen = set()
                 for synonym in synonyms:
                     if not isinstance(synonym, str):
@@ -705,7 +705,7 @@ class LLMProviderBase(ABC):
 
     def _normalize_keywords_structure(self, value: Any) -> Any:
         if isinstance(value, list):
-            normalized_list: List[Any] = []
+            normalized_list: list[Any] = []
             for item in value:
                 normalized_leaf = self._normalize_keyword_leaf(item)
                 if normalized_leaf is not None:
@@ -720,7 +720,7 @@ class LLMProviderBase(ABC):
             if "name" in value and isinstance(value.get("name"), str):
                 return self._normalize_keyword_leaf(value)
 
-            normalized_dict: Dict[str, Any] = {}
+            normalized_dict: dict[str, Any] = {}
             for key, item in value.items():
                 normalized_item = self._normalize_keywords_structure(item)
                 if normalized_item in (None, {}, []):
@@ -731,10 +731,10 @@ class LLMProviderBase(ABC):
         normalized_leaf = self._normalize_keyword_leaf(value)
         return normalized_leaf
 
-    def _prepare_edit_response_structure(self) -> Dict[str, Any]:
+    def _prepare_edit_response_structure(self) -> dict[str, Any]:
         return OPENAI_EDIT_RECIPE_SCHEMA
 
-    def _normalize_edit_recipe(self, value: Any) -> Dict[str, Any]:
+    def _normalize_edit_recipe(self, value: Any) -> dict[str, Any]:
         return normalize_edit_recipe(value)
 
     def _image_to_base64(self, image_data: bytes) -> str:

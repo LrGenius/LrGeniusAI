@@ -4,7 +4,7 @@ Gemini Provider for metadata generation using Google Generative AI API
 
 import json
 import time
-from typing import Dict, Any
+from typing import Any
 from llm_provider_base import (
     LLMProviderBase,
     EditGenerationRequest,
@@ -22,7 +22,7 @@ class GeminiProvider(LLMProviderBase):
     Supports Gemini 2.0, Gemini 1.5 Pro, and other vision-capable models.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         self.api_key = config.get("api_key")
         self.timeout = config.get("timeout", 300)
@@ -418,7 +418,7 @@ class GeminiProvider(LLMProviderBase):
 
     def _prepare_gemini_generation_config(
         self, request: MetadataGenerationRequest
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Prepare Gemini-specific generation config"""
         schema = self._prepare_gemini_response_schema(request)
 
@@ -430,7 +430,7 @@ class GeminiProvider(LLMProviderBase):
 
     def _prepare_gemini_edit_generation_config(
         self, request: EditGenerationRequest
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "response_mime_type": "application/json",
             "response_schema": GEMINI_EDIT_RECIPE_SCHEMA,
@@ -439,7 +439,7 @@ class GeminiProvider(LLMProviderBase):
 
     def _prepare_gemini_response_schema(
         self, request: MetadataGenerationRequest
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Prepare Gemini-style response schema (uses different format than OpenAI)"""
         schema = {
             "type": "OBJECT",  # Gemini uses uppercase
@@ -486,8 +486,8 @@ class GeminiProvider(LLMProviderBase):
         return schema
 
     def _build_nested_gemini_keyword_schema(
-        self, categories: Dict[str, Any], bilingual: bool = False
-    ) -> Dict[str, Any]:
+        self, categories: dict[str, Any], bilingual: bool = False
+    ) -> dict[str, Any]:
         """
         Recursively build Gemini JSON schema for nested keyword categories.
 
@@ -514,7 +514,7 @@ class GeminiProvider(LLMProviderBase):
 
         return schema
 
-    def _gemini_keyword_leaf_item_schema(self, bilingual: bool) -> Dict[str, Any]:
+    def _gemini_keyword_leaf_item_schema(self, bilingual: bool) -> dict[str, Any]:
         if not bilingual:
             return {"type": "STRING"}
 
