@@ -5,7 +5,7 @@ import json
 from flask import Blueprint, jsonify, request
 
 from config import logger
-from routes_index import _extract_options, _extract_photo_ids
+from routes.index import _extract_options, _extract_photo_ids
 from services import chroma as chroma_service
 from services.metadata import get_analysis_service
 

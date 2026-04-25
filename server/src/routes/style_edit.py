@@ -16,11 +16,11 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from config import logger
-from routes_index import _extract_options, _extract_photo_ids
+from routes.index import _extract_options, _extract_photo_ids
 from services import chroma as chroma_service
 from services import style_engine as style_engine
 from services.style_engine import CONFIDENCE_LOW
-from routes_edit import _persist_edit_recipe, _success_payload
+from routes.edit import _persist_edit_recipe, _success_payload
 
 style_edit_bp = Blueprint("style_edit", __name__)
 

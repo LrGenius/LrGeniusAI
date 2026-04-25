@@ -1,6 +1,6 @@
 import unittest
 
-from routes_index import _extract_options
+from routes.index import _extract_options
 
 
 class ExtractOptionsTests(unittest.TestCase):

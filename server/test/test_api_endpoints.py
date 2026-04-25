@@ -46,7 +46,7 @@ def test_version_check(client):
 
 
 def test_db_stats(client, mocker):
-    mocker.patch("routes_db.service_db.get_database_stats", return_value={"total": 0})
+    mocker.patch("routes.db.service_db.get_database_stats", return_value={"total": 0})
     response = client.get("/db/stats")
     assert response.status_code == 200
     assert response.get_json() == {"total": 0}
@@ -54,7 +54,7 @@ def test_db_stats(client, mocker):
 
 def test_get_ids(client, mocker):
     mocker.patch(
-        "routes_index.chroma_service.get_all_image_ids", return_value=["id1", "id2"]
+        "routes.index.chroma_service.get_all_image_ids", return_value=["id1", "id2"]
     )
     response = client.get("/get/ids")
     assert response.status_code == 200
@@ -65,7 +65,7 @@ def test_get_ids(client, mocker):
 
 
 def test_search(client, mocker):
-    mocker.patch("routes_search.service_search.search_images", return_value=([], None))
+    mocker.patch("routes.search.service_search.search_images", return_value=([], None))
     response = client.post("/search", json={"term": "test search", "max_results": 5})
     assert response.status_code == 200
     assert response.get_json() == {"results": []}
@@ -73,7 +73,7 @@ def test_search(client, mocker):
 
 def test_find_similar(client, mocker):
     mocker.patch(
-        "routes_search.service_search.find_similar_images", return_value=([], None)
+        "routes.search.service_search.find_similar_images", return_value=([], None)
     )
     response = client.post(
         "/find_similar", json={"photo_id": "test_id", "max_results": 5}
@@ -85,7 +85,7 @@ def test_find_similar(client, mocker):
 
 def test_group_similar(client, mocker):
     mocker.patch(
-        "routes_search.service_search.group_similar_images", return_value=([], None)
+        "routes.search.service_search.group_similar_images", return_value=([], None)
     )
     response = client.post("/group_similar", json={"photo_ids": ["id1", "id2"]})
     assert response.status_code == 200
@@ -111,9 +111,9 @@ def test_edit(client, mocker):
     mock_service.generate_edit_recipe_single.return_value = mock_response
     mock_response.warning = None
     mock_response.error = None
-    mocker.patch("routes_edit.get_analysis_service", return_value=mock_service)
-    mocker.patch("routes_edit.chroma_service.get_image", return_value=None)
-    mocker.patch("routes_edit.chroma_service.add_image")
+    mocker.patch("routes.edit.get_analysis_service", return_value=mock_service)
+    mocker.patch("routes.edit.chroma_service.get_image", return_value=None)
+    mocker.patch("routes.edit.chroma_service.add_image")
 
     data = {"photo_id": ["id1"], "options": "{}"}
     response = client.post(
@@ -134,9 +134,9 @@ def test_edit_base64(client, mocker):
     mock_service.generate_edit_recipe_single.return_value = mock_response
     mock_response.warning = None
     mock_response.error = None
-    mocker.patch("routes_edit.get_analysis_service", return_value=mock_service)
-    mocker.patch("routes_edit.chroma_service.get_image", return_value=None)
-    mocker.patch("routes_edit.chroma_service.add_image")
+    mocker.patch("routes.edit.get_analysis_service", return_value=mock_service)
+    mocker.patch("routes.edit.chroma_service.get_image", return_value=None)
+    mocker.patch("routes.edit.chroma_service.add_image")
 
     response = client.post(
         "/edit_base64",
@@ -153,7 +153,7 @@ def test_edit_base64(client, mocker):
 
 
 def test_index_unprocessed(client, mocker):
-    mocker.patch("routes_index.get_photo_ids_needing_processing", return_value=["id2"])
+    mocker.patch("routes.index.get_photo_ids_needing_processing", return_value=["id2"])
     response = client.post(
         "/index/check-unprocessed", json={"photo_ids": ["id1", "id2"]}
     )
@@ -163,9 +163,9 @@ def test_index_unprocessed(client, mocker):
 
 
 def test_remove(client, mocker):
-    mocker.patch("routes_index.chroma_service.delete_image", return_value=True)
+    mocker.patch("routes.index.chroma_service.delete_image", return_value=True)
     mocker.patch(
-        "routes_index.chroma_service.delete_faces_by_photo_uuid", return_value=True
+        "routes.index.chroma_service.delete_faces_by_photo_uuid", return_value=True
     )
     response = client.post("/remove", json={"photo_id": "id1"})
     assert response.status_code == 200
@@ -176,12 +176,12 @@ def test_remove(client, mocker):
 
 def test_faces_query(client, mocker):
     mocker.patch(
-        "routes_faces.face_service.detect_faces",
+        "routes.faces.face_service.detect_faces",
         return_value=[{"embedding": [0.1, 0.2]}],
     )
     # Based on routes_faces implementation
     mocker.patch(
-        "routes_faces.chroma_service.query_faces",
+        "routes.faces.chroma_service.query_faces",
         return_value={
             "ids": [["f1"]],
             "distances": [[0.5]],
@@ -200,14 +200,14 @@ def test_faces_query(client, mocker):
 
 def test_faces_cluster(client, mocker):
     mocker.patch(
-        "routes_faces.persons_service.run_clustering", return_value={"summary": "ok"}
+        "routes.faces.persons_service.run_clustering", return_value={"summary": "ok"}
     )
     response = client.post("/faces/cluster")
     assert response.status_code == 200
 
 
 def test_list_persons(client, mocker):
-    mocker.patch("routes_faces.persons_service.list_persons", return_value=[])
+    mocker.patch("routes.faces.persons_service.list_persons", return_value=[])
     response = client.get("/faces/persons")
     assert response.status_code == 200
 
@@ -216,10 +216,10 @@ def test_list_persons(client, mocker):
 
 
 def test_training_add(client, mocker):
-    mocker.patch("routes_training.training_service.add_training_example")
-    mocker.patch("routes_training.training_service.get_training_count", return_value=1)
+    mocker.patch("routes.training.training_service.add_training_example")
+    mocker.patch("routes.training.training_service.get_training_count", return_value=1)
     # Bypass CLIP embedding for simplicity in smoke test
-    mocker.patch("routes_training._compute_clip_embedding", return_value=None)
+    mocker.patch("routes.training._compute_clip_embedding", return_value=None)
 
     response = client.post(
         "/training/add",
@@ -231,7 +231,7 @@ def test_training_add(client, mocker):
 
 def test_training_list(client, mocker):
     mocker.patch(
-        "routes_training.training_service.list_training_examples", return_value=[]
+        "routes.training.training_service.list_training_examples", return_value=[]
     )
     response = client.get("/training/list")
     assert response.status_code == 200
@@ -239,7 +239,7 @@ def test_training_list(client, mocker):
 
 
 def test_training_count(client, mocker):
-    mocker.patch("routes_training.training_service.get_training_count", return_value=5)
+    mocker.patch("routes.training.training_service.get_training_count", return_value=5)
     response = client.get("/training/count")
     assert response.status_code == 200
     assert response.get_json()["count"] == 5
@@ -247,9 +247,9 @@ def test_training_count(client, mocker):
 
 def test_training_delete(client, mocker):
     mocker.patch(
-        "routes_training.training_service.delete_training_example", return_value=True
+        "routes.training.training_service.delete_training_example", return_value=True
     )
-    mocker.patch("routes_training.training_service.get_training_count", return_value=4)
+    mocker.patch("routes.training.training_service.get_training_count", return_value=4)
     response = client.delete("/training/test_id")
     assert response.status_code == 200
 
@@ -259,23 +259,23 @@ def test_training_delete(client, mocker):
 
 def test_db_backup(client, mocker):
     mocker.patch(
-        "routes_db.service_db.build_backup_zip",
+        "routes.db.service_db.build_backup_zip",
         return_value=("fake_path.zip", "backup.zip"),
     )
     # Mock send_file to avoid FileNotFoundError in test environment
     mocker.patch(
-        "routes_db.send_file",
+        "routes.db.send_file",
         return_value=app.response_class("fake content", mimetype="application/zip"),
     )
     # Mock os.remove to avoid errors when the after_this_request handler runs
-    mocker.patch("routes_db.os.remove")
+    mocker.patch("routes.db.os.remove")
     response = client.get("/db/backup")
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "application/zip"
 
 
 def test_db_migrate_photo_ids(client, mocker):
-    mocker.patch("routes_db.service_db.migrate_photo_ids", return_value={"updated": 1})
+    mocker.patch("routes.db.service_db.migrate_photo_ids", return_value={"updated": 1})
     response = client.post("/db/migrate-photo-ids", json={"test": "mapping"})
     assert response.status_code == 200
 
@@ -284,7 +284,7 @@ def test_db_migrate_photo_ids(client, mocker):
 
 
 def test_clip_status(client, mocker):
-    mocker.patch("routes_clip.is_model_cached", return_value=True)
+    mocker.patch("routes.clip.is_model_cached", return_value=True)
     response = client.get("/clip/status")
     assert response.status_code == 200
     assert response.get_json()["clip"] == "ready"
@@ -295,7 +295,7 @@ def test_clip_status(client, mocker):
 
 def test_import_metadata(client, mocker):
     mocker.patch(
-        "routes_import.import_service.import_metadata_task", return_value=(1, 0)
+        "routes.import_.import_service.import_metadata_task", return_value=(1, 0)
     )
     response = client.post(
         "/import/metadata", json={"metadata_items": [{"photo_id": "p1"}]}
@@ -311,7 +311,7 @@ def test_health(client, mocker):
     mocker.patch("server_lifecycle.get_health_status", return_value={"clip": "ok"})
     mock_service = MagicMock()
     mock_service.get_health_status.return_value = {"llm": "ok"}
-    mocker.patch("routes_server.get_analysis_service", return_value=mock_service)
+    mocker.patch("routes.server.get_analysis_service", return_value=mock_service)
     mocker.patch("services.face._get_face_app")
 
     response = client.get("/health")
@@ -324,7 +324,7 @@ def test_health(client, mocker):
 def test_models(client, mocker):
     mock_service = MagicMock()
     mock_service.get_available_models.return_value = {"chatgpt": ["gpt-4"]}
-    mocker.patch("routes_server.get_analysis_service", return_value=mock_service)
+    mocker.patch("routes.server.get_analysis_service", return_value=mock_service)
 
     response = client.get("/models")
     assert response.status_code == 200
