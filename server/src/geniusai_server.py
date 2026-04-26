@@ -8,25 +8,25 @@ import json
 
 # Import modularized components
 from config import logger, args, DB_PATH
-from service_version import get_backend_version_info
+from services.version import get_backend_version_info
 
 # Lazy import server_lifecycle to speed up startup
 import server_lifecycle
 
 # Import blueprints only (services are imported by routes when needed)
-from routes_index import index_bp
-from routes_edit import edit_bp
-from routes_search import search_bp
-from routes_server import server_bp
-from routes_db import db_bp
-from routes_import import import_bp
-from routes_clip import clip_bp
-from routes_faces import faces_bp
-from routes_training import training_bp
-from routes_style_edit import style_edit_bp
-import service_chroma
-import service_persons
-import service_db
+from routes.index import index_bp
+from routes.edit import edit_bp
+from routes.search import search_bp
+from routes.server import server_bp
+from routes.db import db_bp
+from routes.import_ import import_bp
+from routes.clip import clip_bp
+from routes.faces import faces_bp
+from routes.training import training_bp
+from routes.style_edit import style_edit_bp
+from services import chroma as service_chroma
+from services import persons as service_persons
+from services import db as service_db
 
 app = Flask(__name__)
 logger.info("Flask app created")

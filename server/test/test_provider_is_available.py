@@ -9,8 +9,8 @@ user-visible consequences.
 
 
 def test_ollama_is_available_returns_false_when_sdk_missing(mocker):
-    mocker.patch("llm_provider_ollama.Client", None)
-    from llm_provider_ollama import OllamaProvider
+    mocker.patch("providers.ollama.Client", None)
+    from providers.ollama import OllamaProvider
 
     provider = OllamaProvider({})
     assert provider.is_available() is False
@@ -21,9 +21,9 @@ def test_ollama_is_available_returns_false_when_sdk_raises(mocker):
     fake_client_class.return_value.list.side_effect = ConnectionError(
         "connection refused"
     )
-    mocker.patch("llm_provider_ollama.Client", fake_client_class)
+    mocker.patch("providers.ollama.Client", fake_client_class)
 
-    from llm_provider_ollama import OllamaProvider
+    from providers.ollama import OllamaProvider
 
     provider = OllamaProvider({})
     assert provider.is_available() is False
@@ -32,9 +32,9 @@ def test_ollama_is_available_returns_false_when_sdk_raises(mocker):
 def test_ollama_is_available_returns_true_when_sdk_responds(mocker):
     fake_client_class = mocker.MagicMock()
     fake_client_class.return_value.list.return_value = {"models": []}
-    mocker.patch("llm_provider_ollama.Client", fake_client_class)
+    mocker.patch("providers.ollama.Client", fake_client_class)
 
-    from llm_provider_ollama import OllamaProvider
+    from providers.ollama import OllamaProvider
 
     provider = OllamaProvider({})
     assert provider.is_available() is True
@@ -44,8 +44,8 @@ def test_ollama_is_available_returns_true_when_sdk_responds(mocker):
 
 
 def test_lmstudio_is_available_rejects_host_without_colon(mocker):
-    fake_lms = mocker.patch("llm_provider_lmstudio.lms")
-    from llm_provider_lmstudio import LMStudioProvider
+    fake_lms = mocker.patch("providers.lmstudio.lms")
+    from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({"base_url": "no-colon-here"})
     assert provider.is_available() is False
@@ -55,26 +55,26 @@ def test_lmstudio_is_available_rejects_host_without_colon(mocker):
 
 
 def test_lmstudio_is_available_rejects_empty_host(mocker):
-    mocker.patch("llm_provider_lmstudio.lms")
-    from llm_provider_lmstudio import LMStudioProvider
+    mocker.patch("providers.lmstudio.lms")
+    from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({"base_url": ""})
     assert provider.is_available() is False
 
 
 def test_lmstudio_is_available_returns_false_on_sdk_exception(mocker):
-    fake_lms = mocker.patch("llm_provider_lmstudio.lms")
+    fake_lms = mocker.patch("providers.lmstudio.lms")
     fake_lms.Client.is_valid_api_host.side_effect = RuntimeError("sdk borked")
-    from llm_provider_lmstudio import LMStudioProvider
+    from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({"base_url": "host:1234"})
     assert provider.is_available() is False
 
 
 def test_lmstudio_is_available_returns_sdk_result(mocker):
-    fake_lms = mocker.patch("llm_provider_lmstudio.lms")
+    fake_lms = mocker.patch("providers.lmstudio.lms")
     fake_lms.Client.is_valid_api_host.return_value = True
-    from llm_provider_lmstudio import LMStudioProvider
+    from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({"base_url": "host:1234"})
     assert provider.is_available() is True

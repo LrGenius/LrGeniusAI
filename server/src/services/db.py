@@ -1,5 +1,5 @@
-import service_chroma as chroma_service
-import service_persons as persons_service
+from . import chroma as chroma_service
+from . import persons as persons_service
 from config import logger, DB_PATH
 
 import os

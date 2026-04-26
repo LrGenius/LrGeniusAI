@@ -16,11 +16,11 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from config import logger
-from routes_index import _extract_options, _extract_photo_ids
-import service_chroma as chroma_service
-import service_style_engine as style_engine
-from service_style_engine import CONFIDENCE_LOW
-from routes_edit import _persist_edit_recipe, _success_payload
+from routes.index import _extract_options, _extract_photo_ids
+from services import chroma as chroma_service
+from services import style_engine as style_engine
+from services.style_engine import CONFIDENCE_LOW
+from routes.edit import _persist_edit_recipe, _success_payload
 
 style_edit_bp = Blueprint("style_edit", __name__)
 
@@ -129,8 +129,8 @@ def style_edit():
             result.confidence,
             photo_id,
         )
-        from service_metadata import get_analysis_service
-        import service_training as training_service
+        from services.metadata import get_analysis_service
+        from services import training as training_service
 
         # Inject training examples as few-shot context in the LLM request
         if clip_embedding is not None:

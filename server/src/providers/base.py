@@ -8,7 +8,7 @@ import io
 
 # Import prompts from config
 from config import METADATA_GENERATION_SYSTEM_PROMPT
-from edit_recipe import OPENAI_EDIT_RECIPE_SCHEMA, normalize_edit_recipe
+from utils.edit_recipe import OPENAI_EDIT_RECIPE_SCHEMA, normalize_edit_recipe
 
 
 @dataclass
@@ -256,7 +256,7 @@ class LLMProviderBase(ABC):
         context_additions = []
 
         if isinstance(request.location_data, dict) and request.location_data:
-            from service_exif import format_location_for_prompt
+            from services.exif import format_location_for_prompt
 
             location_str = format_location_for_prompt(request.location_data)
             if location_str:
@@ -503,7 +503,7 @@ class LLMProviderBase(ABC):
         if request.submit_folder_names and request.folder_names:
             context_additions.append(f"Folder context: {request.folder_names}")
         if isinstance(request.location_data, dict) and request.location_data:
-            from service_exif import format_location_for_prompt
+            from services.exif import format_location_for_prompt
 
             location_str = format_location_for_prompt(request.location_data)
             if location_str:

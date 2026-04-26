@@ -5,20 +5,20 @@ Uses lazy loading - providers are only initialized when needed.
 """
 
 from typing import Any
-from llm_provider_base import (
+from providers.base import (
     LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from llm_provider_ollama import OllamaProvider
-from llm_provider_lmstudio import LMStudioProvider
-from llm_provider_chatgpt import ChatGPTProvider
-from llm_provider_gemini import GeminiProvider
-from edit_recipe import filter_edit_recipe_by_controls
+from providers.ollama import OllamaProvider
+from providers.lmstudio import LMStudioProvider
+from providers.chatgpt import ChatGPTProvider
+from providers.gemini import GeminiProvider
+from utils.edit_recipe import filter_edit_recipe_by_controls
 from config import logger, DEFAULT_METADATA_PROVIDER, DEFAULT_METADATA_LANGUAGE
-import service_training as training_service
+from . import training as training_service
 from PIL import Image
 import io
 import torch
@@ -430,7 +430,7 @@ class AnalysisService:
             try:
                 # Re-use the CLIP embedding of the current photo from the main collection
                 # (best-effort: skip if not available).
-                import service_chroma as chroma_service
+                from . import chroma as chroma_service
 
                 existing = chroma_service.get_image(uuid)
                 embedding = None

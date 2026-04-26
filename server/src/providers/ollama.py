@@ -10,7 +10,7 @@ try:
 except Exception:  # ImportError or runtime issues
     Client = None  # type: ignore
 
-from llm_provider_base import (
+from .base import (
     LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,

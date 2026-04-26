@@ -6,7 +6,7 @@ from unittest.mock import patch
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from service_style_engine import (
+from services.style_engine import (
     calculate_composite_score,
     interpolate_recipes,
     generate_style_edit,
@@ -62,7 +62,7 @@ class TestStyleEngineLogic(unittest.TestCase):
         # 0 * 0.75 + 40 * 0.25 = 10
         self.assertEqual(interp.get("contrast"), 10)
 
-    @patch("service_style_engine.training_service")
+    @patch("services.style_engine.training_service")
     def test_adaptive_compensation(self, mock_training):
         print("Testing adaptive RAW compensation...")
         # Training was high key (0.8), Target is low key (0.3).

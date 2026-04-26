@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
 from server_lifecycle import is_model_cached
-from service_clip import start_download_clip_model, get_download_status
+from services.clip import start_download_clip_model, get_download_status
 from config import logger
 
 clip_bp = Blueprint("clip", __name__)

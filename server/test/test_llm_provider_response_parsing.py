@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from PIL import Image
 
-from llm_provider_base import MetadataGenerationRequest
+from providers.base import MetadataGenerationRequest
 
 
 def _jpeg_bytes():
@@ -48,10 +48,10 @@ def _request(**overrides):
 @pytest.fixture
 def ollama_provider(mocker):
     """Build an OllamaProvider with the SDK Client mocked out."""
-    from llm_provider_ollama import OllamaProvider
+    from providers.ollama import OllamaProvider
 
     fake_client = MagicMock(name="FakeOllamaClient")
-    mocker.patch("llm_provider_ollama.Client", return_value=fake_client)
+    mocker.patch("providers.ollama.Client", return_value=fake_client)
     provider = OllamaProvider({})
     return provider, fake_client
 
@@ -119,7 +119,7 @@ def test_ollama_caption_omitted_when_not_requested(ollama_provider):
 @pytest.fixture
 def lmstudio_provider(mocker):
     """Build an LMStudioProvider with the SDK fully mocked."""
-    fake_lms = mocker.patch("llm_provider_lmstudio.lms")
+    fake_lms = mocker.patch("providers.lmstudio.lms")
     fake_response = MagicMock(name="FakeLMSResponse")
     fake_model = MagicMock(name="FakeLMSModel")
     fake_model.respond.return_value = fake_response
@@ -135,7 +135,7 @@ def lmstudio_provider(mocker):
     fake_lms.Client.return_value = fake_client
     fake_lms.Chat.return_value = MagicMock(name="FakeChat")
 
-    from llm_provider_lmstudio import LMStudioProvider
+    from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({})
     return provider, fake_response

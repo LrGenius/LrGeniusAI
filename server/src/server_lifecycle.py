@@ -3,14 +3,14 @@ import time
 import signal
 from config import DB_PATH, logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
 import open_clip
-from open_clip_compat import wrap_tokenizer
+from utils.open_clip_compat import wrap_tokenizer
 import threading
 import datetime
 import gc
 import torch
 from huggingface_hub import hf_hub_download
-import service_face
-import service_chroma
+from services import face as service_face
+from services import chroma as service_chroma
 
 
 # Lazy-loadable global model instances

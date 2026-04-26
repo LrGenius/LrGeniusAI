@@ -5,7 +5,7 @@ LM Studio Provider for metadata generation using the lmstudio-python library
 import json
 import lmstudio as lms
 from typing import Any, override
-from llm_provider_base import (
+from .base import (
     LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,

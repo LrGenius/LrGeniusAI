@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, send_file, after_this_request, request
 import os
 
 from config import logger
-import service_db
+from services import db as service_db
 
 
 db_bp = Blueprint("db", __name__)

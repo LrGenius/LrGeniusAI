@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from config import logger
-import service_chroma as chroma_service
-import service_face as face_service
-import service_persons as persons_service
+from services import chroma as chroma_service
+from services import face as face_service
+from services import persons as persons_service
 import base64
 
 

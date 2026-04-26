@@ -4,7 +4,7 @@ import unittest
 
 from PIL import Image
 
-from llm_provider_base import LLMProviderBase
+from providers.base import LLMProviderBase
 
 
 class _StubProvider(LLMProviderBase):

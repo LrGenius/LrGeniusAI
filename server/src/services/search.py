@@ -1,5 +1,5 @@
-import service_chroma as chroma_service
-import service_vertexai as vertexai_service
+from . import chroma as chroma_service
+from . import vertexai as vertexai_service
 from config import logger, TORCH_DEVICE
 import server_lifecycle as server_lifecycle
 import torch

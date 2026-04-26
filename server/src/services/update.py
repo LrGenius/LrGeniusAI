@@ -27,7 +27,7 @@ def perform_code_update(manifest: dict, plugin_path: str) -> tuple[bool, str]:
     _update_in_progress = True
 
     try:
-        backend_root = Path(__file__).parent.parent
+        backend_root = Path(__file__).resolve().parents[2]
         updater_script = backend_root / "src" / "scripts" / "updater.py"
 
         # Save manifest to a temp file for the script

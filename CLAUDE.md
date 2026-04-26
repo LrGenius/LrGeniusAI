@@ -90,18 +90,23 @@ Photo identity uses the stable `globalPhotoId` via `Util.getGlobalPhotoIdForPhot
 
 Entry point: `server/src/geniusai_server.py` — registers Flask Blueprints and starts via `waitress`.
 
-**Routing layer** (`routes_*.py`) — thin HTTP handlers, one Blueprint per domain:
-`routes_index`, `routes_search`, `routes_edit`, `routes_faces`, `routes_clip`, `routes_db`, `routes_import`, `routes_server`, `routes_style_edit`, `routes_training`
+**Routing layer** (`routes/`) — thin HTTP handlers, one Blueprint per domain:
+`routes/index.py`, `routes/search.py`, `routes/edit.py`, `routes/faces.py`, `routes/clip.py`, `routes/db.py`, `routes/import_.py`, `routes/server.py`, `routes/style_edit.py`, `routes/training.py` (the trailing underscore on `import_` avoids the Python keyword).
 
-**Service layer** (`service_*.py`) — business logic:
-- `service_chroma.py` — ChromaDB vector store (semantic embeddings)
-- `service_clip.py` / `service_vertexai.py` — embedding generation (SigLIP2 / Vertex AI)
-- `service_face.py` / `service_persons.py` — InsightFace detection & clustering
-- `service_db.py` — SQLite metadata store
-- `service_index.py` / `service_search.py` — photo indexing & semantic search
-- `service_edit.py` / `service_style_engine.py` — develop edit recipe generation
+**Service layer** (`services/`) — business logic:
+- `services/chroma.py` — ChromaDB vector store (semantic embeddings)
+- `services/clip.py` / `services/vertexai.py` — embedding generation (SigLIP2 / Vertex AI)
+- `services/face.py` / `services/persons.py` — InsightFace detection & clustering
+- `services/db.py` — SQLite metadata store
+- `services/index.py` / `services/search.py` — photo indexing & semantic search
+- `services/style_engine.py` — develop edit recipe generation
+- `services/update.py` — code-update orchestration (spawns `src/scripts/updater.py`)
 
-**LLM providers** (`llm_provider_*.py`): `chatgpt`, `gemini`, `lmstudio`, `ollama`
+**LLM providers** (`providers/`): `providers/chatgpt.py`, `providers/gemini.py`, `providers/lmstudio.py`, `providers/ollama.py`, with the shared base class in `providers/base.py`.
+
+**Shared helpers** (`utils/`): `utils/edit_recipe.py` (recipe schemas and filtering), `utils/open_clip_compat.py` (open_clip tokenizer shim).
+
+Imports use sibling-relative form within a subpackage (`from .face import …` inside `services/`) and absolute form across subpackages (`from services.face import …` from a route). `from config import …` and other root-level modules are unchanged.
 
 **API response format**: always return JSON with `results`, `error`, and `warning` fields.
 
@@ -130,7 +135,7 @@ Entry point: `server/src/geniusai_server.py` — registers Flask Blueprints and 
 
 ### Python / Backend
 
-- Endpoints in `routes_*.py` (Blueprints); logic in `service_*.py`.
+- Endpoints in `routes/` (Blueprints); logic in `services/`. LLM provider implementations in `providers/`. Shared helpers in `utils/`.
 - Always use the configured `logger`; include `exc_info=True` for exceptions.
 - Update `Dockerfile`, `docker-compose-dev.yml`, and `docker-compose-prod.yml` when changing dependencies.
 - Code must pass `bash server/scripts/lint_format.sh` (ruff check + ruff format).

@@ -1,6 +1,6 @@
 import unittest
 
-from service_index import _safe_unit_interval
+from services.index import _safe_unit_interval
 
 
 class SafeUnitIntervalTests(unittest.TestCase):
