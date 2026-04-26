@@ -96,8 +96,15 @@ jobs:
             exit 1
           fi
 
-          uv pip install --python "$PY_EXE" --break-system-packages -r server/requirements-desktop.txt
-          uv pip install --python "$PY_EXE" --break-system-packages pytest pytest-mock
+          # Self-hosted macOS bundle uses a copied-out standalone interpreter,
+          # not a venv. `uv pip install --python <path>` is the uv-native API for
+          # installing into an external interpreter; `uv sync` only manages
+          # project venvs. Resolve runtime + test deps from the lockfile so the
+          # install matches what server-tests.yml validates.
+          uv export --project server --no-dev --no-emit-project --frozen --output-file "$RUNNER_TEMP/runtime-reqs.txt"
+          uv export --project server --only-group dev --no-emit-project --frozen --output-file "$RUNNER_TEMP/test-reqs.txt"
+          uv pip install --python "$PY_EXE" --break-system-packages -r "$RUNNER_TEMP/runtime-reqs.txt"
+          uv pip install --python "$PY_EXE" --break-system-packages -r "$RUNNER_TEMP/test-reqs.txt"
           uv pip check --python "$PY_EXE"
           "$PY_EXE" -c "import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
           "$PY_EXE" -c "import torch, torchvision; from torchvision.ops import nms; b=torch.tensor([[0.,0.,1.,1.],[0.,0.,2.,2.]], dtype=torch.float32); s=torch.tensor([0.9,0.8], dtype=torch.float32); print('torchvision nms op ok', nms(b, s, 0.5).tolist())"

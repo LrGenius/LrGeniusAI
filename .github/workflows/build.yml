@@ -185,22 +185,38 @@ jobs:
             fi
           fi
 
-          # Bundled uv-managed / copied standalone interpreters are marked externally managed;
-          # same as macOS, Windows needs --break-system-packages to install deps into the tree.
+          # Resolve runtime + test deps from the project's uv.lock for reproducibility.
+          # Runtime deps (no dev group) → bundled into the artifact.
+          uv export --project server --no-dev --no-emit-project --frozen --output-file "$RUNNER_TEMP/runtime-reqs.txt"
+          # Test deps (dev group) → installed into the same env so we can run the
+          # test suite against the bundled interpreter before packaging.
+          uv export --project server --only-group dev --no-emit-project --frozen --output-file "$RUNNER_TEMP/test-reqs.txt"
+
+          # macOS / Windows: copied-out standalone interpreters (not venvs).
+          # `uv pip install --python <path>` is uv's intended API for installing
+          # into an external interpreter; the higher-level `uv sync` only operates
+          # on a project venv. `--break-system-packages` is required because
+          # standalone CPython is marked externally-managed.
+          # Linux: the env is a real `uv venv`, so we can sync directly via
+          # UV_PROJECT_ENVIRONMENT, which is fully lockfile-driven.
           if [ "${{ matrix.os_name }}" == "macos" ] || [ "${{ matrix.os_name }}" == "windows" ]; then
-            uv pip install --python "$PY_EXE" --break-system-packages -r server/requirements-desktop.txt
-            uv pip install --python "$PY_EXE" --break-system-packages pytest pytest-mock
+            uv pip install --python "$PY_EXE" --break-system-packages -r "$RUNNER_TEMP/runtime-reqs.txt"
+            uv pip install --python "$PY_EXE" --break-system-packages -r "$RUNNER_TEMP/test-reqs.txt"
           else
-            uv pip install --python "$PY_EXE" -r server/requirements-desktop.txt
-            uv pip install --python "$PY_EXE" pytest pytest-mock
+            UV_PROJECT_ENVIRONMENT="$SERVER_ENV_DIR" uv sync --project server --frozen --all-groups
           fi
 
           # Windows ships CPU-only (config.py hardcodes TORCH_DEVICE="cpu").
-          # Default pip wheel bundles ~600MB of CUDA runtime we never use.
+          # Default wheel bundles ~600MB of CUDA runtime we never use; replace with the
+          # CPU-only build at the same version we just installed (read from the lockfile
+          # to avoid drift).
           if [ "${{ matrix.os_name }}" == "windows" ]; then
             echo "Replacing CUDA torch with CPU-only build..."
+            TORCH_VERSION=$(grep -E "^torch==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torch==//; s/[ ;].*//')
+            TORCHVISION_VERSION=$(grep -E "^torchvision==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torchvision==//; s/[ ;].*//')
+            echo "Using CPU-only torch ${TORCH_VERSION} and torchvision ${TORCHVISION_VERSION}"
             uv pip install --python "$PY_EXE" --break-system-packages \
-              torch==2.5.1+cpu torchvision==0.20.1+cpu \
+              "torch==${TORCH_VERSION}+cpu" "torchvision==${TORCHVISION_VERSION}+cpu" \
               --index-url https://download.pytorch.org/whl/cpu \
               --reinstall --no-deps
           fi
@@ -492,6 +508,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Update Info.lua with version and build date
         shell: bash
         run: |
@@ -532,8 +551,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pip install google-genai
-          python3 scripts/generate_release_notes.py
+          uv run --no-project --with google-genai python3 scripts/generate_release_notes.py
 
       - name: Upload plugin-only artifact
         uses: actions/upload-artifact@v6
@@ -665,6 +683,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -724,8 +745,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pip install google-genai
-          python3 scripts/generate_release_notes.py
+          uv run --no-project --with google-genai python3 scripts/generate_release_notes.py
 
       - name: Generate code-only update manifest
         run: |
