@@ -21,6 +21,10 @@ Welcome to the project wiki.
 - [Troubleshooting](Troubleshooting)
 - [Credits & Dependencies](Credits)
 
+## Dev
+
+- [Testing the Update Mechanism](Dev-Testing-Update-Mechanism)
+
 ## Important note
 
 The new DB backup workflow is documented in:
