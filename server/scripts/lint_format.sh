@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ensure no linting errors
 echo "Checking for linting errors..."
-uv run ruff check --respect-gitignore --ignore E741
+uv run ruff check
 
 echo "Checking for format issues..."
-uv run ruff format --respect-gitignore --check
+uv run ruff format --check

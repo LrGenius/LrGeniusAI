@@ -17,15 +17,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Backend (Python)
 
+Dependencies are managed by [uv](https://docs.astral.sh/uv/). The lockfile (`server/uv.lock`) and project metadata (`server/pyproject.toml`) are the source of truth — there are no `requirements*.txt` files.
+
 ```bash
-bash scripts/setup-local-uv-env.sh   # creates .venv, installs deps via uv
+cd server
+uv sync                  # creates .venv and installs locked deps (incl. dev group)
+uv sync --no-dev         # production-equivalent install (matches the Dockerfile)
 ```
+
+To add or upgrade a dependency, use `uv add <pkg>` (or `uv add --dev <pkg>` for dev-only). This updates both `pyproject.toml` and `uv.lock`; commit both. The Dockerfile picks them up automatically via `uv sync --locked` — no Dockerfile edit needed for routine dependency changes.
 
 ### Pre-commit hooks (formatting + linting)
 
 ```bash
-pip install pre-commit
-pre-commit install
+uv tool install pre-commit   # installs pre-commit as a uv-managed tool
+pre-commit install           # registers the git hook in this repo
 ```
 
 ---
@@ -137,5 +143,5 @@ Imports use sibling-relative form within a subpackage (`from .face import …` i
 
 - Endpoints in `routes/` (Blueprints); logic in `services/`. LLM provider implementations in `providers/`. Shared helpers in `utils/`.
 - Always use the configured `logger`; include `exc_info=True` for exceptions.
-- Update `Dockerfile`, `docker-compose-dev.yml`, and `docker-compose-prod.yml` when changing dependencies.
+- Manage dependencies via `uv add` / `uv remove` (updates `pyproject.toml` + `uv.lock`); commit both. The Dockerfile re-runs `uv sync --locked` automatically — only touch it for non-dependency changes (system packages, env vars, build steps).
 - Code must pass `bash server/scripts/lint_format.sh` (ruff check + ruff format).

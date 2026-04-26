@@ -114,7 +114,7 @@ Recommended new backend metadata fields:
 
 ### Phase 1: Grouping Foundation
 
-- Implement `group_and_sort_images(...)` in `server/src/service_chroma.py`.
+- Implement `group_and_sort_images(...)` in `server/src/services/chroma.py`.
 - Add burst grouping logic based on time window plus similarity threshold.
 - Support both true duplicates and near-duplicates.
 - Return groups in a structure that the plugin can map to Lightroom collections.
@@ -266,7 +266,7 @@ For each set, compare:
 
 ## Concrete Todo Checklist
 
-- [x] Implement similarity grouping backend in `service_chroma.py`
+- [x] Implement similarity grouping backend in `services/chroma.py`
 - [x] Define JSON response schema for grouped culling results
 - [x] Add technical image metrics
 - [x] Add face-aware culling metrics
@@ -288,7 +288,7 @@ Implement the missing grouping foundation so culling can operate on similar-imag
 
 Scope:
 
-- implement `group_and_sort_images(...)` in `server/src/service_chroma.py`
+- implement `group_and_sort_images(...)` in `server/src/services/chroma.py`
 - combine `capture_time`, embedding similarity, and a cheap duplicate signal
 - return stable grouped results for a provided list of photo IDs
 - keep output deterministic and easy to debug

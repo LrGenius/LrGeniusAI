@@ -8,7 +8,7 @@ jobs:
       - name: Linting (Python)
         uses: astral-sh/ruff-action@v3
         with:
-          args: "check --ignore E741"
+          args: "check"
           src: "./server"
       - name: Formatting (Python)
         uses: astral-sh/ruff-action@v3
