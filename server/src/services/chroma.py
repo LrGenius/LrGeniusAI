@@ -204,7 +204,7 @@ def add_image(photo_id, embedding, metadata, *, legacy_uuid=None, catalog_id=Non
     ChromaDB's requirements while still allowing metadata-only storage.
 
     Note: Metadata-only entries are marked with has_embedding=False in their
-    metadata and are filtered out of semantic search results in service_search.py.
+    metadata and are filtered out of semantic search results in services/search.py.
     They can still be found via metadata keyword searches.
 
     If catalog_id is provided, the photo is associated with that catalog (soft state).

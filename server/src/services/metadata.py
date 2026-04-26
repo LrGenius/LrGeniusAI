@@ -153,7 +153,7 @@ class AnalysisService:
 
         Args:
             exif_location_map: Optional mapping of uuid → location_data dict
-                (from service_exif.extract_location_tags). When provided, each
+                (from services.exif.extract_location_tags). When provided, each
                 image's metadata request gets the matching location_data injected.
         """
         uuids = [triplet[1] for triplet in image_triplets]
@@ -227,7 +227,7 @@ class AnalysisService:
 
         # Datetime/capture_time extraction is handled entirely by the client
         # (Lightroom plugin) via explicit fields in the request and stored in
-        # service_index.process_image_task.
+        # services.index.process_image_task.
         return embeddings, metadata_results
 
     def _generate_image_embeddings(

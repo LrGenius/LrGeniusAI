@@ -3,7 +3,7 @@ import os
 import sys
 
 
-# Ensure server src directory (with service_chroma, config, etc.) is importable.
+# Ensure server src directory (with services.chroma, config, etc.) is importable.
 _THIS_DIR = os.path.dirname(__file__)
 _SERVER_ROOT = os.path.dirname(_THIS_DIR)
 _SRC_DIR = os.path.join(_SERVER_ROOT, "src")
@@ -36,7 +36,7 @@ def _extract_photo_id(argv: list[str]) -> tuple[str | None, list[str]]:
     return photo_id, cleaned
 
 
-# Extract our own CLI flag before importing service_chroma/config (which
+# Extract our own CLI flag before importing services.chroma/config (which
 # parse global arguments on import).
 _PHOTO_ID, _NEW_ARGV = _extract_photo_id(sys.argv)
 sys.argv = _NEW_ARGV

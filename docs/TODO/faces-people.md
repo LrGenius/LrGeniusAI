@@ -56,7 +56,7 @@ An alternative is a **post-cluster override layer** (easier to bolt on, harder t
 
 - Ensure list/detail endpoints expose enough data for the plugin (face ids per person if not already).
 
-### Phase C — `run_clustering` changes (`service_persons.run_clustering`)
+### Phase C — `run_clustering` changes (`services.persons.run_clustering`)
 
 Current behavior (simplified): load all embeddings, cluster everyone, map labels to `person_id` by overlap, **overwrite every face’s `person_id`**.
 
@@ -117,9 +117,9 @@ Document edge cases in code:
 
 ## 8. References (codebase)
 
-- `server/src/service_persons.py` — `run_clustering`, `list_persons`, names file  
-- `server/src/service_chroma.py` — face collection, `update_face_metadatas`  
-- `server/src/routes_faces.py` — HTTP surface  
+- `server/src/services/persons.py` — `run_clustering`, `list_persons`, names file  
+- `server/src/services/chroma.py` — face collection, `update_face_metadatas`  
+- `server/src/routes/faces.py` — HTTP surface  
 - `plugin/.../TaskPeople.lua` — People UI  
 
 ---
