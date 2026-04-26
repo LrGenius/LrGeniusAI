@@ -143,31 +143,16 @@ def _ensure_initialized():
         path=config.DB_PATH, settings=Settings(anonymized_telemetry=False)
     )
 
-    # Initialize image_embeddings collection
-    try:
-        collection = chroma_client.get_collection(name="image_embeddings")
-        logger.info("Loaded existing ChromaDB image_embeddings collection.")
-    except Exception:
-        collection = chroma_client.create_collection(name="image_embeddings")
-        logger.info("Created new ChromaDB image_embeddings collection.")
+    collection = chroma_client.get_or_create_collection(name="image_embeddings")
+    logger.info("Initialized ChromaDB image_embeddings collection.")
 
-    # Initialize face_embeddings collection (second collection for face vectors)
-    try:
-        face_collection = chroma_client.get_collection(name="face_embeddings")
-        logger.info("Loaded existing ChromaDB face_embeddings collection.")
-    except Exception:
-        face_collection = chroma_client.create_collection(name="face_embeddings")
-        logger.info("Created new ChromaDB face_embeddings collection.")
+    face_collection = chroma_client.get_or_create_collection(name="face_embeddings")
+    logger.info("Initialized ChromaDB face_embeddings collection.")
 
-    # Initialize image_embeddings_vertex (Google Vertex AI multimodal embeddings)
-    try:
-        vertex_collection = chroma_client.get_collection(name="image_embeddings_vertex")
-        logger.info("Loaded existing ChromaDB image_embeddings_vertex collection.")
-    except Exception:
-        vertex_collection = chroma_client.create_collection(
-            name="image_embeddings_vertex"
-        )
-        logger.info("Created new ChromaDB image_embeddings_vertex collection.")
+    vertex_collection = chroma_client.get_or_create_collection(
+        name="image_embeddings_vertex"
+    )
+    logger.info("Initialized ChromaDB image_embeddings_vertex collection.")
 
 
 def reset_chroma_client():
