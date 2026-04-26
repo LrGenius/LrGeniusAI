@@ -126,6 +126,12 @@ def main():
     parser.add_argument(
         "--output", default="update-manifest.json", help="Output JSON file path"
     )
+    parser.add_argument(
+        "--breaking",
+        action="store_true",
+        default=False,
+        help="Mark release as requiring a full installer (dependency changes)",
+    )
     args = parser.parse_args()
 
     tag = args.version
@@ -157,6 +163,7 @@ def main():
         "version": version,
         "tag": tag,
         "update_type": "code_only",
+        "breaking_changes": args.breaking,
         "requires_restart": True,
         "release_url": RELEASES_BASE.format(repo=repo, tag=tag),
         "total_size_bytes": total_size,
@@ -175,9 +182,10 @@ def main():
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     print(f"Manifest written to: {output_path}")
-    print(f"  Plugin files:  {len(plugin_files)}")
-    print(f"  Backend files: {len(backend_files)}")
-    print(f"  Total size:    {total_size / 1024:.1f} KB")
+    print(f"  Plugin files:   {len(plugin_files)}")
+    print(f"  Backend files:  {len(backend_files)}")
+    print(f"  Total size:     {total_size / 1024:.1f} KB")
+    print(f"  Breaking:       {args.breaking}")
 
 
 if __name__ == "__main__":
