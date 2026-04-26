@@ -33,7 +33,7 @@ We use `uv` for dependency management.
 
 #### Pre-commit Hooks
 To ensure code consistency, we use `pre-commit` for automatic formatting and linting.
-- Install `pre-commit`: `pip install pre-commit` (or `brew install pre-commit`).
+- Install `pre-commit`: `uv tool install pre-commit` (or `brew install pre-commit`).
 - Install the git hooks:
   ```bash
   pre-commit install
