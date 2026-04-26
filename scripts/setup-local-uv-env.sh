@@ -1,42 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Creates a local uv virtual environment for backend development/debugging.
-# Default profile mirrors desktop builds from CI.
+# Sets up the backend's local development environment via `uv sync`.
+#
+# Reads the locked dependency set from server/pyproject.toml + server/uv.lock
+# and creates server/.venv/ as the project's virtual environment.
+#
+# This is a thin convenience wrapper. The equivalent direct command is:
+#   cd server && uv sync --locked
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
 SERVER_DIR="${ROOT_DIR}/server"
-VENV_DIR="${ROOT_DIR}/.venv"
-PROFILE="desktop"
-PYTHON_VERSION="3.12"
+
+INCLUDE_DEV=1
+PYTHON_VERSION=""
 
 usage() {
   cat <<'EOF'
 Usage: scripts/setup-local-uv-env.sh [options]
 
 Options:
-  --profile <desktop|docker>   Dependency profile to install (default: desktop)
-  --venv-dir <path>            Virtual environment directory (default: .venv)
-  --python <version>           Python version for uv venv (default: 3.12)
-  -h, --help                   Show this help message
+  --no-dev             Omit the dev dependency group (matches the production Dockerfile)
+  --python <version>   Pin the venv to a specific Python version (default: from .python-version)
+  -h, --help           Show this help message
 
 Examples:
-  scripts/setup-local-uv-env.sh
-  scripts/setup-local-uv-env.sh --profile docker
-  scripts/setup-local-uv-env.sh --venv-dir .venv-debug --python 3.12
+  scripts/setup-local-uv-env.sh                # full dev environment (runtime + dev deps)
+  scripts/setup-local-uv-env.sh --no-dev       # runtime-only, mirrors production
+  scripts/setup-local-uv-env.sh --python 3.12  # override the project's pinned Python
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --profile)
-      PROFILE="${2:-}"
-      shift 2
-      ;;
-    --venv-dir)
-      VENV_DIR="${2:-}"
-      shift 2
+    --no-dev)
+      INCLUDE_DEV=0
+      shift
       ;;
     --python)
       PYTHON_VERSION="${2:-}"
@@ -60,42 +60,25 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -d "${SERVER_DIR}" ]]; then
-  echo "Error: server directory not found at ${SERVER_DIR}" >&2
+if [[ ! -f "${SERVER_DIR}/pyproject.toml" ]]; then
+  echo "Error: ${SERVER_DIR}/pyproject.toml not found." >&2
   exit 1
 fi
 
-case "${PROFILE}" in
-  desktop)
-    REQUIREMENTS_FILE="${SERVER_DIR}/requirements-desktop.txt"
-    ;;
-  docker)
-    REQUIREMENTS_FILE="${SERVER_DIR}/requirements.txt"
-    ;;
-  *)
-    echo "Error: invalid profile '${PROFILE}'. Use 'desktop' or 'docker'." >&2
-    exit 1
-    ;;
-esac
-
-if [[ ! -f "${REQUIREMENTS_FILE}" ]]; then
-  echo "Error: requirements file not found: ${REQUIREMENTS_FILE}" >&2
-  exit 1
+UV_ARGS=(sync --locked)
+if [[ ${INCLUDE_DEV} -eq 0 ]]; then
+  UV_ARGS+=(--no-dev)
+fi
+if [[ -n "${PYTHON_VERSION}" ]]; then
+  UV_ARGS+=(--python "${PYTHON_VERSION}")
 fi
 
-echo "Creating uv environment..."
-echo "  profile: ${PROFILE}"
-echo "  python:  ${PYTHON_VERSION}"
-echo "  venv:    ${VENV_DIR}"
-echo "  deps:    ${REQUIREMENTS_FILE}"
-
-uv venv --python "${PYTHON_VERSION}" "${VENV_DIR}"
-uv pip install --python "${VENV_DIR}/bin/python" -r "${REQUIREMENTS_FILE}"
+echo "Running 'uv ${UV_ARGS[*]}' in ${SERVER_DIR}..."
+( cd "${SERVER_DIR}" && uv "${UV_ARGS[@]}" )
 
 echo
-echo "Environment ready."
-echo "Activate with:"
-echo "  source \"${VENV_DIR}/bin/activate\""
+echo "Environment ready at: ${SERVER_DIR}/.venv"
 echo
-echo "Quick backend debug run:"
-echo "  PYTHONPATH=\"${ROOT_DIR}/server:\${PYTHONPATH:-}\" \"${VENV_DIR}/bin/python\" \"${ROOT_DIR}/server/src/geniusai_server.py\""
+echo "Next steps:"
+echo "  cd \"${SERVER_DIR}\" && uv run python src/geniusai_server.py --db-path /tmp/lrgeniusai-data"
+echo "  cd \"${SERVER_DIR}\" && uv run pytest test/"
