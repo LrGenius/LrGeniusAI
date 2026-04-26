@@ -600,6 +600,8 @@
 "$$$/LrGeniusAI/TaskUpdate/SuccessMsg" = "LrGeniusAI wurde auf ^1 aktualisiert.\n\nBitte starten Sie Lightroom neu, um die neue Plugin-Version zu aktivieren."
 "$$$/LrGeniusAI/TaskUpdate/BackendRestartNote" = "Hinweis: Das Backend konnte nicht automatisch neu gestartet werden. Falls Sie ein lokales Backend verwenden, starten Sie es bitte manuell neu."
 "$$$/LrGeniusAI/TaskUpdate/SuccessTitle" = "Update erfolgreich"
+"$$$/LrGeniusAI/TaskUpdate/BreakingChangesTitle" = "Vollständige Neuinstallation erforderlich"
+"$$$/LrGeniusAI/TaskUpdate/BreakingChangesRequired" = "Version ^1 erfordert eine Neuinstallation, da sie Änderungen an den Backend-Abhängigkeiten enthält. Bitte laden Sie den Installer für Ihre Plattform von der Releases-Seite herunter."
 "$$$/LrGeniusAI/Menu/CheckForUpdates" = "Nach Updates suchen..."
 "$$$/LrGeniusAI/PluginInfo/UpdateAvailable" = "Update verfügbar: ^1"
 "$$$/LrGeniusAI/PluginInfo/DownloadUpdate" = "Update herunterladen"

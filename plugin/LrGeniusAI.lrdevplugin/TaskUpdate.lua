@@ -1,5 +1,5 @@
 ---@diagnostic disable: undefined-global
----luacheck: globals TaskUpdate UpdateCheck SearchIndexAPI log LrFunctionContext LrProgressScope LrDialogs LrTasks LrPathUtils LrApplication
+---luacheck: globals TaskUpdate UpdateCheck SearchIndexAPI log LrFunctionContext LrProgressScope LrDialogs LrTasks LrPathUtils LrApplication LrHttp
 
 --[[
 TaskUpdate.lua
@@ -65,6 +65,25 @@ function TaskUpdate.runUpdate(releaseInfo)
 				),
 				"critical"
 			)
+			return
+		end
+
+		-- Step 2b: Breaking-changes guard — full installer required
+		if manifest.breaking_changes then
+			local version = manifest.version or releaseInfo.tag_name or "?"
+			local releaseUrl = manifest.release_url
+			local btn = LrDialogs.confirm(
+				LOC("$$$/LrGeniusAI/TaskUpdate/BreakingChangesTitle=Full Installer Required"),
+				LOC(
+					"$$$/LrGeniusAI/TaskUpdate/BreakingChangesRequired=Version ^1 requires a full reinstall because it includes changes to the backend dependencies. Please download the installer for your platform from the releases page.",
+					version
+				),
+				LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
+				LOC("$$$/LrGeniusAI/common/Cancel=Cancel")
+			)
+			if btn == "ok" and releaseUrl then
+				LrHttp.openUrlInBrowser(releaseUrl)
+			end
 			return
 		end
 
