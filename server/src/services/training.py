@@ -79,12 +79,8 @@ def _ensure_initialized() -> None:
         path=config.DB_PATH,
         settings=Settings(anonymized_telemetry=False),
     )
-    try:
-        _training_collection = _chroma_client.get_collection(name=COLLECTION_NAME)
-        logger.info("Loaded existing edit_training collection.")
-    except Exception:
-        _training_collection = _chroma_client.create_collection(name=COLLECTION_NAME)
-        logger.info("Created new edit_training collection.")
+    _training_collection = _chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+    logger.info("Initialized edit_training collection.")
 
 
 def _dummy_embedding() -> list[float]:
