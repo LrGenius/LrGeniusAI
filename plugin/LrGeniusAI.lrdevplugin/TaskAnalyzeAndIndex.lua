@@ -703,6 +703,22 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
+		-- Warn when "New or unprocessed photos" scope is combined with "Regenerate all":
+		-- the backend will treat every photo as needing processing, so delta filtering has no effect.
+		if props.scope == "missing" and props.regenerateMetadata then
+			local confirm = LrDialogs.confirm(
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaTitle=Scope conflict"),
+				LOC(
+					'$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaMessage=You selected "New or unprocessed photos" but "Regenerate all" is also enabled. All photos will be processed — the delta filter has no effect. Continue?'
+				),
+				LOC("$$$/LrGeniusAI/common/Continue=Continue"),
+				LOC("$$$/LrGeniusAI/common/Cancel=Cancel")
+			)
+			if confirm ~= "ok" then
+				return
+			end
+		end
+
 		-- Build tasks array (task name compute_vertexai → "vertexai" in API)
 		local tasks = {}
 		if props.enableEmbeddings then
