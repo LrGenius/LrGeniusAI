@@ -733,7 +733,7 @@ function MetadataManager.addKeywordRecursively(
 	end
 end
 
-function MetadataManager.showValidationDialog(ctx, photo, response, options)
+function MetadataManager.showValidationDialog(ctx, photo, response)
 	local f = LrView.osFactory()
 	local bind = LrView.bind
 
