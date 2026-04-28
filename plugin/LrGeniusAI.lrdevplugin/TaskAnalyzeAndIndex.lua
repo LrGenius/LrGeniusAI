@@ -58,6 +58,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.topLevelKeyword = prefs.topLevelKeyword or "LrGeniusAI"
 	props.bilingualKeywords = prefs.bilingualKeywords or false
 	props.keywordSecondaryLanguage = prefs.keywordSecondaryLanguage or Defaults.defaultKeywordSecondaryLanguage
+	props.keywordAliases = prefs.keywordAliases or false
 
 	-- AI Model selection (unified across providers)
 	props.modelKey = prefs.modelKey -- format: "provider::model"
@@ -351,7 +352,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 					}),
 					f:row({
 						f:static_text({
-							title = LOC("$$$/LrGeniusAI/UI/BilingualKeywords=Bilingual Synonyms:"),
+							title = LOC("$$$/LrGeniusAI/UI/BilingualKeywords=Bilingual Keywords:"),
 							width = share("labelWidth"),
 						}),
 						f:checkbox({ value = bind("bilingualKeywords"), enabled = bind("generateKeywords") }),
@@ -360,6 +361,19 @@ local function showAnalyzeAndIndexDialog(ctx)
 							items = Defaults.generateLanguages,
 							enabled = bind("bilingualKeywords"),
 							width = 160,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/UI/KeywordAliases=Keyword aliases:"),
+							width = share("labelWidth"),
+						}),
+						f:checkbox({
+							value = bind("keywordAliases"),
+							title = LOC(
+								"$$$/LrGeniusAI/UI/KeywordAliasesDescription=Reduce catalog clutter by reusing existing keywords"
+							),
+							enabled = bind("generateKeywords"),
 						}),
 					}),
 				}),
@@ -590,6 +604,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.topLevelKeyword = props.topLevelKeyword
 		prefs.bilingualKeywords = props.bilingualKeywords
 		prefs.keywordSecondaryLanguage = props.keywordSecondaryLanguage
+		prefs.keywordAliases = props.keywordAliases
 
 		-- Keep track of used top-level keywords
 		if props.useTopLevelKeyword and not Util.table_contains(prefs.knownTopLevelKeywords, props.topLevelKeyword) then
@@ -772,6 +787,7 @@ LrTasks.startAsyncTask(function()
 			prompt = props.selectedPrompt,
 			bilingual_keywords = props.bilingualKeywords,
 			keyword_secondary_language = props.keywordSecondaryLanguage,
+			generate_aliases = props.keywordAliases,
 		}
 		if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
 			options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")
@@ -920,6 +936,7 @@ LrTasks.startAsyncTask(function()
 						applyAltText = props.generateAltText,
 						useTopLevelKeyword = props.useTopLevelKeyword,
 						topLevelKeyword = props.topLevelKeyword,
+						generateAliases = props.keywordAliases,
 						appendMetadata = props.appendMetadata,
 					})
 					SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
@@ -974,6 +991,7 @@ LrTasks.startAsyncTask(function()
 									applyAltText = props.generateAltText,
 									useTopLevelKeyword = props.useTopLevelKeyword,
 									topLevelKeyword = props.topLevelKeyword,
+									generateAliases = props.keywordAliases,
 									appendMetadata = props.appendMetadata,
 								})
 
@@ -1002,6 +1020,7 @@ LrTasks.startAsyncTask(function()
 								applyAltText = props.generateAltText,
 								useTopLevelKeyword = props.useTopLevelKeyword,
 								topLevelKeyword = props.topLevelKeyword,
+								generateAliases = props.keywordAliases,
 								appendMetadata = props.appendMetadata,
 							})
 
@@ -1022,6 +1041,7 @@ LrTasks.startAsyncTask(function()
 							applyAltText = props.generateAltText,
 							useTopLevelKeyword = props.useTopLevelKeyword,
 							topLevelKeyword = props.topLevelKeyword,
+							generateAliases = props.keywordAliases,
 							appendMetadata = props.appendMetadata,
 						})
 						savedCount = savedCount + 1

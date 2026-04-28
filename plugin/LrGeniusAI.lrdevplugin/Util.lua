@@ -710,40 +710,62 @@ local function isKeywordLeafObject(value)
 	return type(value) == "table" and type(value.name) == "string"
 end
 
+local function cleanStringList(rawList, reservedLowered)
+	local cleaned = {}
+	local seen = {}
+	if reservedLowered then
+		for _, lowered in ipairs(reservedLowered) do
+			seen[lowered] = true
+		end
+	end
+	if type(rawList) ~= "table" then
+		return cleaned
+	end
+	for _, entry in ipairs(rawList) do
+		if type(entry) == "string" then
+			local text = Util.trim(entry)
+			if text ~= "" then
+				local lowered = string.lower(text)
+				if not seen[lowered] then
+					table.insert(cleaned, text)
+					seen[lowered] = true
+				end
+			end
+		end
+	end
+	return cleaned
+end
+
 local function sanitizeKeywordLeaf(value)
 	if type(value) == "string" then
 		local keyword = Util.trim(value)
 		if keyword == "" then
-			return nil, {}
+			return nil, {}, {}, {}
 		end
-		return keyword, {}
+		return keyword, {}, {}, {}
 	end
 
 	if isKeywordLeafObject(value) then
 		local keyword = Util.trim(value.name)
 		if keyword == "" then
-			return nil, {}
+			return nil, {}, {}, {}
 		end
 
-		local cleanedSynonyms = {}
-		local seen = {}
-		if type(value.synonyms) == "table" then
-			for _, synonym in ipairs(value.synonyms) do
-				if type(synonym) == "string" then
-					local synonymText = Util.trim(synonym)
-					local normalized = string.lower(synonymText)
-					if synonymText ~= "" and normalized ~= string.lower(keyword) and not seen[normalized] then
-						table.insert(cleanedSynonyms, synonymText)
-						seen[normalized] = true
-					end
-				end
-			end
-		end
+		local nameLower = string.lower(keyword)
+		local cleanedSynonyms = cleanStringList(value.synonyms, { nameLower })
+		local cleanedAliases = cleanStringList(value.aliases, { nameLower })
 
-		return keyword, cleanedSynonyms
+		-- synonym_aliases must not collide with the translation names themselves.
+		local translationLowers = { nameLower }
+		for _, syn in ipairs(cleanedSynonyms) do
+			table.insert(translationLowers, string.lower(syn))
+		end
+		local cleanedSynonymAliases = cleanStringList(value.synonym_aliases, translationLowers)
+
+		return keyword, cleanedSynonyms, cleanedAliases, cleanedSynonymAliases
 	end
 
-	return nil, {}
+	return nil, {}, {}, {}
 end
 
 local function iterateDeterministic(tbl, callback)
@@ -800,7 +822,7 @@ function Util.extractAllKeywords(hierarchicalTable)
 
 			if isKeywordLeafObject(value) or type(value) == "string" then
 				-- It's a leaf value (string or leaf object)
-				local keywordName, synonyms = sanitizeKeywordLeaf(value)
+				local keywordName, synonyms, aliases, synonymAliases = sanitizeKeywordLeaf(value)
 				if keywordName and keywordName ~= "" then
 					-- Determine the category path for this keyword
 					local finalPath = currentPath
@@ -820,7 +842,12 @@ function Util.extractAllKeywords(hierarchicalTable)
 						keywordCounter = keywordCounter + 1
 						local keywordId = "kw_" .. tostring(keywordCounter)
 						result[keywordId] = keywordName
-						meta[keywordId] = { synonyms = synonyms, path = finalPath }
+						meta[keywordId] = {
+							synonyms = synonyms,
+							aliases = aliases,
+							synonymAliases = synonymAliases,
+							path = finalPath,
+						}
 						table.insert(orderedIds, keywordId)
 						seenKeywords[dedupeKey] = true
 					end
@@ -860,7 +887,7 @@ end
 function Util.rebuildTableFromKeywords(originalTable, keywordsVal, keywordsSel, keywordsMeta)
 	local keywordCounter = 0
 
-	local function buildKeywordLeaf(keywordId, fallbackValue, fallbackSynonyms)
+	local function buildKeywordLeaf(keywordId, fallbackValue, fallback)
 		if not keywordsSel[keywordId] then
 			return nil
 		end
@@ -870,14 +897,29 @@ function Util.rebuildTableFromKeywords(originalTable, keywordsVal, keywordsSel, 
 		end
 		newKeyword = Util.trim(newKeyword)
 		local meta = keywordsMeta and keywordsMeta[keywordId] or nil
-		local synonyms = (meta and meta.synonyms) or fallbackSynonyms or {}
-		if synonyms and #synonyms > 0 then
-			return {
-				name = newKeyword,
-				synonyms = Util.deepcopy(synonyms),
-			}
+		fallback = fallback or {}
+		local synonyms = (meta and meta.synonyms) or fallback.synonyms or {}
+		local aliases = (meta and meta.aliases) or fallback.aliases or {}
+		local synonymAliases = (meta and meta.synonymAliases) or fallback.synonymAliases or {}
+
+		local hasExtra = (synonyms and #synonyms > 0)
+			or (aliases and #aliases > 0)
+			or (synonymAliases and #synonymAliases > 0)
+		if not hasExtra then
+			return newKeyword
 		end
-		return newKeyword
+
+		local leaf = { name = newKeyword }
+		if synonyms and #synonyms > 0 then
+			leaf.synonyms = Util.deepcopy(synonyms)
+		end
+		if aliases and #aliases > 0 then
+			leaf.aliases = Util.deepcopy(aliases)
+		end
+		if synonymAliases and #synonymAliases > 0 then
+			leaf.synonym_aliases = Util.deepcopy(synonymAliases)
+		end
+		return leaf
 	end
 
 	local function recurse(tbl)
@@ -900,7 +942,11 @@ function Util.rebuildTableFromKeywords(originalTable, keywordsVal, keywordsSel, 
 					newTbl[#newTbl + 1] = leafValue
 				end
 			elseif isKeywordLeafObject(value) then
-				local leafValue = buildKeywordLeaf(keywordId, value.name, value.synonyms or {})
+				local leafValue = buildKeywordLeaf(keywordId, value.name, {
+					synonyms = value.synonyms or {},
+					aliases = value.aliases or {},
+					synonymAliases = value.synonym_aliases or {},
+				})
 				if leafValue ~= nil then
 					newTbl[#newTbl + 1] = leafValue
 				end
@@ -955,9 +1001,21 @@ function Util.buildHierarchyFromPaths(pathsWithMeta)
 
 			local leafName = Util.trim(parts[#parts])
 			if leafName ~= "" then
+				local hasSynonyms = item.synonyms and #item.synonyms > 0
+				local hasAliases = item.aliases and #item.aliases > 0
+				local hasSynonymAliases = item.synonymAliases and #item.synonymAliases > 0
 				local leafNode
-				if item.synonyms and #item.synonyms > 0 then
-					leafNode = { name = leafName, synonyms = item.synonyms }
+				if hasSynonyms or hasAliases or hasSynonymAliases then
+					leafNode = { name = leafName }
+					if hasSynonyms then
+						leafNode.synonyms = item.synonyms
+					end
+					if hasAliases then
+						leafNode.aliases = item.aliases
+					end
+					if hasSynonymAliases then
+						leafNode.synonym_aliases = item.synonymAliases
+					end
 				else
 					leafNode = leafName
 				end

@@ -453,6 +453,8 @@
 "$$$/LrGeniusAI/Training/TopScenes" = "Types de scènes principaux :"
 "$$$/LrGeniusAI/Training/UseTrainingCheckbox" = "Appliquer mon propre style"
 "$$$/LrGeniusAI/UI/BilingualKeywords" = "Mots-clés bilingues"
+"$$$/LrGeniusAI/UI/KeywordAliases" = "Alias de mots-clés :"
+"$$$/LrGeniusAI/UI/KeywordAliasesDescription" = "Réduire l'encombrement du catalogue en réutilisant les mots-clés existants"
 "$$$/LrGeniusAI/UI/TabGeneral" = "Général"
 "$$$/LrGeniusAI/UI/TabMetadata" = "Options Métadonnées"
 "$$$/LrGeniusAI/UI/TabContext" = "Contexte & Sauvegarde"

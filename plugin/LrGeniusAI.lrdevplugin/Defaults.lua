@@ -20,6 +20,7 @@ Defaults.defaultGenerateLanguage = "English"
 Defaults.generateLanguages = { "English", "German", "French", "Spanish", "Italian", "Norwegian" }
 Defaults.defaultBilingualKeywords = false
 Defaults.defaultKeywordSecondaryLanguage = "English"
+Defaults.defaultKeywordAliases = false
 
 Defaults.defaultTemperature = 0.1
 Defaults.defaultMaxTokens = 2048
