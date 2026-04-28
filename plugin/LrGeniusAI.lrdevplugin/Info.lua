@@ -62,6 +62,10 @@ return {
 			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
 			file = "TaskTrainFromEdits.lua",
 		},
+		{
+			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
+			file = "TaskDeduplicateKeywords.lua",
+		},
 	},
 
 	LrExportMenuItems = {
@@ -104,6 +108,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
 			file = "TaskTrainFromEdits.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
+			file = "TaskDeduplicateKeywords.lua",
 		},
 	},
 
