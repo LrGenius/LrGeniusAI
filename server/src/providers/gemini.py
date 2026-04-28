@@ -530,7 +530,7 @@ class GeminiProvider(LLMProviderBase):
                 "name": {"type": "STRING"},
                 "synonyms": {"type": "ARRAY", "items": {"type": "STRING"}},
             },
-            "required": ["name"],
+            "required": ["name", "synonyms"],
         }
 
     def _clean_gemini_response(self, text: str) -> str:
