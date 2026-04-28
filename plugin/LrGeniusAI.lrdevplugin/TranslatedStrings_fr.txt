@@ -89,6 +89,8 @@
 "$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey" = "Clé Gemini non configurée."
 "$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig" = "ID Projet Vertex AI non configuré."
 "$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected" = "Veuillez sélectionner au moins une tâche."
+"$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaTitle" = "Conflit de sélection"
+"$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaMessage" = "Vous avez sélectionné \"Photos nouvelles ou non traitées\" mais \"Régénérer toutes les données\" est également activé. Toutes les photos seront traitées — le filtre delta n'a aucun effet. Continuer ?"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhoto" = "Traitement ^1 réussi (^2 total/^3 échoué)"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos" = "Traitement de ^1 photos avec ^2..."
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProgressCount" = "^1 photos à traiter"

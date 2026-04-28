@@ -89,6 +89,8 @@
 "$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey" = "Gemini API-Schlüssel ist nicht konfiguriert. Bitte in den Plugin-Einstellungen festlegen."
 "$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig" = "Vertex AI Projekt-ID ist nicht konfiguriert. Bitte in den Plugin-Einstellungen festlegen."
 "$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected" = "Bitte wählen Sie mindestens eine Aufgabe aus."
+"$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaTitle" = "Konflikt bei Bereichsauswahl"
+"$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaMessage" = "Sie haben \"Neue oder unverarbeitete Fotos\" ausgewählt, aber \"Alle Daten neu generieren\" ist ebenfalls aktiviert. Alle Fotos werden verarbeitet – der Delta-Filter hat keinen Effekt. Fortfahren?"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhoto" = "Verarbeite ^1 erfolgreich (^2 insgesamt/^3 fehlgeschlagen)"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos" = "Verarbeite ^1 Fotos mit ^2..."
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProgressCount" = "^1 Fotos zu verarbeiten"
