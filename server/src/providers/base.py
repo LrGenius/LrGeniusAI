@@ -325,12 +325,17 @@ class LLMProviderBase(ABC):
 
         if request.generate_keywords and request.generate_aliases:
             alias_instruction = (
-                "For each keyword, also return an `aliases` array containing same-language "
-                "interchangeable surface variants of `name` (e.g. 'automobile' for 'car'). "
-                "Never include broader categories or hypernyms ('vehicle' for 'car' is wrong); "
-                "aliases must be substitutable in any sentence using the original keyword. "
-                "Maximum 3 aliases per keyword. Omit the field or return an empty array if no "
-                "true surface variant exists."
+                "For each keyword, you may return an `aliases` array of at most 3 same-language "
+                "linguistic synonyms of `name` — words that share the exact same core meaning "
+                "and are interchangeable in any context, not just this photo "
+                "(e.g. 'Kraftfahrzeug' / 'Pkw' for 'Auto'). "
+                "Aliases serve as search deduplication: a user searching for either term must "
+                "expect identical results. "
+                "Do NOT include: related concepts, scene attributes, co-occurring elements, "
+                "hypernyms, or hyponyms. "
+                "Counter-example: 'Abendhimmel' is NOT a valid alias for 'Wolkenlos' — "
+                "they may co-occur in this photo but describe different concepts. "
+                "Omit the field entirely if no genuine linguistic synonym exists."
             )
             if request.bilingual_keywords:
                 alias_instruction += (
