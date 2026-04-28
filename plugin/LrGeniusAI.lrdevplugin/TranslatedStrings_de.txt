@@ -453,6 +453,8 @@
 "$$$/LrGeniusAI/Training/TopScenes" = "Top-Szenentypen:"
 "$$$/LrGeniusAI/Training/UseTrainingCheckbox" = "Eignen Stil anwenden"
 "$$$/LrGeniusAI/UI/BilingualKeywords" = "Zweisprachige Stichwörter"
+"$$$/LrGeniusAI/UI/KeywordAliases" = "Stichwort-Aliasse:"
+"$$$/LrGeniusAI/UI/KeywordAliasesDescription" = "Katalog entrümpeln durch Wiederverwendung vorhandener Stichwörter"
 "$$$/LrGeniusAI/UI/TabGeneral" = "Allgemein"
 "$$$/LrGeniusAI/UI/TabMetadata" = "Metadaten-Optionen"
 "$$$/LrGeniusAI/UI/TabContext" = "Kontext & Speichern"

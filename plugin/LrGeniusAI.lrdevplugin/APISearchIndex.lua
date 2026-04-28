@@ -751,6 +751,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 		keyword_secondary_language = options.keyword_secondary_language
 			or (prefs and prefs.keywordSecondaryLanguage)
 			or "English",
+		generate_aliases = tostring(options.generate_aliases or false),
 		date_time = options.date_time,
 		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
 		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
@@ -984,6 +985,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 		name = "keyword_secondary_language",
 		value = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English",
 	})
+	table.insert(mimeChunks, { name = "generate_aliases", value = tostring(options.generate_aliases or false) })
 
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })

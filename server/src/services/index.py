@@ -57,11 +57,12 @@ def _flatten_keywords(keywords):
             name = value.get("name")
             if isinstance(name, str) and name.strip():
                 _append_unique(values, name.strip())
-            synonyms = value.get("synonyms")
-            if isinstance(synonyms, list):
-                for synonym in synonyms:
-                    if isinstance(synonym, str) and synonym.strip():
-                        _append_unique(values, synonym.strip())
+            for field in ("synonyms", "aliases", "synonym_aliases"):
+                bucket = value.get(field)
+                if isinstance(bucket, list):
+                    for entry in bucket:
+                        if isinstance(entry, str) and entry.strip():
+                            _append_unique(values, entry.strip())
             return values
         return []
 

@@ -59,6 +59,7 @@ class MetadataGenerationRequest:
     keyword_categories: list[str] | dict[str, Any] | None = None
     bilingual_keywords: bool = False
     keyword_secondary_language: str | None = None
+    generate_aliases: bool = False
 
     # Provider-specific overrides (e.g. Ollama/LM Studio on remote host)
     ollama_base_url: str | None = None
@@ -322,6 +323,23 @@ class LLMProviderBase(ABC):
                     Use `synonyms` only for meaningful alternate terms and avoid duplicates."
                 )
 
+        if request.generate_keywords and request.generate_aliases:
+            alias_instruction = (
+                "For each keyword, also return an `aliases` array containing same-language "
+                "interchangeable surface variants of `name` (e.g. 'automobile' for 'car'). "
+                "Never include broader categories or hypernyms ('vehicle' for 'car' is wrong); "
+                "aliases must be substitutable in any sentence using the original keyword. "
+                "Maximum 3 aliases per keyword. Omit the field or return an empty array if no "
+                "true surface variant exists."
+            )
+            if request.bilingual_keywords:
+                alias_instruction += (
+                    " When `synonyms` is present, also return `synonym_aliases` with the same "
+                    "rules applied to each entry of `synonyms` (same secondary language as the "
+                    "translation)."
+                )
+            context_additions.append(alias_instruction)
+
         # Append context if any
         if context_additions:
             base_prompt += "\n\n" + "\n".join(context_additions)
@@ -533,7 +551,10 @@ class LLMProviderBase(ABC):
         return base_prompt
 
     def _build_nested_keyword_schema(
-        self, categories: dict[str, Any], bilingual: bool = False
+        self,
+        categories: dict[str, Any],
+        bilingual: bool = False,
+        aliases: bool = False,
     ) -> dict[str, Any]:
         """
         Recursively build JSON schema for nested keyword categories.
@@ -555,14 +576,14 @@ class LLMProviderBase(ABC):
             if isinstance(subcategories, dict) and len(subcategories) > 0:
                 # Nested structure - recursively build
                 schema["properties"][category_name] = self._build_nested_keyword_schema(
-                    subcategories, bilingual
+                    subcategories, bilingual, aliases
                 )
             else:
                 # Leaf node - array of keywords
                 schema["properties"][category_name] = {
                     "type": "array",
                     "items": self._keyword_leaf_item_schema(
-                        request_bilingual=bilingual
+                        request_bilingual=bilingual, request_aliases=aliases
                     ),
                 }
             if category_name not in schema["required"]:
@@ -570,17 +591,31 @@ class LLMProviderBase(ABC):
 
         return schema
 
-    def _keyword_leaf_item_schema(self, request_bilingual: bool) -> dict[str, Any]:
-        if not request_bilingual:
+    def _keyword_leaf_item_schema(
+        self, request_bilingual: bool, request_aliases: bool = False
+    ) -> dict[str, Any]:
+        if not request_bilingual and not request_aliases:
             return {"type": "string"}
+
+        properties: dict[str, Any] = {"name": {"type": "string"}}
+        required = ["name"]
+        if request_aliases:
+            properties["aliases"] = {"type": "array", "items": {"type": "string"}}
+            required.append("aliases")
+        if request_bilingual:
+            properties["synonyms"] = {"type": "array", "items": {"type": "string"}}
+            required.append("synonyms")
+            if request_aliases:
+                properties["synonym_aliases"] = {
+                    "type": "array",
+                    "items": {"type": "string"},
+                }
+                required.append("synonym_aliases")
 
         return {
             "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "synonyms": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["name", "synonyms"],
+            "properties": properties,
+            "required": required,
             "additionalProperties": False,
         }
 
@@ -640,7 +675,9 @@ class LLMProviderBase(ABC):
                 if isinstance(request.keyword_categories, dict):
                     # Nested structure
                     keywords_schema = self._build_nested_keyword_schema(
-                        request.keyword_categories, request.bilingual_keywords
+                        request.keyword_categories,
+                        request.bilingual_keywords,
+                        request.generate_aliases,
                     )
                 else:
                     # Flat list
@@ -654,7 +691,8 @@ class LLMProviderBase(ABC):
                         keywords_schema["properties"][category] = {
                             "type": "array",
                             "items": self._keyword_leaf_item_schema(
-                                request.bilingual_keywords
+                                request.bilingual_keywords,
+                                request.generate_aliases,
                             ),
                         }
                         if category not in keywords_schema["required"]:
@@ -664,11 +702,32 @@ class LLMProviderBase(ABC):
                 # Simple keyword array
                 schema["properties"]["keywords"] = {
                     "type": "array",
-                    "items": self._keyword_leaf_item_schema(request.bilingual_keywords),
+                    "items": self._keyword_leaf_item_schema(
+                        request.bilingual_keywords, request.generate_aliases
+                    ),
                 }
             schema["required"].append("keywords")
 
         return schema
+
+    @final
+    def _clean_string_list(self, value: Any, *reserved_lower: str) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        cleaned: list[str] = []
+        seen = set(reserved_lower)
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            cleaned.append(text)
+        return cleaned
 
     @final
     def _normalize_keyword_leaf(self, value: Any) -> str | dict[str, Any] | None:
@@ -682,24 +741,27 @@ class LLMProviderBase(ABC):
             keyword_name = keyword_name.strip()
             if not keyword_name:
                 return None
-            normalized = {"name": keyword_name}
-            synonyms = value.get("synonyms")
-            if isinstance(synonyms, list):
-                cleaned_synonyms: list[str] = []
-                seen = set()
-                for synonym in synonyms:
-                    if not isinstance(synonym, str):
-                        continue
-                    synonym_text = synonym.strip()
-                    if not synonym_text:
-                        continue
-                    lowered = synonym_text.lower()
-                    if lowered == keyword_name.lower() or lowered in seen:
-                        continue
-                    seen.add(lowered)
-                    cleaned_synonyms.append(synonym_text)
-                if cleaned_synonyms:
-                    normalized["synonyms"] = cleaned_synonyms
+            normalized: dict[str, Any] = {"name": keyword_name}
+            name_lower = keyword_name.lower()
+
+            cleaned_synonyms = self._clean_string_list(
+                value.get("synonyms"), name_lower
+            )
+            if cleaned_synonyms:
+                normalized["synonyms"] = cleaned_synonyms
+
+            cleaned_aliases = self._clean_string_list(value.get("aliases"), name_lower)
+            if cleaned_aliases:
+                normalized["aliases"] = cleaned_aliases
+
+            # synonym_aliases must not collide with the translation names themselves
+            translation_lowers = [s.lower() for s in cleaned_synonyms]
+            cleaned_synonym_aliases = self._clean_string_list(
+                value.get("synonym_aliases"), name_lower, *translation_lowers
+            )
+            if cleaned_synonym_aliases:
+                normalized["synonym_aliases"] = cleaned_synonym_aliases
+
             return normalized
         return None
 

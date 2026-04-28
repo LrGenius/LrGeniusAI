@@ -97,6 +97,9 @@ def _extract_options(data):
     options["keyword_secondary_language"] = (
         data.get("keyword_secondary_language") or None
     )
+    options["generate_aliases"] = (
+        str(data.get("generate_aliases", "false")).lower() == "true"
+    )
 
     options["replace_ss"] = str(data.get("replace_ss", "false")).lower() == "true"
     options["ollama_base_url"] = (
