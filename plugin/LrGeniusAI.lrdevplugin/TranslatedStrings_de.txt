@@ -613,7 +613,7 @@
 "$$$/LrGeniusAI/Menu/DeduplicateKeywords" = "Keyword-Synonyme deduplizieren..."
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningTitle" = "Keyword-Synonyme deduplizieren"
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro" = "Dieses Tool findet Keywords, die als eigenständige Catalog-Keywords existieren, aber gleichzeitig als Synonyme eines anderen Keywords gelistet sind. Diese Duplikate werden zusammengeführt: Fotos werden mit dem kanonischen Keyword neu getaggt und das doppelte Keyword gelöscht."
-"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Warnung: Diese Operation verändert den Catalog dauerhaft. Gelöschte Keywords können nicht wiederhergestellt werden. Erstellen Sie vorher eine Catalog-Sicherung (Datei > Als Catalog exportieren oder Datei > Catalog-Einstellungen > Catalog sichern)."
+"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Warnung: Diese Operation verändert den Catalog dauerhaft. Gelöschte Keywords können nicht wiederhergestellt werden. Erstellen Sie vorher eine Catalog-Sicherung (Datei > Catalog-Einstellungen > Catalog sichern)."
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm" = "Ich habe eine aktuelle Catalog-Sicherung und verstehe, dass diese Operation nicht rückgängig gemacht werden kann."
 "$$$/LrGeniusAI/DeduplicateKeywords/ContinueToSelect" = "Weiter"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupRequiredMessage" = "Bitte bestätigen Sie, dass Sie eine Catalog-Sicherung haben, bevor Sie fortfahren."

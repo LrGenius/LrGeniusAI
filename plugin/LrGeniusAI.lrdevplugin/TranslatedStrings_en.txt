@@ -625,7 +625,7 @@
 "$$$/LrGeniusAI/Menu/DeduplicateKeywords" = "Deduplicate Keyword Synonyms..."
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningTitle" = "Deduplicate Keyword Synonyms"
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro" = "This tool finds keywords that exist as standalone catalog keywords but are also listed as synonyms of another keyword. Those duplicates are merged: photos are re-tagged with the canonical keyword and the standalone duplicate is deleted."
-"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Warning: This permanently modifies your catalog. Deleted keywords cannot be recovered. Create a catalog backup before proceeding (File > Export as Catalog, or File > Catalog Settings > Back Up Catalog)."
+"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Warning: This permanently modifies your catalog. Deleted keywords cannot be recovered. Back up your catalog first (File > Catalog Settings > Back Up Catalog)."
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm" = "I have a recent catalog backup and understand this operation cannot be undone."
 "$$$/LrGeniusAI/DeduplicateKeywords/ContinueToSelect" = "Continue"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupRequiredMessage" = "Please confirm you have a catalog backup before continuing."

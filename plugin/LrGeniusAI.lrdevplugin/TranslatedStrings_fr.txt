@@ -611,7 +611,7 @@
 "$$$/LrGeniusAI/Menu/DeduplicateKeywords" = "Dédupliquer les synonymes de mots-clés..."
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningTitle" = "Dédupliquer les synonymes de mots-clés"
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro" = "Cet outil recherche les mots-clés qui existent en tant que mots-clés autonomes dans le catalogue mais qui sont également répertoriés comme synonymes d'un autre mot-clé. Ces doublons sont fusionnés : les photos sont reclassées avec le mot-clé canonique et le doublon est supprimé."
-"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Avertissement : cette opération modifie définitivement votre catalogue. Les mots-clés supprimés ne peuvent pas être récupérés. Créez une sauvegarde du catalogue avant de continuer (Fichier > Exporter comme catalogue, ou Fichier > Paramètres du catalogue > Sauvegarder le catalogue)."
+"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Avertissement : cette opération modifie définitivement votre catalogue. Les mots-clés supprimés ne peuvent pas être récupérés. Faites une sauvegarde d'abord (Fichier > Paramètres du catalogue > Sauvegarder le catalogue)."
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm" = "J'ai une sauvegarde récente du catalogue et je comprends que cette opération ne peut pas être annulée."
 "$$$/LrGeniusAI/DeduplicateKeywords/ContinueToSelect" = "Continuer"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupRequiredMessage" = "Veuillez confirmer que vous disposez d'une sauvegarde du catalogue avant de continuer."
