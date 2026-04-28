@@ -99,26 +99,26 @@ LrTasks.startAsyncTask(function()
 		local warnView = f:column({
 			bind_to_object = warnProps,
 			spacing = f:control_spacing(),
-			width = 520,
+			width = 430,
 			f:static_text({
 				title = LOC(
 					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool finds keywords that exist as standalone catalog keywords but are also listed as synonyms of another keyword. Those duplicates are merged: photos are re-tagged with the canonical keyword and the standalone duplicate is deleted."
 				),
 				fill_horizontal = 1,
 				wrap = true,
-				height_in_lines = 4,
+				height_in_lines = 3,
 			}),
-			f:spacer({ height = 8 }),
+			f:separator({ fill_horizontal = 1 }),
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk=Warning: This permanently modifies your catalog. Deleted keywords cannot be recovered. Create a catalog backup before proceeding (File > Export as Catalog, or File > Catalog Settings > Back Up Catalog)."
+					"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk=Warning: This permanently modifies your catalog. Deleted keywords cannot be recovered. Back up your catalog first (File > Catalog Settings > Back Up Catalog)."
 				),
 				fill_horizontal = 1,
 				wrap = true,
-				height_in_lines = 3,
+				height_in_lines = 2,
 				text_color = LrColor(0.8, 0.2, 0.0),
 			}),
-			f:spacer({ height = 10 }),
+			f:spacer({ height = 6 }),
 			f:checkbox({
 				value = bind("hasBackup"),
 				title = LOC(

@@ -145,7 +145,11 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 				indexScope = findKeywordByNameInParent(nil, catalog, keywordSessionCache, nil, options.topLevelKeyword)
 			end
 			keywordSessionCache._aliasIndex = MetadataManager.buildAliasIndex(catalog, indexScope)
-			log:trace("Alias index built with " .. tostring(#(keywordSessionCache._aliasIndex or {})) .. " entries")
+			local aliasIndexCount = 0
+			for _ in pairs(keywordSessionCache._aliasIndex) do
+				aliasIndexCount = aliasIndexCount + 1
+			end
+			log:trace("Alias index built with " .. tostring(aliasIndexCount) .. " entries")
 		end
 
 		local topKeyword = nil
@@ -366,13 +370,13 @@ local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
 		return
 	end
 
-	if not keywordObj.setSynonyms then
-		log:warn("Cannot merge synonyms for keyword '" .. tostring(keywordName) .. "': setSynonyms API unavailable")
+	if not keywordObj.setAttributes then
+		log:warn("Cannot merge synonyms for keyword '" .. tostring(keywordName) .. "': setAttributes API unavailable")
 		return
 	end
 
 	local ok, err = LrTasks.pcall(function()
-		keywordObj:setSynonyms(merged)
+		keywordObj:setAttributes({ synonyms = merged })
 	end)
 	if not ok then
 		log:warn("Failed to merge synonyms for keyword '" .. tostring(keywordName) .. "': " .. tostring(err))
