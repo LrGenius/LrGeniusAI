@@ -19,7 +19,7 @@ def cluster_keywords():
 
     Body JSON:
         keywords  list[str]   Keyword names to cluster
-        threshold float       Cosine similarity threshold (default 0.88)
+        threshold float       Cosine similarity threshold (default 0.92)
 
     Response:
         results   list[list[str]]  Each inner list is one cluster of >=2 names

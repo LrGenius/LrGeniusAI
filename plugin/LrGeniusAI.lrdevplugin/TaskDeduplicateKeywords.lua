@@ -44,6 +44,7 @@ end
 
 -- Returns pairs {canonical, canonicalName, duplicate, duplicateName} where
 -- 'duplicate' is a catalog keyword whose name matches a synonym of 'canonical'.
+-- Keywords with child keywords are excluded as duplicates (they can't be merged).
 local function findExactPairs(selectedKeywords, allNameMap)
 	local pairs = {}
 	local scheduled = {}
@@ -60,20 +61,32 @@ local function findExactPairs(selectedKeywords, allNameMap)
 						if key ~= "" then
 							local duplicate = allNameMap[key]
 							if duplicate and duplicate ~= kw and not scheduled[duplicate] then
-								local okDup, dupName = LrTasks.pcall(function()
-									return duplicate:getName()
+								-- Skip keywords that have children — they cannot be merged
+								local okChildren, children = LrTasks.pcall(function()
+									return duplicate:getChildren() or {}
 								end)
-								local okCan, canName = LrTasks.pcall(function()
-									return kw:getName()
-								end)
-								if okDup and okCan then
-									scheduled[duplicate] = true
-									table.insert(pairs, {
-										canonical = kw,
-										canonicalName = canName,
-										duplicate = duplicate,
-										duplicateName = dupName,
-									})
+								if okChildren and type(children) == "table" and #children > 0 then
+									log:trace(
+										"DeduplicateKeywords: skipping '"
+											.. key
+											.. "' (has children) as duplicate candidate"
+									)
+								else
+									local okDup, dupName = LrTasks.pcall(function()
+										return duplicate:getName()
+									end)
+									local okCan, canName = LrTasks.pcall(function()
+										return kw:getName()
+									end)
+									if okDup and okCan then
+										scheduled[duplicate] = true
+										table.insert(pairs, {
+											canonical = kw,
+											canonicalName = canName,
+											duplicate = duplicate,
+											duplicateName = dupName,
+										})
+									end
 								end
 							end
 						end
@@ -362,7 +375,7 @@ LrTasks.startAsyncTask(function()
 		local semanticPairs = {}
 		local semanticWarning = nil
 
-		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allKeywordNames, 0.88)
+		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allKeywordNames, 0.92)
 		if clusterResp and clusterResp.results then
 			if clusterResp.warning and clusterResp.warning ~= "" then
 				semanticWarning = clusterResp.warning
