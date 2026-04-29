@@ -371,6 +371,9 @@ function MetadataManager.buildAliasIndex(catalog, scope)
 		return index
 	end
 
+	-- Index by keyword name only. We deliberately do NOT index by LR synonyms:
+	-- past AI runs may have polluted that field with hypernyms / co-occurring terms,
+	-- and indexing them would silently re-route fresh keywords into the wrong bucket.
 	local function indexKeyword(kw)
 		if not kw or type(kw.getName) ~= "function" then
 			return
@@ -382,22 +385,6 @@ function MetadataManager.buildAliasIndex(catalog, scope)
 			local key = string.lower(Util.trim(name))
 			if key ~= "" and not index[key] then
 				index[key] = kw
-			end
-		end
-		if type(kw.getSynonyms) == "function" then
-			local okSyn, syns = LrTasks.pcall(function()
-				return kw:getSynonyms() or {}
-			end)
-			if okSyn and type(syns) == "table" then
-				for _, s in ipairs(syns) do
-					if type(s) == "string" then
-						local key = string.lower(Util.trim(s))
-						-- Name takes priority over synonym; don't overwrite an existing entry.
-						if key ~= "" and not index[key] then
-							index[key] = kw
-						end
-					end
-				end
 			end
 		end
 	end
