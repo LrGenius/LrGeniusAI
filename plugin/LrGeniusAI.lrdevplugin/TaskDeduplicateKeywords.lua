@@ -85,14 +85,17 @@ local function findExactPairs(selectedKeywords, allNameMap)
 	return pairs
 end
 
--- Executes a single keyword merge: re-tags photos and deletes the duplicate.
+-- Executes a single keyword merge: re-tags photos with the canonical keyword
+-- and removes them from the duplicate. The duplicate keyword entry itself is
+-- left in the catalog (the Lightroom SDK has no deleteKeyword API); it will
+-- appear with 0 photos and can be removed via Metadata > Purge Unused Keywords.
 -- Returns true on success, or nil + reason string on failure/skip.
 local function executeMerge(catalog, pair)
 	local okChildren, children = LrTasks.pcall(function()
 		return pair.duplicate:getChildren() or {}
 	end)
 	if not okChildren or (type(children) == "table" and #children > 0) then
-		log:warn("DeduplicateKeywords: Skipping '" .. pair.duplicateName .. "' — has child keywords, cannot delete")
+		log:warn("DeduplicateKeywords: Skipping '" .. pair.duplicateName .. "' — has child keywords")
 		return nil, pair.duplicateName .. " (has children)"
 	end
 
@@ -132,7 +135,6 @@ local function executeMerge(catalog, pair)
 						)
 					end
 				end
-				catalog:deleteKeyword(pair.duplicate)
 			end,
 			Defaults.catalogWriteAccessOptions
 		)
@@ -145,7 +147,7 @@ local function executeMerge(catalog, pair)
 				.. pair.canonicalName
 				.. "' ("
 				.. #photos
-				.. " photo(s) re-tagged)"
+				.. " photo(s) re-tagged, keyword entry remains — purge via Metadata > Purge Unused Keywords)"
 		)
 		return true
 	else
@@ -629,6 +631,13 @@ LrTasks.startAsyncTask(function()
 		-- ── Results ────────────────────────────────────────────────────────
 		local resultMsg =
 			LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultSuccess=^1 keyword(s) merged successfully.", mergedCount)
+		if mergedCount > 0 then
+			resultMsg = resultMsg
+				.. "\n\n"
+				.. LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/ResultPurgeHint=The duplicate keyword entries are now empty. To remove them from the keyword list, choose Metadata > Purge Unused Keywords in Lightroom."
+				)
+		end
 		if #skippedNames > 0 then
 			resultMsg = resultMsg
 				.. "\n\n"
