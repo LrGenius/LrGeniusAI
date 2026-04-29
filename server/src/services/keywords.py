@@ -1,4 +1,4 @@
-"""Keyword clustering and LLM-based synonym validation."""
+"""Keyword clustering, LLM-based synonym validation, and keyword merge application."""
 
 import json
 from typing import Any
@@ -205,3 +205,132 @@ def validate_clusters_with_llm(
             validated.extend(g for g in chunk if len(g) >= 2)
 
     return validated
+
+
+def _replace_in_keyword_structure(
+    kw_data: Any, merge_map: dict[str, str]
+) -> tuple[Any, bool]:
+    """Recursively replace keyword names in a list/dict/str keyword structure.
+    Returns (updated_data, changed).
+    """
+    if isinstance(kw_data, list):
+        new_list: list = []
+        seen: set[str] = set()
+        changed = False
+        for item in kw_data:
+            new_item, item_changed = _replace_in_keyword_structure(item, merge_map)
+            if item_changed:
+                changed = True
+            norm = new_item.lower() if isinstance(new_item, str) else None
+            if norm is None or norm not in seen:
+                if norm:
+                    seen.add(norm)
+                new_list.append(new_item)
+            else:
+                changed = True  # duplicate removed
+        return new_list, changed
+
+    if isinstance(kw_data, dict):
+        new_dict: dict = {}
+        changed = False
+        for k, v in kw_data.items():
+            new_v, sub_changed = _replace_in_keyword_structure(v, merge_map)
+            new_dict[k] = new_v
+            if sub_changed:
+                changed = True
+        return new_dict, changed
+
+    if isinstance(kw_data, str):
+        replacement = merge_map.get(kw_data.lower(), kw_data)
+        return replacement, replacement != kw_data
+
+    return kw_data, False
+
+
+def apply_keyword_merges(merges: list[dict]) -> dict:
+    """Replace duplicate keyword names with their canonical equivalents in all
+    photo metadata stored in ChromaDB.
+
+    Args:
+        merges: list of {duplicate: str, canonical: str} dicts
+
+    Returns:
+        {updated_photos: int}
+    """
+    from services import chroma as chroma_service
+
+    if not merges:
+        return {"updated_photos": 0}
+
+    merge_map: dict[str, str] = {}
+    for m in merges:
+        dup = (m.get("duplicate") or "").strip()
+        can = (m.get("canonical") or "").strip()
+        if dup and can and dup.lower() != can.lower():
+            merge_map[dup.lower()] = can
+
+    if not merge_map:
+        return {"updated_photos": 0}
+
+    col = chroma_service.collection
+    if col is None:
+        return {"updated_photos": 0}
+
+    data = col.get(include=["metadatas"], limit=chroma_service.STATS_GET_LIMIT)
+    ids: list[str] = data.get("ids", [])
+    metadatas: list[dict] = data.get("metadatas", [])
+
+    updated_ids: list[str] = []
+    updated_metas: list[dict] = []
+
+    for photo_id, meta in zip(ids, metadatas):
+        if not meta:
+            continue
+        changed = False
+        new_meta = dict(meta)
+
+        # flattened_keywords — comma-separated string
+        flat = new_meta.get("flattened_keywords", "") or ""
+        if flat:
+            parts = [p.strip() for p in flat.split(",") if p.strip()]
+            new_parts: list[str] = []
+            seen_flat: set[str] = set()
+            for p in parts:
+                rep = merge_map.get(p.lower(), p)
+                norm = rep.lower()
+                if norm not in seen_flat:
+                    seen_flat.add(norm)
+                    new_parts.append(rep)
+                    if rep != p:
+                        changed = True
+                else:
+                    changed = True  # deduplicated
+            new_meta["flattened_keywords"] = ", ".join(new_parts)
+
+        # keywords — JSON-encoded list or dict
+        kw_json = new_meta.get("keywords", "") or ""
+        if kw_json:
+            try:
+                kw_data = json.loads(kw_json)
+                kw_data, kw_changed = _replace_in_keyword_structure(kw_data, merge_map)
+                if kw_changed:
+                    new_meta["keywords"] = json.dumps(kw_data)
+                    changed = True
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if changed:
+            updated_ids.append(photo_id)
+            updated_metas.append(new_meta)
+
+    _BATCH = 500
+    for start in range(0, len(updated_ids), _BATCH):
+        col.update(
+            ids=updated_ids[start : start + _BATCH],
+            metadatas=updated_metas[start : start + _BATCH],
+        )
+
+    logger.info(
+        f"apply_keyword_merges: updated {len(updated_ids)} photo(s) for {len(merge_map)} merge(s)"
+    )
+    return {"updated_photos": len(updated_ids)}

@@ -490,6 +490,7 @@ LrTasks.startAsyncTask(function()
 
 		-- ── Step 4: Preview with per-item checkboxes ──────────────────────
 		local previewProps = LrBinding.makePropertyTable(context)
+		previewProps.syncBackend = true
 
 		for i = 1, #exactPairs do
 			previewProps["sel_exact_" .. i] = true
@@ -618,6 +619,20 @@ LrTasks.startAsyncTask(function()
 			table.insert(previewChildren, semanticSection)
 		end
 
+		table.insert(previewChildren, f:spacer({ height = 4 }))
+		table.insert(
+			previewChildren,
+			f:row({
+				bind_to_object = previewProps,
+				f:checkbox({ value = bind("syncBackend") }),
+				f:static_text({
+					title = LOC(
+						"$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel=Also update AI search index (recommended)"
+					),
+				}),
+			})
+		)
+
 		local previewView = f:column(previewChildren)
 
 		local previewResult = LrDialogs.presentModalDialog({
@@ -662,6 +677,7 @@ LrTasks.startAsyncTask(function()
 
 		local mergedCount = 0
 		local skippedNames = {}
+		local successfulPairs = {}
 
 		mergeScope:setPortionComplete(0, #finalPairs)
 
@@ -684,11 +700,25 @@ LrTasks.startAsyncTask(function()
 			local ok, reason = executeMerge(catalog, pair)
 			if ok then
 				mergedCount = mergedCount + 1
+				table.insert(successfulPairs, pair)
 			else
 				table.insert(skippedNames, reason)
 			end
 
 			mergeScope:setPortionComplete(i, #finalPairs)
+		end
+
+		-- Sync backend database if the user opted in
+		local backendUpdated = nil
+		if previewProps.syncBackend and #successfulPairs > 0 then
+			mergeScope:setCaption(LOC("$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend=Updating AI search index..."))
+			LrTasks.yield()
+			local syncResp, syncErr = SearchIndexAPI.applyKeywordMerges(successfulPairs)
+			if syncErr then
+				log:warn("DeduplicateKeywords: backend sync failed: " .. tostring(syncErr))
+			elseif syncResp then
+				backendUpdated = syncResp.updated_photos
+			end
 		end
 
 		mergeScope:done()
@@ -710,6 +740,14 @@ LrTasks.startAsyncTask(function()
 					"$$$/LrGeniusAI/DeduplicateKeywords/ResultSkipped=^1 keyword(s) could not be processed:\n^2",
 					#skippedNames,
 					table.concat(skippedNames, "\n")
+				)
+		end
+		if backendUpdated ~= nil then
+			resultMsg = resultMsg
+				.. "\n\n"
+				.. LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync=AI search index updated: ^1 photo(s) updated.",
+					tostring(backendUpdated)
 				)
 		end
 
