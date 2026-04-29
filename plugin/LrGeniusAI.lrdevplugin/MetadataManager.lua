@@ -3,6 +3,7 @@
 
 MetadataManager = {}
 local createKeywordSafely
+local findKeywordByNameInParent
 
 -- Session cache bucket for nil parent (cannot use nil as table key).
 local KEYWORD_CACHE_ROOT = {}
@@ -218,7 +219,7 @@ end
 -- @param parent Optional parent LrKeyword object.
 -- @param keywordName The keyword name to find.
 -- @return LrKeyword|nil
-local function findKeywordByNameInParent(photo, catalog, sessionCache, parent, keywordName)
+findKeywordByNameInParent = function(photo, catalog, sessionCache, parent, keywordName)
 	if not catalog or type(keywordName) ~= "string" then
 		return nil
 	end
