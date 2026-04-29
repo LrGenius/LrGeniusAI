@@ -65,8 +65,9 @@ def cluster_keywords():
         ), 200
 
     try:
+        ctx_len = getattr(model, "context_length", 77)
         with torch.no_grad():
-            tokens = tokenizer(unique).to(TORCH_DEVICE)
+            tokens = tokenizer(unique, context_length=ctx_len).to(TORCH_DEVICE)
             features = model.encode_text(tokens)
             embeddings = F.normalize(features, p=2, dim=1).cpu().numpy()
     except Exception as e:
