@@ -309,81 +309,6 @@ local function findKeywordByNameInParent(photo, catalog, sessionCache, parent, k
 end
 
 ---
--- Adds incoming synonyms to an existing Lightroom keyword (additive-only).
--- Existing synonyms are preserved; duplicates are removed case-insensitively.
--- @param keywordObj LrKeyword
--- @param incomingSynonyms table
-local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
-	if not keywordObj or type(incomingSynonyms) ~= "table" or #incomingSynonyms == 0 then
-		return
-	end
-	if not keywordObj.getSynonyms then
-		return
-	end
-
-	local okName, keywordName = LrTasks.pcall(function()
-		return keywordObj:getName() or ""
-	end)
-	if not okName then
-		log:trace("mergeKeywordSynonyms: getName failed, skipping synonyms for this node: " .. tostring(keywordName))
-		return
-	end
-
-	local okSyn, existing = LrTasks.pcall(function()
-		return keywordObj:getSynonyms() or {}
-	end)
-	if not okSyn then
-		log:trace("mergeKeywordSynonyms: getSynonyms failed, skipping synonyms for this node: " .. tostring(existing))
-		return
-	end
-
-	local merged = {}
-	local seen = {}
-
-	local function addSynonymIfValid(value)
-		if type(value) ~= "string" then
-			return
-		end
-		local synonym = Util.trim(value)
-		local lowered = string.lower(synonym)
-		if synonym == "" or lowered == string.lower(keywordName) or seen[lowered] then
-			return
-		end
-		seen[lowered] = true
-		table.insert(merged, synonym)
-	end
-
-	for _, synonym in ipairs(existing) do
-		addSynonymIfValid(synonym)
-	end
-
-	local addedIncoming = false
-	for _, synonym in ipairs(incomingSynonyms) do
-		local beforeCount = #merged
-		addSynonymIfValid(synonym)
-		if #merged > beforeCount then
-			addedIncoming = true
-		end
-	end
-
-	if not addedIncoming then
-		return
-	end
-
-	if not keywordObj.setAttributes then
-		log:warn("Cannot merge synonyms for keyword '" .. tostring(keywordName) .. "': setAttributes API unavailable")
-		return
-	end
-
-	local ok, err = LrTasks.pcall(function()
-		keywordObj:setAttributes({ synonyms = merged })
-	end)
-	if not ok then
-		log:warn("Failed to merge synonyms for keyword '" .. tostring(keywordName) .. "': " .. tostring(err))
-	end
-end
-
----
 -- Sanitizes a synonym list to a flat array of non-empty strings.
 -- @param synonyms table|nil
 -- @return table
@@ -632,7 +557,10 @@ function MetadataManager.addKeywordRecursively(
 	end
 
 	-- Resolve a keyword by alias-index (if available), then by name within the parent,
-	-- otherwise create it. Aliases (same-language surface variants) become the LR synonym field.
+	-- otherwise create it. AI-generated aliases are kept only in the in-memory alias
+	-- index for run-scoped dedup; they are NOT persisted to LR's synonym field, since
+	-- LLMs unreliably distinguish true synonyms from hypernyms/co-occurring concepts
+	-- and polluted synonyms cascade into the dedup tool's exact-match pass.
 	local aliasIndex = sessionCache and sessionCache._aliasIndex or nil
 	local function resolveAndAttachKeyword(candidateName, candidateAliases, currentParent)
 		if type(candidateName) ~= "string" or candidateName == "" then
@@ -643,11 +571,8 @@ function MetadataManager.addKeywordRecursively(
 		if not resolved then
 			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
 		end
-		if resolved then
-			mergeKeywordSynonyms(resolved, candidateAliases)
-		else
-			resolved = createKeywordSafely(catalog, candidateName, candidateAliases, true, currentParent, sessionCache)
-			mergeKeywordSynonyms(resolved, candidateAliases)
+		if not resolved then
+			resolved = createKeywordSafely(catalog, candidateName, {}, true, currentParent, sessionCache)
 		end
 
 		-- Register the new keyword (and its aliases) in the alias index so the next
