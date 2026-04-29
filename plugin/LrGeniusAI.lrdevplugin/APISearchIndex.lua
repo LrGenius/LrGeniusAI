@@ -2843,20 +2843,38 @@ end
 ---
 ---
 -- Send a list of keyword names to the backend and receive clusters of semantically
--- similar terms using the CLIP text encoder.
+-- similar terms. CLIP embeddings find candidates; an optional LLM validates them.
 -- @param keywordNames table Flat list of keyword name strings
--- @param threshold number Cosine similarity threshold (default 0.88)
+-- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
+-- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
 -- @return table|nil { results = {{name,...},...}, warning = str|nil } or nil, err
-function SearchIndexAPI.clusterKeywords(keywordNames, threshold)
+function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options)
 	if type(keywordNames) ~= "table" or #keywordNames < 2 then
 		return { results = {}, warning = nil }
 	end
 	local url = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER
-	local body = {
-		keywords = keywordNames,
-		threshold = threshold or 0.88,
-	}
-	local result, err = _request("POST", url, body, 60)
+	local body = { keywords = keywordNames }
+	if threshold ~= nil then
+		body.threshold = threshold
+	end
+	if type(options) == "table" then
+		if options.provider then
+			body.provider = options.provider
+		end
+		if options.model then
+			body.model = options.model
+		end
+		if options.api_key then
+			body.api_key = options.api_key
+		end
+		if options.ollama_base_url then
+			body.ollama_base_url = options.ollama_base_url
+		end
+		if options.lmstudio_base_url then
+			body.lmstudio_base_url = options.lmstudio_base_url
+		end
+	end
+	local result, err = _request("POST", url, body, 300)
 	if err then
 		log:error("clusterKeywords failed: " .. tostring(err))
 		return nil, err
