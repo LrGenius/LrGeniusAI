@@ -329,6 +329,70 @@ local function sanitizeSynonyms(synonyms)
 end
 
 ---
+-- Additively merges `incomingSynonyms` into the LR synonym field of `keywordObj`.
+-- Existing synonyms are preserved; entries equal to the keyword name or already
+-- present (case-insensitive) are skipped. No-op when there is nothing to add.
+local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
+	if not keywordObj or type(incomingSynonyms) ~= "table" or #incomingSynonyms == 0 then
+		return
+	end
+	if type(keywordObj.getSynonyms) ~= "function" or type(keywordObj.setAttributes) ~= "function" then
+		return
+	end
+
+	local okName, keywordName = LrTasks.pcall(function()
+		return keywordObj:getName() or ""
+	end)
+	if not okName then
+		return
+	end
+
+	local okSyn, existing = LrTasks.pcall(function()
+		return keywordObj:getSynonyms() or {}
+	end)
+	if not okSyn or type(existing) ~= "table" then
+		return
+	end
+
+	local merged = {}
+	local seen = { [string.lower(keywordName)] = true }
+	for _, synonym in ipairs(existing) do
+		if type(synonym) == "string" then
+			local text = Util.trim(synonym)
+			local key = string.lower(text)
+			if text ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(merged, text)
+			end
+		end
+	end
+
+	local added = false
+	for _, synonym in ipairs(incomingSynonyms) do
+		if type(synonym) == "string" then
+			local text = Util.trim(synonym)
+			local key = string.lower(text)
+			if text ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(merged, text)
+				added = true
+			end
+		end
+	end
+
+	if not added then
+		return
+	end
+
+	local ok, err = LrTasks.pcall(function()
+		keywordObj:setAttributes({ synonyms = merged })
+	end)
+	if not ok then
+		log:warn("Failed to merge synonyms for keyword '" .. tostring(keywordName) .. "': " .. tostring(err))
+	end
+end
+
+---
 -- Creates a Lightroom keyword safely and returns nil on failure.
 -- @param catalog LrCatalog
 -- @param keywordName string
@@ -544,41 +608,62 @@ function MetadataManager.addKeywordRecursively(
 	end
 
 	-- Resolve a keyword by alias-index (if available), then by name within the parent,
-	-- otherwise create it. AI-generated aliases are kept only in the in-memory alias
+	-- otherwise create it. Same-language `aliases` are kept only in the in-memory alias
 	-- index for run-scoped dedup; they are NOT persisted to LR's synonym field, since
 	-- LLMs unreliably distinguish true synonyms from hypernyms/co-occurring concepts
 	-- and polluted synonyms cascade into the dedup tool's exact-match pass.
+	-- Bilingual translations (passed via `lrSynonyms`) DO land in the LR synonym field
+	-- so cross-language search works; existing keywords get an additive merge.
 	local aliasIndex = sessionCache and sessionCache._aliasIndex or nil
-	local function resolveAndAttachKeyword(candidateName, candidateAliases, currentParent)
+	local function resolveAndAttachKeyword(candidateName, candidateAliases, currentParent, lrSynonyms)
 		if type(candidateName) ~= "string" or candidateName == "" then
 			return nil
+		end
+
+		lrSynonyms = sanitizeSynonyms(lrSynonyms)
+		local nameLower = string.lower(Util.trim(candidateName))
+		local filteredLrSynonyms = {}
+		local lrSynSeen = { [nameLower] = true }
+		for _, syn in ipairs(lrSynonyms) do
+			local key = string.lower(syn)
+			if not lrSynSeen[key] then
+				lrSynSeen[key] = true
+				table.insert(filteredLrSynonyms, syn)
+			end
 		end
 
 		local resolved = findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
 		if not resolved then
 			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
 		end
-		if not resolved then
-			resolved = createKeywordSafely(catalog, candidateName, {}, true, currentParent, sessionCache)
+		if resolved then
+			mergeKeywordSynonyms(resolved, filteredLrSynonyms)
+		else
+			resolved =
+				createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
 		end
 
-		-- Register the new keyword (and its aliases) in the alias index so the next
-		-- candidate in the same run can dedupe against it.
+		-- Register the new keyword (and its aliases / bilingual synonyms) in the alias
+		-- index so the next candidate in the same run can dedupe against it.
 		if resolved and aliasIndex then
-			local nameKey = string.lower(Util.trim(candidateName))
-			if nameKey ~= "" and not aliasIndex[nameKey] then
-				aliasIndex[nameKey] = resolved
+			if nameLower ~= "" and not aliasIndex[nameLower] then
+				aliasIndex[nameLower] = resolved
 			end
-			if type(candidateAliases) == "table" then
-				for _, alias in ipairs(candidateAliases) do
-					if type(alias) == "string" then
-						local key = string.lower(Util.trim(alias))
+			local function indexAll(list)
+				if type(list) ~= "table" then
+					return
+				end
+				for _, entry in ipairs(list) do
+					if type(entry) == "string" then
+						local key = string.lower(Util.trim(entry))
 						if key ~= "" and not aliasIndex[key] then
 							aliasIndex[key] = resolved
 						end
 					end
 				end
 			end
+			indexAll(candidateAliases)
+			indexAll(filteredLrSynonyms)
 		end
 
 		if resolved then
@@ -614,22 +699,23 @@ function MetadataManager.addKeywordRecursively(
 					else
 						local currentParent = prefs.useKeywordHierarchy and parent or nil
 
-						-- Primary keyword: aliases (same language) become the LR synonym field.
-						local primary = resolveAndAttachKeyword(keywordName, keywordAliases, currentParent)
+						-- Bilingual translations + their same-language aliases all land in the
+						-- LR synonym field of the primary keyword. The primary's own aliases
+						-- (`keywordAliases`, same language as the primary) are kept out of LR
+						-- synonyms — they only feed the run-scoped alias index for dedup.
+						local lrSynonyms = {}
+						for _, t in ipairs(keywordSynonyms) do
+							table.insert(lrSynonyms, t)
+						end
+						for _, sa in ipairs(keywordSynonymAliases) do
+							table.insert(lrSynonyms, sa)
+						end
+
+						local primary = resolveAndAttachKeyword(keywordName, keywordAliases, currentParent, lrSynonyms)
 						if primary then
 							table.insert(addKeywords, keywordName)
 							-- Use the primary as the parent for nested categories below.
 							keyword = primary
-						end
-
-						-- Bilingual translations: each becomes its own LR keyword (NOT a synonym
-						-- of the primary), with synonym_aliases serving as that keyword's
-						-- same-language alias list.
-						for _, translationName in ipairs(keywordSynonyms) do
-							if not Util.table_contains(addKeywords, translationName) then
-								resolveAndAttachKeyword(translationName, keywordSynonymAliases, currentParent)
-								table.insert(addKeywords, translationName)
-							end
 						end
 					end
 				end
