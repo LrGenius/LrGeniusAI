@@ -659,3 +659,6 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticUnavailable" = "AI semantic clustering unavailable (CLIP model not loaded)."
 "$$$/LrGeniusAI/DeduplicateKeywords/MergeSelected" = "Merge Selected"
 "$$$/LrGeniusAI/DeduplicateKeywords/NoMergesSelected" = "No pairs were selected for merging."
+"$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel" = "Also update AI search index (recommended)"
+"$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend" = "Updating AI search index..."
+"$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync" = "AI search index updated: ^1 photo(s) updated."

@@ -645,3 +645,6 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticUnavailable" = "Clustering sémantique IA indisponible (modèle CLIP non chargé)."
 "$$$/LrGeniusAI/DeduplicateKeywords/MergeSelected" = "Fusionner la sélection"
 "$$$/LrGeniusAI/DeduplicateKeywords/NoMergesSelected" = "Aucune paire sélectionnée pour la fusion."
+"$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel" = "Mettre à jour l'index de recherche IA (recommandé)"
+"$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend" = "Mise à jour de l'index de recherche IA..."
+"$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync" = "Index de recherche IA mis à jour : ^1 photo(s) mise(s) à jour."

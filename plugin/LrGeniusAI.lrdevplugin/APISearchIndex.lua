@@ -65,6 +65,9 @@ local ENDPOINTS = {
 	TRAINING_STATS = "/training/stats",
 	STYLE_EDIT = "/style_edit",
 	KEYWORDS_CLUSTER = "/keywords/cluster",
+	KEYWORDS_CLUSTER_START = "/keywords/cluster/start",
+	KEYWORDS_CLUSTER_STATUS = "/keywords/cluster/status",
+	KEYWORDS_APPLY_MERGES = "/keywords/apply-merges",
 	LOGS = "/logs",
 	LOGS_RAW = "/logs/raw",
 	INITIALIZE = "/initialize",
@@ -2844,6 +2847,7 @@ end
 ---
 -- Send a list of keyword names to the backend and receive clusters of semantically
 -- similar terms. CLIP embeddings find candidates; an optional LLM validates them.
+-- Uses an async job so the HTTP request never times out on large keyword sets.
 -- @param keywordNames table Flat list of keyword name strings
 -- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
 -- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
@@ -2852,7 +2856,6 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options)
 	if type(keywordNames) ~= "table" or #keywordNames < 2 then
 		return { results = {}, warning = nil }
 	end
-	local url = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER
 	local body = { keywords = keywordNames }
 	if threshold ~= nil then
 		body.threshold = threshold
@@ -2874,9 +2877,53 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options)
 			body.lmstudio_base_url = options.lmstudio_base_url
 		end
 	end
-	local result, err = _request("POST", url, body, 300)
+
+	-- Start async job
+	local startUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_START
+	local startResp, startErr = _request("POST", startUrl, body, 30)
+	if startErr or not startResp or not startResp.job_id then
+		log:error("clusterKeywords: failed to start async job: " .. tostring(startErr))
+		return nil, startErr or "no job_id returned"
+	end
+
+	-- Poll until done
+	local jobId = startResp.job_id
+	local statusUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_STATUS .. "/" .. jobId
+	while true do
+		LrTasks.sleep(3)
+		LrTasks.yield()
+		local poll, pollErr = _request("GET", statusUrl, nil, 15)
+		if pollErr or not poll then
+			log:error("clusterKeywords: status poll failed: " .. tostring(pollErr))
+			return nil, pollErr or "status poll failed"
+		end
+		if poll.status == "done" then
+			local res = poll.result or {}
+			return { results = res.results or {}, warning = res.warning }
+		elseif poll.status == "error" then
+			log:error("clusterKeywords: job failed: " .. tostring(poll.error))
+			return nil, poll.error or "cluster job failed"
+		end
+		-- "running" → keep polling
+	end
+end
+
+-- Push successfully merged keyword pairs to the backend so its stored photo
+-- metadata reflects the same deduplication that was applied in the catalog.
+-- @param pairs table Array of {duplicateName, canonicalName} tables
+-- @return table|nil { updated_photos = n } or nil, err
+function SearchIndexAPI.applyKeywordMerges(pairs)
+	if type(pairs) ~= "table" or #pairs == 0 then
+		return { updated_photos = 0 }
+	end
+	local merges = {}
+	for _, pair in ipairs(pairs) do
+		table.insert(merges, { duplicate = pair.duplicateName, canonical = pair.canonicalName })
+	end
+	local url = getBaseUrl() .. ENDPOINTS.KEYWORDS_APPLY_MERGES
+	local result, err = _request("POST", url, { merges = merges }, 60)
 	if err then
-		log:error("clusterKeywords failed: " .. tostring(err))
+		log:error("applyKeywordMerges failed: " .. tostring(err))
 		return nil, err
 	end
 	return result

@@ -647,3 +647,6 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticUnavailable" = "KI-Semantik-Clustering nicht verfügbar (CLIP-Modell nicht geladen)."
 "$$$/LrGeniusAI/DeduplicateKeywords/MergeSelected" = "Ausgewählte zusammenführen"
 "$$$/LrGeniusAI/DeduplicateKeywords/NoMergesSelected" = "Keine Paare zum Zusammenführen ausgewählt."
+"$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel" = "Auch KI-Suchindex aktualisieren (empfohlen)"
+"$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend" = "KI-Suchindex wird aktualisiert..."
+"$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync" = "KI-Suchindex aktualisiert: ^1 Foto(s) aktualisiert."
