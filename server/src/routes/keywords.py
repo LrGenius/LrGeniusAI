@@ -1,33 +1,46 @@
 from flask import Blueprint, request, jsonify
 import numpy as np
-import torch
-import torch.nn.functional as F
 
-from config import logger, TORCH_DEVICE
+from config import logger
 import server_lifecycle
+from services.keywords import embed_keywords_batched, validate_clusters_with_llm
 
 keywords_bp = Blueprint("keywords", __name__)
 
-_MAX_KEYWORDS = 500
+_KNOWN_PROVIDERS = {"chatgpt", "gemini", "ollama", "lmstudio"}
 
 
 @keywords_bp.route("/keywords/cluster", methods=["POST"])
 def cluster_keywords():
     """
-    Embed keyword names with the CLIP text encoder and return clusters of
-    semantically similar terms (cosine similarity >= threshold).
+    Embed keyword names with the CLIP text encoder, cluster semantically similar
+    terms, then optionally validate clusters with an LLM for higher precision.
 
     Body JSON:
-        keywords  list[str]   Keyword names to cluster
-        threshold float       Cosine similarity threshold (default 0.92)
+        keywords          list[str]   Keyword names to cluster
+        threshold         float       CLIP cosine similarity threshold
+                                      (default 0.85 with LLM, 0.88 without)
+        provider          str|null    LLM provider ('chatgpt','gemini','ollama','lmstudio')
+        model             str|null    LLM model name
+        api_key           str|null    API key for cloud providers
+        ollama_base_url   str|null    Ollama server URL
+        lmstudio_base_url str|null    LM Studio server URL
 
     Response:
-        results   list[list[str]]  Each inner list is one cluster of >=2 names
-        warning   str|null         Set when CLIP model is unavailable
+        results   list[list[str]]  Each inner list is one cluster; first entry is canonical
+        warning   str|null
     """
     data = request.get_json() or {}
     keyword_names = data.get("keywords", [])
-    threshold = float(data.get("threshold", 0.88))
+    provider = data.get("provider") or None
+    model = data.get("model") or None
+    api_key = data.get("api_key") or None
+    ollama_base_url = data.get("ollama_base_url") or None
+    lmstudio_base_url = data.get("lmstudio_base_url") or None
+
+    use_llm = provider in _KNOWN_PROVIDERS
+    default_threshold = 0.85 if use_llm else 0.88
+    threshold = float(data.get("threshold", default_threshold))
     threshold = max(0.5, min(threshold, 1.0))
 
     if not isinstance(keyword_names, list):
@@ -49,13 +62,9 @@ def cluster_keywords():
     if len(unique) < 2:
         return jsonify({"results": [], "error": None, "warning": None}), 200
 
-    if len(unique) > _MAX_KEYWORDS:
-        unique = unique[:_MAX_KEYWORDS]
-        logger.warning(f"cluster_keywords: input capped to {_MAX_KEYWORDS} keywords")
-
     tokenizer = server_lifecycle.get_tokenizer()
-    model = server_lifecycle.get_model()
-    if tokenizer is None or model is None:
+    clip_model = server_lifecycle.get_model()
+    if tokenizer is None or clip_model is None:
         return jsonify(
             {
                 "results": [],
@@ -65,11 +74,7 @@ def cluster_keywords():
         ), 200
 
     try:
-        ctx_len = getattr(model, "context_length", 77)
-        with torch.no_grad():
-            tokens = tokenizer(unique, context_length=ctx_len).to(TORCH_DEVICE)
-            features = model.encode_text(tokens)
-            embeddings = F.normalize(features, p=2, dim=1).cpu().numpy()
+        embeddings = embed_keywords_batched(unique, clip_model, tokenizer)
     except Exception as e:
         logger.error(f"cluster_keywords: embedding failed: {e}", exc_info=True)
         return jsonify(
@@ -100,20 +105,39 @@ def cluster_keywords():
                 if pi != pj:
                     parent[pi] = pj
 
-    # Group indices by root
     groups: dict[int, list[int]] = {}
     for i in range(n):
         root = find(i)
         groups.setdefault(root, []).append(i)
 
-    clusters = [
+    candidates = [
         [unique[i] for i in sorted(members)]
         for members in groups.values()
         if len(members) >= 2
     ]
 
     logger.info(
-        f"cluster_keywords: {len(unique)} keywords → {len(clusters)} semantic cluster(s) "
-        f"(threshold={threshold})"
+        f"cluster_keywords: {len(unique)} keywords → {len(candidates)} CLIP candidate(s) "
+        f"(threshold={threshold}, llm={provider or 'none'})"
     )
+
+    if use_llm and candidates:
+        try:
+            clusters = validate_clusters_with_llm(
+                candidates,
+                provider,
+                model,
+                api_key,
+                ollama_base_url,
+                lmstudio_base_url,
+            )
+            logger.info(
+                f"cluster_keywords: LLM reduced {len(candidates)} candidates → {len(clusters)} confirmed clusters"
+            )
+        except Exception as e:
+            logger.error(f"cluster_keywords: LLM validation error: {e}", exc_info=True)
+            clusters = candidates
+    else:
+        clusters = candidates
+
     return jsonify({"results": clusters, "error": None, "warning": None}), 200

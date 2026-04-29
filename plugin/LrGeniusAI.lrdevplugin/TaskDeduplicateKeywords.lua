@@ -175,41 +175,72 @@ LrTasks.startAsyncTask(function()
 		local f = LrView.osFactory()
 		local bind = LrView.bind
 
+		-- Detect active cloud provider for cost disclaimer
+		local cloudProviderName = nil
+		if prefs and prefs.modelKey and prefs.modelKey ~= "" then
+			local sep = string.find(prefs.modelKey, "::", 1, true)
+			local prov = sep and string.sub(prefs.modelKey, 1, sep - 1) or prefs.modelKey
+			if prov == "chatgpt" then
+				cloudProviderName = "ChatGPT"
+			elseif prov == "gemini" then
+				cloudProviderName = "Gemini"
+			end
+		end
+
 		-- ── Step 1: Warning + backup confirmation ─────────────────────────
 		local warnProps = LrBinding.makePropertyTable(context)
 		warnProps.hasBackup = false
 
-		local warnView = f:column({
+		local warnChildren = {
 			bind_to_object = warnProps,
 			spacing = f:control_spacing(),
 			width = 430,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool finds keywords that exist as standalone catalog keywords but are also listed as synonyms of another keyword. Those duplicates are merged: photos are re-tagged with the canonical keyword and the standalone duplicate is deleted."
+					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool merges catalog keywords that are also listed as\nsynonyms of another keyword. Photos are re-tagged with the\ncanonical keyword. The duplicate entry remains in the catalog\nwith 0 photos — remove it via Metadata > Purge Unused Keywords."
 				),
 				fill_horizontal = 1,
 				wrap = true,
-				height_in_lines = 3,
 			}),
 			f:separator({ fill_horizontal = 1 }),
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk=Warning: This permanently modifies your catalog. Deleted keywords cannot be recovered. Back up your catalog first (File > Catalog Settings > Back Up Catalog)."
+					"$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk=Warning: This permanently modifies your catalog.\nDeleted keywords cannot be recovered.\nBack up first: File > Catalog Settings > Back Up Catalog."
 				),
 				fill_horizontal = 1,
 				wrap = true,
-				height_in_lines = 2,
 				text_color = LrColor(0.8, 0.2, 0.0),
 			}),
-			f:spacer({ height = 6 }),
+		}
+
+		if cloudProviderName then
+			table.insert(
+				warnChildren,
+				f:static_text({
+					title = LOC(
+						"$$$/LrGeniusAI/DeduplicateKeywords/LLMCostNote=Note: AI-assisted duplicate detection uses ^1.\nThis will generate API costs depending on your catalog size.",
+						cloudProviderName
+					),
+					fill_horizontal = 1,
+					wrap = true,
+					text_color = LrColor(0.5, 0.35, 0.0),
+				})
+			)
+		end
+
+		table.insert(warnChildren, f:spacer({ height = 4 }))
+		table.insert(
+			warnChildren,
 			f:checkbox({
 				value = bind("hasBackup"),
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm=I have a recent catalog backup and understand this operation cannot be undone."
+					"$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm=I have a recent catalog backup and understand\nthis operation cannot be undone."
 				),
 				wrap = true,
-			}),
-		})
+			})
+		)
+
+		local warnView = f:column(warnChildren)
 
 		local warnResult = LrDialogs.presentModalDialog({
 			title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/WarningTitle=Deduplicate Keyword Synonyms"),
@@ -284,11 +315,10 @@ LrTasks.startAsyncTask(function()
 			width = 520,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/SelectPathsHint=Select the top-level keyword branches to scan for synonym duplicates. The search for duplicates will cover the entire catalog."
+					"$$$/LrGeniusAI/DeduplicateKeywords/SelectPathsHint=Select the top-level keyword branches to scan for duplicates.\nThe search covers the entire catalog."
 				),
 				fill_horizontal = 1,
 				wrap = true,
-				height_in_lines = 2,
 			}),
 			f:spacer({ height = 4 }),
 			f:row({
@@ -366,7 +396,7 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
-		-- Semantic clustering via the CLIP backend
+		-- Semantic clustering via the CLIP backend (+ optional LLM validation)
 		scanScope:setCaption(
 			LOC("$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption=Querying AI for semantic clusters...")
 		)
@@ -375,7 +405,28 @@ LrTasks.startAsyncTask(function()
 		local semanticPairs = {}
 		local semanticWarning = nil
 
-		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allKeywordNames, 0.92)
+		-- Build provider options from the active model selection in prefs
+		local clusterOptions = {}
+		if prefs and prefs.modelKey and prefs.modelKey ~= "" then
+			local sep = string.find(prefs.modelKey, "::", 1, true)
+			if sep then
+				local prov = string.sub(prefs.modelKey, 1, sep - 1)
+				local mdl = string.sub(prefs.modelKey, sep + 2)
+				clusterOptions.provider = prov
+				clusterOptions.model = (mdl ~= "") and mdl or nil
+				if prov == "chatgpt" and prefs.chatgptApiKey and prefs.chatgptApiKey ~= "" then
+					clusterOptions.api_key = prefs.chatgptApiKey
+				elseif prov == "gemini" and prefs.geminiApiKey and prefs.geminiApiKey ~= "" then
+					clusterOptions.api_key = prefs.geminiApiKey
+				elseif prov == "ollama" and prefs.ollamaBaseUrl and prefs.ollamaBaseUrl ~= "" then
+					clusterOptions.ollama_base_url = prefs.ollamaBaseUrl
+				elseif prov == "lmstudio" and prefs.lmstudioBaseUrl and prefs.lmstudioBaseUrl ~= "" then
+					clusterOptions.lmstudio_base_url = prefs.lmstudioBaseUrl
+				end
+			end
+		end
+
+		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allKeywordNames, nil, clusterOptions)
 		if clusterResp and clusterResp.results then
 			if clusterResp.warning and clusterResp.warning ~= "" then
 				semanticWarning = clusterResp.warning
@@ -389,10 +440,13 @@ LrTasks.startAsyncTask(function()
 			end
 
 			for _, cluster in ipairs(clusterResp.results) do
-				-- Sort alphabetically; first entry becomes the canonical (kept keyword)
-				table.sort(cluster, function(a, b)
-					return a:lower() < b:lower()
-				end)
+				-- When the LLM is active the backend returns the canonical name first.
+				-- For CLIP-only results (no LLM) we fall back to alphabetical order.
+				if not clusterOptions.provider then
+					table.sort(cluster, function(a, b)
+						return a:lower() < b:lower()
+					end)
+				end
 				local canonicalName = cluster[1]
 				local canonicalKw = allNameMap[canonicalName:lower()]
 				if canonicalKw then
@@ -522,11 +576,10 @@ LrTasks.startAsyncTask(function()
 				fill_horizontal = 1,
 				f:static_text({
 					title = LOC(
-						"$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote=These keywords are semantically similar according to the AI. Uncheck any pair you want to keep separate."
+						"$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote=These keywords are semantically similar according to the AI.\nUncheck any pair you want to keep separate."
 					),
 					fill_horizontal = 1,
 					wrap = true,
-					height_in_lines = 2,
 				}),
 				f:spacer({ height = 4 }),
 				makeSelectButtons("sel_sem_", #semanticPairs, previewProps),
@@ -551,12 +604,11 @@ LrTasks.startAsyncTask(function()
 			width = 520,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/PreviewHint=^1 duplicate keyword(s) found. Each will be merged into its canonical synonym. Photos will be re-tagged and the duplicate keyword deleted. Keywords with child keywords will be skipped.",
+					"$$$/LrGeniusAI/DeduplicateKeywords/PreviewHint=^1 duplicate(s) found. Photos will be re-tagged with the canonical keyword.\nThe duplicate entry remains empty in the catalog; keywords with child keywords are skipped.",
 					#exactPairs + #semanticPairs
 				),
 				fill_horizontal = 1,
 				wrap = true,
-				height_in_lines = 3,
 			}),
 		}
 		if exactSection then
