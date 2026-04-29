@@ -35,3 +35,6 @@ server/gcloud/
 docker-compose.yml
 .gemini/
 .claude/
+# MemPalace AI Context
+mempalace.yaml
+entities.json
