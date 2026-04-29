@@ -60,6 +60,8 @@ class MetadataGenerationRequest:
     bilingual_keywords: bool = False
     keyword_secondary_language: str | None = None
     generate_aliases: bool = False
+    # Full catalog keyword vocabulary for encouraging reuse over invention
+    catalog_keywords: list[str] | None = None
 
     # Provider-specific overrides (e.g. Ollama/LM Studio on remote host)
     ollama_base_url: str | None = None
@@ -274,6 +276,17 @@ class LLMProviderBase(ABC):
                 )
                 if keywords_str:
                     context_additions.append(f"Some keywords are: {keywords_str}")
+
+        if request.generate_keywords and request.catalog_keywords:
+            vocab_str = ", ".join(
+                str(k).strip() for k in request.catalog_keywords if str(k).strip()
+            )
+            if vocab_str:
+                context_additions.append(
+                    f"Existing catalog vocabulary — prefer these terms over inventing "
+                    f"new ones when semantically equivalent (you may still create new "
+                    f"keywords for concepts not covered here): {vocab_str}"
+                )
 
         if request.user_context and str(request.user_context).strip() != "":
             context_additions.append(f"Context: {request.user_context}")

@@ -64,6 +64,7 @@ local ENDPOINTS = {
 	TRAINING_CLEAR = "/training", -- DELETE /training (all)
 	TRAINING_STATS = "/training/stats",
 	STYLE_EDIT = "/style_edit",
+	KEYWORDS_CLUSTER = "/keywords/cluster",
 	LOGS = "/logs",
 	LOGS_RAW = "/logs/raw",
 	INITIALIZE = "/initialize",
@@ -752,6 +753,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 			or (prefs and prefs.keywordSecondaryLanguage)
 			or "English",
 		generate_aliases = tostring(options.generate_aliases or false),
+		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
 		date_time = options.date_time,
 		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
 		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
@@ -986,6 +988,10 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 		value = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English",
 	})
 	table.insert(mimeChunks, { name = "generate_aliases", value = tostring(options.generate_aliases or false) })
+
+	if options.catalog_keywords then
+		table.insert(mimeChunks, { name = "catalog_keywords", value = JSON:encode(options.catalog_keywords) })
+	end
 
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
@@ -2827,6 +2833,29 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 end
 
 ---
+---
+-- Send a list of keyword names to the backend and receive clusters of semantically
+-- similar terms using the CLIP text encoder.
+-- @param keywordNames table Flat list of keyword name strings
+-- @param threshold number Cosine similarity threshold (default 0.88)
+-- @return table|nil { results = {{name,...},...}, warning = str|nil } or nil, err
+function SearchIndexAPI.clusterKeywords(keywordNames, threshold)
+	if type(keywordNames) ~= "table" or #keywordNames < 2 then
+		return { results = {}, warning = nil }
+	end
+	local url = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER
+	local body = {
+		keywords = keywordNames,
+		threshold = threshold or 0.88,
+	}
+	local result, err = _request("POST", url, body, 60)
+	if err then
+		log:error("clusterKeywords failed: " .. tostring(err))
+		return nil, err
+	end
+	return result
+end
+
 -- Run face clustering to group similar faces into persons.
 -- @param distanceThreshold number Optional cosine distance; default 0.5. Use 0.45 if over-merge; 0.55-0.65 if same person split.
 -- @return table|nil { status, person_count, face_count, updated } or nil, err

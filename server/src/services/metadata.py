@@ -333,6 +333,7 @@ class AnalysisService:
             bilingual_keywords=options.get("bilingual_keywords", False),
             keyword_secondary_language=options.get("keyword_secondary_language"),
             generate_aliases=options.get("generate_aliases", False),
+            catalog_keywords=options.get("catalog_keywords"),
             system_prompt=options.get("prompt"),
             date_time=options.get("date_time"),
             ollama_base_url=options.get("ollama_base_url"),
