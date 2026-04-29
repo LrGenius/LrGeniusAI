@@ -1,7 +1,8 @@
 -- TaskDeduplicateKeywords.lua
--- Finds keywords that exist as standalone catalog keywords but also appear as
--- synonyms of another keyword, then merges them: photos are re-tagged with the
--- canonical keyword and the duplicate keyword is deleted.
+-- Finds duplicate keywords via two passes:
+--   1. Exact: catalog keywords whose name matches a synonym of another keyword.
+--   2. Semantic: CLIP-embedding clusters of semantically similar keyword names.
+-- Both passes show per-item checkboxes so the user controls every merge.
 
 local function collectKeywordsUnder(keyword, result)
 	result = result or {}
@@ -43,11 +44,9 @@ end
 
 -- Returns pairs {canonical, canonicalName, duplicate, duplicateName} where
 -- 'duplicate' is a catalog keyword whose name matches a synonym of 'canonical'.
--- 'allNameMap' covers the entire catalog so duplicates outside the selected scope
--- are also detected.
-local function findDedupPairs(selectedKeywords, allNameMap)
+local function findExactPairs(selectedKeywords, allNameMap)
 	local pairs = {}
-	local scheduled = {} -- duplicate kw -> true
+	local scheduled = {}
 
 	for _, kw in ipairs(selectedKeywords) do
 		if not scheduled[kw] then
@@ -84,6 +83,75 @@ local function findDedupPairs(selectedKeywords, allNameMap)
 		end
 	end
 	return pairs
+end
+
+-- Executes a single keyword merge: re-tags photos and deletes the duplicate.
+-- Returns true on success, or nil + reason string on failure/skip.
+local function executeMerge(catalog, pair)
+	local okChildren, children = LrTasks.pcall(function()
+		return pair.duplicate:getChildren() or {}
+	end)
+	if not okChildren or (type(children) == "table" and #children > 0) then
+		log:warn("DeduplicateKeywords: Skipping '" .. pair.duplicateName .. "' — has child keywords, cannot delete")
+		return nil, pair.duplicateName .. " (has children)"
+	end
+
+	local okPhotos, photos = LrTasks.pcall(function()
+		return pair.duplicate:getPhotos() or {}
+	end)
+	if not okPhotos then
+		log:error("DeduplicateKeywords: getPhotos failed for '" .. pair.duplicateName .. "': " .. tostring(photos))
+		return nil, pair.duplicateName .. " (error reading photos)"
+	end
+
+	local ok, err = LrTasks.pcall(function()
+		catalog:withWriteAccessDo(
+			"Deduplicate keyword: " .. pair.duplicateName .. " → " .. pair.canonicalName,
+			function()
+				for _, photo in ipairs(photos) do
+					local addOk, addErr = LrTasks.pcall(function()
+						photo:addKeyword(pair.canonical)
+					end)
+					if not addOk then
+						log:error(
+							"DeduplicateKeywords: addKeyword failed for '"
+								.. pair.duplicateName
+								.. "': "
+								.. tostring(addErr)
+						)
+					end
+					local rmOk, rmErr = LrTasks.pcall(function()
+						photo:removeKeyword(pair.duplicate)
+					end)
+					if not rmOk then
+						log:error(
+							"DeduplicateKeywords: removeKeyword failed for '"
+								.. pair.duplicateName
+								.. "': "
+								.. tostring(rmErr)
+						)
+					end
+				end
+				catalog:deleteKeyword(pair.duplicate)
+			end,
+			Defaults.catalogWriteAccessOptions
+		)
+	end)
+	if ok then
+		log:info(
+			"DeduplicateKeywords: Merged '"
+				.. pair.duplicateName
+				.. "' → '"
+				.. pair.canonicalName
+				.. "' ("
+				.. #photos
+				.. " photo(s) re-tagged)"
+		)
+		return true
+	else
+		log:error("DeduplicateKeywords: merge failed for '" .. pair.duplicateName .. "': " .. tostring(err))
+		return nil, pair.duplicateName .. " (merge failed)"
+	end
 end
 
 LrTasks.startAsyncTask(function()
@@ -259,7 +327,7 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- ── Step 3: Scan ──────────────────────────────────────────────────
+		-- ── Step 3: Scan — exact + semantic ───────────────────────────────
 		local scanScope = LrProgressScope({
 			title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/ScanProgressTitle=Scanning keyword catalog..."),
 			functionContext = context,
@@ -270,66 +338,252 @@ LrTasks.startAsyncTask(function()
 		local allCatalogKeywords = collectAllKeywords(topKeywords)
 		local allNameMap = buildNameMap(allCatalogKeywords)
 		local selectedKeywords = collectAllKeywords(selectedRoots)
-		local dedupPairs = findDedupPairs(selectedKeywords, allNameMap)
+		local exactPairs = findExactPairs(selectedKeywords, allNameMap)
+
+		-- Collect all keyword names for the semantic pass
+		local allKeywordNames = {}
+		for _, kw in ipairs(allCatalogKeywords) do
+			local okN, name = LrTasks.pcall(function()
+				return kw:getName()
+			end)
+			if okN and type(name) == "string" and name ~= "" then
+				table.insert(allKeywordNames, Util.trim(name))
+			end
+		end
+
+		-- Semantic clustering via the CLIP backend
+		scanScope:setCaption(
+			LOC("$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption=Querying AI for semantic clusters...")
+		)
+		LrTasks.yield()
+
+		local semanticPairs = {}
+		local semanticWarning = nil
+
+		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allKeywordNames, 0.88)
+		if clusterResp and clusterResp.results then
+			if clusterResp.warning and clusterResp.warning ~= "" then
+				semanticWarning = clusterResp.warning
+			end
+
+			-- Build a set of names already scheduled by the exact pass (either side)
+			local alreadyScheduled = {}
+			for _, p in ipairs(exactPairs) do
+				alreadyScheduled[p.duplicateName:lower()] = true
+				alreadyScheduled[p.canonicalName:lower()] = true
+			end
+
+			for _, cluster in ipairs(clusterResp.results) do
+				-- Sort alphabetically; first entry becomes the canonical (kept keyword)
+				table.sort(cluster, function(a, b)
+					return a:lower() < b:lower()
+				end)
+				local canonicalName = cluster[1]
+				local canonicalKw = allNameMap[canonicalName:lower()]
+				if canonicalKw then
+					for j = 2, #cluster do
+						local dupName = cluster[j]
+						local dupKey = dupName:lower()
+						if not alreadyScheduled[dupKey] then
+							local dupKw = allNameMap[dupKey]
+							if dupKw and dupKw ~= canonicalKw then
+								alreadyScheduled[dupKey] = true
+								table.insert(semanticPairs, {
+									canonical = canonicalKw,
+									canonicalName = canonicalName,
+									duplicate = dupKw,
+									duplicateName = dupName,
+								})
+							end
+						end
+					end
+				end
+			end
+		elseif clusterErr then
+			semanticWarning = LOC(
+				"$$$/LrGeniusAI/DeduplicateKeywords/SemanticUnavailable=AI semantic clustering unavailable (CLIP model not loaded)."
+			)
+			log:warn("DeduplicateKeywords: semantic cluster call failed: " .. tostring(clusterErr))
+		end
 
 		scanScope:done()
 
-		if #dedupPairs == 0 then
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesTitle=No Duplicates Found"),
-				LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesMessage=No synonym duplicates were found in the selected keyword branches. Your catalog is already clean."
-				)
+		if #exactPairs == 0 and #semanticPairs == 0 then
+			local msg = LOC(
+				"$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesMessage=No synonym duplicates were found in the selected keyword branches. Your catalog is already clean."
 			)
+			if semanticWarning then
+				msg = msg .. "\n\n" .. semanticWarning
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesTitle=No Duplicates Found"), msg)
 			return
 		end
 
-		-- ── Step 4: Preview + confirm ──────────────────────────────────────
-		local previewRows = { spacing = 2 }
-		for _, pair in ipairs(dedupPairs) do
-			table.insert(
-				previewRows,
-				f:static_text({
-					title = '"' .. pair.duplicateName .. '"  →  "' .. pair.canonicalName .. '"',
-					font = "<system>",
-				})
-			)
+		-- ── Step 4: Preview with per-item checkboxes ──────────────────────
+		local previewProps = LrBinding.makePropertyTable(context)
+
+		for i = 1, #exactPairs do
+			previewProps["sel_exact_" .. i] = true
+		end
+		for i = 1, #semanticPairs do
+			previewProps["sel_sem_" .. i] = true
 		end
 
-		local previewView = f:column({
+		local function makeSelectButtons(prefix, count, props)
+			return f:row({
+				f:push_button({
+					title = LOC("$$$/LrGeniusAI/MetadataManager/SelectAll=Select All"),
+					action = function()
+						for i = 1, count do
+							props[prefix .. i] = true
+						end
+					end,
+				}),
+				f:push_button({
+					title = LOC("$$$/LrGeniusAI/MetadataManager/DeselectAll=Deselect All"),
+					action = function()
+						for i = 1, count do
+							props[prefix .. i] = false
+						end
+					end,
+				}),
+			})
+		end
+
+		-- Section 1: exact synonym pairs
+		local exactSection
+		if #exactPairs > 0 then
+			local exactRows = { spacing = 2 }
+			for i, pair in ipairs(exactPairs) do
+				table.insert(
+					exactRows,
+					f:row({
+						f:checkbox({ value = bind("sel_exact_" .. i) }),
+						f:static_text({
+							title = '"' .. pair.duplicateName .. '"  →  "' .. pair.canonicalName .. '"',
+							font = "<system>",
+						}),
+					})
+				)
+			end
+			exactSection = f:group_box({
+				bind_to_object = previewProps,
+				title = LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/ExactHeader=Exact Synonym Duplicates (^1)",
+					#exactPairs
+				),
+				fill_horizontal = 1,
+				makeSelectButtons("sel_exact_", #exactPairs, previewProps),
+				f:scrolled_view({
+					height = 180,
+					width = 490,
+					f:column(exactRows),
+				}),
+			})
+		end
+
+		-- Section 2: semantic pairs
+		local semanticSection
+		if #semanticPairs > 0 then
+			local semRows = { spacing = 2 }
+			for i, pair in ipairs(semanticPairs) do
+				table.insert(
+					semRows,
+					f:row({
+						f:checkbox({ value = bind("sel_sem_" .. i) }),
+						f:static_text({
+							title = '"' .. pair.duplicateName .. '"  →  "' .. pair.canonicalName .. '"',
+							font = "<system>",
+						}),
+					})
+				)
+			end
+			semanticSection = f:group_box({
+				bind_to_object = previewProps,
+				title = LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/SemanticHeader=AI Semantic Suggestions (^1)",
+					#semanticPairs
+				),
+				fill_horizontal = 1,
+				f:static_text({
+					title = LOC(
+						"$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote=These keywords are semantically similar according to the AI. Uncheck any pair you want to keep separate."
+					),
+					fill_horizontal = 1,
+					wrap = true,
+					height_in_lines = 2,
+				}),
+				f:spacer({ height = 4 }),
+				makeSelectButtons("sel_sem_", #semanticPairs, previewProps),
+				f:scrolled_view({
+					height = 180,
+					width = 490,
+					f:column(semRows),
+				}),
+			})
+		elseif semanticWarning then
+			semanticSection = f:static_text({
+				title = semanticWarning,
+				fill_horizontal = 1,
+				wrap = true,
+				text_color = LrColor(0.5, 0.5, 0.5),
+			})
+		end
+
+		-- Assemble preview column
+		local previewChildren = {
 			spacing = f:control_spacing(),
 			width = 520,
 			f:static_text({
 				title = LOC(
 					"$$$/LrGeniusAI/DeduplicateKeywords/PreviewHint=^1 duplicate keyword(s) found. Each will be merged into its canonical synonym. Photos will be re-tagged and the duplicate keyword deleted. Keywords with child keywords will be skipped.",
-					#dedupPairs
+					#exactPairs + #semanticPairs
 				),
 				fill_horizontal = 1,
 				wrap = true,
 				height_in_lines = 3,
 			}),
-			f:spacer({ height = 4 }),
-			f:static_text({
-				title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/PreviewHeader=Duplicate  →  Canonical"),
-				font = "<system/bold>",
-			}),
-			f:scrolled_view({
-				height = 260,
-				width = 500,
-				f:column(previewRows),
-			}),
-		})
+		}
+		if exactSection then
+			table.insert(previewChildren, exactSection)
+		end
+		if semanticSection then
+			table.insert(previewChildren, semanticSection)
+		end
+
+		local previewView = f:column(previewChildren)
 
 		local previewResult = LrDialogs.presentModalDialog({
 			title = LOC(
 				"$$$/LrGeniusAI/DeduplicateKeywords/PreviewTitle=Preview: ^1 Duplicate(s) to Merge",
-				#dedupPairs
+				#exactPairs + #semanticPairs
 			),
 			contents = previewView,
-			actionVerb = LOC("$$$/LrGeniusAI/DeduplicateKeywords/MergeNow=Merge Now"),
+			actionVerb = LOC("$$$/LrGeniusAI/DeduplicateKeywords/MergeSelected=Merge Selected"),
 			cancelVerb = LOC("$$$/LrGeniusAI/common/Cancel=Cancel"),
 		})
 		if previewResult ~= "ok" then
+			return
+		end
+
+		-- Build the final list from checked items
+		local finalPairs = {}
+		for i, pair in ipairs(exactPairs) do
+			if previewProps["sel_exact_" .. i] then
+				table.insert(finalPairs, pair)
+			end
+		end
+		for i, pair in ipairs(semanticPairs) do
+			if previewProps["sel_sem_" .. i] then
+				table.insert(finalPairs, pair)
+			end
+		end
+
+		if #finalPairs == 0 then
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoSelectionTitle=Nothing Selected"),
+				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoMergesSelected=No pairs were selected for merging.")
+			)
 			return
 		end
 
@@ -342,9 +596,9 @@ LrTasks.startAsyncTask(function()
 		local mergedCount = 0
 		local skippedNames = {}
 
-		mergeScope:setPortionComplete(0, #dedupPairs)
+		mergeScope:setPortionComplete(0, #finalPairs)
 
-		for i, pair in ipairs(dedupPairs) do
+		for i, pair in ipairs(finalPairs) do
 			if mergeScope:isCanceled() then
 				break
 			end
@@ -353,86 +607,21 @@ LrTasks.startAsyncTask(function()
 				LOC(
 					"$$$/LrGeniusAI/DeduplicateKeywords/MergingCaption=Merging ^1 of ^2: ^3",
 					i,
-					#dedupPairs,
+					#finalPairs,
 					pair.duplicateName
 				)
 			)
-			mergeScope:setPortionComplete(i - 1, #dedupPairs)
+			mergeScope:setPortionComplete(i - 1, #finalPairs)
 			LrTasks.yield()
 
-			-- Keywords with children cannot be safely deleted
-			local okChildren, children = LrTasks.pcall(function()
-				return pair.duplicate:getChildren() or {}
-			end)
-			if not okChildren or (type(children) == "table" and #children > 0) then
-				log:warn(
-					"DeduplicateKeywords: Skipping '" .. pair.duplicateName .. "' — has child keywords, cannot delete"
-				)
-				table.insert(skippedNames, pair.duplicateName .. " (has children)")
+			local ok, reason = executeMerge(catalog, pair)
+			if ok then
+				mergedCount = mergedCount + 1
 			else
-				local okPhotos, photos = LrTasks.pcall(function()
-					return pair.duplicate:getPhotos() or {}
-				end)
-				if not okPhotos then
-					log:error(
-						"DeduplicateKeywords: getPhotos failed for '" .. pair.duplicateName .. "': " .. tostring(photos)
-					)
-					table.insert(skippedNames, pair.duplicateName .. " (error reading photos)")
-				else
-					local ok, err = LrTasks.pcall(function()
-						catalog:withWriteAccessDo(
-							"Deduplicate keyword: " .. pair.duplicateName .. " → " .. pair.canonicalName,
-							function()
-								for _, photo in ipairs(photos) do
-									local addOk, addErr = LrTasks.pcall(function()
-										photo:addKeyword(pair.canonical)
-									end)
-									if not addOk then
-										log:error(
-											"DeduplicateKeywords: addKeyword failed for '"
-												.. pair.duplicateName
-												.. "': "
-												.. tostring(addErr)
-										)
-									end
-									local rmOk, rmErr = LrTasks.pcall(function()
-										photo:removeKeyword(pair.duplicate)
-									end)
-									if not rmOk then
-										log:error(
-											"DeduplicateKeywords: removeKeyword failed for '"
-												.. pair.duplicateName
-												.. "': "
-												.. tostring(rmErr)
-										)
-									end
-								end
-								catalog:deleteKeyword(pair.duplicate)
-							end,
-							Defaults.catalogWriteAccessOptions
-						)
-					end)
-					if ok then
-						mergedCount = mergedCount + 1
-						log:info(
-							"DeduplicateKeywords: Merged '"
-								.. pair.duplicateName
-								.. "' → '"
-								.. pair.canonicalName
-								.. "' ("
-								.. #photos
-								.. " photo(s) re-tagged)"
-						)
-					else
-						log:error(
-							"DeduplicateKeywords: merge failed for '" .. pair.duplicateName .. "': " .. tostring(err)
-						)
-						table.insert(skippedNames, pair.duplicateName .. " (merge failed)")
-					end
-				end
+				table.insert(skippedNames, reason)
 			end
 
-			mergeScope:setPortionComplete(i, #dedupPairs)
+			mergeScope:setPortionComplete(i, #finalPairs)
 		end
 
 		mergeScope:done()

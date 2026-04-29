@@ -933,6 +933,61 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 end
 
 ---
+-- Collects up to `limit` unique keyword names from the full catalog keyword tree.
+-- Returns a flat sorted list of strings suitable for sending to the backend as
+-- catalog vocabulary context.
+-- @param catalog LrCatalog
+-- @param limit number Max names to return (default 300)
+-- @return table Flat list of keyword name strings
+function MetadataManager.collectCatalogKeywordNames(catalog, limit)
+	limit = limit or 300
+	local names = {}
+	local seen = {}
+	local count = 0
+
+	local function walk(keywords)
+		if count >= limit or type(keywords) ~= "table" then
+			return
+		end
+		for _, kw in ipairs(keywords) do
+			if count >= limit then
+				break
+			end
+			local okName, name = LrTasks.pcall(function()
+				return kw:getName()
+			end)
+			if okName and type(name) == "string" then
+				local key = string.lower(Util.trim(name))
+				if key ~= "" and not seen[key] then
+					seen[key] = true
+					table.insert(names, Util.trim(name))
+					count = count + 1
+				end
+			end
+			if type(kw.getChildren) == "function" then
+				local okCh, children = LrTasks.pcall(function()
+					return kw:getChildren() or {}
+				end)
+				if okCh then
+					walk(children)
+				end
+			end
+		end
+	end
+
+	local okTop, topKeywords = LrTasks.pcall(function()
+		return catalog:getKeywords() or {}
+	end)
+	if okTop then
+		walk(topKeywords)
+	end
+	table.sort(names, function(a, b)
+		return a:lower() < b:lower()
+	end)
+	return names
+end
+
+---
 -- Get the keyword hierarchy from the Lightroom catalog.
 -- Only keywords with children will be returned.
 -- @return A table representing the keyword hierarchy.

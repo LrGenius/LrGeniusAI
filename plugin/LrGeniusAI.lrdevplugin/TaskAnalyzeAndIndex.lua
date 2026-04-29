@@ -839,6 +839,16 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		-- Collect the catalog's existing keyword vocabulary so the AI can reuse
+		-- known terms instead of inventing near-duplicates.
+		if props.generateKeywords then
+			local catalogKwNames = MetadataManager.collectCatalogKeywordNames(LrApplication.activeCatalog(), 300)
+			if #catalogKwNames > 0 then
+				options.catalog_keywords = catalogKwNames
+				log:trace("Collected " .. #catalogKwNames .. " catalog keyword names for AI context")
+			end
+		end
+
 		-- Create progress scope
 		local progressScope = LrProgressScope({
 			title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle=Processing photos..."),
