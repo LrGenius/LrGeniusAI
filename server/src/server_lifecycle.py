@@ -31,11 +31,15 @@ _unloader_thread = None
 
 
 def _get_open_clip_tokenizer():
-    """Resolve tokenizer across open_clip_torch and older forks."""
-    try:
-        return open_clip.get_tokenizer(IMAGE_MODEL_ID)
-    except Exception:
-        return open_clip.get_tokenizer(CLIP_MODEL_NAME)
+    """Resolve tokenizer via open_clip's built-in config.
+
+    Uses CLIP_MODEL_NAME (the architecture name) rather than IMAGE_MODEL_ID
+    (the HF repo "timm/..."): the architecture name resolves to a built-in
+    config and returns the proper HFTokenizer (Gemma) for SigLIP2. Passing
+    "timm/..." with no schema prefix silently falls back to SimpleTokenizer
+    inside open_clip without raising, which would yield incorrect embeddings.
+    """
+    return open_clip.get_tokenizer(CLIP_MODEL_NAME)
 
 
 def _set_last_used():

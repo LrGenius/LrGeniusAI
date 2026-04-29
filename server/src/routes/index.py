@@ -97,6 +97,17 @@ def _extract_options(data):
     options["keyword_secondary_language"] = (
         data.get("keyword_secondary_language") or None
     )
+    options["generate_aliases"] = (
+        str(data.get("generate_aliases", "false")).lower() == "true"
+    )
+
+    raw_catalog_kw = _parse_json_field(data.get("catalog_keywords"))
+    if isinstance(raw_catalog_kw, list):
+        options["catalog_keywords"] = [
+            str(k).strip() for k in raw_catalog_kw if str(k).strip()
+        ] or None
+    else:
+        options["catalog_keywords"] = None
 
     options["replace_ss"] = str(data.get("replace_ss", "false")).lower() == "true"
     options["ollama_base_url"] = (

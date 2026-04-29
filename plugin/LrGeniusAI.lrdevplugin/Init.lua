@@ -99,6 +99,10 @@ if _G.prefs.keywordSecondaryLanguage == nil then
 	_G.prefs.keywordSecondaryLanguage = Defaults.defaultKeywordSecondaryLanguage
 end
 
+if _G.prefs.keywordAliases == nil then
+	_G.prefs.keywordAliases = Defaults.defaultKeywordAliases
+end
+
 if _G.prefs.replaceSS == nil then
 	_G.prefs.replaceSS = false
 end

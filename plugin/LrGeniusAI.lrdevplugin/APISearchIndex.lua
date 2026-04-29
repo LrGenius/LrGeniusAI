@@ -64,6 +64,10 @@ local ENDPOINTS = {
 	TRAINING_CLEAR = "/training", -- DELETE /training (all)
 	TRAINING_STATS = "/training/stats",
 	STYLE_EDIT = "/style_edit",
+	KEYWORDS_CLUSTER = "/keywords/cluster",
+	KEYWORDS_CLUSTER_START = "/keywords/cluster/start",
+	KEYWORDS_CLUSTER_STATUS = "/keywords/cluster/status",
+	KEYWORDS_APPLY_MERGES = "/keywords/apply-merges",
 	LOGS = "/logs",
 	LOGS_RAW = "/logs/raw",
 	INITIALIZE = "/initialize",
@@ -751,6 +755,8 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 		keyword_secondary_language = options.keyword_secondary_language
 			or (prefs and prefs.keywordSecondaryLanguage)
 			or "English",
+		generate_aliases = tostring(options.generate_aliases or false),
+		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
 		date_time = options.date_time,
 		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
 		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
@@ -984,6 +990,11 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 		name = "keyword_secondary_language",
 		value = options.keyword_secondary_language or (prefs and prefs.keywordSecondaryLanguage) or "English",
 	})
+	table.insert(mimeChunks, { name = "generate_aliases", value = tostring(options.generate_aliases or false) })
+
+	if options.catalog_keywords then
+		table.insert(mimeChunks, { name = "catalog_keywords", value = JSON:encode(options.catalog_keywords) })
+	end
 
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
@@ -2147,8 +2158,16 @@ local SERVER_LOCK_FILENAME = "lrgenius-server.lock"
 local serverStartInProgress = false
 
 local function getServerControlDir()
-	-- Backend uses --db-path = "<catalogParent>/lrgenius.db", and writes pid/OK files next to it.
+	-- Backend writes pid/OK/lock files next to the catalog.
 	return LrPathUtils.parent(LrApplication.activeCatalog():getPath())
+end
+
+local function getDbPath()
+	local custom = prefs.dbStoragePath
+	if custom and custom:gsub("^%s*(.-)%s*$", "%1") ~= "" then
+		return LrPathUtils.child(custom:gsub("^%s*(.-)%s*$", "%1"), "lrgenius.db")
+	end
+	return LrPathUtils.child(getServerControlDir(), "lrgenius.db")
 end
 
 local function getServerPidFilePath()
@@ -2322,7 +2341,7 @@ function SearchIndexAPI.restartBackend()
 	while LrDate.currentTime() < deadline do
 		if SearchIndexAPI.pingServer() then
 			log:info("Backend restarted successfully")
-			local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+			local dbPath = getDbPath()
 			SearchIndexAPI.initializeCatalog(dbPath)
 			return true
 		end
@@ -2338,7 +2357,7 @@ function SearchIndexAPI.initializeCatalog(dbPath)
 	end
 
 	if not dbPath then
-		dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+		dbPath = getDbPath()
 	end
 
 	local url = getBaseUrl() .. ENDPOINTS.INITIALIZE
@@ -2419,7 +2438,7 @@ function SearchIndexAPI.startServer(opts)
 
 	if SearchIndexAPI.pingServer() then
 		log:trace("Search index server is already running, triggering initialization")
-		local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+		local dbPath = getDbPath()
 		if SearchIndexAPI.initializeCatalog(dbPath) then
 			return true
 		end
@@ -2436,7 +2455,7 @@ function SearchIndexAPI.startServer(opts)
 		return false
 	end
 
-	local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+	local dbPath = getDbPath()
 
 	-- Make sure we don't leave the lock behind on early returns.
 	local ok, startResult = LrTasks.pcall(function()
@@ -2663,10 +2682,18 @@ _request = function(method, url, body, timeout, options)
 		local statusStr = httpStatusForLog(status, hdrs)
 		local err_msg
 		if status == nil then
-			local urlFixed = tostring(url):gsub("%%?.*", "")
+			local urlFixed = tostring(url):gsub("%?.*", "")
 			err_msg = "API request failed (no response). URL: " .. urlFixed
 			if type(hdrs) == "string" and hdrs ~= "" then
 				err_msg = err_msg .. " - error: " .. hdrs
+			elseif type(hdrs) == "table" then
+				local hdrsInfo = {}
+				for k, v in pairs(hdrs) do
+					table.insert(hdrsInfo, tostring(k) .. "=" .. tostring(v))
+				end
+				if #hdrsInfo > 0 then
+					err_msg = err_msg .. " - hdrs: " .. table.concat(hdrsInfo, ", ")
+				end
 			end
 		else
 			err_msg = "API request failed. HTTP status: " .. statusStr
@@ -2825,6 +2852,91 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 end
 
 ---
+---
+-- Send a list of keyword names to the backend and receive clusters of semantically
+-- similar terms. CLIP embeddings find candidates; an optional LLM validates them.
+-- Uses an async job so the HTTP request never times out on large keyword sets.
+-- @param keywordNames table Flat list of keyword name strings
+-- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
+-- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
+-- @return table|nil { results = {{name,...},...}, warning = str|nil } or nil, err
+function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options)
+	if type(keywordNames) ~= "table" or #keywordNames < 2 then
+		return { results = {}, warning = nil }
+	end
+	local body = { keywords = keywordNames }
+	if threshold ~= nil then
+		body.threshold = threshold
+	end
+	if type(options) == "table" then
+		if options.provider then
+			body.provider = options.provider
+		end
+		if options.model then
+			body.model = options.model
+		end
+		if options.api_key then
+			body.api_key = options.api_key
+		end
+		if options.ollama_base_url then
+			body.ollama_base_url = options.ollama_base_url
+		end
+		if options.lmstudio_base_url then
+			body.lmstudio_base_url = options.lmstudio_base_url
+		end
+	end
+
+	-- Start async job
+	local startUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_START
+	local startResp, startErr = _request("POST", startUrl, body, 30)
+	if startErr or not startResp or not startResp.job_id then
+		log:error("clusterKeywords: failed to start async job: " .. tostring(startErr))
+		return nil, startErr or "no job_id returned"
+	end
+
+	-- Poll until done
+	local jobId = startResp.job_id
+	local statusUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_STATUS .. "/" .. jobId
+	while true do
+		LrTasks.sleep(3)
+		LrTasks.yield()
+		local poll, pollErr = _request("GET", statusUrl, nil, 15)
+		if pollErr or not poll then
+			log:error("clusterKeywords: status poll failed: " .. tostring(pollErr))
+			return nil, pollErr or "status poll failed"
+		end
+		if poll.status == "done" then
+			local res = poll.result or {}
+			return { results = res.results or {}, warning = res.warning }
+		elseif poll.status == "error" then
+			log:error("clusterKeywords: job failed: " .. tostring(poll.error))
+			return nil, poll.error or "cluster job failed"
+		end
+		-- "running" → keep polling
+	end
+end
+
+-- Push successfully merged keyword pairs to the backend so its stored photo
+-- metadata reflects the same deduplication that was applied in the catalog.
+-- @param pairs table Array of {duplicateName, canonicalName} tables
+-- @return table|nil { updated_photos = n } or nil, err
+function SearchIndexAPI.applyKeywordMerges(pairs)
+	if type(pairs) ~= "table" or #pairs == 0 then
+		return { updated_photos = 0 }
+	end
+	local merges = {}
+	for _, pair in ipairs(pairs) do
+		table.insert(merges, { duplicate = pair.duplicateName, canonical = pair.canonicalName })
+	end
+	local url = getBaseUrl() .. ENDPOINTS.KEYWORDS_APPLY_MERGES
+	local result, err = _request("POST", url, { merges = merges }, 60)
+	if err then
+		log:error("applyKeywordMerges failed: " .. tostring(err))
+		return nil, err
+	end
+	return result
+end
+
 -- Run face clustering to group similar faces into persons.
 -- @param distanceThreshold number Optional cosine distance; default 0.5. Use 0.45 if over-merge; 0.55-0.65 if same person split.
 -- @return table|nil { status, person_count, face_count, updated } or nil, err

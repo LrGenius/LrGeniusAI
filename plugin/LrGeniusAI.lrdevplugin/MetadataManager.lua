@@ -3,6 +3,7 @@
 
 MetadataManager = {}
 local createKeywordSafely
+local findKeywordByNameInParent
 
 -- Session cache bucket for nil parent (cannot use nil as table key).
 local KEYWORD_CACHE_ROOT = {}
@@ -136,6 +137,22 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 	log:trace("Saving keywords to catalog")
 	if saveKeywords and keywords ~= nil and type(keywords) == "table" and prefs.generateKeywords then
 		local keywordSessionCache = {}
+
+		-- Build alias-dedup index when alias mode is on. Scope follows the user's
+		-- top-level-keyword preference so we don't merge into hand-curated branches.
+		if options.generateAliases then
+			local indexScope = nil
+			if options.useTopLevelKeyword and options.topLevelKeyword and options.topLevelKeyword ~= "" then
+				indexScope = findKeywordByNameInParent(nil, catalog, keywordSessionCache, nil, options.topLevelKeyword)
+			end
+			keywordSessionCache._aliasIndex = MetadataManager.buildAliasIndex(catalog, indexScope)
+			local aliasIndexCount = 0
+			for _ in pairs(keywordSessionCache._aliasIndex) do
+				aliasIndexCount = aliasIndexCount + 1
+			end
+			log:trace("Alias index built with " .. tostring(aliasIndexCount) .. " entries")
+		end
+
 		local topKeyword = nil
 		if prefs.useKeywordHierarchy and options.useTopLevelKeyword then
 			catalog:withWriteAccessDo(
@@ -202,7 +219,7 @@ end
 -- @param parent Optional parent LrKeyword object.
 -- @param keywordName The keyword name to find.
 -- @return LrKeyword|nil
-local function findKeywordByNameInParent(photo, catalog, sessionCache, parent, keywordName)
+findKeywordByNameInParent = function(photo, catalog, sessionCache, parent, keywordName)
 	if not catalog or type(keywordName) ~= "string" then
 		return nil
 	end
@@ -293,81 +310,6 @@ local function findKeywordByNameInParent(photo, catalog, sessionCache, parent, k
 end
 
 ---
--- Adds incoming synonyms to an existing Lightroom keyword (additive-only).
--- Existing synonyms are preserved; duplicates are removed case-insensitively.
--- @param keywordObj LrKeyword
--- @param incomingSynonyms table
-local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
-	if not keywordObj or type(incomingSynonyms) ~= "table" or #incomingSynonyms == 0 then
-		return
-	end
-	if not keywordObj.getSynonyms then
-		return
-	end
-
-	local okName, keywordName = LrTasks.pcall(function()
-		return keywordObj:getName() or ""
-	end)
-	if not okName then
-		log:trace("mergeKeywordSynonyms: getName failed, skipping synonyms for this node: " .. tostring(keywordName))
-		return
-	end
-
-	local okSyn, existing = LrTasks.pcall(function()
-		return keywordObj:getSynonyms() or {}
-	end)
-	if not okSyn then
-		log:trace("mergeKeywordSynonyms: getSynonyms failed, skipping synonyms for this node: " .. tostring(existing))
-		return
-	end
-
-	local merged = {}
-	local seen = {}
-
-	local function addSynonymIfValid(value)
-		if type(value) ~= "string" then
-			return
-		end
-		local synonym = Util.trim(value)
-		local lowered = string.lower(synonym)
-		if synonym == "" or lowered == string.lower(keywordName) or seen[lowered] then
-			return
-		end
-		seen[lowered] = true
-		table.insert(merged, synonym)
-	end
-
-	for _, synonym in ipairs(existing) do
-		addSynonymIfValid(synonym)
-	end
-
-	local addedIncoming = false
-	for _, synonym in ipairs(incomingSynonyms) do
-		local beforeCount = #merged
-		addSynonymIfValid(synonym)
-		if #merged > beforeCount then
-			addedIncoming = true
-		end
-	end
-
-	if not addedIncoming then
-		return
-	end
-
-	if not keywordObj.setSynonyms then
-		log:warn("Cannot merge synonyms for keyword '" .. tostring(keywordName) .. "': setSynonyms API unavailable")
-		return
-	end
-
-	local ok, err = LrTasks.pcall(function()
-		keywordObj:setSynonyms(merged)
-	end)
-	if not ok then
-		log:warn("Failed to merge synonyms for keyword '" .. tostring(keywordName) .. "': " .. tostring(err))
-	end
-end
-
----
 -- Sanitizes a synonym list to a flat array of non-empty strings.
 -- @param synonyms table|nil
 -- @return table
@@ -385,6 +327,70 @@ local function sanitizeSynonyms(synonyms)
 		end
 	end
 	return cleaned
+end
+
+---
+-- Additively merges `incomingSynonyms` into the LR synonym field of `keywordObj`.
+-- Existing synonyms are preserved; entries equal to the keyword name or already
+-- present (case-insensitive) are skipped. No-op when there is nothing to add.
+local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
+	if not keywordObj or type(incomingSynonyms) ~= "table" or #incomingSynonyms == 0 then
+		return
+	end
+	if type(keywordObj.getSynonyms) ~= "function" or type(keywordObj.setAttributes) ~= "function" then
+		return
+	end
+
+	local okName, keywordName = LrTasks.pcall(function()
+		return keywordObj:getName() or ""
+	end)
+	if not okName then
+		return
+	end
+
+	local okSyn, existing = LrTasks.pcall(function()
+		return keywordObj:getSynonyms() or {}
+	end)
+	if not okSyn or type(existing) ~= "table" then
+		return
+	end
+
+	local merged = {}
+	local seen = { [string.lower(keywordName)] = true }
+	for _, synonym in ipairs(existing) do
+		if type(synonym) == "string" then
+			local text = Util.trim(synonym)
+			local key = string.lower(text)
+			if text ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(merged, text)
+			end
+		end
+	end
+
+	local added = false
+	for _, synonym in ipairs(incomingSynonyms) do
+		if type(synonym) == "string" then
+			local text = Util.trim(synonym)
+			local key = string.lower(text)
+			if text ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(merged, text)
+				added = true
+			end
+		end
+	end
+
+	if not added then
+		return
+	end
+
+	local ok, err = LrTasks.pcall(function()
+		keywordObj:setAttributes({ synonyms = merged })
+	end)
+	if not ok then
+		log:warn("Failed to merge synonyms for keyword '" .. tostring(keywordName) .. "': " .. tostring(err))
+	end
 end
 
 ---
@@ -417,6 +423,106 @@ createKeywordSafely = function(catalog, keywordName, synonyms, includeOnExport, 
 end
 
 ---
+-- Builds a flat lookup map of (lower-cased name | synonym) -> LrKeyword by walking
+-- the catalog keyword tree once per analysis run. Used for alias-based de-duplication
+-- so a newly generated keyword can be matched against an existing keyword that lists
+-- it as a synonym.
+-- @param catalog LrCatalog
+-- @param scope LrKeyword|nil If provided, only keywords under this subtree are indexed.
+-- @return table Flat map of lower-cased text to LrKeyword.
+function MetadataManager.buildAliasIndex(catalog, scope)
+	local index = {}
+	if not catalog then
+		return index
+	end
+
+	-- Index by keyword name only. We deliberately do NOT index by LR synonyms:
+	-- past AI runs may have polluted that field with hypernyms / co-occurring terms,
+	-- and indexing them would silently re-route fresh keywords into the wrong bucket.
+	local function indexKeyword(kw)
+		if not kw or type(kw.getName) ~= "function" then
+			return
+		end
+		local okName, name = LrTasks.pcall(function()
+			return kw:getName()
+		end)
+		if okName and type(name) == "string" then
+			local key = string.lower(Util.trim(name))
+			if key ~= "" and not index[key] then
+				index[key] = kw
+			end
+		end
+	end
+
+	local function walk(keywords)
+		if type(keywords) ~= "table" then
+			return
+		end
+		for _, kw in ipairs(keywords) do
+			indexKeyword(kw)
+			if type(kw.getChildren) == "function" then
+				local okChildren, children = LrTasks.pcall(function()
+					return kw:getChildren() or {}
+				end)
+				if okChildren then
+					walk(children)
+				end
+			end
+		end
+	end
+
+	local roots
+	if scope and type(scope.getChildren) == "function" then
+		local ok, children = LrTasks.pcall(function()
+			return scope:getChildren() or {}
+		end)
+		if ok then
+			roots = children
+		end
+	else
+		local ok, kws = LrTasks.pcall(function()
+			return catalog:getKeywords() or {}
+		end)
+		if ok then
+			roots = kws
+		end
+	end
+	walk(roots)
+	return index
+end
+
+---
+-- Looks up a candidate keyword in the alias index by its name first and
+-- then by each of its aliases. Returns the matched LrKeyword or nil.
+local function findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
+	if type(aliasIndex) ~= "table" or type(candidateName) ~= "string" then
+		return nil
+	end
+	local nameKey = string.lower(Util.trim(candidateName))
+	if nameKey == "" then
+		return nil
+	end
+	local hit = aliasIndex[nameKey]
+	if hit then
+		return hit
+	end
+	if type(candidateAliases) == "table" then
+		for _, alias in ipairs(candidateAliases) do
+			if type(alias) == "string" then
+				local key = string.lower(Util.trim(alias))
+				if key ~= "" then
+					hit = aliasIndex[key]
+					if hit then
+						return hit
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+---
 -- Recursively adds keywords to a photo, creating parent keywords as needed.
 -- @param photo The LrPhoto object.
 -- @param catalog The LrCatalog object.
@@ -435,38 +541,142 @@ function MetadataManager.addKeywordRecursively(
 	currentTopLevelKeyword,
 	sessionCache
 )
+	local function trimmedStringList(rawList)
+		if type(rawList) ~= "table" then
+			return {}
+		end
+		local cleaned = {}
+		local seen = {}
+		for _, entry in ipairs(rawList) do
+			if type(entry) == "string" then
+				local text = Util.trim(entry)
+				local lowered = string.lower(text)
+				if text ~= "" and not seen[lowered] then
+					table.insert(cleaned, text)
+					seen[lowered] = true
+				end
+			end
+		end
+		return cleaned
+	end
+
 	local function parseKeywordLeaf(leafValue)
 		if type(leafValue) == "string" then
 			local keywordName = Util.trim(leafValue)
-			return keywordName, {}
+			return keywordName, {}, {}, {}
 		end
 		if type(leafValue) == "table" and type(leafValue.name) == "string" then
 			local keywordName = Util.trim(leafValue.name)
-			local synonyms = {}
-			local seenSynonyms = {}
-			if type(leafValue.synonyms) == "table" then
-				for _, synonym in ipairs(leafValue.synonyms) do
-					if type(synonym) == "string" then
-						local synonymText = Util.trim(synonym)
-						local normalized = string.lower(synonymText)
-						if
-							synonymText ~= ""
-							and normalized ~= string.lower(keywordName)
-							and not seenSynonyms[normalized]
-						then
-							table.insert(synonyms, synonymText)
-							seenSynonyms[normalized] = true
-						end
-					end
+			local nameLower = string.lower(keywordName)
+
+			local synonyms = trimmedStringList(leafValue.synonyms)
+			-- Drop translations colliding with the primary name.
+			local filteredSynonyms = {}
+			for _, s in ipairs(synonyms) do
+				if string.lower(s) ~= nameLower then
+					table.insert(filteredSynonyms, s)
 				end
 			end
-			return keywordName, synonyms
+
+			local aliases = trimmedStringList(leafValue.aliases)
+			local filteredAliases = {}
+			for _, a in ipairs(aliases) do
+				if string.lower(a) ~= nameLower then
+					table.insert(filteredAliases, a)
+				end
+			end
+
+			-- synonym_aliases must not collide with the primary name nor any translation.
+			local synonymAliases = trimmedStringList(leafValue.synonym_aliases)
+			local translationLowers = { [nameLower] = true }
+			for _, s in ipairs(filteredSynonyms) do
+				translationLowers[string.lower(s)] = true
+			end
+			local filteredSynonymAliases = {}
+			for _, sa in ipairs(synonymAliases) do
+				if not translationLowers[string.lower(sa)] then
+					table.insert(filteredSynonymAliases, sa)
+				end
+			end
+
+			return keywordName, filteredSynonyms, filteredAliases, filteredSynonymAliases
 		end
-		return nil, {}
+		return nil, {}, {}, {}
 	end
 
 	local function isKeywordLeafObject(value)
 		return type(value) == "table" and type(value.name) == "string"
+	end
+
+	-- Resolve a keyword by alias-index (if available), then by name within the parent,
+	-- otherwise create it. Same-language `aliases` are kept only in the in-memory alias
+	-- index for run-scoped dedup; they are NOT persisted to LR's synonym field, since
+	-- LLMs unreliably distinguish true synonyms from hypernyms/co-occurring concepts
+	-- and polluted synonyms cascade into the dedup tool's exact-match pass.
+	-- Bilingual translations (passed via `lrSynonyms`) DO land in the LR synonym field
+	-- so cross-language search works; existing keywords get an additive merge.
+	local aliasIndex = sessionCache and sessionCache._aliasIndex or nil
+	local function resolveAndAttachKeyword(candidateName, candidateAliases, currentParent, lrSynonyms)
+		if type(candidateName) ~= "string" or candidateName == "" then
+			return nil
+		end
+
+		lrSynonyms = sanitizeSynonyms(lrSynonyms)
+		local nameLower = string.lower(Util.trim(candidateName))
+		local filteredLrSynonyms = {}
+		local lrSynSeen = { [nameLower] = true }
+		for _, syn in ipairs(lrSynonyms) do
+			local key = string.lower(syn)
+			if not lrSynSeen[key] then
+				lrSynSeen[key] = true
+				table.insert(filteredLrSynonyms, syn)
+			end
+		end
+
+		local resolved = findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
+		if not resolved then
+			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
+		end
+		if resolved then
+			mergeKeywordSynonyms(resolved, filteredLrSynonyms)
+		else
+			resolved =
+				createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
+		end
+
+		-- Register the new keyword (and its aliases / bilingual synonyms) in the alias
+		-- index so the next candidate in the same run can dedupe against it.
+		if resolved and aliasIndex then
+			if nameLower ~= "" and not aliasIndex[nameLower] then
+				aliasIndex[nameLower] = resolved
+			end
+			local function indexAll(list)
+				if type(list) ~= "table" then
+					return
+				end
+				for _, entry in ipairs(list) do
+					if type(entry) == "string" then
+						local key = string.lower(Util.trim(entry))
+						if key ~= "" and not aliasIndex[key] then
+							aliasIndex[key] = resolved
+						end
+					end
+				end
+			end
+			indexAll(candidateAliases)
+			indexAll(filteredLrSynonyms)
+		end
+
+		if resolved then
+			local okAdd, errAdd = LrTasks.pcall(function()
+				photo:addKeyword(resolved)
+			end)
+			if not okAdd then
+				log:error("Failed to add keyword '" .. tostring(candidateName) .. "' to photo: " .. tostring(errAdd))
+				return nil
+			end
+		end
+		return resolved
 	end
 
 	local addKeywords = {}
@@ -476,7 +686,7 @@ function MetadataManager.addKeywordRecursively(
 		if type(key) == "string" and key ~= "" and key ~= "None" and key ~= "none" and prefs.useKeywordHierarchy then
 			keyword = createKeywordSafely(catalog, key, {}, false, parent, sessionCache)
 		elseif type(key) == "number" and value then
-			local keywordName, keywordSynonyms = parseKeywordLeaf(value)
+			local keywordName, keywordSynonyms, keywordAliases, keywordSynonymAliases = parseKeywordLeaf(value)
 			if keywordName and keywordName ~= "" and keywordName ~= "None" and keywordName ~= "none" then
 				if not Util.table_contains(addKeywords, keywordName) then
 					if
@@ -489,34 +699,24 @@ function MetadataManager.addKeywordRecursively(
 						log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
 					else
 						local currentParent = prefs.useKeywordHierarchy and parent or nil
-						keyword = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, keywordName)
-						if keyword then
-							mergeKeywordSynonyms(keyword, keywordSynonyms)
-						else
-							keyword = createKeywordSafely(
-								catalog,
-								keywordName,
-								keywordSynonyms,
-								true,
-								currentParent,
-								sessionCache
-							)
-							mergeKeywordSynonyms(keyword, keywordSynonyms)
+
+						-- Bilingual translations + their same-language aliases all land in the
+						-- LR synonym field of the primary keyword. The primary's own aliases
+						-- (`keywordAliases`, same language as the primary) are kept out of LR
+						-- synonyms — they only feed the run-scoped alias index for dedup.
+						local lrSynonyms = {}
+						for _, t in ipairs(keywordSynonyms) do
+							table.insert(lrSynonyms, t)
 						end
-						if keyword then
-							local okAdd, errAdd = LrTasks.pcall(function()
-								photo:addKeyword(keyword)
-							end)
-							if okAdd then
-								table.insert(addKeywords, keywordName)
-							else
-								log:error(
-									"Failed to add keyword '"
-										.. tostring(keywordName)
-										.. "' to photo: "
-										.. tostring(errAdd)
-								)
-							end
+						for _, sa in ipairs(keywordSynonymAliases) do
+							table.insert(lrSynonyms, sa)
+						end
+
+						local primary = resolveAndAttachKeyword(keywordName, keywordAliases, currentParent, lrSynonyms)
+						if primary then
+							table.insert(addKeywords, keywordName)
+							-- Use the primary as the parent for nested categories below.
+							keyword = primary
 						end
 					end
 				end
@@ -536,7 +736,7 @@ function MetadataManager.addKeywordRecursively(
 	end
 end
 
-function MetadataManager.showValidationDialog(ctx, photo, response, options)
+function MetadataManager.showValidationDialog(ctx, photo, response)
 	local f = LrView.osFactory()
 	local bind = LrView.bind
 
@@ -706,9 +906,12 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 		local pathsWithMeta = {}
 		for _, id in ipairs(orderedIds) do
 			if propertyTable["keywordsSel_" .. id] then
+				local meta = kwMeta[id] or {}
 				table.insert(pathsWithMeta, {
 					path = propertyTable["keywordsVal_" .. id],
-					synonyms = kwMeta[id] and kwMeta[id].synonyms or {},
+					synonyms = meta.synonyms or {},
+					aliases = meta.aliases or {},
+					synonymAliases = meta.synonymAliases or {},
 				})
 			end
 		end
@@ -726,6 +929,61 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 	results.skipFromHere = propertyTable.skipFromHere
 
 	return result, results
+end
+
+---
+-- Collects up to `limit` unique keyword names from the full catalog keyword tree.
+-- Returns a flat sorted list of strings suitable for sending to the backend as
+-- catalog vocabulary context.
+-- @param catalog LrCatalog
+-- @param limit number Max names to return (default 300)
+-- @return table Flat list of keyword name strings
+function MetadataManager.collectCatalogKeywordNames(catalog, limit)
+	limit = limit or 300
+	local names = {}
+	local seen = {}
+	local count = 0
+
+	local function walk(keywords)
+		if count >= limit or type(keywords) ~= "table" then
+			return
+		end
+		for _, kw in ipairs(keywords) do
+			if count >= limit then
+				break
+			end
+			local okName, name = LrTasks.pcall(function()
+				return kw:getName()
+			end)
+			if okName and type(name) == "string" then
+				local key = string.lower(Util.trim(name))
+				if key ~= "" and not seen[key] then
+					seen[key] = true
+					table.insert(names, Util.trim(name))
+					count = count + 1
+				end
+			end
+			if type(kw.getChildren) == "function" then
+				local okCh, children = LrTasks.pcall(function()
+					return kw:getChildren() or {}
+				end)
+				if okCh then
+					walk(children)
+				end
+			end
+		end
+	end
+
+	local okTop, topKeywords = LrTasks.pcall(function()
+		return catalog:getKeywords() or {}
+	end)
+	if okTop then
+		walk(topKeywords)
+	end
+	table.sort(names, function(a, b)
+		return a:lower() < b:lower()
+	end)
+	return names
 end
 
 ---

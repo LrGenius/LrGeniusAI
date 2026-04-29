@@ -89,6 +89,50 @@ class NormalizeKeywordLeafTests(unittest.TestCase):
         self.assertIsNone(_provider()._normalize_keyword_leaf(None))
         self.assertIsNone(_provider()._normalize_keyword_leaf(["not", "a", "leaf"]))
 
+    def test_dict_preserves_aliases(self):
+        result = _provider()._normalize_keyword_leaf(
+            {"name": "Car", "aliases": ["automobile", "Car", "AUTOMOBILE"]}
+        )
+        self.assertEqual(result, {"name": "Car", "aliases": ["automobile"]})
+
+    def test_dict_preserves_synonym_aliases_with_bilingual(self):
+        result = _provider()._normalize_keyword_leaf(
+            {
+                "name": "Auto",
+                "aliases": ["Wagen", "Fahrzeug"],
+                "synonyms": ["car"],
+                "synonym_aliases": ["automobile", "vehicle"],
+            }
+        )
+        self.assertEqual(
+            result,
+            {
+                "name": "Auto",
+                "aliases": ["Wagen", "Fahrzeug"],
+                "synonyms": ["car"],
+                "synonym_aliases": ["automobile", "vehicle"],
+            },
+        )
+
+    def test_dict_synonym_aliases_dedupe_against_translations(self):
+        result = _provider()._normalize_keyword_leaf(
+            {
+                "name": "Auto",
+                "synonyms": ["car"],
+                "synonym_aliases": ["car", "automobile"],
+            }
+        )
+        self.assertEqual(
+            result,
+            {"name": "Auto", "synonyms": ["car"], "synonym_aliases": ["automobile"]},
+        )
+
+    def test_dict_empty_aliases_omits_field(self):
+        result = _provider()._normalize_keyword_leaf(
+            {"name": "Car", "aliases": ["", "  ", 42]}
+        )
+        self.assertEqual(result, {"name": "Car"})
+
 
 class NormalizeKeywordsStructureTests(unittest.TestCase):
     def test_flat_list_of_strings(self):

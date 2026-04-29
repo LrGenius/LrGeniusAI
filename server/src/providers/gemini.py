@@ -467,7 +467,9 @@ class GeminiProvider(LLMProviderBase):
                 if isinstance(request.keyword_categories, dict):
                     # Nested structure - recursively build Gemini schema
                     keywords_schema = self._build_nested_gemini_keyword_schema(
-                        request.keyword_categories, request.bilingual_keywords
+                        request.keyword_categories,
+                        request.bilingual_keywords,
+                        request.generate_aliases,
                     )
                 else:
                     # Flat list
@@ -476,7 +478,8 @@ class GeminiProvider(LLMProviderBase):
                         keywords_schema["properties"][category] = {
                             "type": "ARRAY",
                             "items": self._gemini_keyword_leaf_item_schema(
-                                request.bilingual_keywords
+                                request.bilingual_keywords,
+                                request.generate_aliases,
                             ),
                         }
                 schema["properties"]["keywords"] = keywords_schema
@@ -485,14 +488,17 @@ class GeminiProvider(LLMProviderBase):
                 schema["properties"]["keywords"] = {
                     "type": "ARRAY",
                     "items": self._gemini_keyword_leaf_item_schema(
-                        request.bilingual_keywords
+                        request.bilingual_keywords, request.generate_aliases
                     ),
                 }
 
         return schema
 
     def _build_nested_gemini_keyword_schema(
-        self, categories: dict[str, Any], bilingual: bool = False
+        self,
+        categories: dict[str, Any],
+        bilingual: bool = False,
+        aliases: bool = False,
     ) -> dict[str, Any]:
         """
         Recursively build Gemini JSON schema for nested keyword categories.
@@ -509,28 +515,44 @@ class GeminiProvider(LLMProviderBase):
             if isinstance(subcategories, dict) and len(subcategories) > 0:
                 # Nested structure - recursively build
                 schema["properties"][category_name] = (
-                    self._build_nested_gemini_keyword_schema(subcategories, bilingual)
+                    self._build_nested_gemini_keyword_schema(
+                        subcategories, bilingual, aliases
+                    )
                 )
             else:
                 # Leaf node - array of keywords
                 schema["properties"][category_name] = {
                     "type": "ARRAY",
-                    "items": self._gemini_keyword_leaf_item_schema(bilingual),
+                    "items": self._gemini_keyword_leaf_item_schema(bilingual, aliases),
                 }
 
         return schema
 
-    def _gemini_keyword_leaf_item_schema(self, bilingual: bool) -> dict[str, Any]:
-        if not bilingual:
+    def _gemini_keyword_leaf_item_schema(
+        self, bilingual: bool, aliases: bool = False
+    ) -> dict[str, Any]:
+        if not bilingual and not aliases:
             return {"type": "STRING"}
+
+        properties: dict[str, Any] = {"name": {"type": "STRING"}}
+        required = ["name"]
+        if aliases:
+            properties["aliases"] = {"type": "ARRAY", "items": {"type": "STRING"}}
+            required.append("aliases")
+        if bilingual:
+            properties["synonyms"] = {"type": "ARRAY", "items": {"type": "STRING"}}
+            required.append("synonyms")
+            if aliases:
+                properties["synonym_aliases"] = {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"},
+                }
+                required.append("synonym_aliases")
 
         return {
             "type": "OBJECT",
-            "properties": {
-                "name": {"type": "STRING"},
-                "synonyms": {"type": "ARRAY", "items": {"type": "STRING"}},
-            },
-            "required": ["name"],
+            "properties": properties,
+            "required": required,
         }
 
     def _clean_gemini_response(self, text: str) -> str:
