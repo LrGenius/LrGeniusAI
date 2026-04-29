@@ -41,6 +41,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	end)
 
 	propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
+	propertyTable.dbStoragePath = prefs.dbStoragePath or ""
 	propertyTable.backendServerUrl = prefs.backendServerUrl or Defaults.defaultBackendServerUrl
 	propertyTable.ollamaBaseUrl = prefs.ollamaBaseUrl or Defaults.defaultOllamaBaseUrl
 	propertyTable.lmstudioBaseUrl = prefs.lmstudioBaseUrl or Defaults.defaultLmStudioBaseUrl
@@ -425,6 +426,47 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:edit_field({
 						value = bind("backendServerUrl"),
 						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/DbStoragePath=Database storage folder"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:edit_field({
+						value = bind("dbStoragePath"),
+						fill_horizontal = 1,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/Browse=Browse..."),
+						action = function(button)
+							local result = LrDialogs.runOpenPanel({
+								title = LOC(
+									"$$$/LrGeniusAI/PluginInfo/SelectDbFolderTitle=Select Database Storage Folder"
+								),
+								prompt = LOC("$$$/LrGeniusAI/PluginInfo/SelectFolder=Select"),
+								canChooseFiles = false,
+								canChooseDirectories = true,
+								allowsMultipleSelection = false,
+							})
+							if result and result[1] then
+								propertyTable.dbStoragePath = result[1]
+							end
+						end,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:spacer({ width = share("labelWidth") }),
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc=Leave empty to store next to the catalog (default). Set a custom folder if the catalog is on an exFAT volume."
+						),
+						size = "small",
+						fill_horizontal = 1,
+						wrap = true,
 					}),
 				}),
 				f:row({
@@ -1056,6 +1098,7 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	end
 
 	prefs.periodicalUpdateCheck = propertyTable.periodicalUpdateCheck
+	prefs.dbStoragePath = (propertyTable.dbStoragePath and propertyTable.dbStoragePath:gsub("^%s*(.-)%s*$", "%1")) or ""
 
 	prefs.useClip = propertyTable.useClip
 

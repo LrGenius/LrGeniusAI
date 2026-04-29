@@ -2158,8 +2158,16 @@ local SERVER_LOCK_FILENAME = "lrgenius-server.lock"
 local serverStartInProgress = false
 
 local function getServerControlDir()
-	-- Backend uses --db-path = "<catalogParent>/lrgenius.db", and writes pid/OK files next to it.
+	-- Backend writes pid/OK/lock files next to the catalog.
 	return LrPathUtils.parent(LrApplication.activeCatalog():getPath())
+end
+
+local function getDbPath()
+	local custom = prefs.dbStoragePath
+	if custom and custom:gsub("^%s*(.-)%s*$", "%1") ~= "" then
+		return LrPathUtils.child(custom:gsub("^%s*(.-)%s*$", "%1"), "lrgenius.db")
+	end
+	return LrPathUtils.child(getServerControlDir(), "lrgenius.db")
 end
 
 local function getServerPidFilePath()
@@ -2333,7 +2341,7 @@ function SearchIndexAPI.restartBackend()
 	while LrDate.currentTime() < deadline do
 		if SearchIndexAPI.pingServer() then
 			log:info("Backend restarted successfully")
-			local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+			local dbPath = getDbPath()
 			SearchIndexAPI.initializeCatalog(dbPath)
 			return true
 		end
@@ -2349,7 +2357,7 @@ function SearchIndexAPI.initializeCatalog(dbPath)
 	end
 
 	if not dbPath then
-		dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+		dbPath = getDbPath()
 	end
 
 	local url = getBaseUrl() .. ENDPOINTS.INITIALIZE
@@ -2430,7 +2438,7 @@ function SearchIndexAPI.startServer(opts)
 
 	if SearchIndexAPI.pingServer() then
 		log:trace("Search index server is already running, triggering initialization")
-		local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+		local dbPath = getDbPath()
 		if SearchIndexAPI.initializeCatalog(dbPath) then
 			return true
 		end
@@ -2447,7 +2455,7 @@ function SearchIndexAPI.startServer(opts)
 		return false
 	end
 
-	local dbPath = LrPathUtils.child(getServerControlDir(), "lrgenius.db")
+	local dbPath = getDbPath()
 
 	-- Make sure we don't leave the lock behind on early returns.
 	local ok, startResult = LrTasks.pcall(function()
