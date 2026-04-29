@@ -2671,10 +2671,18 @@ _request = function(method, url, body, timeout, options)
 		local statusStr = httpStatusForLog(status, hdrs)
 		local err_msg
 		if status == nil then
-			local urlFixed = tostring(url):gsub("%%?.*", "")
+			local urlFixed = tostring(url):gsub("%?.*", "")
 			err_msg = "API request failed (no response). URL: " .. urlFixed
 			if type(hdrs) == "string" and hdrs ~= "" then
 				err_msg = err_msg .. " - error: " .. hdrs
+			elseif type(hdrs) == "table" then
+				local hdrsInfo = {}
+				for k, v in pairs(hdrs) do
+					table.insert(hdrsInfo, tostring(k) .. "=" .. tostring(v))
+				end
+				if #hdrsInfo > 0 then
+					err_msg = err_msg .. " - hdrs: " .. table.concat(hdrsInfo, ", ")
+				end
 			end
 		else
 			err_msg = "API request failed. HTTP status: " .. statusStr
