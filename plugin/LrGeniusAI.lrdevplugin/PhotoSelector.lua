@@ -72,6 +72,13 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 				end
 			elseif source and (source:type() == "LrCollectionSet" or source:type() == "LrPublishedCollectionSet") then
 				log:warn("Collection sets are not supported as a source; select individual collections instead.")
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle=Collection Sets Not Supported"),
+					LOC(
+						"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage=Collection sets cannot be used as a source. Please select individual collections instead."
+					),
+					"warning"
+				)
 			else
 				if source and source.type then
 					log:warn("Unsupported source type for grouping similar photos: " .. source:type())

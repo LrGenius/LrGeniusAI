@@ -661,3 +661,5 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel" = "Mettre à jour l'index de recherche IA (recommandé)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend" = "Mise à jour de l'index de recherche IA..."
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync" = "Index de recherche IA mis à jour : ^1 photo(s) mise(s) à jour."
+"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle" = "Ensembles de collections non pris en charge"
+"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage" = "Les ensembles de collections ne peuvent pas être utilisés comme source. Veuillez sélectionner des collections individuelles à la place."

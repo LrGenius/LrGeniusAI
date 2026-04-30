@@ -663,3 +663,5 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel" = "Auch KI-Suchindex aktualisieren (empfohlen)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend" = "KI-Suchindex wird aktualisiert..."
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync" = "KI-Suchindex aktualisiert: ^1 Foto(s) aktualisiert."
+"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle" = "Sammlungssätze nicht unterstützt"
+"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage" = "Sammlungssätze können nicht als Quelle verwendet werden. Bitte wählen Sie stattdessen einzelne Sammlungen aus."

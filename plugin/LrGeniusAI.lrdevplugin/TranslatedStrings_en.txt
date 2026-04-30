@@ -675,3 +675,5 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel" = "Also update AI search index (recommended)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SyncingBackend" = "Updating AI search index..."
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSync" = "AI search index updated: ^1 photo(s) updated."
+"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle" = "Collection Sets Not Supported"
+"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage" = "Collection sets cannot be used as a source. Please select individual collections instead."
