@@ -2859,8 +2859,9 @@ end
 -- @param keywordNames table Flat list of keyword name strings
 -- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
 -- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
+-- @param cancelScope table|nil LrProgressScope; polling stops early when isCanceled() returns true
 -- @return table|nil { results = {{name,...},...}, warning = str|nil } or nil, err
-function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options)
+function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancelScope)
 	if type(keywordNames) ~= "table" or #keywordNames < 2 then
 		return { results = {}, warning = nil }
 	end
@@ -2894,12 +2895,20 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options)
 		return nil, startErr or "no job_id returned"
 	end
 
-	-- Poll until done
+	-- Poll until done (max 120 s; check cancellation each cycle)
 	local jobId = startResp.job_id
 	local statusUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_STATUS .. "/" .. jobId
+	local deadline = LrDate.currentTime() + 120
 	while true do
 		LrTasks.sleep(3)
 		LrTasks.yield()
+		if cancelScope and cancelScope:isCanceled() then
+			return nil, "canceled"
+		end
+		if LrDate.currentTime() > deadline then
+			log:error("clusterKeywords: timed out waiting for backend job")
+			return nil, "clustering timed out"
+		end
 		local poll, pollErr = _request("GET", statusUrl, nil, 15)
 		if pollErr or not poll then
 			log:error("clusterKeywords: status poll failed: " .. tostring(pollErr))

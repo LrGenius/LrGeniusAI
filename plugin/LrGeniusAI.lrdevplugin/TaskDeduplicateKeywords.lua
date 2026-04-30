@@ -437,7 +437,8 @@ LrTasks.startAsyncTask(function()
 				nameMap[leaf.name:lower()] = leaf.kw
 			end
 
-			local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(names, warnProps.threshold, clusterOptions)
+			local clusterResp, clusterErr =
+				SearchIndexAPI.clusterKeywords(names, warnProps.threshold, clusterOptions, scanScope)
 			if clusterResp and clusterResp.results then
 				if clusterResp.warning and clusterResp.warning ~= "" then
 					semanticWarning = clusterResp.warning
@@ -656,6 +657,7 @@ LrTasks.startAsyncTask(function()
 			local syncResp, syncErr = SearchIndexAPI.applyKeywordMerges(successfulPairs)
 			if syncErr then
 				log:warn("DeduplicateKeywords: backend sync failed: " .. tostring(syncErr))
+				backendUpdated = false -- flag: sync failed
 			elseif syncResp then
 				backendUpdated = syncResp.updated_photos
 			end
@@ -682,7 +684,13 @@ LrTasks.startAsyncTask(function()
 					table.concat(skippedNames, "\n")
 				)
 		end
-		if backendUpdated ~= nil then
+		if backendUpdated == false then
+			resultMsg = resultMsg
+				.. "\n\n"
+				.. LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSyncFailed=Warning: The AI search index could not be updated. Your Lightroom catalog was merged successfully, but semantic search may show outdated results. Re-run indexing to fix this."
+				)
+		elseif backendUpdated ~= nil then
 			resultMsg = resultMsg
 				.. "\n\n"
 				.. LOC(
