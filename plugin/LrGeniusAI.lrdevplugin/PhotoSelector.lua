@@ -59,9 +59,7 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 				and (
 					source:type() == "LrCollection"
 					or source:type() == "LrFolder"
-					or source:type() == "LrCollectionSet"
 					or source:type() == "LrPublishedCollection"
-					or source:type() == "LrPublishedCollectionSet"
 				)
 			then
 				local photos = filterPhotos(source:getPhotos())
@@ -72,6 +70,8 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 						addedPhotos[photoId] = true
 					end
 				end
+			elseif source and (source:type() == "LrCollectionSet" or source:type() == "LrPublishedCollectionSet") then
+				log:warn("Collection sets are not supported as a source; select individual collections instead.")
 			else
 				if source and source.type then
 					log:warn("Unsupported source type for grouping similar photos: " .. source:type())
