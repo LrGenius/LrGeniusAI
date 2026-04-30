@@ -1002,7 +1002,13 @@ LrTasks.startAsyncTask(function()
 		-- No LLM validation here — CLIP threshold alone keeps latency reasonable.
 		local keywordMapping = {}
 		local mergedPairs = {} -- {from="Automobile", to="Car"} for dialog display
-		if props.keywordAliases and props.generateKeywords and status ~= "allfailed" and #processedPhotos > 0 then
+		if
+			false
+			and props.keywordAliases
+			and props.generateKeywords
+			and status ~= "allfailed"
+			and #processedPhotos > 0
+		then
 			progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/DeClutterProgress=Deduplicating keywords..."))
 			LrTasks.yield()
 
