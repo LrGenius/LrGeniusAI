@@ -120,7 +120,7 @@ def validate_clusters_with_llm(
     api_key: str | None,
     ollama_base_url: str | None,
     lmstudio_base_url: str | None,
-    chunk_size: int = 30,
+    chunk_size: int = 15,
 ) -> list[list[str]]:
     """
     Validate CLIP candidate clusters with an LLM.
@@ -135,8 +135,11 @@ def validate_clusters_with_llm(
     for start in range(0, len(candidate_clusters), chunk_size):
         chunk = candidate_clusters[start : start + chunk_size]
 
+        # Truncate each group so a single oversized entry can't blow the context window.
+        _MAX_MEMBERS = 15
         groups_text = "\n".join(
-            f"{i + 1}. {json.dumps(group)}" for i, group in enumerate(chunk)
+            f"{i + 1}. {json.dumps(group[:_MAX_MEMBERS])}"
+            for i, group in enumerate(chunk)
         )
 
         user_prompt = (
@@ -183,7 +186,13 @@ def validate_clusters_with_llm(
             if text.endswith("```"):
                 text = text[: text.rfind("```")].strip()
 
-            parsed = json.loads(text)
+            # Find the start of the JSON array (LLMs sometimes prepend prose)
+            bracket = text.find("[")
+            if bracket == -1:
+                raise ValueError("no JSON array found in response")
+            # raw_decode stops at the end of the first valid JSON value,
+            # ignoring any trailing text the LLM appended after the array.
+            parsed, _ = json.JSONDecoder().raw_decode(text, bracket)
             if not isinstance(parsed, list):
                 raise ValueError("response is not a JSON array")
 
