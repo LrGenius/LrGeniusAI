@@ -93,6 +93,7 @@
 "$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateWithDeltaMessage" = "Vous avez sélectionné \"Photos nouvelles ou non traitées\" mais \"Régénérer toutes les données\" est également activé. Toutes les photos seront traitées — le filtre delta n'a aucun effet. Continuer ?"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhoto" = "Traitement ^1 réussi (^2 total/^3 échoué)"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos" = "Traitement de ^1 photos avec ^2..."
+"$$$/LrGeniusAI/AnalyzeAndIndex/DeClutterProgress" = "Déduplication des mots-clés..."
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProgressCount" = "^1 photos à traiter"
 "$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle" = "Traitement des photos..."
 "$$$/LrGeniusAI/AnalyzeAndIndex/RegenerateMetadata" = "Régénérer toutes les données (écraser)"

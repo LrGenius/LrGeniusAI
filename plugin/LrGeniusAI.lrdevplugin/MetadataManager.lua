@@ -939,7 +939,7 @@ end
 -- @param limit number Max names to return (default 300)
 -- @return table Flat list of keyword name strings
 function MetadataManager.collectCatalogKeywordNames(catalog, limit)
-	limit = limit or 300
+	limit = limit or math.huge
 	local names = {}
 	local seen = {}
 	local count = 0
