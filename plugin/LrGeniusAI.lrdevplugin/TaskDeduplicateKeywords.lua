@@ -2,42 +2,48 @@
 -- SigLIP-based keyword clustering + optional LLM validation.
 -- Only leaf keywords (no children) are candidates for deduplication.
 
-local function collectKeywordsUnder(keyword, result)
-	result = result or {}
-	table.insert(result, keyword)
-	local ok, children = LrTasks.pcall(function()
-		return keyword:getChildren() or {}
-	end)
-	if ok and type(children) == "table" then
-		for _, child in ipairs(children) do
-			collectKeywordsUnder(child, result)
-		end
-	end
-	return result
-end
-
-local function collectAllKeywords(roots)
-	local all = {}
-	for _, kw in ipairs(roots) do
-		collectKeywordsUnder(kw, all)
-	end
-	return all
-end
-
-local function buildNameMap(keywords)
-	local map = {}
-	for _, kw in ipairs(keywords) do
-		local ok, name = LrTasks.pcall(function()
-			return kw:getName()
+-- Walk keyword tree top-down and group the direct leaf children of each parent.
+-- Only groups with ≥ 2 leaves are added (clustering requires at least 2 items).
+-- Clustering within a parent prevents cross-category false positives.
+local function collectLeafGroups(roots)
+	local groups = {}
+	local function walk(parent, parentName)
+		local okC, children = LrTasks.pcall(function()
+			return parent:getChildren() or {}
 		end)
-		if ok and type(name) == "string" and name ~= "" then
-			local key = string.lower(Util.trim(name))
-			if not map[key] then
-				map[key] = kw
+		if not okC or type(children) ~= "table" or #children == 0 then
+			return
+		end
+		local directLeaves = {}
+		for _, child in ipairs(children) do
+			local okCC, grandchildren = LrTasks.pcall(function()
+				return child:getChildren() or {}
+			end)
+			if okCC and type(grandchildren) == "table" and #grandchildren == 0 then
+				local okN, name = LrTasks.pcall(function()
+					return child:getName()
+				end)
+				if okN and type(name) == "string" and name ~= "" then
+					table.insert(directLeaves, { name = Util.trim(name), kw = child })
+				end
+			else
+				local okN, name = LrTasks.pcall(function()
+					return child:getName()
+				end)
+				walk(child, (okN and name) and name or "?")
 			end
 		end
+		if #directLeaves >= 2 then
+			table.insert(groups, { parentName = parentName, leaves = directLeaves })
+		end
 	end
-	return map
+	for _, root in ipairs(roots) do
+		local okN, name = LrTasks.pcall(function()
+			return root:getName()
+		end)
+		walk(root, (okN and name) and name or "?")
+	end
+	return groups
 end
 
 -- Executes a single keyword merge: re-tags photos with the canonical keyword
@@ -336,7 +342,7 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- ── Step 3: Scan — AI semantic clustering (leaf keywords only) ────────
+		-- ── Step 3: Scan — AI semantic clustering per parent keyword ──────────
 		local scanScope = LrProgressScope({
 			title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/ScanProgressTitle=Scanning keyword catalog..."),
 			functionContext = context,
@@ -344,30 +350,10 @@ LrTasks.startAsyncTask(function()
 		scanScope:setCaption(LOC("$$$/LrGeniusAI/DeduplicateKeywords/ScanningCaption=Building keyword index..."))
 		LrTasks.yield()
 
-		local allCatalogKeywords = collectAllKeywords(topKeywords)
-		local allNameMap = buildNameMap(allCatalogKeywords)
-		local selectedKeywords = collectAllKeywords(selectedRoots)
-
-		-- Only pass leaf keywords (no children) to the cluster API
-		local leafKeywordNames = {}
-		for _, kw in ipairs(selectedKeywords) do
-			local okC, children = LrTasks.pcall(function()
-				return kw:getChildren() or {}
-			end)
-			if okC and type(children) == "table" and #children == 0 then
-				local okN, name = LrTasks.pcall(function()
-					return kw:getName()
-				end)
-				if okN and type(name) == "string" and name ~= "" then
-					table.insert(leafKeywordNames, Util.trim(name))
-				end
-			end
-		end
-
-		scanScope:setCaption(
-			LOC("$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption=Querying AI for semantic clusters...")
-		)
-		LrTasks.yield()
+		-- Group leaf keywords by their direct parent so clustering stays within
+		-- each category — prevents cross-category false positives like place names
+		-- merging into unrelated descriptors.
+		local leafGroups = collectLeafGroups(selectedRoots)
 
 		-- Build provider options from model key selected in warning dialog
 		local clusterOptions = {}
@@ -393,41 +379,70 @@ LrTasks.startAsyncTask(function()
 		local semanticPairs = {}
 		local semanticWarning = nil
 
-		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(leafKeywordNames, nil, clusterOptions)
-		if clusterResp and clusterResp.results then
-			if clusterResp.warning and clusterResp.warning ~= "" then
-				semanticWarning = clusterResp.warning
+		for gi, group in ipairs(leafGroups) do
+			if scanScope:isCanceled() then
+				break
+			end
+			scanScope:setCaption(
+				LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaptionN=Querying AI: ^1 (^2/^3)",
+					group.parentName,
+					gi,
+					#leafGroups
+				)
+			)
+			scanScope:setPortionComplete(gi - 1, #leafGroups)
+			LrTasks.yield()
+
+			local names = {}
+			local nameMap = {}
+			for _, leaf in ipairs(group.leaves) do
+				table.insert(names, leaf.name)
+				nameMap[leaf.name:lower()] = leaf.kw
 			end
 
-			for _, cluster in ipairs(clusterResp.results) do
-				-- LLM returns canonical name first; CLIP-only falls back to alphabetical
-				if not clusterOptions.provider then
-					table.sort(cluster, function(a, b)
-						return a:lower() < b:lower()
-					end)
+			local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(names, nil, clusterOptions)
+			if clusterResp and clusterResp.results then
+				if clusterResp.warning and clusterResp.warning ~= "" then
+					semanticWarning = clusterResp.warning
 				end
-				local canonicalName = cluster[1]
-				local canonicalKw = allNameMap[canonicalName:lower()]
-				if canonicalKw then
-					for j = 2, #cluster do
-						local dupName = cluster[j]
-						local dupKw = allNameMap[dupName:lower()]
-						if dupKw and dupKw ~= canonicalKw then
-							table.insert(semanticPairs, {
-								canonical = canonicalKw,
-								canonicalName = canonicalName,
-								duplicate = dupKw,
-								duplicateName = dupName,
-							})
+				for _, cluster in ipairs(clusterResp.results) do
+					-- LLM returns canonical name first; CLIP-only falls back to alphabetical
+					if not clusterOptions.provider then
+						table.sort(cluster, function(a, b)
+							return a:lower() < b:lower()
+						end)
+					end
+					local canonicalName = cluster[1]
+					local canonicalKw = nameMap[canonicalName:lower()]
+					if canonicalKw then
+						for j = 2, #cluster do
+							local dupName = cluster[j]
+							local dupKw = nameMap[dupName:lower()]
+							if dupKw and dupKw ~= canonicalKw then
+								table.insert(semanticPairs, {
+									canonical = canonicalKw,
+									canonicalName = canonicalName,
+									duplicate = dupKw,
+									duplicateName = dupName,
+								})
+							end
 						end
 					end
 				end
+			elseif clusterErr then
+				semanticWarning = LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/SemanticUnavailable=AI semantic clustering unavailable (CLIP model not loaded)."
+				)
+				log:warn(
+					"DeduplicateKeywords: cluster call failed for '"
+						.. group.parentName
+						.. "': "
+						.. tostring(clusterErr)
+				)
 			end
-		elseif clusterErr then
-			semanticWarning = LOC(
-				"$$$/LrGeniusAI/DeduplicateKeywords/SemanticUnavailable=AI semantic clustering unavailable (CLIP model not loaded)."
-			)
-			log:warn("DeduplicateKeywords: semantic cluster call failed: " .. tostring(clusterErr))
+
+			scanScope:setPortionComplete(gi, #leafGroups)
 		end
 
 		scanScope:done()

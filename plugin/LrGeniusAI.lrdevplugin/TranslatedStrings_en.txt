@@ -659,6 +659,7 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultSuccess" = "^1 keyword(s) merged successfully."
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultSkipped" = "^1 keyword(s) could not be processed:\n^2"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption" = "Querying AI for semantic clusters..."
+"$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaptionN" = "Querying AI: ^1 (^2/^3)"
 "$$$/LrGeniusAI/DeduplicateKeywords/ExactHeader" = "Exact Synonym Duplicates (^1)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticHeader" = "AI Semantic Suggestions (^1)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote" = "These keywords are semantically similar according to the AI.\nUncheck any pair you want to keep separate."

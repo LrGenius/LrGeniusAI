@@ -645,6 +645,7 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultSuccess" = "^1 mot(s)-clé(s) fusionné(s) avec succès."
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultSkipped" = "^1 mot(s)-clé(s) n'ont pas pu être traité(s) :\n^2"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption" = "Interrogation de l'IA pour les clusters sémantiques..."
+"$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaptionN" = "Interrogation IA : ^1 (^2/^3)"
 "$$$/LrGeniusAI/DeduplicateKeywords/ExactHeader" = "Doublons de synonymes exacts (^1)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticHeader" = "Suggestions sémantiques de l'IA (^1)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote" = "Ces mots-clés sont sémantiquement similaires selon l'IA.\nDécochez les paires que vous souhaitez conserver séparées."

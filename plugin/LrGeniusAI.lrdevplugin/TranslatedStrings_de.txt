@@ -647,6 +647,7 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultSuccess" = "^1 Keyword(s) erfolgreich zusammengeführt."
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultSkipped" = "^1 Keyword(s) konnten nicht verarbeitet werden:\n^2"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption" = "KI nach semantischen Clustern befragen..."
+"$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaptionN" = "KI wird befragt: ^1 (^2/^3)"
 "$$$/LrGeniusAI/DeduplicateKeywords/ExactHeader" = "Exakte Synonym-Duplikate (^1)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticHeader" = "KI-Semantik-Vorschläge (^1)"
 "$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote" = "Diese Keywords sind laut KI semantisch ähnlich.\nDeaktivieren Sie Paare, die Sie getrennt halten möchten."
