@@ -621,6 +621,8 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Warnung: Diese Operation verändert den Catalog dauerhaft.\nGelöschte Keywords können nicht wiederhergestellt werden.\nSicherung zuerst: Datei > Catalog-Einstellungen > Catalog sichern."
 "$$$/LrGeniusAI/DeduplicateKeywords/LLMCostNote" = "Hinweis: Bei Verwendung von ChatGPT oder Gemini entstehen API-Kosten."
 "$$$/LrGeniusAI/DeduplicateKeywords/AIModelLabel" = "KI-Modell:"
+"$$$/LrGeniusAI/DeduplicateKeywords/ThresholdLabel" = "Übereinstimmungsgenauigkeit:"
+"$$$/LrGeniusAI/DeduplicateKeywords/ThresholdHint" = "Niedriger: mehr Vorschläge (können falsche Treffer enthalten) — Höher: weniger, präzisere Übereinstimmungen"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm" = "Ich habe eine aktuelle Catalog-Sicherung und verstehe,\ndass diese Operation nicht rückgängig gemacht werden kann."
 "$$$/LrGeniusAI/DeduplicateKeywords/ContinueToSelect" = "Weiter"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupRequiredMessage" = "Bitte bestätigen Sie, dass Sie eine Catalog-Sicherung haben, bevor Sie fortfahren."

@@ -619,6 +619,8 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/WarningRisk" = "Avertissement : cette opération modifie définitivement votre catalogue.\nLes mots-clés supprimés ne peuvent pas être récupérés.\nSauvegardez d'abord : Fichier > Paramètres du catalogue > Sauvegarder."
 "$$$/LrGeniusAI/DeduplicateKeywords/LLMCostNote" = "Remarque : l'utilisation de ChatGPT ou Gemini engendra des frais API."
 "$$$/LrGeniusAI/DeduplicateKeywords/AIModelLabel" = "Modèle IA :"
+"$$$/LrGeniusAI/DeduplicateKeywords/ThresholdLabel" = "Précision de correspondance :"
+"$$$/LrGeniusAI/DeduplicateKeywords/ThresholdHint" = "Faible : plus de suggestions (peut inclure des faux positifs) — Élevé : moins de résultats, plus précis"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm" = "J'ai une sauvegarde récente du catalogue et je comprends\nque cette opération ne peut pas être annulée."
 "$$$/LrGeniusAI/DeduplicateKeywords/ContinueToSelect" = "Continuer"
 "$$$/LrGeniusAI/DeduplicateKeywords/BackupRequiredMessage" = "Veuillez confirmer que vous disposez d'une sauvegarde du catalogue avant de continuer."

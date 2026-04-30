@@ -154,6 +154,7 @@ LrTasks.startAsyncTask(function()
 		if not warnProps.modelKey or warnProps.modelKey == "" then
 			warnProps.modelKey = modelItems[1].value
 		end
+		warnProps.threshold = prefs.deduplicateThreshold or 0.85
 
 		local warnView = f:column({
 			bind_to_object = warnProps,
@@ -173,13 +174,47 @@ LrTasks.startAsyncTask(function()
 				f:row({
 					f:static_text({
 						title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/AIModelLabel=AI Model:"),
-						width = 70,
+						width = 120,
 					}),
 					f:popup_menu({
 						value = bind("modelKey"),
 						items = modelItems,
 						width = 290,
 					}),
+				}),
+				f:spacer({ height = 6 }),
+				f:row({
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/ThresholdLabel=Matching strictness:"),
+						width = 120,
+					}),
+					f:slider({
+						value = bind("threshold"),
+						min = 0.70,
+						max = 0.98,
+						width = 200,
+					}),
+					f:static_text({
+						title = bind({
+							key = "threshold",
+							transform = function(v, fromModel)
+								if fromModel then
+									return string.format("%.2f", v or 0.85)
+								end
+								return tonumber(v) or 0.85
+							end,
+						}),
+						width = 35,
+						alignment = "right",
+					}),
+				}),
+				f:static_text({
+					title = LOC(
+						"$$$/LrGeniusAI/DeduplicateKeywords/ThresholdHint=Lower: more suggestions (may include false positives) — Higher: fewer, more precise matches"
+					),
+					fill_horizontal = 1,
+					wrap = true,
+					font = "<system/small>",
 				}),
 			}),
 			f:separator({ fill_horizontal = 1 }),
@@ -228,8 +263,9 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- Save model preference for next run
+		-- Save preferences for next run
 		prefs.deduplicateModelKey = warnProps.modelKey
+		prefs.deduplicateThreshold = warnProps.threshold
 
 		-- ── Step 2: Keyword branch selection ──────────────────────────────
 		local okTopKw, topKeywords = LrTasks.pcall(function()
@@ -401,7 +437,7 @@ LrTasks.startAsyncTask(function()
 				nameMap[leaf.name:lower()] = leaf.kw
 			end
 
-			local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(names, nil, clusterOptions)
+			local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(names, warnProps.threshold, clusterOptions)
 			if clusterResp and clusterResp.results then
 				if clusterResp.warning and clusterResp.warning ~= "" then
 					semanticWarning = clusterResp.warning
