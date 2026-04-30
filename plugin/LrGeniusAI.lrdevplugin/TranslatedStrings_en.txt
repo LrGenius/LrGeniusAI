@@ -584,6 +584,9 @@
 "$$$/LrGeniusAI/MetadataManager/SkipRemaining" = "Save following without reviewing."
 "$$$/LrGeniusAI/MetadataManager/SelectAll" = "Select All"
 "$$$/LrGeniusAI/MetadataManager/DeselectAll" = "Deselect All"
+"$$$/LrGeniusAI/MetadataManager/ColGenerated" = "Generated"
+"$$$/LrGeniusAI/MetadataManager/ColDeCluttered" = "De-cluttered"
+"$$$/LrGeniusAI/MetadataManager/MergedCount" = "^1 keyword^2 merged with existing catalog terms"
 "$$$/LrGeniusAI/Keywords" = "Keywords"
 "$$$/LrGeniusAI/Metadata" = "Metadata"
 

@@ -572,6 +572,9 @@
 "$$$/LrGeniusAI/MetadataManager/SkipRemaining" = "Folgende ohne Review speichern."
 "$$$/LrGeniusAI/MetadataManager/SelectAll" = "Alle auswählen"
 "$$$/LrGeniusAI/MetadataManager/DeselectAll" = "Alle abwählen"
+"$$$/LrGeniusAI/MetadataManager/ColGenerated" = "Generiert"
+"$$$/LrGeniusAI/MetadataManager/ColDeCluttered" = "Bereinigt"
+"$$$/LrGeniusAI/MetadataManager/MergedCount" = "^1 Keyword^2 mit vorhandenen Katalog-Begriffen zusammengeführt"
 "$$$/LrGeniusAI/Keywords" = "Stichwörter"
 "$$$/LrGeniusAI/Metadata" = "Metadaten"
 

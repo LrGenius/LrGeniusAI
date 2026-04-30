@@ -736,7 +736,9 @@ function MetadataManager.addKeywordRecursively(
 	end
 end
 
-function MetadataManager.showValidationDialog(ctx, photo, response)
+-- @param dedupedKeywords  table|nil  Keyword structure after de-clutter mapping
+-- @param mergedPairs      table|nil  {{from="Automobile", to="Car"}, ...}
+function MetadataManager.showValidationDialog(ctx, photo, response, options, dedupedKeywords, mergedPairs)
 	local f = LrView.osFactory()
 	local bind = LrView.bind
 
@@ -748,13 +750,40 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 	local propertyTable = LrBinding.makePropertyTable(ctx)
 	propertyTable.skipFromHere = false
 
-	local kwVal, kwMeta, orderedIds = Util.extractAllKeywords(keywords or {})
-	propertyTable.keywordsMeta = kwMeta
+	-- ── Keyword extraction ────────────────────────────────────────────────
+	-- Original (generated) keywords
+	local origKwVal, origKwMeta, origOrderedIds = Util.extractAllKeywords(keywords or {})
 
-	-- Initialize flat properties with full paths for bindings
-	for _, id in ipairs(orderedIds) do
-		local fullPath = kwVal[id] or ""
-		local prefix = kwMeta[id].path
+	-- De-cluttered keywords (may be nil if no dedup ran)
+	local dedupKwVal, dedupKwMeta, dedupOrderedIds
+	if dedupedKeywords then
+		dedupKwVal, dedupKwMeta, dedupOrderedIds = Util.extractAllKeywords(dedupedKeywords)
+	end
+
+	-- Decide whether there is actually something to compare
+	local hasDiff = dedupedKeywords ~= nil and #(dedupOrderedIds or {}) > 0
+
+	-- Active set: de-cluttered when available, otherwise original
+	local activeKwVal = hasDiff and dedupKwVal or origKwVal
+	local activeKwMeta = hasDiff and dedupKwMeta or origKwMeta
+	local activeOrderedIds = hasDiff and dedupOrderedIds or origOrderedIds
+
+	-- Build lookup: canonical_lower → list of original names that were merged into it
+	local fromOrigLookup = {} -- canonical_lower → {"Automobile", "Feline", ...}
+	if hasDiff and mergedPairs then
+		for _, pair in ipairs(mergedPairs) do
+			local k = pair.to:lower()
+			if not fromOrigLookup[k] then
+				fromOrigLookup[k] = {}
+			end
+			table.insert(fromOrigLookup[k], pair.from)
+		end
+	end
+
+	-- ── Property table initialisation ────────────────────────────────────
+	for _, id in ipairs(activeOrderedIds) do
+		local fullPath = activeKwVal[id] or ""
+		local prefix = activeKwMeta[id].path
 		if prefix and prefix ~= "" then
 			fullPath = prefix .. " > " .. fullPath
 		end
@@ -767,36 +796,113 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 	propertyTable.altText = altText or ""
 
 	propertyTable.saveKeywords = keywords ~= nil and type(keywords) == "table"
-	-- By default, save if data is present, regardless of pre-flight options
 	propertyTable.saveTitle = title ~= nil and title ~= ""
 	propertyTable.saveCaption = caption ~= nil and caption ~= ""
 	propertyTable.saveAltText = altText ~= nil and altText ~= ""
 
-	local keywordRows = {
-		spacing = 2,
-	}
+	-- ── Keyword rows ──────────────────────────────────────────────────────
+	local keywordRows = { spacing = 2 }
 
-	for _, id in ipairs(orderedIds) do
+	if hasDiff then
+		-- Column header row
 		table.insert(
 			keywordRows,
 			f:row({
-				f:checkbox({
-					value = bind("keywordsSel_" .. id),
-					visible = bind("saveKeywords"),
+				spacing = 4,
+				f:static_text({
+					title = LOC("$$$/LrGeniusAI/MetadataManager/ColGenerated=Generated"),
+					width = 185,
+					font = "<system/bold>",
+					enabled = false,
 				}),
-				f:edit_field({
-					value = bind("keywordsVal_" .. id),
-					width_in_chars = 45, -- Enough for long paths
-					immediate = true,
-					enabled = bind("saveKeywords"),
+				f:spacer({ width = 18 }),
+				f:static_text({
+					title = LOC("$$$/LrGeniusAI/MetadataManager/ColDeCluttered=De-cluttered"),
+					font = "<system/bold>",
 				}),
 			})
 		)
+		table.insert(keywordRows, f:separator({ fill_horizontal = 1 }))
+
+		-- One row per de-cluttered keyword, paired with its original(s)
+		for _, id in ipairs(activeOrderedIds) do
+			local dedupName = activeKwVal[id] or ""
+			local fromList = fromOrigLookup[dedupName:lower()] or {}
+			local changed = #fromList > 0
+			local origDisplay = changed and table.concat(fromList, " / ") or dedupName
+
+			table.insert(
+				keywordRows,
+				f:row({
+					spacing = 4,
+					-- Left column: original name, dimmed when it was replaced
+					f:static_text({
+						title = origDisplay,
+						width = 185,
+						enabled = not changed,
+					}),
+					-- Arrow: visible only when the name changed
+					f:static_text({
+						title = changed and "→" or " ",
+						width = 18,
+						alignment = "center",
+					}),
+					-- Right column: the de-cluttered keyword (editable)
+					f:checkbox({
+						value = bind("keywordsSel_" .. id),
+						visible = bind("saveKeywords"),
+					}),
+					f:edit_field({
+						value = bind("keywordsVal_" .. id),
+						width_in_chars = 26,
+						immediate = true,
+						enabled = bind("saveKeywords"),
+					}),
+				})
+			)
+		end
+	else
+		-- Standard single-column view (no dedup)
+		for _, id in ipairs(activeOrderedIds) do
+			table.insert(
+				keywordRows,
+				f:row({
+					f:checkbox({
+						value = bind("keywordsSel_" .. id),
+						visible = bind("saveKeywords"),
+					}),
+					f:edit_field({
+						value = bind("keywordsVal_" .. id),
+						width_in_chars = 45,
+						immediate = true,
+						enabled = bind("saveKeywords"),
+					}),
+				})
+			)
+		end
 	end
 
+	-- ── Merge count label ─────────────────────────────────────────────────
+	local mergeCount = mergedPairs and #mergedPairs or 0
+	local mergeLabel = hasDiff
+			and mergeCount > 0
+			and f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/MetadataManager/MergedCount=^1 keyword^2 merged with existing catalog terms",
+					tostring(mergeCount),
+					mergeCount == 1 and "" or "s"
+				),
+				fill_horizontal = 1,
+				enabled = false,
+			})
+		or f:spacer({ fill_horizontal = 1 })
+
+	-- ── Dialog layout ─────────────────────────────────────────────────────
 	local dialogView = f:row({
 		bind_to_object = propertyTable,
 		spacing = 20,
+
+		-- Left panel: photo thumbnail + skip checkbox
 		f:column({
 			width = 250,
 			f:static_text({
@@ -816,15 +922,18 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 				title = LOC("$$$/LrGeniusAI/MetadataManager/SkipRemaining=Save following without reviewing."),
 			}),
 		}),
+
+		-- Right panel: keywords + metadata
 		f:column({
 			f:group_box({
 				title = LOC("$$$/LrGeniusAI/Keywords=Keywords"),
 				fill_horizontal = 1,
 				f:row({
+					mergeLabel,
 					f:push_button({
 						title = LOC("$$$/LrGeniusAI/MetadataManager/SelectAll=Select All"),
 						action = function()
-							for _, id in ipairs(orderedIds) do
+							for _, id in ipairs(activeOrderedIds) do
 								propertyTable["keywordsSel_" .. id] = true
 							end
 						end,
@@ -832,12 +941,11 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 					f:push_button({
 						title = LOC("$$$/LrGeniusAI/MetadataManager/DeselectAll=Deselect All"),
 						action = function()
-							for _, id in ipairs(orderedIds) do
+							for _, id in ipairs(activeOrderedIds) do
 								propertyTable["keywordsSel_" .. id] = false
 							end
 						end,
 					}),
-					f:spacer({ fill_horizontal = 1 }),
 					f:checkbox({
 						value = bind("saveKeywords"),
 						title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveKeywords=Save keywords"),
@@ -845,10 +953,11 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 				}),
 				f:scrolled_view({
 					height = 250,
-					width = 560,
+					width = hasDiff and 590 or 560,
 					f:column(keywordRows),
 				}),
 			}),
+
 			f:group_box({
 				title = LOC("$$$/LrGeniusAI/Metadata=Metadata"),
 				fill_horizontal = 1,
@@ -899,14 +1008,14 @@ function MetadataManager.showValidationDialog(ctx, photo, response)
 		contents = dialogView,
 	})
 
+	-- ── Result extraction ─────────────────────────────────────────────────
 	local results = {}
 	local validatedKeywords = {}
 	if propertyTable.saveKeywords then
-		-- Construct a new hierarchical table from the full path strings
 		local pathsWithMeta = {}
-		for _, id in ipairs(orderedIds) do
+		for _, id in ipairs(activeOrderedIds) do
 			if propertyTable["keywordsSel_" .. id] then
-				local meta = kwMeta[id] or {}
+				local meta = activeKwMeta[id] or {}
 				table.insert(pathsWithMeta, {
 					path = propertyTable["keywordsVal_" .. id],
 					synonyms = meta.synonyms or {},

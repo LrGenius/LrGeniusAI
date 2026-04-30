@@ -1001,6 +1001,7 @@ LrTasks.startAsyncTask(function()
 		-- to the catalog.  Existing catalog keywords are preferred as canonical.
 		-- No LLM validation here — CLIP threshold alone keeps latency reasonable.
 		local keywordMapping = {}
+		local mergedPairs = {} -- {from="Automobile", to="Car"} for dialog display
 		if props.keywordAliases and props.generateKeywords and status ~= "allfailed" and #processedPhotos > 0 then
 			progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/DeClutterProgress=Deduplicating keywords..."))
 			LrTasks.yield()
@@ -1057,6 +1058,7 @@ LrTasks.startAsyncTask(function()
 								for _, name in ipairs(cluster) do
 									if name:lower() ~= canonical:lower() then
 										keywordMapping[name:lower()] = canonical
+										table.insert(mergedPairs, { from = name, to = canonical })
 									end
 								end
 							end
@@ -1086,8 +1088,11 @@ LrTasks.startAsyncTask(function()
 				if photoId then
 					local response = SearchIndexAPI.getPhotoData(photoId)
 
+					-- Pre-compute deduped keywords; the validation dialog shows both
+					-- side-by-side. Non-validation paths apply the mapping automatically.
+					local dedupedKeywords = nil
 					if next(keywordMapping) and response and response.metadata and response.metadata.keywords then
-						response.metadata.keywords = applyKeywordNameMapping(response.metadata.keywords, keywordMapping)
+						dedupedKeywords = applyKeywordNameMapping(response.metadata.keywords, keywordMapping)
 					end
 
 					log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
@@ -1104,7 +1109,7 @@ LrTasks.startAsyncTask(function()
 								applyCaption = props.generateCaption,
 								applyAltText = props.generateAltText,
 								appendMetadata = props.appendMetadata,
-							})
+							}, dedupedKeywords, mergedPairs)
 
 							if validatedData ~= nil and validatedData.skipFromHere then
 								log:trace("Skipping validation from here for subsequent photos.")
@@ -1142,6 +1147,9 @@ LrTasks.startAsyncTask(function()
 							end
 						else
 							-- Validation has been skipped from here on; apply metadata without showing dialog
+							if dedupedKeywords then
+								response.metadata.keywords = dedupedKeywords
+							end
 							MetadataManager.applyMetadata(photo, response, nil, {
 								applyKeywords = props.generateKeywords,
 								applyTitle = props.generateTitle,
@@ -1163,6 +1171,9 @@ LrTasks.startAsyncTask(function()
 						end
 					elseif props.enableMetadata and response and response.metadata then
 						-- Directly save generated metadata without validation
+						if dedupedKeywords then
+							response.metadata.keywords = dedupedKeywords
+						end
 						MetadataManager.applyMetadata(photo, response, nil, {
 							applyKeywords = props.generateKeywords,
 							applyTitle = props.generateTitle,

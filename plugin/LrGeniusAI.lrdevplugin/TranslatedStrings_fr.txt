@@ -570,6 +570,9 @@
 "$$$/LrGeniusAI/MetadataManager/SkipRemaining" = "Enregistrer les suivantes sans vérification."
 "$$$/LrGeniusAI/MetadataManager/SelectAll" = "Tout sélectionner"
 "$$$/LrGeniusAI/MetadataManager/DeselectAll" = "Tout désélectionner"
+"$$$/LrGeniusAI/MetadataManager/ColGenerated" = "Généré"
+"$$$/LrGeniusAI/MetadataManager/ColDeCluttered" = "Nettoyé"
+"$$$/LrGeniusAI/MetadataManager/MergedCount" = "^1 mot^2-clé fusionné avec des termes existants du catalogue"
 "$$$/LrGeniusAI/Keywords" = "Mots-clés"
 "$$$/LrGeniusAI/Metadata" = "Métadonnées"
 
