@@ -109,11 +109,23 @@ def _run_clustering(
         root = find(i)
         groups.setdefault(root, []).append(i)
 
-    candidates = [
+    # Cap cluster size — union-find transitive closure can produce giant false-positive
+    # clusters (thousands of keywords chained through intermediate similarities).
+    # Genuine synonym sets are small; anything larger is noise.
+    _MAX_CLUSTER_SIZE = 20
+    all_candidate_groups = [
         [unique[i] for i in sorted(members)]
         for members in groups.values()
         if len(members) >= 2
     ]
+    oversized = [g for g in all_candidate_groups if len(g) > _MAX_CLUSTER_SIZE]
+    candidates = [g for g in all_candidate_groups if len(g) <= _MAX_CLUSTER_SIZE]
+    if oversized:
+        logger.warning(
+            f"cluster_keywords: dropped {len(oversized)} oversized cluster(s) "
+            f"(>{_MAX_CLUSTER_SIZE} members) — likely transitive-closure false positives; "
+            f"largest had {max(len(g) for g in oversized)} member(s)"
+        )
 
     use_llm = provider in _KNOWN_PROVIDERS
     logger.info(

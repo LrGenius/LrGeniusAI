@@ -135,8 +135,11 @@ def validate_clusters_with_llm(
     for start in range(0, len(candidate_clusters), chunk_size):
         chunk = candidate_clusters[start : start + chunk_size]
 
+        # Truncate each group so a single oversized entry can't blow the context window.
+        _MAX_MEMBERS = 15
         groups_text = "\n".join(
-            f"{i + 1}. {json.dumps(group)}" for i, group in enumerate(chunk)
+            f"{i + 1}. {json.dumps(group[:_MAX_MEMBERS])}"
+            for i, group in enumerate(chunk)
         )
 
         user_prompt = (
