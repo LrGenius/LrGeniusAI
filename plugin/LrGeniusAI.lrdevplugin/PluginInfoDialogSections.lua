@@ -462,7 +462,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:spacer({ width = share("labelWidth") }),
 					f:static_text({
 						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc=Leave empty to store next to the catalog (default). Set a custom folder if the catalog is on an exFAT volume."
+							"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc=Leave empty to store next to the catalog (default)."
 						),
 						size = "small",
 						fill_horizontal = 1,
@@ -1099,6 +1099,12 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 
 	prefs.periodicalUpdateCheck = propertyTable.periodicalUpdateCheck
 	prefs.dbStoragePath = (propertyTable.dbStoragePath and propertyTable.dbStoragePath:gsub("^%s*(.-)%s*$", "%1")) or ""
+
+	if prefs.dbStoragePath ~= "" then
+		LrTasks.startAsyncTask(function()
+			SearchIndexAPI.initializeCatalog(prefs.dbStoragePath)
+		end)
+	end
 
 	prefs.useClip = propertyTable.useClip
 

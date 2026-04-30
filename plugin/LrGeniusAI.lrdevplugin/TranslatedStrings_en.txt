@@ -299,7 +299,7 @@
 "$$$/LrGeniusAI/PluginInfo/DbStatsFailed" = "Database statistics failed"
 "$$$/LrGeniusAI/PluginInfo/DbStatsTitle" = "Database statistics"
 "$$$/LrGeniusAI/PluginInfo/DbStoragePath" = "Database storage folder"
-"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc" = "Leave empty to store next to the catalog (default). Set a custom folder if the catalog is on an exFAT volume."
+"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc" = "Leave empty to store next to the catalog (default)."
 "$$$/LrGeniusAI/PluginInfo/SelectDbFolderTitle" = "Select Database Storage Folder"
 "$$$/LrGeniusAI/PluginInfo/SelectFolder" = "Select"
 "$$$/LrGeniusAI/PluginInfo/DownloadDbBackup" = "Download DB backup"

@@ -299,7 +299,7 @@
 "$$$/LrGeniusAI/PluginInfo/DbStatsFailed" = "Statistik fehlgeschlagen"
 "$$$/LrGeniusAI/PluginInfo/DbStatsTitle" = "Datenbank-Statistik"
 "$$$/LrGeniusAI/PluginInfo/DbStoragePath" = "Datenbank-Speicherordner"
-"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc" = "Leer lassen, um neben dem Katalog zu speichern (Standard). Anderen Ordner wählen, wenn der Katalog auf einem exFAT-Datenträger liegt."
+"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc" = "Leer lassen, um neben dem Katalog zu speichern (Standard)."
 "$$$/LrGeniusAI/PluginInfo/SelectDbFolderTitle" = "Datenbank-Speicherordner auswählen"
 "$$$/LrGeniusAI/PluginInfo/SelectFolder" = "Auswählen"
 "$$$/LrGeniusAI/PluginInfo/DownloadDbBackup" = "DB-Backup herunterladen"

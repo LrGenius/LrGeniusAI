@@ -299,7 +299,7 @@
 "$$$/LrGeniusAI/PluginInfo/DbStatsFailed" = "Échec de statistiques"
 "$$$/LrGeniusAI/PluginInfo/DbStatsTitle" = "Stats de la base"
 "$$$/LrGeniusAI/PluginInfo/DbStoragePath" = "Dossier de stockage de la base"
-"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc" = "Laisser vide pour stocker à côté du catalogue (défaut). Choisir un autre dossier si le catalogue est sur un volume exFAT."
+"$$$/LrGeniusAI/PluginInfo/DbStoragePathDesc" = "Laisser vide pour stocker à côté du catalogue (défaut)."
 "$$$/LrGeniusAI/PluginInfo/SelectDbFolderTitle" = "Sélectionner le dossier de stockage"
 "$$$/LrGeniusAI/PluginInfo/SelectFolder" = "Sélectionner"
 "$$$/LrGeniusAI/PluginInfo/DownloadDbBackup" = "Télécharger sauvegarde DB"
