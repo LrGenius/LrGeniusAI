@@ -186,7 +186,13 @@ def validate_clusters_with_llm(
             if text.endswith("```"):
                 text = text[: text.rfind("```")].strip()
 
-            parsed = json.loads(text)
+            # Find the start of the JSON array (LLMs sometimes prepend prose)
+            bracket = text.find("[")
+            if bracket == -1:
+                raise ValueError("no JSON array found in response")
+            # raw_decode stops at the end of the first valid JSON value,
+            # ignoring any trailing text the LLM appended after the array.
+            parsed, _ = json.JSONDecoder().raw_decode(text, bracket)
             if not isinstance(parsed, list):
                 raise ValueError("response is not a JSON array")
 

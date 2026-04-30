@@ -87,45 +87,36 @@ def _run_clustering(
         return {"results": [], "warning": f"Embedding failed: {e}"}
 
     sim_matrix: np.ndarray = np.dot(embeddings, embeddings.T)
-
-    parent = list(range(len(unique)))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
     n = len(unique)
-    for i in range(n):
-        for j in range(i + 1, n):
-            if float(sim_matrix[i, j]) >= threshold:
-                pi, pj = find(i), find(j)
-                if pi != pj:
-                    parent[pi] = pj
 
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        root = find(i)
-        groups.setdefault(root, []).append(i)
+    # Build adjacency using numpy (fast) then find cliques with complete-linkage:
+    # a keyword joins a cluster only when it's above threshold with every existing
+    # member, preventing the transitive-closure chains that union-find creates.
+    mask = np.triu(sim_matrix, k=1) >= threshold
+    i_arr, j_arr = np.where(mask)
 
-    # Cap cluster size — union-find transitive closure can produce giant false-positive
-    # clusters (thousands of keywords chained through intermediate similarities).
-    # Genuine synonym sets are small; anything larger is noise.
-    _MAX_CLUSTER_SIZE = 20
-    all_candidate_groups = [
-        [unique[i] for i in sorted(members)]
-        for members in groups.values()
-        if len(members) >= 2
-    ]
-    oversized = [g for g in all_candidate_groups if len(g) > _MAX_CLUSTER_SIZE]
-    candidates = [g for g in all_candidate_groups if len(g) <= _MAX_CLUSTER_SIZE]
-    if oversized:
-        logger.warning(
-            f"cluster_keywords: dropped {len(oversized)} oversized cluster(s) "
-            f"(>{_MAX_CLUSTER_SIZE} members) — likely transitive-closure false positives; "
-            f"largest had {max(len(g) for g in oversized)} member(s)"
-        )
+    adj: dict[int, set[int]] = {i: set() for i in range(n)}
+    for i, j in zip(i_arr.tolist(), j_arr.tolist()):
+        adj[i].add(j)
+        adj[j].add(i)
+
+    assigned: set[int] = set()
+    all_candidate_groups: list[list[str]] = []
+
+    for seed in sorted(range(n), key=lambda x: -len(adj[x])):
+        if seed in assigned or not adj[seed]:
+            continue
+        cluster: set[int] = {seed}
+        for candidate in sorted(adj[seed], key=lambda x: -len(adj[x])):
+            if candidate in assigned or candidate in cluster:
+                continue
+            if all(candidate in adj[m] for m in cluster):
+                cluster.add(candidate)
+        if len(cluster) >= 2:
+            all_candidate_groups.append([unique[i] for i in sorted(cluster)])
+            assigned.update(cluster)
+
+    candidates = all_candidate_groups
 
     use_llm = provider in _KNOWN_PROVIDERS
     logger.info(
