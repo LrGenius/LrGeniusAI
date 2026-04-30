@@ -189,7 +189,7 @@ def load_model():
 
         except Exception as e:
             _model_load_error = str(e)
-            logger.error(f"Failed to load OpenCLIP model (lazy): {e}", exc_info=True)
+            logger.exception(f"Failed to load OpenCLIP model (lazy): {e}")
             raise
 
 
@@ -309,8 +309,10 @@ def write_pid_file():
     if not db_dir:
         return
     pid_file = os.path.join(db_dir, "lrgenius-server.pid")
-    with open(pid_file, "w") as f:
+    tmp_file = pid_file + ".tmp"
+    with open(tmp_file, "w") as f:
         f.write(str(os.getpid()))
+    os.replace(tmp_file, pid_file)  # atomic on POSIX and Windows
 
 
 def remove_pid_file():

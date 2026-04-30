@@ -452,7 +452,18 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 								allowsMultipleSelection = false,
 							})
 							if result and result[1] then
-								propertyTable.dbStoragePath = result[1]
+								local newPath = result[1]
+								local oldPath = (propertyTable.dbStoragePath or ""):gsub("^%s*(.-)%s*$", "%1")
+								if oldPath ~= "" and oldPath ~= newPath then
+									LrDialogs.message(
+										LOC("$$$/LrGeniusAI/PluginInfo/DbPathChangedTitle=Database Path Changed"),
+										LOC(
+											"$$$/LrGeniusAI/PluginInfo/DbPathChangedMessage=The AI search index will be created fresh at the new location. Your existing index data will remain at the old path and will not be moved. Re-run indexing after saving to rebuild the index."
+										),
+										"warning"
+									)
+								end
+								propertyTable.dbStoragePath = newPath
 							end
 						end,
 					}),
@@ -1102,7 +1113,21 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 
 	if prefs.dbStoragePath ~= "" then
 		LrTasks.startAsyncTask(function()
-			SearchIndexAPI.initializeCatalog(prefs.dbStoragePath)
+			local ok, errMsg = LrTasks.pcall(function()
+				local resp, err = SearchIndexAPI.initializeCatalog(prefs.dbStoragePath)
+				if err then
+					error(err)
+				end
+			end)
+			if not ok then
+				ErrorHandler.handleError(
+					"DbPathInit",
+					LOC(
+						"$$$/LrGeniusAI/PluginInfo/DbPathInitFailed=Failed to initialize database at the selected path: ^1\n\nCheck that the folder exists and is writable.",
+						tostring(errMsg)
+					)
+				)
+			end
 		end)
 	end
 

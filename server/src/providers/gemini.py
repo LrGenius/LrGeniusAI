@@ -291,7 +291,7 @@ class GeminiProvider(LLMProviderBase):
                 time.sleep(5)
                 return self.generate_metadata(request)
 
-            logger.error(f"Error generating metadata with Gemini: {e}", exc_info=True)
+            logger.exception(f"Error generating metadata with Gemini: {e}")
             return MetadataGenerationResponse(
                 uuid=request.uuid, success=False, error=str(e)
             )
@@ -415,9 +415,7 @@ class GeminiProvider(LLMProviderBase):
                     )
                 time.sleep(5)
                 return self.generate_edit_recipe(request)
-            logger.error(
-                f"Error generating edit recipe with Gemini: {e}", exc_info=True
-            )
+            logger.exception(f"Error generating edit recipe with Gemini: {e}")
             return EditGenerationResponse(
                 uuid=request.uuid, success=False, error=str(e)
             )

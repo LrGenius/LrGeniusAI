@@ -124,6 +124,7 @@ def _run_clustering(
         f"(threshold={threshold}, llm={provider or 'none'})"
     )
 
+    warning = None
     if use_llm and candidates:
         try:
             clusters = validate_clusters_with_llm(
@@ -133,12 +134,13 @@ def _run_clustering(
                 f"cluster_keywords: LLM reduced {len(candidates)} candidates → {len(clusters)} confirmed clusters"
             )
         except Exception as e:
-            logger.error(f"cluster_keywords: LLM validation error: {e}", exc_info=True)
+            logger.exception(f"cluster_keywords: LLM validation error: {e}")
             clusters = candidates
+            warning = f"LLM validation failed ({provider}); results are CLIP-only and may include false positives."
     else:
         clusters = candidates
 
-    return {"results": clusters, "warning": None}
+    return {"results": clusters, "warning": warning}
 
 
 @keywords_bp.route("/keywords/cluster", methods=["POST"])

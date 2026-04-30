@@ -26,9 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Abhängigkeiten
 
 COPY uv.lock pyproject.toml .
-# Disable development dependencies
-ENV UV_NO_DEV=1
-RUN uv sync --locked
+RUN uv sync --locked --no-dev
 
 # App source
 COPY src /app/src

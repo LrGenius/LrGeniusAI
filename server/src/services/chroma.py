@@ -143,6 +143,8 @@ def _ensure_initialized():
         path=config.DB_PATH, settings=Settings(anonymized_telemetry=False)
     )
 
+    # No embedding_function is passed: all callers supply pre-computed vectors
+    # explicitly via embeddings=[...], so ChromaDB's built-in embedding is unused.
     collection = chroma_client.get_or_create_collection(name="image_embeddings")
     logger.info("Initialized ChromaDB image_embeddings collection.")
 

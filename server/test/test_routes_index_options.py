@@ -130,6 +130,27 @@ class ExtractOptionsTests(unittest.TestCase):
         opts = _extract_options({"temperature": "0.7"})
         self.assertEqual(opts["temperature"], 0.7)
 
+    def test_max_tokens_absent_yields_none(self):
+        self.assertIsNone(_extract_options({})["max_tokens"])
+
+    def test_max_tokens_none_yields_none(self):
+        self.assertIsNone(_extract_options({"max_tokens": None})["max_tokens"])
+
+    def test_max_tokens_valid_int(self):
+        self.assertEqual(_extract_options({"max_tokens": 1024})["max_tokens"], 1024)
+
+    def test_max_tokens_valid_string(self):
+        self.assertEqual(_extract_options({"max_tokens": "2048"})["max_tokens"], 2048)
+
+    def test_max_tokens_zero_clamped_to_one(self):
+        self.assertEqual(_extract_options({"max_tokens": 0})["max_tokens"], 1)
+
+    def test_max_tokens_negative_clamped_to_one(self):
+        self.assertEqual(_extract_options({"max_tokens": -512})["max_tokens"], 1)
+
+    def test_max_tokens_non_numeric_string_yields_none(self):
+        self.assertIsNone(_extract_options({"max_tokens": "abc"})["max_tokens"])
+
 
 if __name__ == "__main__":
     unittest.main()

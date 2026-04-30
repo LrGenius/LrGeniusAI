@@ -43,9 +43,11 @@ def _extract_options(data):
     options["api_key"] = data.get("api_key")
     options["language"] = data.get("language", "German")
     options["temperature"] = float(data.get("temperature", 0.2))
-    options["max_tokens"] = (
-        int(data["max_tokens"]) if data.get("max_tokens") is not None else None
-    )
+    try:
+        _mt = data.get("max_tokens")
+        options["max_tokens"] = max(1, int(_mt)) if _mt is not None else None
+    except (ValueError, TypeError):
+        options["max_tokens"] = None
     options["generate_keywords"] = (
         str(data.get("generate_keywords", "true")).lower() == "true"
     )

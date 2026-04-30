@@ -19,6 +19,7 @@ import base64
 import datetime
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +35,9 @@ RELEASES_BASE = "https://github.com/{repo}/releases/tag/{tag}"
 # Files that must NOT be updated via code-only update because they
 # affect the plugin identity / LR registration and require a full reload.
 EXCLUDE_PLUGIN_FILES: set[str] = set()
+
+# Files whose change between releases signals a breaking dependency update.
+DEPENDENCY_FILES = ["server/pyproject.toml", "server/uv.lock"]
 
 # version_info.py is excluded from raw URL fetching because the file in the
 # repo at the tag commit still contains dev placeholders — the real values are
@@ -113,6 +117,40 @@ def make_version_info_entry(version: str, tag: str) -> dict:
     }
 
 
+def _detect_dependency_changes(current_tag: str) -> bool:
+    """Return True if any dependency files changed since the previous release tag."""
+    try:
+        result = subprocess.run(
+            ["git", "tag", "--sort=-creatordate"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        tags = [t.strip() for t in result.stdout.splitlines() if t.strip()]
+        # Drop the current tag (it may or may not be in the list yet)
+        prev_tags = [t for t in tags if t != current_tag]
+        if not prev_tags:
+            print("WARNING: No previous tag found; assuming breaking changes.", file=sys.stderr)
+            return True
+        prev_tag = prev_tags[0]
+
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", prev_tag, "HEAD", "--"] + DEPENDENCY_FILES,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        changed = [f for f in diff.stdout.splitlines() if f.strip()]
+        if changed:
+            print(f"Dependency files changed since {prev_tag}: {changed}", file=sys.stderr)
+            print("Auto-setting breaking_changes=True.", file=sys.stderr)
+            return True
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"WARNING: Could not detect dependency changes: {e}", file=sys.stderr)
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate LrGeniusAI code-only update manifest"
@@ -130,7 +168,8 @@ def main():
         "--breaking",
         action="store_true",
         default=False,
-        help="Mark release as requiring a full installer (dependency changes)",
+        help="Mark release as requiring a full installer (dependency changes). "
+             "Also auto-detected from git diff against the previous tag.",
     )
     args = parser.parse_args()
 
@@ -149,6 +188,9 @@ def main():
         )
         sys.exit(1)
 
+    # Auto-detect breaking changes from dependency file diffs; --breaking overrides too
+    is_breaking = args.breaking or _detect_dependency_changes(tag)
+
     print(f"Generating update manifest for {tag}...")
 
     plugin_files = collect_plugin_files(repo, tag)
@@ -163,7 +205,7 @@ def main():
         "version": version,
         "tag": tag,
         "update_type": "code_only",
-        "breaking_changes": args.breaking,
+        "breaking_changes": is_breaking,
         "requires_restart": True,
         "release_url": RELEASES_BASE.format(repo=repo, tag=tag),
         "total_size_bytes": total_size,
@@ -185,7 +227,7 @@ def main():
     print(f"  Plugin files:   {len(plugin_files)}")
     print(f"  Backend files:  {len(backend_files)}")
     print(f"  Total size:     {total_size / 1024:.1f} KB")
-    print(f"  Breaking:       {args.breaking}")
+    print(f"  Breaking:       {is_breaking}")
 
 
 if __name__ == "__main__":
