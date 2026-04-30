@@ -1114,7 +1114,7 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	if prefs.dbStoragePath ~= "" then
 		LrTasks.startAsyncTask(function()
 			local ok, errMsg = LrTasks.pcall(function()
-				local resp, err = SearchIndexAPI.initializeCatalog(prefs.dbStoragePath)
+				local _, err = SearchIndexAPI.initializeCatalog(prefs.dbStoragePath)
 				if err then
 					error(err)
 				end
