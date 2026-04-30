@@ -1,8 +1,6 @@
 -- TaskDeduplicateKeywords.lua
--- Finds duplicate keywords via two passes:
---   1. Exact: catalog keywords whose name matches a synonym of another keyword.
---   2. Semantic: CLIP-embedding clusters of semantically similar keyword names.
--- Both passes show per-item checkboxes so the user controls every merge.
+-- SigLIP-based keyword clustering + optional LLM validation.
+-- Only leaf keywords (no children) are candidates for deduplication.
 
 local function collectKeywordsUnder(keyword, result)
 	result = result or {}
@@ -40,62 +38,6 @@ local function buildNameMap(keywords)
 		end
 	end
 	return map
-end
-
--- Returns pairs {canonical, canonicalName, duplicate, duplicateName} where
--- 'duplicate' is a catalog keyword whose name matches a synonym of 'canonical'.
--- Keywords with child keywords are excluded as duplicates (they can't be merged).
-local function findExactPairs(selectedKeywords, allNameMap)
-	local pairs = {}
-	local scheduled = {}
-
-	for _, kw in ipairs(selectedKeywords) do
-		if not scheduled[kw] then
-			local okSyn, synonyms = LrTasks.pcall(function()
-				return kw:getSynonyms() or {}
-			end)
-			if okSyn and type(synonyms) == "table" then
-				for _, syn in ipairs(synonyms) do
-					if type(syn) == "string" then
-						local key = string.lower(Util.trim(syn))
-						if key ~= "" then
-							local duplicate = allNameMap[key]
-							if duplicate and duplicate ~= kw and not scheduled[duplicate] then
-								-- Skip keywords that have children — they cannot be merged
-								local okChildren, children = LrTasks.pcall(function()
-									return duplicate:getChildren() or {}
-								end)
-								if okChildren and type(children) == "table" and #children > 0 then
-									log:trace(
-										"DeduplicateKeywords: skipping '"
-											.. key
-											.. "' (has children) as duplicate candidate"
-									)
-								else
-									local okDup, dupName = LrTasks.pcall(function()
-										return duplicate:getName()
-									end)
-									local okCan, canName = LrTasks.pcall(function()
-										return kw:getName()
-									end)
-									if okDup and okCan then
-										scheduled[duplicate] = true
-										table.insert(pairs, {
-											canonical = kw,
-											canonicalName = canName,
-											duplicate = duplicate,
-											duplicateName = dupName,
-										})
-									end
-								end
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-	return pairs
 end
 
 -- Executes a single keyword merge: re-tags photos with the canonical keyword
@@ -175,32 +117,64 @@ LrTasks.startAsyncTask(function()
 		local f = LrView.osFactory()
 		local bind = LrView.bind
 
-		-- Detect active cloud provider for cost disclaimer
-		local cloudProviderName = nil
-		if prefs and prefs.modelKey and prefs.modelKey ~= "" then
-			local sep = string.find(prefs.modelKey, "::", 1, true)
-			local prov = sep and string.sub(prefs.modelKey, 1, sep - 1) or prefs.modelKey
-			if prov == "chatgpt" then
-				cloudProviderName = "ChatGPT"
-			elseif prov == "gemini" then
-				cloudProviderName = "Gemini"
+		-- Load available LLM models from server
+		local modelItems = {}
+		do
+			local openaiKey = (prefs and not Util.nilOrEmpty(prefs.chatgptApiKey)) and prefs.chatgptApiKey or nil
+			local geminiKey = (prefs and not Util.nilOrEmpty(prefs.geminiApiKey)) and prefs.geminiApiKey or nil
+			local modelsResp = SearchIndexAPI.getModels(openaiKey, geminiKey)
+			if modelsResp and modelsResp.models then
+				for provider, list in pairs(modelsResp.models) do
+					for _, model in ipairs(list) do
+						table.insert(modelItems, {
+							title = provider .. ": " .. model,
+							value = provider .. "::" .. model,
+						})
+					end
+				end
+			end
+			table.sort(modelItems, function(a, b)
+				return a.title < b.title
+			end)
+			if #modelItems == 0 then
+				table.insert(modelItems, { title = "qwen: (default)", value = "qwen::" })
 			end
 		end
 
-		-- ── Step 1: Warning + backup confirmation ─────────────────────────
+		-- ── Step 1: Warning + model selection + backup confirmation ──────────
 		local warnProps = LrBinding.makePropertyTable(context)
 		warnProps.hasBackup = false
+		warnProps.modelKey = prefs.deduplicateModelKey or prefs.modelKey or modelItems[1].value
+		if not warnProps.modelKey or warnProps.modelKey == "" then
+			warnProps.modelKey = modelItems[1].value
+		end
 
-		local warnChildren = {
+		local warnView = f:column({
 			bind_to_object = warnProps,
 			spacing = f:control_spacing(),
-			width = 430,
+			width = 450,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool merges catalog keywords that are also listed as\nsynonyms of another keyword. Photos are re-tagged with the\ncanonical keyword. The duplicate entry remains in the catalog\nwith 0 photos — remove it via Metadata > Purge Unused Keywords."
+					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool uses AI (SigLIP similarity + LLM validation) to find\nleaf keywords that are true synonyms and suggests merging them.\nPhotos are re-tagged with the canonical keyword. Duplicate entries\nremain in the catalog with 0 photos — remove via\nMetadata > Purge Unused Keywords."
 				),
 				fill_horizontal = 1,
 				wrap = true,
+			}),
+			f:separator({ fill_horizontal = 1 }),
+			f:group_box({
+				title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AISettings=AI Model"),
+				fill_horizontal = 1,
+				f:row({
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/AIModelLabel=AI Model:"),
+						width = 70,
+					}),
+					f:popup_menu({
+						value = bind("modelKey"),
+						items = modelItems,
+						width = 290,
+					}),
+				}),
 			}),
 			f:separator({ fill_horizontal = 1 }),
 			f:static_text({
@@ -211,36 +185,23 @@ LrTasks.startAsyncTask(function()
 				wrap = true,
 				text_color = LrColor(0.8, 0.2, 0.0),
 			}),
-		}
-
-		if cloudProviderName then
-			table.insert(
-				warnChildren,
-				f:static_text({
-					title = LOC(
-						"$$$/LrGeniusAI/DeduplicateKeywords/LLMCostNote=Note: AI-assisted duplicate detection uses ^1.\nThis will generate API costs depending on your catalog size.",
-						cloudProviderName
-					),
-					fill_horizontal = 1,
-					wrap = true,
-					text_color = LrColor(0.5, 0.35, 0.0),
-				})
-			)
-		end
-
-		table.insert(warnChildren, f:spacer({ height = 4 }))
-		table.insert(
-			warnChildren,
+			f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/LLMCostNote=Note: When using ChatGPT or Gemini, AI analysis will incur API costs."
+				),
+				fill_horizontal = 1,
+				wrap = true,
+				text_color = LrColor(0.5, 0.35, 0.0),
+			}),
+			f:spacer({ height = 4 }),
 			f:checkbox({
 				value = bind("hasBackup"),
 				title = LOC(
 					"$$$/LrGeniusAI/DeduplicateKeywords/BackupConfirm=I have a recent catalog backup and understand\nthis operation cannot be undone."
 				),
 				wrap = true,
-			})
-		)
-
-		local warnView = f:column(warnChildren)
+			}),
+		})
 
 		local warnResult = LrDialogs.presentModalDialog({
 			title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/WarningTitle=Deduplicate Keyword Synonyms"),
@@ -260,6 +221,9 @@ LrTasks.startAsyncTask(function()
 			)
 			return
 		end
+
+		-- Save model preference for next run
+		prefs.deduplicateModelKey = warnProps.modelKey
 
 		-- ── Step 2: Keyword branch selection ──────────────────────────────
 		local okTopKw, topKeywords = LrTasks.pcall(function()
@@ -315,7 +279,7 @@ LrTasks.startAsyncTask(function()
 			width = 520,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/SelectPathsHint=Select the top-level keyword branches to scan for duplicates.\nThe search covers the entire catalog."
+					"$$$/LrGeniusAI/DeduplicateKeywords/SelectPathsHint=Select the top-level keyword branches to scan for duplicates.\nOnly leaf keywords (without sub-keywords) are considered."
 				),
 				fill_horizontal = 1,
 				wrap = true,
@@ -372,7 +336,7 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- ── Step 3: Scan — exact + semantic ───────────────────────────────
+		-- ── Step 3: Scan — AI semantic clustering (leaf keywords only) ────────
 		local scanScope = LrProgressScope({
 			title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/ScanProgressTitle=Scanning keyword catalog..."),
 			functionContext = context,
@@ -383,35 +347,35 @@ LrTasks.startAsyncTask(function()
 		local allCatalogKeywords = collectAllKeywords(topKeywords)
 		local allNameMap = buildNameMap(allCatalogKeywords)
 		local selectedKeywords = collectAllKeywords(selectedRoots)
-		local exactPairs = findExactPairs(selectedKeywords, allNameMap)
 
-		-- Collect all keyword names for the semantic pass
-		local allKeywordNames = {}
-		for _, kw in ipairs(allCatalogKeywords) do
-			local okN, name = LrTasks.pcall(function()
-				return kw:getName()
+		-- Only pass leaf keywords (no children) to the cluster API
+		local leafKeywordNames = {}
+		for _, kw in ipairs(selectedKeywords) do
+			local okC, children = LrTasks.pcall(function()
+				return kw:getChildren() or {}
 			end)
-			if okN and type(name) == "string" and name ~= "" then
-				table.insert(allKeywordNames, Util.trim(name))
+			if okC and type(children) == "table" and #children == 0 then
+				local okN, name = LrTasks.pcall(function()
+					return kw:getName()
+				end)
+				if okN and type(name) == "string" and name ~= "" then
+					table.insert(leafKeywordNames, Util.trim(name))
+				end
 			end
 		end
 
-		-- Semantic clustering via the CLIP backend (+ optional LLM validation)
 		scanScope:setCaption(
 			LOC("$$$/LrGeniusAI/DeduplicateKeywords/SemanticScanCaption=Querying AI for semantic clusters...")
 		)
 		LrTasks.yield()
 
-		local semanticPairs = {}
-		local semanticWarning = nil
-
-		-- Build provider options from the active model selection in prefs
+		-- Build provider options from model key selected in warning dialog
 		local clusterOptions = {}
-		if prefs and prefs.modelKey and prefs.modelKey ~= "" then
-			local sep = string.find(prefs.modelKey, "::", 1, true)
+		if warnProps.modelKey and warnProps.modelKey ~= "" then
+			local sep = string.find(warnProps.modelKey, "::", 1, true)
 			if sep then
-				local prov = string.sub(prefs.modelKey, 1, sep - 1)
-				local mdl = string.sub(prefs.modelKey, sep + 2)
+				local prov = string.sub(warnProps.modelKey, 1, sep - 1)
+				local mdl = string.sub(warnProps.modelKey, sep + 2)
 				clusterOptions.provider = prov
 				clusterOptions.model = (mdl ~= "") and mdl or nil
 				if prov == "chatgpt" and prefs.chatgptApiKey and prefs.chatgptApiKey ~= "" then
@@ -426,22 +390,17 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
-		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allKeywordNames, nil, clusterOptions)
+		local semanticPairs = {}
+		local semanticWarning = nil
+
+		local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(leafKeywordNames, nil, clusterOptions)
 		if clusterResp and clusterResp.results then
 			if clusterResp.warning and clusterResp.warning ~= "" then
 				semanticWarning = clusterResp.warning
 			end
 
-			-- Build a set of names already scheduled by the exact pass (either side)
-			local alreadyScheduled = {}
-			for _, p in ipairs(exactPairs) do
-				alreadyScheduled[p.duplicateName:lower()] = true
-				alreadyScheduled[p.canonicalName:lower()] = true
-			end
-
 			for _, cluster in ipairs(clusterResp.results) do
-				-- When the LLM is active the backend returns the canonical name first.
-				-- For CLIP-only results (no LLM) we fall back to alphabetical order.
+				-- LLM returns canonical name first; CLIP-only falls back to alphabetical
 				if not clusterOptions.provider then
 					table.sort(cluster, function(a, b)
 						return a:lower() < b:lower()
@@ -452,18 +411,14 @@ LrTasks.startAsyncTask(function()
 				if canonicalKw then
 					for j = 2, #cluster do
 						local dupName = cluster[j]
-						local dupKey = dupName:lower()
-						if not alreadyScheduled[dupKey] then
-							local dupKw = allNameMap[dupKey]
-							if dupKw and dupKw ~= canonicalKw then
-								alreadyScheduled[dupKey] = true
-								table.insert(semanticPairs, {
-									canonical = canonicalKw,
-									canonicalName = canonicalName,
-									duplicate = dupKw,
-									duplicateName = dupName,
-								})
-							end
+						local dupKw = allNameMap[dupName:lower()]
+						if dupKw and dupKw ~= canonicalKw then
+							table.insert(semanticPairs, {
+								canonical = canonicalKw,
+								canonicalName = canonicalName,
+								duplicate = dupKw,
+								duplicateName = dupName,
+							})
 						end
 					end
 				end
@@ -477,9 +432,9 @@ LrTasks.startAsyncTask(function()
 
 		scanScope:done()
 
-		if #exactPairs == 0 and #semanticPairs == 0 then
+		if #semanticPairs == 0 then
 			local msg = LOC(
-				"$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesMessage=No synonym duplicates were found in the selected keyword branches. Your catalog is already clean."
+				"$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesMessage=No similar leaf keywords were found in the selected branches. Your catalog is already clean."
 			)
 			if semanticWarning then
 				msg = msg .. "\n\n" .. semanticWarning
@@ -492,9 +447,6 @@ LrTasks.startAsyncTask(function()
 		local previewProps = LrBinding.makePropertyTable(context)
 		previewProps.syncBackend = true
 
-		for i = 1, #exactPairs do
-			previewProps["sel_exact_" .. i] = true
-		end
 		for i = 1, #semanticPairs do
 			previewProps["sel_sem_" .. i] = true
 		end
@@ -520,108 +472,53 @@ LrTasks.startAsyncTask(function()
 			})
 		end
 
-		-- Section 1: exact synonym pairs
-		local exactSection
-		if #exactPairs > 0 then
-			local exactRows = { spacing = 2 }
-			for i, pair in ipairs(exactPairs) do
-				table.insert(
-					exactRows,
-					f:row({
-						f:checkbox({ value = bind("sel_exact_" .. i) }),
-						f:static_text({
-							title = '"' .. pair.duplicateName .. '"  →  "' .. pair.canonicalName .. '"',
-							font = "<system>",
-						}),
-					})
-				)
-			end
-			exactSection = f:group_box({
-				bind_to_object = previewProps,
-				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/ExactHeader=Exact Synonym Duplicates (^1)",
-					#exactPairs
-				),
-				fill_horizontal = 1,
-				makeSelectButtons("sel_exact_", #exactPairs, previewProps),
-				f:scrolled_view({
-					height = 180,
-					width = 490,
-					f:column(exactRows),
-				}),
-			})
+		local semRows = { spacing = 2 }
+		for i, pair in ipairs(semanticPairs) do
+			table.insert(
+				semRows,
+				f:row({
+					f:checkbox({ value = bind("sel_sem_" .. i) }),
+					f:static_text({
+						title = '"' .. pair.duplicateName .. '"  →  "' .. pair.canonicalName .. '"',
+						font = "<system>",
+					}),
+				})
+			)
 		end
 
-		-- Section 2: semantic pairs
-		local semanticSection
-		if #semanticPairs > 0 then
-			local semRows = { spacing = 2 }
-			for i, pair in ipairs(semanticPairs) do
-				table.insert(
-					semRows,
-					f:row({
-						f:checkbox({ value = bind("sel_sem_" .. i) }),
-						f:static_text({
-							title = '"' .. pair.duplicateName .. '"  →  "' .. pair.canonicalName .. '"',
-							font = "<system>",
-						}),
-					})
-				)
-			end
-			semanticSection = f:group_box({
-				bind_to_object = previewProps,
-				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/SemanticHeader=AI Semantic Suggestions (^1)",
-					#semanticPairs
-				),
-				fill_horizontal = 1,
-				f:static_text({
-					title = LOC(
-						"$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote=These keywords are semantically similar according to the AI.\nUncheck any pair you want to keep separate."
-					),
-					fill_horizontal = 1,
-					wrap = true,
-				}),
-				f:spacer({ height = 4 }),
-				makeSelectButtons("sel_sem_", #semanticPairs, previewProps),
-				f:scrolled_view({
-					height = 180,
-					width = 490,
-					f:column(semRows),
-				}),
-			})
-		elseif semanticWarning then
-			semanticSection = f:static_text({
-				title = semanticWarning,
-				fill_horizontal = 1,
-				wrap = true,
-				text_color = LrColor(0.5, 0.5, 0.5),
-			})
-		end
-
-		-- Assemble preview column
-		local previewChildren = {
-			spacing = f:control_spacing(),
-			width = 520,
+		local semanticSection = f:group_box({
+			bind_to_object = previewProps,
+			title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/SemanticHeader=AI Suggestions (^1)", #semanticPairs),
+			fill_horizontal = 1,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/PreviewHint=^1 duplicate(s) found. Photos will be re-tagged with the canonical keyword.\nThe duplicate entry remains empty in the catalog; keywords with child keywords are skipped.",
-					#exactPairs + #semanticPairs
+					"$$$/LrGeniusAI/DeduplicateKeywords/SemanticNote=These keywords are semantically similar according to the AI.\nUncheck any pair you want to keep separate."
 				),
 				fill_horizontal = 1,
 				wrap = true,
 			}),
-		}
-		if exactSection then
-			table.insert(previewChildren, exactSection)
-		end
-		if semanticSection then
-			table.insert(previewChildren, semanticSection)
-		end
+			f:spacer({ height = 4 }),
+			makeSelectButtons("sel_sem_", #semanticPairs, previewProps),
+			f:scrolled_view({
+				height = 240,
+				width = 490,
+				f:column(semRows),
+			}),
+		})
 
-		table.insert(previewChildren, f:spacer({ height = 4 }))
-		table.insert(
-			previewChildren,
+		local previewView = f:column({
+			spacing = f:control_spacing(),
+			width = 520,
+			f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/DeduplicateKeywords/PreviewHint=^1 duplicate(s) found. Photos will be re-tagged with the canonical keyword.\nThe duplicate entry remains empty in the catalog.",
+					#semanticPairs
+				),
+				fill_horizontal = 1,
+				wrap = true,
+			}),
+			semanticSection,
+			f:spacer({ height = 4 }),
 			f:row({
 				bind_to_object = previewProps,
 				f:checkbox({ value = bind("syncBackend") }),
@@ -630,15 +527,13 @@ LrTasks.startAsyncTask(function()
 						"$$$/LrGeniusAI/DeduplicateKeywords/SyncBackendLabel=Also update AI search index (recommended)"
 					),
 				}),
-			})
-		)
-
-		local previewView = f:column(previewChildren)
+			}),
+		})
 
 		local previewResult = LrDialogs.presentModalDialog({
 			title = LOC(
 				"$$$/LrGeniusAI/DeduplicateKeywords/PreviewTitle=Preview: ^1 Duplicate(s) to Merge",
-				#exactPairs + #semanticPairs
+				#semanticPairs
 			),
 			contents = previewView,
 			actionVerb = LOC("$$$/LrGeniusAI/DeduplicateKeywords/MergeSelected=Merge Selected"),
@@ -648,13 +543,7 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- Build the final list from checked items
 		local finalPairs = {}
-		for i, pair in ipairs(exactPairs) do
-			if previewProps["sel_exact_" .. i] then
-				table.insert(finalPairs, pair)
-			end
-		end
 		for i, pair in ipairs(semanticPairs) do
 			if previewProps["sel_sem_" .. i] then
 				table.insert(finalPairs, pair)

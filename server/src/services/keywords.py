@@ -120,7 +120,7 @@ def validate_clusters_with_llm(
     api_key: str | None,
     ollama_base_url: str | None,
     lmstudio_base_url: str | None,
-    chunk_size: int = 30,
+    chunk_size: int = 15,
 ) -> list[list[str]]:
     """
     Validate CLIP candidate clusters with an LLM.
