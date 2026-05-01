@@ -61,7 +61,7 @@ class OllamaProvider(LLMProviderBase):
     def _get_client(self, base_url_override: str | None = None):
         """Get Ollama client, using base_url_override when provided (e.g. from request)."""
         url = base_url_override or self.base_url
-        return Client(host=url) if Client else None
+        return Client(host=url, timeout=self.timeout) if Client else None
 
     @override
     def generate_metadata(
