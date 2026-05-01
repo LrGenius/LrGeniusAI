@@ -50,7 +50,10 @@ def perform_code_update(manifest: dict, plugin_path: str) -> tuple[bool, str]:
                 plugin_path,
                 str(backend_root),
             ]
-            subprocess.Popen(cmd, start_new_session=True)
+            creationflags = (
+                subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            )
+            subprocess.Popen(cmd, start_new_session=True, creationflags=creationflags)
 
             # Now we can shutdown the backend to free up files
             logger.info("Updater spawned. Requesting backend shutdown.")

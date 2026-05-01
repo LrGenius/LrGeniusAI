@@ -106,6 +106,8 @@ def _modern_dialog(title: str, message: str, kind: str = "info") -> None:
 
 _LAUNCHD_PLIST = Path.home() / "Library/LaunchAgents/com.lrgenius.server.plist"
 _LAUNCHD_LABEL = "com.lrgenius.server"
+_WIN_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_WIN_REG_VALUE = "LrGeniusAIBackend"
 
 
 def _launchd_unload() -> bool:
@@ -134,6 +136,57 @@ def _launchd_load() -> bool:
     return result.returncode == 0
 
 
+def _windows_stop() -> bool:
+    """Kill lingering backend processes on Windows.
+
+    The registry Run key doesn't auto-restart on exit (only at login), so this is
+    just belt-and-suspenders after the backend's own shutdown request.
+    """
+    if sys.platform != "win32":
+        return False
+    for img in ("python.exe", "pythonw.exe"):
+        subprocess.run(
+            [
+                "taskkill",
+                "/F",
+                "/IM",
+                img,
+                "/T",
+                "/FI",
+                "WINDOWTITLE eq lrgenius-server*",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    time.sleep(1)
+    return True
+
+
+def _windows_start() -> bool:
+    """Restart the backend by re-running the cmd registered in HKCU Run."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_REG_KEY) as key:
+            cmd_path, _ = winreg.QueryValueEx(key, _WIN_REG_VALUE)
+        cmd_path = cmd_path.strip('"')
+        if not Path(cmd_path).exists():
+            _log(f"Backend cmd not found: {cmd_path}")
+            return False
+        subprocess.Popen(
+            ["cmd.exe", "/c", cmd_path],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            start_new_session=True,
+        )
+        _log(f"Backend started via registry: {cmd_path}")
+        return True
+    except Exception as e:
+        _log(f"Failed to start backend via registry: {e}")
+        return False
+
+
 def _patch_info_lua(content: bytes, version: str) -> bytes:
     """Bake the release version into downloaded Info.lua (repo has dev placeholders)."""
     parts = version.split(".")
@@ -153,9 +206,8 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _apply_elevated(ops: list[tuple[Path, Path]]) -> None:
+def _apply_elevated_macos(ops: list[tuple[Path, Path]]) -> None:
     """Run all (src, dst) copies in a single privileged osascript call (one prompt)."""
-    # Write a temp shell script so escaping is trivial and the prompt fires once.
     script_path = Path(os.path.expanduser("~/.lrgeniusai/update_tmp/apply_elevated.sh"))
     script_path.parent.mkdir(parents=True, exist_ok=True)
     with open(script_path, "w") as f:
@@ -172,6 +224,55 @@ def _apply_elevated(ops: list[tuple[Path, Path]]) -> None:
     )
     if result.returncode != 0:
         raise PermissionError(f"Privileged apply failed: {result.stderr.strip()}")
+
+
+def _apply_elevated_windows(ops: list[tuple[Path, Path]]) -> None:
+    """Run all (src, dst) copies in a single UAC-elevated PowerShell call (one prompt)."""
+    script_path = Path(
+        os.path.expanduser("~/.lrgeniusai/update_tmp/apply_elevated.ps1")
+    )
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write("$ErrorActionPreference = 'Stop'\n")
+        for src, dst in ops:
+            # PowerShell single-quoted strings — escape embedded single quotes as ''
+            src_q = str(src).replace("'", "''")
+            dst_q = str(dst).replace("'", "''")
+            f.write(f"Copy-Item -Force -Path '{src_q}' -Destination '{dst_q}'\n")
+
+    # Outer powershell invokes inner with -Verb RunAs (UAC) and propagates exit code.
+    ps_cmd = (
+        f"$p = Start-Process powershell "
+        f"-ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{script_path}\"' "
+        f"-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise PermissionError(f"Privileged apply failed: {result.stderr.strip()}")
+
+
+def _apply_elevated(ops: list[tuple[Path, Path]]) -> None:
+    if sys.platform == "darwin":
+        _apply_elevated_macos(ops)
+    elif sys.platform == "win32":
+        _apply_elevated_windows(ops)
+    else:
+        raise RuntimeError(f"Elevated copy not supported on {sys.platform}")
+
+
+def _can_write(directory: Path) -> bool:
+    """Probe write access by actually touching a file — os.access ignores ACLs on Windows."""
+    test = directory / ".write_test"
+    try:
+        test.touch()
+        test.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def verify_sha256(content: bytes, expected_hash: str | None) -> bool:
@@ -338,9 +439,18 @@ class UpdaterGUI:
             except Exception:
                 pass
 
-            if _launchd_load():
+            restarted = False
+            if sys.platform == "darwin" and _launchd_load():
                 _log("Backend restarted via launchd.")
-            else:
+                restarted = True
+            elif sys.platform == "win32" and _windows_start():
+                restarted = True
+
+            if not restarted:
+                # CREATE_NO_WINDOW suppresses the console window on Windows when using python.exe
+                creationflags = (
+                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
                 subprocess.Popen(
                     [sys.executable, str(entry_point)],
                     start_new_session=True,
@@ -348,6 +458,7 @@ class UpdaterGUI:
                     stderr=subprocess.DEVNULL,
                     env=os.environ.copy(),
                     cwd=str(backend_root / "src"),
+                    creationflags=creationflags,
                 )
                 _log("Backend restarted via Popen.")
             self.root.destroy()
@@ -384,9 +495,9 @@ class UpdaterGUI:
 
     def perform_update(self):
         try:
-            # Unload launchd service first so KeepAlive can't restart the backend
-            # while we're replacing files.  Falls back silently on non-launchd installs.
+            # Stop the system service so it can't restart the backend mid-update.
             _launchd_unload()
+            _windows_stop()
 
             _log(f"Reading manifest: {self.manifest_path}")
             with open(self.manifest_path, "r") as f:
@@ -455,18 +566,19 @@ class UpdaterGUI:
             elevated: list[tuple[Path, Path, str | None]] = []
             for temp_path, target_path, sha in downloaded:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
-                if os.access(target_path.parent, os.W_OK):
+                if _can_write(target_path.parent):
                     normal.append((temp_path, target_path, sha))
                 else:
                     elevated.append((temp_path, target_path, sha))
 
-            # Normal files — direct copy with in-place backup
+            # Normal files — rename old to .bak first (rename works on open files on Windows),
+            # then copy the new file in.
             applied_backups: list[Path] = []
             for temp_path, target_path, sha in normal:
                 _log(f"  applying {target_path}")
                 bak_path = target_path.with_suffix(target_path.suffix + ".bak")
                 if target_path.exists():
-                    shutil.copy2(target_path, bak_path)
+                    target_path.rename(bak_path)
                     applied_backups.append(bak_path)
                 shutil.copy2(temp_path, target_path)
                 if sha and not verify_sha256(target_path.read_bytes(), sha):
