@@ -3981,7 +3981,7 @@ function SearchIndexAPI.applyUpdate(manifest)
 	local url = getBaseUrl() .. ENDPOINTS.UPDATE_APPLY
 	local body = {
 		manifest = manifest,
-		plugin_path = LrApplication.currentPlugin().path,
+		plugin_path = _PLUGIN.path,
 	}
 
 	log:info("APISearchIndex: Requesting backend to apply code update...")
