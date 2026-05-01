@@ -47,6 +47,7 @@ local ENDPOINTS = {
 	START_CLIP_DOWNLOAD = "/clip/download/start",
 	STATUS_CLIP_DOWNLOAD = "/clip/download/status",
 	CLIP_STATUS = "/clip/status",
+	CLIP_DEVICE = "/clip/device",
 	CHECK_UNPROCESSED = "/index/check-unprocessed",
 	FACES_CLUSTER = "/faces/cluster",
 	FACES_PERSONS = "/faces/persons",
@@ -3912,6 +3913,16 @@ function SearchIndexAPI.getRemoteLogs()
 		return nil, err
 	end
 	return response
+end
+
+function SearchIndexAPI.setClipDevice(device)
+	local url = getBaseUrl() .. ENDPOINTS.CLIP_DEVICE
+	local response, err = _request("POST", url, { device = device }, 15)
+	if err then
+		log:warn("setClipDevice: " .. tostring(err))
+		return false, err
+	end
+	return true
 end
 
 function SearchIndexAPI.styleEdit(photoId, filepath, options)

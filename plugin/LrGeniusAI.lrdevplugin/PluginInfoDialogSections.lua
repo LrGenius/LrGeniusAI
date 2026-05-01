@@ -512,7 +512,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:spacer({ width = share("labelWidth") }),
 					f:static_text({
 						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc=Requires backend restart. Only use CUDA with Gemini or ChatGPT —\nrunning CLIP and a local LLM (Ollama, LM Studio) on CUDA will exhaust VRAM.\nCUDA requires the CUDA-enabled installer on Windows."
+							"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc=Applied immediately on save — model reloads on next use. Only use CUDA with Gemini or ChatGPT —\nrunning CLIP and a local LLM (Ollama, LM Studio) on CUDA will exhaust VRAM.\nCUDA requires the CUDA-enabled installer on Windows."
 						),
 						size = "small",
 						fill_horizontal = 1,
@@ -1169,7 +1169,11 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		end)
 	end
 
-	prefs.torchDevice = propertyTable.torchDevice or Defaults.defaultTorchDevice
+	local newTorchDevice = propertyTable.torchDevice or Defaults.defaultTorchDevice
+	prefs.torchDevice = newTorchDevice
+	LrTasks.startAsyncTask(function()
+		SearchIndexAPI.setClipDevice(newTorchDevice)
+	end)
 	prefs.useClip = propertyTable.useClip
 
 	if propertyTable.backendServerUrl and propertyTable.backendServerUrl:gsub("^%s*(.-)%s*$", "%1") ~= "" then

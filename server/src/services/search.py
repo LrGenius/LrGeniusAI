@@ -1,6 +1,6 @@
 from . import chroma as chroma_service
 from . import vertexai as vertexai_service
-from config import logger, TORCH_DEVICE
+from config import logger
 import server_lifecycle as server_lifecycle
 import torch
 import torch.nn.functional as F
@@ -126,7 +126,7 @@ def search_images(
     if sources["semantic_siglip"]:
         tokenizer = server_lifecycle.get_tokenizer()
         if tokenizer:
-            text_tokens = tokenizer(term).to(TORCH_DEVICE)
+            text_tokens = tokenizer(term).to(server_lifecycle.get_torch_device())
             with torch.no_grad():
                 model = server_lifecycle.get_model()
                 text_features = model.encode_text(text_tokens)

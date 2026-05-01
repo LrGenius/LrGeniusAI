@@ -338,7 +338,7 @@
 "$$$/LrGeniusAI/PluginInfo/TorchDeviceCpu" = "CPU"
 "$$$/LrGeniusAI/PluginInfo/TorchDeviceCuda" = "CUDA (NVIDIA GPU)"
 "$$$/LrGeniusAI/PluginInfo/TorchDeviceMps" = "MPS (Apple Metal)"
-"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc" = "Requires backend restart. Only use CUDA with Gemini or ChatGPT —\nrunning CLIP and a local LLM (Ollama, LM Studio) on CUDA will exhaust VRAM.\nCUDA requires the CUDA-enabled installer on Windows."
+"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc" = "Applied immediately on save — model reloads on next use. Only use CUDA with Gemini or ChatGPT —\nrunning CLIP and a local LLM (Ollama, LM Studio) on CUDA will exhaust VRAM.\nCUDA requires the CUDA-enabled installer on Windows."
 "$$$/LrGeniusAI/PluginInfo/Restarting" = "Restarting..."
 "$$$/LrGeniusAI/PluginInfo/RestartSuccess" = "Backend restarted successfully."
 "$$$/LrGeniusAI/PluginInfo/RestartFailed" = "Failed to restart backend: ^1"

@@ -1,6 +1,7 @@
 import os
 import time
 import signal
+import config as _config
 from config import DB_PATH, logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
 import open_clip
 from utils.open_clip_compat import wrap_tokenizer
@@ -11,6 +12,49 @@ import torch
 from huggingface_hub import hf_hub_download
 from services import face as service_face
 from services import chroma as service_chroma
+
+
+# Runtime-mutable device — starts from config but can be changed via set_clip_device().
+_current_device: str = TORCH_DEVICE
+
+
+def get_torch_device() -> str:
+    return _current_device
+
+
+def set_clip_device(device: str) -> str:
+    """Switch the CLIP model to a different torch device without restarting.
+
+    Unloads the currently loaded model so it reloads to the new device on next use.
+    Also updates config.TORCH_DEVICE so services that reference it via the module
+    attribute pick up the change.
+    """
+    global _current_device
+    import sys
+
+    device = device.strip().lower()
+    if device == "auto":
+        if sys.platform == "darwin":
+            import torch as _torch
+
+            device = "mps" if _torch.backends.mps.is_available() else "cpu"
+        elif sys.platform == "win32":
+            device = "cpu"
+        else:
+            import torch as _torch
+
+            device = "cuda" if _torch.cuda.is_available() else "cpu"
+
+    if device not in ("cpu", "cuda", "mps"):
+        raise ValueError(
+            f"Unsupported device '{device}'. Accepted values: cpu, cuda, mps, auto."
+        )
+
+    unload_model()
+    _current_device = device
+    _config.TORCH_DEVICE = device
+    logger.info(f"CLIP device switched to '{device}'; model reloads on next inference")
+    return device
 
 
 # Lazy-loadable global model instances
@@ -151,11 +195,11 @@ def load_model():
                         raise FileNotFoundError("Bundled model files incomplete")
 
                     try:
-                        model_obj.to(TORCH_DEVICE)
-                        logger.info(f"Text and vision model moved to {TORCH_DEVICE}")
+                        model_obj.to(_current_device)
+                        logger.info(f"Text and vision model moved to {_current_device}")
                     except Exception as e:
                         logger.warning(
-                            f"Failed to move text and vision model to {TORCH_DEVICE}: {e}."
+                            f"Failed to move text and vision model to {_current_device}: {e}."
                         )
 
                     model = model_obj
@@ -174,11 +218,11 @@ def load_model():
                 )
                 tok = _get_open_clip_tokenizer()
                 try:
-                    model_obj.to(TORCH_DEVICE)
-                    logger.info(f"Text and vision model moved to {TORCH_DEVICE}")
+                    model_obj.to(_current_device)
+                    logger.info(f"Text and vision model moved to {_current_device}")
                 except Exception as move_exc:
                     logger.warning(
-                        f"Failed to move text and vision model to {TORCH_DEVICE}: {move_exc}."
+                        f"Failed to move text and vision model to {_current_device}: {move_exc}."
                     )
 
                 model = model_obj

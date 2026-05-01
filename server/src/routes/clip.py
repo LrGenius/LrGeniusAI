@@ -1,4 +1,5 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
+import server_lifecycle
 from server_lifecycle import is_model_cached
 from services.clip import start_download_clip_model, get_download_status
 from config import logger
@@ -47,3 +48,34 @@ def download_clip_model_status():
             f"Error while getting download status for CLIP model: {e}", exc_info=True
         )
         return jsonify({"error": str(e)}), 500
+
+
+@clip_bp.route("/clip/device", methods=["POST"])
+def set_clip_device():
+    data = request.get_json(silent=True) or {}
+    device = str(data.get("device", "")).strip()
+    if not device:
+        return jsonify(
+            {"results": None, "error": "Missing 'device' field", "warning": None}
+        ), 400
+    try:
+        new_device = server_lifecycle.set_clip_device(device)
+        return jsonify(
+            {"results": {"device": new_device}, "error": None, "warning": None}
+        )
+    except ValueError as e:
+        return jsonify({"results": None, "error": str(e), "warning": None}), 400
+    except Exception as e:
+        logger.error(f"Error setting CLIP device: {e}", exc_info=True)
+        return jsonify({"results": None, "error": str(e), "warning": None}), 500
+
+
+@clip_bp.route("/clip/device", methods=["GET"])
+def get_clip_device():
+    return jsonify(
+        {
+            "results": {"device": server_lifecycle.get_torch_device()},
+            "error": None,
+            "warning": None,
+        }
+    )

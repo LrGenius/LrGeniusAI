@@ -7,7 +7,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from config import logger, TORCH_DEVICE
+from config import logger
+import server_lifecycle
 
 
 def embed_keywords_batched(
@@ -21,7 +22,9 @@ def embed_keywords_batched(
     for i in range(0, len(keyword_names), batch_size):
         batch = keyword_names[i : i + batch_size]
         with torch.no_grad():
-            tokens = tokenizer(batch, context_length=ctx_len).to(TORCH_DEVICE)
+            tokens = tokenizer(batch, context_length=ctx_len).to(
+                server_lifecycle.get_torch_device()
+            )
             features = model.encode_text(tokens)
             parts.append(F.normalize(features, p=2, dim=1).cpu().numpy())
     return np.vstack(parts)

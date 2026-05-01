@@ -338,7 +338,7 @@
 "$$$/LrGeniusAI/PluginInfo/TorchDeviceCpu" = "CPU"
 "$$$/LrGeniusAI/PluginInfo/TorchDeviceCuda" = "CUDA (NVIDIA GPU)"
 "$$$/LrGeniusAI/PluginInfo/TorchDeviceMps" = "MPS (Apple Metal)"
-"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc" = "Erfordert Neustart des Backends. CUDA nur mit Gemini oder ChatGPT verwenden –\nCLIP und ein lokales LLM (Ollama, LM Studio) gleichzeitig auf CUDA führen zu VRAM-Überlauf.\nCUDA erfordert das CUDA-Installationsprogramm unter Windows."
+"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc" = "Wird beim Speichern sofort angewendet – das Modell wird bei der nächsten Verwendung neu geladen. CUDA nur mit Gemini oder ChatGPT verwenden –\nCLIP und ein lokales LLM (Ollama, LM Studio) gleichzeitig auf CUDA führen zu VRAM-Überlauf.\nCUDA erfordert das CUDA-Installationsprogramm unter Windows."
 "$$$/LrGeniusAI/PluginInfo/Restarting" = "Neustart..."
 "$$$/LrGeniusAI/PluginInfo/RestartSuccess" = "Backend erfolgreich neu gestartet."
 "$$$/LrGeniusAI/PluginInfo/RestartFailed" = "Fehler beim Neustart des Backends: ^1"
