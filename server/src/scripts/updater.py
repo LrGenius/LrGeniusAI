@@ -11,9 +11,95 @@ import time
 import tkinter as tk
 from pathlib import Path
 from threading import Thread
-from tkinter import messagebox, ttk
-
 import requests
+
+# ── Modern dark palette ───────────────────────────────────────────────────────
+_BG = "#1c1c1e"
+_SURFACE = "#2c2c2e"
+_ACCENT = "#0a84ff"
+_TEXT = "#ffffff"
+_SUBTEXT = "#8e8e93"
+_SUCCESS = "#30d158"
+_ERROR = "#ff453a"
+_TRACK = "#3a3a3c"
+_FONT_TITLE = ("Helvetica", 14, "bold")
+_FONT_BODY = ("Helvetica", 11)
+_FONT_SMALL = ("Helvetica", 10)
+_BTN_HOVER = "#1a6fd4"
+_W = 420
+_PAD = 28
+
+
+def _modern_dialog(title: str, message: str, kind: str = "info") -> None:
+    """Modern dark-themed replacement for messagebox.show*."""
+    win = tk.Tk()
+    win.withdraw()
+    win.title(title)
+    win.resizable(False, False)
+    win.configure(bg=_BG)
+
+    outer = tk.Frame(win, bg=_BG, padx=_PAD, pady=_PAD)
+    outer.pack(fill="both", expand=True)
+
+    accent = {
+        "info": (_ACCENT, "✓"),
+        "warning": ("#ff9f0a", "!"),
+        "error": (_ERROR, "✕"),
+    }.get(kind, (_ACCENT, "i"))
+    color, icon = accent
+
+    circle = tk.Label(
+        outer,
+        text=icon,
+        bg=color,
+        fg=_TEXT,
+        font=("Helvetica", 13, "bold"),
+        width=2,
+        height=1,
+    )
+    circle.pack(anchor="w", pady=(0, 14))
+
+    tk.Label(outer, text=title, bg=_BG, fg=_TEXT, font=_FONT_TITLE, anchor="w").pack(
+        fill="x", anchor="w"
+    )
+    tk.Label(
+        outer,
+        text=message,
+        bg=_BG,
+        fg=_SUBTEXT,
+        font=_FONT_SMALL,
+        wraplength=_W - _PAD * 2,
+        justify="left",
+        anchor="w",
+    ).pack(fill="x", anchor="w", pady=(6, 20))
+
+    btn = tk.Button(
+        outer,
+        text="OK",
+        bg=_ACCENT,
+        fg=_TEXT,
+        font=("Helvetica", 11, "bold"),
+        relief="flat",
+        bd=0,
+        padx=20,
+        pady=8,
+        cursor="hand2",
+        command=win.destroy,
+        activebackground=_BTN_HOVER,
+        activeforeground=_TEXT,
+    )
+    btn.pack(anchor="e")
+
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    x = (win.winfo_screenwidth() // 2) - (w // 2)
+    y = (win.winfo_screenheight() // 2) - (h // 2)
+    win.geometry(f"{w}x{h}+{x}+{y}")
+    win.deiconify()
+    win.lift()
+    win.attributes("-topmost", True)
+    win.focus_force()
+    win.mainloop()
 
 
 def _log(msg: str) -> None:
@@ -72,35 +158,86 @@ class UpdaterGUI:
         # Queue used to pass events from the worker thread to the main thread.
         # Tuples: ('status', current, total, msg) | ('done',) | ('error', msg)
         self._q: queue.Queue = queue.Queue()
+        self._bar_total = 1
+        self._bar_value = 0
 
         self.root = tk.Tk()
         self.root.title("LrGeniusAI Updater")
         self.root.resizable(False, False)
+        self.root.configure(bg=_BG)
 
-        self.label = tk.Label(self.root, text="Preparing update...", pady=10)
-        self.label.pack()
+        outer = tk.Frame(self.root, bg=_BG, padx=_PAD, pady=_PAD)
+        outer.pack(fill="both", expand=True)
 
-        self.progress = ttk.Progressbar(
-            self.root, orient="horizontal", length=300, mode="determinate"
+        # App name + subtitle row
+        tk.Label(
+            outer,
+            text="LrGeniusAI",
+            bg=_BG,
+            fg=_TEXT,
+            font=_FONT_TITLE,
+            anchor="w",
+        ).pack(fill="x")
+
+        self.label = tk.Label(
+            outer,
+            text="Preparing update…",
+            bg=_BG,
+            fg=_SUBTEXT,
+            font=_FONT_BODY,
+            anchor="w",
         )
-        self.progress.pack(pady=10)
+        self.label.pack(fill="x", pady=(2, 20))
 
-        self.status_label = tk.Label(self.root, text="", font=("Arial", 10))
-        self.status_label.pack()
+        # Canvas-based thin progress bar
+        bar_bg = tk.Frame(outer, bg=_SURFACE, height=6)
+        bar_bg.pack(fill="x")
+        bar_bg.pack_propagate(False)
+        self._bar_canvas = tk.Canvas(
+            bar_bg, bg=_SURFACE, height=6, highlightthickness=0, bd=0
+        )
+        self._bar_canvas.pack(fill="both", expand=True)
+        self._bar_fill = self._bar_canvas.create_rectangle(
+            0, 0, 0, 6, fill=_ACCENT, outline=""
+        )
 
-        # Centre window after widgets are packed and geometry is known
+        # File name label
+        self.status_label = tk.Label(
+            outer,
+            text="",
+            bg=_BG,
+            fg=_SUBTEXT,
+            font=_FONT_SMALL,
+            anchor="w",
+        )
+        self.status_label.pack(fill="x", pady=(10, 0))
+
+        # Kick off bar animation loop
+        self.root.after(50, self._animate_bar)
+
+        # Centre window
         self.root.update_idletasks()
-        width = self.root.winfo_reqwidth()
-        height = self.root.winfo_reqheight()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        w = max(self.root.winfo_reqwidth(), _W)
+        h = self.root.winfo_reqheight()
+        x = (self.root.winfo_screenwidth() // 2) - (w // 2)
+        y = (self.root.winfo_screenheight() // 2) - (h // 2)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
         # Bring window to the front on macOS
         self.root.lift()
         self.root.attributes("-topmost", True)
         self.root.after(500, lambda: self.root.attributes("-topmost", False))
         self.root.focus_force()
+
+    def _animate_bar(self):
+        """Smoothly resize the progress fill on the canvas."""
+        try:
+            canvas_w = self._bar_canvas.winfo_width()
+            filled = int(canvas_w * self._bar_value / max(self._bar_total, 1))
+            self._bar_canvas.coords(self._bar_fill, 0, 0, filled, 6)
+            self.root.after(50, self._animate_bar)
+        except tk.TclError:
+            pass  # window already destroyed
 
     def update_status(self, current, total, message):
         """Thread-safe: enqueues a status update for the main thread to pick up."""
@@ -115,8 +252,8 @@ class UpdaterGUI:
                 kind = item[0]
                 if kind == "status":
                     _, current, total, message = item
-                    self.progress["maximum"] = max(total, 1)
-                    self.progress["value"] = current
+                    self._bar_total = max(total, 1)
+                    self._bar_value = current
                     self.status_label.config(text=message)
                 elif kind == "done":
                     self._on_update_complete()
@@ -136,13 +273,12 @@ class UpdaterGUI:
         entry_point = backend_root / "src" / "geniusai_server.py"
         if not entry_point.exists():
             _log(f"Backend entry point not found: {entry_point}")
-            messagebox.showwarning(
-                "Backend Not Found",
-                f"The update was applied successfully, but the backend entry "
-                f"point was not found at:\n{entry_point}\n\n"
-                "Please restart Lightroom to activate the new version.",
-            )
             self.root.destroy()
+            _modern_dialog(
+                "Backend Not Found",
+                f"Update applied, but the backend entry point was not found at:\n{entry_point}\n\nRestart Lightroom to activate the new version.",
+                "warning",
+            )
             return
 
         try:
@@ -155,27 +291,30 @@ class UpdaterGUI:
                 cwd=str(backend_root / "src"),
             )
             _log("Backend restarted successfully.")
-            messagebox.showinfo(
-                "Success",
-                "LrGeniusAI has been updated successfully.\nYou can now restart Lightroom.",
+            self.root.destroy()
+            _modern_dialog(
+                "Update complete",
+                "LrGeniusAI has been updated successfully. You can now restart Lightroom.",
+                "info",
             )
         except Exception as e:
             _log(f"Backend restart failed: {e}")
-            messagebox.showwarning(
-                "Backend Restart Failed",
-                f"The update was applied successfully, but the backend "
-                f"could not be restarted automatically:\n\n{e}\n\n"
-                "Please restart Lightroom to activate the new version.",
+            self.root.destroy()
+            _modern_dialog(
+                "Backend restart failed",
+                f"The update was applied, but the backend could not restart automatically:\n\n{e}\n\nRestart Lightroom to activate the new version.",
+                "warning",
             )
-        self.root.destroy()
 
     def _on_update_error(self, error_msg):
         """Runs on the main thread when the update worker raises."""
         _log(f"Update error: {error_msg}")
-        messagebox.showerror(
-            "Update Error", f"An error occurred during update:\n\n{error_msg}"
-        )
         self.root.destroy()
+        _modern_dialog(
+            "Update failed",
+            f"An error occurred during the update:\n\n{error_msg}",
+            "error",
+        )
 
     def run(self):
         _log("Starting updater...")
