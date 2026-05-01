@@ -10,17 +10,22 @@
 
 ## 2. Pull at least one vision-capable model
 
-Examples:
+Suggested starting points (smaller variant first if unsure about VRAM):
 
 ```bash
-ollama pull gemma3:4b-it-q4_K_M
-ollama pull qwen3-vl:4b-instruct-q4_K_M
-ollama pull llava
+ollama pull qwen3-vl:4b-instruct-q4_K_M    # fast, ~6 GB VRAM
+ollama pull qwen3-vl:8b-instruct-q4_K_M    # better quality, ~10 GB VRAM
+ollama pull gemma3:4b-it-q4_K_M            # solid general default
+ollama pull gemma3:12b-it-q4_K_M           # higher quality if VRAM allows
+ollama pull llava                           # legacy fallback
 ```
 
-You can browse vision models here:
+You can browse all vision models here:
 
 - [https://ollama.com/search?c=vision](https://ollama.com/search?c=vision)
+
+See [Help: Choosing AI Model](Help-Choosing-AI-Model) for guidance on
+picking between local and cloud options.
 
 ## 3. Configure plugin/backend
 
