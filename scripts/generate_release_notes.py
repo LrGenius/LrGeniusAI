@@ -87,7 +87,7 @@ def generate_ai_notes(api_key, tag, commits, date):
             f"Generate technical release notes for version {tag}.\n\n"
             "Here is the list of commits:\n"
             f"{commits}\n\n"
-            "Format the output as clean Markdown starting with the heading: ## [{tag}] - {date}"
+            f"Format the output as clean Markdown starting with the heading: ## [{tag}] - {date}"
         )
         
         config = types.GenerateContentConfig(
