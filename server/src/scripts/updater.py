@@ -67,10 +67,56 @@ class UpdaterGUI:
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
     def update_status(self, current, total, message):
+        """Thread-safe: schedules the UI update on the main thread."""
+        self.root.after(0, self._apply_status, current, total, message)
+
+    def _apply_status(self, current, total, message):
         self.progress["maximum"] = max(total, 1)
         self.progress["value"] = current
         self.status_label.config(text=message)
-        self.root.update()
+
+    def _on_update_complete(self):
+        """Runs on the main thread after all files have been applied."""
+        backend_root = Path(self.backend_root)
+        entry_point = backend_root / "src" / "geniusai_server.py"
+        if not entry_point.exists():
+            messagebox.showwarning(
+                "Backend Not Found",
+                f"The update was applied successfully, but the backend entry "
+                f"point was not found at:\n{entry_point}\n\n"
+                "Please restart Lightroom to activate the new version.",
+            )
+            self.root.destroy()
+            return
+
+        try:
+            subprocess.Popen(
+                [sys.executable, str(entry_point)],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=os.environ.copy(),
+                cwd=str(backend_root / "src"),
+            )
+            messagebox.showinfo(
+                "Success",
+                "LrGeniusAI has been updated successfully.\nYou can now restart Lightroom.",
+            )
+        except Exception as e:
+            messagebox.showwarning(
+                "Backend Restart Failed",
+                f"The update was applied successfully, but the backend "
+                f"could not be restarted automatically:\n\n{e}\n\n"
+                "Please restart Lightroom to activate the new version.",
+            )
+        self.root.destroy()
+
+    def _on_update_error(self, error_msg):
+        """Runs on the main thread when the update worker raises."""
+        messagebox.showerror(
+            "Update Error", f"An error occurred during update:\n\n{error_msg}"
+        )
+        self.root.destroy()
 
     def run(self):
         Thread(target=self.perform_update, daemon=True).start()
@@ -160,48 +206,11 @@ class UpdaterGUI:
 
             self.update_status(total_files, total_files, "Update complete!")
 
-            # 5. Restart backend — inherit the full environment so that env-var
-            #    configuration (GENIUSAI_PORT, etc.) is preserved across the restart.
-            entry_point = backend_root / "src" / "geniusai_server.py"
-            backend_restarted = False
-            if entry_point.exists():
-                try:
-                    subprocess.Popen(
-                        [sys.executable, str(entry_point)],
-                        start_new_session=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=os.environ.copy(),
-                        cwd=str(backend_root / "src"),
-                    )
-                    backend_restarted = True
-                except Exception as e:
-                    messagebox.showwarning(
-                        "Backend Restart Failed",
-                        f"The update was applied successfully, but the backend "
-                        f"could not be restarted automatically:\n\n{e}\n\n"
-                        "Please restart Lightroom to activate the new version.",
-                    )
-            else:
-                messagebox.showwarning(
-                    "Backend Not Found",
-                    f"The update was applied successfully, but the backend entry "
-                    f"point was not found at:\n{entry_point}\n\n"
-                    "Please restart Lightroom to activate the new version.",
-                )
-
-            if backend_restarted:
-                messagebox.showinfo(
-                    "Success",
-                    "LrGeniusAI has been updated successfully.\nYou can now restart Lightroom.",
-                )
-            self.root.destroy()
+            # Hand off to the main thread for all remaining GUI work
+            self.root.after(0, self._on_update_complete)
 
         except Exception as e:
-            messagebox.showerror(
-                "Update Error", f"An error occurred during update:\n\n{str(e)}"
-            )
-            self.root.destroy()
+            self.root.after(0, self._on_update_error, str(e))
 
 
 if __name__ == "__main__":
