@@ -136,3 +136,5 @@ function TaskUpdate.runUpdate(releaseInfo)
 		)
 	end)
 end
+
+return TaskUpdate
