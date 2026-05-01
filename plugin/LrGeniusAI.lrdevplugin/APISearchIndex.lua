@@ -2500,11 +2500,19 @@ function SearchIndexAPI.startServer(opts)
 			return false
 		end
 
+		local torchDevice = (prefs and prefs.torchDevice) or "auto"
+
 		local startServerCmd
 		local serverDir = LrPathUtils.parent(serverBinary)
 		if WIN_ENV then
 			-- The .cmd launcher handles environment variables and uses pythonw.exe for invisible execution.
-			startServerCmd = 'start /b /d "'
+			-- Prepend GENIUSAI_TORCH_DEVICE so the child process inherits it (setlocal in .cmd keeps parent env).
+			local envSetPrefix = ""
+			if torchDevice ~= "auto" then
+				envSetPrefix = 'set "GENIUSAI_TORCH_DEVICE=' .. torchDevice .. '" && '
+			end
+			startServerCmd = envSetPrefix
+				.. 'start /b /d "'
 				.. serverDir
 				.. '" "" "'
 				.. tostring(serverBinary)
@@ -2518,11 +2526,17 @@ function SearchIndexAPI.startServer(opts)
 			else
 				-- Local/Dev fallback
 				local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
+				if torchDevice ~= "auto" then
+					envPrefix = envPrefix .. "GENIUSAI_TORCH_DEVICE=" .. torchDevice .. " "
+				end
 				startServerCmd = envPrefix .. 'bash "' .. tostring(serverBinary) .. '" --db-path "' .. dbPath .. '"'
 			end
 		else
 			-- Unknown platform fallback
 			local envPrefix = "KMP_DUPLICATE_LIB_OK=TRUE "
+			if torchDevice ~= "auto" then
+				envPrefix = envPrefix .. "GENIUSAI_TORCH_DEVICE=" .. torchDevice .. " "
+			end
 			startServerCmd = envPrefix .. 'bash "' .. tostring(serverBinary) .. '" --db-path "' .. dbPath .. '"'
 		end
 

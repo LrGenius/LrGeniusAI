@@ -44,9 +44,15 @@ jobs:
           - os: windows-latest
             os_name: windows
             arch: x64
+            cuda: "false"
+          - os: windows-latest
+            os_name: windows
+            arch: x64-cuda
+            cuda: "true"
           - os: macos-latest
             os_name: macos
             arch: arm64
+            cuda: "false"
 
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
@@ -206,11 +212,9 @@ jobs:
             UV_PROJECT_ENVIRONMENT="$SERVER_ENV_DIR" uv sync --project server --frozen --all-groups
           fi
 
-          # Windows ships CPU-only (config.py hardcodes TORCH_DEVICE="cpu").
-          # Default wheel bundles ~600MB of CUDA runtime we never use; replace with the
-          # CPU-only build at the same version we just installed (read from the lockfile
-          # to avoid drift).
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
+          # Windows CPU build: replace the default CUDA-bundled torch (~600 MB) with the
+          # CPU-only wheel at the same version. The CUDA variant skips this step.
+          if [ "${{ matrix.os_name }}" == "windows" ] && [ "${{ matrix.cuda }}" != "true" ]; then
             echo "Replacing CUDA torch with CPU-only build..."
             TORCH_VERSION=$(grep -E "^torch==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torch==//; s/[ ;].*//')
             TORCHVISION_VERSION=$(grep -E "^torchvision==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torchvision==//; s/[ ;].*//')
@@ -360,6 +364,12 @@ jobs:
           MSYS_NO_PATHCONV=1 "$ISCC" /DAppVersion="$VERSION" /O"installers/windows/Output" installers/windows/setup.iss
           # Match the installer even if the OutputDir logic in the .iss varies
           find . -name "*.exe" -path "*/Output/*" -exec mv {} . \; -quit || mv installers/windows/Output/*.exe .
+          # For the CUDA variant, suffix the installer name so both variants can coexist in the release.
+          if [ "${{ matrix.cuda }}" == "true" ]; then
+            for f in LrGeniusAI-windows-x64-*.exe; do
+              [ -f "$f" ] && mv "$f" "${f%.exe}-cuda.exe"
+            done
+          fi
 
 
       - name: Smoke test packaged backend and log cold start
@@ -570,10 +580,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: x64
+          - arch: x64-cuda
             docker_platform: linux/amd64
+            cpu_only: "false"
+          - arch: x64-cpu
+            docker_platform: linux/amd64
+            cpu_only: "true"
           - arch: aarch64
             docker_platform: linux/arm64
+            cpu_only: "true"
 
     name: Build Docker Image - ${{ matrix.arch }}
 
@@ -626,6 +641,8 @@ jobs:
           platforms: ${{ matrix.docker_platform }}
           push: true
           tags: ${{ steps.image-name.outputs.registry_image }}:${{ github.ref_name }}-${{ matrix.arch }}
+          build-args: |
+            CPU_ONLY=${{ matrix.cpu_only }}
           cache-from: type=gha,scope=lrgeniusai-server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=lrgeniusai-server-${{ matrix.arch }}
           labels: |
@@ -657,16 +674,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create and push multi-arch latest
+      - name: Create and push multi-arch manifests
         shell: bash
         run: |
           set -euo pipefail
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMG="ghcr.io/${OWNER_LC}/lrgeniusai"
           TAG="${{ github.ref_name }}"
+          # :latest — CUDA-enabled x64 + arm64 (CPU-only on arm, no CUDA hardware there)
           docker buildx imagetools create \
             --tag "${IMG}:latest" \
-            "${IMG}:${TAG}-x64" \
+            "${IMG}:${TAG}-x64-cuda" \
+            "${IMG}:${TAG}-aarch64"
+          # :latest-cpu — CPU-only for both architectures
+          docker buildx imagetools create \
+            --tag "${IMG}:latest-cpu" \
+            "${IMG}:${TAG}-x64-cpu" \
             "${IMG}:${TAG}-aarch64"
           
   create-release:
@@ -698,7 +721,7 @@ jobs:
           
           cd artifacts
 
-          for ARTIFACT_DIR in lrgenius-ai-windows-x64 lrgenius-ai-macos-arm64 lrgenius-ai-plugin-docker-backend; do
+          for ARTIFACT_DIR in lrgenius-ai-windows-x64 lrgenius-ai-windows-x64-cuda lrgenius-ai-macos-arm64 lrgenius-ai-plugin-docker-backend; do
             if [ -d "$ARTIFACT_DIR" ]; then
               TAR_PATH="$(echo "$ARTIFACT_DIR"/*.tar)"
               if [ -f "$TAR_PATH" ]; then
@@ -717,6 +740,12 @@ jobs:
           if [ -d "lrgenius-ai-windows-x64" ]; then
             cd lrgenius-ai-windows-x64
             zip -r ../LrGeniusAI-windows-x64-${VERSION}.zip .
+            cd ..
+          fi
+
+          if [ -d "lrgenius-ai-windows-x64-cuda" ]; then
+            cd lrgenius-ai-windows-x64-cuda
+            zip -r ../LrGeniusAI-windows-x64-cuda-${VERSION}.zip .
             cd ..
           fi
 
@@ -772,6 +801,7 @@ jobs:
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
             artifacts/lrgenius-ai-macos-arm64/*.pkg
             artifacts/lrgenius-ai-windows-x64/*.exe
+            artifacts/lrgenius-ai-windows-x64-cuda/*.exe
             update-manifest-${{ github.ref_name }}.json
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}

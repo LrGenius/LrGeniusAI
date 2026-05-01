@@ -30,15 +30,17 @@ DB_PATH = args.db_path
 
 
 # --- Model & Path Definitions ---
-# Platform-specific device selection:
-# - macOS: Use Metal GPU (MPS) if available
-# - Windows: CPU-only for now to avoid VRAM issues with open_clip on CUDA and local LLMs using CUDA
-if sys.platform == "darwin":  # macOS
+# Platform-specific device selection. Override via GENIUSAI_TORCH_DEVICE env var (cpu/cuda/mps).
+_device_env = os.environ.get("GENIUSAI_TORCH_DEVICE", "").strip().lower()
+if _device_env in ("cpu", "cuda", "mps"):
+    TORCH_DEVICE = _device_env
+elif sys.platform == "darwin":  # macOS
     TORCH_DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
-elif sys.platform == "win32":  # Windows
+elif (
+    sys.platform == "win32"
+):  # Windows: CPU default; CUDA-enabled builds can override via env var
     TORCH_DEVICE = "cpu"
 else:
-    # Linux (e.g. Docker): CPU; set CUDA in container if needed
     TORCH_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 

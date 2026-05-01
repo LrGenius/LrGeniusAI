@@ -26,7 +26,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Abhängigkeiten
 
 COPY uv.lock pyproject.toml .
-RUN uv sync --locked --no-dev
+ARG CPU_ONLY=false
+RUN uv sync --locked --no-dev && \
+    if [ "$CPU_ONLY" = "true" ]; then \
+        TORCH_VER=$(.venv/bin/python -c "import importlib.metadata; print(importlib.metadata.version('torch').split('+')[0])") && \
+        TV_VER=$(.venv/bin/python -c "import importlib.metadata; print(importlib.metadata.version('torchvision').split('+')[0])") && \
+        uv pip install --python .venv/bin/python \
+            "torch==${TORCH_VER}+cpu" \
+            "torchvision==${TV_VER}+cpu" \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --no-deps; \
+    fi
 
 # App source
 COPY src /app/src

@@ -53,6 +53,7 @@ Defaults.defaultOllamaBaseUrl = "http://localhost:11434"
 Defaults.defaultLmStudioBaseUrl = "localhost:1234"
 
 Defaults.defaultBackendServerUrl = "http://127.0.0.1:19819"
+Defaults.defaultTorchDevice = "auto"
 
 Defaults.defaultExportQuality = 50
 Defaults.defaultExportSize = "3072"

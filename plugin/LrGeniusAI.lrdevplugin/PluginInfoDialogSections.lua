@@ -45,6 +45,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.backendServerUrl = prefs.backendServerUrl or Defaults.defaultBackendServerUrl
 	propertyTable.ollamaBaseUrl = prefs.ollamaBaseUrl or Defaults.defaultOllamaBaseUrl
 	propertyTable.lmstudioBaseUrl = prefs.lmstudioBaseUrl or Defaults.defaultLmStudioBaseUrl
+	propertyTable.torchDevice = prefs.torchDevice or Defaults.defaultTorchDevice
 
 	-- Training/Style Profile stats (loaded asynchronously).
 	propertyTable.trainingCount = 0
@@ -478,6 +479,43 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						size = "small",
 						fill_horizontal = 1,
 						wrap = true,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/TorchDevice=CLIP Processing Device"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:popup_menu({
+						value = bind("torchDevice"),
+						items = {
+							{
+								title = LOC("$$$/LrGeniusAI/PluginInfo/TorchDeviceAuto=Auto (recommended)"),
+								value = "auto",
+							},
+							{ title = LOC("$$$/LrGeniusAI/PluginInfo/TorchDeviceCpu=CPU"), value = "cpu" },
+							{
+								title = LOC("$$$/LrGeniusAI/PluginInfo/TorchDeviceCuda=CUDA (NVIDIA GPU)"),
+								value = "cuda",
+							},
+							{
+								title = LOC("$$$/LrGeniusAI/PluginInfo/TorchDeviceMps=MPS (Apple Metal)"),
+								value = "mps",
+							},
+						},
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:spacer({ width = share("labelWidth") }),
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/TorchDeviceDesc=Requires backend restart. Only use CUDA with Gemini or ChatGPT —\nrunning CLIP and a local LLM (Ollama, LM Studio) on CUDA will exhaust VRAM.\nCUDA requires the CUDA-enabled installer on Windows."
+						),
+						size = "small",
+						fill_horizontal = 1,
 					}),
 				}),
 				f:row({
@@ -1131,6 +1169,7 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		end)
 	end
 
+	prefs.torchDevice = propertyTable.torchDevice or Defaults.defaultTorchDevice
 	prefs.useClip = propertyTable.useClip
 
 	if propertyTable.backendServerUrl and propertyTable.backendServerUrl:gsub("^%s*(.-)%s*$", "%1") ~= "" then
