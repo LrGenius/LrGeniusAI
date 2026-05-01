@@ -37,14 +37,13 @@ class GeminiProvider(LLMProviderBase):
     def _initialize_client(self):
         """Initialize Google Generative AI client"""
         try:
-            # New Google GenAI Python SDK (package name: google-genai) exposes
-            # the `genai` module. Use google.genai instead of google.generativeai.
-            # The new google-genai SDK exposes a Client API.
-            # Create a genai Client instance and store it on the provider.
             import google.genai as genai
+            from google.genai.types import HttpOptions
 
-            self.client = genai.Client(api_key=self.api_key)
-
+            self.client = genai.Client(
+                api_key=self.api_key,
+                http_options=HttpOptions(timeout=self.timeout * 1000),
+            )
             logger.info("Google GenAI client initialized")
         except Exception as e:
             logger.error(f"Failed to initialize Gemini client: {e}")
@@ -123,33 +122,16 @@ class GeminiProvider(LLMProviderBase):
             logger.info(
                 f"Sending metadata request to Gemini: {model_name} (timeout: {self.timeout}s)"
             )
-            try:
-                # contents may include the user prompt and an image part
-                contents = [
-                    user_prompt,
-                    types.Part.from_bytes(
-                        data=request.image_data, mime_type="image/jpeg"
-                    ),
-                ]
-                response = self.client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=config,
-                )
-                logger.debug("Gemini metadata response received")
-            except TimeoutError:
-                error_msg = f"Gemini request timed out after {self.timeout}s"
-                logger.warning(error_msg)
-                return MetadataGenerationResponse(
-                    uuid=request.uuid, success=False, error=error_msg
-                )
-            except Exception as api_error:
-                # Catch API errors early and re-raise for main handler
-                if "DeadlineExceeded" in str(type(api_error).__name__) or "504" in str(
-                    api_error
-                ):
-                    logger.warning(f"Gemini API deadline exceeded: {api_error}")
-                raise  # Re-raise to be caught by the main exception handler
+            contents = [
+                user_prompt,
+                types.Part.from_bytes(data=request.image_data, mime_type="image/jpeg"),
+            ]
+            response = self.client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+            logger.debug("Gemini metadata response received")
 
             # Check for prompt feedback (blocking)
             if hasattr(response, "prompt_feedback") and getattr(
