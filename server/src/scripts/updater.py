@@ -1,8 +1,10 @@
 import base64
+import datetime
 import hashlib
 import json
 import os
 import queue
+import re
 import shlex
 import shutil
 import subprocess
@@ -102,6 +104,21 @@ def _modern_dialog(title: str, message: str, kind: str = "info") -> None:
     win.mainloop()
 
 
+def _patch_info_lua(content: bytes, version: str) -> bytes:
+    """Bake the release version into downloaded Info.lua (repo has dev placeholders)."""
+    parts = version.split(".")
+    major = parts[0] if len(parts) > 0 else "0"
+    minor = parts[1] if len(parts) > 1 else "0"
+    revision = parts[2] if len(parts) > 2 else "0"
+    build = datetime.date.today().strftime("%Y%m%d")
+    text = content.decode("utf-8")
+    text = re.sub(r"Info\.MAJOR\s*=\s*\d+", f"Info.MAJOR = {major}", text)
+    text = re.sub(r"Info\.MINOR\s*=\s*\d+", f"Info.MINOR = {minor}", text)
+    text = re.sub(r"Info\.REVISION\s*=\s*\d+", f"Info.REVISION = {revision}", text)
+    text = re.sub(r"Info\.BUILD\s*=\s*\d+", f"Info.BUILD = {build}", text)
+    return text.encode("utf-8")
+
+
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -127,7 +144,7 @@ def _apply_elevated(ops: list[tuple[Path, Path]]) -> None:
         raise PermissionError(f"Privileged apply failed: {result.stderr.strip()}")
 
 
-def verify_sha256(content: bytes, expected_hash: str) -> bool:
+def verify_sha256(content: bytes, expected_hash: str | None) -> bool:
     if not expected_hash:
         return True
     actual_hash = hashlib.sha256(content).hexdigest()
@@ -364,6 +381,14 @@ class UpdaterGUI:
                     content = base64.b64decode(entry["content"])
                 else:
                     content = download_with_retry(entry["url"])
+
+                # Info.lua is downloaded from the repo tag where version fields are
+                # still dev placeholders — patch them to the real release version.
+                if is_plugin and rel_path == "Info.lua":
+                    version = manifest.get("version", "")
+                    if version:
+                        content = _patch_info_lua(content, version)
+                        sha = None  # sha was for the placeholder; skip check after patching
 
                 if not verify_sha256(content, sha):
                     raise Exception(f"SHA256 mismatch for {rel_path}")
