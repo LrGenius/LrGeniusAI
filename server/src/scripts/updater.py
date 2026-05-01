@@ -14,6 +14,10 @@ from tkinter import messagebox, ttk
 import requests
 
 
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
 def verify_sha256(content: bytes, expected_hash: str) -> bool:
     if not expected_hash:
         return True
@@ -66,8 +70,15 @@ class UpdaterGUI:
         y = (self.root.winfo_screenheight() // 2) - (height // 2)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
+        # Bring window to the front on macOS
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        self.root.after(500, lambda: self.root.attributes("-topmost", False))
+        self.root.focus_force()
+
     def update_status(self, current, total, message):
         """Thread-safe: schedules the UI update on the main thread."""
+        _log(f"[{current}/{total}] {message}")
         self.root.after(0, self._apply_status, current, total, message)
 
     def _apply_status(self, current, total, message):
@@ -77,9 +88,11 @@ class UpdaterGUI:
 
     def _on_update_complete(self):
         """Runs on the main thread after all files have been applied."""
+        _log("Update applied — restarting backend...")
         backend_root = Path(self.backend_root)
         entry_point = backend_root / "src" / "geniusai_server.py"
         if not entry_point.exists():
+            _log(f"Backend entry point not found: {entry_point}")
             messagebox.showwarning(
                 "Backend Not Found",
                 f"The update was applied successfully, but the backend entry "
@@ -98,11 +111,13 @@ class UpdaterGUI:
                 env=os.environ.copy(),
                 cwd=str(backend_root / "src"),
             )
+            _log("Backend restarted successfully.")
             messagebox.showinfo(
                 "Success",
                 "LrGeniusAI has been updated successfully.\nYou can now restart Lightroom.",
             )
         except Exception as e:
+            _log(f"Backend restart failed: {e}")
             messagebox.showwarning(
                 "Backend Restart Failed",
                 f"The update was applied successfully, but the backend "
@@ -113,17 +128,21 @@ class UpdaterGUI:
 
     def _on_update_error(self, error_msg):
         """Runs on the main thread when the update worker raises."""
+        _log(f"Update error: {error_msg}")
         messagebox.showerror(
             "Update Error", f"An error occurred during update:\n\n{error_msg}"
         )
         self.root.destroy()
 
     def run(self):
+        _log("Starting updater...")
         Thread(target=self.perform_update, daemon=True).start()
         self.root.mainloop()
+        _log("Updater window closed.")
 
     def perform_update(self):
         try:
+            _log(f"Reading manifest: {self.manifest_path}")
             with open(self.manifest_path, "r") as f:
                 manifest = json.load(f)
 
@@ -140,6 +159,9 @@ class UpdaterGUI:
                 (entry, False) for entry in backend_files
             ]
             total_files = len(all_files)
+            _log(
+                f"Files to update: {total_files} ({len(plugin_files)} plugin, {len(backend_files)} backend)"
+            )
 
             temp_dir = Path(os.path.expanduser("~/.lrgeniusai/update_tmp"))
             # Clear any stale files from a previous aborted run
@@ -215,6 +237,10 @@ class UpdaterGUI:
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
+        print(
+            "Usage: updater.py <manifest_json_path> <plugin_path> <backend_root>",
+            flush=True,
+        )
         sys.exit(1)
 
     # Usage: python updater.py <manifest_json_path> <plugin_path> <backend_root>
