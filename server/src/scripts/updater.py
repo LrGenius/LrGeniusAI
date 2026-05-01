@@ -2,6 +2,8 @@ import base64
 import hashlib
 import json
 import os
+import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,6 +18,27 @@ import requests
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _apply_elevated(ops: list[tuple[Path, Path]]) -> None:
+    """Run all (src, dst) copies in a single privileged osascript call (one prompt)."""
+    # Write a temp shell script so escaping is trivial and the prompt fires once.
+    script_path = Path(os.path.expanduser("~/.lrgeniusai/update_tmp/apply_elevated.sh"))
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(script_path, "w") as f:
+        f.write("#!/bin/bash\nset -e\n")
+        for src, dst in ops:
+            f.write(f"cp -p {shlex.quote(str(src))} {shlex.quote(str(dst))}\n")
+    script_path.chmod(0o700)
+
+    # AppleScript requires double-quoted strings — shlex.quote uses single quotes and breaks.
+    escaped = str(script_path).replace("\\", "\\\\").replace('"', '\\"')
+    osascript_cmd = f'do shell script "{escaped}" with administrator privileges'
+    result = subprocess.run(
+        ["osascript", "-e", osascript_cmd], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise PermissionError(f"Privileged apply failed: {result.stderr.strip()}")
 
 
 def verify_sha256(content: bytes, expected_hash: str) -> bool:
@@ -46,6 +69,9 @@ class UpdaterGUI:
         self.manifest_path = manifest_path
         self.plugin_path = plugin_path
         self.backend_root = backend_root
+        # Queue used to pass events from the worker thread to the main thread.
+        # Tuples: ('status', current, total, msg) | ('done',) | ('error', msg)
+        self._q: queue.Queue = queue.Queue()
 
         self.root = tk.Tk()
         self.root.title("LrGeniusAI Updater")
@@ -77,14 +103,31 @@ class UpdaterGUI:
         self.root.focus_force()
 
     def update_status(self, current, total, message):
-        """Thread-safe: schedules the UI update on the main thread."""
+        """Thread-safe: enqueues a status update for the main thread to pick up."""
         _log(f"[{current}/{total}] {message}")
-        self.root.after(0, self._apply_status, current, total, message)
+        self._q.put(("status", current, total, message))
 
-    def _apply_status(self, current, total, message):
-        self.progress["maximum"] = max(total, 1)
-        self.progress["value"] = current
-        self.status_label.config(text=message)
+    def _poll_queue(self):
+        """Called on the main thread every 100 ms to drain the worker queue."""
+        try:
+            while True:
+                item = self._q.get_nowait()
+                kind = item[0]
+                if kind == "status":
+                    _, current, total, message = item
+                    self.progress["maximum"] = max(total, 1)
+                    self.progress["value"] = current
+                    self.status_label.config(text=message)
+                elif kind == "done":
+                    self._on_update_complete()
+                    return  # stop polling — window will be destroyed
+                elif kind == "error":
+                    self._on_update_error(item[1])
+                    return  # stop polling — window will be destroyed
+        except queue.Empty:
+            pass
+        # Reschedule on the main thread
+        self.root.after(100, self._poll_queue)
 
     def _on_update_complete(self):
         """Runs on the main thread after all files have been applied."""
@@ -137,6 +180,7 @@ class UpdaterGUI:
     def run(self):
         _log("Starting updater...")
         Thread(target=self.perform_update, daemon=True).start()
+        self.root.after(100, self._poll_queue)
         self.root.mainloop()
         _log("Updater window closed.")
 
@@ -153,8 +197,6 @@ class UpdaterGUI:
             plugin_files = files.get("plugin", [])
             backend_files = files.get("backend_src", [])
 
-            # Build tagged list so is_plugin lookup is O(1) per file, avoiding
-            # dict equality membership bugs when plugin/backend entries collide.
             all_files = [(entry, True) for entry in plugin_files] + [
                 (entry, False) for entry in backend_files
             ]
@@ -164,7 +206,6 @@ class UpdaterGUI:
             )
 
             temp_dir = Path(os.path.expanduser("~/.lrgeniusai/update_tmp"))
-            # Clear any stale files from a previous aborted run
             if temp_dir.exists():
                 shutil.rmtree(temp_dir)
             temp_dir.mkdir(parents=True, exist_ok=True)
@@ -196,22 +237,46 @@ class UpdaterGUI:
                 target_base = plugin_root if is_plugin else backend_root / "src"
                 downloaded.append((temp_path, target_base / rel_path, sha))
 
-            # 2. Apply phase — backup then overwrite
+            # 2. Apply phase — split by write permission
             self.update_status(total_files, total_files, "Applying changes...")
             time.sleep(1)
 
-            applied_backups: list[Path] = []
+            normal: list[tuple[Path, Path, str | None]] = []
+            elevated: list[tuple[Path, Path, str | None]] = []
             for temp_path, target_path, sha in downloaded:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
+                if os.access(target_path.parent, os.W_OK):
+                    normal.append((temp_path, target_path, sha))
+                else:
+                    elevated.append((temp_path, target_path, sha))
+
+            # Normal files — direct copy with in-place backup
+            applied_backups: list[Path] = []
+            for temp_path, target_path, sha in normal:
+                _log(f"  applying {target_path}")
                 bak_path = target_path.with_suffix(target_path.suffix + ".bak")
                 if target_path.exists():
                     shutil.copy2(target_path, bak_path)
                     applied_backups.append(bak_path)
                 shutil.copy2(temp_path, target_path)
-
-                # Verify the copy landed intact
                 if sha and not verify_sha256(target_path.read_bytes(), sha):
                     raise Exception(f"Post-copy SHA256 mismatch for {target_path.name}")
+
+            # Elevated files — single admin prompt for all of them
+            if elevated:
+                _log(
+                    f"  {len(elevated)} files need admin privileges — requesting once..."
+                )
+                ops = []
+                for temp_path, target_path, sha in elevated:
+                    _log(f"  applying {target_path}")
+                    ops.append((temp_path, target_path))
+                _apply_elevated(ops)
+                for _, target_path, sha in elevated:
+                    if sha and not verify_sha256(target_path.read_bytes(), sha):
+                        raise Exception(
+                            f"Post-copy SHA256 mismatch for {target_path.name}"
+                        )
 
             # 3. Remove backup files on full success
             for bak_path in applied_backups:
@@ -227,12 +292,11 @@ class UpdaterGUI:
                 pass
 
             self.update_status(total_files, total_files, "Update complete!")
-
-            # Hand off to the main thread for all remaining GUI work
-            self.root.after(0, self._on_update_complete)
+            self._q.put(("done",))
 
         except Exception as e:
-            self.root.after(0, self._on_update_error, str(e))
+            _log(f"Update error: {e}")
+            self._q.put(("error", str(e)))
 
 
 if __name__ == "__main__":
@@ -243,6 +307,5 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    # Usage: python updater.py <manifest_json_path> <plugin_path> <backend_root>
     gui = UpdaterGUI(sys.argv[1], sys.argv[2], sys.argv[3])
     gui.run()
