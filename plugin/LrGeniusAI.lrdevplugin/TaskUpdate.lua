@@ -126,14 +126,15 @@ function TaskUpdate.runUpdate(releaseInfo)
 			return
 		end
 
-		-- Step 5: Inform user — LrApplication has no public API to quit Lightroom.
+		-- Step 5: Brief heads-up before Lightroom shuts down automatically.
 		log:info("TaskUpdate: update to " .. version .. " triggered successfully")
 		LrDialogs.message(
-			LOC("$$$/LrGeniusAI/TaskUpdate/SuccessTitle=Update Successful"),
+			LOC("$$$/LrGeniusAI/TaskUpdate/SuccessTitle=Update Starting"),
 			LOC(
-				"$$$/LrGeniusAI/TaskUpdate/ExternalUpdaterMsg=The update process has started in a separate window. Please close Lightroom now to allow the update to complete.\n\nYou can restart Lightroom once the update window shows 'Finished'."
+				"$$$/LrGeniusAI/TaskUpdate/ExternalUpdaterMsg=Lightroom will now close to allow the update to complete. Restart it once the updater window shows 'Finished'."
 			)
 		)
+		LrApplication.shutdown()
 	end)
 end
 
