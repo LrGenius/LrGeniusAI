@@ -117,6 +117,13 @@ local function httpStatusForLog(status, hdrs)
 	return "unknown"
 end
 
+local function sanitizeForLog(s)
+	if type(s) ~= "string" then
+		return tostring(s)
+	end
+	return (s:gsub("[^\t\n\r\32-\126]", "?"))
+end
+
 -- Catalog DB migrations: one-time backend operations per catalog (e.g. claim_photos after cross-catalog soft state).
 -- Each entry: { id = "unique_id", run = function(progressScope) return ok, err [, userMessage] end }. progressScope is optional (nil for migrations that don't need it). Optional userMessage is shown via LrDialogs when present.
 local CATALOG_DB_MIGRATIONS = {
@@ -2664,7 +2671,7 @@ _request = function(method, url, body, timeout, options)
 			if ok2 then
 				return decoded
 			else
-				local snippet = tostring(result):sub(1, 1000)
+				local snippet = sanitizeForLog(tostring(result):sub(1, 1000))
 				log:error(
 					"_request: JSON decode failed: "
 						.. tostring(decoded)
@@ -2702,7 +2709,7 @@ _request = function(method, url, body, timeout, options)
 				if ok2 and type(decoded_err) == "table" and decoded_err.error then
 					err_msg = err_msg .. " - " .. decoded_err.error
 				else
-					err_msg = err_msg .. " Response: " .. tostring(result):sub(1, 400)
+					err_msg = err_msg .. " Response: " .. sanitizeForLog(tostring(result):sub(1, 400))
 				end
 			end
 		end
