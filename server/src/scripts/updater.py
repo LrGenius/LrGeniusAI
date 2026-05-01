@@ -104,6 +104,36 @@ def _modern_dialog(title: str, message: str, kind: str = "info") -> None:
     win.mainloop()
 
 
+_LAUNCHD_PLIST = Path.home() / "Library/LaunchAgents/com.lrgenius.server.plist"
+_LAUNCHD_LABEL = "com.lrgenius.server"
+
+
+def _launchd_unload() -> bool:
+    """Stop and unload the launchd service so KeepAlive can't restart the backend mid-update."""
+    if sys.platform != "darwin" or not _LAUNCHD_PLIST.exists():
+        return False
+    result = subprocess.run(
+        ["launchctl", "unload", str(_LAUNCHD_PLIST)],
+        capture_output=True,
+        text=True,
+    )
+    _log(f"launchctl unload: rc={result.returncode} {result.stderr.strip()}")
+    return result.returncode == 0
+
+
+def _launchd_load() -> bool:
+    """Re-register and start the backend via launchd after a successful update."""
+    if sys.platform != "darwin" or not _LAUNCHD_PLIST.exists():
+        return False
+    result = subprocess.run(
+        ["launchctl", "load", str(_LAUNCHD_PLIST)],
+        capture_output=True,
+        text=True,
+    )
+    _log(f"launchctl load: rc={result.returncode} {result.stderr.strip()}")
+    return result.returncode == 0
+
+
 def _patch_info_lua(content: bytes, version: str) -> bytes:
     """Bake the release version into downloaded Info.lua (repo has dev placeholders)."""
     parts = version.split(".")
@@ -299,15 +329,27 @@ class UpdaterGUI:
             return
 
         try:
-            subprocess.Popen(
-                [sys.executable, str(entry_point)],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=os.environ.copy(),
-                cwd=str(backend_root / "src"),
-            )
-            _log("Backend restarted successfully.")
+            # Ask a still-running backend to restart itself (picks up new files).
+            # Silently ignored if the backend is already down.
+            try:
+                port = int(os.environ.get("GENIUSAI_PORT", "19819"))
+                requests.post(f"http://127.0.0.1:{port}/restart", timeout=5)
+                _log("Sent /restart to running backend.")
+            except Exception:
+                pass
+
+            if _launchd_load():
+                _log("Backend restarted via launchd.")
+            else:
+                subprocess.Popen(
+                    [sys.executable, str(entry_point)],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=os.environ.copy(),
+                    cwd=str(backend_root / "src"),
+                )
+                _log("Backend restarted via Popen.")
             self.root.destroy()
             _modern_dialog(
                 "Update complete",
@@ -342,6 +384,10 @@ class UpdaterGUI:
 
     def perform_update(self):
         try:
+            # Unload launchd service first so KeepAlive can't restart the backend
+            # while we're replacing files.  Falls back silently on non-launchd installs.
+            _launchd_unload()
+
             _log(f"Reading manifest: {self.manifest_path}")
             with open(self.manifest_path, "r") as f:
                 manifest = json.load(f)
