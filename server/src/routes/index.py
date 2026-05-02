@@ -437,7 +437,7 @@ def index_images_batch_by_reference():
             {"status": "processed", "success_count": 0, "failure_count": read_failures}
         ), 200
 
-    success_count, processing_failures, error_messages = process_image_task(
+    success_count, processing_failures, error_messages, warnings = process_image_task(
         image_triplets, options=options
     )
     total_failures = read_failures + processing_failures
@@ -459,6 +459,8 @@ def index_images_batch_by_reference():
             "status": "processed",
             "success_count": success_count,
             "failure_count": total_failures,
+            "error_messages": error_messages,
+            "warnings": warnings or [],
         }
     ), 200
 

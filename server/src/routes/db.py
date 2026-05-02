@@ -21,7 +21,8 @@ def database_stats():
     """
     catalog_id = request.args.get("catalog_id")
     try:
-        return jsonify(service_db.get_database_stats(catalog_id=catalog_id))
+        stats = service_db.get_database_stats(catalog_id=catalog_id)
+        return jsonify({"results": stats, "error": None, "warning": None})
     except Exception as e:
         logger.error(f"Error computing database stats: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500

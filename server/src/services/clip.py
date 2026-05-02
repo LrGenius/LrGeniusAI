@@ -17,6 +17,10 @@ _download_lock = threading.Lock()
 _counter_lock = threading.Lock()
 _download_thread = None
 
+# Single process-lifetime devnull sink for tqdm output. A fresh open() per
+# tracker instance leaks file descriptors during long downloads.
+_DEVNULL = open(os.devnull, "w")
+
 
 class DownloadProgressTracker(tqdm.tqdm):
     """
@@ -26,7 +30,7 @@ class DownloadProgressTracker(tqdm.tqdm):
 
     def __init__(self, *args, **kwargs):
         # Mute standard output to avoid polluting logs/console
-        kwargs["file"] = open(os.devnull, "w")
+        kwargs["file"] = _DEVNULL
         kwargs.pop("name", None)
         super().__init__(*args, **kwargs)
 
