@@ -1365,6 +1365,9 @@ function SearchIndexAPI.findSimilarImages(photoId, options)
 	end
 	local count = (result and result.results and #result.results) or 0
 	log:info("findSimilarImages: got %s similar photo(s)", count)
+	if result and result.warning then
+		log:warn("findSimilarImages warning: " .. result.warning)
+	end
 	return result
 end
 
