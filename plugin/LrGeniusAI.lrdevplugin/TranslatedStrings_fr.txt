@@ -673,3 +673,7 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSyncFailed" = "Avertissement : L'index de recherche IA n'a pas pu être mis à jour. Votre catalogue Lightroom a été fusionné avec succès, mais la recherche sémantique peut afficher des résultats obsolètes. Relancez l'indexation pour corriger cela."
 "$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle" = "Ensembles de collections non pris en charge"
 "$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage" = "Les ensembles de collections ne peuvent pas être utilisés comme source. Veuillez sélectionner des collections individuelles à la place."
+"$$$/LrGeniusAI/KeywordConfig/Title" = "Configurer les catégories de mots-clés"
+"$$$/LrGeniusAI/KeywordConfig/Description" = "Une catégorie par ligne.\nLes lignes vides sont ignorées lors de l'enregistrement."
+"$$$/LrGeniusAI/KeywordConfig/Count" = "^1 catégories"
+"$$$/LrGeniusAI/KeywordConfig/ResetButton" = "Réinitialiser aux valeurs par défaut"

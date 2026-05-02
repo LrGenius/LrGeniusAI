@@ -687,3 +687,7 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSyncFailed" = "Warning: The AI search index could not be updated. Your Lightroom catalog was merged successfully, but semantic search may show outdated results. Re-run indexing to fix this."
 "$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle" = "Collection Sets Not Supported"
 "$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage" = "Collection sets cannot be used as a source. Please select individual collections instead."
+"$$$/LrGeniusAI/KeywordConfig/Title" = "Configure Keyword Categories"
+"$$$/LrGeniusAI/KeywordConfig/Description" = "One category per line.\nEmpty lines are ignored when you save."
+"$$$/LrGeniusAI/KeywordConfig/Count" = "^1 categories"
+"$$$/LrGeniusAI/KeywordConfig/ResetButton" = "Reset to defaults"

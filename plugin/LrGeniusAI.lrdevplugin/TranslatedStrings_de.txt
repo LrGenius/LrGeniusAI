@@ -675,3 +675,7 @@
 "$$$/LrGeniusAI/DeduplicateKeywords/ResultBackendSyncFailed" = "Warnung: Der KI-Suchindex konnte nicht aktualisiert werden. Ihr Lightroom-Katalog wurde erfolgreich zusammengeführt, aber die semantische Suche zeigt möglicherweise veraltete Ergebnisse. Führen Sie die Indizierung erneut aus, um dies zu beheben."
 "$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle" = "Sammlungssätze nicht unterstützt"
 "$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage" = "Sammlungssätze können nicht als Quelle verwendet werden. Bitte wählen Sie stattdessen einzelne Sammlungen aus."
+"$$$/LrGeniusAI/KeywordConfig/Title" = "Stichwort-Kategorien konfigurieren"
+"$$$/LrGeniusAI/KeywordConfig/Description" = "Eine Kategorie pro Zeile.\nLeere Zeilen werden beim Speichern ignoriert."
+"$$$/LrGeniusAI/KeywordConfig/Count" = "^1 Kategorien"
+"$$$/LrGeniusAI/KeywordConfig/ResetButton" = "Auf Standardwerte zurücksetzen"
