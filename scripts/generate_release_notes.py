@@ -28,7 +28,12 @@ STATIC_FOOTER = """
 The CUDA variant (`-cuda.exe`) uses your NVIDIA GPU to accelerate CLIP-based image search and indexing. It is **experimental** and only recommended if you are **not** running a local LLM at the same time — combining both will exhaust VRAM quickly. Use the standard CPU build when running a local LLM alongside the plugin (e.g. via Ollama or LM Studio).
 
 ## Docker Deployment
-- For containerized environments, use the `LrGeniusAI-plugin-docker-backend-<version>.zip` asset which includes the pre-configured plugin and Docker setup.
+The `LrGeniusAI-plugin-docker-backend-<version>.zip` asset contains the plugin and both compose files.
+
+| File | Image | Use when |
+|---|---|---|
+| `docker-compose-prod.yml` | `:latest-cpu` (amd64 + arm64) | Default — works on any machine |
+| `docker-compose-cuda.yml` | `:latest` (CUDA, amd64) | NVIDIA GPU — accelerates CLIP search/indexing. Requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Not recommended when running a local LLM alongside (shared VRAM). |
 """
 
 def run_command(cmd):

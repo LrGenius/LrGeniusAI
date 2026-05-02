@@ -1,0 +1,47 @@
+# geniusai-server — CUDA build (NVIDIA GPU, experimental).
+#
+# Accelerates CLIP-based image search and indexing via GPU.
+# Not recommended when running a local LLM at the same time — both will compete for VRAM.
+#
+# Requirements: NVIDIA GPU + NVIDIA Container Toolkit installed on the host.
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#
+# Image: :latest (CUDA-enabled amd64, published on each release tag).
+# Override image in .env, e.g. LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:v1.2.3-x64-cuda
+#
+# Start: docker compose -f docker-compose-cuda.yml up -d
+# Stop:  docker compose -f docker-compose-cuda.yml down
+# Logs:  docker compose -f docker-compose-cuda.yml logs -f geniusai-server
+
+services:
+  geniusai-server:
+    image: ${LRGENIUS_IMAGE:-ghcr.io/lrgenius/lrgeniusai:latest}
+    container_name: geniusai-server
+    restart: unless-stopped
+    ports:
+      - "19819:19819"
+    volumes:
+      - ./data:/data
+      - ./models:/models
+      - ./gcloud:/root/.config/gcloud
+    environment:
+      - GENIUSAI_HOST=0.0.0.0
+      - GENIUSAI_PORT=19819
+      - CLOUDSDK_CONFIG=/root/.config/gcloud
+
+      - GENIUSAI_FACES_CLUSTER_ENABLED=true
+      - GENIUSAI_FACES_CLUSTER_INTERVAL=3600
+      - GENIUSAI_FACES_CLUSTER_DISTANCE=0.5
+      - GENIUSAI_FACES_CLUSTER_MIN_FACES=3
+      - GENIUSAI_FACES_CLUSTER_LINKAGE=complete
+
+      - GENIUSAI_BACKUP_ENABLED=true
+      - GENIUSAI_BACKUP_INTERVAL=86400
+      - GENIUSAI_BACKUP_MAX_KEEP=14
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

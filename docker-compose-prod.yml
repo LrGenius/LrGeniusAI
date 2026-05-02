@@ -1,14 +1,15 @@
-# geniusai-server using the published GHCR image (same backend as a GitHub release).
+# geniusai-server — CPU build (works on any machine, no GPU required).
 #
-# Default: :latest (multi-arch; CI publishes it on each release tag — see publish-docker-manifest).
-# Override in .env, e.g. LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:v1.2.3-x64
+# Image: :latest-cpu (multi-arch amd64 + arm64, published on each release tag).
+# For NVIDIA GPU acceleration (CLIP search/indexing) use docker-compose-cuda.yml instead.
+# Override image in .env, e.g. LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:v1.2.3-x64-cpu
 #
 # Stop:  docker compose down
 # Logs:  docker compose logs -f geniusai-server
 
 services:
   geniusai-server:
-    image: ${LRGENIUS_IMAGE:-ghcr.io/lrgenius/lrgeniusai:latest}
+    image: ${LRGENIUS_IMAGE:-ghcr.io/lrgenius/lrgeniusai:latest-cpu}
     container_name: geniusai-server
     restart: unless-stopped
     ports:
