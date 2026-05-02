@@ -3917,7 +3917,7 @@ end
 
 function SearchIndexAPI.setClipDevice(device)
 	local url = getBaseUrl() .. ENDPOINTS.CLIP_DEVICE
-	local response, err = _request("POST", url, { device = device }, 15)
+	local _, err = _request("POST", url, { device = device }, 15)
 	if err then
 		log:warn("setClipDevice: " .. tostring(err))
 		return false, err
