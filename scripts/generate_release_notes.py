@@ -24,9 +24,8 @@ STATIC_FOOTER = """
   - Windows: Run `{commonpf}\\LrGeniusAI\\backend\\lrgenius-server.cmd`
   - macOS: Service `com.lrgenius.server` (managed via `launchctl`)
 
-### Security & Permissions
-- **Windows**: You may see a SmartScreen warning ("Windows protected your PC") during installation because the installer is not signed. Click "More info" and "Run anyway" to proceed.
-- **macOS**: If Gatekeeper blocks the installer, go to **System Settings > Privacy & Security** and click **"Open Anyway"** under the Security section. Alternatively, run `xattr -d com.apple.quarantine <path-to-pkg>` in Terminal to clear the block.
+### Windows CUDA Build (Experimental)
+The CUDA variant (`-cuda.exe`) uses your NVIDIA GPU to accelerate CLIP-based image search and indexing. It is **experimental** and only recommended if you are **not** running a local LLM at the same time — combining both will exhaust VRAM quickly. Use the standard CPU build when running a local LLM alongside the plugin (e.g. via Ollama or LM Studio).
 
 ## Docker Deployment
 - For containerized environments, use the `LrGeniusAI-plugin-docker-backend-<version>.zip` asset which includes the pre-configured plugin and Docker setup.
