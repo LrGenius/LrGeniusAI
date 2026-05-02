@@ -43,7 +43,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
    - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
 4. Select your photos in the library and choose from the menu: **Library -> Plug-in Extras -> Analyze & Index photos**.
 
-*For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
+*For comprehensive details, model setup guides, and tips, see the wiki — in particular [Getting Started](Getting-Started), [Help: Choosing AI Model](Help-Choosing-AI-Model), [Help: Ollama Setup](Help-Ollama-Setup), and [Help: LM Studio Setup](Help-LM-Studio-Setup).*
 
 ---
 

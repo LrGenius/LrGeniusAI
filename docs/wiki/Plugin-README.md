@@ -108,7 +108,8 @@ In the plugin settings dialog you can configure:
 
 - Backend server URL
 - Ollama base URL
-- API keys and Vertex settings
+- LM Studio base URL
+- API keys (Gemini, OpenAI/ChatGPT) and Vertex AI project/location
 - Export size and quality used for AI processing
 - Prompt presets
 - Optional CLIP model download for advanced search
