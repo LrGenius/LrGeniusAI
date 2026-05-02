@@ -126,7 +126,7 @@ def is_model_cached() -> bool:
 
 def load_model():
     """Load the OpenCLIP model (idempotent)."""
-    global model, processor, tokenizer
+    global model, processor, tokenizer, _model_load_error
     with _model_lock:
         if model is not None:
             _set_last_used()
