@@ -15,17 +15,23 @@
 
 ## 3. Download vision model(s)
 
-Examples mentioned in help content:
+Recommended starting points:
 
-- `qwen/qwen3-vl-4b`
-- `qwen/qwen3-vl-8b`
-- `google/gemma3-4b`
-- `google/gemma3-12b`
+- `qwen/qwen3-vl-4b` — fast baseline.
+- `qwen/qwen3-vl-8b` — better description quality at moderate cost.
+- `google/gemma3-4b` — solid general-purpose default.
+- `google/gemma3-12b` — higher quality if your hardware can host it.
 
 ## 4. Performance guidance
 
-- Prefer the largest model that still fits your hardware
-- On Apple Silicon, use MLX-optimized variants when available
+- Prefer the largest model that still fits comfortably in VRAM/unified memory.
+- On Apple Silicon, prefer the **MLX** variant of the same model — it runs
+  noticeably faster than the GGUF build for vision workloads.
+- For batch indexing on a laptop, a 4B model usually beats waiting on a
+  thrashing 12B model.
+
+See [Help: Choosing AI Model](Help-Choosing-AI-Model) for a side-by-side
+comparison with cloud providers.
 
 ## 5. Configure plugin/backend
 

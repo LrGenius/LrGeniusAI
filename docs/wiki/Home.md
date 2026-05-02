@@ -10,6 +10,7 @@ Welcome to the project wiki.
 - [Help: Analyze and Index](Help-Analyze-and-Index)
 - [Help: Advanced Search](Help-Advanced-Search)
 - [Help: Cull Photos](Help-Cull-Photos)
+- [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter)
 - [Help: Choosing AI Model](Help-Choosing-AI-Model)
 - [Feature Priority Decision](Feature-Priority-Decision)
 - [Image Culling Implementation Plan](Image-Culling-Implementation-Plan)
