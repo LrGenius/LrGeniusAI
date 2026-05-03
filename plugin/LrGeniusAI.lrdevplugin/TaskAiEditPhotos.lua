@@ -1065,10 +1065,18 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompletionTitle=AI Edit Completed"),
-				combinedReport
-			)
+			if errorCount > 0 then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompletionTitle=AI Edit Completed"),
+					combinedReport
+				)
+			else
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompletionTitle=AI Edit Completed"),
+					combinedReport,
+					"warning"
+				)
+			end
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SuccessTitle=AI Lightroom Edit"),

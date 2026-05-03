@@ -18,16 +18,17 @@ from typing import Any
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
 
-from config import DB_PATH, logger
+import config
+from config import logger
 from . import chroma as chroma_service
 
 PERSON_NAMES_FILENAME = "person_names.json"
 
 
 def _person_names_path() -> str | None:
-    if not DB_PATH:
+    if not config.DB_PATH:
         return None
-    return os.path.join(DB_PATH, PERSON_NAMES_FILENAME)
+    return os.path.join(config.DB_PATH, PERSON_NAMES_FILENAME)
 
 
 def _load_person_names() -> dict[str, str]:

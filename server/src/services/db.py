@@ -1,6 +1,7 @@
+import config
 from . import chroma as chroma_service
 from . import persons as persons_service
-from config import logger, DB_PATH
+from config import logger
 
 import os
 import json
@@ -12,11 +13,9 @@ from datetime import datetime
 
 # Ordner für serverseitig aufgehobene Backups: Docker /data/db/backups, Standalone <db-path>/backups
 def _get_backups_dir():
-    from config import DB_PATH
-
-    if not DB_PATH:
+    if not config.DB_PATH:
         return None
-    return os.path.join(DB_PATH, "backups")
+    return os.path.join(config.DB_PATH, "backups")
 
 
 def get_database_stats(catalog_id=None) -> dict:
@@ -44,9 +43,10 @@ def get_database_stats(catalog_id=None) -> dict:
 
 def build_backup_zip() -> tuple[str, str]:
     """Create a temporary ZIP containing all persistent DB files."""
-    if not DB_PATH or not os.path.isdir(DB_PATH):
+    db_path = config.DB_PATH
+    if not db_path or not os.path.isdir(db_path):
         raise FileNotFoundError(
-            f"Database path does not exist or is not a directory: {DB_PATH}"
+            f"Database path does not exist or is not a directory: {db_path}"
         )
 
     backup_name = (
@@ -55,15 +55,15 @@ def build_backup_zip() -> tuple[str, str]:
     fd, zip_path = tempfile.mkstemp(prefix="lrgeniusai-backup-", suffix=".zip")
     os.close(fd)
 
-    root_parent = os.path.dirname(DB_PATH)
+    root_parent = os.path.dirname(db_path)
     included_files = 0
     with zipfile.ZipFile(
         zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
     ) as archive:
-        for current_root, dirs, files in os.walk(DB_PATH):
+        for current_root, dirs, files in os.walk(db_path):
             # Do not include the backups directory in the backup (avoid self-embedding and runaway size)
             dirs[:] = [
-                d for d in dirs if not (current_root == DB_PATH and d == "backups")
+                d for d in dirs if not (current_root == db_path and d == "backups")
             ]
             files.sort()
             for filename in files:
@@ -78,7 +78,7 @@ def build_backup_zip() -> tuple[str, str]:
         "Created DB backup zip at %s with %s files from %s",
         zip_path,
         included_files,
-        DB_PATH,
+        db_path,
     )
 
     # Kopie serverseitig aufbewahren (Docker: /data/db/backups, Standalone: <db-path>/backups)
@@ -155,7 +155,7 @@ def migrate_photo_ids(data: dict) -> dict:
     if mappings is None and data.get("mapping_file"):
         file_path = data["mapping_file"]
         if not os.path.isabs(file_path):
-            file_path = os.path.join(DB_PATH, file_path)
+            file_path = os.path.join(config.DB_PATH, file_path)
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)

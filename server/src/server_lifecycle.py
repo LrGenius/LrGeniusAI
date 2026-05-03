@@ -345,7 +345,7 @@ def get_tokenizer():
 
 
 def get_db_dir():
-    return os.path.dirname(DB_PATH) if DB_PATH else None
+    return os.path.dirname(config.DB_PATH) if config.DB_PATH else None
 
 
 def write_pid_file():
