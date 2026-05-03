@@ -7,7 +7,8 @@ from waitress import serve
 import json
 
 # Import modularized components
-from config import logger, args, DB_PATH
+import config
+from config import logger, args
 from services.version import get_backend_version_info
 
 # Lazy import server_lifecycle to speed up startup
@@ -189,17 +190,19 @@ if __name__ == "__main__":
     )
     logger.info("LrGenius Server starting...")
     logger.info(f"Python: {sys.version.split()[0]}")
-    logger.info(f"Database Path: {DB_PATH or 'Idle (waiting for plugin initialize)'}")
+    logger.info(
+        f"Database Path: {config.DB_PATH or 'Idle (waiting for plugin initialize)'}"
+    )
     logger.info("=" * 60)
 
     # Optional one-shot ID migration for deployed databases.
     # Set GENIUSAI_MIGRATION_FILE to a JSON list/object with mappings.
     migration_file = os.environ.get("GENIUSAI_MIGRATION_FILE", "").strip()
-    if migration_file and DB_PATH:
+    if migration_file and config.DB_PATH:
         migration_path = (
             migration_file
             if os.path.isabs(migration_file)
-            else os.path.join(DB_PATH, migration_file)
+            else os.path.join(config.DB_PATH, migration_file)
         )
         try:
             with open(migration_path, "r", encoding="utf-8") as f:
