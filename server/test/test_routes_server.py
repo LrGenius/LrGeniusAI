@@ -1,4 +1,4 @@
-"""Tests for routes/server.py — covers B1 (clip_error reporting) and B4 (/ping envelope)."""
+"""Tests for routes/server.py — covers B1 (clip_error reporting) and /ping."""
 
 import pytest
 from unittest.mock import MagicMock
@@ -13,11 +13,10 @@ def client():
         yield c
 
 
-def test_ping_returns_envelope(client):
+def test_ping_returns_pong(client):
     response = client.get("/ping")
     assert response.status_code == 200
-    payload = response.get_json()
-    assert payload == {"results": "pong", "error": None, "warning": None}
+    assert response.get_data(as_text=True) == "pong"
 
 
 def test_version_returns_backend_version(client):

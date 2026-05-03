@@ -20,8 +20,7 @@ def client():
 def test_ping(client):
     response = client.get("/ping")
     assert response.status_code == 200
-    payload = response.get_json()
-    assert payload == {"results": "pong", "error": None, "warning": None}
+    assert response.get_data(as_text=True) == "pong"
 
 
 def test_version(client):
@@ -50,11 +49,7 @@ def test_db_stats(client, mocker):
     mocker.patch("routes.db.service_db.get_database_stats", return_value={"total": 0})
     response = client.get("/db/stats")
     assert response.status_code == 200
-    assert response.get_json() == {
-        "results": {"total": 0},
-        "error": None,
-        "warning": None,
-    }
+    assert response.get_json() == {"total": 0}
 
 
 def test_get_ids(client, mocker):
