@@ -104,8 +104,7 @@ def _modern_dialog(title: str, message: str, kind: str = "info") -> None:
     win.mainloop()
 
 
-_LAUNCHD_PLIST = Path.home() / "Library/LaunchAgents/com.lrgenius.server.plist"
-_LAUNCHD_LABEL = "com.lrgenius.server"
+_LAUNCHD_PLIST = Path("/Library/LaunchAgents/com.lrgenius.server.plist")
 _WIN_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _WIN_REG_VALUE = "LrGeniusAIBackend"
 
