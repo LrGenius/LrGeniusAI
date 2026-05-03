@@ -2029,15 +2029,11 @@ function SearchIndexAPI.pingServer()
 	local url = getBaseUrl() .. "/ping"
 	local result, hdrs = LrHttp.get(url)
 	local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
-	if status ~= 200 then
+	if status == 200 and result == "pong" then
+		return true
+	else
 		return false
 	end
-	-- Support legacy plain "pong" and current JSON envelope {"results": "pong", ...}
-	if result == "pong" then
-		return true
-	end
-	local ok, data = LrTasks.pcall(JSON.decode, JSON, result)
-	return ok and type(data) == "table" and data.results == "pong"
 end
 
 function SearchIndexAPI.isBackendOnLocalhost()

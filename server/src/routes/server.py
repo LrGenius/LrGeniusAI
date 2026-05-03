@@ -14,7 +14,7 @@ server_bp = Blueprint("server", __name__)
 @server_bp.route("/ping", methods=["GET"])
 def ping():
     # logger.info("Ping request received")
-    return jsonify({"results": "pong", "error": None, "warning": None})
+    return "pong"
 
 
 @server_bp.route("/shutdown", methods=["POST"])

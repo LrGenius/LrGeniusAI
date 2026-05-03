@@ -49,9 +49,8 @@ def assert_status(status: int, expected: int, context: str) -> None:
 def run_contract_tests(base_url: str, timeout: float) -> None:
     status, body = call_api(base_url, "/ping", timeout=timeout)
     assert_status(status, 200, "GET /ping")
-    ping_data = parse_json(body)
-    if ping_data.get("results") != "pong":
-        raise AssertionError(f"GET /ping: expected results='pong', got {ping_data!r}")
+    if body.strip() != "pong":
+        raise AssertionError(f"GET /ping: expected 'pong', got {body!r}")
 
     status, body = call_api(base_url, "/version", timeout=timeout)
     assert_status(status, 200, "GET /version")
@@ -121,7 +120,7 @@ def run_load_probe(base_url: str, timeout: float, iterations: int) -> None:
     for i in range(iterations):
         status, body = call_api(base_url, "/ping", timeout=timeout)
         assert_status(status, 200, f"GET /ping load iteration {i + 1}")
-        if parse_json(body).get("results") != "pong":
+        if body.strip() != "pong":
             raise AssertionError(f"GET /ping load iteration {i + 1}: unexpected body")
 
     for i in range(max(1, iterations // 2)):
