@@ -27,15 +27,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY uv.lock pyproject.toml .
 ARG CPU_ONLY=false
+ARG ROCM=false
+ARG ROCM_VERSION=rocm6.3
 RUN uv sync --locked --no-dev && \
-    if [ "$CPU_ONLY" = "true" ]; then \
+    if [ "$CPU_ONLY" = "true" ] || [ "$ROCM" = "true" ]; then \
         TORCH_VER=$(.venv/bin/python -c "import importlib.metadata; print(importlib.metadata.version('torch').split('+')[0])") && \
         TV_VER=$(.venv/bin/python -c "import importlib.metadata; print(importlib.metadata.version('torchvision').split('+')[0])") && \
-        uv pip install --python .venv/bin/python \
-            "torch==${TORCH_VER}+cpu" \
-            "torchvision==${TV_VER}+cpu" \
-            --index-url https://download.pytorch.org/whl/cpu \
-            --no-deps; \
+        .venv/bin/python -m pip list --format=freeze \
+            | grep -iE '^(nvidia-|cuda-bindings|cuda-toolkit)' \
+            | cut -d= -f1 \
+            | xargs -r uv pip uninstall --python .venv/bin/python 2>/dev/null || true && \
+        if [ "$CPU_ONLY" = "true" ]; then \
+            uv pip install --python .venv/bin/python \
+                "torch==${TORCH_VER}+cpu" \
+                "torchvision==${TV_VER}+cpu" \
+                --index-url https://download.pytorch.org/whl/cpu \
+                --no-deps --reinstall; \
+        else \
+            uv pip install --python .venv/bin/python \
+                "torch==${TORCH_VER}+${ROCM_VERSION}" \
+                "torchvision==${TV_VER}+${ROCM_VERSION}" \
+                --index-url "https://download.pytorch.org/whl/${ROCM_VERSION}" \
+                --no-deps --reinstall; \
+        fi; \
     fi
 
 # App source

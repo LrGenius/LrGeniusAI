@@ -212,17 +212,27 @@ jobs:
             UV_PROJECT_ENVIRONMENT="$SERVER_ENV_DIR" uv sync --project server --frozen --all-groups
           fi
 
-          # Windows CPU build: replace the default CUDA-bundled torch (~600 MB) with the
-          # CPU-only wheel at the same version. The CUDA variant skips this step.
-          if [ "${{ matrix.os_name }}" == "windows" ] && [ "${{ matrix.cuda }}" != "true" ]; then
-            echo "Replacing CUDA torch with CPU-only build..."
+          # Windows builds: the uv.lock pins the vanilla PyPI Windows torch wheel (CPU-only,
+          # ~115 MB) because PyTorch CUDA Windows wheels live on a separate index and are not
+          # resolved by uv. Explicitly upgrade to the matching CPU or CUDA variant here.
+          if [ "${{ matrix.os_name }}" == "windows" ]; then
             TORCH_VERSION=$(grep -E "^torch==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torch==//; s/[ ;].*//')
             TORCHVISION_VERSION=$(grep -E "^torchvision==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torchvision==//; s/[ ;].*//')
-            echo "Using CPU-only torch ${TORCH_VERSION} and torchvision ${TORCHVISION_VERSION}"
-            uv pip install --python "$PY_EXE" --break-system-packages \
-              "torch==${TORCH_VERSION}+cpu" "torchvision==${TORCHVISION_VERSION}+cpu" \
-              --index-url https://download.pytorch.org/whl/cpu \
-              --reinstall --no-deps
+            TORCH_BASE=$(echo "$TORCH_VERSION" | sed 's/+.*//')
+            TV_BASE=$(echo "$TORCHVISION_VERSION" | sed 's/+.*//')
+            if [ "${{ matrix.cuda }}" == "true" ]; then
+              echo "Upgrading to CUDA torch ${TORCH_BASE}+cu124..."
+              uv pip install --python "$PY_EXE" --break-system-packages \
+                "torch==${TORCH_BASE}+cu124" "torchvision==${TV_BASE}+cu124" \
+                --index-url https://download.pytorch.org/whl/cu124 \
+                --reinstall --no-deps
+            else
+              echo "Installing CPU-only torch ${TORCH_BASE}+cpu..."
+              uv pip install --python "$PY_EXE" --break-system-packages \
+                "torch==${TORCH_BASE}+cpu" "torchvision==${TV_BASE}+cpu" \
+                --index-url https://download.pytorch.org/whl/cpu \
+                --reinstall --no-deps
+            fi
           fi
 
           "$PY_EXE" -c "import torch, torch.testing; print('torch ok', torch.__version__)"
@@ -583,12 +593,19 @@ jobs:
           - arch: x64-cuda
             docker_platform: linux/amd64
             cpu_only: "false"
+            rocm: "false"
           - arch: x64-cpu
             docker_platform: linux/amd64
             cpu_only: "true"
+            rocm: "false"
+          - arch: x64-rocm
+            docker_platform: linux/amd64
+            cpu_only: "false"
+            rocm: "true"
           - arch: aarch64
             docker_platform: linux/arm64
             cpu_only: "true"
+            rocm: "false"
 
     name: Build Docker Image - ${{ matrix.arch }}
 
@@ -643,6 +660,7 @@ jobs:
           tags: ${{ steps.image-name.outputs.registry_image }}:${{ github.ref_name }}-${{ matrix.arch }}
           build-args: |
             CPU_ONLY=${{ matrix.cpu_only }}
+            ROCM=${{ matrix.rocm }}
           cache-from: type=gha,scope=lrgeniusai-server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=lrgeniusai-server-${{ matrix.arch }}
           labels: |
@@ -691,6 +709,10 @@ jobs:
             --tag "${IMG}:latest-cpu" \
             "${IMG}:${TAG}-x64-cpu" \
             "${IMG}:${TAG}-aarch64"
+          # :latest-rocm — ROCm (AMD GPU) x64 only
+          docker buildx imagetools create \
+            --tag "${IMG}:latest-rocm" \
+            "${IMG}:${TAG}-x64-rocm"
           
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')
