@@ -1,7 +1,8 @@
 import os
 import time
 import signal
-from config import DB_PATH, logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
+import config
+from config import logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
 import open_clip
 from utils.open_clip_compat import wrap_tokenizer
 import threading
@@ -301,7 +302,7 @@ def get_tokenizer():
 
 
 def get_db_dir():
-    return os.path.dirname(DB_PATH) if DB_PATH else None
+    return os.path.dirname(config.DB_PATH) if config.DB_PATH else None
 
 
 def write_pid_file():
