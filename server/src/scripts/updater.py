@@ -114,29 +114,25 @@ def _launchd_unload() -> bool:
     """Stop and unload the launchd service so KeepAlive can't restart the backend mid-update."""
     if sys.platform != "darwin" or not _LAUNCHD_PLIST.exists():
         return False
-    uid = os.getuid()
     result = subprocess.run(
-        ["launchctl", "bootout", f"gui/{uid}", str(_LAUNCHD_PLIST)],
+        ["launchctl", "unload", str(_LAUNCHD_PLIST)],
         capture_output=True,
         text=True,
     )
-    # bootout exits non-zero if the service isn't currently loaded — treat as success
-    success = result.returncode == 0 or "not find specified service" in result.stderr
-    _log(f"launchctl bootout: rc={result.returncode} {result.stderr.strip()}")
-    return success
+    _log(f"launchctl unload: rc={result.returncode} {result.stderr.strip()}")
+    return result.returncode == 0
 
 
 def _launchd_load() -> bool:
     """Re-register and start the backend via launchd after a successful update."""
     if sys.platform != "darwin" or not _LAUNCHD_PLIST.exists():
         return False
-    uid = os.getuid()
     result = subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{uid}", str(_LAUNCHD_PLIST)],
+        ["launchctl", "load", str(_LAUNCHD_PLIST)],
         capture_output=True,
         text=True,
     )
-    _log(f"launchctl bootstrap: rc={result.returncode} {result.stderr.strip()}")
+    _log(f"launchctl load: rc={result.returncode} {result.stderr.strip()}")
     return result.returncode == 0
 
 
