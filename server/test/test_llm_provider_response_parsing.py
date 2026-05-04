@@ -171,7 +171,7 @@ def test_lmstudio_malformed_string_returns_failure(lmstudio_provider):
     fake_response.stats = None
     resp = provider.generate_metadata(_request())
     assert resp.success is False
-    assert "Unexpected non-JSON response" in resp.error
+    assert "could not be parsed as JSON" in resp.error
 
 
 def test_lmstudio_unexpected_type_returns_failure(lmstudio_provider):

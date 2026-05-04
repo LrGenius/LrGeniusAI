@@ -116,13 +116,30 @@ class OllamaProvider(LLMProviderBase):
 
             # Extract message content (supports dict or typed SDK objects)
             if isinstance(result, dict):
+                done_reason = result.get("done_reason")
                 message = result.get("message") or {}
                 content = message.get("content")
             else:
+                done_reason = getattr(result, "done_reason", None)
                 message = getattr(result, "message", None)
                 content = (
                     getattr(message, "content", None) if message is not None else None
                 )
+
+            if done_reason == "length":
+                _max_tokens = request.max_tokens or DEFAULT_MAX_TOKENS
+                return MetadataGenerationResponse(
+                    uuid=request.uuid,
+                    success=False,
+                    error=(
+                        f"Ollama stopped before finishing the response because the token "
+                        f"limit was reached (num_predict={_max_tokens}). Please raise the "
+                        f"Max Tokens setting in the plugin (General tab → AI Model section) "
+                        f"— try 4096 or higher. If you use hierarchical keywords, a large "
+                        f"taxonomy increases token usage significantly."
+                    ),
+                )
+
             if not content:
                 error_msg = "Empty response content from Ollama"
                 logger.error(error_msg)
@@ -205,13 +222,29 @@ class OllamaProvider(LLMProviderBase):
             )
 
             if isinstance(result, dict):
+                done_reason = result.get("done_reason")
                 message = result.get("message") or {}
                 content = message.get("content")
             else:
+                done_reason = getattr(result, "done_reason", None)
                 message = getattr(result, "message", None)
                 content = (
                     getattr(message, "content", None) if message is not None else None
                 )
+
+            if done_reason == "length":
+                _max_tokens = request.max_tokens or DEFAULT_MAX_TOKENS
+                return EditGenerationResponse(
+                    uuid=request.uuid,
+                    success=False,
+                    error=(
+                        f"Ollama stopped before finishing the response because the token "
+                        f"limit was reached (num_predict={_max_tokens}). Please raise the "
+                        f"Max Tokens setting in the plugin (General tab → AI Model section) "
+                        f"— try 4096 or higher."
+                    ),
+                )
+
             if not content:
                 return EditGenerationResponse(
                     uuid=request.uuid,
