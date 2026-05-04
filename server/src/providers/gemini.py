@@ -133,6 +133,20 @@ class GeminiProvider(LLMProviderBase):
             )
             logger.debug("Gemini metadata response received")
 
+            # Check for truncation
+            _candidates = getattr(response, "candidates", None)
+            if _candidates:
+                _finish_reason = str(getattr(_candidates[0], "finish_reason", "") or "")
+                if "MAX_TOKENS" in _finish_reason:
+                    _max_tokens = request.max_tokens or DEFAULT_MAX_TOKENS
+                    raise ValueError(
+                        f"Gemini stopped before finishing the response because the token "
+                        f"limit was reached (max_output_tokens={_max_tokens}). Please raise "
+                        f"the Max Tokens setting in the plugin (General tab → AI Model section) "
+                        f"— try 4096 or higher. If you use hierarchical keywords, a large "
+                        f"taxonomy increases token usage significantly."
+                    )
+
             # Check for prompt feedback (blocking)
             if hasattr(response, "prompt_feedback") and getattr(
                 response.prompt_feedback, "block_reason", None
@@ -334,6 +348,18 @@ class GeminiProvider(LLMProviderBase):
                 ],
                 config=config,
             )
+
+            _candidates = getattr(response, "candidates", None)
+            if _candidates:
+                _finish_reason = str(getattr(_candidates[0], "finish_reason", "") or "")
+                if "MAX_TOKENS" in _finish_reason:
+                    _max_tokens = request.max_tokens or DEFAULT_MAX_TOKENS
+                    raise ValueError(
+                        f"Gemini stopped before finishing the response because the token "
+                        f"limit was reached (max_output_tokens={_max_tokens}). Please raise "
+                        f"the Max Tokens setting in the plugin (General tab → AI Model section) "
+                        f"— try 4096 or higher."
+                    )
 
             if not getattr(response, "text", None):
                 parsed = getattr(response, "parsed", None)

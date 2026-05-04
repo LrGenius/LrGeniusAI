@@ -126,7 +126,15 @@ class ChatGPTProvider(LLMProviderBase):
             # Check finish reason
             choice = response.choices[0]
             if choice.finish_reason != "stop":
-                error_msg = f"OpenAI generation failed: {choice.finish_reason}"
+                if choice.finish_reason == "length":
+                    error_msg = (
+                        f"OpenAI stopped before finishing the response because the token "
+                        f"limit was reached (max_tokens={request.max_tokens or DEFAULT_MAX_TOKENS}). "
+                        f"Please raise the Max Tokens setting in the plugin "
+                        f"(General tab → AI Model section) — try 4096 or higher."
+                    )
+                else:
+                    error_msg = f"OpenAI generation failed: {choice.finish_reason}"
                 logger.error(error_msg)
                 return MetadataGenerationResponse(
                     uuid=request.uuid,
@@ -237,10 +245,19 @@ class ChatGPTProvider(LLMProviderBase):
             response = self.client.chat.completions.create(**completion_params)
             choice = response.choices[0]
             if choice.finish_reason != "stop":
+                if choice.finish_reason == "length":
+                    edit_error_msg = (
+                        f"OpenAI stopped before finishing the response because the token "
+                        f"limit was reached (max_tokens={request.max_tokens or DEFAULT_MAX_TOKENS}). "
+                        f"Please raise the Max Tokens setting in the plugin "
+                        f"(General tab → AI Model section) — try 4096 or higher."
+                    )
+                else:
+                    edit_error_msg = f"OpenAI generation failed: {choice.finish_reason}"
                 return EditGenerationResponse(
                     uuid=request.uuid,
                     success=False,
-                    error=f"OpenAI generation failed: {choice.finish_reason}",
+                    error=edit_error_msg,
                     input_tokens=response.usage.prompt_tokens if response.usage else 0,
                     output_tokens=response.usage.completion_tokens
                     if response.usage

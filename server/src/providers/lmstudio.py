@@ -99,6 +99,18 @@ class LMStudioProvider(LLMProviderBase):
                     },
                 )
 
+            # Detect truncation before touching the content
+            _stats = getattr(response, "stats", None)
+            _stop_reason = getattr(_stats, "stop_reason", None) if _stats else None
+            if _stop_reason in ("maxPredictedTokensReached", "maxTokens"):
+                raise ValueError(
+                    f"LM Studio stopped before finishing the response because the token "
+                    f"limit was reached (max_tokens={max_tokens}). Please raise the "
+                    f"Max Tokens setting in the plugin (General tab → AI Model section) "
+                    f"— try 4096 or higher. If you use hierarchical keywords, a large "
+                    f"taxonomy increases token usage significantly."
+                )
+
             # Extract message content
             content = response.parsed
             logger.debug(f"LM Studio raw response: {content}")
@@ -109,8 +121,13 @@ class LMStudioProvider(LLMProviderBase):
                 try:
                     content = json.loads(content)
                 except Exception as parse_err:
+                    logger.debug(
+                        f"LM Studio non-JSON content (length={len(content)}): {content[:200]}..."
+                    )
                     raise ValueError(
-                        f"Unexpected non-JSON response from LM Studio: {content}"
+                        f"LM Studio returned a response that could not be parsed as JSON "
+                        f"(length={len(content)} chars). This often means the response was "
+                        f"truncated — try raising the Max Tokens setting in the plugin."
                     ) from parse_err
 
             if not isinstance(content, dict):
@@ -212,9 +229,29 @@ class LMStudioProvider(LLMProviderBase):
                     },
                 )
 
+            _stats = getattr(response, "stats", None)
+            _stop_reason = getattr(_stats, "stop_reason", None) if _stats else None
+            if _stop_reason in ("maxPredictedTokensReached", "maxTokens"):
+                raise ValueError(
+                    f"LM Studio stopped before finishing the response because the token "
+                    f"limit was reached (max_tokens={max_tokens}). Please raise the "
+                    f"Max Tokens setting in the plugin (General tab → AI Model section) "
+                    f"— try 4096 or higher."
+                )
+
             content = response.parsed
             if isinstance(content, str):
-                content = json.loads(content)
+                try:
+                    content = json.loads(content)
+                except Exception as parse_err:
+                    logger.debug(
+                        f"LM Studio non-JSON content (length={len(content)}): {content[:200]}..."
+                    )
+                    raise ValueError(
+                        f"LM Studio returned a response that could not be parsed as JSON "
+                        f"(length={len(content)} chars). This often means the response was "
+                        f"truncated — try raising the Max Tokens setting in the plugin."
+                    ) from parse_err
             if not isinstance(content, dict):
                 raise ValueError(
                     f"Unexpected response type from LM Studio: {type(content)}"
