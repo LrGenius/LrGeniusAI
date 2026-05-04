@@ -1,4 +1,4 @@
-name: Build LrGeniusAI Plugin and Server
+name: Build and Release LrGeniusAI
 
 on:
   push:
@@ -566,13 +566,6 @@ jobs:
           mkdir -p "$ARTIFACT_DIR"
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
-      - name: Show recent changes
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          uv run --no-project --with google-genai python3 scripts/generate_release_notes.py
-
       - name: Upload plugin-only artifact
         uses: actions/upload-artifact@v6
         with:
@@ -791,13 +784,6 @@ jobs:
           VERSION="${{ github.ref_name }}"
           echo "release_name=Release ${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Prepare release notes
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          uv run --no-project --with google-genai python3 scripts/generate_release_notes.py
-
       - name: Generate code-only update manifest
         run: |
           VERSION="${{ github.ref_name }}"
@@ -818,7 +804,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ steps.release-meta.outputs.release_name }}
-          body_path: release_notes.md
           files: |
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
             artifacts/lrgenius-ai-macos-arm64/*.pkg
