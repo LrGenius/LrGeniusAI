@@ -290,8 +290,10 @@ def update_log_path(new_db_path: str):
     except Exception:
         pass
 
-    # Optional: We could reconfigure logging here, but for now we'll
-    # at least ensure endpoints find the right file.
+    logging.basicConfig(
+        filename=LOG_PATH, level=logging.DEBUG if args.debug else logging.INFO
+    )
+
     logger.info(f"Log path context updated to: {LOG_PATH}")
 
 
