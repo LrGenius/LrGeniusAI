@@ -263,7 +263,7 @@ def get_current_log_path() -> str:
 
     # Default paths determined at startup
     if sys.platform == "darwin":  # macOS
-        return os.path.expanduser("~/Library/Logs/LrGeniusAI/lrgenius-server.log")
+        return "/Library/Logs/LrGeniusAI/service.log"
     elif sys.platform == "win32":  # Windows
         return os.path.join(
             os.environ.get("LOCALAPPDATA", ""),
