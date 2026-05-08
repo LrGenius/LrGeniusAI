@@ -94,8 +94,6 @@ def initialize():
     logger.info(f"Initializing/Switching catalog database: {db_path}")
 
     config.update_log_path(db_path)
-    # Re-initialize logger if needed
-    # but for now we focus on the database connection).
 
     service_chroma.reset_chroma_client()
     # Trigger lazy re-initialization on next use or do it now:

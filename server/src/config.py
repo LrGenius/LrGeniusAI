@@ -263,7 +263,7 @@ def get_current_log_path() -> str:
 
     # Default paths determined at startup
     if sys.platform == "darwin":  # macOS
-        return os.path.expanduser("~/Library/Logs/LrGeniusAI/lrgenius-server.log")
+        return "/Library/Logs/LrGeniusAI/service.log"
     elif sys.platform == "win32":  # Windows
         return os.path.join(
             os.environ.get("LOCALAPPDATA", ""),
@@ -279,10 +279,15 @@ LOG_PATH = get_current_log_path()
 
 
 def update_log_path(new_db_path: str):
-    """Updates the global LOG_PATH and potentially reconfigures logging handlers."""
+    """Updates the global LOG_PATH and reconfigures the file logging handler."""
     global DB_PATH, LOG_PATH
     DB_PATH = new_db_path
-    LOG_PATH = get_current_log_path()
+    new_log_path = get_current_log_path()
+
+    if new_log_path == LOG_PATH:
+        return
+
+    LOG_PATH = new_log_path
 
     # Ensure directory exists
     try:
@@ -290,8 +295,19 @@ def update_log_path(new_db_path: str):
     except Exception:
         pass
 
-    # Optional: We could reconfigure logging here, but for now we'll
-    # at least ensure endpoints find the right file.
+    # logging.basicConfig is a no-op once handlers are configured, so we must
+    # swap the FileHandler on the root logger manually.
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        if isinstance(handler, logging.FileHandler):
+            handler.close()
+            root.removeHandler(handler)
+
+    new_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    new_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    new_handler.setLevel(logging.DEBUG if args.debug else logging.INFO)
+    root.addHandler(new_handler)
+
     logger.info(f"Log path context updated to: {LOG_PATH}")
 
 
