@@ -5,13 +5,133 @@ import server_lifecycle as server_lifecycle
 import torch
 import torch.nn.functional as F
 
+DEFAULT_MAX_RESULTS = 300
+MAX_RESULTS_HARD_LIMIT = 2000
+MIN_RESULTS_HARD_LIMIT = 10
 
-def _filter_by_relevance(results):
-    """Filters results based on a dynamically calculated relevance threshold."""
-    # DISABLED: The statistical filtering is proving unreliable and too aggressive,
-    # especially for smaller datasets. It has been disabled to prevent it from
-    # filtering out relevant results.
-    return results
+DEFAULT_RELEVANCE_STRICTNESS = 50
+RELEVANCE_FLOOR = 8
+RELEVANCE_KNEE_SCAN_LIMIT = 100
+RELEVANCE_KNEE_GAP_RATIO = 0.15
+
+
+def _clamp_max_results(value):
+    """Clamp the requested max_results to a safe range. Falls back to default on bad input."""
+    if value is None:
+        return DEFAULT_MAX_RESULTS
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_RESULTS
+    if n < MIN_RESULTS_HARD_LIMIT:
+        return MIN_RESULTS_HARD_LIMIT
+    if n > MAX_RESULTS_HARD_LIMIT:
+        return MAX_RESULTS_HARD_LIMIT
+    return n
+
+
+def _clamp_strictness(value):
+    """Clamp the strictness slider (0..100). Falls back to default on bad input."""
+    if value is None:
+        return DEFAULT_RELEVANCE_STRICTNESS
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RELEVANCE_STRICTNESS
+    if n < 0:
+        return 0
+    if n > 100:
+        return 100
+    return n
+
+
+def _strictness_to_k(strictness):
+    """Map a 0..100 strictness slider value to a k-factor used in
+    `cutoff = noise_median - k * noise_spread`. Linear interpolation between
+    anchor points: 25->0.5, 50->1.0, 75->1.5, 100->2.0. 0 disables filtering."""
+    s = max(0, min(100, int(strictness)))
+    if s == 0:
+        return 0.0
+    return 0.5 + (s - 25) * (1.5 / 75.0)
+
+
+def _smart_filter_by_relevance(transformed_results, strictness, *, label=""):
+    """Adaptive per-provider relevance filter.
+
+    Operates on a list of {"photo_id", "distance"} dicts (already sorted by
+    distance ascending). Uses the bottom half of the result set as a noise
+    baseline (median + IQR), then keeps results whose distance is meaningfully
+    smaller than that noise. A knee/gap pass force-includes a clearly relevant
+    leading cluster even if it would otherwise straddle the cutoff. A hard
+    floor ensures small/sparse datasets never return empty.
+
+    strictness:
+        0   -> filter disabled, return input unchanged
+        100 -> very strict
+    """
+    if not transformed_results:
+        return transformed_results
+
+    s = _clamp_strictness(strictness)
+    if s == 0:
+        return transformed_results
+
+    n = len(transformed_results)
+    if n <= RELEVANCE_FLOOR:
+        return transformed_results
+
+    distances = [r["distance"] for r in transformed_results]
+
+    tail_start = n // 2
+    tail = distances[tail_start:]
+    sorted_tail = sorted(tail)
+    m = len(sorted_tail)
+    noise_median = sorted_tail[m // 2]
+    q1 = sorted_tail[m // 4]
+    q3 = sorted_tail[(3 * m) // 4]
+    noise_spread = max(q3 - q1, 1e-6)
+
+    k = _strictness_to_k(s)
+    stat_cutoff = noise_median - k * noise_spread
+
+    knee_index = None
+    scan_limit = min(RELEVANCE_KNEE_SCAN_LIMIT, n - 1)
+    best_ratio = 0.0
+    for i in range(scan_limit):
+        d_here = distances[i]
+        d_next = distances[i + 1]
+        ratio = (d_next - d_here) / max(d_here, 1e-6)
+        if ratio > best_ratio and ratio >= RELEVANCE_KNEE_GAP_RATIO:
+            best_ratio = ratio
+            knee_index = i + 1
+
+    # A knee (clear distance gap) is strong evidence of where relevance ends —
+    # prefer it over the statistical cutoff when found. The stat cutoff is the
+    # fallback for smooth distributions with no obvious break.
+    if knee_index is not None:
+        cutoff = distances[knee_index - 1]
+    else:
+        cutoff = stat_cutoff
+
+    kept = [r for r in transformed_results if r["distance"] <= cutoff]
+
+    if len(kept) < RELEVANCE_FLOOR:
+        kept = transformed_results[:RELEVANCE_FLOOR]
+
+    logger.info(
+        "Smart filter [%s]: in=%d kept=%d strictness=%d k=%.2f "
+        "noise_median=%.4f noise_spread=%.4f knee_index=%s cutoff=%.4f",
+        label or "?",
+        n,
+        len(kept),
+        s,
+        k,
+        noise_median,
+        noise_spread,
+        str(knee_index),
+        cutoff,
+    )
+    return kept
 
 
 def _merge_semantic_results(siglip_results, vertex_results):
@@ -112,10 +232,14 @@ def search_images(
     vertex_project_id=None,
     vertex_location=None,
     catalog_id=None,
+    relevance_strictness=None,
+    max_results=None,
 ):
     sources = _normalize_search_sources(search_sources)
+    n_results = _clamp_max_results(max_results)
+    strictness = _clamp_strictness(relevance_strictness)
     logger.info(
-        f"Searching for '{term}' (quality_sort: {quality_sort}, scoped: {photo_ids_to_search is not None}, catalog_id: {bool(catalog_id)}, sources: {sources})"
+        f"Searching for '{term}' (quality_sort: {quality_sort}, scoped: {photo_ids_to_search is not None}, catalog_id: {bool(catalog_id)}, sources: {sources}, max_results: {n_results}, relevance_strictness: {strictness})"
     )
 
     sorted_semantic_results = []
@@ -136,7 +260,7 @@ def search_images(
 
             db_results = chroma_service.query_images(
                 query_embedding=normalized_embeddings,
-                n_results=300,
+                n_results=n_results,
                 where_clause={"photo_id": {"$in": photo_ids_to_search}}
                 if photo_ids_to_search
                 else None,
@@ -148,14 +272,16 @@ def search_images(
                 # Legacy fallback for unmigrated metadata
                 db_results = chroma_service.query_images(
                     query_embedding=normalized_embeddings,
-                    n_results=300,
+                    n_results=n_results,
                     where_clause={"uuid": {"$in": photo_ids_to_search}},
                     catalog_id=catalog_id,
                 )
 
-            relevant_results = _filter_by_relevance(db_results)
             sorted_semantic_results = _transform_and_sort_results(
-                relevant_results, quality_sort
+                db_results, quality_sort
+            )
+            sorted_semantic_results = _smart_filter_by_relevance(
+                sorted_semantic_results, strictness, label="siglip2"
             )
             semantic_photo_ids = {res["photo_id"] for res in sorted_semantic_results}
         else:
@@ -187,7 +313,7 @@ def search_images(
                 if query_emb:
                     vertex_results = chroma_service.query_vertex_images(
                         query_embedding=query_emb,
-                        n_results=300,
+                        n_results=n_results,
                         where_clause=vertex_where,
                         catalog_id=catalog_id,
                     )
@@ -198,11 +324,14 @@ def search_images(
                     ):
                         vertex_results = chroma_service.query_vertex_images(
                             query_embedding=query_emb,
-                            n_results=300,
+                            n_results=n_results,
                             where_clause={"uuid": {"$in": list(photo_ids_to_search)}},
                             catalog_id=catalog_id,
                         )
                     vertex_semantic_results = _transform_vertex_results(vertex_results)
+                    vertex_semantic_results = _smart_filter_by_relevance(
+                        vertex_semantic_results, strictness, label="vertex"
+                    )
                     logger.info(
                         f"Vertex AI semantic search returned {len(vertex_semantic_results)} results."
                     )

@@ -1098,6 +1098,8 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
 
 	-- Build search_sources for API (snake_case). If searchOptions is nil, backend uses defaults.
 	local search_sources = nil
+	local relevance_strictness = nil
+	local max_results = nil
 	if searchOptions then
 		search_sources = {
 			semantic_siglip = searchOptions.semanticSiglip ~= false,
@@ -1105,6 +1107,8 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
 			metadata = searchOptions.metadata ~= false,
 			metadata_fields = searchOptions.metadataFields or { "flattened_keywords", "alt_text", "caption", "title" },
 		}
+		relevance_strictness = searchOptions.relevanceStrictness
+		max_results = searchOptions.maxResults
 	end
 
 	if photosToSearch and #photosToSearch > 0 then
@@ -1127,16 +1131,31 @@ function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, sea
 		if search_sources then
 			body.search_sources = search_sources
 		end
+		if relevance_strictness ~= nil then
+			body.relevance_strictness = relevance_strictness
+		end
+		if max_results ~= nil then
+			body.max_results = max_results
+		end
 		local postUrl = buildUrlWithParams(url, params)
 
 		log:trace("Searching index via POST (scoped): " .. postUrl)
 		return _request("POST", postUrl, body)
 	else
-		-- Global search: use POST when search_sources are provided so we can send JSON body
-		if search_sources then
-			local body = { term = searchTerm, search_sources = search_sources, catalog_id = getCatalogId() }
+		-- Global search: use POST when search_sources or tuning params are provided so we can send JSON body
+		if search_sources or relevance_strictness ~= nil or max_results ~= nil then
+			local body = { term = searchTerm, catalog_id = getCatalogId() }
+			if search_sources then
+				body.search_sources = search_sources
+			end
+			if relevance_strictness ~= nil then
+				body.relevance_strictness = relevance_strictness
+			end
+			if max_results ~= nil then
+				body.max_results = max_results
+			end
 			local postUrl = buildUrlWithParams(url, params)
-			log:trace("Searching index via POST (global with search_sources): " .. postUrl)
+			log:trace("Searching index via POST (global with options): " .. postUrl)
 			return _request("POST", postUrl, body)
 		end
 		local getUrl = buildUrlWithParams(url, params)

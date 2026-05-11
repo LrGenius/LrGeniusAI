@@ -17,6 +17,8 @@ local function showAdvancedSearchDialog(ctx)
 	props.searchInMetadataCaption = prefs.searchInMetadataCaption ~= false
 	props.searchInMetadataTitle = prefs.searchInMetadataTitle ~= false
 	props.searchInMetadataAltText = prefs.searchInMetadataAltText ~= false
+	props.relevanceStrictness = prefs.relevanceStrictness or 50
+	props.maxResults = prefs.maxResults or 300
 
 	local f = LrView.osFactory()
 	local bind = LrView.bind
@@ -54,6 +56,56 @@ local function showAdvancedSearchDialog(ctx)
 							value = "selected",
 						},
 					},
+				}),
+			}),
+			f:group_box({
+				title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/Tuning=Tuning"),
+				f:column({
+					spacing = f:control_spacing(),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/RelevanceStrictness=Relevance strictness"),
+							width = share("labelWidth"),
+							alignment = "right",
+						}),
+						f:slider({
+							value = bind("relevanceStrictness"),
+							min = 0,
+							max = 100,
+							integral = true,
+							width = 200,
+						}),
+						f:static_text({
+							title = bind("relevanceStrictness"),
+							width = 30,
+						}),
+					}),
+					f:row({
+						f:static_text({ width = share("labelWidth") }),
+						f:static_text({
+							title = LOC(
+								"$$$/LrGeniusAI/AdvancedSearchTask/RelevanceStrictnessHint=0 = off, 50 = moderate, 100 = strict"
+							),
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/MaxResults=Max results"),
+							width = share("labelWidth"),
+							alignment = "right",
+						}),
+						f:slider({
+							value = bind("maxResults"),
+							min = 50,
+							max = 1000,
+							integral = true,
+							width = 200,
+						}),
+						f:static_text({
+							title = bind("maxResults"),
+							width = 40,
+						}),
+					}),
 				}),
 			}),
 			f:group_box({
@@ -134,6 +186,8 @@ local function showAdvancedSearchDialog(ctx)
 		prefs.searchInMetadataCaption = props.searchInMetadataCaption
 		prefs.searchInMetadataTitle = props.searchInMetadataTitle
 		prefs.searchInMetadataAltText = props.searchInMetadataAltText
+		prefs.relevanceStrictness = props.relevanceStrictness
+		prefs.maxResults = props.maxResults
 		return props
 	else
 		return nil
@@ -191,6 +245,8 @@ LrTasks.startAsyncTask(function()
 				semanticVertex = props.searchInSemanticVertex,
 				metadata = props.searchInMetadata,
 				metadataFields = {},
+				relevanceStrictness = props.relevanceStrictness,
+				maxResults = props.maxResults,
 			}
 			if props.searchInMetadata then
 				if props.searchInMetadataKeywords then

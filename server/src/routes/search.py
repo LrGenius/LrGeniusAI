@@ -82,6 +82,8 @@ def search_route():
         vertex_project_id = None
         vertex_location = None
         catalog_id = None
+        relevance_strictness = None
+        max_results = None
         if request.method == "POST" and request.is_json:
             body = request.get_json()
             photo_ids_to_search = body.get("photo_ids") or body.get("uuids")
@@ -91,8 +93,14 @@ def search_route():
             )
             vertex_location = body.get("vertex_location") or body.get("vertexLocation")
             catalog_id = body.get("catalog_id")
+            relevance_strictness = body.get("relevance_strictness")
+            max_results = body.get("max_results")
         if catalog_id is None:
             catalog_id = request.args.get("catalog_id")
+        if relevance_strictness is None:
+            relevance_strictness = request.args.get("relevance_strictness")
+        if max_results is None:
+            max_results = request.args.get("max_results")
 
         results, warning = service_search.search_images(
             term,
@@ -102,6 +110,8 @@ def search_route():
             vertex_project_id=vertex_project_id,
             vertex_location=vertex_location,
             catalog_id=catalog_id,
+            relevance_strictness=relevance_strictness,
+            max_results=max_results,
         )
         response = {"results": results}
         if warning:
