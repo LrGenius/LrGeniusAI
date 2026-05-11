@@ -1,5 +1,6 @@
 import chromadb
 from chromadb.config import Settings
+from chromadb.errors import InternalError as ChromaInternalError
 import json
 import numpy as np
 from config import logger, CULLING_CONFIG, get_culling_config
@@ -59,7 +60,10 @@ def _add_catalog_id(photo_id, catalog_id):
     _ensure_initialized()
     if collection is None:
         return
-    data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    try:
+        data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    except ChromaInternalError:
+        return
     if not data or not data.get("ids"):
         return
     meta = dict(data["metadatas"][0]) if data.get("metadatas") else {}
@@ -81,7 +85,10 @@ def _remove_catalog_id(photo_id, catalog_id):
     _ensure_initialized()
     if collection is None:
         return
-    data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    try:
+        data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    except ChromaInternalError:
+        return
     if not data or not data.get("ids"):
         return
     meta = dict(data["metadatas"][0]) if data.get("metadatas") else {}
@@ -253,7 +260,13 @@ def get_image(photo_id, *, legacy_uuid=None, catalog_id=None):
     photo_id = _normalize_photo_id(photo_id, legacy_uuid)
     if not photo_id:
         return {"ids": [], "metadatas": [], "embeddings": []}
-    data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    try:
+        data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    except ChromaInternalError as e:
+        logger.debug(
+            "ChromaDB get_image: index not yet built (empty collection): %s", e
+        )
+        return {"ids": [], "metadatas": [], "embeddings": []}
     if catalog_id and data and data.get("ids"):
         meta = (data.get("metadatas") or [None])[0]
         ids_set = _parse_catalog_ids(meta)
@@ -311,7 +324,10 @@ def clear_image_metadata(photo_id, *, legacy_uuid=None):
     if not photo_id:
         return False
     # Main collection: get current, strip AI fields, update (keep embedding)
-    data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    try:
+        data = collection.get(ids=[photo_id], include=["metadatas", "embeddings"])
+    except ChromaInternalError:
+        return False
     if not data or not data.get("ids"):
         logger.debug(
             "clear_image_metadata: photo_id %s not in main collection", photo_id
@@ -1551,7 +1567,10 @@ def find_similar_to_photo(
     results = []
     for start in range(0, len(candidate_ids), FIND_SIMILAR_BATCH_SIZE):
         batch = candidate_ids[start : start + FIND_SIMILAR_BATCH_SIZE]
-        raw = collection.get(ids=batch, include=["metadatas", "embeddings"])
+        try:
+            raw = collection.get(ids=batch, include=["metadatas", "embeddings"])
+        except ChromaInternalError:
+            continue
         ids_list = raw.get("ids") or []
         metas = raw.get("metadatas") or [{}] * len(ids_list)
         embs = raw.get("embeddings")
