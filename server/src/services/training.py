@@ -23,6 +23,11 @@ import numpy as np
 
 from config import logger
 
+try:
+    from chromadb.errors import InternalError as _ChromaInternalError
+except Exception:
+    _ChromaInternalError = Exception
+
 # Lazy ChromaDB globals – initialized on first use.
 _chroma_client = None
 _training_collection = None
@@ -424,7 +429,10 @@ def add_training_example(
     emb = embedding if embedding is not None else _dummy_embedding()
 
     # Upsert: update if already present, add otherwise.
-    existing = _training_collection.get(ids=[photo_id], include=[])
+    try:
+        existing = _training_collection.get(ids=[photo_id], include=[])
+    except _ChromaInternalError:
+        existing = None
     if existing and existing.get("ids"):
         _training_collection.update(
             ids=[photo_id], embeddings=[emb], metadatas=[metadata]
@@ -449,7 +457,10 @@ def delete_training_example(photo_id: str) -> bool:
         return False
     if not photo_id:
         return False
-    existing = _training_collection.get(ids=[photo_id], include=[])
+    try:
+        existing = _training_collection.get(ids=[photo_id], include=[])
+    except _ChromaInternalError:
+        return False
     if not existing or not existing.get("ids"):
         return False
     _training_collection.delete(ids=[photo_id])
@@ -462,7 +473,10 @@ def get_training_count() -> int:
     _ensure_initialized()
     if _training_collection is None:
         return 0
-    result = _training_collection.get(include=[], limit=1_000_000)
+    try:
+        result = _training_collection.get(include=[], limit=1_000_000)
+    except _ChromaInternalError:
+        return 0
     return len(result.get("ids") or [])
 
 
@@ -471,7 +485,10 @@ def list_training_examples() -> list[dict[str, Any]]:
     _ensure_initialized()
     if _training_collection is None:
         return []
-    result = _training_collection.get(include=["metadatas"], limit=1_000_000)
+    try:
+        result = _training_collection.get(include=["metadatas"], limit=1_000_000)
+    except _ChromaInternalError:
+        return []
     ids = result.get("ids") or []
     metadatas = result.get("metadatas") or []
     examples = []
@@ -520,7 +537,10 @@ def get_training_stats() -> dict[str, Any]:
             "camera_distribution": {},
             "exposure": {},
         }
-    result = _training_collection.get(include=["metadatas"], limit=1_000_000)
+    try:
+        result = _training_collection.get(include=["metadatas"], limit=1_000_000)
+    except _ChromaInternalError:
+        result = {}
     ids = result.get("ids") or []
     metadatas = result.get("metadatas") or []
     count = len(ids)
@@ -668,7 +688,10 @@ def clear_all_training_examples() -> int:
     _ensure_initialized()
     if _training_collection is None:
         return 0
-    result = _training_collection.get(include=[], limit=1_000_000)
+    try:
+        result = _training_collection.get(include=[], limit=1_000_000)
+    except _ChromaInternalError:
+        return 0
     ids = result.get("ids") or []
     if not ids:
         return 0
