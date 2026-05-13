@@ -2,7 +2,7 @@ import os
 import sys
 import threading
 import time
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from waitress import serve
 import json
 
@@ -172,6 +172,44 @@ def _start_housekeeping_scheduler() -> None:
 
     t = threading.Thread(target=_loop, name="db-backup-scheduler", daemon=True)
     t.start()
+
+
+# Endpoints that don't need (and shouldn't pay the cost of) a chroma init:
+# liveness checks and the explicit init route, which handles db_path itself.
+_DB_PATH_BYPASS_ENDPOINTS = frozenset(
+    {
+        "server.ping",
+        "server.initialize",
+    }
+)
+
+
+@app.before_request
+def _auto_bind_db_path():
+    """Fallback recovery: if a request carries `db_path` and the backend
+    isn't bound to it yet (e.g. after an unexpected process restart), bind
+    it transparently before the route runs. No-op when already matching.
+    """
+    if request.endpoint in _DB_PATH_BYPASS_ENDPOINTS:
+        return
+
+    db_path = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        data = request.get_json(silent=True, cache=True)
+        if isinstance(data, dict):
+            db_path = data.get("db_path")
+    if not db_path:
+        db_path = request.args.get("db_path")
+    if not db_path:
+        return
+
+    try:
+        service_chroma.ensure_db_path(db_path)
+    except Exception as e:
+        # Don't 500 here — let the route's own error handling report the
+        # underlying failure with more context. We only log so we can see
+        # an init crash separately from the route-level failure.
+        logger.error("Auto-bind to db_path %s failed: %s", db_path, e, exc_info=True)
 
 
 @app.errorhandler(500)

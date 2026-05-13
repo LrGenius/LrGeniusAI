@@ -2,6 +2,7 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.errors import InternalError as ChromaInternalError
 import json
+import threading
 import numpy as np
 from config import logger, CULLING_CONFIG, get_culling_config
 
@@ -172,6 +173,46 @@ def reset_chroma_client():
     collection = None
     face_collection = None
     vertex_collection = None
+
+
+# Serializes concurrent ensure_db_path calls so two requests racing after a
+# fresh start (config.DB_PATH is None) don't both try to construct a client.
+_db_path_lock = threading.Lock()
+
+
+def ensure_db_path(db_path: str) -> bool:
+    """Make sure the backend is bound to `db_path` and ready to serve queries.
+
+    Returns True if any switch/init happened, False if the path was already active.
+
+    Acts as the recovery path used by the per-request middleware: if the
+    process restarted (config.DB_PATH lost) the next request that carries a
+    db_path re-binds the backend transparently. If `db_path` differs from
+    the currently-active one, the chroma client is reset and re-opened
+    against the new location (same semantics as the /initialize route).
+    """
+    if not db_path:
+        return False
+
+    import config
+
+    if config.DB_PATH == db_path and chroma_client is not None:
+        return False
+
+    with _db_path_lock:
+        # Re-check inside the lock — another thread may have just bound it.
+        if config.DB_PATH == db_path and chroma_client is not None:
+            return False
+
+        if config.DB_PATH and config.DB_PATH != db_path:
+            logger.info("Switching catalog database: %s -> %s", config.DB_PATH, db_path)
+            reset_chroma_client()
+        elif not config.DB_PATH:
+            logger.info("Binding backend to db_path from request: %s", db_path)
+
+        config.update_log_path(db_path)
+        _ensure_initialized()
+        return True
 
 
 def unload_collections():

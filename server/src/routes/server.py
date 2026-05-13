@@ -84,27 +84,20 @@ def initialize():
     if not db_path:
         return jsonify({"error": "db_path is required"}), 400
 
-    import config
     from services import chroma as service_chroma
 
-    prev_db_path = config.DB_PATH
-    if prev_db_path == db_path:
-        return jsonify({"status": "already_initialized", "db_path": db_path})
-
-    logger.info(f"Initializing/Switching catalog database: {db_path}")
-
-    config.update_log_path(db_path)
-
-    service_chroma.reset_chroma_client()
-    # Trigger lazy re-initialization on next use or do it now:
     try:
-        service_chroma._ensure_initialized()
-        server_lifecycle.write_ok_file()
-        server_lifecycle.write_pid_file()
-        return jsonify({"status": "success", "db_path": db_path})
+        switched = service_chroma.ensure_db_path(db_path)
     except Exception as e:
         logger.error(f"Failed to initialize database at {db_path}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+    if not switched:
+        return jsonify({"status": "already_initialized", "db_path": db_path})
+
+    server_lifecycle.write_ok_file()
+    server_lifecycle.write_pid_file()
+    return jsonify({"status": "success", "db_path": db_path})
 
 
 @server_bp.route("/models", methods=["GET", "POST"])

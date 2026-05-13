@@ -96,6 +96,7 @@ local EXPORT_SETTINGS = {
 -- Forward declarations for private helper functions
 local _request
 local _requestMultipart
+local _urlEncode
 
 -- Returns a string safe for logging; never passes a table to tostring (avoids "table: 0x...").
 local function httpStatusForLog(status, hdrs)
@@ -2594,6 +2595,17 @@ function SearchIndexAPI.startServer(opts)
 end
 
 _requestMultipart = function(url, mimeChunks, timeout)
+	-- Mirror _request's auto-bind so multipart endpoints also recover after a
+	-- backend restart. Multipart doesn't carry a JSON body, so use the query
+	-- string — the server's middleware reads either form.
+	if SearchIndexAPI.isLocalBackend() and not url:match("[?&]db_path=") then
+		local dbPath = getDbPath()
+		if dbPath then
+			local sep = url:find("?", 1, true) and "&" or "?"
+			url = url .. sep .. "db_path=" .. _urlEncode(dbPath)
+		end
+	end
+
 	log:trace(
 		"_requestMultipart start: url="
 			.. tostring(url)
@@ -2651,8 +2663,42 @@ _requestMultipart = function(url, mimeChunks, timeout)
 	end
 end
 
+-- Percent-encodes a string for safe inclusion in a URL query value.
+_urlEncode = function(s)
+	if s == nil then
+		return ""
+	end
+	return (tostring(s):gsub("([^A-Za-z0-9._~-])", function(c)
+		return string.format("%%%02X", string.byte(c))
+	end))
+end
+
 _request = function(method, url, body, timeout, options)
 	options = options or {}
+
+	-- Auto-inject db_path so the backend can transparently re-bind after a
+	-- crash/restart that wiped its in-memory DB_PATH. Only for local backends
+	-- (a remote backend manages its own db_path via argv/env). Skip if the
+	-- caller already supplied db_path (e.g. /initialize itself).
+	if SearchIndexAPI.isLocalBackend() then
+		local dbPath = getDbPath()
+		if dbPath then
+			if method == "GET" then
+				if not url:match("[?&]db_path=") then
+					local sep = url:find("?", 1, true) and "&" or "?"
+					url = url .. sep .. "db_path=" .. _urlEncode(dbPath)
+				end
+			else
+				if type(body) ~= "table" then
+					body = {}
+				end
+				if body.db_path == nil then
+					body.db_path = dbPath
+				end
+			end
+		end
+	end
+
 	local result, hdrs
 	local bodyString = (body and type(body) == "table") and JSON:encode(body) or nil
 
