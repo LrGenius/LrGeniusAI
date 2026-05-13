@@ -146,6 +146,7 @@ class AnalysisService:
         uuids_needing_embeddings=None,
         uuids_needing_metadata=None,
         exif_location_map: dict | None = None,
+        pil_images: list | None = None,
     ):
         """
         Analyzes a batch of images, generating embeddings and metadata.
@@ -155,10 +156,18 @@ class AnalysisService:
             exif_location_map: Optional mapping of uuid → location_data dict
                 (from services.exif.extract_location_tags). When provided, each
                 image's metadata request gets the matching location_data injected.
+            pil_images: Optional pre-decoded PIL.Image list aligned with
+                image_triplets. When provided, skip re-decoding bytes for the
+                CLIP preprocess path.
         """
         uuids = [triplet[1] for triplet in image_triplets]
         image_data = [triplet[0] for triplet in image_triplets]
-        images = [Image.open(io.BytesIO(data)).convert("RGB") for data in image_data]
+        if pil_images is not None:
+            images = pil_images
+        else:
+            images = [
+                Image.open(io.BytesIO(data)).convert("RGB") for data in image_data
+            ]
 
         # If no specific UUIDs lists provided, generate for all (backward compatibility)
         if uuids_needing_embeddings is None:
@@ -244,6 +253,9 @@ class AnalysisService:
         embeddings = []
 
         for i, image in enumerate(images):
+            if image is None:
+                embeddings.append(None)
+                continue
             try:
                 # The image_processor is now the open_clip transform.
                 # It returns a tensor for a single image, so we add a batch dimension.

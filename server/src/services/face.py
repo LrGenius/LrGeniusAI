@@ -154,12 +154,16 @@ def _compute_occlusion_proxy(
     )
 
 
-def detect_faces(image_bytes: bytes) -> list[dict[str, Any]]:
+def detect_faces(
+    image_bytes: bytes, pil_image: "Image.Image | None" = None
+) -> list[dict[str, Any]]:
     """
     Detect faces in an image and return embedding, thumbnail, and quality metadata.
 
     Args:
         image_bytes: Raw image bytes (JPEG/PNG etc.)
+        pil_image: Optional already-decoded RGB PIL.Image. When provided, the
+            JPEG is not re-decoded here.
 
     Returns:
         List of dicts with keys:
@@ -172,7 +176,12 @@ def detect_faces(image_bytes: bytes) -> list[dict[str, Any]]:
         - center_proximity: how central the face is (0..1)
     """
     app = _get_face_app()
-    img = np.array(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
+    source = (
+        pil_image
+        if pil_image is not None
+        else Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    )
+    img = np.array(source)
     faces = app.get(img)
     image_height, image_width = img.shape[:2]
     image_area = float(max(1, image_width * image_height))

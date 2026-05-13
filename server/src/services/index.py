@@ -1,4 +1,4 @@
-from config import logger, CULLING_CONFIG
+from config import logger, CULLING_CONFIG, TORCH_DEVICE
 from . import chroma as chroma_service
 from .chroma import DatabaseNotReadyError
 from .metadata import get_analysis_service
@@ -6,12 +6,14 @@ import server_lifecycle as server_lifecycle
 from . import face as face_service
 from . import vertexai as vertexai_service
 from . import exif as exif_service
+import gc
 import json
 from datetime import datetime as time
 from functools import lru_cache
 from PIL import Image
 import io
 import numpy as np
+import torch
 
 
 def _flatten_keywords(keywords):
@@ -116,6 +118,14 @@ def _load_analysis_grayscale(image_bytes: bytes, max_side: int = 512) -> np.ndar
     return (0.299 * rgb[:, :, 0]) + (0.587 * rgb[:, :, 1]) + (0.114 * rgb[:, :, 2])
 
 
+def _decode_image(image_bytes: bytes) -> Image.Image | None:
+    try:
+        return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as exc:
+        logger.warning("Could not decode image: %s", exc)
+        return None
+
+
 @lru_cache(maxsize=4)
 def _build_dct_matrix(size: int) -> np.ndarray:
     indices = np.arange(size, dtype=np.float32)
@@ -127,18 +137,14 @@ def _build_dct_matrix(size: int) -> np.ndarray:
     return matrix
 
 
-def _compute_perceptual_hash(image_bytes: bytes) -> str:
+def _compute_perceptual_hash(image: Image.Image) -> str:
     """
     Compute a classic 64-bit pHash (DCT-based) and return 16-char hex.
     Returns empty string on failure.
     """
     try:
-        image = (
-            Image.open(io.BytesIO(image_bytes))
-            .convert("L")
-            .resize((32, 32), Image.Resampling.LANCZOS)
-        )
-        pixels = np.asarray(image, dtype=np.float32)
+        gray = image.convert("L").resize((32, 32), Image.Resampling.LANCZOS)
+        pixels = np.asarray(gray, dtype=np.float32)
         dct_matrix = _build_dct_matrix(32)
         dct_transformed = dct_matrix @ pixels @ dct_matrix.T
         low_freq = dct_transformed[:8, :8]
@@ -152,14 +158,13 @@ def _compute_perceptual_hash(image_bytes: bytes) -> str:
         return ""
 
 
-def _compute_culling_metrics(image_bytes: bytes) -> dict:
+def _compute_culling_metrics(image: Image.Image) -> dict:
     """
     Compute cheap, deterministic image-quality metrics for culling.
     All normalized quality scores use a 0..1 range where higher is better,
     except the explicit clip/noise fields which are stored as penalties.
     """
     try:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         if max(image.size) > 512:
             scale = 512 / float(max(image.size))
             resized = (
@@ -603,7 +608,11 @@ def process_image_task(
 
         # Pre-extract EXIF location data for each image (always, when available).
         # Keyed by uuid so it can be passed to analyze_batch for per-image injection.
+        # Decode each JPEG to a single PIL.Image up front; downstream helpers
+        # (culling, phash, CLIP, face detection) all reuse it instead of decoding
+        # the same bytes 4–5 times per photo.
         exif_location_by_uuid: dict[str, dict | None] = {}
+        pil_images: list[Image.Image | None] = []
         for image_bytes, uuid, _ in image_triplets:
             try:
                 exif_location_by_uuid[uuid] = exif_service.extract_location_tags(
@@ -612,6 +621,7 @@ def process_image_task(
             except Exception as exc:
                 logger.debug("Could not extract EXIF location for %s: %s", uuid, exc)
                 exif_location_by_uuid[uuid] = None
+            pil_images.append(_decode_image(image_bytes))
 
         try:
             embeddings, metadata_results = analysis_service.analyze_batch(
@@ -622,6 +632,7 @@ def process_image_task(
                 images_needing_embeddings,
                 images_needing_metadata,
                 exif_location_map=exif_location_by_uuid or None,
+                pil_images=pil_images,
             )
         except Exception as e:
             logger.error(f"Error in analyze_batch: {str(e)}", exc_info=True)
@@ -668,6 +679,7 @@ def process_image_task(
             try:
                 embedding = embeddings[i] if embeddings is not None else None
                 metadata_data = metadata_results[i] if metadata_results else None
+                pil_image = pil_images[i]
 
                 existing = existing_records.get(uuid, {})
 
@@ -763,8 +775,11 @@ def process_image_task(
                     main_metadata["capture_time"] = capture_time
 
                 # Technical culling metrics are cheap enough to compute on every pass.
-                main_metadata.update(_compute_culling_metrics(image_bytes))
-                phash_hex = _compute_perceptual_hash(image_bytes)
+                if pil_image is not None:
+                    main_metadata.update(_compute_culling_metrics(pil_image))
+                    phash_hex = _compute_perceptual_hash(pil_image)
+                else:
+                    phash_hex = ""
                 if phash_hex:
                     main_metadata["cull_phash"] = phash_hex
                     main_metadata["phash"] = phash_hex
@@ -892,7 +907,9 @@ def process_image_task(
                     else:
                         try:
                             chroma_service.delete_faces_by_photo_uuid(uuid)
-                            face_results = face_service.detect_faces(image_bytes)
+                            face_results = face_service.detect_faces(
+                                image_bytes, pil_image=pil_image
+                            )
                             if face_results:
                                 face_ids = [
                                     f"{uuid}_{i}" for i in range(len(face_results))
@@ -987,3 +1004,13 @@ def process_image_task(
         logger.error(f"Error during batch processing task: {str(e)}", exc_info=True)
         error_messages.append(f"Batch processing error: {str(e)}")
         return 0, total_images, error_messages, warnings
+    finally:
+        # Free MPS allocator cache between requests. PyTorch holds onto freed
+        # blocks aggressively on Apple silicon, which combined with InsightFace
+        # and ChromaDB is enough to trip macOS jetsam on smaller-RAM machines.
+        if TORCH_DEVICE == "mps":
+            try:
+                torch.mps.empty_cache()
+            except Exception:
+                pass
+        gc.collect()
