@@ -1615,6 +1615,46 @@ function SearchIndexAPI.removeMissingFromIndex()
 	return SearchIndexAPI.syncCleanup()
 end
 
+-- Build per-photo analysis options by merging shared options with catalog-derived
+-- context (GPS, existing keywords, folder names, capture time, manual user context).
+-- Shared by the sequential and parallel pipelines so per-photo payloads stay identical.
+local function buildPhotoOptions(photo, photoId, options)
+	local photoOptions = {}
+	for k, v in pairs(options) do
+		photoOptions[k] = v
+	end
+	if options.submit_gps then
+		local gps = photo:getRawMetadata("gps")
+		if gps then
+			photoOptions.gps_coordinates = gps
+		end
+	end
+	if options.submit_keywords then
+		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
+		if keywords then
+			if type(keywords) == "string" then
+				photoOptions.existing_keywords = Util.string_split(keywords, ",")
+			else
+				photoOptions.existing_keywords = keywords
+			end
+		end
+	end
+	if options.submit_folder_names then
+		local originalFilePath = photo:getRawMetadata("path")
+		if originalFilePath then
+			photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
+		end
+	end
+	local datetime = photo:getRawMetadata("dateTime")
+	if datetime ~= nil and type(datetime) == "number" then
+		photoOptions.date_time = LrDate.timeToW3CDate(datetime)
+		photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
+	end
+	photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
+	photoOptions.photo_id = photoId
+	return photoOptions
+end
+
 ---
 -- Analyzes and indexes selected photos with LLM processing (metadata, embeddings).
 -- Uses JPEG export instead of thumbnails for better reliability.
@@ -1677,208 +1717,356 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	local errorMessages = {}
 	local warningsList = {}
 
-	local analyzeWorker = function()
-		while #photoToProcessStack > 0 do
-			if progressScope:isCanceled() then
-				break
+	if MAC_ENV and numPhotos > 1 then
+		-- Pipelined export/index path (macOS only). A producer drives a single
+		-- LrExportSession and pushes rendered JPEG paths into a queue; a consumer
+		-- POSTs each photo to the backend as soon as its export completes, so the
+		-- next export overlaps with the previous photo's backend round-trip.
+		-- Disabled on Windows because earlier multi-worker attempts crashed Lightroom.
+		local tempDir = LrPathUtils.getStandardFilePath("temp")
+		EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
+
+		local exportSession = LrExportSession({
+			photosToExport = selectedPhotos,
+			exportSettings = EXPORT_SETTINGS,
+		})
+
+		local queue = {}
+		local producerDone = false
+		local consumerDone = false
+
+		LrTasks.startAsyncTask(function()
+			local idx = 0
+			for _, rendition in exportSession:renditions() do
+				idx = idx + 1
+				if progressScope:isCanceled() or not keepRunning then
+					LrTasks.pcall(function()
+						rendition:cancel()
+					end)
+				else
+					local success, path = rendition:waitForRender()
+					local photo = selectedPhotos[idx]
+					if success and path and photo then
+						table.insert(queue, { photo = photo, path = path })
+					else
+						table.insert(queue, { photo = photo, exportFailed = true, error = path })
+					end
+				end
 			end
-			if not keepRunning then
-				break
-			end
+			producerDone = true
+			log:trace("Indexing export producer finished (" .. tostring(idx) .. " renditions)")
+		end)
 
-			local photo = table.remove(photoToProcessStack, 1)
-			if photo ~= nil then
-				local filename = photo:getFormattedMetadata("fileName")
-				local hashStart = LrDate.currentTime()
-				local photoId, photoIdErr = getPhotoIdForPhoto(photo)
-				if photoId then
-					log:trace(
-						"Using photo_id for "
-							.. filename
-							.. " (hashing_ms="
-							.. tostring(math.floor((LrDate.currentTime() - hashStart) * 1000))
-							.. ")"
-					)
+		LrTasks.startAsyncTask(function()
+			while true do
+				if progressScope:isCanceled() or not keepRunning then
+					break
+				end
+				if #queue == 0 then
+					if producerDone then
+						break
+					end
+					LrTasks.yield()
+				else
+					local item = table.remove(queue, 1)
+					local photo = item.photo
+					local filename = (photo and photo:getFormattedMetadata("fileName")) or "unknown"
 
-					-- Prepare analysis options with photo-specific context
-					local photoOptions = {}
-					for k, v in pairs(options) do
-						photoOptions[k] = v
-					end
-					if options.submit_gps then
-						local gps = photo:getRawMetadata("gps")
-						if gps then
-							photoOptions.gps_coordinates = gps
-						end
-					end
-					if options.submit_keywords then
-						local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-						if keywords then
-							-- Lightroom may return a comma-separated string; send as array so server
-							-- does not treat it as iterable of characters (issue #45).
-							if type(keywords) == "string" then
-								photoOptions.existing_keywords = Util.string_split(keywords, ",")
-							else
-								photoOptions.existing_keywords = keywords
-							end
-						end
-					end
-					if options.submit_folder_names then
-						local originalFilePath = photo:getRawMetadata("path")
-						if originalFilePath then
-							photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
-						end
-					end
-					-- Always submit catalog capture time.
-					local datetime = photo:getRawMetadata("dateTime")
-					if datetime ~= nil and type(datetime) == "number" then
-						-- Keep backwards-compatible ISO string for older backends
-						photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-						-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
-						photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
-					end
-					photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-					photoOptions.photo_id = photoId
-
-					local success, indexResponse
-					local usePreviewThumbnails = previewRequestState.enabled and not previewRequestState.disabledForRun
-					local thumbnailSize = tonumber(prefs and prefs.exportSize) or 1024
-					local leafName = LrPathUtils.leafName(filename or "photo.jpg")
-
-					if usePreviewThumbnails then
-						local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(
-							photo,
-							thumbnailSize,
-							thumbnailSize,
-							previewRequestState
-						)
-						if jpegData and #jpegData > 0 then
-							previewRequestState.consecutiveTimeouts = 0
-							log:trace("Using Lightroom preview for " .. filename)
-							success, indexResponse =
-								SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, leafName, photoOptions)
-						else
-							log:trace(
-								"Preview unavailable for "
-									.. filename
-									.. ", falling back to export: "
-									.. tostring(thumbErr)
-							)
-							if thumbErr and string.find(thumbErr, "timed out", 1, true) then
-								previewRequestState.consecutiveTimeouts = previewRequestState.consecutiveTimeouts + 1
-								if
-									previewRequestState.consecutiveTimeouts
-									>= previewRequestState.disableAfterConsecutiveTimeouts
-								then
-									previewRequestState.disabledForRun = true
-									log:warn(
-										"Disabling Lightroom preview thumbnails for the rest of this batch after "
-											.. tostring(previewRequestState.consecutiveTimeouts)
-											.. " consecutive timeouts."
-									)
-								else
-									log:trace(
-										"Cooling down preview requests after timeout ("
-											.. tostring(previewRequestState.consecutiveTimeouts)
-											.. "/"
-											.. tostring(previewRequestState.disableAfterConsecutiveTimeouts)
-											.. ")"
-									)
-								end
-
-								if previewRequestState.cooldownSeconds > 0 then
-									LrTasks.sleep(previewRequestState.cooldownSeconds)
-								end
-							else
-								previewRequestState.consecutiveTimeouts = 0
-							end
-						end
-					end
-
-					if not success then
-						local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
-						if exportedPhotoPath then
-							log:trace("Using exported JPEG for " .. filename)
-							success, indexResponse =
-								SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath, photoOptions)
-							LrFileUtils.delete(exportedPhotoPath)
-						end
-					end
-
-					if success then
-						stats.success = stats.success + 1
-						if indexResponse and indexResponse.warnings and #indexResponse.warnings > 0 then
-							for _, w in ipairs(indexResponse.warnings) do
-								table.insert(warningsList, w)
-							end
-						end
-						if options.onPhotoAnalyzed then
-							local okCb, cbErr = LrTasks.pcall(function()
-								options.onPhotoAnalyzed(photo, photoId, progressScope)
+					if item.exportFailed then
+						stats.failed = stats.failed + 1
+						local msg = "Export failed for " .. filename .. ": " .. tostring(item.error or "unknown")
+						table.insert(errorMessages, msg)
+						log:error(msg)
+					else
+						local photoId, photoIdErr = getPhotoIdForPhoto(photo)
+						if photoId then
+							local photoOptions = buildPhotoOptions(photo, photoId, options)
+							log:trace("Indexing exported JPEG for " .. filename)
+							local success, indexResponse =
+								SearchIndexAPI.analyzeAndIndexPhoto(photoId, item.path, photoOptions)
+							LrTasks.pcall(function()
+								LrFileUtils.delete(item.path)
 							end)
-							if not okCb then
-								log:error("onPhotoAnalyzed callback failed for " .. filename .. ": " .. tostring(cbErr))
+							if success then
+								stats.success = stats.success + 1
+								if indexResponse and indexResponse.warnings and #indexResponse.warnings > 0 then
+									for _, w in ipairs(indexResponse.warnings) do
+										table.insert(warningsList, w)
+									end
+								end
+								if options.onPhotoAnalyzed then
+									local okCb, cbErr = LrTasks.pcall(function()
+										options.onPhotoAnalyzed(photo, photoId, progressScope)
+									end)
+									if not okCb then
+										log:error(
+											"onPhotoAnalyzed callback failed for "
+												.. filename
+												.. ": "
+												.. tostring(cbErr)
+										)
+									end
+								end
+							else
+								stats.failed = stats.failed + 1
+								table.insert(errorMessages, tostring(indexResponse or "Unknown"))
+								log:error(
+									"Failed to analyze/index photo: "
+										.. filename
+										.. " Error: "
+										.. tostring(indexResponse)
+								)
 							end
+						else
+							stats.failed = stats.failed + 1
+							table.insert(errorMessages, "Could not compute photo ID: " .. tostring(photoIdErr))
+							log:error("Failed to compute photo ID for " .. filename .. ": " .. tostring(photoIdErr))
+						end
+					end
+
+					stats.processed = stats.processed + 1
+					table.insert(processedPhotos, photo)
+					progressScope:setPortionComplete(stats.processed, numPhotos)
+					progressScope:setCaption(
+						LOC(
+							"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhoto=Processing ^1 successful (^2 total/^3 failed)",
+							stats.success,
+							numPhotos,
+							stats.failed
+						)
+					)
+				end
+			end
+			-- Cancellation/early-stop can leave queued temp files un-indexed; remove them so
+			-- we don't leak JPEGs into the OS temp directory.
+			for _, item in ipairs(queue) do
+				if item.path then
+					LrTasks.pcall(function()
+						LrFileUtils.delete(item.path)
+					end)
+				end
+			end
+			consumerDone = true
+			log:trace("Indexing consumer finished")
+		end)
+
+		while not (producerDone and consumerDone) do
+			if progressScope:isCanceled() then
+				keepRunning = false
+			end
+			LrTasks.yield()
+		end
+	else
+		local analyzeWorker = function()
+			while #photoToProcessStack > 0 do
+				if progressScope:isCanceled() then
+					break
+				end
+				if not keepRunning then
+					break
+				end
+
+				local photo = table.remove(photoToProcessStack, 1)
+				if photo ~= nil then
+					local filename = photo:getFormattedMetadata("fileName")
+					local hashStart = LrDate.currentTime()
+					local photoId, photoIdErr = getPhotoIdForPhoto(photo)
+					if photoId then
+						log:trace(
+							"Using photo_id for "
+								.. filename
+								.. " (hashing_ms="
+								.. tostring(math.floor((LrDate.currentTime() - hashStart) * 1000))
+								.. ")"
+						)
+
+						-- Prepare analysis options with photo-specific context
+						local photoOptions = {}
+						for k, v in pairs(options) do
+							photoOptions[k] = v
+						end
+						if options.submit_gps then
+							local gps = photo:getRawMetadata("gps")
+							if gps then
+								photoOptions.gps_coordinates = gps
+							end
+						end
+						if options.submit_keywords then
+							local keywords = photo:getFormattedMetadata("keywordTagsForExport")
+							if keywords then
+								-- Lightroom may return a comma-separated string; send as array so server
+								-- does not treat it as iterable of characters (issue #45).
+								if type(keywords) == "string" then
+									photoOptions.existing_keywords = Util.string_split(keywords, ",")
+								else
+									photoOptions.existing_keywords = keywords
+								end
+							end
+						end
+						if options.submit_folder_names then
+							local originalFilePath = photo:getRawMetadata("path")
+							if originalFilePath then
+								photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
+							end
+						end
+						-- Always submit catalog capture time.
+						local datetime = photo:getRawMetadata("dateTime")
+						if datetime ~= nil and type(datetime) == "number" then
+							-- Keep backwards-compatible ISO string for older backends
+							photoOptions.date_time = LrDate.timeToW3CDate(datetime)
+							-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
+							photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
+						end
+						photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
+						photoOptions.photo_id = photoId
+
+						local success, indexResponse
+						local usePreviewThumbnails = previewRequestState.enabled
+							and not previewRequestState.disabledForRun
+						local thumbnailSize = tonumber(prefs and prefs.exportSize) or 1024
+						local leafName = LrPathUtils.leafName(filename or "photo.jpg")
+
+						if usePreviewThumbnails then
+							local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(
+								photo,
+								thumbnailSize,
+								thumbnailSize,
+								previewRequestState
+							)
+							if jpegData and #jpegData > 0 then
+								previewRequestState.consecutiveTimeouts = 0
+								log:trace("Using Lightroom preview for " .. filename)
+								success, indexResponse =
+									SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, leafName, photoOptions)
+							else
+								log:trace(
+									"Preview unavailable for "
+										.. filename
+										.. ", falling back to export: "
+										.. tostring(thumbErr)
+								)
+								if thumbErr and string.find(thumbErr, "timed out", 1, true) then
+									previewRequestState.consecutiveTimeouts = previewRequestState.consecutiveTimeouts
+										+ 1
+									if
+										previewRequestState.consecutiveTimeouts
+										>= previewRequestState.disableAfterConsecutiveTimeouts
+									then
+										previewRequestState.disabledForRun = true
+										log:warn(
+											"Disabling Lightroom preview thumbnails for the rest of this batch after "
+												.. tostring(previewRequestState.consecutiveTimeouts)
+												.. " consecutive timeouts."
+										)
+									else
+										log:trace(
+											"Cooling down preview requests after timeout ("
+												.. tostring(previewRequestState.consecutiveTimeouts)
+												.. "/"
+												.. tostring(previewRequestState.disableAfterConsecutiveTimeouts)
+												.. ")"
+										)
+									end
+
+									if previewRequestState.cooldownSeconds > 0 then
+										LrTasks.sleep(previewRequestState.cooldownSeconds)
+									end
+								else
+									previewRequestState.consecutiveTimeouts = 0
+								end
+							end
+						end
+
+						if not success then
+							local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
+							if exportedPhotoPath then
+								log:trace("Using exported JPEG for " .. filename)
+								success, indexResponse =
+									SearchIndexAPI.analyzeAndIndexPhoto(photoId, exportedPhotoPath, photoOptions)
+								LrFileUtils.delete(exportedPhotoPath)
+							end
+						end
+
+						if success then
+							stats.success = stats.success + 1
+							if indexResponse and indexResponse.warnings and #indexResponse.warnings > 0 then
+								for _, w in ipairs(indexResponse.warnings) do
+									table.insert(warningsList, w)
+								end
+							end
+							if options.onPhotoAnalyzed then
+								local okCb, cbErr = LrTasks.pcall(function()
+									options.onPhotoAnalyzed(photo, photoId, progressScope)
+								end)
+								if not okCb then
+									log:error(
+										"onPhotoAnalyzed callback failed for " .. filename .. ": " .. tostring(cbErr)
+									)
+								end
+							end
+						else
+							stats.failed = stats.failed + 1
+							table.insert(errorMessages, tostring(indexResponse or "Unknown"))
+							log:error(
+								"Failed to analyze/index photo: "
+									.. filename
+									.. " Error: "
+									.. (indexResponse or "Unknown")
+							)
 						end
 					else
 						stats.failed = stats.failed + 1
-						table.insert(errorMessages, tostring(indexResponse or "Unknown"))
-						log:error(
-							"Failed to analyze/index photo: " .. filename .. " Error: " .. (indexResponse or "Unknown")
-						)
+						table.insert(errorMessages, "Could not compute photo ID: " .. tostring(photoIdErr))
+						log:error("Failed to compute photo ID for " .. filename .. ": " .. tostring(photoIdErr))
 					end
-				else
-					stats.failed = stats.failed + 1
-					table.insert(errorMessages, "Could not compute photo ID: " .. tostring(photoIdErr))
-					log:error("Failed to compute photo ID for " .. filename .. ": " .. tostring(photoIdErr))
-				end
 
-				stats.processed = stats.processed + 1
-				table.insert(processedPhotos, photo)
-				progressScope:setPortionComplete(stats.processed, numPhotos)
-				progressScope:setCaption(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhoto=Processing ^1 successful (^2 total/^3 failed)",
-						stats.success,
-						numPhotos,
-						stats.failed
+					stats.processed = stats.processed + 1
+					table.insert(processedPhotos, photo)
+					progressScope:setPortionComplete(stats.processed, numPhotos)
+					progressScope:setCaption(
+						LOC(
+							"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhoto=Processing ^1 successful (^2 total/^3 failed)",
+							stats.success,
+							numPhotos,
+							stats.failed
+						)
 					)
-				)
-			else
-				log:error("Photo is nil in analyze worker, probably it got deleted in the meantime.")
+				else
+					log:error("Photo is nil in analyze worker, probably it got deleted in the meantime.")
+				end
 			end
+			log:trace("Analyze worker thread finished.")
+			activeWorkers = activeWorkers - 1
 		end
-		log:trace("Analyze worker thread finished.")
-		activeWorkers = activeWorkers - 1
-	end
 
-	-- Start worker threads
-	for i = 1, maxWorkers do
-		LrTasks.startAsyncTask(analyzeWorker)
-		log:trace("Started analyze worker #" .. tostring(i))
-		activeWorkers = activeWorkers + 1
-	end
-
-	-- Monitor workers and server availability
-
-	while activeWorkers > 0 do
-		if progressScope:isCanceled() then
-			break
+		-- Start worker threads
+		for i = 1, maxWorkers do
+			LrTasks.startAsyncTask(analyzeWorker)
+			log:trace("Started analyze worker #" .. tostring(i))
+			activeWorkers = activeWorkers + 1
 		end
-		if MAC_ENV then
-			LrTasks.yield()
-		else
-			LrTasks.sleep(0.1)
-		end
-	end
 
-	-- Wait for workers to stop in case of server failure
-	if not keepRunning then
+		-- Monitor workers and server availability
+
 		while activeWorkers > 0 do
+			if progressScope:isCanceled() then
+				break
+			end
 			if MAC_ENV then
 				LrTasks.yield()
 			else
-				LrTasks.sleep(0.5)
+				LrTasks.sleep(0.1)
+			end
+		end
+
+		-- Wait for workers to stop in case of server failure
+		if not keepRunning then
+			while activeWorkers > 0 do
+				if MAC_ENV then
+					LrTasks.yield()
+				else
+					LrTasks.sleep(0.5)
+				end
 			end
 		end
 	end
