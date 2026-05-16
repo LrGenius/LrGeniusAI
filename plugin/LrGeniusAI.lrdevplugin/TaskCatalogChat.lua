@@ -12,13 +12,88 @@ local function getCatalogId()
 	return nil
 end
 
-local function getProviderAndModel()
-	local modelKey = prefs.modelKey or ""
-	local sep = string.find(modelKey, "::", 1, true)
+local function splitModelKey(modelKey)
+	local sep = string.find(modelKey or "", "::", 1, true)
 	if sep then
 		return string.sub(modelKey, 1, sep - 1), string.sub(modelKey, sep + 2)
 	end
-	return "chatgpt", "gpt-4.1"
+	return modelKey or "chatgpt", ""
+end
+
+-- ─── Model-picker dialog ─────────────────────────────────────────────────────
+
+local function showModelPickerDialog(context)
+	local f = LrView.osFactory()
+	local bind = LrView.bind
+	local share = LrView.share
+
+	-- Fetch available models from server
+	local modelItems = {}
+	local openaiKey = (prefs and not Util.nilOrEmpty(prefs.chatgptApiKey)) and prefs.chatgptApiKey or nil
+	local geminiKey = (prefs and not Util.nilOrEmpty(prefs.geminiApiKey)) and prefs.geminiApiKey or nil
+
+	local modelsResp = SearchIndexAPI.getModels(openaiKey, geminiKey)
+	if modelsResp and modelsResp.models then
+		for provider, list in pairs(modelsResp.models) do
+			for _, model in ipairs(list) do
+				table.insert(modelItems, {
+					title = provider .. ": " .. model,
+					value = provider .. "::" .. model,
+				})
+			end
+		end
+	end
+	table.sort(modelItems, function(a, b)
+		return a.title < b.title
+	end)
+	if #modelItems == 0 then
+		table.insert(modelItems, { title = "chatgpt: gpt-4.1", value = "chatgpt::gpt-4.1" })
+	end
+
+	local props = LrBinding.makePropertyTable(context)
+	-- Start with the last-used chat model, fall back to global model key
+	props.modelKey = prefs.chatModelKey or prefs.modelKey or modelItems[1].value
+	-- Make sure the saved key is in the list; if not, default to first item
+	local keyInList = false
+	for _, item in ipairs(modelItems) do
+		if item.value == props.modelKey then
+			keyInList = true
+			break
+		end
+	end
+	if not keyInList then
+		props.modelKey = modelItems[1].value
+	end
+
+	local contents = f:column({
+		bind_to_object = props,
+		spacing = f:control_spacing(),
+		f:row({
+			spacing = f:label_spacing(),
+			f:static_text({
+				title = LOC("$$$/LrGeniusAI/CatalogChat/ModelLabel=AI Model:"),
+				width = share("labelWidth"),
+				alignment = "right",
+			}),
+			f:popup_menu({
+				value = bind("modelKey"),
+				items = modelItems,
+				width = 300,
+			}),
+		}),
+	})
+
+	local result = LrDialogs.presentModalDialog({
+		title = LOC("$$$/LrGeniusAI/CatalogChat/Title=Catalog Chat (beta)"),
+		contents = contents,
+		actionVerb = LOC("$$$/LrGeniusAI/CatalogChat/StartButton=Start Chat"),
+	})
+
+	if result == "ok" then
+		prefs.chatModelKey = props.modelKey
+		return props.modelKey
+	end
+	return nil
 end
 
 -- ─── API helpers ────────────────────────────────────────────────────────────
@@ -27,6 +102,13 @@ local function apiCreateSession(provider, model, catalogId)
 	local body = { provider = provider, model = model }
 	if catalogId then
 		body.catalog_id = catalogId
+	end
+	-- send the provider's API key so the server can authenticate
+	local p = (provider or ""):lower()
+	if p == "chatgpt" or p == "openai" then
+		body.api_key = (prefs and prefs.chatgptApiKey ~= "") and prefs.chatgptApiKey or nil
+	elseif p == "gemini" then
+		body.api_key = (prefs and prefs.geminiApiKey ~= "") and prefs.geminiApiKey or nil
 	end
 	local result, err = SearchIndexAPI._chatRequest("POST", "/chat/session", body)
 	if err then
@@ -499,10 +581,16 @@ LrTasks.startAsyncTask(function()
 		end
 
 		LrFunctionContext.callWithContext("CatalogChat", function(context)
-			local provider, model = getProviderAndModel()
+			-- Step 1: show model picker
+			local modelKey = showModelPickerDialog(context)
+			if not modelKey then
+				return
+			end -- user cancelled
+
+			local provider, model = splitModelKey(modelKey)
 			local catalogId = getCatalogId()
 
-			-- Create session synchronously before opening the dialog
+			-- Step 2: create session with selected model
 			local sessionResult, sessionErr = apiCreateSession(provider, model, catalogId)
 			if sessionErr then
 				LrDialogs.message(
@@ -524,21 +612,12 @@ LrTasks.startAsyncTask(function()
 				return
 			end
 
-			-- Expose sessionId to the dialog via a closure
+			-- Step 3: open full chat dialog
 			LrFunctionContext.callWithContext("CatalogChatDialog", function(innerCtx)
-				local props2 = LrBinding.makePropertyTable(innerCtx)
-				props2._sessionId = sessionId
-
 				local f = LrView.osFactory()
 				local bind = LrView.bind
 
-				local function getChatSessionId()
-					return sessionId
-				end
-
-				-- Run dialog (blocking)
-				-- We embed the sessionId in the dialog closure and reuse showChatDialog logic.
-				-- For simplicity we recreate the dialog here with the session already set.
+				-- Chat dialog with sessionId bound via closure
 				local chatProps = LrBinding.makePropertyTable(innerCtx)
 				chatProps.transcript =
 					LOC("$$$/LrGeniusAI/CatalogChat/Welcome=Catalog Chat ready. Ask anything about your photos.")
@@ -761,11 +840,11 @@ LrTasks.startAsyncTask(function()
 					}),
 				})
 
-				LrDialogs.presentModalDialog({
+				LrDialogs.presentFloatingDialog(_PLUGIN, {
 					title = LOC("$$$/LrGeniusAI/CatalogChat/Title=Catalog Chat (beta)"),
 					contents = contents,
-					actionVerb = LOC("$$$/LrGeniusAI/CatalogChat/CloseButton=Close"),
-					cancelVerb = "< exclude >",
+					-- actionVerb = LOC("$$$/LrGeniusAI/CatalogChat/CloseButton=Close"),
+					-- cancelVerb = "< exclude >",
 					resizable = false,
 				})
 			end)

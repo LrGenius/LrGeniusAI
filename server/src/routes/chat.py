@@ -17,6 +17,7 @@ def create_session():
     catalog_id = data.get("catalog_id")
     provider = data.get("provider")
     model = data.get("model")
+    api_key = data.get("api_key") or None
 
     if not provider:
         return jsonify(
@@ -26,7 +27,9 @@ def create_session():
     try:
         from services import agent as agent_service
 
-        result = agent_service.start_session(catalog_id, provider, model)
+        result = agent_service.start_session(
+            catalog_id, provider, model, api_key=api_key
+        )
         return jsonify({"results": result, "error": None, "warning": None})
     except Exception as e:
         logger.error("create_session failed: %s", e, exc_info=True)

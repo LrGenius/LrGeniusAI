@@ -37,6 +37,7 @@ class Session:
     provider: str | None
     model: str | None
     created_at: int
+    api_key: str | None = None
     # Accumulated retrieved photo_ids this session (for proposal guard)
     retrieved_photo_ids: set[str] = field(default_factory=set)
     # result_refs: opaque key -> full list[str] of photo_ids
@@ -59,7 +60,10 @@ def _now_s() -> int:
 
 
 def start_session(
-    catalog_id: str | None, provider: str | None, model: str | None
+    catalog_id: str | None,
+    provider: str | None,
+    model: str | None,
+    api_key: str | None = None,
 ) -> dict:
     session_id = str(uuid.uuid4())
     now = _now_s()
@@ -69,6 +73,7 @@ def start_session(
         provider=provider,
         model=model,
         created_at=now,
+        api_key=api_key,
     )
     with _sessions_lock:
         SESSIONS[session_id] = sess
@@ -165,15 +170,13 @@ def _get_provider(sess: Session):
     import config as cfg
 
     provider_name = (sess.provider or "").lower()
-    api_key = None
+    api_key = sess.api_key  # sent by the plugin at session creation
 
     if provider_name in ("chatgpt", "openai"):
-        api_key = cfg.OPENAI_API_KEY if hasattr(cfg, "OPENAI_API_KEY") else None
         from providers.chatgpt import ChatGPTProvider
 
         return ChatGPTProvider({"api_key": api_key})
     elif provider_name == "gemini":
-        api_key = cfg.GEMINI_API_KEY if hasattr(cfg, "GEMINI_API_KEY") else None
         from providers.gemini import GeminiProvider
 
         return GeminiProvider({"api_key": api_key})

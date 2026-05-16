@@ -711,3 +711,5 @@
 "$$$/LrGeniusAI/CatalogChat/SetColorLabel" = "Définir l'étiquette de couleur"
 "$$$/LrGeniusAI/CatalogChat/ColorLabelSet" = "Étiquette de couleur définie pour ^1 photo(s)."
 "$$$/LrGeniusAI/CatalogChat/CsvExported" = "CSV avec ^1 IDs exporté vers : "
+"$$$/LrGeniusAI/CatalogChat/ModelLabel" = "Modèle IA :"
+"$$$/LrGeniusAI/CatalogChat/StartButton" = "Démarrer le chat"

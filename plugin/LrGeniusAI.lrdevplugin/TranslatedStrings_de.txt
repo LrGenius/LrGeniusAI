@@ -711,3 +711,5 @@
 "$$$/LrGeniusAI/CatalogChat/SetColorLabel" = "Farbbeschriftung setzen"
 "$$$/LrGeniusAI/CatalogChat/ColorLabelSet" = "Farbbeschriftung für ^1 Foto(s) gesetzt."
 "$$$/LrGeniusAI/CatalogChat/CsvExported" = "CSV mit ^1 IDs exportiert nach: "
+"$$$/LrGeniusAI/CatalogChat/ModelLabel" = "KI-Modell:"
+"$$$/LrGeniusAI/CatalogChat/StartButton" = "Chat starten"

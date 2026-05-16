@@ -355,7 +355,9 @@ class LMStudioProvider(LLMProviderBase):
                             {"role": "assistant", "content": msg.content or ""}
                         )
                 model_handle = client.llm.model(use_model)
-                response = model_handle.respond(lms_messages, temperature=temperature)
+                response = model_handle.respond(
+                    lms_messages, config={"temperature": temperature}
+                )
                 return str(response)
         except Exception as e:
             logger.error("LMStudio _plain_chat error: %s", e, exc_info=True)
