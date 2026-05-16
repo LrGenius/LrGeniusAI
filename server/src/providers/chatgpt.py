@@ -389,3 +389,114 @@ class ChatGPTProvider(LLMProviderBase):
 
         logger.info(f"Returning {len(vision_models)} hardcoded ChatGPT models")
         return vision_models
+
+    @override
+    def chat_with_tools(self, messages, tools, *, model=None, temperature=0.2):
+        from .base import ChatEvent
+
+        if not self.is_available():
+            yield ChatEvent(
+                kind="assistant_text", payload={"text": "OpenAI API not configured"}
+            )
+            yield ChatEvent(kind="done", payload={})
+            return
+
+        use_model = model or "gpt-4.1"
+
+        oai_messages = []
+        for msg in messages:
+            if msg.role == "tool":
+                oai_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.tool_call_id or "unknown",
+                        "content": msg.content or "",
+                    }
+                )
+            elif msg.role == "assistant" and msg.tool_calls:
+                oai_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.content,
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": __import__("json").dumps(
+                                        tc["arguments"]
+                                    ),
+                                },
+                            }
+                            for tc in msg.tool_calls
+                        ],
+                    }
+                )
+            else:
+                oai_messages.append({"role": msg.role, "content": msg.content or ""})
+
+        oai_tools = (
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.json_schema,
+                    },
+                }
+                for t in tools
+            ]
+            if tools
+            else []
+        )
+
+        params = {
+            "model": use_model,
+            "messages": oai_messages,
+            "temperature": temperature,
+        }
+        if oai_tools:
+            params["tools"] = oai_tools
+
+        try:
+            response = self.client.chat.completions.create(**params)
+        except Exception as e:
+            logger.error("OpenAI chat_with_tools error: %s", e, exc_info=True)
+            raise
+
+        choice = response.choices[0]
+        msg_out = choice.message
+
+        if msg_out.tool_calls:
+            import json as _json
+
+            for tc in msg_out.tool_calls:
+                try:
+                    args = _json.loads(tc.function.arguments)
+                except Exception:
+                    args = {}
+                yield ChatEvent(
+                    kind="tool_call",
+                    payload={
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": args,
+                    },
+                )
+
+        if msg_out.content:
+            yield ChatEvent(kind="assistant_text", payload={"text": msg_out.content})
+
+        yield ChatEvent(kind="done", payload={})
+
+    def _plain_chat(self, messages, *, model=None, temperature=0.2):
+        use_model = model or "gpt-4.1"
+        oai_messages = [{"role": m.role, "content": m.content or ""} for m in messages]
+        response = self.client.chat.completions.create(
+            model=use_model,
+            messages=oai_messages,
+            temperature=temperature,
+        )
+        return response.choices[0].message.content or ""

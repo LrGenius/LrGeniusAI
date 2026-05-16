@@ -66,6 +66,10 @@ return {
 			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
 			file = "TaskDeduplicateKeywords.lua",
 		},
+		{
+			title = LOC("$$$/LrGeniusAI/CatalogChat/MenuItem=Catalog Chat (beta)..."),
+			file = "TaskCatalogChat.lua",
+		},
 	},
 
 	LrExportMenuItems = {
@@ -112,6 +116,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
 			file = "TaskDeduplicateKeywords.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/CatalogChat/MenuItem=Catalog Chat (beta)..."),
+			file = "TaskCatalogChat.lua",
 		},
 	},
 

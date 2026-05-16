@@ -4248,4 +4248,63 @@ function SearchIndexAPI.applyUpdate(manifest)
 		return false, response.error or "Update failed"
 	end
 end
+
+-- ─── Chat API helpers ────────────────────────────────────────────────────────
+
+function SearchIndexAPI._chatBaseUrl()
+	return getBaseUrl()
+end
+
+function SearchIndexAPI._getDbPath()
+	return getDbPath()
+end
+
+function SearchIndexAPI._urlEncode(s)
+	return _urlEncode(s)
+end
+
+function SearchIndexAPI._chatRequest(method, path, body, timeout)
+	local url = getBaseUrl() .. path
+	return _request(method, url, body, timeout or 60)
+end
+
+function SearchIndexAPI.chatCreateSession(provider, model, catalogId)
+	local body = { provider = provider, model = model }
+	if catalogId then
+		body.catalog_id = catalogId
+	end
+	local result, err = _request("POST", getBaseUrl() .. "/chat/session", body, 30)
+	if not result then
+		return nil, err
+	end
+	if result.error then
+		return nil, result.error
+	end
+	return result.results, nil
+end
+
+function SearchIndexAPI.chatPostTurn(sessionId, message)
+	local body = { session_id = sessionId, message = message }
+	local result, err = _request("POST", getBaseUrl() .. "/chat/turn", body, 30)
+	if not result then
+		return nil, err
+	end
+	if result.error then
+		return nil, result.error
+	end
+	return result.results, nil
+end
+
+function SearchIndexAPI.chatCommit(sessionId, proposalId)
+	local body = { session_id = sessionId, proposal_id = proposalId }
+	local result, err = _request("POST", getBaseUrl() .. "/chat/commit", body, 30)
+	if not result then
+		return nil, err
+	end
+	if result.error then
+		return nil, result.error
+	end
+	return result.results, nil
+end
+
 return SearchIndexAPI

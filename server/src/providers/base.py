@@ -1,14 +1,39 @@
 from abc import ABC, abstractmethod
-from typing import Any, final
-from dataclasses import dataclass
+from typing import Any, Iterator, Literal, final
+from dataclasses import dataclass, field
 import base64
 from PIL import Image
 import io
 
-
 # Import prompts from config
 from config import METADATA_GENERATION_SYSTEM_PROMPT
 from utils.edit_recipe import OPENAI_EDIT_RECIPE_SCHEMA, normalize_edit_recipe
+
+
+# ---------------------------------------------------------------------------
+# Chat / tool-calling types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class ChatMessage:
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | None = None
+    tool_calls: list[dict] | None = None  # list of {"id", "name", "arguments"}
+    tool_call_id: str | None = None  # when role == "tool"
+
+
+@dataclass
+class ChatEvent:
+    kind: Literal["assistant_text", "tool_call", "proposal", "done"]
+    payload: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -213,6 +238,139 @@ class LLMProviderBase(ABC):
             List of model names/identifiers
         """
         pass
+
+    # Whether this provider supports parallel tool calls in one assistant turn.
+    supports_parallel_tool_calls: bool = True
+
+    def chat_with_tools(
+        self,
+        messages: list["ChatMessage"],
+        tools: list[Any],
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+    ) -> Iterator["ChatEvent"]:
+        """
+        Drive one LLM turn with tool-calling support.
+
+        Yields ChatEvent objects: tool_call, assistant_text, proposal, done.
+        Default implementation uses the JSON-mode shim for providers that
+        don't override this method.
+        """
+        return self._chat_with_tools_jsonmode(
+            messages, tools, model=model, temperature=temperature
+        )
+
+    def _chat_with_tools_jsonmode(
+        self,
+        messages: list["ChatMessage"],
+        tools: list[Any],
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+    ) -> Iterator["ChatEvent"]:
+        """
+        JSON-mode shim: injects tool schemas into the system prompt and parses
+        structured JSON responses. Used by local providers (LM Studio, Ollama).
+        Subclasses call this from their chat_with_tools implementation.
+        """
+        import json
+        import re
+        import uuid
+
+        if not tools:
+            # Plain text completion
+            text = self._plain_chat(messages, model=model, temperature=temperature)
+            yield ChatEvent(kind="assistant_text", payload={"text": text})
+            yield ChatEvent(kind="done", payload={})
+            return
+
+        tool_prompt = self._build_tool_system_prompt(tools)
+
+        # Inject tool instructions before the last system message or prepend
+        augmented = list(messages)
+        injected = False
+        for i, msg in enumerate(augmented):
+            if msg.role == "system":
+                augmented[i] = ChatMessage(
+                    role="system",
+                    content=(msg.content or "") + "\n\n" + tool_prompt,
+                )
+                injected = True
+                break
+        if not injected:
+            augmented.insert(0, ChatMessage(role="system", content=tool_prompt))
+
+        raw = self._plain_chat(augmented, model=model, temperature=temperature)
+
+        # Extract JSON from the response (strip code fences)
+        json_str = raw.strip()
+        m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", json_str)
+        if m:
+            json_str = m.group(1)
+
+        try:
+            parsed = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            # Not JSON — treat as plain text
+            yield ChatEvent(kind="assistant_text", payload={"text": raw})
+            yield ChatEvent(kind="done", payload={})
+            return
+
+        if "tool" in parsed and "arguments" in parsed:
+            tc_id = f"tc_{uuid.uuid4().hex[:8]}"
+            yield ChatEvent(
+                kind="tool_call",
+                payload={
+                    "id": tc_id,
+                    "name": parsed["tool"],
+                    "arguments": parsed["arguments"],
+                },
+            )
+        elif "final" in parsed:
+            yield ChatEvent(
+                kind="assistant_text", payload={"text": str(parsed["final"])}
+            )
+        elif "proposal" in parsed:
+            prop = parsed["proposal"]
+            prop.setdefault("proposal_id", f"p_{uuid.uuid4().hex[:12]}")
+            yield ChatEvent(kind="proposal", payload=prop)
+        else:
+            # Fallback: return raw text
+            yield ChatEvent(kind="assistant_text", payload={"text": raw})
+
+        yield ChatEvent(kind="done", payload={})
+
+    def _build_tool_system_prompt(self, tools: list[Any]) -> str:
+        import json
+
+        lines = [
+            "You have access to the following tools. Respond with EXACTLY ONE of:",
+            '  {"tool": "<tool_name>", "arguments": {...}}',
+            '  {"final": "<your final answer to the user>"}',
+            '  {"proposal": {"kind": "...", "payload": {...}, "dry_run_summary": "..."}}',
+            "",
+            "Do not include any other text outside the JSON. Available tools:",
+            "",
+        ]
+        for t in tools:
+            lines.append(f"Tool: {t.name}")
+            lines.append(f"  Description: {t.description}")
+            lines.append(f"  Arguments schema: {json.dumps(t.json_schema)}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _plain_chat(
+        self,
+        messages: list["ChatMessage"],
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+    ) -> str:
+        """Plain text completion without tools. Override in subclasses that support it."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement _plain_chat"
+        )
 
     def _prepare_system_prompt(self, request: MetadataGenerationRequest) -> str:
         """

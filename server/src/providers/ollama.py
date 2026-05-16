@@ -318,3 +318,32 @@ class OllamaProvider(LLMProviderBase):
         except Exception as e:
             logger.error(f"Error listing Ollama models: {e}", exc_info=True)
             return []
+
+    # Ollama uses the JSON-mode shim for tool-calling
+    supports_parallel_tool_calls = False
+
+    @override
+    def chat_with_tools(self, messages, tools, *, model=None, temperature=0.2):
+        return self._chat_with_tools_jsonmode(
+            messages, tools, model=model, temperature=temperature
+        )
+
+    def _plain_chat(self, messages, *, model=None, temperature=0.2):
+        if Client is None:
+            raise RuntimeError("ollama package not installed")
+        if self.client is None:
+            self.client = Client(host=self.base_url)
+        ollama_messages = []
+        for msg in messages:
+            if msg.role in ("system", "user", "assistant"):
+                ollama_messages.append({"role": msg.role, "content": msg.content or ""})
+        use_model = model or "llama3.2"
+        response = self.client.chat(
+            model=use_model,
+            messages=ollama_messages,
+            options={"temperature": temperature},
+        )
+        if isinstance(response, dict):
+            return (response.get("message") or {}).get("content") or ""
+        msg = getattr(response, "message", None)
+        return getattr(msg, "content", None) or ""

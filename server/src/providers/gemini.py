@@ -604,3 +604,152 @@ class GeminiProvider(LLMProviderBase):
 
         logger.info(f"Returning {len(vision_models)} hardcoded Gemini models")
         return vision_models
+
+    @override
+    def chat_with_tools(self, messages, tools, *, model=None, temperature=0.2):
+        import json as _json
+        import uuid
+        from .base import ChatEvent
+
+        if not self.is_available():
+            yield ChatEvent(
+                kind="assistant_text", payload={"text": "Gemini API not configured"}
+            )
+            yield ChatEvent(kind="done", payload={})
+            return
+
+        try:
+            from google.genai import types as genai_types
+        except ImportError as e:
+            raise RuntimeError(f"google-genai not installed: {e}") from e
+
+        use_model = model or "gemini-2.5-flash"
+
+        # Build contents list
+        contents = []
+        system_text = None
+        for msg in messages:
+            if msg.role == "system":
+                system_text = (system_text or "") + (msg.content or "")
+            elif msg.role == "user":
+                contents.append(
+                    {"role": "user", "parts": [{"text": msg.content or ""}]}
+                )
+            elif msg.role == "assistant":
+                if msg.tool_calls:
+                    parts = []
+                    if msg.content:
+                        parts.append({"text": msg.content})
+                    for tc in msg.tool_calls:
+                        parts.append(
+                            {
+                                "function_call": {
+                                    "name": tc["name"],
+                                    "args": tc["arguments"],
+                                }
+                            }
+                        )
+                    contents.append({"role": "model", "parts": parts})
+                else:
+                    contents.append(
+                        {"role": "model", "parts": [{"text": msg.content or ""}]}
+                    )
+            elif msg.role == "tool":
+                try:
+                    result = _json.loads(msg.content or "{}")
+                except Exception:
+                    result = {"raw": msg.content}
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "function_response": {
+                                    "name": "tool_result",
+                                    "response": result,
+                                }
+                            }
+                        ],
+                    }
+                )
+
+        # Build tool declarations
+        tool_declarations = []
+        for t in tools:
+            tool_declarations.append(
+                genai_types.Tool(
+                    function_declarations=[
+                        genai_types.FunctionDeclaration(
+                            name=t.name,
+                            description=t.description,
+                            parameters=t.json_schema,
+                        )
+                    ]
+                )
+            )
+
+        config_params: dict = {"temperature": temperature}
+        if system_text:
+            config_params["system_instruction"] = system_text
+        if tool_declarations:
+            config_params["tools"] = tool_declarations
+
+        try:
+            response = self.client.models.generate_content(
+                model=use_model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(**config_params),
+            )
+        except Exception as e:
+            logger.error("Gemini chat_with_tools error: %s", e, exc_info=True)
+            raise
+
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is None:
+            yield ChatEvent(kind="done", payload={})
+            return
+
+        for part in candidate.content.parts or []:
+            if hasattr(part, "function_call") and part.function_call:
+                fc = part.function_call
+                tc_id = f"tc_{uuid.uuid4().hex[:8]}"
+                args = dict(fc.args) if fc.args else {}
+                yield ChatEvent(
+                    kind="tool_call",
+                    payload={
+                        "id": tc_id,
+                        "name": fc.name,
+                        "arguments": args,
+                    },
+                )
+            elif hasattr(part, "text") and part.text:
+                yield ChatEvent(kind="assistant_text", payload={"text": part.text})
+
+        yield ChatEvent(kind="done", payload={})
+
+    def _plain_chat(self, messages, *, model=None, temperature=0.2):
+        try:
+            from google.genai import types as genai_types
+        except ImportError as e:
+            raise RuntimeError(f"google-genai not installed: {e}") from e
+
+        use_model = model or "gemini-2.5-flash"
+        contents = []
+        system_text = None
+        for msg in messages:
+            if msg.role == "system":
+                system_text = (system_text or "") + (msg.content or "")
+            elif msg.role in ("user", "assistant"):
+                role = "user" if msg.role == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": msg.content or ""}]})
+
+        config_params: dict = {"temperature": temperature}
+        if system_text:
+            config_params["system_instruction"] = system_text
+
+        response = self.client.models.generate_content(
+            model=use_model,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(**config_params),
+        )
+        return response.text or ""

@@ -326,3 +326,37 @@ class LMStudioProvider(LLMProviderBase):
                 exc_info=True,
             )
             return []
+
+    # LM Studio uses the JSON-mode shim for tool-calling
+    supports_parallel_tool_calls = False
+
+    @override
+    def chat_with_tools(self, messages, tools, *, model=None, temperature=0.2):
+        return self._chat_with_tools_jsonmode(
+            messages, tools, model=model, temperature=temperature
+        )
+
+    def _plain_chat(self, messages, *, model=None, temperature=0.2):
+        try:
+            with lms.Client(self.host) as client:
+                use_model = model or client.llm.list_downloaded()[0].model_key
+                lms_messages = []
+                for msg in messages:
+                    if msg.role == "system":
+                        lms_messages.append(
+                            {"role": "system", "content": msg.content or ""}
+                        )
+                    elif msg.role == "user":
+                        lms_messages.append(
+                            {"role": "user", "content": msg.content or ""}
+                        )
+                    elif msg.role == "assistant":
+                        lms_messages.append(
+                            {"role": "assistant", "content": msg.content or ""}
+                        )
+                model_handle = client.llm.model(use_model)
+                response = model_handle.respond(lms_messages, temperature=temperature)
+                return str(response)
+        except Exception as e:
+            logger.error("LMStudio _plain_chat error: %s", e, exc_info=True)
+            raise
