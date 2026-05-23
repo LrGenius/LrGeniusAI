@@ -18,7 +18,6 @@ from config import logger, DEFAULT_MAX_TOKENS
 
 # Vision-capable family prefixes. Update when a new vision family ships.
 _ALLOWED_PREFIXES: tuple[str, ...] = (
-    "gpt-4o",
     "gpt-4.1",
     "gpt-5",
 )
@@ -32,6 +31,8 @@ _BLOCKED_SUBSTRINGS: tuple[str, ...] = (
     "-tts",
     "-search",
     "-moderation",
+    "-codex",
+    "-chat",
 )
 
 # Drop dated snapshot ids: trailing -YYYY-MM-DD or -NNNN (e.g. -0125).

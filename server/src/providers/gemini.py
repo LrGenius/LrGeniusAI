@@ -30,6 +30,12 @@ _BLOCKED_SUBSTRINGS: tuple[str, ...] = (
     "aqa",
     "imagen",
     "bison",
+    "tts",
+    "image",
+    "computer",
+    "customtools",
+    "robotics",
+    "latest",
 )
 
 # Drop numbered snapshot suffix (-001, -002, etc.) — prefer alias.
