@@ -3,6 +3,7 @@ Gemini Provider for metadata generation using Google Generative AI API
 """
 
 import json
+import re
 import time
 from typing import Any, override
 from .base import (
@@ -14,6 +15,54 @@ from .base import (
 )
 from config import logger, DEFAULT_MAX_TOKENS
 from utils.edit_recipe import GEMINI_EDIT_RECIPE_SCHEMA
+
+
+# Vision-capable family prefix. Bare id must start with this.
+_ALLOWED_PREFIX = "gemini-"
+
+# Drop if id starts with one of these (deprecated / non-vision families).
+_BLOCKED_PREFIXES: tuple[str, ...] = ("gemini-1.0",)
+
+# Drop if id contains any of these substrings.
+_BLOCKED_SUBSTRINGS: tuple[str, ...] = (
+    "tuning",
+    "embedding",
+    "aqa",
+    "imagen",
+    "bison",
+)
+
+# Drop numbered snapshot suffix (-001, -002, etc.) — prefer alias.
+_SNAPSHOT_RE = re.compile(r"-\d{3}$")
+
+# In-memory cache keyed by api_key. Value: (expires_at_epoch, model_ids).
+_CACHE_TTL_SECONDS = 3600
+_CACHE: dict[str, tuple[float, list[str]]] = {}
+
+
+def _get_cached(key: str) -> list[str] | None:
+    entry = _CACHE.get(key)
+    if entry is None:
+        return None
+    expires_at, models = entry
+    if time.time() >= expires_at:
+        _CACHE.pop(key, None)
+        return None
+    return models
+
+
+def _set_cached(key: str, models: list[str]) -> None:
+    if not models:
+        return
+    _CACHE[key] = (time.time() + _CACHE_TTL_SECONDS, models)
+
+
+def _family_rank(model_id: str) -> int:
+    # Newer families ranked first; previews ranked after stable within family.
+    for i, prefix in enumerate(("gemini-3.", "gemini-2.5", "gemini-2.")):
+        if model_id.startswith(prefix):
+            return i * 2 + (1 if "preview" in model_id else 0)
+    return 99
 
 
 class GeminiProvider(LLMProviderBase):
@@ -579,28 +628,61 @@ class GeminiProvider(LLMProviderBase):
     @override
     def list_available_models(self) -> list[str]:
         """
-        List available Gemini models.
+        List vision-capable Gemini models by querying the ListModels endpoint
+        and applying an allowlist (gemini- families that support generateContent)
+        + blocklist (embeddings, imagen, bison, tuning, snapshots, 1.0).
 
-        Args:
-            only_multimodal: If True, return only vision-capable models
-
-        Returns:
-            List of model identifiers
+        Returns an empty list if no API key is configured or the API call fails.
+        Results are cached in-memory for 1 hour, keyed by api_key.
         """
-        # Return hardcoded list even if API key is not configured
-        # This allows users to see which models are available
-        # The actual API key will be provided when making requests
+        if not self.api_key:
+            return []
 
-        # Hardcoded list of vision-capable Gemini models
-        # SDK-based filtering commented out as it returns too many irrelevant models
-        vision_models = [
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
-            "gemini-3.1-pro-preview",
-        ]
+        cached = _get_cached(self.api_key)
+        if cached is not None:
+            logger.debug(f"Gemini model list cache hit ({len(cached)} models)")
+            return cached
 
-        logger.info(f"Returning {len(vision_models)} hardcoded Gemini models")
-        return vision_models
+        if self.client is None:
+            self._initialize_client()
+        if self.client is None:
+            return []
+
+        try:
+            raw = list(self.client.models.list())
+        except Exception as e:
+            logger.warning(f"Failed to list Gemini models: {e}", exc_info=True)
+            return []
+
+        candidates: dict[str, str] = {}  # stem -> chosen id
+        for model in raw:
+            actions = getattr(model, "supported_actions", None) or []
+            if "generateContent" not in actions:
+                continue
+
+            full_name = getattr(model, "name", "") or ""
+            model_id = full_name.removeprefix("models/")
+
+            if not model_id.startswith(_ALLOWED_PREFIX):
+                continue
+            if model_id.startswith(_BLOCKED_PREFIXES):
+                continue
+            if any(sub in model_id for sub in _BLOCKED_SUBSTRINGS):
+                continue
+            if _SNAPSHOT_RE.search(model_id):
+                continue
+
+            # Collapse `<stem>` vs `<stem>-latest` to the shorter form.
+            stem = model_id.removesuffix("-latest")
+            existing = candidates.get(stem)
+            if existing is None or len(model_id) < len(existing):
+                candidates[stem] = model_id
+
+        filtered = sorted(candidates.values(), key=lambda m: (_family_rank(m), m))
+
+        logger.info(
+            f"Listed {len(filtered)} Gemini vision models from API "
+            f"(filtered from {len(raw)} total)"
+        )
+        _set_cached(self.api_key, filtered)
+        return filtered

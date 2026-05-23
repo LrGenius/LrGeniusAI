@@ -3,6 +3,8 @@ ChatGPT/OpenAI Provider for metadata generation using OpenAI API
 """
 
 import json
+import re
+import time
 from typing import Any, override
 from .base import (
     LLMProviderBase,
@@ -12,6 +14,61 @@ from .base import (
     MetadataGenerationResponse,
 )
 from config import logger, DEFAULT_MAX_TOKENS
+
+
+# Vision-capable family prefixes. Update when a new vision family ships.
+_ALLOWED_PREFIXES: tuple[str, ...] = (
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-5",
+)
+
+# Drop any model id containing one of these substrings.
+_BLOCKED_SUBSTRINGS: tuple[str, ...] = (
+    "-instruct",
+    "-audio",
+    "-realtime",
+    "-transcribe",
+    "-tts",
+    "-search",
+    "-moderation",
+)
+
+# Drop dated snapshot ids: trailing -YYYY-MM-DD or -NNNN (e.g. -0125).
+_SNAPSHOT_RE = re.compile(r"-(\d{4}-\d{2}-\d{2}|\d{4})$")
+
+# Explicit excludes: product aliases and known non-vision models.
+_EXCLUDED_IDS: frozenset[str] = frozenset({"chatgpt-4o-latest"})
+_EXCLUDED_PREFIXES: tuple[str, ...] = ("o1-mini",)
+
+# In-memory cache keyed by api_key. Value: (expires_at_epoch, model_ids).
+_CACHE_TTL_SECONDS = 3600
+_CACHE: dict[str, tuple[float, list[str]]] = {}
+
+
+def _get_cached(key: str) -> list[str] | None:
+    entry = _CACHE.get(key)
+    if entry is None:
+        return None
+    expires_at, models = entry
+    if time.time() >= expires_at:
+        _CACHE.pop(key, None)
+        return None
+    return models
+
+
+def _set_cached(key: str, models: list[str]) -> None:
+    if not models:
+        return
+    _CACHE[key] = (time.time() + _CACHE_TTL_SECONDS, models)
+
+
+def _family_rank(model_id: str) -> int:
+    # Lower = sorted first. Newer families ranked higher (= lower number).
+    for i, prefix in enumerate(("gpt-5", "gpt-4.1", "gpt-4o", "o4", "o3")):
+        if model_id.startswith(prefix):
+            return i
+    return 99
 
 
 class ChatGPTProvider(LLMProviderBase):
@@ -362,30 +419,48 @@ class ChatGPTProvider(LLMProviderBase):
     @override
     def list_available_models(self) -> list[str]:
         """
-        List available OpenAI models.
+        List vision-capable OpenAI models by querying /v1/models and applying
+        an allowlist (vision families) + blocklist (snapshots, audio/tts/etc.).
 
-        Args:
-            only_multimodal: If True, return only vision-capable models
-
-        Returns:
-            List of model identifiers
+        Returns an empty list if no API key is configured or the API call fails.
+        Results are cached in-memory for 1 hour, keyed by api_key.
         """
-        # Return hardcoded list even if API key is not configured
-        # This allows users to see which models are available
-        # The actual API key will be provided when making requests
+        if not self.api_key:
+            return []
 
-        # Hardcoded list of vision-capable ChatGPT models
-        # SDK-based filtering commented out as it returns too many irrelevant models
-        vision_models = [
-            "gpt-4.1",
-            "gpt-5-nano",
-            "gpt-5-mini",
-            "gpt-5",
-            "gpt-5.4-nano",
-            "gpt-5.4-mini",
-            "gpt-5.4",
-            "gpt-5.4-pro",
-        ]
+        cached = _get_cached(self.api_key)
+        if cached is not None:
+            logger.debug(f"ChatGPT model list cache hit ({len(cached)} models)")
+            return cached
 
-        logger.info(f"Returning {len(vision_models)} hardcoded ChatGPT models")
-        return vision_models
+        if self.client is None:
+            self._initialize_client()
+        if self.client is None:
+            return []
+
+        try:
+            raw = self.client.models.list()
+        except Exception as e:
+            logger.warning(f"Failed to list OpenAI models: {e}", exc_info=True)
+            return []
+
+        filtered: list[str] = []
+        for model in raw:
+            model_id = model.id
+            if not model_id.startswith(_ALLOWED_PREFIXES):
+                continue
+            if model_id in _EXCLUDED_IDS:
+                continue
+            if model_id.startswith(_EXCLUDED_PREFIXES):
+                continue
+            if any(sub in model_id for sub in _BLOCKED_SUBSTRINGS):
+                continue
+            if _SNAPSHOT_RE.search(model_id):
+                continue
+            filtered.append(model_id)
+
+        filtered.sort(key=lambda m: (_family_rank(m), m))
+
+        logger.info(f"Listed {len(filtered)} ChatGPT vision models from API")
+        _set_cached(self.api_key, filtered)
+        return filtered
