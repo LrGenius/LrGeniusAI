@@ -603,8 +603,22 @@ def process_image_task(
         siglip_model = None
         siglip_processor = None
 
-        siglip_model = server_lifecycle.get_model()
-        siglip_processor = server_lifecycle.get_processor()
+        # Only load the CLIP/SigLIP model when embeddings are actually needed.
+        # Otherwise a metadata-only (LLM) run would fail just because the CLIP
+        # model isn't downloaded or CLIP is disabled in the plugin settings.
+        if images_needing_embeddings:
+            try:
+                siglip_model = server_lifecycle.get_model()
+                siglip_processor = server_lifecycle.get_processor()
+            except Exception as e:
+                logger.error(
+                    f"Failed to load CLIP model for embedding generation: {e}",
+                    exc_info=True,
+                )
+                error_messages.append(
+                    "Failed to load the CLIP model required for embeddings"
+                )
+                return 0, total_images, error_messages, warnings
 
         # Pre-extract EXIF location data for each image (always, when available).
         # Keyed by uuid so it can be passed to analyze_batch for per-image injection.
