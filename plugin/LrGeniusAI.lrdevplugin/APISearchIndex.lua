@@ -3358,7 +3358,7 @@ function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
 		ollama_base_url = (prefs and prefs.ollamaBaseUrl) or nil,
 		lmstudio_base_url = (prefs and prefs.lmstudioBaseUrl) or nil,
 	}
-	local result = _request("POST", url, body)
+	local result = _request("POST", url, body, 15)
 	return result
 end
 

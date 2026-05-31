@@ -4,6 +4,11 @@ Handles provider selection, initialization, and orchestration.
 Uses lazy loading - providers are only initialized when needed.
 """
 
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+    TimeoutError as FuturesTimeoutError,
+)
 from typing import Any
 from providers.base import (
     LLMProviderBase,
@@ -528,36 +533,48 @@ class AnalysisService:
     ) -> dict[str, list[str]]:
         """
         Return all available multimodal (vision-capable) models from all providers.
+        Provider checks run concurrently so a single offline provider does not block others.
         """
-        result: dict[str, list[str]] = {}
+        # Apply config overrides sequentially before dispatching threads.
+        prepared: dict[str, LLMProviderBase] = {}
         for provider_name, provider_instance in self.providers.items():
+            if provider_name == "chatgpt" and openai_apikey:
+                provider_instance.api_key = openai_apikey
+            if provider_name == "gemini" and gemini_apikey:
+                provider_instance.api_key = gemini_apikey
+            if provider_name == "ollama" and ollama_base_url:
+                provider_instance = OllamaProvider({"base_url": ollama_base_url})
+            if provider_name == "lmstudio" and lmstudio_base_url:
+                provider_instance.host = lmstudio_base_url
+            prepared[provider_name] = provider_instance
+
+        def _fetch(name: str, inst: LLMProviderBase) -> tuple[str, list[str]]:
+            if name in ["ollama", "lmstudio"] and not inst.is_available():
+                return name, []
             try:
-                if provider_name == "chatgpt" and openai_apikey:
-                    provider_instance.api_key = openai_apikey
-                if provider_name == "gemini" and gemini_apikey:
-                    provider_instance.api_key = gemini_apikey
-
-                if provider_name == "ollama" and ollama_base_url:
-                    provider_instance = OllamaProvider({"base_url": ollama_base_url})
-                if provider_name == "lmstudio" and lmstudio_base_url:
-                    # Reuse existing provider instance but point it to a different host
-                    provider_instance.host = lmstudio_base_url
-
-                if (
-                    provider_name in ["ollama", "lmstudio"]
-                    and not provider_instance.is_available()
-                ):
-                    result[provider_name] = []
-                    continue
-
-                models = provider_instance.list_available_models()
-                result[provider_name] = models
+                return name, inst.list_available_models()
             except Exception as e:
                 logger.error(
-                    f"Error listing models for provider {provider_name}: {e}",
-                    exc_info=True,
+                    f"Error listing models for provider {name}: {e}", exc_info=True
                 )
-                result[provider_name] = []
+                return name, []
+
+        result: dict[str, list[str]] = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(prepared))) as pool:
+            futures = {
+                pool.submit(_fetch, name, inst): name for name, inst in prepared.items()
+            }
+            try:
+                for future in as_completed(futures, timeout=10):
+                    name, models = future.result()
+                    result[name] = models
+            except FuturesTimeoutError:
+                logger.warning(
+                    "Provider model listing timed out; returning partial results"
+                )
+                for future, name in futures.items():
+                    if name not in result:
+                        result[name] = []
         return result
 
     def get_health_status(self) -> dict[str, Any]:

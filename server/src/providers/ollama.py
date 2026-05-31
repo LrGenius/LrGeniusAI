@@ -278,21 +278,16 @@ class OllamaProvider(LLMProviderBase):
         """
         List available Ollama models using Ollama API.
 
-        Args:
-            only_multimodal: If True, return only vision-capable models
-
         Returns:
             List of model identifiers
         """
-        if not self.is_available():
-            logger.warning("Ollama not available for listing models")
-            return []
-
         try:
-            if self.client is None:
-                self.client = Client(host=self.base_url)
+            if Client is None:
+                return []
 
-            data = self.client.list()
+            # Use a short timeout for listing — callers already verified availability.
+            list_client = Client(host=self.base_url, timeout=5)
+            data = list_client.list()
             logger.debug(f"Ollama models response: {data}")
 
             # Support dict response or typed response with attribute `.models`
