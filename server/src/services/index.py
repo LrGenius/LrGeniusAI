@@ -498,6 +498,15 @@ def process_image_task(
         vertex_project_id = options.get("vertex_project_id")
         vertex_location = options.get("vertex_location")
 
+        if compute_metadata and not model_name:
+            msg = (
+                "AI metadata generation requires an LLM model to be configured. "
+                "Disable 'AI metadata' in the indexing dialog or select a model "
+                "under Plugin Settings → AI Provider."
+            )
+            logger.error(msg)
+            return 0, total_images, [msg], []
+
         logger.info(f"Starting batch processing of {total_images} images...")
         logger.info(
             f"regenerate_metadata={regenerate_metadata}, compute_embeddings={compute_embeddings}, "
