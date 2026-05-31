@@ -100,6 +100,55 @@ Then complete the remote bootstrap flow on a second trusted machine with a brows
 
 ---
 
+## 🧹 Automatic Housekeeping (Faces & Backups)
+
+When running the backend in Docker (or any long‑lived environment), you can enable optional background housekeeping tasks using environment variables.
+
+### Periodic face clustering
+
+The server can automatically re‑cluster face embeddings in the background, using the same logic as the `POST /faces/cluster` endpoint:
+
+- `GENIUSAI_FACES_CLUSTER_ENABLED`  
+  - `true` / `1` / `yes` / `on` to enable.  
+  - Default: disabled.
+- `GENIUSAI_FACES_CLUSTER_INTERVAL`  
+  - Interval in seconds between clustering runs.  
+  - Default: `3600` (1 hour). Minimum effective interval is 60 seconds.
+- `GENIUSAI_FACES_CLUSTER_DISTANCE`  
+  - Cosine distance threshold, same scale as Immich “Maximum recognition distance”.  
+  - Typical range: `0.45–0.65`. Default: `0.5`.
+- `GENIUSAI_FACES_CLUSTER_MIN_FACES`  
+  - Minimum number of faces required to form a person cluster (DBSCAN mode).  
+  - Example: `3` (singletons go to `person_unassigned`).  
+  - If unset/empty, every face is assigned to a cluster (Agglomerative mode).
+- `GENIUSAI_FACES_CLUSTER_LINKAGE`  
+  - `"complete"` (default) = tighter clusters, fewer false merges.  
+  - `"average"` = more merging.
+
+These runs happen entirely in the backend process and do not require Lightroom to be open.
+
+### Periodic database backups
+
+The backend can also create periodic ZIP backups of the database directory and prune older backups automatically:
+
+- `GENIUSAI_BACKUP_ENABLED`  
+  - `true` / `1` / `yes` / `on` to enable.  
+  - Default: disabled.
+- `GENIUSAI_BACKUP_INTERVAL`  
+  - Interval in seconds between backup runs.  
+  - Default: `86400` (once per day). Minimum is 600 seconds.
+- `GENIUSAI_BACKUP_MAX_KEEP`  
+  - Number of newest backup ZIPs to keep under `<db-path>/backups`.  
+  - Default: `14`. Values ≤ 0 are treated as `1`.
+
+Each run:
+
+1. Calls the same backup logic used by `GET /db/backup` to create a ZIP of the DB path.
+2. Stores a persistent copy under `<db-path>/backups`.
+3. Deletes older ZIPs so that only the newest `GENIUSAI_BACKUP_MAX_KEEP` remain.
+
+---
+
 ## ⚠️ Breaking Change: `photo_id` Migration
 
 The server switched primary IDs from legacy Lightroom UUIDs to file-based `photo_id` values.
@@ -133,3 +182,38 @@ In practice, backend identity should still be treated as best-effort and mostly 
 - ID generation had to fall back to partial file hashes because stable metadata IDs were unavailable
 
 For workflows that depend on strict cross-catalog identity, re-indexing and migration validation are still recommended when moving photos between catalogs or restoring older backend databases.
+
+---
+
+## Cross-catalog behavior (soft state, no deletion)
+
+When multiple Lightroom catalogs use the same remote backend, the server **never deletes** photo data. Instead it tracks which catalog “has” each photo.
+
+### Data model
+
+- Each catalog has a stable **catalog_id** (managed by the plugin).
+- Each photo in the backend has metadata **catalog_ids**: a list of catalog_ids that currently “have” that photo.
+- Indexing adds the requesting catalog’s id to **catalog_ids**. All read operations (search, get/ids, stats, check-unprocessed, get photo) accept an optional **catalog_id** and return only photos that include that catalog in **catalog_ids**.
+
+### Endpoints
+
+- **`POST /sync/cleanup`**  
+  Body: `{ "catalog_id": "...", "photo_ids": ["id1", "id2", ...] }`.  
+  Disassociates the given **catalog_id** from any backend photo that is **not** in **photo_ids** (photos removed from the Lightroom catalog). Does **not** delete documents; only updates metadata so other catalogs still see those photos.
+
+- **`POST /sync/claim`**  
+  Body: `{ "catalog_id": "...", "photo_ids": ["id1", "id2", ...] }`.  
+  Adds **catalog_id** to **catalog_ids** for each listed photo. Used to “claim” existing backend photos for a catalog (e.g. after upgrading to this behavior so previously indexed photos become visible to that catalog).
+
+### Behavior summary
+
+- **No physical deletion**: Removing a photo from a catalog only removes that catalog’s id from the photo’s **catalog_ids**.
+- **Catalog-scoped reads**: When **catalog_id** is sent, search, stats, get/ids, and related endpoints filter to photos that have that catalog in **catalog_ids**.
+- **Backward compatibility**: Requests without **catalog_id** are unchanged (no catalog filter).
+
+---
+
+## ⚖️ License
+
+The LrGeniusAI core and backend server are released under the **GNU Affero General Public License v3 (AGPL-3.0)**. 
+Project license details can be found in the root [LICENSE](../LICENSE) file.

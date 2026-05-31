@@ -1,6 +1,6 @@
 # Server Guide
 
-The Python backend (`geniusai-server`) acts as the brains of LrGeniusAI. It runs locally via FastAPI and handles Large Language Model (LLM) inference, image embedding generation using OpenCLIP, and vector database management.
+The Python backend (`geniusai-server`) acts as the brains of LrGeniusAI. It runs locally via Flask/Waitress and handles Large Language Model (LLM) inference, image embedding generation using OpenCLIP, and vector database management.
 
 ## Main Documentation
 

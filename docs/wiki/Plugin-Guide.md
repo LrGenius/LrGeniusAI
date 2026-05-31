@@ -1,32 +1,67 @@
 # Plugin Guide
 
-The LrGeniusAI Lightroom Plug-in is the primary frontend for communicating with the AI backend. Through native Lua integrations and Lightroom dialogs, it provides a seamless user experience for extending your photography workflow with AI.
+The LrGeniusAI Lightroom Plug-in is the primary frontend for communicating with the AI backend. Through native Lua integrations and Lightroom dialogs, it extends your photography workflow with AI — without freezing the Lightroom interface.
 
 ## Main Documentation
 
-For detailed technical usage of the plugin component, please view the [`plugin/README.md`](Plugin-README).
+For detailed technical usage of the plugin component, please view the [`plugin/README.md`](Dev-Plugin-README).
 
-## Core Workflows
+## All menu items
 
-The plugin handles the following core capabilities via the `Library -> Plug-in Extras` menu:
+All actions are available under `Library → Plug-in Extras`:
 
-### 1. Analyze and Index
-Passes the image files, metadata, and optional context directly to the backend to generate tags, structural descriptions, and embeddings. This operation is asynchronous, and progress can be monitored safely without freezing the interface.
+| Menu item | What it does |
+|---|---|
+| Analyze & Index Photos... | AI metadata generation + search embeddings |
+| AI Edit Photos... | Generate and apply Lightroom develop recipes |
+| Advanced Search... | Semantic free-text photo search |
+| Cull Similar Photos... | Burst grouping, ranking, Picks/Alternates/Rejects |
+| Retrieve Metadata from Backend... | Pull AI-generated metadata back into Lightroom |
+| Import Metadata from Catalog... | Sync existing Lightroom metadata into backend |
+| People... | Browse face clusters, assign names, open person collections |
+| Find Similar Faces... | Find photos with the same face as a selected photo |
+| Find Similar Images... | Find near-duplicates or visually similar photos |
+| Save Edits as AI Training Examples... | Feed your own edits to the AI as style reference |
+| Deduplicate Keyword Synonyms... | Find and merge near-duplicate keywords in your catalog |
 
-### 2. Advanced Search
-Invokes semantic search. Unlike keyword search, semantic search translates natural language queries (e.g. "red sports car in a dark alley") into vectors that are compared against the visual embeddings of your images. Matches are grouped into a new Lightroom Collection, sorted by relevance.
+## Core workflows
 
-### 3. Image Culling
-Instead of manually comparing bursts of similar photos, the culling workflow analyzes time-grouped shots for sharpness, eye contact, and expression, grading them from best to worst. The plugin will create a structured Collection Set to categorize Picks, Alternates, and Rejects automatically.
+### Analyze and Index
+Passes photos to the AI backend to generate keywords, title, caption, and alt text. Simultaneously creates SigLIP2 semantic embeddings so photos can be found via Advanced Search. Configurable scope (selected, current view, entire catalog), metadata toggles, and extra context options (folder name, date, GPS). See [Help: Analyze and Index](Help-Analyze-and-Index).
 
-### 4. Metadata Import and Retrieval
-- **Import:** Syncs your existing Lightroom catalog metadata into the backend, improving subsequent AI tagging logic by giving the LLM existing context.
-- **Retrieval:** If you generate AI tags on the backend but opt not to write them into Lightroom immediately, you can fetch them back later using the Retrieval utility.
+### AI Edit Photos
+For each photo, the backend generates a structured Lightroom develop recipe (global adjustments + optional masks) which the plugin applies via the Lightroom SDK. Supports style presets, style strength, composition/crop modes, per-photo review, and per-photo instruction overrides. See [Help: AI Edit Photos](Help-AI-Edit).
 
-### 5. Error Management
-Errors no longer fail silently into log files. If a batch indexing task encounters issues (like a network timeout or an API authentication failure), the plugin provides a **Task Completion Dialog**. This aggregates the successes and details exactly what went wrong for any omitted files, making troubleshooting immediate and straightforward. For more info, see the [Troubleshooting](Troubleshooting) guide.
+### Advanced Search
+Translates a natural language query into vector embeddings and compares them against your indexed photos. Results are placed into a new Lightroom Collection sorted by relevance. See [Help: Advanced Search](Help-Advanced-Search).
 
-## One-Time Upgrade Path
+### Cull Similar Photos
+Groups time-adjacent photos into bursts, scores each image (sharpness, face quality, eye openness, blink detection), and creates a timestamped Collection Set with Picks, Alternates, and Reject Candidates. See [Help: Cull Photos](Help-Cull-Photos).
 
-`photo_id` migration is a required, one-time step for databases upgrading from older releases that utilized catalog UUIDs. This enables better cross-catalog stability.
-- **To perform the migration:** Open the Plug-in Manager dialog -> Backend Server -> Click **Migrate existing DB IDs to photo_id**.
+### People & Faces
+Lists detected face clusters (persons) with thumbnails and photo counts. Lets you assign names and jump directly to a Lightroom collection per person. **Find Similar Faces** finds other photos containing the same face as a selected photo. See [Help: People & Faces](Help-People-Faces).
+
+### Find Similar Images
+Finds near-duplicates (perceptual hash) or visually similar photos (CLIP embeddings) for a selected photo. Results go into a new Lightroom collection. See [Help: Find Similar Images](Help-Find-Similar).
+
+### Keyword Management
+- **Deduplicate Keyword Synonyms** — interactive workflow to find and merge near-duplicate catalog keywords.
+- **Auto De-Clutter** — runs automatically during indexing to prevent the AI from creating synonym keywords of ones already in your catalog.
+
+See [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter).
+
+### Metadata Import and Retrieval
+- **Import Metadata from Catalog** — syncs your existing Lightroom keyword/title/caption data into the backend before AI generation runs.
+- **Retrieve Metadata from Backend** — pulls AI-generated metadata back into Lightroom if it was not written during indexing.
+
+### Style Training
+**Save Edits as AI Training Examples** reads your current develop settings and stores them on the backend as labeled few-shot examples. On the next AI Edit run, these examples are injected as style context. See [Help: Train from Edits](Help-Train-From-Edits).
+
+### Error Management
+Batch tasks never fail silently. At the end of a run, a **Task Completion Dialog** aggregates successes and per-photo errors so you can see exactly what failed and why. See [Troubleshooting](Troubleshooting).
+
+## Upgrade: one-time ID migration
+
+If you are upgrading from an older version that stored Lightroom catalog UUIDs as primary IDs, run the one-time migration:
+
+*File → Plug-in Manager → LrGeniusAI → Backend Server → Migrate existing DB IDs to photo_id*

@@ -5,7 +5,7 @@ Welcome to LrGeniusAI! This guide will walk you through setting up the plugin, i
 ## 1. Install Plugin and Server
 
 To begin, you must install both the Lightroom Classic plugin frontend and the Python backend server. These components communicate locally to process your images without freezing the Lightroom UI. 
-Please refer to the high-level installation instructions on the [root `README.md`](Project-README) or the detailed steps in the [`plugin/README.md`](Plugin-README).
+Please refer to the high-level installation instructions on the [root `README.md`](Dev-Project-README) or the detailed steps in the [`plugin/README.md`](Dev-Plugin-README).
 
 ### ⚠️ Bypassing Security Warnings (Unsigned Installers)
 
@@ -41,7 +41,7 @@ Before semantic search or AI-assisted culling can work, the backend needs to pro
 2. Navigate to `Library -> Plug-in Extras -> Analyze & Index Photos`.
 3. The plugin will pass the photos to the backend, generate descriptions, tags, and AI embeddings, and store them.
 
-Once indexing finishes, try out **Advanced Search**, the **People** workflows, or use **Retrieve Metadata** to inject the generated tags straight back into your catalog.
+Once indexing finishes, try out **Advanced Search**, the **People** workflows, use **Retrieve Metadata** to inject the generated tags straight back into your catalog, or run **AI Edit Photos** *(beta)* to get AI-suggested develop settings for each photo.
 
 ## 4. Run One-Time ID Migration (Upgrade Path)
 
@@ -94,11 +94,17 @@ docker compose exec geniusai-server gcloud auth application-default login --no-b
 ```
 The `./gcloud:/root/.config/gcloud` bind mount keeps your ADC credentials intact between container restarts.
 
-## 8. Imported Help Pages
+## 8. Next Steps
 
-For further reading, we've migrated several curated guides from the project website:
+- [FAQ](FAQ) — quick answers to common questions
 - [Help: Analyze and Index](Help-Analyze-and-Index)
+- [Help: AI Edit Photos](Help-AI-Edit) *(beta)*
 - [Help: Advanced Search](Help-Advanced-Search)
+- [Help: Cull Photos](Help-Cull-Photos) *(beta)*
+- [Help: People & Faces](Help-People-Faces)
+- [Help: Find Similar Images](Help-Find-Similar)
+- [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter)
 - [Help: Choosing AI Model](Help-Choosing-AI-Model)
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
+- [Troubleshooting](Troubleshooting)

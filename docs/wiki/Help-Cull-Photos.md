@@ -1,4 +1,6 @@
-# Help: Cull Photos
+# Help: Cull Photos *(beta)*
+
+> **Beta feature.** Culling results are useful as a starting point but should be treated as suggestions, not final decisions. Always review Picks and Reject Candidates before deleting anything. No photos are ever deleted automatically.
 
 ## What the culling workflow does
 

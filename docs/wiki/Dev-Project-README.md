@@ -1,3 +1,7 @@
+# Project README
+
+> Auto-generated from `README.md`. Do not edit this page manually.
+
 <div align="center">
   <h1>🌟 LrGeniusAI</h1>
   <p><b>A smart Lightroom Classic plugin for AI-powered tagging, describing, semantic search, and develop edits.</b></p>
