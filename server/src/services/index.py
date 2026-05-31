@@ -501,8 +501,7 @@ def process_image_task(
         if compute_metadata and not model_name:
             msg = (
                 "AI metadata generation requires an LLM model to be configured. "
-                "Disable 'AI metadata' in the indexing dialog or select a model "
-                "under Plugin Settings → AI Provider."
+                "Disable 'AI metadata' in the indexing dialog or select a model. "
             )
             logger.error(msg)
             return 0, total_images, [msg], []
