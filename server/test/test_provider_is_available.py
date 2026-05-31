@@ -65,6 +65,7 @@ def test_lmstudio_is_available_rejects_empty_host(mocker):
 def test_lmstudio_is_available_returns_false_on_sdk_exception(mocker):
     fake_lms = mocker.patch("providers.lmstudio.lms")
     fake_lms.Client.is_valid_api_host.side_effect = RuntimeError("sdk borked")
+    mocker.patch("providers.lmstudio.socket.create_connection")
     from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({"base_url": "host:1234"})
@@ -74,6 +75,7 @@ def test_lmstudio_is_available_returns_false_on_sdk_exception(mocker):
 def test_lmstudio_is_available_returns_sdk_result(mocker):
     fake_lms = mocker.patch("providers.lmstudio.lms")
     fake_lms.Client.is_valid_api_host.return_value = True
+    mocker.patch("providers.lmstudio.socket.create_connection")
     from providers.lmstudio import LMStudioProvider
 
     provider = LMStudioProvider({"base_url": "host:1234"})

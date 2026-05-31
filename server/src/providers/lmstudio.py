@@ -3,6 +3,7 @@ LM Studio Provider for metadata generation using the lmstudio-python library
 """
 
 import json
+import socket
 import lmstudio as lms
 from typing import Any, override
 from .base import (
@@ -42,12 +43,15 @@ class LMStudioProvider(LLMProviderBase):
     def is_available(self) -> bool:
         """Check if LM Studio server is reachable with a short timeout"""
         try:
-            # First, a basic validation of host format
             if not self.host or ":" not in self.host:
                 return False
 
-            # Use the SDK's validation but be aware it might block if the host is a dead IP.
-            # In a future version, we might add a socket-level pre-check here.
+            # TCP probe first (2 s) so we never block on the SDK's unbound timeout
+            # when the host is simply not running.
+            host_part, port_str = self.host.rsplit(":", 1)
+            with socket.create_connection((host_part, int(port_str)), timeout=2.0):
+                pass
+
             return lms.Client.is_valid_api_host(self.host)
         except Exception as e:
             logger.warning(f"LM Studio availability check failed for {self.host}: {e}")
