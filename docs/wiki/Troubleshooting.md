@@ -10,27 +10,12 @@ LrGeniusAI surfaces errors directly in Lightroom rather than hiding them in log 
 
 ## Common Issues
 
-### 0. Installer & Security Warnings (SmartScreen / Gatekeeper)
+### 1. Installer & Security Warnings (SmartScreen / Gatekeeper)
 
 Since LrGeniusAI installers are not currently code-signed, your OS may block them.
 
 - **Symptom:** "Windows protected your PC" or "LrGeniusAI.pkg cannot be opened because it is from an unidentified developer".
 - **Resolution:** Refer to the [Getting Started](Getting-Started#%E2%9A%A0%EF%B8%8F-bypassing-security-warnings-unsigned-installers) guide for OS-specific bypass steps. This is a one-time requirement during installation.
-
----
-
-### 1. Backend Server Connection Failed
-
-Lightroom communicates with the `geniusai-server` over a local network port (default: 8000).
-
-- **Symptom:** "Cannot connect to server", "Connection Refused", or "API request failed (no response)".
-- **Resolution:**
-  1. Open *File → Plug-in Manager → LrGeniusAI → Backend Server* — the status indicator shows whether the server responded.
-  2. Verify the server URL is correct (default `http://127.0.0.1:8000`).
-  3. Ensure the server process is actually running. Start it manually if needed:
-     - macOS: `lrgenius-server/lrgenius-server`
-     - Windows: `lrgenius-server/lrgenius-server.cmd`
-  4. If you updated recently and the server won't start, see [Plugin/Backend version mismatch](#pluginbackend-version-mismatch) below.
 
 ---
 
