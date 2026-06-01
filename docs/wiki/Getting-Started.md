@@ -28,7 +28,7 @@ When you try to open the `.pkg` installer or the backend binary:
 ## 2. Configure Plugin
 
 Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:
-- **Set the Backend Server URL:** This defaults to `http://127.0.0.1:8000` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
+- **Set the Backend Server URL:** This defaults to `http://127.0.0.1:19819` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
 - **Configure Provider/API Keys:** If you plan to use cloud providers like OpenAI or Google Gemini, enter your API keys. For local providers like Ollama or LM Studio, ensure their respective base URLs are correctly configured.
 - **Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.
 
