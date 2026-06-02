@@ -1398,9 +1398,9 @@ function Util.checkPluginHealth(options)
 	if not health.clip and (options.requireClip or prefs.useClip) then
 		report.healthy = false
 		table.insert(report.issues, {
-			title = LOC("$$$/LrGeniusAI/Health/ClipMissing=CLIP model for semantic search is missing."),
+			title = LOC("$$$/LrGeniusAI/Health/ClipMissing=AI search model is missing."),
 			hint = LOC(
-				"$$$/LrGeniusAI/Health/ClipMissingHint=Semantic search and some indexing features will be disabled. You can download the model in the Setup Wizard."
+				"$$$/LrGeniusAI/Health/ClipMissingHint=Smart photo search will be disabled. You can download the model in the Setup Wizard."
 			),
 			critical = false,
 		})

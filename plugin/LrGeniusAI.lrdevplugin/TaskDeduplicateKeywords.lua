@@ -162,7 +162,7 @@ LrTasks.startAsyncTask(function()
 			width = 450,
 			f:static_text({
 				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool uses AI (SigLIP similarity + LLM validation) to find\nleaf keywords that are true synonyms and suggests merging them.\nPhotos are re-tagged with the canonical keyword. Duplicate entries\nremain in the catalog with 0 photos — remove via\nMetadata > Purge Unused Keywords."
+					"$$$/LrGeniusAI/DeduplicateKeywords/WarningIntro=This tool uses AI to find duplicate keywords that mean the same thing and suggests merging them.\nPhotos are re-tagged with the kept keyword. The duplicate entries\nremain in the catalog with 0 photos — remove them via\nMetadata > Purge Unused Keywords."
 				),
 				fill_horizontal = 1,
 				wrap = true,

@@ -3730,7 +3730,7 @@ function SearchIndexAPI.startClipDownload()
 	end
 
 	local progressScope = LrProgressScope({
-		title = LOC("$$$/LrGeniusAI/ClipDownload/ProgressTitle=Downloading CLIP AI model for advanced search"),
+		title = LOC("$$$/LrGeniusAI/ClipDownload/ProgressTitle=Downloading AI model for smart photo search"),
 		functionContext = nil,
 	})
 
@@ -3751,7 +3751,7 @@ function SearchIndexAPI.startClipDownload()
 				ErrorHandler.handleError("Error downloading CLIP model", loopErr)
 				if progressScope ~= nil then
 					progressScope:setCaption(
-						LOC("$$$/LrGeniusAI/ClipDownload/Error=Error downloading CLIP model: ^1"),
+						LOC("$$$/LrGeniusAI/ClipDownload/Error=Error downloading AI search model: ^1"),
 						loopErr
 					)
 					progressScope:done()
@@ -3761,7 +3761,9 @@ function SearchIndexAPI.startClipDownload()
 
 			if loopStatus ~= nil then
 				if progressScope ~= nil then
-					progressScope:setCaption(LOC("$$$/LrGeniusAI/ClipDownload/Downloading=Downloading CLIP model..."))
+					progressScope:setCaption(
+						LOC("$$$/LrGeniusAI/ClipDownload/Downloading=Downloading AI search model...")
+					)
 				end
 				if loopStatus.status == "downloading" then
 					progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
@@ -3769,8 +3771,8 @@ function SearchIndexAPI.startClipDownload()
 					log:trace("CLIP model download completed")
 					progressScope:done()
 					LrDialogs.message(
-						LOC("$$$/LrGeniusAI/ClipDownload/SuccessTitle=CLIP Download"),
-						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=CLIP model downloaded successfully.")
+						LOC("$$$/LrGeniusAI/ClipDownload/SuccessTitle=AI Model Download"),
+						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=AI search model downloaded successfully.")
 					)
 					break
 				elseif
@@ -3779,7 +3781,7 @@ function SearchIndexAPI.startClipDownload()
 				then
 					local error_msg = loopStatus.error or "Unknown download error"
 					ErrorHandler.handleError(
-						LOC("$$$/LrGeniusAI/ClipDownload/ErrorTitle=Error downloading CLIP model"),
+						LOC("$$$/LrGeniusAI/ClipDownload/ErrorTitle=Error downloading AI search model"),
 						error_msg
 					)
 					progressScope:done()

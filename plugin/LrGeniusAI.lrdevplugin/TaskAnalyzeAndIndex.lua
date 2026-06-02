@@ -233,7 +233,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 					f:row({
 						f:checkbox({
 							value = bind("enableEmbeddings"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableEmbeddings=Create search embeddings"),
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableEmbeddings=Enable smart photo search"),
 							enabled = props.clipReady,
 						}),
 						f:static_text({

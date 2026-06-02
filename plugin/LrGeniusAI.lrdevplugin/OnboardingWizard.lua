@@ -209,7 +209,7 @@ function OnboardingWizard.show(manualTrigger)
 							}),
 							f:row({
 								f:push_button({
-									title = LOC("$$$/LrGeniusAI/Onboarding/DownloadClip=Download OpenCLIP Model"),
+									title = LOC("$$$/LrGeniusAI/Onboarding/DownloadClip=Download AI Search Model"),
 									action = function()
 										LrTasks.startAsyncTask(function()
 											SearchIndexAPI.startClipDownload()
