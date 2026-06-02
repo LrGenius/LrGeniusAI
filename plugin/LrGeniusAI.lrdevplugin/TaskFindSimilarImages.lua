@@ -29,10 +29,10 @@ local function showFindSimilarDialog(ctx)
 				value = bind("similarityMode"),
 				items = {
 					{
-						title = LOC("$$$/LrGeniusAI/FindSimilarImages/ModePhash=Near duplicates (phash)"),
+						title = LOC("$$$/LrGeniusAI/FindSimilarImages/ModePhash=Near duplicates (visual match)"),
 						value = "phash",
 					},
-					{ title = LOC("$$$/LrGeniusAI/FindSimilarImages/ModeClip=Similar content (CLIP)"), value = "clip" },
+					{ title = LOC("$$$/LrGeniusAI/FindSimilarImages/ModeClip=Similar content (AI)"), value = "clip" },
 				},
 				width = 260,
 			}),

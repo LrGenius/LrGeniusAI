@@ -65,20 +65,21 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 				if readiness == "active" then
 					propertyTable.styleReadyText =
-						LOC("$$$/LrGeniusAI/Training/Status/Active=ACTIVE - High precision matching")
+						LOC("$$$/LrGeniusAI/Training/Status/Active=Active — matching your style precisely")
 					propertyTable.styleReadyColor = { 0.2, 0.8, 0.2 }
 				elseif readiness == "limited" then
-					propertyTable.styleReadyText = LOC("$$$/LrGeniusAI/Training/Status/Limited=LIMITED - Good matching")
+					propertyTable.styleReadyText =
+						LOC("$$$/LrGeniusAI/Training/Status/Limited=Learning — getting better with more examples")
 					propertyTable.styleReadyColor = { 0.8, 0.8, 0.2 }
 				elseif readiness == "warming_up" then
 					propertyTable.styleReadyText = LOC(
-						"$$$/LrGeniusAI/Training/Status/WarmingUp=WARMING UP (^1/10 examples)",
+						"$$$/LrGeniusAI/Training/Status/WarmingUp=Building up — ^1 of 10 examples saved",
 						tostring(stats.count)
 					)
 					propertyTable.styleReadyColor = { 0.8, 0.4, 0.1 }
 				else
 					propertyTable.styleReadyText =
-						LOC("$$$/LrGeniusAI/Training/Status/ColdStart=COLD START (Add examples to begin)")
+						LOC("$$$/LrGeniusAI/Training/Status/ColdStart=Not started — save some edited photos to begin")
 					propertyTable.styleReadyColor = { 0.7, 0.7, 0.7 }
 				end
 			end
@@ -110,10 +111,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 					status = "warning"
 					color = { 0.8, 0.8, 0 }
 				end
-				table.insert(
-					issues,
-					LOC("$$$/LrGeniusAI/Health/ClipMissing=CLIP model for semantic search is missing.")
-				)
+				table.insert(issues, LOC("$$$/LrGeniusAI/Health/ClipMissing=AI search model is missing."))
 			end
 			if not health.gemini and not health.chatgpt and not health.ollama and not health.lmstudio then
 				if status ~= "critical" then
@@ -885,7 +883,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				width = groupBoxWidth,
 				f:checkbox({
 					value = bind("useClip"),
-					title = LOC("$$$/LrGeniusAI/PluginInfo/UseOpenClip=Use OpenCLIP AI model for advanced search"),
+					title = LOC("$$$/LrGeniusAI/PluginInfo/UseOpenClip=Use AI model for smart photo search"),
 				}),
 				f:group_box({
 					fill_horizontal = 1,
@@ -895,7 +893,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						f:checkbox({
 							value = bind("clipReady"),
 							enabled = false,
-							title = LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=OpenCLIP AI model is ready"),
+							title = LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=AI search model is ready"),
 						}),
 						f:push_button({
 							title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
@@ -1013,7 +1011,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({
-						title = LOC("$$$/LrGeniusAI/Training/StyleDNA=Style DNA (Average):"),
+						title = LOC("$$$/LrGeniusAI/Training/StyleDNA=Your Average Style Settings:"),
 						alignment = "right",
 						width = share("labelWidth"),
 					}),
