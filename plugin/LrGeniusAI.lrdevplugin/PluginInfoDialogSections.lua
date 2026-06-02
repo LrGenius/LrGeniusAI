@@ -50,7 +50,8 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.trainingCount = 0
 	propertyTable.styleStats = nil
 	propertyTable.styleReadiness = "cold_start"
-	propertyTable.styleReadyText = LOC("$$$/LrGeniusAI/Training/Status/ColdStart=Cold Start (0 examples)")
+	propertyTable.styleReadyText =
+		LOC("$$$/LrGeniusAI/Training/Status/ColdStart=Not started — save some edited photos to begin")
 	propertyTable.styleReadyColor = { 0.7, 0.7, 0.7 }
 
 	local function updateStats()
