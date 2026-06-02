@@ -145,3 +145,7 @@ Imports use sibling-relative form within a subpackage (`from .face import …` i
 - Always use the configured `logger`; include `exc_info=True` for exceptions.
 - Manage dependencies via `uv add` / `uv remove` (updates `pyproject.toml` + `uv.lock`); commit both. The Dockerfile re-runs `uv sync --locked` automatically — only touch it for non-dependency changes (system packages, env vars, build steps).
 - Code must pass `bash server/scripts/lint_format.sh` (ruff check + ruff format).
+
+### Docs
+
+- Backend port is 19819 by default

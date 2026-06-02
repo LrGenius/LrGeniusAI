@@ -82,8 +82,8 @@ Download from [lmstudio.ai](https://lmstudio.ai/download), enable server mode,
 and download one or more vision models from inside the app. Recommended:
 
 - `qwen/qwen3-vl-4b` — fast baseline.
-- `qwen/qwen3-vl-8b` — better description quality.
-- `google/gemma3-4b` / `google/gemma3-12b` — strong general-purpose options.
+- `qwen/qwen3-vl-8b` — better description quality.`
+- `gemma-4-e4b` / `google/gemma3-12b` — strong general-purpose options.
 
 On Apple Silicon prefer the **MLX** variants of the same model — they run
 significantly faster than the GGUF builds. See [LM Studio Setup](Help-LM-Studio-Setup).

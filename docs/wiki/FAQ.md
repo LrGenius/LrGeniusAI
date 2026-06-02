@@ -38,7 +38,7 @@ Yes. The installers are not code-signed (cost and complexity for an open-source 
 
 ### Can I run the backend on a different machine or in Docker?
 
-Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:8000`. Docker Compose files are included in the repository.
+Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository.
 
 ---
 
@@ -181,7 +181,7 @@ See [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutte
 
 The backend is not reachable:
 1. Check *Plug-in Manager → Backend Server* — the status indicator shows whether the server responded.
-2. Verify the server URL (default `http://127.0.0.1:8000`).
+2. Verify the server URL (default `http://127.0.0.1:19819`).
 3. Restart the backend manually if it crashed.
 
 For more detailed solutions see [Troubleshooting](Troubleshooting).

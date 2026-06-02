@@ -1,6 +1,6 @@
 # Backend API Reference
 
-The `geniusai-server` exposes a REST API over HTTP (default port 8000). All responses use JSON with the structure `{ "results": ..., "error": ..., "warning": ... }`.
+The `geniusai-server` exposes a REST API over HTTP (default port 19819). All responses use JSON with the structure `{ "results": ..., "error": ..., "warning": ... }`.
 
 This reference is intended for developers integrating with or extending the backend. Regular users interact through the Lightroom plugin and do not need to call these endpoints directly.
 
