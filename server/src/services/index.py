@@ -401,6 +401,7 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     """
     Returns UUIDs that need processing based on selected tasks and existing backend data.
     Mirrors the same logic as process_image_task for determining what's missing.
+    Uses batch ChromaDB queries to avoid N+1 performance issues on large catalogs.
     """
     regenerate_metadata = options.get("regenerate_metadata", True)
     compute_embeddings = options.get("compute_embeddings", True)
@@ -415,14 +416,18 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
     if not uuids:
         return []
 
-    # Load existing records for all UUIDs (catalog-scoped when catalog_id provided)
-    existing_records = {}
-    for uuid in uuids:
-        existing_record = chroma_service.get_image(uuid, catalog_id=catalog_id)
-        if existing_record and existing_record["ids"]:
-            existing_records[uuid] = (
-                existing_record["metadatas"][0] if existing_record["metadatas"] else {}
-            )
+    # Single batch query replaces N individual get_image() calls.
+    existing_records = chroma_service.get_images_batch(uuids, catalog_id=catalog_id)
+
+    # Batch-check vertex and faces only when those tasks are selected and we're not
+    # regenerating everything (regenerate_metadata=True means always process).
+    vertex_ids_present: set = set()
+    if compute_vertexai and not regenerate_metadata:
+        vertex_ids_present = chroma_service.has_vertex_embeddings_batch(uuids)
+
+    faces_checked_ids: set = set()
+    if compute_faces and not regenerate_metadata:
+        faces_checked_ids = chroma_service.faces_checked_batch(uuids)
 
     needing_processing = []
     for uuid in uuids:
@@ -441,10 +446,10 @@ def get_uuids_needing_processing(uuids: list[str], options: dict) -> list[str]:
             regenerate_metadata or not has_any_metadata
         )
         needs_faces = compute_faces and (
-            regenerate_metadata or not chroma_service.faces_checked_for_photo(uuid)
+            regenerate_metadata or uuid not in faces_checked_ids
         )
         needs_vertexai = compute_vertexai and (
-            regenerate_metadata or not chroma_service.has_vertex_embedding(uuid)
+            regenerate_metadata or uuid not in vertex_ids_present
         )
         needs_cull_phash = any_processing_task_enabled and (
             regenerate_metadata or not existing.get("cull_phash")

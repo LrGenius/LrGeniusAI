@@ -2949,7 +2949,18 @@ _request = function(method, url, body, timeout, options)
 			elseif type(hdrs) == "table" then
 				local hdrsInfo = {}
 				for k, v in pairs(hdrs) do
-					table.insert(hdrsInfo, tostring(k) .. "=" .. tostring(v))
+					local vStr
+					if type(v) == "table" then
+						-- LrHttp sometimes nests the error as a sub-table; flatten it
+						local inner = {}
+						for ik, iv in pairs(v) do
+							table.insert(inner, tostring(ik) .. "=" .. tostring(iv))
+						end
+						vStr = #inner > 0 and ("{" .. table.concat(inner, ", ") .. "}") or "{}"
+					else
+						vStr = tostring(v)
+					end
+					table.insert(hdrsInfo, tostring(k) .. "=" .. vStr)
 				end
 				if #hdrsInfo > 0 then
 					err_msg = err_msg .. " - hdrs: " .. table.concat(hdrsInfo, ", ")
