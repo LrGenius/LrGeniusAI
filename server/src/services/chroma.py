@@ -316,6 +316,88 @@ def get_image(photo_id, *, legacy_uuid=None, catalog_id=None):
     return data
 
 
+def get_images_batch(photo_ids: list, *, catalog_id=None) -> dict:
+    """Batch get for multiple photo_ids. Returns {photo_id: metadata_dict} for found photos.
+
+    Filters by catalog_id when provided. Missing IDs are absent from the result.
+    """
+    _ensure_initialized()
+    if collection is None or not photo_ids:
+        return {}
+    normalized = [_normalize_photo_id(pid) for pid in photo_ids]
+    valid = [pid for pid in normalized if pid]
+    if not valid:
+        return {}
+    try:
+        data = collection.get(ids=valid, include=["metadatas"])
+    except ChromaInternalError:
+        return {}
+    except Exception as e:
+        logger.warning("get_images_batch failed: %s", e)
+        return {}
+
+    result = {}
+    for pid, meta in zip(data.get("ids", []), data.get("metadatas", [])):
+        if catalog_id:
+            ids_set = _parse_catalog_ids(meta)
+            if str(catalog_id).strip() not in ids_set:
+                continue
+        result[pid] = meta or {}
+    return result
+
+
+def has_vertex_embeddings_batch(photo_ids: list) -> set:
+    """Return the set of photo_ids that have a Vertex AI embedding."""
+    _ensure_initialized()
+    if vertex_collection is None or not photo_ids:
+        return set()
+    normalized = [_normalize_photo_id(pid) for pid in photo_ids if pid]
+    if not normalized:
+        return set()
+    try:
+        r = vertex_collection.get(ids=normalized, include=[])
+        return set(r.get("ids", []))
+    except Exception:
+        return set()
+
+
+def faces_checked_batch(photo_ids: list) -> set:
+    """Return the set of photo_ids for which face detection has already been run."""
+    _ensure_initialized()
+    if collection is None or not photo_ids:
+        return set()
+    normalized = [_normalize_photo_id(pid) for pid in photo_ids if pid]
+    if not normalized:
+        return set()
+
+    checked = set()
+    # Check face_collection for photos that have faces stored.
+    # Face IDs are not photo IDs, so we need metadatas to extract photo_id.
+    if face_collection is not None:
+        try:
+            r = face_collection.get(
+                where={"photo_id": {"$in": normalized}},
+                include=["metadatas"],
+            )
+            for meta in r.get("metadatas", []):
+                pid = (meta or {}).get("photo_id")
+                if pid:
+                    checked.add(pid)
+        except Exception:
+            pass
+
+    # Check main collection metadata for `faces_checked` flag
+    try:
+        data = collection.get(ids=normalized, include=["metadatas"])
+        for pid, meta in zip(data.get("ids", []), data.get("metadatas", [])):
+            if (meta or {}).get("faces_checked"):
+                checked.add(pid)
+    except Exception:
+        pass
+
+    return checked
+
+
 def delete_image(photo_id, *, legacy_uuid=None):
     _ensure_initialized()
     if collection is None:

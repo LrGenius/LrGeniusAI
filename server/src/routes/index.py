@@ -648,7 +648,11 @@ def check_unprocessed():
         return jsonify({"photo_ids": [], "uuids": []}), 200
 
     options = _extract_options(data)
-    needing = get_photo_ids_needing_processing(photo_ids, options)
+    try:
+        needing = get_photo_ids_needing_processing(photo_ids, options)
+    except Exception as e:
+        logger.error("check-unprocessed failed: %s", e, exc_info=True)
+        return jsonify({"error": str(e), "results": None, "warning": None}), 500
     logger.info(
         f"check-unprocessed: {len(needing)} of {len(photo_ids)} photos need processing"
     )
