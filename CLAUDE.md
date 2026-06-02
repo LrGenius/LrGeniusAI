@@ -67,11 +67,24 @@ uv run python src/geniusai_server.py
 
 Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua`.
 
-### Translations sync
+### Plugin — headless unit tests
+
+Pure Lua logic (string/table helpers, keyword and photo-id handling) is tested outside Lightroom with [busted]. The Lightroom SDK environment is stubbed in `plugin/spec/spec_helper.lua`.
 
 ```bash
-python sync_translations.py
+busted                       # runs plugin/spec/*_spec.lua (config in /.busted)
 ```
+
+Add tests when you touch pure helpers in `Util.lua` (or any logic that doesn't require live LR objects). CI runs this via `.github/workflows/lua-tests.yml`.
+
+### Translations sync & check
+
+```bash
+python sync_translations.py            # regenerate all three TranslatedStrings_*.txt from LOC() keys
+python3 scripts/check_translations.py  # read-only parity check (used by CI and the edit hook)
+```
+
+The `.txt` files are UTF-16 — never hand-edit one in isolation; go through the scripts. See the `sync-translations` skill.
 
 ---
 
@@ -149,3 +162,7 @@ Imports use sibling-relative form within a subpackage (`from .face import …` i
 ### Docs
 
 - Backend port is 19819 by default
+
+### Editor automation (Claude Code)
+
+- A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, `ruff check`/`ruff format` for server Python, and the translation parity check for `TranslatedStrings_*.txt`. Fix anything it reports before moving on — don't disable it to get past a warning.

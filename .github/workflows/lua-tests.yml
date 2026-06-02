@@ -1,0 +1,28 @@
+name: "Lua tests"
+on:
+  pull_request:
+    paths:
+      - "plugin/**"
+      - ".busted"
+      - ".github/workflows/lua-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugin/**"
+      - ".busted"
+      - ".github/workflows/lua-tests.yml"
+jobs:
+  busted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Lua 5.1 (matches the Lightroom runtime)
+        uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.1"
+      - name: Set up LuaRocks
+        uses: leafo/gh-actions-luarocks@v4
+      - name: Install busted
+        run: luarocks install busted
+      - name: Run headless unit tests
+        run: busted

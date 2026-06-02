@@ -1,0 +1,12 @@
+-- busted configuration for the headless Lua unit tests.
+-- Run from the repo root with:  busted
+return {
+	default = {
+		ROOT = { "plugin/spec" },
+		-- Make the plugin's Lua modules require-able by their bare name.
+		lpath = "./plugin/LrGeniusAI.lrdevplugin/?.lua;./plugin/LrGeniusAI.lrdevplugin/?/init.lua",
+		-- Stub the Lightroom SDK environment before any spec loads.
+		helper = "plugin/spec/spec_helper.lua",
+		verbose = true,
+	},
+}
