@@ -33,8 +33,10 @@ data/
 models/
 server/gcloud/
 docker-compose.yml
-.gemini/
-.claude/
+.claude/settings.local.json
+.claude/sessions/
+.claude/logs/
+.claude/mcp-settings.json
 # MemPalace AI Context
 mempalace.yaml
 entities.json
