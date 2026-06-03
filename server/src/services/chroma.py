@@ -316,10 +316,25 @@ def get_image(photo_id, *, legacy_uuid=None, catalog_id=None):
     return data
 
 
+# ChromaDB runs on SQLite, which caps the number of host variables per query
+# (SQLITE_MAX_VARIABLE_NUMBER). A single collection.get(ids=[...]) with a very
+# large id list raises "too many SQL variables", so we chunk id-based queries.
+# 5000 stays well under the limit (and matches Chroma's own add-batch ceiling)
+# even if Chroma binds more than one variable per id.
+GET_IDS_CHUNK_SIZE = 5000
+
+
+def _chunked(seq: list, size: int = GET_IDS_CHUNK_SIZE):
+    """Yield successive chunks of `seq` no larger than `size`."""
+    for start in range(0, len(seq), size):
+        yield seq[start : start + size]
+
+
 def get_images_batch(photo_ids: list, *, catalog_id=None) -> dict:
     """Batch get for multiple photo_ids. Returns {photo_id: metadata_dict} for found photos.
 
     Filters by catalog_id when provided. Missing IDs are absent from the result.
+    Queries are chunked to stay under SQLite's host-variable limit on large catalogs.
     """
     _ensure_initialized()
     if collection is None or not photo_ids:
@@ -328,21 +343,22 @@ def get_images_batch(photo_ids: list, *, catalog_id=None) -> dict:
     valid = [pid for pid in normalized if pid]
     if not valid:
         return {}
-    try:
-        data = collection.get(ids=valid, include=["metadatas"])
-    except ChromaInternalError:
-        return {}
-    except Exception as e:
-        logger.warning("get_images_batch failed: %s", e)
-        return {}
 
     result = {}
-    for pid, meta in zip(data.get("ids", []), data.get("metadatas", [])):
-        if catalog_id:
-            ids_set = _parse_catalog_ids(meta)
-            if str(catalog_id).strip() not in ids_set:
-                continue
-        result[pid] = meta or {}
+    for chunk in _chunked(valid):
+        try:
+            data = collection.get(ids=chunk, include=["metadatas"])
+        except ChromaInternalError:
+            continue
+        except Exception as e:
+            logger.warning("get_images_batch failed: %s", e)
+            continue
+        for pid, meta in zip(data.get("ids", []), data.get("metadatas", [])):
+            if catalog_id:
+                ids_set = _parse_catalog_ids(meta)
+                if str(catalog_id).strip() not in ids_set:
+                    continue
+            result[pid] = meta or {}
     return result
 
 
@@ -354,11 +370,14 @@ def has_vertex_embeddings_batch(photo_ids: list) -> set:
     normalized = [_normalize_photo_id(pid) for pid in photo_ids if pid]
     if not normalized:
         return set()
-    try:
-        r = vertex_collection.get(ids=normalized, include=[])
-        return set(r.get("ids", []))
-    except Exception:
-        return set()
+    present: set = set()
+    for chunk in _chunked(normalized):
+        try:
+            r = vertex_collection.get(ids=chunk, include=[])
+            present.update(r.get("ids", []))
+        except Exception:
+            continue
+    return present
 
 
 def faces_checked_batch(photo_ids: list) -> set:
@@ -373,27 +392,30 @@ def faces_checked_batch(photo_ids: list) -> set:
     checked = set()
     # Check face_collection for photos that have faces stored.
     # Face IDs are not photo IDs, so we need metadatas to extract photo_id.
+    # Chunk the $in filter to stay under SQLite's host-variable limit.
     if face_collection is not None:
-        try:
-            r = face_collection.get(
-                where={"photo_id": {"$in": normalized}},
-                include=["metadatas"],
-            )
-            for meta in r.get("metadatas", []):
-                pid = (meta or {}).get("photo_id")
-                if pid:
-                    checked.add(pid)
-        except Exception:
-            pass
+        for chunk in _chunked(normalized):
+            try:
+                r = face_collection.get(
+                    where={"photo_id": {"$in": chunk}},
+                    include=["metadatas"],
+                )
+                for meta in r.get("metadatas", []):
+                    pid = (meta or {}).get("photo_id")
+                    if pid:
+                        checked.add(pid)
+            except Exception:
+                continue
 
     # Check main collection metadata for `faces_checked` flag
-    try:
-        data = collection.get(ids=normalized, include=["metadatas"])
-        for pid, meta in zip(data.get("ids", []), data.get("metadatas", [])):
-            if (meta or {}).get("faces_checked"):
-                checked.add(pid)
-    except Exception:
-        pass
+    for chunk in _chunked(normalized):
+        try:
+            data = collection.get(ids=chunk, include=["metadatas"])
+            for pid, meta in zip(data.get("ids", []), data.get("metadatas", [])):
+                if (meta or {}).get("faces_checked"):
+                    checked.add(pid)
+        except Exception:
+            continue
 
     return checked
 
