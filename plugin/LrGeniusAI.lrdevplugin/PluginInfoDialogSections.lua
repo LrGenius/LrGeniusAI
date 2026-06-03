@@ -5,13 +5,15 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	propertyTable.clipReady = false
 	propertyTable.keepChecksRunning = true
-	LrTasks.startAsyncTask(function(context)
-		propertyTable.clipReady = SearchIndexAPI.isClipReady()
-		while propertyTable.keepChecksRunning do
-			LrTasks.sleep(5)
+	if prefs.useClip then
+		LrTasks.startAsyncTask(function(context)
 			propertyTable.clipReady = SearchIndexAPI.isClipReady()
-		end
-	end)
+			while propertyTable.keepChecksRunning do
+				LrTasks.sleep(5)
+				propertyTable.clipReady = SearchIndexAPI.isClipReady()
+			end
+		end)
+	end
 	propertyTable.logging = prefs.logging
 	propertyTable.geminiApiKey = prefs.geminiApiKey
 	propertyTable.chatgptApiKey = prefs.chatgptApiKey
