@@ -3729,6 +3729,10 @@ function SearchIndexAPI.generateGlobalPhotoIdsForCatalog()
 end
 
 function SearchIndexAPI.startClipDownload()
+	if not (prefs and prefs.useClip) then
+		return
+	end
+
 	if SearchIndexAPI.isClipReady() then
 		log:trace("CLIP model is already cached")
 		return
@@ -3794,6 +3798,12 @@ function SearchIndexAPI.startClipDownload()
 					ErrorHandler.handleError(
 						LOC("$$$/LrGeniusAI/ClipDownload/ErrorTitle=Error downloading AI search model"),
 						error_msg
+					)
+					progressScope:done()
+					break
+				else
+					log:warn(
+						"startClipDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping poll"
 					)
 					progressScope:done()
 					break
