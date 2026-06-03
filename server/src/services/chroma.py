@@ -340,7 +340,9 @@ def get_images_batch(photo_ids: list, *, catalog_id=None) -> dict:
     if collection is None or not photo_ids:
         return {}
     normalized = [_normalize_photo_id(pid) for pid in photo_ids]
-    valid = [pid for pid in normalized if pid]
+    valid = list(
+        dict.fromkeys(pid for pid in normalized if pid)
+    )  # dedupe, preserve order
     if not valid:
         return {}
 
