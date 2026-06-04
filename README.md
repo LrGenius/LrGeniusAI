@@ -10,6 +10,10 @@
 
 ---
 
+> **Note:** The lead developer is currently [taking a break from open-source development](https://blog.fokuspunk.de/posts/taking-a-break-from-open-source/). The project remains available, but active maintenance is paused.
+
+---
+
 ## 📖 About the Project
 
 **LrGeniusAI** brings the power of modern Large Language Models (LLMs) directly into Adobe Lightroom Classic. It analyzes your photos, automatically generates accurate tags and detailed descriptions, creates AI-guided Lightroom develop edit recipes, and lets you rediscover your library with semantic free-text search using natural language.
