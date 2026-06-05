@@ -166,3 +166,5 @@ Imports use sibling-relative form within a subpackage (`from .face import …` i
 ### Editor automation (Claude Code)
 
 - A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, `ruff check`/`ruff format` for server Python, and the translation parity check for `TranslatedStrings_*.txt`. Fix anything it reports before moving on — don't disable it to get past a warning.
+
+@.claude/skills/lrc-plugin-dev.md
