@@ -352,8 +352,6 @@ jobs:
       # runtime launchers, before they get packaged into the installer below.
       # Requires a SignPath Foundation project with an artifact configuration that
       # signs *.exe files inside the uploaded zip.
-      # TODO_SIGNPATH: fill in organization-id / project-slug below, and add the
-      # SIGNPATH_API_TOKEN repo secret (SignPath project settings > API tokens).
       - name: Prepare bundled Python binaries for SignPath
         if: matrix.os_name == 'windows'
         shell: bash
@@ -384,7 +382,7 @@ jobs:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
           project-slug: LrGeniusAI
-          signing-policy-slug: release-signing
+          signing-policy-slug: test-signing
           github-artifact-id: ${{ steps.upload-unsigned-binaries.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: signed-binaries
@@ -410,8 +408,7 @@ jobs:
           # Match the installer even if the OutputDir logic in the .iss varies
           find . -name "*.exe" -path "*/Output/*" -exec mv {} . \; -quit || mv installers/windows/Output/*.exe .
 
-      # SignPath Foundation signing of the final installer .exe. Same TODOs as above
-      # apply for organization-id / project-slug / the SIGNPATH_API_TOKEN secret.
+      # SignPath Foundation signing of the final installer .exe.
       - name: Locate unsigned installer
         if: matrix.os_name == 'windows'
         id: locate-installer
@@ -436,7 +433,7 @@ jobs:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
           project-slug: LrGeniusAI
-          signing-policy-slug: release-signing
+          signing-policy-slug: test-signing
           github-artifact-id: ${{ steps.upload-unsigned-installer.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: signed-installer
