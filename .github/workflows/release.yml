@@ -350,9 +350,10 @@ jobs:
 
       # SignPath Foundation (Windows Authenticode) signing of the bundled Python
       # runtime launchers, before they get packaged into the installer below.
-      # Requires a SignPath Foundation project with an artifact configuration that
-      # signs *.exe files inside the uploaded zip.
-      - name: Prepare bundled Python binaries for SignPath
+      # The project's default artifact configuration is single-PE-file typed, so
+      # python.exe and pythonw.exe are each submitted as their own signing request
+      # rather than bundled into one zip artifact.
+      - name: Locate bundled Python binaries
         if: matrix.os_name == 'windows'
         shell: bash
         run: |
@@ -363,19 +364,17 @@ jobs:
             PY_ENV_DIR="build/lrgenius-server/env"
           fi
           echo "PY_ENV_DIR=$PY_ENV_DIR" >> "$GITHUB_ENV"
-          mkdir -p unsigned-binaries
-          cp "$PY_ENV_DIR/python.exe" "$PY_ENV_DIR/pythonw.exe" unsigned-binaries/
 
-      - name: Upload unsigned Python binaries for signing
+      - name: Upload unsigned python.exe for signing
         if: matrix.os_name == 'windows'
-        id: upload-unsigned-binaries
+        id: upload-unsigned-python-exe
         uses: actions/upload-artifact@v6
         with:
-          name: unsigned-python-binaries-${{ matrix.arch }}
-          path: unsigned-binaries/*
+          name: unsigned-python-exe-${{ matrix.arch }}
+          path: ${{ env.PY_ENV_DIR }}/python.exe
           retention-days: 1
 
-      - name: Submit Python binaries to SignPath
+      - name: Submit python.exe to SignPath
         if: matrix.os_name == 'windows'
         uses: signpath/github-action-submit-signing-request@v2
         with:
@@ -383,17 +382,44 @@ jobs:
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
           project-slug: LrGeniusAI
           signing-policy-slug: test-signing
-          github-artifact-id: ${{ steps.upload-unsigned-binaries.outputs.artifact-id }}
+          github-artifact-id: ${{ steps.upload-unsigned-python-exe.outputs.artifact-id }}
           wait-for-completion: true
-          output-artifact-directory: signed-binaries
+          output-artifact-directory: signed-python-exe
 
-      - name: Replace bundled binaries with SignPath-signed versions
+      - name: Replace python.exe with SignPath-signed version
         if: matrix.os_name == 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          cp signed-binaries/python.exe "$PY_ENV_DIR/python.exe"
-          cp signed-binaries/pythonw.exe "$PY_ENV_DIR/pythonw.exe"
+          cp signed-python-exe/python.exe "$PY_ENV_DIR/python.exe"
+
+      - name: Upload unsigned pythonw.exe for signing
+        if: matrix.os_name == 'windows'
+        id: upload-unsigned-pythonw-exe
+        uses: actions/upload-artifact@v6
+        with:
+          name: unsigned-pythonw-exe-${{ matrix.arch }}
+          path: ${{ env.PY_ENV_DIR }}/pythonw.exe
+          retention-days: 1
+
+      - name: Submit pythonw.exe to SignPath
+        if: matrix.os_name == 'windows'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
+          project-slug: LrGeniusAI
+          signing-policy-slug: test-signing
+          github-artifact-id: ${{ steps.upload-unsigned-pythonw-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-pythonw-exe
+
+      - name: Replace pythonw.exe with SignPath-signed version
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp signed-pythonw-exe/pythonw.exe "$PY_ENV_DIR/pythonw.exe"
 
       - name: Build Windows installer
         if: matrix.os_name == 'windows'
