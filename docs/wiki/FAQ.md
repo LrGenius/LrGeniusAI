@@ -18,6 +18,10 @@ Adobe **Lightroom Classic** only. Lightroom CC (cloud) and other Lightroom versi
 
 Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI) incurs costs at the respective provider's standard rates. Local models (Ollama, LM Studio) are completely free to run.
 
+### Is there a more minimalist version?
+
+Yes. **[LrGeniusTagAI](https://github.com/LrGenius/LrGeniusTagAI)** is our earlier, lightweight Lightroom Classic plugin that focuses solely on AI-generated tags and descriptions, without the full server, semantic search, culling, or editing features of LrGeniusAI. It's a good fit if you just want quick AI keywording with a simpler setup.
+
 ---
 
 ## Installation
