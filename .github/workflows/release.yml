@@ -348,6 +348,55 @@ jobs:
           chmod +x installers/macos/build_pkg.sh
           ./installers/macos/build_pkg.sh "$VERSION" "${{ matrix.arch }}"
 
+      # SignPath Foundation (Windows Authenticode) signing of the bundled Python
+      # runtime launchers, before they get packaged into the installer below.
+      # Requires a SignPath Foundation project with an artifact configuration that
+      # signs *.exe files inside the uploaded zip.
+      # TODO_SIGNPATH: fill in organization-id / project-slug below, and add the
+      # SIGNPATH_API_TOKEN repo secret (SignPath project settings > API tokens).
+      - name: Prepare bundled Python binaries for SignPath
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "build/lrgenius-server/env/Scripts/python.exe" ]; then
+            PY_ENV_DIR="build/lrgenius-server/env/Scripts"
+          else
+            PY_ENV_DIR="build/lrgenius-server/env"
+          fi
+          echo "PY_ENV_DIR=$PY_ENV_DIR" >> "$GITHUB_ENV"
+          mkdir -p unsigned-binaries
+          cp "$PY_ENV_DIR/python.exe" "$PY_ENV_DIR/pythonw.exe" unsigned-binaries/
+
+      - name: Upload unsigned Python binaries for signing
+        if: matrix.os_name == 'windows'
+        id: upload-unsigned-binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: unsigned-python-binaries-${{ matrix.arch }}
+          path: unsigned-binaries/*
+          retention-days: 1
+
+      - name: Submit Python binaries to SignPath
+        if: matrix.os_name == 'windows'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
+          project-slug: LrGeniusAI
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.upload-unsigned-binaries.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-binaries
+
+      - name: Replace bundled binaries with SignPath-signed versions
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp signed-binaries/python.exe "$PY_ENV_DIR/python.exe"
+          cp signed-binaries/pythonw.exe "$PY_ENV_DIR/pythonw.exe"
+
       - name: Build Windows installer
         if: matrix.os_name == 'windows'
         shell: bash
@@ -360,6 +409,44 @@ jobs:
           MSYS_NO_PATHCONV=1 "$ISCC" /DAppVersion="$VERSION" /O"installers/windows/Output" installers/windows/setup.iss
           # Match the installer even if the OutputDir logic in the .iss varies
           find . -name "*.exe" -path "*/Output/*" -exec mv {} . \; -quit || mv installers/windows/Output/*.exe .
+
+      # SignPath Foundation signing of the final installer .exe. Same TODOs as above
+      # apply for organization-id / project-slug / the SIGNPATH_API_TOKEN secret.
+      - name: Locate unsigned installer
+        if: matrix.os_name == 'windows'
+        id: locate-installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "path=$(ls LrGeniusAI-windows-x64-*.exe)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload unsigned installer for signing
+        if: matrix.os_name == 'windows'
+        id: upload-unsigned-installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: unsigned-installer-${{ matrix.arch }}
+          path: ${{ steps.locate-installer.outputs.path }}
+          retention-days: 1
+
+      - name: Submit installer to SignPath
+        if: matrix.os_name == 'windows'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
+          project-slug: LrGeniusAI
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.upload-unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-installer
+
+      - name: Replace installer with SignPath-signed version
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "signed-installer/$(basename "${{ steps.locate-installer.outputs.path }}")" "${{ steps.locate-installer.outputs.path }}"
 
 
       - name: Smoke test packaged backend and log cold start
