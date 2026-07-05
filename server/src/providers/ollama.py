@@ -154,7 +154,8 @@ class OllamaProvider(LLMProviderBase):
 
             # Extract metadata
             keywords = self._normalize_keywords_structure(
-                parsed_data.get("keywords", [])
+                parsed_data.get("keywords", []),
+                catalog_keywords=request.catalog_keywords,
             )
             caption = parsed_data.get("caption") if request.generate_caption else None
             title = parsed_data.get("title") if request.generate_title else None

@@ -650,6 +650,11 @@ local function showAiEditDialog(ctx)
 		providerFromKey = props.modelKey
 	end
 
+	local catalogKeywords = MetadataManager.collectCatalogKeywordNames(
+		LrApplication.activeCatalog(),
+		500
+	)
+
 	local options = {
 		scope = props.scope,
 		provider = providerFromKey,
@@ -678,6 +683,7 @@ local function showAiEditDialog(ctx)
 		submit_folder_names = props.submitFolderName,
 		showPhotoContextDialog = props.showPhotoContextDialog,
 		use_training_style = props.useTrainingStyle ~= false,
+		catalog_keywords = (catalogKeywords and #catalogKeywords > 0) and catalogKeywords or nil,
 	}
 
 	if providerFromKey == "chatgpt" then

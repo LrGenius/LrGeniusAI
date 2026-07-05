@@ -213,7 +213,8 @@ class ChatGPTProvider(LLMProviderBase):
 
             # Extract metadata
             keywords = self._normalize_keywords_structure(
-                parsed_data.get("keywords", [])
+                parsed_data.get("keywords", []),
+                catalog_keywords=request.catalog_keywords,
             )
 
             caption = parsed_data.get("caption") if request.generate_caption else None

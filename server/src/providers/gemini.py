@@ -261,7 +261,8 @@ class GeminiProvider(LLMProviderBase):
 
             # Extract metadata
             keywords = self._normalize_keywords_structure(
-                parsed_data.get("keywords", [])
+                parsed_data.get("keywords", []),
+                catalog_keywords=request.catalog_keywords,
             )
             # logger.debug(f"Extracted keywords: {keywords} .. type: {type(keywords)}")
 

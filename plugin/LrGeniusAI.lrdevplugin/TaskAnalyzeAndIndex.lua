@@ -882,6 +882,16 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		-- Send flat catalog keyword vocabulary for LLM context
+		-- (limited to 500 to avoid overflowing the prompt)
+		local catalogKeywords = MetadataManager.collectCatalogKeywordNames(
+			LrApplication.activeCatalog(),
+			500
+		)
+		if catalogKeywords and #catalogKeywords > 0 then
+			options.catalog_keywords = catalogKeywords
+		end
+
 		-- Create progress scope
 		local progressScope = LrProgressScope({
 			title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle=Processing photos..."),

@@ -784,15 +784,73 @@ class LLMProviderBase(ABC):
         return None
 
     @final
-    def _normalize_keywords_structure(self, value: Any) -> Any:
+    def _normalize_keywords_structure(
+        self, value: Any, catalog_keywords: list[str] | None = None
+    ) -> Any:
+        """
+        Normalize keyword structure from LLM response.
+
+        When catalog_keywords is provided, also:
+        - Deduplicates keywords (case-insensitive) within the returned list
+        - Normalizes keyword names to match the existing catalog vocabulary
+          (e.g. LLM returns "frühling" → uses "Frühling" from catalog)
+        - This prevents creating duplicate Lightroom keywords that differ only
+          in casing or minor spelling from existing catalog entries.
+
+        Args:
+            value: Raw keyword data from LLM (list, dict, or string)
+            catalog_keywords: Optional flat list of existing catalog keyword names
+                             for deduplication and name normalization
+
+        Returns:
+            Normalized keyword structure
+        """
+        # Build a case-insensitive lookup from catalog vocabulary for
+        # name normalization: "frühling" → "Frühling" (canonical catalog name)
+        catalog_lookup: dict[str, str] | None = None
+        if catalog_keywords:
+            catalog_lookup = {}
+            for name in catalog_keywords:
+                if isinstance(name, str) and name.strip():
+                    catalog_lookup[name.strip().lower()] = name.strip()
+
+        # Track seen names (lowercase) to remove duplicates within the response
+        seen_lower: set[str] = set()
+
+        def _resolve_name(name: str) -> str | None:
+            """Normalize keyword name: dedup + prefer catalog spelling."""
+            cleaned = name.strip()
+            if not cleaned:
+                return None
+            lower = cleaned.lower()
+            # Use catalog's canonical spelling if available (case-insensitive match)
+            if catalog_lookup and lower in catalog_lookup:
+                return catalog_lookup[lower]
+            return cleaned
+
         if isinstance(value, list):
             normalized_list: list[Any] = []
             for item in value:
                 normalized_leaf = self._normalize_keyword_leaf(item)
                 if normalized_leaf is not None:
-                    normalized_list.append(normalized_leaf)
+                    # Apply dedup + catalog name normalization
+                    leaf_name: str | None = None
+                    if isinstance(normalized_leaf, str):
+                        leaf_name = _resolve_name(normalized_leaf)
+                    elif isinstance(normalized_leaf, dict):
+                        raw = normalized_leaf.get("name")
+                        if isinstance(raw, str):
+                            resolved = _resolve_name(raw)
+                            if resolved:
+                                normalized_leaf["name"] = resolved
+                                leaf_name = resolved.lower()
+                    if leaf_name:
+                        key = leaf_name.lower() if isinstance(leaf_name, str) else ""
+                        if key and key not in seen_lower:
+                            seen_lower.add(key)
+                            normalized_list.append(normalized_leaf)
                 elif isinstance(item, (dict, list)):
-                    nested = self._normalize_keywords_structure(item)
+                    nested = self._normalize_keywords_structure(item, catalog_keywords)
                     if nested not in (None, {}, []):
                         normalized_list.append(nested)
             return normalized_list
@@ -803,13 +861,23 @@ class LLMProviderBase(ABC):
 
             normalized_dict: dict[str, Any] = {}
             for key, item in value.items():
-                normalized_item = self._normalize_keywords_structure(item)
+                normalized_item = self._normalize_keywords_structure(
+                    item, catalog_keywords
+                )
                 if normalized_item in (None, {}, []):
                     continue
                 normalized_dict[key] = normalized_item
             return normalized_dict
 
         normalized_leaf = self._normalize_keyword_leaf(value)
+        if isinstance(normalized_leaf, str):
+            resolved = _resolve_name(normalized_leaf)
+            if resolved:
+                r_lower = resolved.lower()
+                if r_lower not in seen_lower:
+                    seen_lower.add(r_lower)
+                    return resolved
+            return None
         return normalized_leaf
 
     def _prepare_edit_response_structure(self) -> dict[str, Any]:
