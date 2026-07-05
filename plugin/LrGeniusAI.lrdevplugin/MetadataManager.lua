@@ -616,6 +616,63 @@ function MetadataManager.addKeywordRecursively(
 	-- Bilingual translations (passed via `lrSynonyms`) DO land in the LR synonym field
 	-- so cross-language search works; existing keywords get an additive merge.
 	local aliasIndex = sessionCache and sessionCache._aliasIndex or nil
+
+	-- Search the full catalog keyword tree for a keyword by name (case-insensitive).
+	-- Uses a sessionCache to avoid re-traversing the tree.
+	local function findKeywordInFullTree(targetName, cache)
+		if type(targetName) ~= "string" or targetName == "" then
+			return nil
+		end
+		local targetLower = string.lower(Util.trim(targetName))
+		if targetLower == "" then
+			return nil
+		end
+
+		-- Fast path: already resolved this name in this session
+		if cache and cache._fullTreeNameIndex then
+			return cache._fullTreeNameIndex[targetLower]
+		end
+
+		-- Build the full name-to-keyword index by traversing the entire tree once
+		local nameIndex = {}
+		local function walk(keywords)
+			if type(keywords) ~= "table" then
+				return
+			end
+			for _, kw in ipairs(keywords) do
+				local okName, kwName = LrTasks.pcall(function()
+					return kw:getName()
+				end)
+				if okName and type(kwName) == "string" then
+					local key = string.lower(Util.trim(kwName))
+					if key ~= "" and not nameIndex[key] then
+						nameIndex[key] = kw
+					end
+				end
+				if type(kw.getChildren) == "function" then
+					local okCh, children = LrTasks.pcall(function()
+						return kw:getChildren() or {}
+					end)
+					if okCh then
+						walk(children)
+					end
+				end
+			end
+		end
+		local okTop, topKeywords = LrTasks.pcall(function()
+			return catalog:getKeywords() or {}
+		end)
+		if okTop then
+			walk(topKeywords)
+		end
+
+		-- Cache the index for subsequent lookups in this session
+		if cache then
+			cache._fullTreeNameIndex = nameIndex
+		end
+		return nameIndex[targetLower]
+	end
+
 	local function resolveAndAttachKeyword(candidateName, candidateAliases, currentParent, lrSynonyms)
 		if type(candidateName) ~= "string" or candidateName == "" then
 			return nil
@@ -636,6 +693,11 @@ function MetadataManager.addKeywordRecursively(
 		local resolved = findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
 		if not resolved then
 			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
+		end
+		-- Fallback: search the entire catalog tree (Lightroom-style: if the name
+		-- exists anywhere in the hierarchy, reuse rather than create a duplicate)
+		if not resolved then
+			resolved = findKeywordInFullTree(candidateName, sessionCache)
 		end
 		if resolved then
 			mergeKeywordSynonyms(resolved, filteredLrSynonyms)
