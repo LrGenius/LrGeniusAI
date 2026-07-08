@@ -807,6 +807,9 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		local regenerateMetadataForRequest = props.regenerateMetadata
+			or (props.appendMetadata and props.enableMetadata)
+
 		-- Build options for the API
 		local options = {
 			tasks = tasks,
@@ -826,7 +829,7 @@ LrTasks.startAsyncTask(function()
 			enableFaces = props.enableFaces,
 			enableVertexAI = props.enableVertexAI,
 			replace_ss = props.replaceSS,
-			regenerate_metadata = props.regenerateMetadata,
+			regenerate_metadata = regenerateMetadataForRequest,
 			prompt = props.selectedPrompt,
 			bilingual_keywords = props.bilingualKeywords,
 			keyword_secondary_language = props.keywordSecondaryLanguage,
