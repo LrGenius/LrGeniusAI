@@ -492,26 +492,20 @@ function MetadataManager.buildAliasIndex(catalog, scope)
 end
 
 ---
--- Looks up a candidate keyword in the alias index by its name first and
--- then by each of its aliases. Returns the matched LrKeyword or nil.
-local function findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
-	if type(aliasIndex) ~= "table" or type(candidateName) ~= "string" then
+-- Looks up a candidate keyword in the alias index by its explicit aliases only.
+-- The primary generated keyword name must be resolved by exact catalog name first;
+-- otherwise an existing keyword's polluted synonyms can swallow new generated
+-- keywords in append mode.
+local function findKeywordByAliases(aliasIndex, candidateAliases)
+	if type(aliasIndex) ~= "table" then
 		return nil
-	end
-	local nameKey = string.lower(Util.trim(candidateName))
-	if nameKey == "" then
-		return nil
-	end
-	local hit = aliasIndex[nameKey]
-	if hit then
-		return hit
 	end
 	if type(candidateAliases) == "table" then
 		for _, alias in ipairs(candidateAliases) do
 			if type(alias) == "string" then
 				local key = string.lower(Util.trim(alias))
 				if key ~= "" then
-					hit = aliasIndex[key]
+					local hit = aliasIndex[key]
 					if hit then
 						return hit
 					end
@@ -608,8 +602,9 @@ function MetadataManager.addKeywordRecursively(
 		return type(value) == "table" and type(value.name) == "string"
 	end
 
-	-- Resolve a keyword by alias-index (if available), then by name within the parent,
-	-- otherwise create it. Same-language `aliases` are kept only in the in-memory alias
+	-- Resolve a keyword by exact name within the parent first, then by explicit
+	-- alias-index hits if available, otherwise create it. Same-language `aliases`
+	-- are kept only in the in-memory alias
 	-- index for run-scoped dedup; they are NOT persisted to LR's synonym field, since
 	-- LLMs unreliably distinguish true synonyms from hypernyms/co-occurring concepts
 	-- and polluted synonyms cascade into the dedup tool's exact-match pass.
@@ -633,9 +628,9 @@ function MetadataManager.addKeywordRecursively(
 			end
 		end
 
-		local resolved = findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
+		local resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
 		if not resolved then
-			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
+			resolved = findKeywordByAliases(aliasIndex, candidateAliases)
 		end
 		if resolved then
 			mergeKeywordSynonyms(resolved, filteredLrSynonyms)
