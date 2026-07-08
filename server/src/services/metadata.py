@@ -341,6 +341,7 @@ class AnalysisService:
             max_tokens=options.get("max_tokens"),
             user_prompt=options.get("user_prompt"),
             submit_keywords=options["submit_keywords"],
+            submit_context_keywords=options.get("submit_context_keywords", False),
             submit_folder_names=options["submit_folder_names"],
             existing_keywords=options.get("existing_keywords"),
             location_data=options.get("location_data"),

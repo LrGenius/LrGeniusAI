@@ -6,15 +6,17 @@ from routes.index import _extract_options
 class ExtractOptionsTests(unittest.TestCase):
     def test_all_defaults(self):
         opts = _extract_options({})
-        self.assertEqual(opts["language"], "German")
+        self.assertEqual(opts["language"], "English")
         self.assertEqual(opts["temperature"], 0.2)
         self.assertTrue(opts["generate_keywords"])
         self.assertTrue(opts["generate_caption"])
         self.assertTrue(opts["generate_title"])
         self.assertTrue(opts["generate_alt_text"])
         self.assertFalse(opts["submit_keywords"])
+        self.assertFalse(opts["submit_context_keywords"])
         self.assertFalse(opts["submit_folder_names"])
         self.assertEqual(opts["existing_keywords"], None)
+        self.assertIsNone(opts["location_data"])
         self.assertEqual(opts["keyword_categories"], [])
         self.assertEqual(opts["style_strength"], 0.5)
 
@@ -66,12 +68,14 @@ class ExtractOptionsTests(unittest.TestCase):
                 "generate_keywords": "false",
                 "generate_caption": "FALSE",
                 "submit_keywords": "True",
+                "submit_context_keywords": "TRUE",
                 "submit_folder_names": "TRUE",
             }
         )
         self.assertFalse(opts["generate_keywords"])
         self.assertFalse(opts["generate_caption"])
         self.assertTrue(opts["submit_keywords"])
+        self.assertTrue(opts["submit_context_keywords"])
         self.assertTrue(opts["submit_folder_names"])
 
     def test_boolean_coercion_unrecognized_string_is_false(self):
@@ -92,6 +96,22 @@ class ExtractOptionsTests(unittest.TestCase):
         # split on commas into a list.
         opts = _extract_options({"existing_keywords": '"  Alpha , Beta,  ,Gamma "'})
         self.assertEqual(opts["existing_keywords"], ["Alpha", "Beta", "Gamma"])
+
+    def test_gps_coordinates_dict_parsed_as_location_data(self):
+        opts = _extract_options(
+            {"gps_coordinates": '{"latitude": 35.8933708, "longitude": 14.5057755}'}
+        )
+        self.assertEqual(
+            opts["location_data"],
+            {"gps_latitude": 35.893371, "gps_longitude": 14.505776},
+        )
+
+    def test_gps_coordinates_list_parsed_as_location_data(self):
+        opts = _extract_options({"gps_coordinates": "[35.8933708, 14.5057755]"})
+        self.assertEqual(
+            opts["location_data"],
+            {"gps_latitude": 35.893371, "gps_longitude": 14.505776},
+        )
 
     def test_existing_keywords_list_input(self):
         opts = _extract_options({"existing_keywords": ["Alpha", "  Beta  ", ""]})

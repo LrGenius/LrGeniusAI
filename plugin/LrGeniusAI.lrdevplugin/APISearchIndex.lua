@@ -752,6 +752,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 		generate_alt_text = tostring(options.generate_alt_text or false),
 		submit_gps = tostring(options.submit_gps or false),
 		submit_keywords = tostring(options.submit_keywords or false),
+		submit_context_keywords = tostring(options.submit_context_keywords or false),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = options.user_context,
 		gps_coordinates = options.gps_coordinates and JSON:encode(options.gps_coordinates) or nil,
@@ -858,6 +859,10 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
+	table.insert(
+		mimeChunks,
+		{ name = "submit_context_keywords", value = tostring(options.submit_context_keywords or false) }
+	)
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 	table.insert(mimeChunks, { name = "include_masks", value = tostring(options.include_masks ~= false) })
 	if options.user_context then
@@ -1620,6 +1625,7 @@ end
 -- Shared by the sequential and parallel pipelines so per-photo payloads stay identical.
 local function buildPhotoOptions(photo, photoId, options)
 	local photoOptions = {}
+	local contextKeywords
 	for k, v in pairs(options) do
 		photoOptions[k] = v
 	end
@@ -1629,7 +1635,7 @@ local function buildPhotoOptions(photo, photoId, options)
 			photoOptions.gps_coordinates = gps
 		end
 	end
-	if options.submit_keywords then
+	if options.submit_keywords or options.submit_context_keywords then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
 			if type(keywords) == "string" then
@@ -1639,6 +1645,7 @@ local function buildPhotoOptions(photo, photoId, options)
 			end
 		end
 	end
+	contextKeywords = photoOptions.existing_keywords
 	if options.submit_folder_names then
 		local originalFilePath = photo:getRawMetadata("path")
 		if originalFilePath then
@@ -1651,6 +1658,15 @@ local function buildPhotoOptions(photo, photoId, options)
 		photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
 	end
 	photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
+	if options.submit_context_keywords and contextKeywords ~= nil then
+		local keywordsString = type(contextKeywords) == "table" and table.concat(contextKeywords, ", ")
+			or tostring(contextKeywords)
+		if keywordsString ~= "" then
+			local contextPrefix =
+				"Authoritative existing Lightroom keywords for factual context only. Use them to preserve known places, landmark names, city, region, and country in titles/captions; do not invent conflicting place names; and do not simply repeat them as the generated keyword output: "
+			photoOptions.user_context = contextPrefix .. keywordsString .. "\n" .. (photoOptions.user_context or "")
+		end
+	end
 	photoOptions.photo_id = photoId
 	return photoOptions
 end
@@ -1880,45 +1896,59 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								.. ")"
 						)
 
-						-- Prepare analysis options with photo-specific context
-						local photoOptions = {}
-						for k, v in pairs(options) do
-							photoOptions[k] = v
-						end
-						if options.submit_gps then
-							local gps = photo:getRawMetadata("gps")
-							if gps then
-								photoOptions.gps_coordinates = gps
+							-- Prepare analysis options with photo-specific context
+							local photoOptions = {}
+							local contextKeywords
+							for k, v in pairs(options) do
+								photoOptions[k] = v
 							end
-						end
-						if options.submit_keywords then
-							local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-							if keywords then
-								-- Lightroom may return a comma-separated string; send as array so server
-								-- does not treat it as iterable of characters (issue #45).
-								if type(keywords) == "string" then
-									photoOptions.existing_keywords = Util.string_split(keywords, ",")
-								else
-									photoOptions.existing_keywords = keywords
+							if options.submit_gps then
+								local gps = photo:getRawMetadata("gps")
+								if gps then
+									photoOptions.gps_coordinates = gps
 								end
 							end
-						end
-						if options.submit_folder_names then
-							local originalFilePath = photo:getRawMetadata("path")
-							if originalFilePath then
-								photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
+							if options.submit_keywords or options.submit_context_keywords then
+								local keywords = photo:getFormattedMetadata("keywordTagsForExport")
+								if keywords then
+									-- Lightroom may return a comma-separated string; send as array so server
+									-- does not treat it as iterable of characters (issue #45).
+									if type(keywords) == "string" then
+										photoOptions.existing_keywords = Util.string_split(keywords, ",")
+									else
+										photoOptions.existing_keywords = keywords
+									end
+								end
 							end
-						end
-						-- Always submit catalog capture time.
-						local datetime = photo:getRawMetadata("dateTime")
-						if datetime ~= nil and type(datetime) == "number" then
-							-- Keep backwards-compatible ISO string for older backends
-							photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-							-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
-							photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
-						end
-						photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-						photoOptions.photo_id = photoId
+							contextKeywords = photoOptions.existing_keywords
+							if options.submit_folder_names then
+								local originalFilePath = photo:getRawMetadata("path")
+								if originalFilePath then
+									photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
+								end
+							end
+							-- Always submit catalog capture time.
+							local datetime = photo:getRawMetadata("dateTime")
+							if datetime ~= nil and type(datetime) == "number" then
+								-- Keep backwards-compatible ISO string for older backends
+								photoOptions.date_time = LrDate.timeToW3CDate(datetime)
+								-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
+								photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
+							end
+							photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
+							if options.submit_context_keywords and contextKeywords ~= nil then
+								local keywordsString = type(contextKeywords) == "table" and table.concat(contextKeywords, ", ")
+									or tostring(contextKeywords)
+								if keywordsString ~= "" then
+									local contextPrefix =
+										"Authoritative existing Lightroom keywords for factual context only. Use them to preserve known places, landmark names, city, region, and country in titles/captions; do not invent conflicting place names; and do not simply repeat them as the generated keyword output: "
+									photoOptions.user_context = contextPrefix
+										.. keywordsString
+										.. "\n"
+										.. (photoOptions.user_context or "")
+								end
+							end
+							photoOptions.photo_id = photoId
 
 						local success, indexResponse
 						local usePreviewThumbnails = previewRequestState.enabled

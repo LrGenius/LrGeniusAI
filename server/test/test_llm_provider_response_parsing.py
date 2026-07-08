@@ -35,6 +35,7 @@ def _request(**overrides):
         system_prompt=None,
         user_prompt=None,
         submit_keywords=False,
+        submit_context_keywords=False,
         submit_folder_names=False,
         existing_keywords=None,
     )

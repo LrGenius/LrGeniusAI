@@ -63,6 +63,9 @@ def _extract_options(data):
     options["submit_keywords"] = (
         str(data.get("submit_keywords", "false")).lower() == "true"
     )
+    options["submit_context_keywords"] = (
+        str(data.get("submit_context_keywords", "false")).lower() == "true"
+    )
     options["submit_folder_names"] = (
         str(data.get("submit_folder_names", "false")).lower() == "true"
     )
@@ -81,6 +84,32 @@ def _extract_options(data):
         ]
     else:
         options["existing_keywords"] = None
+    gps_raw = _parse_json_field(data.get("gps_coordinates"))
+    if isinstance(gps_raw, dict):
+        lat = gps_raw.get("latitude") or gps_raw.get("lat") or gps_raw.get("gps_latitude")
+        lon = (
+            gps_raw.get("longitude")
+            or gps_raw.get("lon")
+            or gps_raw.get("lng")
+            or gps_raw.get("gps_longitude")
+        )
+        try:
+            options["location_data"] = {
+                "gps_latitude": round(float(lat), 6),
+                "gps_longitude": round(float(lon), 6),
+            }
+        except (TypeError, ValueError):
+            options["location_data"] = None
+    elif isinstance(gps_raw, (list, tuple)) and len(gps_raw) >= 2:
+        try:
+            options["location_data"] = {
+                "gps_latitude": round(float(gps_raw[0]), 6),
+                "gps_longitude": round(float(gps_raw[1]), 6),
+            }
+        except (TypeError, ValueError):
+            options["location_data"] = None
+    else:
+        options["location_data"] = None
     options["folder_names"] = data.get("folder_names")
     options["user_context"] = data.get("user_context")
 

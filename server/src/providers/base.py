@@ -42,6 +42,7 @@ class MetadataGenerationRequest:
 
     # Context flags (whether to include additional context)
     submit_keywords: bool
+    submit_context_keywords: bool
     submit_folder_names: bool
 
     # Optional context data
@@ -271,7 +272,9 @@ class LLMProviderBase(ABC):
             if location_str:
                 context_additions.append(f"This photo was taken at: {location_str}")
 
-        if request.submit_keywords and request.existing_keywords:
+        if request.existing_keywords and (
+            request.submit_keywords or request.submit_context_keywords
+        ):
             # Must be a list; if still a string, split so join() doesn't iterate over characters (issue #45).
             kw_list = request.existing_keywords
             if isinstance(kw_list, str):
@@ -281,7 +284,16 @@ class LLMProviderBase(ABC):
                     str(k).strip() for k in kw_list if str(k).strip()
                 )
                 if keywords_str:
-                    context_additions.append(f"Some keywords are: {keywords_str}")
+                    if request.submit_context_keywords and not request.submit_keywords:
+                        context_additions.append(
+                            "Authoritative existing Lightroom keywords for factual "
+                            "context only. Use them to preserve known places, landmark "
+                            "names, city, region, and country in titles/captions; do "
+                            "not invent conflicting place names; and do not simply "
+                            f"repeat them as the generated keyword output: {keywords_str}"
+                        )
+                    else:
+                        context_additions.append(f"Some keywords are: {keywords_str}")
 
         if request.generate_keywords and request.catalog_keywords:
             vocab_str = ", ".join(

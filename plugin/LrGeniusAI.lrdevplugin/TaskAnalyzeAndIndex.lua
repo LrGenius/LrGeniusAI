@@ -837,7 +837,12 @@ LrTasks.startAsyncTask(function()
 			-- Sending them back to the model can cause local LLMs to echo only the
 			-- existing tags instead of generating additional visual keywords.
 			submit_keywords = props.submitKeywords and not (props.appendMetadata and props.enableMetadata),
+			-- Still send existing keywords as factual context in append mode so
+			-- title/caption/location generation can honour researched place names
+			-- without treating those keywords as the requested keyword output.
+			submit_context_keywords = props.submitKeywords and props.appendMetadata and props.enableMetadata,
 			submit_folder_names = props.submitFolderName,
+			submit_gps = props.enableMetadata,
 			submit_user_context = props.showPhotoContextDialog,
 			enableMetadata = props.enableMetadata,
 			enableFaces = props.enableFaces,
