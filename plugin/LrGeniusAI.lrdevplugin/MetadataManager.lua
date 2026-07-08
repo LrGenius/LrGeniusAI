@@ -628,15 +628,24 @@ function MetadataManager.addKeywordRecursively(
 			end
 		end
 
-		local resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
-		if not resolved then
-			resolved = findKeywordByAliases(aliasIndex, candidateAliases)
+		local resolved = nil
+		if aliasIndex then
+			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
+			if not resolved then
+				resolved = findKeywordByAliases(aliasIndex, candidateAliases)
+			end
+			if not resolved then
+				resolved =
+					createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
+			end
+		else
+			-- Fast path for normal keywording: Lightroom can find-or-create an exact
+			-- keyword with returnIfExists=true. Avoid catalog:getKeywords() per leaf,
+			-- which is very slow on large keyword catalogs.
+			resolved = createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
 		end
 		if resolved then
 			mergeKeywordSynonyms(resolved, filteredLrSynonyms)
-		else
-			resolved =
-				createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
 		end
 
 		-- Register the new keyword (and its aliases / bilingual synonyms) in the alias
