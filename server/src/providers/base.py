@@ -254,6 +254,12 @@ class LLMProviderBase(ABC):
 
         # Add language instruction
         base_prompt += f"\n\nAll results should be generated in {request.language}."
+        if request.generate_keywords:
+            base_prompt += (
+                f"\nFor keyword output, every keyword name must be written in "
+                f"{request.language}. Do not translate keyword names into any "
+                f"other language unless bilingual keywords are explicitly requested."
+            )
 
         # Add contextual information if provided and enabled
         context_additions = []
@@ -573,6 +579,7 @@ class LLMProviderBase(ABC):
         categories: dict[str, Any],
         bilingual: bool = False,
         aliases: bool = False,
+        primary_language: str | None = None,
     ) -> dict[str, Any]:
         """
         Recursively build JSON schema for nested keyword categories.
@@ -594,14 +601,16 @@ class LLMProviderBase(ABC):
             if isinstance(subcategories, dict) and len(subcategories) > 0:
                 # Nested structure - recursively build
                 schema["properties"][category_name] = self._build_nested_keyword_schema(
-                    subcategories, bilingual, aliases
+                    subcategories, bilingual, aliases, primary_language
                 )
             else:
                 # Leaf node - array of keywords
                 schema["properties"][category_name] = {
                     "type": "array",
                     "items": self._keyword_leaf_item_schema(
-                        request_bilingual=bilingual, request_aliases=aliases
+                        request_bilingual=bilingual,
+                        request_aliases=aliases,
+                        primary_language=primary_language,
                     ),
                 }
             if category_name not in schema["required"]:
@@ -610,12 +619,24 @@ class LLMProviderBase(ABC):
         return schema
 
     def _keyword_leaf_item_schema(
-        self, request_bilingual: bool, request_aliases: bool = False
+        self,
+        request_bilingual: bool,
+        request_aliases: bool = False,
+        primary_language: str | None = None,
     ) -> dict[str, Any]:
+        primary_language = primary_language or "the selected primary language"
         if not request_bilingual and not request_aliases:
-            return {"type": "string"}
+            return {
+                "type": "string",
+                "description": f"Keyword in {primary_language}.",
+            }
 
-        properties: dict[str, Any] = {"name": {"type": "string"}}
+        properties: dict[str, Any] = {
+            "name": {
+                "type": "string",
+                "description": f"Keyword name in {primary_language}.",
+            }
+        }
         required = ["name"]
         if request_aliases:
             properties["aliases"] = {"type": "array", "items": {"type": "string"}}
@@ -696,6 +717,7 @@ class LLMProviderBase(ABC):
                         request.keyword_categories,
                         request.bilingual_keywords,
                         request.generate_aliases,
+                        request.language,
                     )
                 else:
                     # Flat list
@@ -709,8 +731,9 @@ class LLMProviderBase(ABC):
                         keywords_schema["properties"][category] = {
                             "type": "array",
                             "items": self._keyword_leaf_item_schema(
-                                request.bilingual_keywords,
-                                request.generate_aliases,
+                                request_bilingual=request.bilingual_keywords,
+                                request_aliases=request.generate_aliases,
+                                primary_language=request.language,
                             ),
                         }
                         if category not in keywords_schema["required"]:
@@ -721,7 +744,9 @@ class LLMProviderBase(ABC):
                 schema["properties"]["keywords"] = {
                     "type": "array",
                     "items": self._keyword_leaf_item_schema(
-                        request.bilingual_keywords, request.generate_aliases
+                        request_bilingual=request.bilingual_keywords,
+                        request_aliases=request.generate_aliases,
+                        primary_language=request.language,
                     ),
                 }
             schema["required"].append("keywords")

@@ -810,6 +810,17 @@ LrTasks.startAsyncTask(function()
 		local regenerateMetadataForRequest = props.regenerateMetadata
 			or (props.appendMetadata and props.enableMetadata)
 
+		local metadataPrompt = props.selectedPrompt
+		if metadataPrompt and props.enableMetadata then
+			local selectedLanguage = props.language or "English"
+			metadataPrompt = metadataPrompt
+				.. "\n\nLanguage requirement: generate all requested metadata in "
+				.. selectedLanguage
+				.. ". Keyword names must be in "
+				.. selectedLanguage
+				.. "; do not translate keyword names into any other language unless bilingual keywords are explicitly enabled."
+		end
+
 		-- Build options for the API
 		local options = {
 			tasks = tasks,
@@ -822,7 +833,10 @@ LrTasks.startAsyncTask(function()
 			generate_caption = props.generateCaption,
 			generate_title = props.generateTitle,
 			generate_alt_text = props.generateAltText,
-			submit_keywords = props.submitKeywords,
+			-- In append mode, existing keywords are already preserved by Lightroom.
+			-- Sending them back to the model can cause local LLMs to echo only the
+			-- existing tags instead of generating additional visual keywords.
+			submit_keywords = props.submitKeywords and not (props.appendMetadata and props.enableMetadata),
 			submit_folder_names = props.submitFolderName,
 			submit_user_context = props.showPhotoContextDialog,
 			enableMetadata = props.enableMetadata,
@@ -830,7 +844,7 @@ LrTasks.startAsyncTask(function()
 			enableVertexAI = props.enableVertexAI,
 			replace_ss = props.replaceSS,
 			regenerate_metadata = regenerateMetadataForRequest,
-			prompt = props.selectedPrompt,
+			prompt = metadataPrompt,
 			bilingual_keywords = props.bilingualKeywords,
 			keyword_secondary_language = props.keywordSecondaryLanguage,
 			generate_aliases = props.keywordAliases,

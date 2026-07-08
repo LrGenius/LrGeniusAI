@@ -41,7 +41,7 @@ def _extract_options(data):
     options["provider"] = data.get("provider")
     options["model"] = data.get("model")
     options["api_key"] = data.get("api_key")
-    options["language"] = data.get("language", "German")
+    options["language"] = data.get("language", "English")
     options["temperature"] = float(data.get("temperature", 0.2))
     try:
         _mt = data.get("max_tokens")
