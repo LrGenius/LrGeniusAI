@@ -2,10 +2,10 @@
 //! `services/index.py::process_image_task`'s core loop: embeddings
 //! (SigLIP2), pHash + culling metrics (always computed), faces (when
 //! requested), catalog association, existing-record merge for
-//! `regenerate_metadata=false`, and LLM metadata generation across all
-//! four providers (Ollama, OpenAI, Gemini, LM Studio).
-//! Vertex AI embedding generation is M8 (needs cloud auth) — requesting
-//! it returns a clear "not yet available" warning.
+//! `regenerate_metadata=false`, LLM metadata generation across all four
+//! providers (Ollama, OpenAI, Gemini, LM Studio), and optional Vertex AI
+//! embeddings (silently skipped, not an error, when no project is
+//! configured — matching Python's behavior exactly).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use serde_json::{json, Map, Value};
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
-use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
+use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
 
 use crate::state::AppState;
 
@@ -38,6 +38,8 @@ struct ParsedOptions {
     model: Option<String>,
     api_key: Option<String>,
     capture_time: Option<f64>,
+    vertex_project_id: Option<String>,
+    vertex_location: Option<String>,
     metadata_request: MetadataOptions,
 }
 
@@ -128,6 +130,14 @@ fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         model: fields.get("model").cloned(),
         api_key: fields.get("api_key").cloned(),
         capture_time,
+        vertex_project_id: fields
+            .get("vertex_project_id")
+            .or_else(|| fields.get("vertexProjectId"))
+            .cloned(),
+        vertex_location: fields
+            .get("vertex_location")
+            .or_else(|| fields.get("vertexLocation"))
+            .cloned(),
         metadata_request: MetadataOptions {
             language: fields
                 .get("language")
@@ -284,11 +294,6 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
     let mut failure_count = conversion_errors.len();
     let mut error_messages = conversion_errors;
     let mut warnings: Vec<String> = Vec::new();
-
-    if options.compute_vertexai {
-        warnings
-            .push("Vertex AI embeddings are not yet available in this backend build.".to_string());
-    }
 
     let store = state.store();
 
@@ -647,6 +652,45 @@ async fn index_one(
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");
                     warning = Some(format!("{filename} faces: {e}"));
+                }
+            }
+        }
+    }
+
+    // Vertex AI embeddings: optional, separate table. Silently skipped
+    // (no warning) when no project is configured, matching Python's
+    // `if vertexai_service.is_available(...):` guard with no else branch.
+    if options.compute_vertexai {
+        let already_has_vertex = store
+            .get(VERTEX_TABLE, std::slice::from_ref(&photo_id.to_string()))
+            .await
+            .ok()
+            .is_some_and(|v| v.first().is_some_and(|r| r.vector.is_some()));
+        if options.regenerate_metadata || !already_has_vertex {
+            if let Some(client) = lrg_providers::vertexai::VertexAiProvider::new(
+                options.vertex_project_id.as_deref(),
+                options.vertex_location.as_deref(),
+            ) {
+                let embeddings = client
+                    .get_image_embeddings(std::slice::from_ref(&image_bytes.to_vec()))
+                    .await;
+                if let Some(Some(embedding)) = embeddings.into_iter().next() {
+                    let mut vertex_meta = Map::new();
+                    vertex_meta.insert("photo_id".into(), json!(photo_id));
+                    vertex_meta.insert("uuid".into(), json!(photo_id));
+                    let vertex_record = StoreRecord {
+                        id: photo_id.to_string(),
+                        vector: Some(embedding),
+                        metadata: vertex_meta,
+                    };
+                    if let Err(e) = store
+                        .upsert(VERTEX_TABLE, std::slice::from_ref(&vertex_record))
+                        .await
+                    {
+                        log::error!("Vertex AI embedding upsert failed for {photo_id}: {e}");
+                    } else {
+                        log::debug!("Photo {photo_id}: Vertex AI embedding stored.");
+                    }
                 }
             }
         }
