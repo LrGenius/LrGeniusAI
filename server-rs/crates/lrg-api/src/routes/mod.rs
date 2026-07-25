@@ -1,5 +1,6 @@
 pub mod clip;
 pub mod db;
+pub mod edit;
 pub mod faces;
 pub mod find_similar;
 pub mod group_similar;

@@ -762,7 +762,8 @@ async fn generate_metadata_for_photo(
             Ok(client.generate_metadata(&request).await)
         }
         "lmstudio" => {
-            let client = lrg_providers::lmstudio::LmStudioProvider::new(mo.lmstudio_base_url.clone());
+            let client =
+                lrg_providers::lmstudio::LmStudioProvider::new(mo.lmstudio_base_url.clone());
             Ok(client.generate_metadata(&request).await)
         }
         other => Err(format!("Unknown provider '{other}'.")),
