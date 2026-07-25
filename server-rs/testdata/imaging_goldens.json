@@ -1,0 +1,107 @@
+{
+ "note": "inputs regenerable: see make_imaging_goldens.py; PIL RGB arrays",
+ "cases": {
+  "gradient": {
+   "shape": [
+    480,
+    640,
+    3
+   ],
+   "phash": "a13ca1353f417b43",
+   "metrics": {
+    "cull_sharpness": 0.0008,
+    "cull_exposure": 0.9716,
+    "cull_noise": 0.012,
+    "cull_highlight_clip": 0.0193,
+    "cull_shadow_clip": 0.0242,
+    "cull_technical_score": 0.4887,
+    "cull_aesthetic": 0.6443
+   }
+  },
+  "noise": {
+   "shape": [
+    600,
+    800,
+    3
+   ],
+   "phash": "e2abe93417d17c60",
+   "metrics": {
+    "cull_sharpness": 0.8505,
+    "cull_exposure": 0.9996,
+    "cull_noise": 0.6969,
+    "cull_highlight_clip": 0.0,
+    "cull_shadow_clip": 0.0,
+    "cull_technical_score": 0.8205,
+    "cull_aesthetic": 0.5554
+   }
+  },
+  "dark": {
+   "shape": [
+    480,
+    640,
+    3
+   ],
+   "phash": "ea57e855a8555555",
+   "metrics": {
+    "cull_sharpness": 0.0,
+    "cull_exposure": 0.25,
+    "cull_noise": 0.0,
+    "cull_highlight_clip": 0.0,
+    "cull_shadow_clip": 0.0,
+    "cull_technical_score": 0.2375,
+    "cull_aesthetic": 0.05
+   }
+  },
+  "bright_clipped": {
+   "shape": [
+    480,
+    640,
+    3
+   ],
+   "phash": "a8a8a855aa57ea17",
+   "metrics": {
+    "cull_sharpness": 0.0,
+    "cull_exposure": 0.0,
+    "cull_noise": 0.0,
+    "cull_highlight_clip": 1.0,
+    "cull_shadow_clip": 0.0,
+    "cull_technical_score": 0.15,
+    "cull_aesthetic": 0.0
+   }
+  },
+  "checker": {
+   "shape": [
+    512,
+    512,
+    3
+   ],
+   "phash": "d5aa55aa55aa55aa",
+   "metrics": {
+    "cull_sharpness": 0.9434,
+    "cull_exposure": 0.75,
+    "cull_noise": 0.3473,
+    "cull_highlight_clip": 0.5,
+    "cull_shadow_clip": 0.5,
+    "cull_technical_score": 0.8321,
+    "cull_aesthetic": 0.6
+   }
+  },
+  "mixed": {
+   "shape": [
+    480,
+    640,
+    3
+   ],
+   "phash": "c6463939393bc6c6",
+   "metrics": {
+    "cull_sharpness": 0.3655,
+    "cull_exposure": 0.9537,
+    "cull_noise": 0.0947,
+    "cull_highlight_clip": 0.0193,
+    "cull_shadow_clip": 0.0242,
+    "cull_technical_score": 0.6523,
+    "cull_aesthetic": 0.6575
+   }
+  }
+ }
+}
