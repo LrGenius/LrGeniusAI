@@ -497,24 +497,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # TODO(M9 follow-up): server/Dockerfile still builds the Python
-      # backend. Needs a rewrite to build/ship the Rust binary
-      # (server-rs) instead — deferred separately from the installer
-      # pipeline rewrite above since it also needs a base-image and
-      # ONNX Runtime shared-lib strategy decision.
-      - name: Update backend version info from tag
+      - name: Resolve backend version build-args from tag
+        id: backend-version
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           BUILD_DATE=$(date +%Y%m%d)
-          VERSION_FILE="server/src/version_info.py"
-          cat > "$VERSION_FILE" <<EOF
-          BACKEND_VERSION = "${VERSION}"
-          BACKEND_RELEASE_TAG = "v${VERSION}"
-          BACKEND_BUILD = ${BUILD_DATE}
-          EOF
-          echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
+          {
+            echo "version=${VERSION}"
+            echo "release_tag=v${VERSION}"
+            echo "build=${BUILD_DATE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Backend version build-args: version=${VERSION} build=${BUILD_DATE}"
 
       - name: Prepare image name
         id: image-name
@@ -539,10 +534,14 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ./server
-          file: ./server/Dockerfile
+          context: ./server-rs
+          file: ./server-rs/Dockerfile
           platforms: ${{ matrix.docker_platform }}
           push: true
+          build-args: |
+            LRG_BACKEND_VERSION=${{ steps.backend-version.outputs.version }}
+            LRG_BACKEND_RELEASE_TAG=${{ steps.backend-version.outputs.release_tag }}
+            LRG_BACKEND_BUILD=${{ steps.backend-version.outputs.build }}
           tags: ${{ steps.image-name.outputs.registry_image }}:${{ github.ref_name }}-${{ matrix.arch }}
           cache-from: type=gha,scope=lrgeniusai-server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=lrgeniusai-server-${{ matrix.arch }}

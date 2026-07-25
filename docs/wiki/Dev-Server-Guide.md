@@ -1,10 +1,10 @@
 # Server Guide
 
-The Python backend (`geniusai-server`) acts as the brains of LrGeniusAI. It runs locally via Flask/Waitress and handles Large Language Model (LLM) inference, image embedding generation using OpenCLIP, and vector database management.
+The backend (`geniusai-server`) acts as the brains of LrGeniusAI. It runs locally and handles Large Language Model (LLM) inference, image embedding generation, and vector database management. It's being rewritten from Python (Flask/Waitress, OpenCLIP, ChromaDB) to Rust (axum, ONNX Runtime, LanceDB) for lower and more deterministic memory use; both implementations speak the same HTTP API.
 
 ## Main Documentation
 
-For configuration settings, dependency management, and architecture details, refer to the [`server/README.md`](Server-README).
+For configuration settings, dependency management, and architecture details, refer to the [`server/README.md`](Dev-Server-README) (Python) or [`server-rs/README.md`](../server-rs/README.md) (Rust, in this repo — not yet mirrored to a wiki page).
 
 ## Key Responsibilities
 

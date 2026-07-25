@@ -9,7 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **LrGeniusAI** is an Adobe Lightroom Classic plugin that brings AI-powered photo analysis (tagging, descriptions, semantic search, develop edits, face recognition) into Lightroom. It consists of two main components:
 
 - **Plugin** (`plugin/LrGeniusAI.lrdevplugin/`) — Lua frontend using the Lightroom SDK
-- **Backend** (`server/`) — Python/Flask server running as a local background process
+- **Backend** — a local background process the plugin talks to over HTTP on port 19819. Two implementations currently coexist in this repo on the `rust-rewrite` branch:
+  - **`server-rs/`** — the Rust rewrite (axum + LanceDB + `ort`/ONNX Runtime), single binary `geniusai-server`, byte-compatible with the same API contract. See [server-rs/README.md](server-rs/README.md).
+  - **`server/`** — the original Python/Flask server, still the one that ships until the rewrite is validated end-to-end in Lightroom (see the plan file referenced in project memory for milestone status).
+
+When asked to work on "the backend" with no further qualifier, check which of `server/` or `server-rs/` the task actually concerns — they implement the same API but are separate codebases in different languages; changes to one do not apply to the other.
 
 ---
 
@@ -26,6 +30,17 @@ uv sync --no-dev         # production-equivalent install (matches the Dockerfile
 ```
 
 To add or upgrade a dependency, use `uv add <pkg>` (or `uv add --dev <pkg>` for dev-only). This updates both `pyproject.toml` and `uv.lock`; commit both. The Dockerfile picks them up automatically via `uv sync --locked` — no Dockerfile edit needed for routine dependency changes.
+
+### Backend (Rust)
+
+Standard cargo workspace, no extra tooling beyond `rustup`/`cargo`.
+
+```bash
+cd server-rs
+cargo build --release -p lrg-server
+```
+
+Model files (SigLIP2 ONNX export, InsightFace buffalo_l) are not auto-downloaded yet — see [server-rs/README.md](server-rs/README.md) for how to produce/place them and which env vars point the server at them.
 
 ### Pre-commit hooks (formatting + linting)
 
@@ -61,6 +76,16 @@ uv run pytest test/test_api_endpoints.py   # single file
 ```bash
 cd server
 uv run python src/geniusai_server.py
+```
+
+### Backend (Rust) — lint, test, run
+
+```bash
+cd server-rs
+cargo fmt
+cargo clippy --workspace --all-targets   # must be clean, zero warnings
+cargo test --workspace
+cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
 ```
 
 ### Plugin — load into Lightroom
@@ -133,10 +158,25 @@ Imports use sibling-relative form within a subpackage (`from .face import …` i
 
 **Configuration** is driven by environment variables (e.g. `GENIUSAI_PORT`, `GENIUSAI_BACKUP_ENABLED`, `GENIUSAI_FACES_CLUSTER_ENABLED`).
 
+### Backend (Rust) — `server-rs/`
+
+Cargo workspace, one binary (`geniusai-server`) across these crates:
+
+- `lrg-common` — config/CLI, error→envelope, version (baked in via `LRG_BACKEND_*` build-time env vars, `option_env!`), logging+rotation, PID/OK lifecycle handshake.
+- `lrg-store` — LanceDB wrapper (replaces ChromaDB), Arrow schemas, `db_path` bind state machine, backup, stats. `lrg-chroma-reader` is migration-only: reads an existing Chroma dir (WAL + HNSW segment binaries) to migrate into LanceDB, no Chroma dependency at runtime.
+- `lrg-imaging` — image_convert, EXIF/IPTC/XMP, pHash, culling metrics (port of `utils/image_convert.py` + related).
+- `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, SCRFD face detection + ArcFace embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
+- `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
+- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, Vertex AI via `gcp_auth`), edit-recipe schemas.
+- `lrg-api` — axum routers (one module per Flask blueprint equivalent under `routes/`), `db_path` auto-bind middleware, jobs registry.
+- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
+
+Same API envelope and endpoint contract as the Python backend — `APISearchIndex.lua` does not need to know which one it's talking to. When porting an endpoint from Python to Rust (or fixing one), read the real Python source behavior first rather than assuming from docs/config — this codebase has repeatedly found real backend behavior diverging from what config files or docstrings imply (see project memory for specific examples caught this way).
+
 ### Data & Identity
 
 - Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
-- Vector search: ChromaDB collections `image_embeddings` (SigLIP2) and `image_embeddings_vertex` (Vertex AI).
+- Vector search: ChromaDB collections `image_embeddings` (SigLIP2) and `image_embeddings_vertex` (Vertex AI) in the Python backend; the equivalent LanceDB tables (`IMAGE_TABLE`/`VERTEX_TABLE`/`FACE_TABLE` in `lrg_store`) in the Rust backend.
 - Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
 
 ---
@@ -158,6 +198,14 @@ Imports use sibling-relative form within a subpackage (`from .face import …` i
 - Always use the configured `logger`; include `exc_info=True` for exceptions.
 - Manage dependencies via `uv add` / `uv remove` (updates `pyproject.toml` + `uv.lock`); commit both. The Dockerfile re-runs `uv sync --locked` automatically — only touch it for non-dependency changes (system packages, env vars, build steps).
 - Code must pass `bash server/scripts/lint_format.sh` (ruff check + ruff format).
+
+### Rust / Backend (`server-rs/`)
+
+- Routes in `lrg-api::routes` (one axum `Router` per domain, merged in `lrg_api::build_router`); business logic in `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`.
+- Always use the `log` facade (`log::info!`/`warn!`/`error!`), matching the Python backend's logging discipline.
+- Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
+- Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
+- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed.
 
 ### Docs
 
