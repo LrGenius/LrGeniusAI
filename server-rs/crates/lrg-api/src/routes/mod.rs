@@ -4,6 +4,7 @@ pub mod edit;
 pub mod faces;
 pub mod find_similar;
 pub mod group_similar;
+pub mod import_;
 pub mod index;
 pub mod index_upload;
 pub mod keywords;

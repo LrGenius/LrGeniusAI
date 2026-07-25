@@ -504,6 +504,12 @@ async fn index_one(
                             && !matches!(&keywords, Value::Object(o) if o.is_empty())
                         {
                             main_metadata.insert("keywords".into(), json!(keywords.to_string()));
+                            main_metadata.insert(
+                                "flattened_keywords".into(),
+                                json!(lrg_analysis::keywords::flatten_keywords_to_string(
+                                    &keywords
+                                )),
+                            );
                         }
                     }
                     main_metadata.insert(

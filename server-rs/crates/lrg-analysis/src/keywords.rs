@@ -3,8 +3,14 @@
 //! recursive keyword-structure merge-replacement used by
 //! `apply_keyword_merges`. Embedding generation (CLIP) and LLM cluster
 //! validation are I/O and live in `lrg-api`/`lrg-providers`.
+//!
+//! Also carries `flatten_keywords_to_string`, ported from
+//! `services/index.py::_flatten_keywords` (a different Python module,
+//! but the same "keyword structure" domain) — the `flattened_keywords`
+//! field it produces is what search substring-matches against and what
+//! `replace_in_flattened_keywords` above rewrites during merges.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
 /// Normalize + dedupe (case-insensitive) a raw keyword name list, matching
@@ -183,6 +189,97 @@ pub fn replace_in_flattened_keywords(
     (new_parts.join(", "), changed)
 }
 
+fn normalize_keyword_text(value: &Value, seen: &mut HashSet<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let push_unique = |out: &mut Vec<String>, seen: &mut HashSet<String>, text: &str| {
+        let text = text.trim();
+        if !text.is_empty() && seen.insert(text.to_lowercase()) {
+            out.push(text.to_string());
+        }
+    };
+    match value {
+        Value::String(s) => push_unique(&mut out, seen, s),
+        Value::Object(map) => {
+            if let Some(name) = map.get("name").and_then(Value::as_str) {
+                push_unique(&mut out, seen, name);
+            }
+            for field in ["synonyms", "aliases", "synonym_aliases"] {
+                if let Some(Value::Array(bucket)) = map.get(field) {
+                    for entry in bucket {
+                        if let Some(s) = entry.as_str() {
+                            push_unique(&mut out, seen, s);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn collect_nested_keywords(
+    map: &Map<String, Value>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    for value in map.values() {
+        match value {
+            Value::Array(items) => {
+                for kw in items {
+                    out.extend(normalize_keyword_text(kw, seen));
+                }
+            }
+            Value::Object(m) if !m.is_empty() => {
+                if m.contains_key("name") {
+                    out.extend(normalize_keyword_text(value, seen));
+                } else {
+                    collect_nested_keywords(m, seen, out);
+                }
+            }
+            _ => out.extend(normalize_keyword_text(value, seen)),
+        }
+    }
+}
+
+/// Port of `services/index.py::_flatten_keywords`: flatten a flat list,
+/// nested category dict, or already-flat string of keywords (plain
+/// strings or `{name, synonyms, aliases, synonym_aliases}` objects) into
+/// a single deduped (case-insensitive), comma-separated display string.
+pub fn flatten_keywords_to_string(keywords: &Value) -> String {
+    let is_falsy = match keywords {
+        Value::Null => true,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+        Value::String(s) => s.is_empty(),
+        Value::Bool(false) => true,
+        _ => false,
+    };
+    if is_falsy {
+        return String::new();
+    }
+    if let Value::String(s) = keywords {
+        return s.clone();
+    }
+
+    let mut seen = HashSet::new();
+    match keywords {
+        Value::Array(items) => {
+            let mut flattened = Vec::new();
+            for kw in items {
+                flattened.extend(normalize_keyword_text(kw, &mut seen));
+            }
+            flattened.join(", ")
+        }
+        Value::Object(map) => {
+            let mut all = Vec::new();
+            collect_nested_keywords(map, &mut seen, &mut all);
+            all.join(", ")
+        }
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +386,53 @@ mod tests {
         let (result, changed) = replace_in_flattened_keywords("Car, Truck", &merge_map);
         assert!(!changed);
         assert_eq!(result, "Car, Truck");
+    }
+
+    #[test]
+    fn flatten_keywords_empty_and_string_passthrough() {
+        assert_eq!(flatten_keywords_to_string(&Value::Null), "");
+        assert_eq!(flatten_keywords_to_string(&json!([])), "");
+        assert_eq!(flatten_keywords_to_string(&json!({})), "");
+        assert_eq!(flatten_keywords_to_string(&json!("Car, Dog")), "Car, Dog");
+    }
+
+    #[test]
+    fn flatten_keywords_flat_list_of_strings() {
+        assert_eq!(
+            flatten_keywords_to_string(&json!(["Car", "Dog", "Car"])),
+            "Car, Dog"
+        );
+    }
+
+    #[test]
+    fn flatten_keywords_structured_objects_include_synonyms_and_aliases() {
+        let value = json!([
+            {"name": "Auto", "synonyms": ["Car"], "aliases": ["Kraftfahrzeug"]},
+            "Dog",
+        ]);
+        assert_eq!(
+            flatten_keywords_to_string(&value),
+            "Auto, Car, Kraftfahrzeug, Dog"
+        );
+    }
+
+    #[test]
+    fn flatten_keywords_nested_category_dict_recurses() {
+        let value = json!({
+            "People": {"Family": ["Mom", "Dad"]},
+            "Places": ["Beach"],
+        });
+        let result = flatten_keywords_to_string(&value);
+        let mut parts: Vec<&str> = result.split(", ").collect();
+        parts.sort_unstable();
+        assert_eq!(parts, vec!["Beach", "Dad", "Mom"]);
+    }
+
+    #[test]
+    fn flatten_keywords_dict_leaf_with_name_is_not_recursed_into() {
+        // A dict value that itself looks like a {name, synonyms} keyword
+        // object (not a further category) must be treated as a leaf.
+        let value = json!({"Category": {"name": "Sunset", "synonyms": ["Dusk"]}});
+        assert_eq!(flatten_keywords_to_string(&value), "Sunset, Dusk");
     }
 }
