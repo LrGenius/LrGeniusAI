@@ -23,6 +23,172 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/get/ids", get(get_ids))
         .route("/remove", post(remove_image))
         .route("/remove/metadata", post(remove_metadata))
+        .route("/sync/claim", post(sync_claim))
+        .route("/sync/cleanup", post(sync_cleanup))
+}
+
+/// Port of `chroma_service.sync_claim`: add catalog_id to each photo's
+/// catalog_ids (claim existing backend photos for this catalog).
+async fn sync_claim(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
+    let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    let catalog_id = data
+        .get("catalog_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(catalog_id) = catalog_id else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "catalog_id is required"})),
+        )
+            .into_response();
+    };
+    let Some(photo_ids) = data.get("photo_ids").and_then(Value::as_array) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "photo_ids must be a list"})),
+        )
+            .into_response();
+    };
+    log::info!(
+        "sync/claim request: catalog_id={catalog_id}, photo_ids count={}",
+        photo_ids.len()
+    );
+
+    // Deduplicate (virtual copies share a file-based id), preserve order.
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<String> = photo_ids
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && seen.insert(s.to_string()))
+        .map(str::to_string)
+        .collect();
+
+    let Some(store) = state.store() else {
+        return Json(json!({"status": "ok", "claimed": 0, "errors": 0})).into_response();
+    };
+
+    let mut claimed = 0usize;
+    let mut errors = 0usize;
+    for chunk in unique.chunks(200) {
+        let result: Result<usize, String> = async {
+            let mut records = store
+                .get(IMAGE_TABLE, chunk)
+                .await
+                .map_err(|e| e.to_string())?;
+            for record in &mut records {
+                let mut ids_set = meta::parse_catalog_ids(&record.metadata);
+                ids_set.insert(catalog_id.to_string());
+                record.metadata.insert(
+                    meta::CATALOG_IDS_FIELD.into(),
+                    Value::String(meta::serialize_catalog_ids(&ids_set)),
+                );
+                let id = record.id.clone();
+                meta::ensure_photo_metadata(&id, &mut record.metadata);
+            }
+            let n = records.len();
+            store
+                .upsert(IMAGE_TABLE, &records)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(n)
+        }
+        .await;
+        match result {
+            Ok(n) => claimed += n,
+            Err(e) => {
+                log::warn!("sync_claim batch failed: {e}");
+                errors += chunk.len();
+            }
+        }
+    }
+    Json(json!({"status": "ok", "claimed": claimed, "errors": errors})).into_response()
+}
+
+/// Port of `chroma_service.sync_cleanup`: disassociate catalog_id from
+/// photos no longer in the active list (soft state only, never deletes).
+async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
+    let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    let catalog_id = data
+        .get("catalog_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(catalog_id) = catalog_id else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "catalog_id is required"})),
+        )
+            .into_response();
+    };
+    let photo_ids = data.get("photo_ids");
+    if photo_ids.is_some_and(|v| !v.is_null() && !v.is_array()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "photo_ids must be a list or omit for empty"})),
+        )
+            .into_response();
+    }
+    let active: std::collections::HashSet<&str> = photo_ids
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+
+    let Some(store) = state.store() else {
+        return Json(json!({"status": "ok", "checked": 0, "disassociated": 0})).into_response();
+    };
+
+    let result: Result<(usize, usize), String> = async {
+        let rows = store
+            .scan_meta(IMAGE_TABLE)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut checked = 0usize;
+        let mut disassociated = 0usize;
+        for (id, metadata) in rows {
+            let mut ids_set = meta::parse_catalog_ids(&metadata);
+            if !ids_set.contains(catalog_id) {
+                continue;
+            }
+            checked += 1;
+            if active.contains(id.as_str()) {
+                continue;
+            }
+            // Read-modify-write keeping the vector (Python _remove_catalog_id).
+            let mut records = store
+                .get(IMAGE_TABLE, std::slice::from_ref(&id))
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(record) = records.first_mut() else {
+                continue;
+            };
+            ids_set.remove(catalog_id);
+            record.metadata.insert(
+                meta::CATALOG_IDS_FIELD.into(),
+                Value::String(meta::serialize_catalog_ids(&ids_set)),
+            );
+            meta::ensure_photo_metadata(&id, &mut record.metadata);
+            store
+                .upsert(IMAGE_TABLE, &records)
+                .await
+                .map_err(|e| e.to_string())?;
+            disassociated += 1;
+        }
+        Ok((checked, disassociated))
+    }
+    .await;
+
+    match result {
+        Ok((checked, disassociated)) => {
+            Json(json!({"status": "ok", "checked": checked, "disassociated": disassociated}))
+                .into_response()
+        }
+        Err(e) => {
+            log::error!("Sync cleanup failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response()
+        }
+    }
 }
 
 fn body_photo_id(body: &Option<Json<Value>>) -> Option<String> {
@@ -183,7 +349,10 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         return not_found();
     };
 
-    let records = match store.get(IMAGE_TABLE, std::slice::from_ref(&photo_id)).await {
+    let records = match store
+        .get(IMAGE_TABLE, std::slice::from_ref(&photo_id))
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             log::error!("Error retrieving photo data for {photo_id}: {e}");
