@@ -8,12 +8,15 @@ license.workspace = true
 lrg-common.workspace = true
 lrg-store.workspace = true
 lrg-ml.workspace = true
+lrg-analysis.workspace = true
 
 axum.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [dev-dependencies]
 lrg-store.workspace = true

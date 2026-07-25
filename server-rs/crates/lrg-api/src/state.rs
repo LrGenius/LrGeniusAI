@@ -48,6 +48,17 @@ impl AppState {
         self.store.read().unwrap().clone()
     }
 
+    /// Where per-catalog side files (`person_names.json`) live — the
+    /// LanceDB root, matching where Python's `person_names.json` sat
+    /// alongside `chroma.sqlite3` inside the old Chroma dir.
+    pub fn lance_root(&self) -> Option<PathBuf> {
+        self.db_path
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|p| migrate::lance_root_for_db(p))
+    }
+
     fn is_bound_to(&self, path: &PathBuf) -> bool {
         self.db_path.read().unwrap().as_ref() == Some(path) && self.store.read().unwrap().is_some()
     }

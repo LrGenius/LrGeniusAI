@@ -3887,8 +3887,11 @@ name = "lrg-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "http-body-util",
+ "image",
  "log",
+ "lrg-analysis",
  "lrg-common",
  "lrg-ml",
  "lrg-store",

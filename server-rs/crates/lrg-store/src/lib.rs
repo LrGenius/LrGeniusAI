@@ -323,6 +323,19 @@ impl Store {
         Ok(out)
     }
 
+    /// Full table scan including vectors — used by face clustering and
+    /// face-similarity queries, both brute-force over what is normally a
+    /// few hundred to a few thousand rows per catalog.
+    pub async fn scan_all(&self, table: &str) -> Result<Vec<StoreRecord>> {
+        let tbl = self.table(table).await?;
+        let batches: Vec<RecordBatch> = tbl.query().execute().await?.try_collect().await?;
+        let mut out = Vec::new();
+        for batch in &batches {
+            out.extend(batch_to_records(batch));
+        }
+        Ok(out)
+    }
+
     pub async fn count(&self, table: &str) -> Result<usize> {
         let tbl = self.table(table).await?;
         Ok(tbl.count_rows(None).await?)
