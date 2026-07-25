@@ -3,4 +3,5 @@
 //! land in M6-M8.
 
 pub mod clustering;
+pub mod face_aggregate;
 pub mod persons;

@@ -1,0 +1,576 @@
+//! `/index` — port of `routes/index.py::index_images_batch` +
+//! `services/index.py::process_image_task`'s core loop. Scope for M6:
+//! embeddings (SigLIP2), pHash + culling metrics (always computed),
+//! faces (when requested), catalog association, existing-record merge
+//! for `regenerate_metadata=false`. LLM metadata and Vertex AI embedding
+//! generation are M7/M8 — options requesting them get a clear warning
+//! rather than silently doing nothing, matching Python's own behavior
+//! when a provider isn't configured.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use axum::extract::{Multipart, State};
+use axum::response::{IntoResponse, Json, Response};
+use chrono::Utc;
+use serde_json::{json, Map, Value};
+
+use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
+use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
+use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
+use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
+
+use crate::state::AppState;
+
+pub fn router() -> axum::Router<Arc<AppState>> {
+    axum::Router::new().route("/index", axum::routing::post(index_batch))
+}
+
+struct ParsedOptions {
+    compute_embeddings: bool,
+    compute_faces: bool,
+    compute_metadata: bool,
+    compute_vertexai: bool,
+    regenerate_metadata: bool,
+    replace_ss: bool,
+    catalog_id: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    capture_time: Option<f64>,
+}
+
+fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> bool {
+    fields
+        .get(key)
+        .map(|v| v.to_lowercase() == "true")
+        .unwrap_or(default)
+}
+
+fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
+    let tasks: Vec<String> = match fields.get("tasks") {
+        Some(s) if !s.is_empty() => {
+            if s.starts_with('[') {
+                serde_json::from_str::<Vec<String>>(s)
+                    .unwrap_or_else(|_| s.split(',').map(|t| t.trim().to_string()).collect())
+            } else {
+                s.split(',').map(|t| t.trim().to_string()).collect()
+            }
+        }
+        _ => vec!["embeddings".to_string()],
+    };
+    let has_task = |t: &str| tasks.iter().any(|x| x == t);
+
+    let reg_val = fields
+        .get("regenerate_metadata")
+        .or_else(|| fields.get("regenerateMetadata"));
+    let regenerate_metadata = reg_val.map(|v| v.to_lowercase() == "true").unwrap_or(true);
+
+    let catalog_id = fields
+        .get("catalog_id")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let capture_time = fields
+        .get("date_time_unix")
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| {
+            fields.get("date_time").and_then(|s| {
+                let normalized = if let Some(stripped) = s.strip_suffix('Z') {
+                    format!("{stripped}+00:00")
+                } else {
+                    s.clone()
+                };
+                chrono::DateTime::parse_from_rfc3339(&normalized)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc).timestamp() as f64)
+            })
+        });
+
+    ParsedOptions {
+        compute_embeddings: has_task("embeddings"),
+        compute_faces: has_task("faces"),
+        compute_metadata: has_task("metadata"),
+        compute_vertexai: has_task("vertexai"),
+        regenerate_metadata,
+        replace_ss: bool_field(fields, "replace_ss", false),
+        catalog_id,
+        provider: fields.get("provider").cloned(),
+        model: fields.get("model").cloned(),
+        capture_time,
+    }
+}
+
+struct UploadedImage {
+    bytes: Vec<u8>,
+    filename: String,
+}
+
+async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+    log::info!("Index request received");
+
+    let mut images: Vec<UploadedImage> = Vec::new();
+    let mut photo_ids: Vec<String> = Vec::new();
+    let mut uuids_fallback: Vec<String> = Vec::new();
+    let mut fields: HashMap<String, String> = HashMap::new();
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("invalid multipart body: {e}")})),
+                )
+                    .into_response()
+            }
+        };
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "image" => {
+                let filename = field.file_name().unwrap_or("photo").to_string();
+                match field.bytes().await {
+                    Ok(bytes) => images.push(UploadedImage {
+                        bytes: bytes.to_vec(),
+                        filename,
+                    }),
+                    Err(e) => log::warn!("Skipping unreadable image field: {e}"),
+                }
+            }
+            "photo_id" => {
+                if let Ok(text) = field.text().await {
+                    photo_ids.push(text);
+                }
+            }
+            "uuid" => {
+                if let Ok(text) = field.text().await {
+                    uuids_fallback.push(text);
+                }
+            }
+            _ => {
+                if let Ok(text) = field.text().await {
+                    fields.insert(name, text);
+                }
+            }
+        }
+    }
+    let photo_ids = if photo_ids.is_empty() {
+        uuids_fallback
+    } else {
+        photo_ids
+    };
+    let options = parse_options(&fields);
+
+    // The generic auto-bind middleware only peeks JSON bodies and query
+    // strings (a multipart body can't be cheaply peeked and replayed), so
+    // multipart endpoints bind explicitly from their own parsed fields —
+    // the plugin sends db_path as a form field here, same as every other
+    // indexing option.
+    if let Some(db_path) = fields.get("db_path") {
+        if let Err(e) = state.ensure_db_path(db_path).await {
+            log::error!("Auto-bind to db_path {db_path} failed: {e}");
+        }
+    }
+
+    if images.is_empty() || photo_ids.is_empty() || images.len() != photo_ids.len() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Mismatch between number of images and photo IDs, or no images provided"})),
+        )
+            .into_response();
+    }
+
+    let max_edge = lrg_imaging::convert::default_max_long_edge();
+    let quality = lrg_imaging::convert::default_jpeg_quality();
+
+    let mut triplets: Vec<(Vec<u8>, String, String)> = Vec::new();
+    let mut conversion_errors: Vec<String> = Vec::new();
+    for (img, photo_id) in images.into_iter().zip(photo_ids) {
+        match normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality) {
+            Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename)),
+            Err(UnsupportedImageError(msg)) => {
+                log::warn!("Skipping {}: {msg}", img.filename);
+                conversion_errors.push(msg);
+            }
+        }
+    }
+
+    if triplets.is_empty() {
+        if !conversion_errors.is_empty() {
+            let joined = conversion_errors
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ");
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": joined})),
+            )
+                .into_response();
+        }
+        return Json(json!({"status": "processed", "success_count": 0, "failure_count": 0}))
+            .into_response();
+    }
+
+    let total = triplets.len();
+    let mut success_count = 0usize;
+    let mut failure_count = conversion_errors.len();
+    let mut error_messages = conversion_errors;
+    let mut warnings: Vec<String> = Vec::new();
+
+    if options.compute_metadata {
+        warnings
+            .push("AI metadata generation is not yet available in this backend build.".to_string());
+    }
+    if options.compute_vertexai {
+        warnings
+            .push("Vertex AI embeddings are not yet available in this backend build.".to_string());
+    }
+
+    let store = state.store();
+
+    for (image_bytes, photo_id, filename) in triplets {
+        let result = index_one(
+            &state,
+            store.as_ref(),
+            &options,
+            &image_bytes,
+            &photo_id,
+            &filename,
+        )
+        .await;
+        match result {
+            Ok(warn) => {
+                success_count += 1;
+                if let Some(w) = warn {
+                    warnings.push(w);
+                }
+            }
+            Err(e) => {
+                failure_count += 1;
+                error_messages.push(format!("{filename}: {e}"));
+            }
+        }
+    }
+
+    log::info!("Batch processing complete. Success: {success_count}, Failures: {failure_count}.");
+
+    if success_count == 0 {
+        let mut unique = Vec::new();
+        for e in &error_messages {
+            if !unique.contains(e) {
+                unique.push(e.clone());
+            }
+        }
+        let mut msg = "No images were successfully processed".to_string();
+        if !unique.is_empty() {
+            msg.push_str(": ");
+            msg.push_str(
+                &unique
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            );
+        }
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": msg})),
+        )
+            .into_response();
+    }
+
+    let _ = total;
+    Json(json!({
+        "status": "processed",
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "error_messages": error_messages,
+        "warnings": warnings,
+    }))
+    .into_response()
+}
+
+async fn index_one(
+    state: &AppState,
+    store: Option<&Arc<lrg_store::Store>>,
+    options: &ParsedOptions,
+    image_bytes: &[u8],
+    photo_id: &str,
+    filename: &str,
+) -> Result<Option<String>, String> {
+    let Some(store) = store else {
+        return Err("database not initialized (no db_path bound)".to_string());
+    };
+
+    let decoded = image::load_from_memory(image_bytes)
+        .map_err(|e| format!("could not decode image: {e}"))?
+        .to_rgb8();
+    let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+    let pixels = decoded.into_raw();
+    let rgb = RgbImage {
+        pixels: &pixels,
+        width,
+        height,
+    };
+
+    let existing = if options.regenerate_metadata {
+        None
+    } else {
+        store
+            .get(IMAGE_TABLE, &[photo_id.to_string()])
+            .await
+            .ok()
+            .and_then(|mut v| v.pop())
+    };
+
+    let mut main_metadata: Map<String, Value> = match &existing {
+        Some(record) if !options.regenerate_metadata => {
+            let mut m = record.metadata.clone();
+            m.insert("filename".into(), json!(filename));
+            m.insert("photo_id".into(), json!(photo_id));
+            m.insert(
+                "uuid".into(),
+                m.get("uuid").cloned().unwrap_or(json!(photo_id)),
+            );
+            m
+        }
+        _ => {
+            let mut m = Map::new();
+            m.insert("filename".into(), json!(filename));
+            m.insert("photo_id".into(), json!(photo_id));
+            m.insert("uuid".into(), json!(photo_id));
+            if let Some(p) = &options.provider {
+                m.insert("provider".into(), json!(p));
+            }
+            if let Some(mo) = &options.model {
+                m.insert("model".into(), json!(mo));
+            }
+            m
+        }
+    };
+
+    if let Some(ct) = options.capture_time {
+        main_metadata.insert("capture_time".into(), json!(ct));
+    }
+
+    // Culling metrics + pHash are cheap enough to compute on every pass.
+    let metrics = culling_metrics(&rgb);
+    main_metadata.insert("cull_sharpness".into(), json!(metrics.cull_sharpness));
+    main_metadata.insert("cull_exposure".into(), json!(metrics.cull_exposure));
+    main_metadata.insert("cull_noise".into(), json!(metrics.cull_noise));
+    main_metadata.insert(
+        "cull_highlight_clip".into(),
+        json!(metrics.cull_highlight_clip),
+    );
+    main_metadata.insert("cull_shadow_clip".into(), json!(metrics.cull_shadow_clip));
+    main_metadata.insert(
+        "cull_technical_score".into(),
+        json!(metrics.cull_technical_score),
+    );
+    main_metadata.insert("cull_aesthetic".into(), json!(metrics.cull_aesthetic));
+    let phash = perceptual_hash(&rgb);
+    if !phash.is_empty() {
+        main_metadata.insert("cull_phash".into(), json!(phash));
+        main_metadata.insert("phash".into(), json!(phash));
+    }
+
+    // Python's inline delta-check here defaults `has_embedding` to False
+    // when absent — a different default than `meta::has_embedding`
+    // (which defaults True, matching the stats/get_all_ids call sites).
+    let existing_has_embedding = existing
+        .as_ref()
+        .and_then(|r| r.metadata.get("has_embedding"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let need_embedding =
+        options.compute_embeddings && (options.regenerate_metadata || !existing_has_embedding);
+
+    let mut new_embedding: Option<Vec<f32>> = None;
+    if need_embedding {
+        let mut emb = state
+            .siglip
+            .embed_image(&pixels, width, height)
+            .map_err(|e| format!("Embedding generation failed: {e}"))?;
+        lrg_ml::siglip::l2_normalize(&mut emb);
+        new_embedding = Some(emb);
+    }
+
+    if options.replace_ss {
+        for v in main_metadata.values_mut() {
+            if let Value::String(s) = v {
+                if s.contains('\u{df}') {
+                    *v = json!(s.replace('\u{df}', "ss"));
+                }
+            }
+        }
+    }
+
+    let final_vector = match &new_embedding {
+        Some(v) => Some(v.clone()),
+        None => existing
+            .as_ref()
+            .and_then(|r| r.vector.clone())
+            .filter(|_| existing_has_embedding),
+    };
+    main_metadata.insert("has_embedding".into(), json!(final_vector.is_some()));
+    meta::ensure_photo_metadata(photo_id, &mut main_metadata);
+
+    let record = StoreRecord {
+        id: photo_id.to_string(),
+        vector: final_vector,
+        metadata: main_metadata.clone(),
+    };
+    store
+        .upsert(IMAGE_TABLE, std::slice::from_ref(&record))
+        .await
+        .map_err(|e| format!("Database update failed: {e}"))?;
+
+    if let Some(catalog_id) = &options.catalog_id {
+        let mut ids_set = meta::parse_catalog_ids(&record.metadata);
+        ids_set.insert(catalog_id.clone());
+        let mut updated = record.clone();
+        updated.metadata.insert(
+            meta::CATALOG_IDS_FIELD.into(),
+            json!(meta::serialize_catalog_ids(&ids_set)),
+        );
+        store
+            .upsert(IMAGE_TABLE, &[updated])
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut warning = None;
+    if options.compute_faces {
+        let already_checked = record
+            .metadata
+            .get("faces_checked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if options.regenerate_metadata || !already_checked {
+            match state.face.detect_faces(&pixels, width, height) {
+                Ok(faces) => {
+                    let existing_faces = store.scan_meta(FACE_TABLE).await.unwrap_or_default();
+                    let stale: Vec<String> = existing_faces
+                        .into_iter()
+                        .filter(|(_, m)| {
+                            m.get("photo_id").and_then(Value::as_str) == Some(photo_id)
+                        })
+                        .map(|(id, _)| id)
+                        .collect();
+                    store
+                        .delete(FACE_TABLE, &stale)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    if !faces.is_empty() {
+                        let face_records: Vec<StoreRecord> = faces
+                            .iter()
+                            .enumerate()
+                            .map(|(i, f)| {
+                                let mut m = Map::new();
+                                m.insert("photo_id".into(), json!(photo_id));
+                                m.insert("photo_uuid".into(), json!(photo_id));
+                                m.insert("thumbnail".into(), json!(f.thumbnail_base64));
+                                m.insert("person_id".into(), json!(""));
+                                m.insert(
+                                    "bbox".into(),
+                                    json!(serde_json::to_string(&f.bbox).unwrap()),
+                                );
+                                m.insert("face_area_ratio".into(), json!(f.area_ratio));
+                                m.insert("face_sharpness".into(), json!(f.sharpness));
+                                m.insert("face_det_score".into(), json!(f.det_score));
+                                m.insert("face_center_proximity".into(), json!(f.center_proximity));
+                                m.insert("face_eye_openness".into(), json!(f.eye_openness));
+                                m.insert("face_blink_penalty".into(), json!(f.blink_penalty));
+                                m.insert("face_occlusion".into(), json!(f.occlusion));
+                                StoreRecord {
+                                    id: format!("{photo_id}_{i}"),
+                                    vector: Some(f.embedding.clone()),
+                                    metadata: m,
+                                }
+                            })
+                            .collect();
+                        store
+                            .upsert(FACE_TABLE, &face_records)
+                            .await
+                            .map_err(|e| e.to_string())?;
+
+                        let inputs: Vec<FaceMetricsInput> = faces
+                            .iter()
+                            .map(|f| FaceMetricsInput {
+                                sharpness: f.sharpness,
+                                area_ratio: f.area_ratio,
+                                det_score: f.det_score,
+                                center_proximity: f.center_proximity,
+                                eye_openness: f.eye_openness,
+                                blink_penalty: f.blink_penalty,
+                                occlusion: Some(f.occlusion),
+                            })
+                            .collect();
+                        apply_face_aggregate(store, &record, &inputs).await?;
+                        log::info!("Photo {photo_id}: indexed {} face(s).", faces.len());
+                    } else {
+                        apply_face_aggregate(store, &record, &[]).await?;
+                        let mut flagged = record.clone();
+                        flagged.metadata.insert("faces_checked".into(), json!(true));
+                        store
+                            .upsert(IMAGE_TABLE, &[flagged])
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Face detection/indexing failed for {photo_id}: {e}");
+                    warning = Some(format!("{filename} faces: {e}"));
+                }
+            }
+        }
+    }
+
+    Ok(warning)
+}
+
+async fn apply_face_aggregate(
+    store: &lrg_store::Store,
+    record: &StoreRecord,
+    faces: &[FaceMetricsInput],
+) -> Result<(), String> {
+    let agg = aggregate_face_culling_metrics(faces);
+    let mut updated = record.clone();
+    updated
+        .metadata
+        .insert("cull_face_count".into(), json!(agg.cull_face_count));
+    updated
+        .metadata
+        .insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
+    updated.metadata.insert(
+        "cull_face_prominence".into(),
+        json!(agg.cull_face_prominence),
+    );
+    updated.metadata.insert(
+        "cull_face_visibility".into(),
+        json!(agg.cull_face_visibility),
+    );
+    updated
+        .metadata
+        .insert("cull_face_score".into(), json!(agg.cull_face_score));
+    updated
+        .metadata
+        .insert("cull_eye_openness".into(), json!(agg.cull_eye_openness));
+    updated
+        .metadata
+        .insert("cull_blink_penalty".into(), json!(agg.cull_blink_penalty));
+    updated
+        .metadata
+        .insert("cull_occlusion".into(), json!(agg.cull_occlusion));
+    updated
+        .metadata
+        .insert("cull_faces_present".into(), json!(agg.cull_faces_present));
+    store
+        .upsert(IMAGE_TABLE, &[updated])
+        .await
+        .map_err(|e| e.to_string())
+}
