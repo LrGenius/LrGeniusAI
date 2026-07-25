@@ -3817,6 +3817,9 @@ dependencies = [
 [[package]]
 name = "lrg-imaging"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "lrg-ml"

@@ -1,40 +1,76 @@
 """M3 golden fixtures: run the Python pHash + culling metrics on
 deterministic synthetic images and dump results for the Rust port.
-Written into server-rs/testdata/ so the Rust tests can ship with it."""
-import json, os, sys
-sys.path.insert(0, "/Users/bm/src/LrGeniusAI/server/src")
-sys.argv = ["x"]  # config.py parses args at import
+
+Inputs use only formulas reproducible in Rust (linear gradients, checkers,
+constants, and a 31-bit LCG) -- no numpy RNG -- so the Rust tests regenerate
+identical pixel buffers instead of shipping megabytes of pixels.
+
+Run:  cd server && uv run python ../server-rs/testdata/make_imaging_goldens.py
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../server/src"))
+sys.argv = ["x"]  # config.py parses argv at import time
+
 import numpy as np
 from PIL import Image
 from services import index as svc_index
 
-rng = np.random.default_rng(123)
+
+def lcg_bytes(n, seed=42):
+    """31-bit LCG (glibc constants), byte = (x >> 16) & 0xFF."""
+    out = np.empty(n, dtype=np.uint8)
+    x = seed
+    for i in range(n):
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        out[i] = (x >> 16) & 0xFF
+    return out
+
+
+def gradient(w, h):
+    n = w * h * 3
+    vals = (np.arange(n, dtype=np.float64) * 255.0 / (n - 1)).astype(np.uint8)
+    return vals.reshape(h, w, 3)
+
+
+def checker(size, cell):
+    board = ((np.indices((size, size)).sum(axis=0) // cell) % 2 * 255).astype(np.uint8)
+    return np.stack([board] * 3, axis=-1)
+
+
 cases = {}
+
 
 def add_case(name, arr):
     img = Image.fromarray(arr, "RGB")
-    phash = svc_index._compute_perceptual_hash(img)
-    metrics = svc_index._compute_culling_metrics(img)
-    cases[name] = {"shape": list(arr.shape), "phash": phash,
-                   "metrics": {k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
-                                for k, v in metrics.items()}}
+    cases[name] = {
+        "width": int(arr.shape[1]),
+        "height": int(arr.shape[0]),
+        "phash": svc_index._compute_perceptual_hash(img),
+        "metrics": {
+            k: float(v) for k, v in svc_index._compute_culling_metrics(img).items()
+        },
+    }
 
-# Deterministic synthetic images covering the metric space
-grad = np.linspace(0, 255, 640*480*3).reshape(480, 640, 3).astype(np.uint8)
-add_case("gradient", grad)
-add_case("noise", rng.integers(0, 256, (600, 800, 3), dtype=np.uint8))
-add_case("dark", np.full((480, 640, 3), 12, dtype=np.uint8))
-add_case("bright_clipped", np.full((480, 640, 3), 252, dtype=np.uint8))
-checker = ((np.indices((512, 512)).sum(axis=0) // 32) % 2 * 255).astype(np.uint8)
-add_case("checker", np.stack([checker]*3, axis=-1))
-mixed = grad.copy(); mixed[100:200, 100:300] = rng.integers(0, 256, (100, 200, 3), dtype=np.uint8)
-add_case("mixed", mixed)
 
-# also dump raw pixel seeds so Rust can regenerate identical inputs
-out = {"note": "inputs regenerable: see make_imaging_goldens.py; PIL RGB arrays",
-       "cases": cases}
-dst = "/Users/bm/src/LrGeniusAI/server-rs/testdata/imaging_goldens.json"
-os.makedirs(os.path.dirname(dst), exist_ok=True)
-json.dump(out, open(dst, "w"), indent=1)
-print("phash fn exists:", True)
+add_case("gradient_640x480", gradient(640, 480))
+add_case("lcg_noise_800x600", lcg_bytes(800 * 600 * 3).reshape(600, 800, 3))
+add_case("dark_640x480", np.full((480, 640, 3), 12, dtype=np.uint8))
+add_case("bright_640x480", np.full((480, 640, 3), 252, dtype=np.uint8))
+add_case("checker_512", checker(512, 32))
+mixed = gradient(640, 480).copy()
+mixed[100:200, 100:300] = lcg_bytes(100 * 200 * 3, seed=7).reshape(100, 200, 3)
+add_case("mixed_640x480", mixed)
+# Small image: exercises the no-resize path (< 512).
+add_case("small_320x240", lcg_bytes(320 * 240 * 3, seed=99).reshape(240, 320, 3))
+
+dst = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imaging_goldens.json")
+json.dump(
+    {"note": "inputs regenerated in Rust tests (see tests/goldens.rs)", "cases": cases},
+    open(dst, "w"),
+    indent=1,
+)
 print(json.dumps({k: v["phash"] for k, v in cases.items()}, indent=0))
