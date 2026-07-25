@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{Mutex, Notify};
 
 use lrg_common::{config, logging};
+use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
 
 pub struct AppState {
@@ -18,6 +19,9 @@ pub struct AppState {
     /// Signalled by /shutdown and /restart to trigger graceful shutdown.
     pub shutdown: Notify,
     pub debug: bool,
+    /// Global (not per-catalog) — lazily loaded on first use, matching
+    /// server_lifecycle.py's model lifecycle.
+    pub siglip: Arc<SiglipModel>,
 }
 
 impl AppState {
@@ -28,6 +32,7 @@ impl AppState {
             bind_lock: Mutex::new(()),
             shutdown: Notify::new(),
             debug,
+            siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
         }
     }
 

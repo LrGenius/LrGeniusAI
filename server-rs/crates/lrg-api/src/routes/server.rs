@@ -58,9 +58,11 @@ async fn restart(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"status": "Restarting..."}))
 }
 
-async fn unload() -> Json<Value> {
+async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Unload request received via API");
-    // M4: drop ort sessions and store handles here.
+    state.siglip.unload();
+    // M5 adds InsightFace unload here; store handles stay open (LanceDB
+    // keeps its own lazy IO, nothing to proactively drop).
     Json(json!({"status": "Resources unloaded successfully."}))
 }
 
@@ -119,11 +121,12 @@ async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
     ))
 }
 
-async fn health() -> Json<Value> {
-    // M4 adds real CLIP session state, M5 face model state, M7 provider health.
+async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let (clip_status, clip_error) = state.siglip.status();
+    // M5 adds real InsightFace status, M7 provider health.
     Json(json!({
-        "clip_model": "not_loaded",
-        "clip_error": null,
+        "clip_model": clip_status,
+        "clip_error": clip_error,
         "face_model": "not_loaded",
         "face_error": null,
     }))
