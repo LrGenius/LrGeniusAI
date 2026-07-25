@@ -3,9 +3,18 @@ process_image_task while it returns 4. Pre-fix this raised ValueError on
 every call.
 """
 
+import io
+
 import pytest
+from PIL import Image
 
 from geniusai_server import app
+
+
+def _jpeg_bytes():
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32)).save(buf, format="JPEG")
+    return buf.getvalue()
 
 
 @pytest.fixture
@@ -18,7 +27,7 @@ def client():
 @pytest.fixture
 def tmp_image(tmp_path):
     p = tmp_path / "test.jpg"
-    p.write_bytes(b"fake image bytes")
+    p.write_bytes(_jpeg_bytes())
     return str(p)
 
 
@@ -74,7 +83,7 @@ def test_index_by_reference_aggregates_read_and_processing_failures(
     success_count to come from the service result.
     """
     valid = tmp_path / "ok.jpg"
-    valid.write_bytes(b"x")
+    valid.write_bytes(_jpeg_bytes())
     missing = str(tmp_path / "does_not_exist.jpg")
 
     mocker.patch(
@@ -95,3 +104,34 @@ def test_index_by_reference_aggregates_read_and_processing_failures(
     assert payload["success_count"] == 1
     # 1 read failure + 0 processing failures
     assert payload["failure_count"] == 1
+    assert any("does_not_exist" in msg for msg in payload["error_messages"])
+
+
+def test_index_by_reference_counts_undecodable_file_as_failure(
+    client, mocker, tmp_path
+):
+    """A file whose bytes cannot be decoded (e.g. corrupt raw) is reported as a
+    per-image failure with a clear message instead of aborting the batch."""
+    valid = tmp_path / "ok.jpg"
+    valid.write_bytes(_jpeg_bytes())
+    corrupt = tmp_path / "broken.nef"
+    corrupt.write_bytes(b"not raw sensor data")
+
+    mocker.patch(
+        "routes.index.process_image_task",
+        return_value=(1, 0, [], []),
+    )
+    response = client.post(
+        "/index_by_reference",
+        json={
+            "images": [
+                {"path": str(valid), "photo_id": "a"},
+                {"path": str(corrupt), "photo_id": "b"},
+            ]
+        },
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success_count"] == 1
+    assert payload["failure_count"] == 1
+    assert any("broken.nef" in msg for msg in payload["error_messages"])

@@ -6,6 +6,7 @@ import os
 from services import chroma as chroma_service
 from config import logger
 from services.index import process_image_task, get_photo_ids_needing_processing
+from utils.image_convert import UnsupportedImageError, normalize_image_bytes
 import base64
 import json
 
@@ -275,6 +276,7 @@ def index_images_batch():
             logger.info(f"Indexing at {images_per_second:.2f} images/sec")
 
     image_triplets = []
+    conversion_errors = []
     for i in range(batch_size):
         file = images[i]
         photo_id = photo_ids[i]
@@ -285,10 +287,19 @@ def index_images_batch():
             )
             continue
 
-        image_triplets.append((file.read(), photo_id, file.filename))
+        try:
+            image_bytes, filename = normalize_image_bytes(file.read(), file.filename)
+        except UnsupportedImageError as exc:
+            logger.warning(f"Skipping {file.filename}: {exc}")
+            conversion_errors.append(str(exc))
+            continue
+
+        image_triplets.append((image_bytes, photo_id, filename))
 
     if not image_triplets:
         logger.info("No valid images to process in the batch.")
+        if conversion_errors:
+            return jsonify({"error": " | ".join(conversion_errors[:5])}), 500
         return jsonify(
             {"status": "processed", "success_count": 0, "failure_count": batch_size}
         ), 200
@@ -296,6 +307,8 @@ def index_images_batch():
     success_count, failure_count, error_messages, warnings = process_image_task(
         image_triplets, options
     )
+    failure_count += len(conversion_errors)
+    error_messages = conversion_errors + error_messages
 
     logger.info(
         f"Batch processing complete. Success: {success_count}, Failures: {failure_count}."
@@ -345,8 +358,16 @@ def index_images_batch_base64():
 
     options = _extract_options(data)
 
+    try:
+        image_bytes, filename = normalize_image_bytes(
+            base64.b64decode(image.encode("ascii")), filename
+        )
+    except UnsupportedImageError as exc:
+        logger.warning(f"Cannot index {filename}: {exc}")
+        return jsonify({"error": str(exc)}), 500
+
     success_count, failure_count, error_messages, warnings = process_image_task(
-        [(base64.b64decode(image.encode("ascii")), photo_id, filename)], options=options
+        [(image_bytes, photo_id, filename)], options=options
     )
 
     logger.info(
@@ -407,6 +428,7 @@ def index_images_batch_by_reference():
 
     image_triplets = []
     failed_paths = []
+    read_error_messages = []
     for i in range(batch_size):
         path = paths[i]
         photo_id = photo_ids[i]
@@ -422,17 +444,26 @@ def index_images_batch_by_reference():
                 image_data = file.read()
 
             filename = os.path.basename(path)
-            image_triplets.append((image_data, photo_id, filename))
+            image_bytes, filename = normalize_image_bytes(image_data, filename)
+            image_triplets.append((image_bytes, photo_id, filename))
         except FileNotFoundError:
             logger.warning(f"File not found at path: {path}. Skipping.")
             failed_paths.append(path)
+            read_error_messages.append(f"File not found: {path}")
+        except UnsupportedImageError as exc:
+            logger.warning(f"Cannot convert file at path {path}: {exc}")
+            failed_paths.append(path)
+            read_error_messages.append(str(exc))
         except Exception as e:
             logger.error(f"Error processing file at path {path}: {e}")
             failed_paths.append(path)
+            read_error_messages.append(f"Error reading {path}: {e}")
 
     read_failures = len(failed_paths)
     if not image_triplets:
         logger.info("No valid image paths to process in the batch.")
+        if read_error_messages:
+            return jsonify({"error": " | ".join(read_error_messages[:5])}), 500
         return jsonify(
             {"status": "processed", "success_count": 0, "failure_count": read_failures}
         ), 200
@@ -440,6 +471,7 @@ def index_images_batch_by_reference():
     success_count, processing_failures, error_messages, warnings = process_image_task(
         image_triplets, options=options
     )
+    error_messages = read_error_messages + error_messages
     total_failures = read_failures + processing_failures
 
     logger.info(

@@ -23,6 +23,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.exportSize = prefs.exportSize
 	propertyTable.exportQuality = prefs.exportQuality
 	propertyTable.usePreviewThumbnails = (prefs.usePreviewThumbnails ~= false)
+	propertyTable.indexSubmitOriginals = (prefs.indexSubmitOriginals == true)
 
 	propertyTable.promptTitles = {}
 	for title in pairs(prefs.prompts) do
@@ -881,6 +882,26 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						),
 					}),
 				}),
+				f:row({
+					fill_horizontal = 1,
+					f:spacer({ width = share("labelWidth") }),
+					f:checkbox({
+						value = bind("indexSubmitOriginals"),
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginals=Submit original files for fastest indexing (experimental)"
+						),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:spacer({ width = share("labelWidth") }),
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected,\nlocation keywords from Lightroom's address lookup are unavailable, and results may\ndiffer slightly from photos indexed the classic way. Re-index to keep search consistent."
+						),
+						enabled = false,
+					}),
+				}),
 			}),
 			f:group_box({
 				width = groupBoxWidth,
@@ -1098,6 +1119,7 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	prefs.exportSize = propertyTable.exportSize
 	prefs.exportQuality = propertyTable.exportQuality
 	prefs.usePreviewThumbnails = (propertyTable.usePreviewThumbnails ~= false)
+	prefs.indexSubmitOriginals = (propertyTable.indexSubmitOriginals == true)
 
 	prefs.prompt = propertyTable.prompt
 	prefs.prompts = propertyTable.prompts

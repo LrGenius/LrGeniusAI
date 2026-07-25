@@ -107,6 +107,10 @@ if _G.prefs.replaceSS == nil then
 	_G.prefs.replaceSS = false
 end
 
+if _G.prefs.indexSubmitOriginals == nil then
+	_G.prefs.indexSubmitOriginals = false
+end
+
 if _G.prefs.exportSize == nil then
 	_G.prefs.exportSize = Defaults.defaultExportSize
 end

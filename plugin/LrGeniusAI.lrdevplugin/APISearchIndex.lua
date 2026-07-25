@@ -796,6 +796,97 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 end
 
 ---
+-- Analyzes and indexes a single photo by submitting only its file path; the
+-- backend reads and converts the original file (RAW/JPEG/HEIC) itself.
+-- Only valid when the backend runs on the same machine (see isLocalBackend).
+-- Uses the /index_by_reference endpoint; same options as analyzeAndIndexPhoto.
+-- @param photoId string
+-- @param filePath string Absolute path to the original photo file.
+-- @param options table Same as analyzeAndIndexPhoto.
+-- @return boolean success, table|string response or error.
+--
+function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, options)
+	if not filePath or filePath == "" then
+		log:error("analyzeAndIndexPhotoByReference: no file path")
+		return false, "No file path provided"
+	end
+	if not photoId or photoId == "" then
+		log:error("Photo ID is missing")
+		return false, "No photo ID provided"
+	end
+
+	options = options or {}
+	local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
+
+	local body = {
+		images = { { path = filePath, photo_id = photoId } },
+		catalog_id = getCatalogId(),
+		tasks = options.tasks or {},
+		provider = options.provider,
+		model = options.model,
+		api_key = options.api_key,
+		language = options.language or (prefs and prefs.generateLanguage) or "English",
+		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
+		replace_ss = tostring(options.replace_ss or false),
+		generate_keywords = tostring(options.generate_keywords or false),
+		generate_caption = tostring(options.generate_caption or false),
+		generate_title = tostring(options.generate_title or false),
+		generate_alt_text = tostring(options.generate_alt_text or false),
+		submit_gps = tostring(options.submit_gps or false),
+		submit_keywords = tostring(options.submit_keywords or false),
+		submit_folder_names = tostring(options.submit_folder_names or false),
+		user_context = options.user_context,
+		gps_coordinates = options.gps_coordinates and JSON:encode(options.gps_coordinates) or nil,
+		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
+		folder_names = options.folder_names,
+		prompt = options.prompt,
+		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
+		bilingual_keywords = tostring(options.bilingual_keywords or false),
+		keyword_secondary_language = options.keyword_secondary_language
+			or (prefs and prefs.keywordSecondaryLanguage)
+			or "English",
+		generate_aliases = tostring(options.generate_aliases or false),
+		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
+		date_time = options.date_time,
+		date_time_unix = options.date_time_unix,
+		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
+		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		vertex_project_id = options.vertex_project_id,
+		vertex_location = options.vertex_location,
+		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+	}
+
+	log:trace("Analyzing and indexing photo (by reference): " .. tostring(filePath) .. " id " .. photoId)
+
+	local response, err = _request("POST", url, body, 720)
+
+	if not response then
+		log:error("Failed to analyze/index photo (by reference): " .. tostring(err))
+		return false, err or "Unknown error"
+	end
+	if response.status == "processed" then
+		local success_count = response.success_count or 0
+		if success_count > 0 then
+			log:trace("Successfully processed photo (by reference): " .. tostring(filePath))
+			return true, response
+		end
+		local errMsg = response.error
+		if not errMsg and response.error_messages and #response.error_messages > 0 then
+			errMsg = table.concat(response.error_messages, " | ")
+		end
+		log:error("Photo processing failed (by reference): " .. tostring(filePath))
+		return false, errMsg or "Processing failed"
+	end
+	if response.error then
+		log:error("Backend error (by reference): " .. tostring(response.error))
+		return false, response.error
+	end
+	log:error("Unexpected response status (by reference): " .. tostring(response.status))
+	return false, "Unexpected response status"
+end
+
+---
 -- Unified function to analyze and index photos with metadata and embeddings.
 -- Replaces the old separate analyze and index workflows.
 -- @param photoId string The ID of the photo.
@@ -1026,12 +1117,20 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	-- Regeneration control: if false, server will only fill missing fields
 	table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
 
-	-- Add file
+	-- Add file. Originals may be RAW/HEIC/etc. — the backend converts them
+	-- based on the file name, so only the content type header varies here.
+	local extension = string.lower(LrPathUtils.extension(filename) or "")
+	local contentType = "application/octet-stream"
+	if extension == "jpg" or extension == "jpeg" then
+		contentType = "image/jpeg"
+	elseif extension == "png" then
+		contentType = "image/png"
+	end
 	table.insert(mimeChunks, {
 		name = "image",
 		fileName = filename,
 		filePath = filepath,
-		contentType = "image/jpeg",
+		contentType = contentType,
 	})
 
 	log:trace(
@@ -1705,6 +1804,9 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	local processedPhotos = {}
 	local activeWorkers = 0
 	local keepRunning = true
+	-- Opt-in fast path: submit the original file instead of exporting a JPEG.
+	-- Local backend gets just the path; remote backends get the raw upload.
+	local useOriginals = (prefs and prefs.indexSubmitOriginals == true)
 	local previewRequestState = {
 		enabled = (prefs and prefs.usePreviewThumbnails ~= false),
 		timeoutSeconds = tonumber(prefs and prefs.previewThumbnailTimeoutSeconds) or 12,
@@ -1717,12 +1819,13 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	local errorMessages = {}
 	local warningsList = {}
 
-	if MAC_ENV and numPhotos > 1 then
+	if MAC_ENV and numPhotos > 1 and not useOriginals then
 		-- Pipelined export/index path (macOS only). A producer drives a single
 		-- LrExportSession and pushes rendered JPEG paths into a queue; a consumer
 		-- POSTs each photo to the backend as soon as its export completes, so the
 		-- next export overlaps with the previous photo's backend round-trip.
 		-- Disabled on Windows because earlier multi-worker attempts crashed Lightroom.
+		-- Skipped when originals are submitted directly: there is nothing to export.
 		local tempDir = LrPathUtils.getStandardFilePath("temp")
 		EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
 
@@ -1926,7 +2029,41 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 						local thumbnailSize = tonumber(prefs and prefs.exportSize) or 1024
 						local leafName = LrPathUtils.leafName(filename or "photo.jpg")
 
-						if usePreviewThumbnails then
+						if useOriginals then
+							local originalPath = photo:getRawMetadata("path")
+							local isVideo = photo:getRawMetadata("isVideo")
+							if isVideo then
+								log:trace("Original submission skipped for video " .. filename)
+							elseif originalPath and photo:checkPhotoAvailability() then
+								if SearchIndexAPI.isLocalBackend() then
+									log:trace("Submitting original by reference for " .. filename)
+									success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
+										photoId,
+										originalPath,
+										photoOptions
+									)
+								else
+									log:trace("Uploading original file for " .. filename)
+									success, indexResponse =
+										SearchIndexAPI.analyzeAndIndexPhoto(photoId, originalPath, photoOptions)
+								end
+								if not success then
+									log:warn(
+										"Original-file indexing failed for "
+											.. filename
+											.. " ("
+											.. tostring(indexResponse)
+											.. "); falling back to preview/export"
+									)
+								end
+							else
+								log:trace(
+									"Original file not available for " .. filename .. "; falling back to preview/export"
+								)
+							end
+						end
+
+						if not success and usePreviewThumbnails then
 							local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(
 								photo,
 								thumbnailSize,
