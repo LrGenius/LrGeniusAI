@@ -7,6 +7,8 @@ pub mod group_similar;
 pub mod index;
 pub mod index_upload;
 pub mod keywords;
+pub(crate) mod route_util;
 pub mod search;
 pub mod server;
+pub mod style_edit;
 pub mod training;

@@ -9,4 +9,5 @@ pub mod grouping;
 pub mod keywords;
 pub mod persons;
 pub mod relevance_filter;
+pub mod style_engine;
 pub mod training;

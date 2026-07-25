@@ -31,7 +31,7 @@ pub fn router() -> axum::Router<Arc<AppState>> {
         .route("/edit_base64", axum::routing::post(edit_base64))
 }
 
-struct EditOptions {
+pub(crate) struct EditOptions {
     provider: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
@@ -112,7 +112,7 @@ fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> boo
         .unwrap_or(default)
 }
 
-fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditOptions {
+pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditOptions {
     let defaults = EditOptions::default();
     let existing_keywords = fields.get("existing_keywords").map(|raw| {
         serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| {
@@ -273,7 +273,7 @@ fn controls_map(options: &EditOptions) -> Map<String, Value> {
     m
 }
 
-fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
+pub(crate) fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
     let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
     let na: f64 = a
         .iter()
@@ -297,7 +297,11 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
 /// re-embedding here, same as Python's best-effort try/except), brute-force
 /// cosine-rank the (typically small) `edit_training` table, and shape the
 /// top matches as the few-shot JSON `prompts::format_training_example` expects.
-async fn fetch_training_examples(store: &Store, photo_id: &str, n_results: usize) -> Vec<Value> {
+pub(crate) async fn fetch_training_examples(
+    store: &Store,
+    photo_id: &str,
+    n_results: usize,
+) -> Vec<Value> {
     let Ok(mut existing) = store.get(IMAGE_TABLE, &[photo_id.to_string()]).await else {
         return Vec::new();
     };
@@ -337,7 +341,7 @@ async fn fetch_training_examples(store: &Store, photo_id: &str, n_results: usize
         .collect()
 }
 
-async fn generate_edit_recipe_for_photo(
+pub(crate) async fn generate_edit_recipe_for_photo(
     store: Option<&Store>,
     options: &EditOptions,
     image_bytes: &[u8],
@@ -444,7 +448,7 @@ fn edit_fail(uuid: &str, error: String) -> EditGenerationResponse {
 /// Port of `_persist_edit_recipe`: merge the recipe into the photo's
 /// existing metadata record (preserving its embedding untouched), or
 /// create a metadata-only record if the photo was never indexed.
-async fn persist_edit_recipe(
+pub(crate) async fn persist_edit_recipe(
     store: &Store,
     photo_id: &str,
     filename: Option<&str>,
@@ -539,7 +543,7 @@ async fn persist_edit_recipe(
         .map_err(|e| e.to_string())
 }
 
-fn success_payload(
+pub(crate) fn success_payload(
     photo_id: &str,
     recipe: &Value,
     options: &EditOptions,

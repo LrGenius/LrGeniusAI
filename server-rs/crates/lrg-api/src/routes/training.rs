@@ -10,17 +10,15 @@ use std::sync::Arc;
 use axum::extract::{Multipart, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{Local, TimeZone};
 use serde_json::{json, Map, Value};
 
 use lrg_analysis::training::{
     aggregate_training_stats, compute_exposure_metrics, focal_length_bucket,
-    normalize_develop_settings_for_style, scene_tags_from_similarities,
-    time_of_day_bucket_for_hour, SCENE_PROBES,
+    normalize_develop_settings_for_style, time_of_day_bucket_for_hour,
 };
-use lrg_ml::siglip::l2_normalize;
 use lrg_store::TRAINING_TABLE;
 
+use crate::routes::route_util::{compute_scene_tags, local_hour};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -49,16 +47,6 @@ fn opt_str(fields: &HashMap<String, String>, key: &str) -> Option<String> {
 
 fn opt_f64(fields: &HashMap<String, String>, key: &str) -> Option<f64> {
     fields.get(key).and_then(|s| s.trim().parse::<f64>().ok())
-}
-
-/// Local-hour equivalent of Python's `datetime.fromtimestamp(unix).hour`.
-fn local_hour(capture_time_unix: Option<f64>) -> Option<u32> {
-    use chrono::Timelike;
-    let secs = capture_time_unix?;
-    Local
-        .timestamp_opt(secs as i64, 0)
-        .single()
-        .map(|dt| dt.hour())
 }
 
 async fn add_training_example(
@@ -226,36 +214,10 @@ async fn add_training_example(
         }
     }
 
-    let scene_tags: Vec<String> = if let Some(img_emb) = &embedding {
-        let probe_texts: Vec<String> = SCENE_PROBES
-            .iter()
-            .map(|&(_, text)| text.to_string())
-            .collect();
-        match state.siglip.embed_text(&probe_texts) {
-            Ok(mut text_embs) => {
-                let sims: Vec<(String, f64)> = SCENE_PROBES
-                    .iter()
-                    .zip(text_embs.iter_mut())
-                    .map(|(&(name, _), text_emb)| {
-                        l2_normalize(text_emb);
-                        let sim: f64 = img_emb
-                            .iter()
-                            .zip(text_emb.iter())
-                            .map(|(a, b)| *a as f64 * *b as f64)
-                            .sum();
-                        (name.to_string(), sim)
-                    })
-                    .collect();
-                scene_tags_from_similarities(&sims)
-            }
-            Err(e) => {
-                log::debug!("compute_scene_tags failed (non-critical): {e}");
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    let scene_tags: Vec<String> = embedding
+        .as_ref()
+        .map(|img_emb| compute_scene_tags(&state.siglip, img_emb))
+        .unwrap_or_default();
     metadata.insert("scene_tags".into(), json!(json!(scene_tags).to_string()));
 
     let record = lrg_store::StoreRecord {

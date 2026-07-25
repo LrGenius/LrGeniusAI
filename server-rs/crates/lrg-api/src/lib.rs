@@ -27,6 +27,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::edit::router())
         .merge(routes::training::router())
         .merge(routes::keywords::router())
+        .merge(routes::style_edit::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::auto_bind_db_path,
