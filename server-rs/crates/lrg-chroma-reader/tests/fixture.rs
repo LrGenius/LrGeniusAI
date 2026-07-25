@@ -22,10 +22,8 @@ fn check_fixture(dir: &Path) {
     let collections = lrg_chroma_reader::read_chroma_dir(&dir.join("lrgenius.db"))
         .expect("read_chroma_dir failed");
 
-    let by_name: HashMap<&str, &lrg_chroma_reader::ChromaCollection> = collections
-        .iter()
-        .map(|c| (c.name.as_str(), c))
-        .collect();
+    let by_name: HashMap<&str, &lrg_chroma_reader::ChromaCollection> =
+        collections.iter().map(|c| (c.name.as_str(), c)).collect();
 
     for (name, expected_col) in expected.as_object().unwrap() {
         let col = by_name
@@ -56,10 +54,16 @@ fn check_fixture(dir: &Path) {
                 .iter()
                 .map(|v| v.as_f64().unwrap() as f32)
                 .collect();
-            let got_vec = record.embedding.as_ref().unwrap_or_else(|| {
-                panic!("no vector recovered for {} in {name}", record.id)
-            });
-            assert_eq!(got_vec.len(), exp_vec.len(), "dim mismatch for {}", record.id);
+            let got_vec = record
+                .embedding
+                .as_ref()
+                .unwrap_or_else(|| panic!("no vector recovered for {} in {name}", record.id));
+            assert_eq!(
+                got_vec.len(),
+                exp_vec.len(),
+                "dim mismatch for {}",
+                record.id
+            );
             for (a, b) in got_vec.iter().zip(&exp_vec) {
                 assert!(
                     (a - b).abs() <= 1e-6 * b.abs().max(1.0),

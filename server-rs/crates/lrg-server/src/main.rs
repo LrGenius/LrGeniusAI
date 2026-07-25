@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use lrg_api::state::AppState;
 use lrg_common::{config, lifecycle, logging, version};
@@ -14,17 +14,54 @@ use lrg_common::{config, lifecycle, logging, version};
 #[derive(Parser)]
 #[command(name = "geniusai-server", about = "LrGenius Server")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Path to the database folder (e.g. <catalog dir>/lrgenius.db)
-    #[arg(long = "db-path")]
+    #[arg(long = "db-path", global = true)]
     db_path: Option<PathBuf>,
 
     /// Enable debug mode with debug log level
-    #[arg(long)]
+    #[arg(long, global = true)]
     debug: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// One-time migration of a ChromaDB dir into the LanceDB store.
+    Migrate {
+        /// Read + report the chroma dir without writing anything.
+        #[arg(long)]
+        verify_only: bool,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
+
+    if let Some(Command::Migrate { verify_only }) = &cli.command {
+        let verify_only = *verify_only;
+        let db_path = cli
+            .db_path
+            .clone()
+            .expect("--db-path is required for migrate");
+        logging::init_with_options(&config::log_path_for_db(&db_path), cli.debug, false);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime");
+        let result = runtime.block_on(run_migrate(&db_path, verify_only));
+        match result {
+            Ok(summary) => {
+                println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+                return;
+            }
+            Err(e) => {
+                eprintln!("migration failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let log_path = match &cli.db_path {
         Some(p) => config::log_path_for_db(p),
@@ -68,6 +105,48 @@ fn main() {
         log::error!("Server exited with error: {e}");
         std::process::exit(1);
     }
+}
+
+async fn run_migrate(
+    db_path: &std::path::Path,
+    verify_only: bool,
+) -> Result<serde_json::Value, String> {
+    use lrg_store::{migrate, Store};
+
+    if verify_only {
+        let db_path = db_path.to_path_buf();
+        let collections = tokio::task::spawn_blocking(move || lrg_chroma_reader_counts(&db_path))
+            .await
+            .map_err(|e| e.to_string())??;
+        return Ok(collections);
+    }
+
+    let lance_root = migrate::lance_root_for_db(db_path);
+    let store = Store::open(&lance_root).await.map_err(|e| e.to_string())?;
+    match migrate::ensure_migrated(db_path, &lance_root, &store).await? {
+        Some(summary) => Ok(summary),
+        None => Ok(serde_json::json!({
+            "status": "nothing to do (no chroma dir, or already migrated)",
+            "marker": migrate::migration_marker(&lance_root).display().to_string(),
+        })),
+    }
+}
+
+fn lrg_chroma_reader_counts(db_path: &std::path::Path) -> Result<serde_json::Value, String> {
+    let collections = lrg_chroma_reader::read_chroma_dir(db_path).map_err(|e| e.to_string())?;
+    let mut out = serde_json::Map::new();
+    for c in collections {
+        let with_vectors = c.records.iter().filter(|r| r.embedding.is_some()).count();
+        out.insert(
+            c.name.clone(),
+            serde_json::json!({
+                "records": c.records.len(),
+                "with_vectors": with_vectors,
+                "dimension": c.dimension,
+            }),
+        );
+    }
+    Ok(serde_json::Value::Object(out))
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {

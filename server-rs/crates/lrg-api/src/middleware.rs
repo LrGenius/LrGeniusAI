@@ -72,7 +72,9 @@ pub async fn auto_bind_db_path(
     if let Some(path) = db_path {
         // Don't fail the request here — let the route's own error handling
         // report underlying failures with more context (Python parity).
-        let _ = state.ensure_db_path(&path);
+        if let Err(e) = state.ensure_db_path(&path).await {
+            log::error!("Auto-bind to db_path {path} failed: {e}");
+        }
     }
 
     next.run(request).await

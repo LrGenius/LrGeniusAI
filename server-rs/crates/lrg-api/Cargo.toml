@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lrg-common.workspace = true
+lrg-store.workspace = true
 
 axum.workspace = true
 log.workspace = true

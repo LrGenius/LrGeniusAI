@@ -79,7 +79,13 @@ async fn initialize(State(state): State<Arc<AppState>>, body: Option<Json<Value>
             .into_response();
     }
 
-    let switched = state.ensure_db_path(db_path);
+    let switched = match state.ensure_db_path(db_path).await {
+        Ok(switched) => switched,
+        Err(e) => {
+            log::error!("Failed to initialize database at {db_path}: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+        }
+    };
     if !switched {
         return Json(json!({"status": "already_initialized", "db_path": db_path})).into_response();
     }

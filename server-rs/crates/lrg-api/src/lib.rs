@@ -16,6 +16,7 @@ use state::AppState;
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(routes::server::router())
+        .merge(routes::index::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::auto_bind_db_path,

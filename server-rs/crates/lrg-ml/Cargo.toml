@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ort = { version = "2.0.0-rc.10", features = ["coreml"] }
+
+[[example]]
+name = "bench_image"

@@ -30,6 +30,14 @@ impl Log for SwapLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
+        // Foreign crates (lance, datafusion, ort, ...) log through the same
+        // facade; keep only their warnings/errors so our log mirrors the
+        // Python backend's own-logger-only output.
+        let target = record.target();
+        let ours = target.starts_with("lrg") || target.starts_with("geniusai");
+        if !ours && record.level() > Level::Warn {
+            return;
+        }
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S,%3f");
         let level = match record.level() {
             Level::Warn => "WARNING",
@@ -87,13 +95,19 @@ pub fn rotate_log_on_startup(log_path: &Path, backup_count: u32) {
 /// Initialize global logging. Rotates the startup log unless running in
 /// Docker (where a single file keeps container logs simple).
 pub fn init(log_path: &Path, debug: bool) {
+    init_with_options(log_path, debug, true);
+}
+
+/// `stdout_echo = false` keeps stdout clean for CLI subcommands that print
+/// machine-readable output (logs still go to the file).
+pub fn init_with_options(log_path: &Path, debug: bool, stdout_echo: bool) {
     if !config::is_running_in_docker() {
         rotate_log_on_startup(log_path, config::log_rotate_backups());
     }
     let logger = SwapLogger {
         file: Mutex::new(open_log_file(log_path)),
         path: RwLock::new(log_path.to_path_buf()),
-        stdout: true,
+        stdout: stdout_echo,
     };
     if LOGGER.set(logger).is_ok() {
         // OnceLock guarantees a stable address for the lifetime of the process.
