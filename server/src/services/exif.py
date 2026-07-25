@@ -14,11 +14,10 @@ Supported tag sources (in priority order):
 
 from __future__ import annotations
 
-import struct
 import io
+import struct
 
 from config import logger
-
 
 # ---------------------------------------------------------------------------
 # IPTC IIM record-2 tag IDs relevant for location
@@ -144,7 +143,7 @@ def _read_gps_from_exif(image_bytes: bytes) -> tuple[float | None, float | None]
     """
     try:
         from PIL import Image
-        from PIL.ExifTags import TAGS, GPSTAGS
+        from PIL.ExifTags import GPSTAGS, TAGS
 
         img = Image.open(io.BytesIO(image_bytes))
         exif_data = img._getexif()  # type: ignore[attr-defined]

@@ -1,9 +1,10 @@
-import threading
 import os
-import tqdm
-from huggingface_hub import snapshot_download, hf_hub_download, HfApi
-from config import logger, IMAGE_MODEL_ID
+import threading
 
+import tqdm
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+
+from config import IMAGE_MODEL_ID, logger
 
 _download_status = {
     "status": "idle",

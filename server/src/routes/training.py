@@ -13,11 +13,11 @@ DELETE /training        – Clear all training examples
 
 from __future__ import annotations
 
+import io
 import json
 
 from flask import Blueprint, jsonify, request
 from PIL import Image
-import io
 
 from config import logger
 from services import training as training_service
@@ -34,6 +34,7 @@ def _compute_clip_embedding(image_bytes: bytes):
     try:
         import torch
         import torch.nn.functional as F
+
         import server_lifecycle
         from config import TORCH_DEVICE
 

@@ -41,6 +41,12 @@ dev = [
 ]
 
 [tool.ruff.lint]
+# Pin an explicit rule set rather than relying on ruff's implicit defaults:
+# those defaults have changed between ruff releases (e.g. 0.15 -> 0.16 added
+# dozens of new categories such as BLE, S, TRY, DTZ, PERF, SIM, PLR, FURB),
+# which silently broke CI since the ruff-action installs whatever is latest.
+# E4/E7/E9/F/I match ruff's traditional defaults plus import sorting.
+select = ["E4", "E7", "E9", "F", "I"]
 # E741: ambiguous variable name (single-letter `l`, `I`, `O`). Allowed for
 # numerical / scientific code where these names are conventional.
 extend-ignore = ["E741"]

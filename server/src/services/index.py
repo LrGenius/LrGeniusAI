@@ -1,19 +1,22 @@
-from config import logger, CULLING_CONFIG, TORCH_DEVICE
-from . import chroma as chroma_service
-from .chroma import DatabaseNotReadyError
-from .metadata import get_analysis_service
-import server_lifecycle as server_lifecycle
-from . import face as face_service
-from . import vertexai as vertexai_service
-from . import exif as exif_service
 import gc
+import io
 import json
 from datetime import datetime as time
 from functools import lru_cache
-from PIL import Image
-import io
+
 import numpy as np
 import torch
+from PIL import Image
+
+import server_lifecycle as server_lifecycle
+from config import CULLING_CONFIG, TORCH_DEVICE, logger
+
+from . import chroma as chroma_service
+from . import exif as exif_service
+from . import face as face_service
+from . import vertexai as vertexai_service
+from .chroma import DatabaseNotReadyError
+from .metadata import get_analysis_service
 
 
 def _flatten_keywords(keywords):

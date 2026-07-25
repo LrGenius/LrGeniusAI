@@ -1,6 +1,7 @@
 """Tests for routes/faces.py — covers all face and person endpoints."""
 
 import base64
+
 import pytest
 
 from geniusai_server import app

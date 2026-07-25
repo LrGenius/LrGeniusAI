@@ -3,9 +3,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-
 from services.import_ import import_metadata_task
-
 
 # ---------------------------------------------------------------------------
 # Helpers

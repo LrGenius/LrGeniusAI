@@ -1,7 +1,9 @@
-from config import logger
-from . import chroma as chroma_service
 import json
 from datetime import datetime as time
+
+from config import logger
+
+from . import chroma as chroma_service
 from .index import _flatten_keywords
 
 

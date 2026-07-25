@@ -6,15 +6,15 @@ face-quality metadata for indexing and culling.
 
 from __future__ import annotations
 
-import io
 import base64
+import io
+import os
 from typing import Any
 
-import os
 import numpy as np
 from PIL import Image
 
-from config import logger, CULLING_CONFIG
+from config import CULLING_CONFIG, logger
 
 # Lazy-loaded FaceAnalysis app
 _face_app = None

@@ -1,7 +1,8 @@
 """Tests for routes/server.py — covers B1 (clip_error reporting) and /ping."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from geniusai_server import app
 

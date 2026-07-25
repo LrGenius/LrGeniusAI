@@ -1,5 +1,6 @@
-from flask import Blueprint, request, jsonify
-from config import logger, get_available_culling_presets
+from flask import Blueprint, jsonify, request
+
+from config import get_available_culling_presets, logger
 from services import search as service_search
 
 search_bp = Blueprint("search", __name__)

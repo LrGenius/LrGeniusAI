@@ -6,15 +6,16 @@ import json
 import re
 import time
 from typing import Any, override
+
+from config import DEFAULT_MAX_TOKENS, logger
+
 from .base import (
-    LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,
+    LLMProviderBase,
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger, DEFAULT_MAX_TOKENS
-
 
 # Vision-capable family prefixes. Update when a new vision family ships.
 _ALLOWED_PREFIXES: tuple[str, ...] = (

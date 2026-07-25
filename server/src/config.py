@@ -1,8 +1,9 @@
 import argparse
 import copy
 import logging
-import sys
 import os
+import sys
+
 import torch
 
 # In windowless environments (like pythonw.exe on Windows), sys.stdout and sys.stderr are None.

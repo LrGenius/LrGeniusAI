@@ -2,9 +2,9 @@
 compatibility check logic."""
 
 from services.version import (
-    _normalize_version,
-    _is_dev_backend,
     _is_default_dev_plugin,
+    _is_dev_backend,
+    _normalize_version,
     check_plugin_backend_version,
 )
 

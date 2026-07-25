@@ -16,10 +16,11 @@ import re
 from typing import Any
 
 import numpy as np
-from sklearn.cluster import AgglomerativeClustering, DBSCAN
+from sklearn.cluster import DBSCAN, AgglomerativeClustering
 
 import config
 from config import logger
+
 from . import chroma as chroma_service
 
 PERSON_NAMES_FILENAME = "person_names.json"

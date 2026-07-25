@@ -1,4 +1,4 @@
-from src.version_info import BACKEND_VERSION, BACKEND_RELEASE_TAG, BACKEND_BUILD
+from src.version_info import BACKEND_BUILD, BACKEND_RELEASE_TAG, BACKEND_VERSION
 
 
 def test_version_info_types():

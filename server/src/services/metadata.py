@@ -4,31 +4,40 @@ Handles provider selection, initialization, and orchestration.
 Uses lazy loading - providers are only initialized when needed.
 """
 
+import io
 from concurrent.futures import (
     ThreadPoolExecutor,
     as_completed,
+)
+from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
 )
 from typing import Any
+
+import torch
+import torch.nn.functional as F
+from PIL import Image
+
+from config import (
+    DEFAULT_METADATA_LANGUAGE,
+    DEFAULT_METADATA_PROVIDER,
+    TORCH_DEVICE,
+    logger,
+)
 from providers.base import (
-    LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,
+    LLMProviderBase,
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from providers.ollama import OllamaProvider
-from providers.lmstudio import LMStudioProvider
 from providers.chatgpt import ChatGPTProvider
 from providers.gemini import GeminiProvider
+from providers.lmstudio import LMStudioProvider
+from providers.ollama import OllamaProvider
 from utils.edit_recipe import filter_edit_recipe_by_controls
-from config import logger, DEFAULT_METADATA_PROVIDER, DEFAULT_METADATA_LANGUAGE
+
 from . import training as training_service
-from PIL import Image
-import io
-import torch
-import torch.nn.functional as F
-from config import TORCH_DEVICE
 
 
 class AnalysisService:

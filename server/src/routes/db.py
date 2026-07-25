@@ -1,9 +1,9 @@
-from flask import Blueprint, jsonify, send_file, after_this_request, request
 import os
+
+from flask import Blueprint, after_this_request, jsonify, request, send_file
 
 from config import logger
 from services import db as service_db
-
 
 db_bp = Blueprint("db", __name__)
 

@@ -1,6 +1,6 @@
 import unittest
 
-from services.jobs import complete_job, create_job, fail_job, get_job, _jobs, _lock
+from services.jobs import _jobs, _lock, complete_job, create_job, fail_job, get_job
 
 
 def _drain():

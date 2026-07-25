@@ -1,15 +1,15 @@
-import sys
 import os
+import sys
 from unittest.mock import patch
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 from services.style_engine import (
-    calculate_composite_score,
-    interpolate_recipes,
-    generate_style_edit,
     StyleEngineResult,
+    calculate_composite_score,
+    generate_style_edit,
+    interpolate_recipes,
 )
 
 

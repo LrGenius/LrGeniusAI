@@ -1,12 +1,13 @@
 import os
+
 from flask import Blueprint, jsonify, request, send_file
 
-import server_lifecycle
 import config
+import server_lifecycle
 from config import logger
-from services.metadata import get_analysis_service
-from services import version as service_version
 from services import update as service_update
+from services import version as service_version
+from services.metadata import get_analysis_service
 
 server_bp = Blueprint("server", __name__)
 

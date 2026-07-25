@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from config import logger, TORCH_DEVICE
+from config import TORCH_DEVICE, logger
 
 
 def embed_keywords_batched(

@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -8,8 +8,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "s
 
 from services.style_engine import (
     calculate_composite_score,
-    interpolate_recipes,
     generate_style_edit,
+    interpolate_recipes,
 )
 
 

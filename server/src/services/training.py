@@ -108,8 +108,9 @@ def compute_exposure_metrics(image_bytes: bytes) -> dict[str, float]:
     storage as ChromaDB metadata and multi-criteria matching.
     """
     try:
-        from PIL import Image
         import io
+
+        from PIL import Image
 
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         # Downscale for speed – we only need aggregate statistics
@@ -195,6 +196,7 @@ def compute_scene_tags(image_embedding: list[float] | None) -> list[str]:
     try:
         import torch
         import torch.nn.functional as F
+
         import server_lifecycle
         from config import TORCH_DEVICE
 

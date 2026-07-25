@@ -4,16 +4,19 @@ LM Studio Provider for metadata generation using the lmstudio-python library
 
 import json
 import socket
-import lmstudio as lms
 from typing import Any, override
+
+import lmstudio as lms
+
+from config import DEFAULT_MAX_TOKENS, LMSTUDIO_HOST, logger
+
 from .base import (
-    LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,
+    LLMProviderBase,
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger, LMSTUDIO_HOST, DEFAULT_MAX_TOKENS
 
 
 class LMStudioProvider(LLMProviderBase):

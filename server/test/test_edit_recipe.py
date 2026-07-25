@@ -1,11 +1,11 @@
-import unittest
-import sys
 import os
+import sys
+import unittest
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from utils.edit_recipe import normalize_edit_recipe, filter_edit_recipe_by_controls
+from utils.edit_recipe import filter_edit_recipe_by_controls, normalize_edit_recipe
 
 
 class NormalizeEditRecipeTests(unittest.TestCase):

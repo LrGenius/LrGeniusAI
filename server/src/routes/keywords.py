@@ -3,8 +3,8 @@ import threading
 import numpy as np
 from flask import Blueprint, jsonify, request
 
-from config import logger
 import server_lifecycle
+from config import logger
 from services.jobs import complete_job, create_job, fail_job, get_job
 from services.keywords import (
     apply_keyword_merges,

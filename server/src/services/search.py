@@ -1,9 +1,11 @@
-from . import chroma as chroma_service
-from . import vertexai as vertexai_service
-from config import logger, TORCH_DEVICE
-import server_lifecycle as server_lifecycle
 import torch
 import torch.nn.functional as F
+
+import server_lifecycle as server_lifecycle
+from config import TORCH_DEVICE, logger
+
+from . import chroma as chroma_service
+from . import vertexai as vertexai_service
 
 DEFAULT_MAX_RESULTS = 300
 MAX_RESULTS_HARD_LIMIT = 2000

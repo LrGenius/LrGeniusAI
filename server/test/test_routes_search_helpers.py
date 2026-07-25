@@ -19,7 +19,6 @@ def client():
 # Import the helper directly after the app is available.
 from routes.search import _parse_grouping_params  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify, request
+
 from config import logger
 from services import import_ as import_service
 

@@ -10,14 +10,15 @@ try:
 except Exception:  # ImportError or runtime issues
     Client = None  # type: ignore
 
+from config import DEFAULT_MAX_TOKENS, OLLAMA_BASE_URL, logger
+
 from .base import (
-    LLMProviderBase,
     EditGenerationRequest,
     EditGenerationResponse,
+    LLMProviderBase,
     MetadataGenerationRequest,
     MetadataGenerationResponse,
 )
-from config import logger, OLLAMA_BASE_URL, DEFAULT_MAX_TOKENS
 
 
 class OllamaProvider(LLMProviderBase):

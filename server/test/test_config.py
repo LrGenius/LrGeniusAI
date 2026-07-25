@@ -1,4 +1,4 @@
-from src.config import _deep_merge_dict, get_culling_config, BASE_CULLING_CONFIG
+from src.config import BASE_CULLING_CONFIG, _deep_merge_dict, get_culling_config
 
 
 def test_deep_merge_dict():

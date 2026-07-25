@@ -1,10 +1,11 @@
-import os
 import hashlib
-from pathlib import Path
 import json
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
 from config import logger
 
 _update_in_progress = False

@@ -11,7 +11,6 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-
 GLOBAL_FIELD_RANGES: dict[str, dict[str, float]] = {
     "exposure": {"min": -5.0, "max": 5.0},
     "contrast": {"min": -100.0, "max": 100.0},

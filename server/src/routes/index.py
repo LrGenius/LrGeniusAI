@@ -1,14 +1,15 @@
-from flask import Blueprint, request, jsonify
-import time
-from collections import deque
-import os
-
-from services import chroma as chroma_service
-from config import logger
-from services.index import process_image_task, get_photo_ids_needing_processing
-from utils.image_convert import UnsupportedImageError, normalize_image_bytes
 import base64
 import json
+import os
+import time
+from collections import deque
+
+from flask import Blueprint, jsonify, request
+
+from config import logger
+from services import chroma as chroma_service
+from services.index import get_photo_ids_needing_processing, process_image_task
+from utils.image_convert import UnsupportedImageError, normalize_image_bytes
 
 index_bp = Blueprint("index", __name__)
 

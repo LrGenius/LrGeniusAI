@@ -2,7 +2,6 @@ import json
 import os
 import sys
 
-
 # Ensure server src directory (with services.chroma, config, etc.) is importable.
 _THIS_DIR = os.path.dirname(__file__)
 _SERVER_ROOT = os.path.dirname(_THIS_DIR)
@@ -41,7 +40,10 @@ def _extract_photo_id(argv: list[str]) -> tuple[str | None, list[str]]:
 _PHOTO_ID, _NEW_ARGV = _extract_photo_id(sys.argv)
 sys.argv = _NEW_ARGV
 
-from services.chroma import get_all_image_ids, get_image  # noqa: E402  (import after argv tweak)
+from services.chroma import (  # noqa: E402  (import after argv tweak)
+    get_all_image_ids,
+    get_image,
+)
 
 
 def main() -> int:

@@ -1,13 +1,13 @@
 """Tests for the adaptive relevance filter in services.search."""
 
 from services.search import (
-    _smart_filter_by_relevance,
-    _strictness_to_k,
-    _clamp_max_results,
-    _clamp_strictness,
-    RELEVANCE_FLOOR,
     DEFAULT_MAX_RESULTS,
     DEFAULT_RELEVANCE_STRICTNESS,
+    RELEVANCE_FLOOR,
+    _clamp_max_results,
+    _clamp_strictness,
+    _smart_filter_by_relevance,
+    _strictness_to_k,
 )
 
 

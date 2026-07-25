@@ -1,6 +1,6 @@
-from datetime import datetime
 import base64
 import json
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
@@ -8,7 +8,6 @@ from config import logger
 from routes.index import _extract_options, _extract_photo_ids
 from services import chroma as chroma_service
 from services.metadata import get_analysis_service
-
 
 edit_bp = Blueprint("edit", __name__)
 

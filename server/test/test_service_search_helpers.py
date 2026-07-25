@@ -35,7 +35,6 @@ from services.search import (  # noqa: E402  (import after sys.modules patch)
     _transform_vertex_results,
 )
 
-
 # ---------------------------------------------------------------------------
 # _clamp_max_results
 # ---------------------------------------------------------------------------

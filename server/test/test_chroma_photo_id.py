@@ -9,14 +9,14 @@ import json
 import numpy as np
 
 from services.chroma import (
+    CATALOG_IDS_FIELD,
+    LEGACY_UUID_FIELD,
+    PHOTO_ID_FIELD,
     _ensure_photo_metadata,
     _first_result_item,
     _normalize_photo_id,
     _parse_catalog_ids,
     _serialize_catalog_ids,
-    CATALOG_IDS_FIELD,
-    LEGACY_UUID_FIELD,
-    PHOTO_ID_FIELD,
 )
 
 

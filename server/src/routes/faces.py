@@ -1,10 +1,11 @@
-from flask import Blueprint, request, jsonify
+import base64
+
+from flask import Blueprint, jsonify, request
+
 from config import logger
 from services import chroma as chroma_service
 from services import face as face_service
 from services import persons as persons_service
-import base64
-
 
 faces_bp = Blueprint("faces", __name__)
 

@@ -1,34 +1,35 @@
+import json
 import os
 import sys
 import threading
 import time
+
 from flask import Flask, jsonify, request
 from waitress import serve
-import json
 
 # Import modularized components
 import config
-from config import logger, args
-from services.version import get_backend_version_info
 
 # Lazy import server_lifecycle to speed up startup
 import server_lifecycle
+from config import args, logger
+from routes.clip import clip_bp
+from routes.db import db_bp
+from routes.edit import edit_bp
+from routes.faces import faces_bp
+from routes.import_ import import_bp
 
 # Import blueprints only (services are imported by routes when needed)
 from routes.index import index_bp
-from routes.edit import edit_bp
+from routes.keywords import keywords_bp
 from routes.search import search_bp
 from routes.server import server_bp
-from routes.db import db_bp
-from routes.import_ import import_bp
-from routes.clip import clip_bp
-from routes.faces import faces_bp
-from routes.training import training_bp
 from routes.style_edit import style_edit_bp
-from routes.keywords import keywords_bp
+from routes.training import training_bp
 from services import chroma as service_chroma
-from services import persons as service_persons
 from services import db as service_db
+from services import persons as service_persons
+from services.version import get_backend_version_info
 
 app = Flask(__name__)
 logger.info("Flask app created")

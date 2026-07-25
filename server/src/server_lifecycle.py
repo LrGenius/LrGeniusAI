@@ -1,18 +1,19 @@
-import os
-import time
-import signal
-import config
-from config import logger, IMAGE_MODEL_ID, CLIP_MODEL_NAME, TORCH_DEVICE
-import open_clip
-from utils.open_clip_compat import wrap_tokenizer
-import threading
 import datetime
 import gc
+import os
+import signal
+import threading
+import time
+
+import open_clip
 import torch
 from huggingface_hub import hf_hub_download
-from services import face as service_face
-from services import chroma as service_chroma
 
+import config
+from config import CLIP_MODEL_NAME, IMAGE_MODEL_ID, TORCH_DEVICE, logger
+from services import chroma as service_chroma
+from services import face as service_face
+from utils.open_clip_compat import wrap_tokenizer
 
 # Lazy-loadable global model instances
 # model, processor and tokenizer start as None and will be loaded on first use.

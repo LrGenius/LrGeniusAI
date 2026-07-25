@@ -1,10 +1,10 @@
-from abc import ABC, abstractmethod
-from typing import Any, final
-from dataclasses import dataclass
 import base64
-from PIL import Image
 import io
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, final
 
+from PIL import Image
 
 # Import prompts from config
 from config import METADATA_GENERATION_SYSTEM_PROMPT

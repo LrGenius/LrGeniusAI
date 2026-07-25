@@ -27,6 +27,7 @@ import json
 from typing import Any
 
 from config import logger
+
 from . import training as training_service
 
 # ---------------------------------------------------------------------------

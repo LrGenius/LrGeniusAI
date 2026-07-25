@@ -1,11 +1,12 @@
-import chromadb
-from chromadb.config import Settings
-from chromadb.errors import InternalError as ChromaInternalError
 import json
 import threading
-import numpy as np
-from config import logger, CULLING_CONFIG, get_culling_config
 
+import chromadb
+import numpy as np
+from chromadb.config import Settings
+from chromadb.errors import InternalError as ChromaInternalError
+
+from config import CULLING_CONFIG, get_culling_config, logger
 
 # --- ChromaDB Client and Collection Initialization (Lazy) ---
 chroma_client = None

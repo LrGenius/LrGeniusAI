@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 import tempfile
 
 # Monkeypatch sys.argv BEFORE any test modules are collected.

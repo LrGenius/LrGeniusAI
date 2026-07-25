@@ -1,8 +1,8 @@
 import io
-import pytest
 import json
 from unittest.mock import MagicMock
 
+import pytest
 
 from geniusai_server import app
 
