@@ -837,6 +837,33 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSettings=Export settings"),
 				f:row({
 					fill_horizontal = 1,
+					f:radio_button({
+						value = bind("indexSubmitOriginals"),
+						checked_value = true,
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginals=Submit original files for fastest indexing (experimental)"
+						),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected,\nlocation keywords from Lightroom's address lookup are unavailable, and results may\ndiffer slightly from photos indexed the classic way. Re-index to keep search consistent."
+						),
+						enabled = false,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:radio_button({
+						value = bind("indexSubmitOriginals"),
+						checked_value = false,
+						title = LOC("$$$/LrGeniusAI/PluginInfo/IndexModeExport=Export photos for indexing"),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
 					f:static_text({
 						title = LOC(
 							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSize=Export size in pixel (long edge)"
@@ -869,36 +896,6 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:static_text({
 						title = bind("exportQuality"),
 						width_in_chars = 5,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:spacer({ width = share("labelWidth") }),
-					f:radio_button({
-						value = bind("indexSubmitOriginals"),
-						checked_value = false,
-						title = LOC("$$$/LrGeniusAI/PluginInfo/IndexModeExport=Export photos for indexing"),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:spacer({ width = share("labelWidth") }),
-					f:radio_button({
-						value = bind("indexSubmitOriginals"),
-						checked_value = true,
-						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginals=Submit original files for fastest indexing (experimental)"
-						),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:spacer({ width = share("labelWidth") }),
-					f:static_text({
-						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected,\nlocation keywords from Lightroom's address lookup are unavailable, and results may\ndiffer slightly from photos indexed the classic way. Re-index to keep search consistent."
-						),
-						enabled = false,
 					}),
 				}),
 			}),
