@@ -2,8 +2,8 @@
 //! `services/index.py::process_image_task`'s core loop: embeddings
 //! (SigLIP2), pHash + culling metrics (always computed), faces (when
 //! requested), catalog association, existing-record merge for
-//! `regenerate_metadata=false`, and LLM metadata generation (Ollama +
-//! OpenAI; Gemini/LM Studio land with the edit-recipe port in M8).
+//! `regenerate_metadata=false`, and LLM metadata generation across all
+//! four providers (Ollama, OpenAI, Gemini, LM Studio).
 //! Vertex AI embedding generation is M8 (needs cloud auth) — requesting
 //! it returns a clear "not yet available" warning.
 
@@ -693,8 +693,8 @@ async fn apply_face_aggregate(
 
 /// Builds a `MetadataGenerationRequest` from the parsed options + this
 /// photo's bytes, dispatches to the configured provider, and returns its
-/// response. `provider` accepts "ollama" or "chatgpt"/"openai"; anything
-/// else (gemini, lmstudio) is a clear error until M8.
+/// response. `provider` accepts "ollama", "chatgpt"/"openai", "gemini", or
+/// "lmstudio".
 async fn generate_metadata_for_photo(
     options: &ParsedOptions,
     image_bytes: &[u8],
@@ -753,8 +753,18 @@ async fn generate_metadata_for_photo(
             let client = lrg_providers::openai::OpenAiProvider::new(api_key);
             Ok(client.generate_metadata(&request).await)
         }
-        other => Err(format!(
-            "Provider '{other}' is not yet available in this backend build (planned for M8)."
-        )),
+        "gemini" => {
+            let api_key = request
+                .api_key
+                .clone()
+                .ok_or_else(|| "Gemini API not configured".to_string())?;
+            let client = lrg_providers::gemini::GeminiProvider::new(api_key);
+            Ok(client.generate_metadata(&request).await)
+        }
+        "lmstudio" => {
+            let client = lrg_providers::lmstudio::LmStudioProvider::new(mo.lmstudio_base_url.clone());
+            Ok(client.generate_metadata(&request).await)
+        }
+        other => Err(format!("Unknown provider '{other}'.")),
     }
 }

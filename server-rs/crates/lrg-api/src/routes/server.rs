@@ -38,13 +38,12 @@ struct ModelsQuery {
     openai_apikey: Option<String>,
     gemini_apikey: Option<String>,
     ollama_base_url: Option<String>,
-    #[allow(dead_code)]
     lmstudio_base_url: Option<String>,
 }
 
-/// Port of `list_models`. Scope for M7: Ollama (local REST probe) and
-/// OpenAI (vision-model allowlist via `/v1/models`, needs an API key).
-/// Gemini/LM Studio/Qwen return empty lists until their providers land.
+/// Port of `list_models` / `AnalysisService.get_available_models`. Ollama
+/// and LM Studio are probed concurrently with the rest (an offline local
+/// server must not block the others); Qwen is unimplemented upstream too.
 async fn list_models(
     axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
     body: Option<Json<Value>>,
@@ -62,22 +61,48 @@ async fn list_models(
         .and_then(Value::as_str)
         .map(str::to_string)
         .or(q.ollama_base_url);
-    let _gemini_key = data
+    let gemini_key = data
         .get("gemini_apikey")
         .and_then(Value::as_str)
         .map(str::to_string)
         .or(q.gemini_apikey);
+    let lmstudio_base_url = data
+        .get("lmstudio_base_url")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(q.lmstudio_base_url);
 
     let ollama = lrg_providers::ollama::OllamaProvider::new(ollama_base_url);
-    let ollama_models = if ollama.is_available().await {
-        ollama.list_available_models().await
-    } else {
-        Vec::new()
-    };
+    let lmstudio = lrg_providers::lmstudio::LmStudioProvider::new(lmstudio_base_url);
+
+    let (ollama_models, lmstudio_models) = tokio::join!(
+        async {
+            if ollama.is_available().await {
+                ollama.list_available_models().await
+            } else {
+                Vec::new()
+            }
+        },
+        async {
+            if lmstudio.is_available().await {
+                lmstudio.list_available_models().await
+            } else {
+                Vec::new()
+            }
+        },
+    );
 
     let openai_models = match openai_key {
         Some(key) if !key.is_empty() => {
             lrg_providers::openai::OpenAiProvider::new(key)
+                .list_available_models()
+                .await
+        }
+        _ => Vec::new(),
+    };
+    let gemini_models = match gemini_key {
+        Some(key) if !key.is_empty() => {
+            lrg_providers::gemini::GeminiProvider::new(key)
                 .list_available_models()
                 .await
         }
@@ -88,9 +113,9 @@ async fn list_models(
         "models": {
             "qwen": [],
             "ollama": ollama_models,
-            "lmstudio": [],
+            "lmstudio": lmstudio_models,
             "chatgpt": openai_models,
-            "gemini": [],
+            "gemini": gemini_models,
         }
     }))
 }

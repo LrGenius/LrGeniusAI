@@ -1,8 +1,13 @@
-//! LLM provider REST clients for metadata generation. Edit-recipe
-//! generation (Gemini, LM Studio, Vertex AI) lands alongside the
-//! `utils/edit_recipe.py` port in M8.
+//! LLM provider REST clients for metadata generation, plus the
+//! edit-recipe contract (`edit_recipe`) shared by all edit-capable
+//! providers. Gemini, LM Studio, and Vertex AI providers land in M8
+//! alongside the `/edit` endpoint.
 
+pub mod edit_recipe;
+pub mod gemini;
+pub mod gemini_schema;
 pub mod image_encode;
+pub mod lmstudio;
 pub mod normalize;
 pub mod ollama;
 pub mod openai;

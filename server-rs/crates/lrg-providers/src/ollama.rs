@@ -5,11 +5,18 @@
 
 use serde_json::{json, Value};
 
+use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
 use crate::normalize::normalize_keywords_structure;
-use crate::prompts::{prepare_system_prompt, prepare_user_prompt};
+use crate::prompts::{
+    prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
+    prepare_user_prompt,
+};
 use crate::schema::prepare_response_structure;
-use crate::types::{MetadataGenerationRequest, MetadataGenerationResponse, ProviderError};
+use crate::types::{
+    EditGenerationRequest, EditGenerationResponse, MetadataGenerationRequest,
+    MetadataGenerationResponse, ProviderError,
+};
 
 pub const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 const DEFAULT_MAX_TOKENS: u32 = 2048;
@@ -151,10 +158,105 @@ impl OllamaProvider {
         };
         build_success(request, &parsed)
     }
+
+    pub async fn generate_edit_recipe(
+        &self,
+        request: &EditGenerationRequest,
+    ) -> EditGenerationResponse {
+        let base = request.ollama_base_url.as_deref().unwrap_or(&self.base_url);
+        let url = format!("{base}/api/chat");
+
+        let image_b64 = match image_to_base64(&request.image_data) {
+            Ok(b64) => b64,
+            Err(e) => return fail_edit(&request.uuid, e.to_string()),
+        };
+        let system_prompt = prepare_edit_system_prompt(request);
+        let user_prompt = prepare_edit_user_prompt(request);
+        let response_schema = openai_edit_recipe_schema();
+        let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+
+        let body = json!({
+            "model": request.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt, "images": [image_b64]},
+            ],
+            "format": response_schema,
+            "options": {
+                "temperature": request.temperature,
+                "top_p": 0.9,
+                "num_keep": -1,
+                "num_predict": max_tokens,
+            },
+            "stream": false,
+        });
+
+        let resp = match self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return fail_edit(&request.uuid, ProviderError::Http(e).to_string()),
+        };
+        let result: Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => return fail_edit(&request.uuid, ProviderError::Http(e).to_string()),
+        };
+
+        let done_reason = result.get("done_reason").and_then(Value::as_str);
+        if done_reason == Some("length") {
+            return fail_edit(
+                &request.uuid,
+                format!(
+                    "Ollama stopped before finishing the response because the token limit was reached (num_predict={max_tokens}). Please raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher."
+                ),
+            );
+        }
+
+        let content = result
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if content.is_empty() {
+            return fail_edit(
+                &request.uuid,
+                "Empty response content from Ollama".to_string(),
+            );
+        }
+
+        let parsed: Value = match serde_json::from_str(content) {
+            Ok(v) => v,
+            Err(e) => return fail_edit(&request.uuid, format!("JSON parsing error: {e}")),
+        };
+
+        EditGenerationResponse {
+            uuid: request.uuid.clone(),
+            success: true,
+            recipe: Some(normalize_edit_recipe(&parsed)),
+            input_tokens: 0,
+            output_tokens: 0,
+            error: None,
+            warning: None,
+        }
+    }
 }
 
 fn fail(uuid: &str, error: String) -> MetadataGenerationResponse {
     MetadataGenerationResponse {
+        uuid: uuid.to_string(),
+        success: false,
+        error: Some(error),
+        ..Default::default()
+    }
+}
+
+fn fail_edit(uuid: &str, error: String) -> EditGenerationResponse {
+    EditGenerationResponse {
         uuid: uuid.to_string(),
         success: false,
         error: Some(error),

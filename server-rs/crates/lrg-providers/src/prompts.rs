@@ -4,7 +4,7 @@
 
 use lrg_imaging::location::format_location_for_prompt;
 
-use crate::types::{KeywordCategories, MetadataGenerationRequest};
+use crate::types::{EditGenerationRequest, KeywordCategories, MetadataGenerationRequest};
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a professional photography analyst with expertise in object recognition and computer-generated image description. \nYou also try to identify famous buildings and landmarks as well as the location where the photo was taken. \nFurthermore, you aim to specify animal and plant species as accurately as possible. \nYou also describe objects—such as vehicle types and manufacturers—as specifically as you can.";
 
@@ -182,9 +182,273 @@ pub fn prepare_user_prompt(request: &MetadataGenerationRequest) -> String {
     base_prompt
 }
 
+pub const DEFAULT_EDIT_SYSTEM_PROMPT: &str = "You are a senior Lightroom Classic retoucher producing high-end, client-ready edits. \
+Return only a structured Lightroom edit recipe that strictly matches the provided JSON schema. \
+Never output prose instructions, markdown, or fields not present in the schema. \
+Prioritize natural color science, tonal separation, and believable micro-contrast unless an explicit stylized intent is given. \
+Use the minimum number of controls needed for a strong result; avoid noisy over-adjustment. \
+When local edits are useful, use only supported mask kinds: subject, sky, background.";
+
+/// Port of `_prepare_edit_system_prompt`.
+pub fn prepare_edit_system_prompt(request: &EditGenerationRequest) -> String {
+    request
+        .system_prompt
+        .clone()
+        .unwrap_or_else(|| DEFAULT_EDIT_SYSTEM_PROMPT.to_string())
+}
+
+const TRAINING_CANONICAL_KEYS: &[&str] = &[
+    "Exposure2012",
+    "Contrast2012",
+    "Highlights2012",
+    "Shadows2012",
+    "Whites2012",
+    "Blacks2012",
+    "Temp",
+    "Tint",
+    "Texture",
+    "Clarity2012",
+    "Dehaze",
+    "Vibrance",
+    "Saturation",
+    "Sharpness",
+    "LuminanceSmoothing",
+    "ColorNoiseReduction",
+    "PostCropVignetteAmount",
+    "GrainAmount",
+    "SplitToningShadowHue",
+    "SplitToningShadowSaturation",
+    "SplitToningHighlightHue",
+    "SplitToningHighlightSaturation",
+    "SplitToningBalance",
+    "ParametricHighlights",
+    "ParametricLights",
+    "ParametricDarks",
+    "ParametricShadows",
+];
+
+/// Port of `_format_training_example`: serializes one few-shot training
+/// example into a compact prompt-friendly string.
+pub fn format_training_example(idx: usize, example: &serde_json::Value) -> String {
+    let dev = example.get("develop_settings").cloned().unwrap_or_default();
+    let label = example
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| example.get("filename").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Example {idx}"));
+    let summary = example.get("summary").and_then(serde_json::Value::as_str);
+
+    let mut compact: Vec<(String, String)> = Vec::new();
+    if let serde_json::Value::Object(dev) = &dev {
+        for &key in TRAINING_CANONICAL_KEYS {
+            let Some(v) = dev.get(key) else { continue };
+            // Python's `round(v, 2)` + `str()` doesn't zero-pad (1.0 stays
+            // "1.0"); this always shows 2 decimals. Harmless — this text
+            // only feeds an LLM few-shot prompt, never parsed back.
+            let formatted = match v {
+                serde_json::Value::Number(n) if n.is_f64() => {
+                    format!("{:.2}", n.as_f64().unwrap())
+                }
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => continue,
+            };
+            compact.push((key.to_string(), formatted));
+        }
+    }
+    compact.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut lines = vec![format!("  [{idx}] {label}")];
+    if let Some(summary) = summary {
+        lines.push(format!("      Summary: {summary}"));
+    }
+    if compact.is_empty() {
+        lines.push("      Settings: (no numeric develop settings captured)".to_string());
+    } else {
+        let params = compact
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("      Settings: {params}"));
+    }
+    lines.join("\n")
+}
+
+/// Port of `_prepare_edit_user_prompt`.
+pub fn prepare_edit_user_prompt(request: &EditGenerationRequest) -> String {
+    let mut base_prompt = match &request.user_prompt {
+        Some(p) => p.clone(),
+        None => "Analyze the uploaded photo and return a Lightroom edit recipe.\n\
+* Add a concise summary of the intended look\n\
+* Put broad corrections in `global`\n\
+* Put local corrections in `masks` only when they produce clear benefit\n\
+* Keep the result natural and premium unless the context explicitly asks for stylization\n\
+* Do not include unchanged controls"
+            .to_string(),
+    };
+
+    base_prompt.push_str(
+        "\n\nEdit recipe rules:\n\
+* Return only numeric Lightroom-friendly adjustments\n\
+* Build edits in this order: white balance and exposure foundation -> tonal shaping -> color refinement -> detail/effects\n\
+* For white balance use global `temperature` and `tint` (or `white_balance.temperature` / `white_balance.tint`)\n\
+* Use global controls first; add masks only when global edits cannot solve the problem cleanly\n\
+* Use masks only for subject, sky, or background\n\
+* Keep saturation and clarity moderate; avoid brittle or crunchy output\n\
+* Prefer highlight recovery and shadow shaping before aggressive contrast\n\
+* If a curve-shaped tone response is needed (e.g. subtle S-curve, matte blacks, gentle roll-off), prefer `tone_curve.point_curve` and/or `tone_curve.extended_point_curve` over faking it with only contrast sliders\n\
+* When using point curves, provide valid point pairs per channel in ascending x order and keep endpoints anchored near black/white unless a deliberate fade is requested\n\
+* Use advanced controls (vignette sub-controls, sharpen detail/masking, noise detail, color NR detail/smoothness) only when clearly justified by image content\n\
+* Use `lens_corrections` and `crop` only when they clearly improve the result\n\
+* Add warnings when something seems uncertain or unsupported\n",
+    );
+
+    if !request.include_masks {
+        base_prompt.push_str("* Do not return any masks; keep all edits global\n");
+    }
+    if !request.adjust_white_balance {
+        base_prompt
+            .push_str("* Do not adjust white balance (`temperature`, `tint`, `white_balance`)\n");
+    }
+    if !request.adjust_basic_tone {
+        base_prompt.push_str("* Do not adjust global basic tone controls (`exposure`, `contrast`, `highlights`, `shadows`, `whites`, `blacks`)\n");
+    }
+    if !request.adjust_presence {
+        base_prompt
+            .push_str("* Do not adjust presence controls (`texture`, `clarity`, `dehaze`)\n");
+    }
+    if !request.adjust_color_mix {
+        base_prompt
+            .push_str("* Do not adjust color mix controls (`vibrance`, `saturation`, `hsl`)\n");
+    }
+    if !request.do_color_grading {
+        base_prompt.push_str("* Do not use `color_grading`\n");
+    }
+    if !request.use_tone_curve {
+        base_prompt.push_str("* Do not use `tone_curve` (neither parametric nor point curve)\n");
+    } else if !request.use_point_curve {
+        base_prompt.push_str("* Do not use `tone_curve.point_curve` or `tone_curve.extended_point_curve`; use only parametric tone curve sliders if needed\n");
+    }
+    if !request.adjust_detail {
+        base_prompt.push_str("* Do not adjust detail controls (sharpening/noise reduction)\n");
+    }
+    if !request.adjust_effects {
+        base_prompt.push_str("* Do not adjust effects controls (vignette/grain)\n");
+    }
+    if !request.adjust_lens_corrections {
+        base_prompt.push_str("* Do not use `lens_corrections`\n");
+    }
+    if !request.allow_auto_crop {
+        base_prompt.push_str("* Do not use `crop`\n");
+    } else {
+        match request.composition_mode.to_lowercase().as_str() {
+            "none" => base_prompt.push_str("* Do not use `crop`\n"),
+            "subtle" => base_prompt.push_str("* If using `crop`, keep it subtle: preserve overall framing and avoid aggressive trims\n"),
+            "aggressive" => base_prompt.push_str("* Crop may be assertive when composition clearly improves; keep key subjects and avoid awkward cutoffs\n"),
+            _ => {}
+        }
+    }
+
+    let mut context_additions: Vec<String> = Vec::new();
+    if let Some(intent) = &request.edit_intent {
+        if !intent.is_empty() {
+            context_additions.push(format!("Requested editing intent: {intent}"));
+        }
+    }
+
+    let strength = request.style_strength.clamp(0.0, 1.0);
+    if strength <= 0.25 {
+        context_additions.push(
+            "Style strength: very subtle (minimal slider movement, preserve original character)."
+                .to_string(),
+        );
+    } else if strength <= 0.5 {
+        context_additions.push(
+            "Style strength: subtle to moderate (clean refinement, avoid strong stylization)."
+                .to_string(),
+        );
+    } else if strength <= 0.75 {
+        context_additions.push(
+            "Style strength: moderate to strong (noticeable look while staying plausible)."
+                .to_string(),
+        );
+    } else {
+        context_additions.push(
+            "Style strength: strong (bold look allowed, but avoid clipping and artifacts)."
+                .to_string(),
+        );
+    }
+
+    if let Some(ctx) = &request.user_context {
+        if !ctx.is_empty() {
+            context_additions.push(format!("Per-photo instructions: {ctx}"));
+        }
+    }
+    if request.submit_keywords {
+        if let Some(kw) = &request.existing_keywords {
+            let joined = kw
+                .iter()
+                .map(|k| k.trim())
+                .filter(|k| !k.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !joined.is_empty() {
+                context_additions.push(format!("Existing keywords: {joined}"));
+            }
+        }
+    }
+    if request.submit_folder_names {
+        if let Some(folders) = &request.folder_names {
+            if !folders.is_empty() {
+                context_additions.push(format!("Folder context: {folders}"));
+            }
+        }
+    }
+    if let Some(location) = &request.location_data {
+        if !location.is_empty() {
+            if let Some(location_str) = format_location_for_prompt(location) {
+                context_additions.push(format!("Photo taken in: {location_str}"));
+            }
+        }
+    }
+    if let Some(dt) = &request.date_time {
+        if !dt.is_empty() {
+            context_additions.push(format!("Capture time: {dt}"));
+        }
+    }
+    if !request.language.is_empty() {
+        context_additions.push(format!(
+            "Write `summary` and `warnings` in {}, but keep field names exactly as specified by the schema.",
+            request.language
+        ));
+    }
+
+    if !context_additions.is_empty() {
+        base_prompt.push_str("\n\n");
+        base_prompt.push_str(&context_additions.join("\n"));
+    }
+
+    if !request.training_examples.is_empty() {
+        base_prompt.push_str("\n\n--- YOUR PERSONAL EDIT STYLE (few-shot examples) ---\n");
+        base_prompt.push_str(
+            "The following examples are from your own Lightroom edits on visually similar photos. \
+Study the slider values and replicate this editing style for the current photo.\n",
+        );
+        for (i, example) in request.training_examples.iter().enumerate() {
+            base_prompt.push_str(&format_training_example(i + 1, example));
+            base_prompt.push('\n');
+        }
+        base_prompt.push_str("--- END OF STYLE EXAMPLES ---\n");
+    }
+
+    base_prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn base_request() -> MetadataGenerationRequest {
         MetadataGenerationRequest {
@@ -287,5 +551,85 @@ mod tests {
         ]);
         let flat = flatten_keyword_categories(&KeywordCategories::Nested(tree));
         assert_eq!(flat, vec!["People", "Family", "Friends", "Places"]);
+    }
+
+    fn base_edit_request() -> EditGenerationRequest {
+        EditGenerationRequest::new(
+            Vec::new(),
+            "uuid-1".to_string(),
+            "openai".to_string(),
+            "gpt-5".to_string(),
+        )
+    }
+
+    #[test]
+    fn default_edit_system_prompt_used_when_not_overridden() {
+        let req = base_edit_request();
+        assert_eq!(prepare_edit_system_prompt(&req), DEFAULT_EDIT_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn custom_edit_system_prompt_overrides_default() {
+        let mut req = base_edit_request();
+        req.system_prompt = Some("custom edit prompt".to_string());
+        assert_eq!(prepare_edit_system_prompt(&req), "custom edit prompt");
+    }
+
+    #[test]
+    fn disabled_controls_add_matching_negative_instructions() {
+        let mut req = base_edit_request();
+        req.adjust_white_balance = false;
+        req.use_tone_curve = true;
+        req.use_point_curve = false;
+        req.allow_auto_crop = false;
+        let prompt = prepare_edit_user_prompt(&req);
+        assert!(prompt.contains("Do not adjust white balance"));
+        assert!(prompt.contains("Do not use `tone_curve.point_curve`"));
+        assert!(prompt.contains("Do not use `crop`"));
+    }
+
+    #[test]
+    fn composition_mode_subtle_vs_aggressive() {
+        let mut req = base_edit_request();
+        req.composition_mode = "aggressive".to_string();
+        let prompt = prepare_edit_user_prompt(&req);
+        assert!(prompt.contains("Crop may be assertive"));
+
+        req.composition_mode = "subtle".to_string();
+        let prompt = prepare_edit_user_prompt(&req);
+        assert!(prompt.contains("keep it subtle"));
+    }
+
+    #[test]
+    fn style_strength_bands_produce_expected_text() {
+        let mut req = base_edit_request();
+        req.style_strength = 0.1;
+        assert!(prepare_edit_user_prompt(&req).contains("very subtle"));
+        req.style_strength = 0.9;
+        assert!(prepare_edit_user_prompt(&req).contains("Style strength: strong"));
+    }
+
+    #[test]
+    fn training_examples_are_injected_as_few_shot_block() {
+        let mut req = base_edit_request();
+        req.training_examples = vec![json!({
+            "label": "Sunset portrait",
+            "summary": "Warm golden-hour look",
+            "develop_settings": {"Exposure2012": 0.33, "Contrast2012": 12},
+        })];
+        let prompt = prepare_edit_user_prompt(&req);
+        assert!(prompt.contains("YOUR PERSONAL EDIT STYLE"));
+        assert!(prompt.contains("[1] Sunset portrait"));
+        assert!(prompt.contains("Summary: Warm golden-hour look"));
+        assert!(prompt.contains("Contrast2012=12"));
+        assert!(prompt.contains("END OF STYLE EXAMPLES"));
+    }
+
+    #[test]
+    fn edit_prompt_includes_language_instruction() {
+        let mut req = base_edit_request();
+        req.language = "German".to_string();
+        let prompt = prepare_edit_user_prompt(&req);
+        assert!(prompt.contains("Write `summary` and `warnings` in German"));
     }
 }
