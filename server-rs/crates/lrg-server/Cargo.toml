@@ -1,0 +1,18 @@
+[package]
+name = "lrg-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "geniusai-server"
+path = "src/main.rs"
+
+[dependencies]
+lrg-api.workspace = true
+lrg-common.workspace = true
+
+axum.workspace = true
+clap.workspace = true
+log.workspace = true
+tokio.workspace = true

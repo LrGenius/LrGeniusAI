@@ -40,3 +40,4 @@ docker-compose.yml
 # MemPalace AI Context
 mempalace.yaml
 entities.json
+server-rs/target/debug/

@@ -1,0 +1,7 @@
+[package]
+name = "lrg-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
