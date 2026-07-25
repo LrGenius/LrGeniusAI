@@ -3878,6 +3878,9 @@ dependencies = [
 [[package]]
 name = "lrg-analysis"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "lrg-api"
