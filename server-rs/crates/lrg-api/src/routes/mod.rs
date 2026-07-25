@@ -8,3 +8,4 @@ pub mod index;
 pub mod index_upload;
 pub mod search;
 pub mod server;
+pub mod training;
