@@ -5,21 +5,24 @@
 //! long edge is within the limit are returned untouched, so embeddings of
 //! already-indexed photos never drift.
 //!
-//! RAW (LibRaw) and HEIC (libheif) decoding are wired in behind
-//! `RawDecoder`/vendored builds in a later pass; until then those files
-//! raise the same "not available in this backend build" error the Python
-//! backend uses when rawpy/pillow-heif are missing — the plugin falls
-//! back to its export-based flow by design.
+//! RAW decoding goes through `rawler` (see `crate::raw`) — the Rust
+//! equivalent of the Python backend's rawpy/LibRaw dependency. HEIC
+//! (libheif) decoding is wired in behind vendored builds in a later
+//! pass; until then those files raise the same "not available in this
+//! backend build" error the Python backend uses when pillow-heif is
+//! missing — the plugin falls back to its export-based flow by design.
 
 use std::io::Cursor;
 
 use image::{DynamicImage, ImageFormat, ImageReader};
 
 use crate::pil_resample::{resize_plane, Filter};
+use crate::raw::decode_raw;
 
-pub const RAW_EXTENSIONS: [&str; 26] = [
+pub const RAW_EXTENSIONS: [&str; 27] = [
     "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "gpr", "iiq", "kdc", "mef",
     "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw",
+    "x3f",
 ];
 
 pub const VIDEO_EXTENSIONS: [&str; 11] = [
@@ -156,10 +159,20 @@ pub fn normalize_image_bytes(
     if is_raw_filename(filename) {
         // Never let the generic decoder open TIFF-based raws (NEF/CR2/DNG) —
         // it would return thumbnails or unprocessed sensor data.
-        return Err(UnsupportedImageError(format!(
-            "Cannot decode raw file '{filename}': raw decoding (rawpy) is not \
-             available in this backend build"
-        )));
+        let decoded = decode_raw(data).map_err(|e| {
+            UnsupportedImageError(format!("Failed to decode raw file '{filename}': {e}"))
+        })?;
+        // Most RAW formats are TIFF-based containers, so the same
+        // container-level EXIF reader used for JPEG/TIFF picks up the
+        // root IFD's Orientation tag directly from the raw bytes here
+        // too; formats with a non-TIFF container (CR3, RAF, X3F) simply
+        // won't match and are left unrotated rather than failing.
+        let oriented = match exif_orientation(data) {
+            Some(o) => apply_orientation(decoded, o),
+            None => decoded,
+        };
+        let resized = downscale(oriented, max_long_edge);
+        return Ok((encode_jpeg(&resized, quality)?, jpeg_filename(filename)));
     }
 
     let reader = ImageReader::new(Cursor::new(data))
