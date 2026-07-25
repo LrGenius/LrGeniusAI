@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::{Multipart, State};
 use axum::response::{IntoResponse, Json, Response};
@@ -301,7 +302,14 @@ pub(crate) async fn process_batch(
     let mut triplets: Vec<(Vec<u8>, String, String)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
     for (img, photo_id) in images.into_iter().zip(photo_ids) {
-        match normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality) {
+        let t0 = Instant::now();
+        let result = normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality);
+        log::debug!(
+            "Photo {photo_id} ({}): decode+resize+encode took {:?}",
+            img.filename,
+            t0.elapsed()
+        );
+        match result {
             Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename)),
             Err(UnsupportedImageError(msg)) => {
                 log::warn!("Skipping {}: {msg}", img.filename);
@@ -509,10 +517,12 @@ async fn index_one(
 
     let mut new_embedding: Option<Vec<f32>> = None;
     if need_embedding {
+        let t0 = Instant::now();
         let mut emb = state
             .siglip
             .embed_image(&pixels, width, height)
             .map_err(|e| format!("Embedding generation failed: {e}"))?;
+        log::debug!("Photo {photo_id}: SigLIP2 embed took {:?}", t0.elapsed());
         lrg_ml::siglip::l2_normalize(&mut emb);
         new_embedding = Some(emb);
     }
@@ -629,7 +639,10 @@ async fn index_one(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if options.regenerate_metadata || !already_checked {
-            match state.face.detect_faces(&pixels, width, height) {
+            let t0 = Instant::now();
+            let face_result = state.face.detect_faces(&pixels, width, height);
+            log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
+            match face_result {
                 Ok(faces) => {
                     let existing_faces = store.scan_meta(FACE_TABLE).await.unwrap_or_default();
                     let stale: Vec<String> = existing_faces
