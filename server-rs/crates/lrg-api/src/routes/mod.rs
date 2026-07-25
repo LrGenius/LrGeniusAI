@@ -6,6 +6,7 @@ pub mod find_similar;
 pub mod group_similar;
 pub mod index;
 pub mod index_upload;
+pub mod keywords;
 pub mod search;
 pub mod server;
 pub mod training;

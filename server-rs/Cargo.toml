@@ -36,6 +36,7 @@ log = "0.4"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
+uuid = { version = "1", features = ["v4"] }
 
 # dev/test
 http-body-util = "0.1"

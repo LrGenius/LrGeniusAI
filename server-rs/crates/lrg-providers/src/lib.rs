@@ -14,4 +14,5 @@ pub mod openai;
 pub mod prompts;
 pub mod schema;
 pub mod schema_strict;
+pub mod text_llm;
 pub mod types;

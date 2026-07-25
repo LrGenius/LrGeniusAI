@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 
-use lrg_common::{config, logging};
+use lrg_common::{config, jobs::JobRegistry, logging};
 use lrg_ml::faces::FaceModel;
 use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
@@ -25,6 +25,8 @@ pub struct AppState {
     pub siglip: Arc<SiglipModel>,
     /// Global — lazily loaded, matching `services/face.py`'s `_get_face_app`.
     pub face: Arc<FaceModel>,
+    /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
+    pub jobs: Arc<JobRegistry>,
 }
 
 impl AppState {
@@ -37,6 +39,7 @@ impl AppState {
             debug,
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
+            jobs: Arc::new(JobRegistry::new()),
         }
     }
 

@@ -3,6 +3,7 @@
 //! version info/compatibility checks, and PID/OK lifecycle files.
 
 pub mod config;
+pub mod jobs;
 pub mod lifecycle;
 pub mod logging;
 pub mod version;

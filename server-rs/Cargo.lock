@@ -3900,6 +3900,7 @@ dependencies = [
  "lrg-ml",
  "lrg-providers",
  "lrg-store",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -3927,6 +3928,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]
