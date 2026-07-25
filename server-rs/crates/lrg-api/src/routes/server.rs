@@ -61,8 +61,9 @@ async fn restart(State(state): State<Arc<AppState>>) -> Json<Value> {
 async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Unload request received via API");
     state.siglip.unload();
-    // M5 adds InsightFace unload here; store handles stay open (LanceDB
-    // keeps its own lazy IO, nothing to proactively drop).
+    state.face.unload();
+    // Store handles stay open (LanceDB keeps its own lazy IO, nothing to
+    // proactively drop).
     Json(json!({"status": "Resources unloaded successfully."}))
 }
 
@@ -123,12 +124,13 @@ async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
-    // M5 adds real InsightFace status, M7 provider health.
+    let (face_status, face_error) = state.face.status();
+    // M7 adds real LLM provider health.
     Json(json!({
         "clip_model": clip_status,
         "clip_error": clip_error,
-        "face_model": "not_loaded",
-        "face_error": null,
+        "face_model": face_status,
+        "face_error": face_error,
     }))
 }
 

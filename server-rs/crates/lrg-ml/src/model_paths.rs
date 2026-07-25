@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::faces::FaceModelPaths;
 use crate::siglip::ModelPaths;
 
 fn default_models_dir() -> PathBuf {
@@ -32,5 +33,20 @@ pub fn resolve() -> ModelPaths {
         image_onnx: env_or_default("LRG_SIGLIP_IMAGE_ONNX", dir.join("siglip2_image.onnx")),
         text_onnx: env_or_default("LRG_SIGLIP_TEXT_ONNX", dir.join("siglip2_text.onnx")),
         tokenizer_json: env_or_default("LRG_SIGLIP_TOKENIZER", dir.join("tokenizer.json")),
+    }
+}
+
+/// buffalo_l's own directory layout is the real InsightFace convention
+/// (`INSIGHTFACE_ROOT`, default `~/.insightface`) — unlike SigLIP2, no
+/// interim convention is needed since these ONNX files are already
+/// exactly what production downloads and uses.
+pub fn resolve_face() -> FaceModelPaths {
+    let root = std::env::var_os("INSIGHTFACE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs_next_home().join(".insightface"));
+    let dir = root.join("models").join("buffalo_l");
+    FaceModelPaths {
+        det_onnx: dir.join("det_10g.onnx"),
+        rec_onnx: dir.join("w600k_r50.onnx"),
     }
 }

@@ -11,6 +11,8 @@ tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 ndarray = "0.16"
 thiserror = "2"
 log.workspace = true
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 serde_json.workspace = true

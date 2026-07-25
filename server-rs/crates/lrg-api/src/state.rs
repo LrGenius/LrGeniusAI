@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{Mutex, Notify};
 
 use lrg_common::{config, logging};
+use lrg_ml::faces::FaceModel;
 use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
 
@@ -22,6 +23,8 @@ pub struct AppState {
     /// Global (not per-catalog) — lazily loaded on first use, matching
     /// server_lifecycle.py's model lifecycle.
     pub siglip: Arc<SiglipModel>,
+    /// Global — lazily loaded, matching `services/face.py`'s `_get_face_app`.
+    pub face: Arc<FaceModel>,
 }
 
 impl AppState {
@@ -33,6 +36,7 @@ impl AppState {
             shutdown: Notify::new(),
             debug,
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
+            face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
         }
     }
 
