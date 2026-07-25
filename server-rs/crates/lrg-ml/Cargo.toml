@@ -5,7 +5,15 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+lrg-imaging.workspace = true
 ort = { version = "2.0.0-rc.10", features = ["coreml"] }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+ndarray = "0.16"
+thiserror = "2"
+log.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [[example]]
 name = "bench_image"

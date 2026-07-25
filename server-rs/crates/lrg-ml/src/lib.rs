@@ -1,1 +1,6 @@
-//! ONNX inference via ort: SigLIP2 image/text embedding, tokenizer, SCRFD+ArcFace face pipeline, model download management. Implemented in M4/M5.
+//! ONNX inference: SigLIP2 image/text embedding via `ort`. Face pipeline
+//! (SCRFD + ArcFace) lands in M5.
+
+pub mod image_pre;
+pub mod siglip;
+pub mod text_pre;

@@ -14,6 +14,9 @@ pub enum Filter {
     Bilinear,
     /// Lanczos windowed sinc, support 3.0 (PIL LANCZOS / ANTIALIAS).
     Lanczos3,
+    /// Cubic convolution (a = -0.5), support 2.0 (PIL BICUBIC). Used for
+    /// open_clip's "squash" preprocessing resize.
+    Bicubic,
 }
 
 impl Filter {
@@ -21,6 +24,7 @@ impl Filter {
         match self {
             Filter::Bilinear => 1.0,
             Filter::Lanczos3 => 3.0,
+            Filter::Bicubic => 2.0,
         }
     }
 
@@ -45,6 +49,17 @@ impl Filter {
                 }
                 if x.abs() < 3.0 {
                     sinc(x) * sinc(x / 3.0)
+                } else {
+                    0.0
+                }
+            }
+            Filter::Bicubic => {
+                const A: f64 = -0.5;
+                let x = x.abs();
+                if x < 1.0 {
+                    ((A + 2.0) * x - (A + 3.0)) * x * x + 1.0
+                } else if x < 2.0 {
+                    (((x - 5.0) * x + 8.0) * x - 4.0) * A
                 } else {
                     0.0
                 }
