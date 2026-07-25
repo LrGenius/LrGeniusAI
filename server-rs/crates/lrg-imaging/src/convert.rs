@@ -14,9 +14,9 @@
 
 use std::io::Cursor;
 
-use image::{DynamicImage, ImageFormat, ImageReader};
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+use image::{DynamicImage, ImageFormat, ImageReader, RgbImage};
 
-use crate::pil_resample::{resize_plane, Filter};
 use crate::raw::decode_raw;
 
 pub const RAW_EXTENSIONS: [&str; 27] = [
@@ -106,26 +106,13 @@ fn downscale(image: DynamicImage, max_long_edge: u32) -> DynamicImage {
     let new_w = ((w as f64 * scale) as u32).max(1);
     let new_h = ((h as f64 * scale) as u32).max(1);
 
-    let rgb = image.to_rgb8();
-    let (iw, ih) = (rgb.width() as usize, rgb.height() as usize);
-    let pixels = rgb.as_raw();
-    let n = iw * ih;
-    let mut out = vec![0u8; new_w as usize * new_h as usize * 3];
-    for c in 0..3 {
-        let plane: Vec<u8> = (0..n).map(|i| pixels[i * 3 + c]).collect();
-        let resized = resize_plane(
-            &plane,
-            iw,
-            ih,
-            new_w as usize,
-            new_h as usize,
-            Filter::Lanczos3,
-        );
-        for (i, v) in resized.into_iter().enumerate() {
-            out[i * 3 + c] = v;
-        }
-    }
-    DynamicImage::ImageRgb8(image::RgbImage::from_raw(new_w, new_h, out).expect("sized buffer"))
+    let src = image.to_rgb8();
+    let mut dst = RgbImage::new(new_w, new_h);
+    let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+    Resizer::new()
+        .resize(&src, &mut dst, &options)
+        .expect("RGB8 -> RGB8 resize");
+    DynamicImage::ImageRgb8(dst)
 }
 
 fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, UnsupportedImageError> {
@@ -159,9 +146,16 @@ pub fn normalize_image_bytes(
     if is_raw_filename(filename) {
         // Never let the generic decoder open TIFF-based raws (NEF/CR2/DNG) —
         // it would return thumbnails or unprocessed sensor data.
+        let t_decode = std::time::Instant::now();
         let decoded = decode_raw(data).map_err(|e| {
             UnsupportedImageError(format!("Failed to decode raw file '{filename}': {e}"))
         })?;
+        log::debug!(
+            "'{filename}': raw decode ({}x{}) took {:?}",
+            decoded.width(),
+            decoded.height(),
+            t_decode.elapsed()
+        );
         // Most RAW formats are TIFF-based containers, so the same
         // container-level EXIF reader used for JPEG/TIFF picks up the
         // root IFD's Orientation tag directly from the raw bytes here
@@ -171,8 +165,18 @@ pub fn normalize_image_bytes(
             Some(o) => apply_orientation(decoded, o),
             None => decoded,
         };
+        let t_resize = std::time::Instant::now();
         let resized = downscale(oriented, max_long_edge);
-        return Ok((encode_jpeg(&resized, quality)?, jpeg_filename(filename)));
+        log::debug!(
+            "'{filename}': resize to {}x{} took {:?}",
+            resized.width(),
+            resized.height(),
+            t_resize.elapsed()
+        );
+        let t_encode = std::time::Instant::now();
+        let jpeg = encode_jpeg(&resized, quality)?;
+        log::debug!("'{filename}': JPEG re-encode took {:?}", t_encode.elapsed());
+        return Ok((jpeg, jpeg_filename(filename)));
     }
 
     let reader = ImageReader::new(Cursor::new(data))
