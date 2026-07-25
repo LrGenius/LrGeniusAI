@@ -68,6 +68,21 @@ impl AppState {
     /// Where per-catalog side files (`person_names.json`) live — the
     /// LanceDB root, matching where Python's `person_names.json` sat
     /// alongside `chroma.sqlite3` inside the old Chroma dir.
+    /// Background maintenance: idle-unloads ML models and compacts the
+    /// LanceDB tables, so a long indexing run doesn't accumulate the
+    /// per-photo `merge_insert` write amplification (new fragment +
+    /// dataset version per write) indefinitely. Called periodically from
+    /// `lrg-server`'s maintenance loop, never per-request.
+    pub async fn run_maintenance(&self) {
+        self.siglip.unload_if_idle();
+        self.face.unload_if_idle();
+        if let Some(store) = self.store() {
+            if let Err(e) = store.optimize_all().await {
+                log::warn!("LanceDB maintenance optimize failed: {e}");
+            }
+        }
+    }
+
     pub fn lance_root(&self) -> Option<PathBuf> {
         self.db_path
             .read()

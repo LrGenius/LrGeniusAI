@@ -607,34 +607,28 @@ async fn index_one(
     main_metadata.insert("has_embedding".into(), json!(final_vector.is_some()));
     meta::ensure_photo_metadata(photo_id, &mut main_metadata);
 
-    let record = StoreRecord {
-        id: photo_id.to_string(),
-        vector: final_vector,
-        metadata: main_metadata.clone(),
-    };
-    store
-        .upsert(IMAGE_TABLE, std::slice::from_ref(&record))
-        .await
-        .map_err(|e| format!("Database update failed: {e}"))?;
-
     if let Some(catalog_id) = &options.catalog_id {
-        let mut ids_set = meta::parse_catalog_ids(&record.metadata);
+        let mut ids_set = meta::parse_catalog_ids(&main_metadata);
         ids_set.insert(catalog_id.clone());
-        let mut updated = record.clone();
-        updated.metadata.insert(
+        main_metadata.insert(
             meta::CATALOG_IDS_FIELD.into(),
             json!(meta::serialize_catalog_ids(&ids_set)),
         );
-        store
-            .upsert(IMAGE_TABLE, &[updated])
-            .await
-            .map_err(|e| e.to_string())?;
     }
 
+    // Everything below folds into `main_metadata` in place — faces (and
+    // catalog_id, above) used to each cost their own IMAGE_TABLE
+    // `merge_insert`, which scans the whole table to match the key and
+    // mints a new dataset version every time; back-to-back per-photo
+    // scans on a growing table is what drove the unbounded memory growth
+    // during large indexing runs. One coalesced write at the end fixes
+    // that, and also fixes a real bug: the old per-branch writes based
+    // themselves on the stale pre-catalog_id `record`, so indexing with
+    // both faces and catalog_id set silently dropped the catalog_ids
+    // field once face processing's write landed last.
     let mut warning = None;
     if options.compute_faces {
-        let already_checked = record
-            .metadata
+        let already_checked = main_metadata
             .get("faces_checked")
             .and_then(Value::as_bool)
             .unwrap_or(false);
@@ -702,16 +696,11 @@ async fn index_one(
                                 occlusion: Some(f.occlusion),
                             })
                             .collect();
-                        apply_face_aggregate(store, &record, &inputs).await?;
+                        apply_face_aggregate(&mut main_metadata, &inputs);
                         log::info!("Photo {photo_id}: indexed {} face(s).", faces.len());
                     } else {
-                        apply_face_aggregate(store, &record, &[]).await?;
-                        let mut flagged = record.clone();
-                        flagged.metadata.insert("faces_checked".into(), json!(true));
-                        store
-                            .upsert(IMAGE_TABLE, &[flagged])
-                            .await
-                            .map_err(|e| e.to_string())?;
+                        apply_face_aggregate(&mut main_metadata, &[]);
+                        main_metadata.insert("faces_checked".into(), json!(true));
                     }
                 }
                 Err(e) => {
@@ -721,6 +710,16 @@ async fn index_one(
             }
         }
     }
+
+    let record = StoreRecord {
+        id: photo_id.to_string(),
+        vector: final_vector,
+        metadata: main_metadata,
+    };
+    store
+        .upsert(IMAGE_TABLE, std::slice::from_ref(&record))
+        .await
+        .map_err(|e| format!("Database update failed: {e}"))?;
 
     // Vertex AI embeddings: optional, separate table. Silently skipped
     // (no warning) when no project is configured, matching Python's
@@ -764,46 +763,23 @@ async fn index_one(
     Ok(warning)
 }
 
-async fn apply_face_aggregate(
-    store: &lrg_store::Store,
-    record: &StoreRecord,
-    faces: &[FaceMetricsInput],
-) -> Result<(), String> {
+fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsInput]) {
     let agg = aggregate_face_culling_metrics(faces);
-    let mut updated = record.clone();
-    updated
-        .metadata
-        .insert("cull_face_count".into(), json!(agg.cull_face_count));
-    updated
-        .metadata
-        .insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
-    updated.metadata.insert(
+    metadata.insert("cull_face_count".into(), json!(agg.cull_face_count));
+    metadata.insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
+    metadata.insert(
         "cull_face_prominence".into(),
         json!(agg.cull_face_prominence),
     );
-    updated.metadata.insert(
+    metadata.insert(
         "cull_face_visibility".into(),
         json!(agg.cull_face_visibility),
     );
-    updated
-        .metadata
-        .insert("cull_face_score".into(), json!(agg.cull_face_score));
-    updated
-        .metadata
-        .insert("cull_eye_openness".into(), json!(agg.cull_eye_openness));
-    updated
-        .metadata
-        .insert("cull_blink_penalty".into(), json!(agg.cull_blink_penalty));
-    updated
-        .metadata
-        .insert("cull_occlusion".into(), json!(agg.cull_occlusion));
-    updated
-        .metadata
-        .insert("cull_faces_present".into(), json!(agg.cull_faces_present));
-    store
-        .upsert(IMAGE_TABLE, &[updated])
-        .await
-        .map_err(|e| e.to_string())
+    metadata.insert("cull_face_score".into(), json!(agg.cull_face_score));
+    metadata.insert("cull_eye_openness".into(), json!(agg.cull_eye_openness));
+    metadata.insert("cull_blink_penalty".into(), json!(agg.cull_blink_penalty));
+    metadata.insert("cull_occlusion".into(), json!(agg.cull_occlusion));
+    metadata.insert("cull_faces_present".into(), json!(agg.cull_faces_present));
 }
 
 /// Builds a `MetadataGenerationRequest` from the parsed options + this

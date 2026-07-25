@@ -17,7 +17,10 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
+use lancedb::index::scalar::BTreeIndexBuilder;
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::table::OptimizeAction;
 use serde_json::{Map, Value};
 
 pub mod meta;
@@ -189,12 +192,54 @@ impl Store {
                     .await?;
             }
         }
-        Ok(Store { conn })
+        let store = Store { conn };
+        store.ensure_id_indices().await?;
+        Ok(store)
     }
 
     async fn table(&self, name: &str) -> Result<lancedb::Table> {
         table_dim(name)?; // validate name
         Ok(self.conn.open_table(name).execute().await?)
+    }
+
+    /// `upsert`'s `merge_insert` matches existing rows by scanning for the
+    /// `id` key; without an index that's a full table scan on every single
+    /// call. As a catalog grows, each subsequent per-photo upsert during a
+    /// big indexing run gets more expensive than the last — a scalar index
+    /// turns that into a lookup. Idempotent (skips tables that already have
+    /// one), so re-binding an already-indexed catalog is a no-op.
+    async fn ensure_id_indices(&self) -> Result<()> {
+        for (name, _) in TABLES {
+            let tbl = self.table(name).await?;
+            let has_id_index = tbl
+                .list_indices()
+                .await?
+                .iter()
+                .any(|idx| idx.columns.iter().any(|c| c == "id"));
+            if !has_id_index {
+                tbl.create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
+                    .execute()
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compacts small fragments and prunes old dataset versions on every
+    /// table. `merge_insert`/`add` each mint a new fragment + dataset
+    /// version, so an indexing-heavy catalog accumulates both quickly;
+    /// LanceDB's own guidance is to run this after ~20+ write ops or
+    /// 100k+ modified rows. Called periodically from a background task
+    /// (see `lrg-server`'s maintenance loop), not per-request — compaction
+    /// itself scans/rewrites files, so it's too costly to run inline with
+    /// every batch.
+    pub async fn optimize_all(&self) -> Result<()> {
+        for (name, _) in TABLES {
+            let tbl = self.table(name).await?;
+            let stats = tbl.optimize(OptimizeAction::All).await?;
+            log::debug!("LanceDB optimize({name}): {stats:?}");
+        }
+        Ok(())
     }
 
     /// Insert-or-replace by id (Chroma add/update semantics).

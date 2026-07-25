@@ -213,6 +213,8 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     let state = Arc::new(AppState::new(cli.db_path.clone(), cli.debug));
     let app = lrg_api::build_router(state.clone());
 
+    tokio::spawn(maintenance_loop(state.clone()));
+
     let host = config::host();
     let port = config::port();
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
@@ -227,6 +229,18 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
 
     let relaunch_path = state.relaunch_after_shutdown.lock().unwrap().take();
     Ok(relaunch_path)
+}
+
+/// Runs `AppState::run_maintenance` (model idle-unload + LanceDB
+/// compaction) every 10 minutes for the life of the process. Runs for the
+/// whole process lifetime — no shutdown wiring needed, it's just dropped
+/// along with the runtime on exit.
+async fn maintenance_loop(state: Arc<AppState>) {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+    loop {
+        tokio::time::sleep(INTERVAL).await;
+        state.run_maintenance().await;
+    }
 }
 
 /// Resolves on /shutdown, /restart, Ctrl-C/SIGINT, or SIGTERM (launchd).
