@@ -94,6 +94,11 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Backend version env: version=${VERSION} tag=v${VERSION} build=${BUILD_DATE}"
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
