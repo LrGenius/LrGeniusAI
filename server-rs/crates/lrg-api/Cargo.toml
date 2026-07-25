@@ -23,6 +23,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 sha2 = "0.10"
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 lrg-store.workspace = true
