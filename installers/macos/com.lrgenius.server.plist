@@ -16,10 +16,5 @@
     <string>/Library/Logs/LrGeniusAI/service.log</string>
     <key>StandardErrorPath</key>
     <string>/Library/Logs/LrGeniusAI/service.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>KMP_DUPLICATE_LIB_OK</key>
-        <string>TRUE</string>
-    </dict>
 </dict>
 </plist>

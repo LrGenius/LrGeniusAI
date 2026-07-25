@@ -2,6 +2,15 @@
 //! `geniusai_server.py` startup/shutdown semantics: log banner, OK/PID
 //! handshake files next to the catalog, GENIUSAI_HOST/PORT binding, and
 //! cleanup of the handshake files on exit.
+//!
+//! This stays a normal console-subsystem binary on Windows (unlike the
+//! Python era's separate windowless `pythonw.exe`) so the `migrate` CLI
+//! subcommand always has working stdout/stderr. The installer and
+//! self-updater instead launch the always-running service via a tiny
+//! `.vbs` wrapper (`installers/windows/run_hidden.vbs`) that starts it
+//! with a hidden window — the standard, well-tested way to background a
+//! console-subsystem exe on Windows without touching low-level console
+//! attach/redirect APIs that can't be verified without a Windows machine.
 
 use std::path::PathBuf;
 use std::sync::Arc;

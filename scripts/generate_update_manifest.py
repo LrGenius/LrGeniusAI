@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """
-Generate a code-only update manifest for LrGeniusAI releases.
+Generate a v2 update manifest for LrGeniusAI releases (Rust backend era).
 
-The manifest is a JSON file that lists all plugin (.lua, .txt) and backend
-Python source files with their download URLs and SHA256 hashes. The plugin
-uses this manifest to apply lightweight code-only updates without downloading
-the full installer.
+Unlike the v1 (Python backend) manifest — which listed every individual
+.py source file for the plugin to patch in place — the backend is now a
+single compiled binary per platform, so the manifest instead points at
+one binary asset per platform (with its sha256) that the self-updater
+downloads and swaps in atomically. The plugin (still interpreted Lua) is
+still listed file-by-file, since patching individual .lua files in place
+remains cheap and doesn't require a backend restart.
 
 Usage (in CI):
     python3 scripts/generate_update_manifest.py \
-        --version v2.15.0 \
+        --version v2.16.0 \
         --repo LrGenius/LrGeniusAI \
+        --binary macos-arm64=update-assets/lrgenius-server-macos-arm64 \
+        --binary windows-x64=update-assets/lrgenius-server-windows-x64.exe \
         --output update-manifest.json
 """
 
 import argparse
-import base64
-import datetime
 import hashlib
 import json
 import subprocess
@@ -24,27 +27,20 @@ import sys
 from pathlib import Path
 
 PLUGIN_DIR = Path("plugin/LrGeniusAI.lrdevplugin")
-BACKEND_SRC_DIR = Path("server/src")
-
 PLUGIN_EXTENSIONS = {".lua", ".txt"}
-BACKEND_EXTENSIONS = {".py"}
 
 RAW_BASE = "https://raw.githubusercontent.com/{repo}/{tag}"
 RELEASES_BASE = "https://github.com/{repo}/releases/tag/{tag}"
+DOWNLOAD_BASE = "https://github.com/{repo}/releases/download/{tag}"
 
-# Files that must NOT be updated via code-only update because they
+# Files that must NOT be updated via in-place patching because they
 # affect the plugin identity / LR registration and require a full reload.
 EXCLUDE_PLUGIN_FILES: set[str] = set()
 
-# Files whose change between releases signals a breaking dependency update.
-DEPENDENCY_FILES = ["server/pyproject.toml", "server/uv.lock"]
-
-# version_info.py is excluded from raw URL fetching because the file in the
-# repo at the tag commit still contains dev placeholders — the real values are
-# baked in by CI after checkout and are NOT committed back. Instead, the
-# manifest generator writes the correct content inline (base64-encoded) so the
-# updater can write it directly without a download.
-EXCLUDE_BACKEND_FILES = {"version_info.py"}
+# A dependency version bump here is the Rust-era equivalent of the old
+# pyproject.toml/uv.lock signal: native library upgrades (e.g. onnxruntime)
+# sometimes need installer-level changes, not just a binary swap.
+DEPENDENCY_FILES = ["server-rs/Cargo.toml", "server-rs/Cargo.lock"]
 
 
 def sha256_of_file(path: Path) -> str:
@@ -55,14 +51,9 @@ def sha256_of_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def sha256_of_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def collect_plugin_files(repo: str, tag: str) -> list[dict]:
     entries = []
     for ext in PLUGIN_EXTENSIONS:
-        # rglob picks up files in subdirectories too
         for path in sorted(PLUGIN_DIR.rglob(f"*{ext}")):
             rel = path.relative_to(PLUGIN_DIR)
             if rel.name in EXCLUDE_PLUGIN_FILES:
@@ -79,42 +70,25 @@ def collect_plugin_files(repo: str, tag: str) -> list[dict]:
     return entries
 
 
-def collect_backend_files(repo: str, tag: str) -> list[dict]:
-    entries = []
-    for ext in BACKEND_EXTENSIONS:
-        for path in sorted(BACKEND_SRC_DIR.rglob(f"*{ext}")):
-            rel = path.relative_to(BACKEND_SRC_DIR)
-            if rel.name in EXCLUDE_BACKEND_FILES:
-                continue
-            url = f"{RAW_BASE.format(repo=repo, tag=tag)}/{BACKEND_SRC_DIR}/{rel.as_posix()}"
-            entries.append(
-                {
-                    "path": rel.as_posix(),
-                    "url": url,
-                    "sha256": sha256_of_file(path),
-                    "size": path.stat().st_size,
-                }
-            )
-    return entries
-
-
-def make_version_info_entry(version: str, tag: str) -> dict:
-    """
-    Generate a version_info.py entry with the correct release values embedded
-    directly as base64 content (no raw URL, which would serve dev placeholders).
-    """
-    build_date = datetime.date.today().strftime("%Y%m%d")
-    content = (
-        f'BACKEND_VERSION = "{version}"\n'
-        f'BACKEND_RELEASE_TAG = "{tag}"\n'
-        f"BACKEND_BUILD = {build_date}\n"
-    ).encode()
-    return {
-        "path": "version_info.py",
-        "content": base64.b64encode(content).decode(),
-        "sha256": sha256_of_bytes(content),
-        "size": len(content),
-    }
+def collect_platform_binaries(repo: str, tag: str, binaries: list[str]) -> dict[str, dict]:
+    platforms: dict[str, dict] = {}
+    for entry in binaries:
+        if "=" not in entry:
+            print(f"ERROR: --binary must be PLATFORM=PATH, got: {entry}", file=sys.stderr)
+            sys.exit(1)
+        platform, raw_path = entry.split("=", 1)
+        path = Path(raw_path)
+        if not path.is_file():
+            print(f"ERROR: binary not found for platform {platform}: {path}", file=sys.stderr)
+            sys.exit(1)
+        asset_name = path.name
+        platforms[platform] = {
+            "asset_name": asset_name,
+            "url": f"{DOWNLOAD_BASE.format(repo=repo, tag=tag)}/{asset_name}",
+            "sha256": sha256_of_file(path),
+            "size": path.stat().st_size,
+        }
+    return platforms
 
 
 def _detect_dependency_changes(current_tag: str) -> bool:
@@ -127,7 +101,6 @@ def _detect_dependency_changes(current_tag: str) -> bool:
             check=True,
         )
         tags = [t.strip() for t in result.stdout.splitlines() if t.strip()]
-        # Drop the current tag (it may or may not be in the list yet)
         prev_tags = [t for t in tags if t != current_tag]
         if not prev_tags:
             print("WARNING: No previous tag found; assuming breaking changes.", file=sys.stderr)
@@ -152,24 +125,22 @@ def _detect_dependency_changes(current_tag: str) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate LrGeniusAI code-only update manifest"
-    )
-    parser.add_argument("--version", required=True, help="Version tag (e.g. v2.15.0)")
+    parser = argparse.ArgumentParser(description="Generate LrGeniusAI v2 update manifest")
+    parser.add_argument("--version", required=True, help="Version tag (e.g. v2.16.0)")
+    parser.add_argument("--repo", default="LrGenius/LrGeniusAI", help="GitHub repo in owner/name format")
+    parser.add_argument("--output", default="update-manifest.json", help="Output JSON file path")
     parser.add_argument(
-        "--repo",
-        default="LrGenius/LrGeniusAI",
-        help="GitHub repo in owner/name format",
-    )
-    parser.add_argument(
-        "--output", default="update-manifest.json", help="Output JSON file path"
+        "--binary",
+        action="append",
+        default=[],
+        metavar="PLATFORM=PATH",
+        help="Local path to a platform's built binary, e.g. macos-arm64=path/to/lrgenius-server. Repeatable.",
     )
     parser.add_argument(
         "--breaking",
         action="store_true",
         default=False,
-        help="Mark release as requiring a full installer (dependency changes). "
-             "Also auto-detected from git diff against the previous tag.",
+        help="Mark release as requiring a full installer. Also auto-detected from git diff of Cargo.toml/Cargo.lock against the previous tag.",
     )
     args = parser.parse_args()
 
@@ -177,46 +148,35 @@ def main():
     version = tag.lstrip("v")
     repo = args.repo
 
-    # Validate that source directories exist
     if not PLUGIN_DIR.exists():
         print(f"ERROR: Plugin directory not found: {PLUGIN_DIR}", file=sys.stderr)
         sys.exit(1)
-    if not BACKEND_SRC_DIR.exists():
-        print(
-            f"ERROR: Backend source directory not found: {BACKEND_SRC_DIR}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    if not args.binary:
+        print("WARNING: no --binary entries given; manifest will have no platform binaries.", file=sys.stderr)
 
-    # Auto-detect breaking changes from dependency file diffs; --breaking overrides too
     is_breaking = args.breaking or _detect_dependency_changes(tag)
 
     print(f"Generating update manifest for {tag}...")
 
     plugin_files = collect_plugin_files(repo, tag)
-    backend_files = collect_backend_files(repo, tag)
+    platforms = collect_platform_binaries(repo, tag, args.binary)
 
-    # Append version_info.py with baked-in release values
-    backend_files.append(make_version_info_entry(version, tag))
-
-    total_size = sum(f["size"] for f in plugin_files + backend_files)
+    total_size = sum(f["size"] for f in plugin_files) + sum(p["size"] for p in platforms.values())
 
     manifest = {
         "version": version,
         "tag": tag,
-        "update_type": "code_only",
+        "update_type": "binary",
         "breaking_changes": is_breaking,
         "requires_restart": True,
         "release_url": RELEASES_BASE.format(repo=repo, tag=tag),
         "total_size_bytes": total_size,
         "file_counts": {
+            "platforms": len(platforms),
             "plugin": len(plugin_files),
-            "backend_src": len(backend_files),
         },
-        "files": {
-            "plugin": plugin_files,
-            "backend_src": backend_files,
-        },
+        "platforms": platforms,
+        "plugin_files": plugin_files,
     }
 
     output_path = Path(args.output)
@@ -224,10 +184,10 @@ def main():
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     print(f"Manifest written to: {output_path}")
-    print(f"  Plugin files:   {len(plugin_files)}")
-    print(f"  Backend files:  {len(backend_files)}")
-    print(f"  Total size:     {total_size / 1024:.1f} KB")
-    print(f"  Breaking:       {is_breaking}")
+    print(f"  Platform binaries: {len(platforms)} ({', '.join(platforms.keys())})")
+    print(f"  Plugin files:      {len(plugin_files)}")
+    print(f"  Total size:        {total_size / 1024:.1f} KB")
+    print(f"  Breaking:          {is_breaking}")
 
 
 if __name__ == "__main__":

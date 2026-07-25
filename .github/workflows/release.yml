@@ -44,9 +44,15 @@ jobs:
           - os: windows-latest
             os_name: windows
             arch: x64
+            bin_ext: .exe
           - os: macos-latest
             os_name: macos
             arch: arm64
+            bin_ext: ''
+          - os: ubuntu-latest
+            os_name: linux
+            arch: x64
+            bin_ext: ''
 
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
@@ -75,268 +81,114 @@ jobs:
           sed 's/Info.BUILD = [0-9]*/build = '"$BUILD_DATE"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
           echo "Updated Info.lua: MAJOR=$MAJOR MINOR=$MINOR REVISION=$REVISION build=$BUILD_DATE"
 
-      - name: Update backend version info from tag
+      - name: Resolve backend version env vars from tag
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           BUILD_DATE=$(date +%Y%m%d)
-          VERSION_FILE="server/src/version_info.py"
-          cat > "$VERSION_FILE" <<EOF
-          BACKEND_VERSION = "${VERSION}"
-          BACKEND_RELEASE_TAG = "v${VERSION}"
-          BACKEND_BUILD = ${BUILD_DATE}
-          EOF
-          echo "Updated backend version info: version=${VERSION} build=${BUILD_DATE}"
+          {
+            echo "LRG_BACKEND_VERSION=${VERSION}"
+            echo "LRG_BACKEND_RELEASE_TAG=v${VERSION}"
+            echo "LRG_BACKEND_BUILD=${BUILD_DATE}"
+          } >> "$GITHUB_ENV"
+          echo "Backend version env: version=${VERSION} tag=v${VERSION} build=${BUILD_DATE}"
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          enable-cache: true
+          workspaces: server-rs
 
-      - name: Build backend runtime
+      - name: Run backend test suite
+        shell: bash
+        run: |
+          cd server-rs
+          cargo test --workspace --release
+
+      - name: Build backend binary (release)
+        shell: bash
+        run: |
+          cd server-rs
+          cargo build --release --bin geniusai-server
+          cargo clippy --workspace --tests -- -D warnings
+
+      - name: Stage backend binary
         shell: bash
         run: |
           set -euo pipefail
-          BUILD_DIR="build"
-          SERVER_DIR="$BUILD_DIR/lrgenius-server"
-          SERVER_APP_DIR="$SERVER_DIR/app"
-          SERVER_ENV_DIR="$SERVER_DIR/env"
-          mkdir -p "$SERVER_APP_DIR"
-
-          # On macOS and Windows, bundle the full uv-managed interpreter so the artifact does
-          # not reference runner-local installs (macOS: Framework Python; Windows: Actions
-          # toolcache / pyvenv.cfg home paths).
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
-            uv python install 3.12
-            UV_MANAGED_PY="$(uv python find --managed-python --resolve-links 3.12)"
-            echo "Using uv-managed Python runtime: $UV_MANAGED_PY"
-            UV_MANAGED_ROOT="$(dirname "$(dirname "$UV_MANAGED_PY")")"
-            mkdir -p "$SERVER_ENV_DIR"
-            cp -a "$UV_MANAGED_ROOT/." "$SERVER_ENV_DIR/"
-          elif [ "${{ matrix.os_name }}" == "windows" ]; then
-            uv python install 3.12
-            UV_MANAGED_PY="$(uv python find --managed-python --resolve-links 3.12)"
-            echo "Using uv-managed Python runtime: $UV_MANAGED_PY"
-            case "$UV_MANAGED_PY" in
-              */Scripts/python.exe)
-                UV_MANAGED_ROOT="$(dirname "$(dirname "$UV_MANAGED_PY")")"
-                ;;
-              *)
-                UV_MANAGED_ROOT="$(dirname "$UV_MANAGED_PY")"
-                ;;
-            esac
-            mkdir -p "$SERVER_ENV_DIR"
-            cp -a "$UV_MANAGED_ROOT/." "$SERVER_ENV_DIR/"
-            if [ -f "$SERVER_ENV_DIR/pyvenv.cfg" ]; then
-              echo "Error: Windows bundle unexpectedly contains pyvenv.cfg (expected standalone interpreter copy, not a venv)"
-              cat "$SERVER_ENV_DIR/pyvenv.cfg"
-              exit 1
-            fi
-          else
-            uv venv --python 3.12 --relocatable "$SERVER_ENV_DIR"
+          BUILD_DIR="build/lrgenius-server"
+          mkdir -p "$BUILD_DIR"
+          cp "server-rs/target/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
+          if [ "${{ matrix.os_name }}" != "windows" ]; then
+            chmod +x "$BUILD_DIR/lrgenius-server"
           fi
+          echo "=== Staged binary ==="
+          ls -lh "$BUILD_DIR"
 
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            if [ -f "$SERVER_ENV_DIR/Scripts/python.exe" ]; then
-              PY_EXE="$SERVER_ENV_DIR/Scripts/python.exe"
-            else
-              PY_EXE="$SERVER_ENV_DIR/python.exe"
-            fi
-          elif [ "${{ matrix.os_name }}" == "macos" ]; then
-            PY_EXE="$SERVER_ENV_DIR/bin/python3.12"
-          else
-            PY_EXE="$SERVER_ENV_DIR/bin/python"
-          fi
-
-          # Validate bundled libpython linkage in copied standalone runtime.
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
-            LIBPY_REF="$(otool -L "$PY_EXE" | awk '/libpython[0-9.]+\.dylib/{print $1; exit}')"
-            if [ -n "${LIBPY_REF}" ]; then
-              LIBPY_NAME="$(basename "${LIBPY_REF}")"
-              if [ ! -f "$SERVER_ENV_DIR/lib/${LIBPY_NAME}" ]; then
-                echo "Error: bundled libpython missing at $SERVER_ENV_DIR/lib/${LIBPY_NAME}"
-                exit 1
-              fi
-              for PY_BIN in "$SERVER_ENV_DIR/bin/python" "$SERVER_ENV_DIR/bin/python3" "$SERVER_ENV_DIR/bin/python3.12"; do
-                if [ -f "${PY_BIN}" ]; then
-                  install_name_tool -change "${LIBPY_REF}" "@executable_path/../lib/${LIBPY_NAME}" "${PY_BIN}" 2>/dev/null || true
-                fi
-              done
-              if ! otool -L "$PY_EXE" | grep -F -q "@executable_path/../lib/${LIBPY_NAME}"; then
-                echo "Error: packaged python is not linked to bundled libpython at env/lib/${LIBPY_NAME}"
-                otool -L "$PY_EXE"
-                exit 1
-              fi
-              echo "Validated bundled libpython dylib: ${LIBPY_NAME}"
-            else
-              echo "No libpython dylib dependency detected; skipping dylib bundle."
-            fi
-          fi
-
-          # Fast-fail on macOS before expensive installs if the relocatable
-          # venv still points to a runner-local Framework Python.
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
-            echo "Validating packaged python linkage..."
-            if otool -L "$PY_EXE" | grep -E -q '/Library/Frameworks/Python\.framework/Versions/.+/Python'; then
-              echo "Error: packaged python is linked to /Library/Frameworks/Python.framework"
-              otool -L "$PY_EXE"
-              exit 1
-            fi
-          fi
-
-          # Resolve runtime + test deps from the project's uv.lock for reproducibility.
-          # Runtime deps (no dev group) → bundled into the artifact.
-          uv export --project server --no-dev --no-emit-project --frozen --output-file "$RUNNER_TEMP/runtime-reqs.txt"
-          # Test deps (dev group) → installed into the same env so we can run the
-          # test suite against the bundled interpreter before packaging.
-          uv export --project server --only-group dev --no-emit-project --frozen --output-file "$RUNNER_TEMP/test-reqs.txt"
-
-          # macOS / Windows: copied-out standalone interpreters (not venvs).
-          # `uv pip install --python <path>` is uv's intended API for installing
-          # into an external interpreter; the higher-level `uv sync` only operates
-          # on a project venv. `--break-system-packages` is required because
-          # standalone CPython is marked externally-managed.
-          # Linux: the env is a real `uv venv`, so we can sync directly via
-          # UV_PROJECT_ENVIRONMENT, which is fully lockfile-driven.
-          if [ "${{ matrix.os_name }}" == "macos" ] || [ "${{ matrix.os_name }}" == "windows" ]; then
-            uv pip install --python "$PY_EXE" --break-system-packages -r "$RUNNER_TEMP/runtime-reqs.txt"
-            uv pip install --python "$PY_EXE" --break-system-packages -r "$RUNNER_TEMP/test-reqs.txt"
-          else
-            UV_PROJECT_ENVIRONMENT="$SERVER_ENV_DIR" uv sync --project server --frozen --all-groups
-          fi
-
-          # Windows ships CPU-only (config.py hardcodes TORCH_DEVICE="cpu").
-          # Default wheel bundles ~600MB of CUDA runtime we never use; replace with the
-          # CPU-only build at the same version we just installed (read from the lockfile
-          # to avoid drift).
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            echo "Replacing CUDA torch with CPU-only build..."
-            TORCH_VERSION=$(grep -E "^torch==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torch==//; s/[ ;].*//')
-            TORCHVISION_VERSION=$(grep -E "^torchvision==" "$RUNNER_TEMP/runtime-reqs.txt" | head -1 | sed 's/^torchvision==//; s/[ ;].*//')
-            echo "Using CPU-only torch ${TORCH_VERSION} and torchvision ${TORCHVISION_VERSION}"
-            uv pip install --python "$PY_EXE" --break-system-packages \
-              "torch==${TORCH_VERSION}+cpu" "torchvision==${TORCHVISION_VERSION}+cpu" \
-              --index-url https://download.pytorch.org/whl/cpu \
-              --reinstall --no-deps
-          fi
-
-          "$PY_EXE" -c "import torch, torch.testing; print('torch ok', torch.__version__)"
-          uv pip check --python "$PY_EXE"
-          "$PY_EXE" -c "import torch, torchvision, timm, open_clip; cfg = open_clip.get_model_config('ViT-SO400M-16-SigLIP2-384'); assert cfg and cfg.get('vision_cfg', {}).get('timm_model_name'); print('ml import contract ok', torch.__version__, torchvision.__version__, timm.__version__)"
-          "$PY_EXE" -c "import torch, torchvision; from torchvision.ops import nms; b=torch.tensor([[0.,0.,1.,1.],[0.,0.,2.,2.]], dtype=torch.float32); s=torch.tensor([0.9,0.8], dtype=torch.float32); print('torchvision nms op ok', nms(b, s, 0.5).tolist())"
-
-          echo "Running unit tests with pytest..."
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            export PYTHONPATH="server;server/src"
-          else
-            export PYTHONPATH="server:server/src"
-          fi
-          "$PY_EXE" -m pytest server/test/ -v
-
-          echo "Copying backend source files..."
-          cp -r server/src "$SERVER_APP_DIR/"
-
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            if [ -f "$SERVER_ENV_DIR/Scripts/python.exe" ]; then
-              WIN_PYW_REL='env\Scripts\pythonw.exe'
-            else
-              WIN_PYW_REL='env\pythonw.exe'
-            fi
-            {
-              echo '@echo off'
-              echo 'setlocal'
-              echo 'set "SCRIPT_DIR=%~dp0"'
-              echo 'set "KMP_DUPLICATE_LIB_OK=TRUE"'
-              echo 'set "PYTHONPATH=%SCRIPT_DIR%app;%PYTHONPATH%"'
-              echo 'rem Use start /b with pythonw.exe to run invisibly and allow the batch script to exit immediately.'
-              echo "start \"\" /b \"%SCRIPT_DIR%${WIN_PYW_REL}\" \"%SCRIPT_DIR%app\src\geniusai_server.py\" %*"
-            } > "$SERVER_DIR/lrgenius-server.cmd"
-          else
-            {
-              echo '#!/usr/bin/env bash'
-              echo 'set -euo pipefail'
-              echo 'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"'
-              echo 'export KMP_DUPLICATE_LIB_OK=TRUE'
-              echo 'export PYTHONHOME="$SCRIPT_DIR/env"'
-              echo 'export PYTHONNOUSERSITE=1'
-              echo 'export PYTHONPATH="$SCRIPT_DIR/app:${PYTHONPATH:-}"'
-              echo 'export DYLD_LIBRARY_PATH="$SCRIPT_DIR/env/lib:$SCRIPT_DIR/env/lib/python3.12/site-packages/torch/lib:${DYLD_LIBRARY_PATH:-}"'
-              echo ''
-              echo '# macOS release ZIPs can lose execute bits and carry quarantine.'
-              echo 'if [ "$(uname -s)" = "Darwin" ]; then'
-              echo '  chmod +x "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/env/bin/python3" "$SCRIPT_DIR/env/bin/python3.12" 2>/dev/null || true'
-              echo '  if command -v xattr >/dev/null 2>&1; then'
-              echo '    xattr -dr com.apple.quarantine "$SCRIPT_DIR/env" 2>/dev/null || true'
-              echo '    xattr -d com.apple.quarantine "$SCRIPT_DIR" 2>/dev/null || true'
-              echo '  fi'
-              echo 'fi'
-              echo 'exec "$SCRIPT_DIR/env/bin/python" "$SCRIPT_DIR/app/src/geniusai_server.py" "$@"'
-            } > "$SERVER_DIR/lrgenius-server"
-            chmod +x "$SERVER_DIR/lrgenius-server"
-          fi
-
-          # GitHub artifact upload/download can lose symlink semantics.
-          # Flatten symlinks inside the packaged macOS runtime to keep it portable.
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
-            echo "Normalizing macOS runtime (dereferencing symlinks)..."
-            RESOLVED_ENV="${SERVER_ENV_DIR}.resolved"
-            mkdir -p "$RESOLVED_ENV"
-            rsync -aL "$SERVER_ENV_DIR/" "$RESOLVED_ENV/"
-            rm -rf "$SERVER_ENV_DIR"
-            mv "$RESOLVED_ENV" "$SERVER_ENV_DIR"
-            PY_EXE="$SERVER_ENV_DIR/bin/python3.12"
-            "$PY_EXE" -c "import torch, torchvision; from torchvision.ops import nms; b=torch.tensor([[0.,0.,1.,1.],[0.,0.,2.,2.]], dtype=torch.float32); s=torch.tensor([0.9,0.8], dtype=torch.float32); print('post-normalize nms ok', nms(b, s, 0.5).tolist())"
-          fi
-          
       - name: Prepare plugin files
         shell: bash
         run: |
           BUILD_DIR="build"
           PLUGIN_DIR="$BUILD_DIR/LrGeniusAI.lrplugin"
-          
+
           mkdir -p $PLUGIN_DIR
-          
+
           echo "Copying plugin files..."
           cp plugin/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
           cp plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
-            if [ -f "$BUILD_DIR/lrgenius-server/lrgenius-server" ]; then
-              echo "Setting executable permissions for macOS server binary..."
-              chmod +x $BUILD_DIR/lrgenius-server/lrgenius-server
-            fi
-          fi
-
-      - name: Shrink build before upload
+      # macOS Developer ID codesigning + notarization. Skipped (with a
+      # warning, not a failure) when the secrets aren't configured, so
+      # forks/dev builds still work before signing is set up.
+      - name: Import macOS signing certificates
+        if: matrix.os_name == 'macos'
+        id: macos-certs
         shell: bash
         run: |
           set -euo pipefail
-          ENV_DIR="build/lrgenius-server/env"
-          echo "=== Size before cleanup ==="
-          du -sh build/ || true
-
-          find "$ENV_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-          find "$ENV_DIR" -name "*.pyc" -delete 2>/dev/null || true
-          # Keep .dist-info dirs: entry_points.txt is needed at runtime
-          # (opentelemetry discovers its context backend via entry_points).
-          # Strip only the large bookkeeping files inside each .dist-info.
-          find "$ENV_DIR" -path "*.dist-info/RECORD" -delete 2>/dev/null || true
-          find "$ENV_DIR" -path "*.dist-info/INSTALLER" -delete 2>/dev/null || true
-          find "$ENV_DIR" -path "*.dist-info/REQUESTED" -delete 2>/dev/null || true
-          find "$ENV_DIR" -path "*.dist-info/LICENSE*" -delete 2>/dev/null || true
-          find "$ENV_DIR" -path "*.dist-info/NOTICE*" -delete 2>/dev/null || true
-          find "$ENV_DIR" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
-
-          find "$ENV_DIR" -type d -name "tests" -path "*/site-packages/*/tests" -exec rm -rf {} + 2>/dev/null || true
-          find "$ENV_DIR" -type d -name "test"  -path "*/site-packages/*/test"  -exec rm -rf {} + 2>/dev/null || true
-
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            find "$ENV_DIR" -name "*.pdb" -delete 2>/dev/null || true
+          if [ -z "${MACOS_CERTIFICATE_P12_BASE64:-}" ] || [ -z "${MACOS_INSTALLER_CERTIFICATE_P12_BASE64:-}" ]; then
+            echo "macOS signing secrets not configured — building unsigned (dev) artifact."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "=== Size after cleanup ==="
-          du -sh build/ || true
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          APP_CERT_PATH="$RUNNER_TEMP/app_cert.p12"
+          INSTALLER_CERT_PATH="$RUNNER_TEMP/installer_cert.p12"
+
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$APP_CERT_PATH"
+          echo "$MACOS_INSTALLER_CERTIFICATE_P12_BASE64" | base64 --decode > "$INSTALLER_CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$APP_CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$INSTALLER_CERT_PATH" -P "$MACOS_INSTALLER_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          rm -f "$APP_CERT_PATH" "$INSTALLER_CERT_PATH"
+
+          APP_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"/\1/')"
+          INSTALLER_IDENTITY="$(security find-identity -v "$KEYCHAIN_PATH" | grep 'Developer ID Installer' | head -1 | sed -E 's/.*"(.*)"/\1/')"
+          if [ -z "$APP_IDENTITY" ] || [ -z "$INSTALLER_IDENTITY" ]; then
+            echo "Error: expected identities not found in imported certificates."
+            security find-identity -v "$KEYCHAIN_PATH"
+            exit 1
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "MACOS_SIGN_IDENTITY=$APP_IDENTITY" >> "$GITHUB_ENV"
+          echo "MACOS_INSTALLER_SIGN_IDENTITY=$INSTALLER_IDENTITY" >> "$GITHUB_ENV"
+          echo "Imported signing identities: app=$APP_IDENTITY installer=$INSTALLER_IDENTITY"
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_INSTALLER_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_P12_BASE64 }}
+          MACOS_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PASSWORD }}
 
       - name: Build macOS installer
         if: matrix.os_name == 'macos'
@@ -348,33 +200,44 @@ jobs:
           chmod +x installers/macos/build_pkg.sh
           ./installers/macos/build_pkg.sh "$VERSION" "${{ matrix.arch }}"
 
-      # SignPath Foundation (Windows Authenticode) signing of the bundled Python
-      # runtime launchers, before they get packaged into the installer below.
-      # The project's default artifact configuration is single-PE-file typed, so
-      # python.exe and pythonw.exe are each submitted as their own signing request
-      # rather than bundled into one zip artifact.
-      - name: Locate bundled Python binaries
-        if: matrix.os_name == 'windows'
+      - name: Notarize macOS installer
+        if: matrix.os_name == 'macos' && steps.macos-certs.outputs.configured == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f "build/lrgenius-server/env/Scripts/python.exe" ]; then
-            PY_ENV_DIR="build/lrgenius-server/env/Scripts"
-          else
-            PY_ENV_DIR="build/lrgenius-server/env"
-          fi
-          echo "PY_ENV_DIR=$PY_ENV_DIR" >> "$GITHUB_ENV"
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          PKG_PATH="LrGeniusAI-macos-${{ matrix.arch }}-${VERSION}.pkg"
+          KEY_PATH="$RUNNER_TEMP/notary_key.p8"
+          echo "$APPLE_NOTARIZATION_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
 
-      - name: Upload unsigned python.exe for signing
+          echo "Submitting $PKG_PATH for notarization (this can take a few minutes)..."
+          xcrun notarytool submit "$PKG_PATH" \
+            --key "$KEY_PATH" \
+            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+            --wait
+
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$PKG_PATH"
+          rm -f "$KEY_PATH"
+        env:
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      # SignPath Foundation (Windows Authenticode) signing of the single
+      # Rust binary, before it gets packaged into the installer below.
+      - name: Upload unsigned backend exe for signing
         if: matrix.os_name == 'windows'
-        id: upload-unsigned-python-exe
+        id: upload-unsigned-exe
         uses: actions/upload-artifact@v6
         with:
-          name: unsigned-python-exe-${{ matrix.arch }}
-          path: ${{ env.PY_ENV_DIR }}/python.exe
+          name: unsigned-backend-exe-${{ matrix.arch }}
+          path: build/lrgenius-server/lrgenius-server.exe
           retention-days: 1
 
-      - name: Submit python.exe to SignPath
+      - name: Submit backend exe to SignPath
         if: matrix.os_name == 'windows'
         uses: signpath/github-action-submit-signing-request@v2
         with:
@@ -382,44 +245,16 @@ jobs:
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
           project-slug: LrGeniusAI
           signing-policy-slug: test-signing
-          github-artifact-id: ${{ steps.upload-unsigned-python-exe.outputs.artifact-id }}
+          github-artifact-id: ${{ steps.upload-unsigned-exe.outputs.artifact-id }}
           wait-for-completion: true
-          output-artifact-directory: signed-python-exe
+          output-artifact-directory: signed-backend-exe
 
-      - name: Replace python.exe with SignPath-signed version
+      - name: Replace backend exe with SignPath-signed version
         if: matrix.os_name == 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          cp signed-python-exe/python.exe "$PY_ENV_DIR/python.exe"
-
-      - name: Upload unsigned pythonw.exe for signing
-        if: matrix.os_name == 'windows'
-        id: upload-unsigned-pythonw-exe
-        uses: actions/upload-artifact@v6
-        with:
-          name: unsigned-pythonw-exe-${{ matrix.arch }}
-          path: ${{ env.PY_ENV_DIR }}/pythonw.exe
-          retention-days: 1
-
-      - name: Submit pythonw.exe to SignPath
-        if: matrix.os_name == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
-          project-slug: LrGeniusAI
-          signing-policy-slug: test-signing
-          github-artifact-id: ${{ steps.upload-unsigned-pythonw-exe.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed-pythonw-exe
-
-      - name: Replace pythonw.exe with SignPath-signed version
-        if: matrix.os_name == 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp signed-pythonw-exe/pythonw.exe "$PY_ENV_DIR/pythonw.exe"
+          cp signed-backend-exe/lrgenius-server.exe build/lrgenius-server/lrgenius-server.exe
 
       - name: Build Windows installer
         if: matrix.os_name == 'windows'
@@ -471,7 +306,6 @@ jobs:
           set -euo pipefail
           cp "signed-installer/$(basename "${{ steps.locate-installer.outputs.path }}")" "${{ steps.locate-installer.outputs.path }}"
 
-
       - name: Smoke test packaged backend and log cold start
         shell: bash
         run: |
@@ -482,29 +316,14 @@ jobs:
           SMOKE_STDOUT="$DB_DIR/smoke-backend.out"
           mkdir -p "$DB_DIR"
           URL="http://127.0.0.1:19819/ping"
-          START_TS=$(python -c "import time; print(time.time())")
+          START_TS=$(python3 -c "import time; print(time.time())")
 
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            DB_PATH_WIN=$(cygpath -w "$DB_PATH")
-            # Use console python.exe directly for smoke test so it remains synchronous and trackable
-            if [ -f "build/lrgenius-server/env/Scripts/python.exe" ]; then
-              PY_EXE_WIN=$(cygpath -w "$GITHUB_WORKSPACE/build/lrgenius-server/env/Scripts/python.exe")
-            else
-              PY_EXE_WIN=$(cygpath -w "$GITHUB_WORKSPACE/build/lrgenius-server/env/python.exe")
-            fi
-            SERVER_PY_WIN=$(cygpath -w "$GITHUB_WORKSPACE/build/lrgenius-server/app/src/geniusai_server.py")
-            SMOKE_LAUNCH_CMD="$DB_DIR/smoke-launch.cmd"
-            {
-              echo '@echo off'
-              echo "\"$PY_EXE_WIN\" \"$SERVER_PY_WIN\" --db-path \"$DB_PATH_WIN\""
-            } > "$SMOKE_LAUNCH_CMD"
-            SMOKE_LAUNCH_CMD_WIN=$(cygpath -w "$SMOKE_LAUNCH_CMD")
-            cmd.exe //c "$SMOKE_LAUNCH_CMD_WIN" >"$SMOKE_STDOUT" 2>&1 &
-            BACKEND_PID=$!
-          else
-            "build/lrgenius-server/lrgenius-server" --db-path "$DB_PATH" >"$SMOKE_STDOUT" 2>&1 &
-            BACKEND_PID=$!
+          BIN="$GITHUB_WORKSPACE/build/lrgenius-server/lrgenius-server${{ matrix.bin_ext }}"
+          if [ "${{ matrix.os_name }}" != "windows" ]; then
+            chmod +x "$BIN"
           fi
+          "$BIN" --db-path "$DB_PATH" >"$SMOKE_STDOUT" 2>&1 &
+          BACKEND_PID=$!
 
           READY=0
           for i in $(seq 1 600); do
@@ -512,7 +331,7 @@ jobs:
               READY=1
               break
             fi
-            if [ -n "${BACKEND_PID:-}" ] && ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+            if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
               echo "Backend process exited early before /ping became ready."
               break
             fi
@@ -528,8 +347,6 @@ jobs:
               echo "---- backend log tail ----"
               tail -n 120 "$LOG_PATH" || true
               echo "--------------------------"
-            else
-              echo "Backend log file not found at $LOG_PATH"
             fi
             if [ -f "$SMOKE_STDOUT" ]; then
               echo "---- launcher stdout/stderr ----"
@@ -539,52 +356,11 @@ jobs:
             exit 1
           fi
 
-          END_TS=$(python -c "import time; print(time.time())")
-          COLD_START_SECONDS=$(python -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$START_TS" "$END_TS")
+          END_TS=$(python3 -c "import time; print(time.time())")
+          COLD_START_SECONDS=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$START_TS" "$END_TS")
           echo "Measured cold start to /ping: ${COLD_START_SECONDS}s"
 
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            if [ -f "$GITHUB_WORKSPACE/build/lrgenius-server/env/Scripts/python.exe" ]; then
-              TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/Scripts/python.exe"
-            else
-              TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/python.exe"
-            fi
-          else
-            TEST_PY="$GITHUB_WORKSPACE/build/lrgenius-server/env/bin/python"
-          fi
-
-          "$TEST_PY" "server/test/api_test_client.py" \
-            --base-url "http://127.0.0.1:19819" \
-            --iterations 120 \
-            --timeout 5
-
           curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
-
-      - name: Relocation import test
-        shell: bash
-        run: |
-          set -euo pipefail
-          RELOCATED="$RUNNER_TEMP/relocated-server"
-          cp -a build/lrgenius-server "$RELOCATED"
-          if [ "${{ matrix.os_name }}" == "windows" ]; then
-            if [ -f "$RELOCATED/env/Scripts/python.exe" ]; then
-              PY="$RELOCATED/env/Scripts/python.exe"
-            else
-              PY="$RELOCATED/env/python.exe"
-            fi
-          else
-            PY="$RELOCATED/env/bin/python"
-          fi
-          export PYTHONPATH="$RELOCATED/app:${PYTHONPATH:-}"
-          "$PY" -c "import torch, torchvision; print('relocation ok', torch.__version__, torchvision.__version__)"
-          if [ "${{ matrix.os_name }}" == "macos" ]; then
-            LIBPY_REF="$(otool -L "$PY" | awk '/libpython[0-9.]+\.dylib/{print $1; exit}')"
-            if [ -n "${LIBPY_REF}" ]; then
-              LIBPY_NAME="$(basename "${LIBPY_REF}")"
-              test -f "$RELOCATED/env/lib/${LIBPY_NAME}"
-            fi
-          fi
-          rm -rf "$RELOCATED"
 
       - name: Pack artifact payload
         shell: bash
@@ -617,9 +393,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v7
 
       - name: Update Info.lua with version and build date
         shell: bash
@@ -684,9 +457,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # Same as build-and-release: bake release tag into version_info.py so /version and
-      # /version/check match the plugin from the same tag. Without this, the image keeps
-      # the repo's dev placeholder and users see plugin/server version mismatch.
+      # TODO(M9 follow-up): server/Dockerfile still builds the Python
+      # backend. Needs a rewrite to build/ship the Rust binary
+      # (server-rs) instead — deferred separately from the installer
+      # pipeline rewrite above since it also needs a base-image and
+      # ONNX Runtime shared-lib strategy decision.
       - name: Update backend version info from tag
         shell: bash
         run: |
@@ -771,7 +546,7 @@ jobs:
             --tag "${IMG}:latest" \
             "${IMG}:${TAG}-x64" \
             "${IMG}:${TAG}-aarch64"
-          
+
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-and-release, build-plugin-only]
@@ -794,11 +569,11 @@ jobs:
         with:
           pattern: lrgenius-ai-*
           path: artifacts
-      
+
       - name: Zip artifacts
         run: |
           VERSION=${{ github.ref_name }}
-          
+
           cd artifacts
 
           for ARTIFACT_DIR in lrgenius-ai-windows-x64 lrgenius-ai-macos-arm64 lrgenius-ai-plugin-docker-backend; do
@@ -811,12 +586,11 @@ jobs:
             fi
           done
 
-          # actions/download-artifact normalizes permissions, so restore macOS executable bits before zipping.
+          # actions/download-artifact normalizes permissions, so restore the executable bit before zipping.
           if [ -d "lrgenius-ai-macos-arm64" ]; then
             chmod +x lrgenius-ai-macos-arm64/lrgenius-server/lrgenius-server || true
-            chmod +x lrgenius-ai-macos-arm64/lrgenius-server/env/bin/* || true
           fi
-          
+
           if [ -d "lrgenius-ai-windows-x64" ]; then
             cd lrgenius-ai-windows-x64
             zip -r ../LrGeniusAI-windows-x64-${VERSION}.zip .
@@ -834,7 +608,7 @@ jobs:
             zip -r ../LrGeniusAI-plugin-docker-backend-${VERSION}.zip .
             cd ..
           fi
-          
+
           cd ..
 
       - name: Set release metadata
@@ -843,20 +617,42 @@ jobs:
           VERSION="${{ github.ref_name }}"
           echo "release_name=Release ${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Generate code-only update manifest
+      # The self-updater swaps the raw binary in place — it must NOT run
+      # the full installer (UAC prompts / GUI wizard / plugin re-copy).
+      # These are published as their own release assets, distinct from
+      # the .pkg/.exe installers used for fresh installs.
+      - name: Stage raw binaries for self-update manifest
+        run: |
+          set -euo pipefail
+          mkdir -p update-assets
+          if [ -f artifacts/lrgenius-ai-macos-arm64/lrgenius-server/lrgenius-server ]; then
+            cp artifacts/lrgenius-ai-macos-arm64/lrgenius-server/lrgenius-server update-assets/lrgenius-server-macos-arm64
+            chmod +x update-assets/lrgenius-server-macos-arm64
+          fi
+          if [ -f artifacts/lrgenius-ai-windows-x64/lrgenius-server/lrgenius-server.exe ]; then
+            cp artifacts/lrgenius-ai-windows-x64/lrgenius-server/lrgenius-server.exe update-assets/lrgenius-server-windows-x64.exe
+          fi
+          echo "=== Staged self-update binaries ==="
+          ls -la update-assets/
+
+      - name: Generate update manifest
         run: |
           VERSION="${{ github.ref_name }}"
           BREAKING_FLAG=""
           if [[ "${{ github.event.inputs.breaking_changes }}" == "true" ]]; then
             BREAKING_FLAG="--breaking"
           fi
+          BINARY_ARGS=()
+          [ -f update-assets/lrgenius-server-macos-arm64 ] && BINARY_ARGS+=(--binary "macos-arm64=update-assets/lrgenius-server-macos-arm64")
+          [ -f update-assets/lrgenius-server-windows-x64.exe ] && BINARY_ARGS+=(--binary "windows-x64=update-assets/lrgenius-server-windows-x64.exe")
           python3 scripts/generate_update_manifest.py \
             --version "${VERSION}" \
             --repo "${{ github.repository }}" \
             --output "update-manifest-${VERSION}.json" \
+            "${BINARY_ARGS[@]}" \
             ${BREAKING_FLAG}
           echo "Generated update-manifest-${VERSION}.json"
-          cat "update-manifest-${VERSION}.json" | python3 -c "import sys,json; m=json.load(sys.stdin); print(f'Manifest: {m[\"file_counts\"][\"plugin\"]} plugin files, {m[\"file_counts\"][\"backend_src\"]} backend files, {m[\"total_size_bytes\"]//1024} KB total, breaking={m[\"breaking_changes\"]}')"
+          cat "update-manifest-${VERSION}.json" | python3 -c "import sys,json; m=json.load(sys.stdin); print(f'Manifest: {len(m[\"platforms\"])} platform binaries, {len(m[\"plugin_files\"])} plugin files, breaking={m[\"breaking_changes\"]}')"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -867,6 +663,7 @@ jobs:
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
             artifacts/lrgenius-ai-macos-arm64/*.pkg
             artifacts/lrgenius-ai-windows-x64/*.exe
+            update-assets/*
             update-manifest-${{ github.ref_name }}.json
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
