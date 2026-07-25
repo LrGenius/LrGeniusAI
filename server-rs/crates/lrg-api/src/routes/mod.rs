@@ -13,3 +13,4 @@ pub mod search;
 pub mod server;
 pub mod style_edit;
 pub mod training;
+pub mod update;

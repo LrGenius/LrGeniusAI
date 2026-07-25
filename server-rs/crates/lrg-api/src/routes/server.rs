@@ -1,5 +1,5 @@
-//! Server blueprint — port of `routes/server.py`. `/update/apply` gains
-//! real behavior in M9 (model distribution / self-update pipeline).
+//! Server blueprint — port of `routes/server.py`. `/update/apply` lives
+//! in `routes/update.rs` (M9's self-update rewrite).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

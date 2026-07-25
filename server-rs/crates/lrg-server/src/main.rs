@@ -108,12 +108,57 @@ fn main() {
         lifecycle::remove_pid_file(db_path);
         lifecycle::remove_ok_file(db_path);
     }
+
+    match &result {
+        // The listener is fully dropped by now (axum::serve has returned),
+        // so spawning the new binary here can never race the old one for
+        // the port. This is the last thing the old process does.
+        Ok(Some(relaunch_path)) => {
+            log::info!("Relaunching updated binary: {}", relaunch_path.display());
+            if let Err(e) = spawn_relaunch(relaunch_path) {
+                log::error!("Failed to relaunch after update: {e}");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => log::error!("Server exited with error: {e}"),
+    }
     log::info!("Bye.");
 
-    if let Err(e) = result {
-        log::error!("Server exited with error: {e}");
+    if result.is_err() {
         std::process::exit(1);
     }
+}
+
+/// Spawns the freshly-swapped-in binary, detached, with no arguments —
+/// matching how the installer/OS would normally launch it (the plugin
+/// re-calls `/initialize` once the new process is up, same as any other
+/// restart). On Windows this goes through `run_hidden.vbs` next to the
+/// exe (installer-placed) to avoid a console flash; falls back to a
+/// direct spawn if that wrapper isn't present (dev/manual runs).
+fn spawn_relaunch(exe_path: &std::path::Path) -> std::io::Result<()> {
+    use std::process::Stdio;
+
+    #[cfg(windows)]
+    {
+        let vbs_path = exe_path.with_file_name("run_hidden.vbs");
+        if vbs_path.is_file() {
+            return std::process::Command::new("wscript.exe")
+                .arg(&vbs_path)
+                .arg(exe_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ());
+        }
+    }
+
+    std::process::Command::new(exe_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
 }
 
 async fn run_migrate(
@@ -158,7 +203,7 @@ fn lrg_chroma_reader_counts(db_path: &std::path::Path) -> Result<serde_json::Val
     Ok(serde_json::Value::Object(out))
 }
 
-async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     // Mark server as ready for startup scripts.
     if let Some(db_path) = &cli.db_path {
         lifecycle::write_ok_file(db_path)?;
@@ -173,10 +218,15 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     log::info!("Starting production server on http://{host}:{port}");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(state))
-        .await?;
-    Ok(())
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(state.clone()))
+    .await?;
+
+    let relaunch_path = state.relaunch_after_shutdown.lock().unwrap().take();
+    Ok(relaunch_path)
 }
 
 /// Resolves on /shutdown, /restart, Ctrl-C/SIGINT, or SIGTERM (launchd).

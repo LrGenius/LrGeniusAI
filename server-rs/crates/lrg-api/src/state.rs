@@ -3,7 +3,7 @@
 //! store and auto-runs the one-time Chroma migration when needed.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 
@@ -27,6 +27,13 @@ pub struct AppState {
     pub face: Arc<FaceModel>,
     /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
     pub jobs: Arc<JobRegistry>,
+    /// Set by `/update/apply` once the binary swap is done, just before
+    /// triggering graceful shutdown. `main.rs` checks this after
+    /// `axum::serve`'s graceful shutdown returns (listener fully
+    /// dropped) and spawns the new binary at this path — never from
+    /// inside the request handler itself, so there's no bind-race
+    /// between the exiting old process and the freshly spawned new one.
+    pub relaunch_after_shutdown: StdMutex<Option<PathBuf>>,
 }
 
 impl AppState {
@@ -40,6 +47,7 @@ impl AppState {
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
             jobs: Arc::new(JobRegistry::new()),
+            relaunch_after_shutdown: StdMutex::new(None),
         }
     }
 
