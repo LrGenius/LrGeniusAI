@@ -12,6 +12,8 @@ use lrg_ml::faces::FaceModel;
 use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
 
+use crate::routes::clip::ModelDownloadStatus;
+
 pub struct AppState {
     db_path: RwLock<Option<PathBuf>>,
     store: RwLock<Option<Arc<Store>>>,
@@ -27,6 +29,9 @@ pub struct AppState {
     pub face: Arc<FaceModel>,
     /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
     pub jobs: Arc<JobRegistry>,
+    /// Global — port of `services/clip.py`'s download-thread status, backs
+    /// `/clip/download/start` + `/clip/download/status`.
+    pub model_download: Arc<StdMutex<ModelDownloadStatus>>,
     /// Set by `/update/apply` once the binary swap is done, just before
     /// triggering graceful shutdown. `main.rs` checks this after
     /// `axum::serve`'s graceful shutdown returns (listener fully
@@ -47,6 +52,7 @@ impl AppState {
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
             jobs: Arc::new(JobRegistry::new()),
+            model_download: Arc::new(StdMutex::new(ModelDownloadStatus::default())),
             relaunch_after_shutdown: StdMutex::new(None),
         }
     }

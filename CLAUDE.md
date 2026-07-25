@@ -40,7 +40,7 @@ cd server-rs
 cargo build --release -p lrg-server
 ```
 
-Model files (SigLIP2 ONNX export, InsightFace buffalo_l) are not auto-downloaded yet — see [server-rs/README.md](server-rs/README.md) for how to produce/place them and which env vars point the server at them.
+`POST /clip/download/start` fetches the SigLIP2 fp16 ONNX assets from this build's own GitHub release; until a release with those assets exists, export them yourself — see [server-rs/README.md](server-rs/README.md) for the exact commands and the env vars that point the server at the files (also covers InsightFace's buffalo_l, which needs no export step).
 
 ### Pre-commit hooks (formatting + linting)
 

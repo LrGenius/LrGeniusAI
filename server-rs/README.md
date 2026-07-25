@@ -24,16 +24,21 @@ both be clean before sending changes.
 
 ## Model files
 
-Model files are **not** downloaded automatically yet (`lrg-ml::model_paths`
-still documents this as an interim convention) — you need to place them on
-disk yourself and point the server at them via environment variables.
-
 ### SigLIP2 (semantic embeddings)
 
-There is no signed release with prebuilt fp16 ONNX assets to download yet
-(the `build-model-assets` CI job that produces and attaches them only runs
-against a real tagged release). Until one exists, export the model
-yourself with the script already used to build and verify that CI job:
+`POST /clip/download/start` + `GET /clip/download/status` fetch the fp16
+ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
+`tokenizer.json`) from this running binary's own matching GitHub release
+(`LRG_BACKEND_RELEASE_TAG`) and place them at the `LRG_SIGLIP_*` paths
+below — this is the Rust equivalent of Python's `/clip/download/start`,
+just pulling CI-exported ONNX assets from a release instead of the fp32
+checkpoint from Hugging Face.
+
+**There is no signed release with those assets attached yet**, so right
+now this endpoint fails with a clear "release asset not found" error on
+any build (including released ones, until the first tag with the
+`build-model-assets` CI job runs). Until then, export the model yourself
+with the same script that CI job runs:
 
 ```bash
 cd server-rs

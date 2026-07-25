@@ -6,6 +6,7 @@ pub mod find_similar;
 pub mod group_similar;
 pub mod import_;
 pub mod index;
+pub mod index_by_reference;
 pub mod index_upload;
 pub mod keywords;
 pub(crate) mod route_util;

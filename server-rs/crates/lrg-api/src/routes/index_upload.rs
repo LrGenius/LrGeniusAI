@@ -26,7 +26,7 @@ pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route("/index", axum::routing::post(index_batch))
 }
 
-struct ParsedOptions {
+pub(crate) struct ParsedOptions {
     compute_embeddings: bool,
     compute_faces: bool,
     compute_metadata: bool,
@@ -69,7 +69,7 @@ fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> boo
         .unwrap_or(default)
 }
 
-fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
+pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     let tasks: Vec<String> = match fields.get("tasks") {
         Some(s) if !s.is_empty() => {
             if s.starts_with('[') {
@@ -163,9 +163,9 @@ fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     }
 }
 
-struct UploadedImage {
-    bytes: Vec<u8>,
-    filename: String,
+pub(crate) struct UploadedImage {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) filename: String,
 }
 
 async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
@@ -222,6 +222,34 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
     } else {
         photo_ids
     };
+
+    process_batch(state, fields, images, photo_ids, Vec::new(), true).await
+}
+
+/// Shared by `/index` (multipart) and `/index_by_reference` (JSON + on-disk
+/// paths) once each has gathered its images/photo_ids/option-fields in its
+/// own way — everything past that point (db_path auto-bind, validation,
+/// per-photo processing, response shape) is identical.
+///
+/// `pre_failures` are errors the caller already knows about before this
+/// point (e.g. `/index_by_reference`'s file-not-found reads) — folded in
+/// exactly like an image-normalization failure so failure_count/
+/// error_messages account for them the same way Python's
+/// `read_failures + processing_failures` does.
+///
+/// `reject_empty_batch` matches Python's per-endpoint difference on a
+/// genuinely empty batch: `/index` 400s ("no images provided"), while
+/// `/index_by_reference` treats an all-paths-invalid batch as a normal
+/// zero-success response (or a 500 quoting the read errors, if there
+/// were any) rather than a client-error mismatch.
+pub(crate) async fn process_batch(
+    state: Arc<AppState>,
+    fields: HashMap<String, String>,
+    images: Vec<UploadedImage>,
+    photo_ids: Vec<String>,
+    pre_failures: Vec<String>,
+    reject_empty_batch: bool,
+) -> Response {
     let options = parse_options(&fields);
 
     // The generic auto-bind middleware only peeks JSON bodies and query
@@ -235,11 +263,35 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
         }
     }
 
-    if images.is_empty() || photo_ids.is_empty() || images.len() != photo_ids.len() {
+    if images.len() != photo_ids.len() {
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"error": "Mismatch between number of images and photo IDs, or no images provided"})),
         )
+            .into_response();
+    }
+    if images.is_empty() {
+        if reject_empty_batch {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Mismatch between number of images and photo IDs, or no images provided"})),
+            )
+                .into_response();
+        }
+        if !pre_failures.is_empty() {
+            let joined = pre_failures
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ");
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": joined})),
+            )
+                .into_response();
+        }
+        return Json(json!({"status": "processed", "success_count": 0, "failure_count": 0}))
             .into_response();
     }
 
@@ -247,7 +299,7 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
     let quality = lrg_imaging::convert::default_jpeg_quality();
 
     let mut triplets: Vec<(Vec<u8>, String, String)> = Vec::new();
-    let mut conversion_errors: Vec<String> = Vec::new();
+    let mut conversion_errors: Vec<String> = pre_failures;
     for (img, photo_id) in images.into_iter().zip(photo_ids) {
         match normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality) {
             Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename)),

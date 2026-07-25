@@ -22,6 +22,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::clip::router())
         .merge(routes::faces::router())
         .merge(routes::index_upload::router())
+        .merge(routes::index_by_reference::router())
         .merge(routes::search::router())
         .merge(routes::find_similar::router())
         .merge(routes::group_similar::router())

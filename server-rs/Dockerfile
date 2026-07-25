@@ -3,9 +3,10 @@
 # Run:   docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 #          -e GENIUSAI_HOST=0.0.0.0 geniusai-server
 #
-# Model files are not fetched at runtime yet (see model_paths.rs) — mount them
-# under /models following the layout below, or the server starts fine but
-# /index and /faces/detect fail until they're in place.
+# Model files: mount /models per the layout below (or trigger POST
+# /clip/download/start once a matching GitHub release with model assets
+# exists — see server-rs/README.md), or the server starts fine but
+# /index and /faces/detect fail until the files are in place.
 
 FROM rust:1-bookworm AS builder
 
