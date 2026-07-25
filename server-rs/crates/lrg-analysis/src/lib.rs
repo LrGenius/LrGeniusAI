@@ -5,3 +5,4 @@
 pub mod clustering;
 pub mod face_aggregate;
 pub mod persons;
+pub mod relevance_filter;

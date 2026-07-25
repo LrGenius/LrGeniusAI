@@ -3,4 +3,5 @@ pub mod db;
 pub mod faces;
 pub mod index;
 pub mod index_upload;
+pub mod search;
 pub mod server;
