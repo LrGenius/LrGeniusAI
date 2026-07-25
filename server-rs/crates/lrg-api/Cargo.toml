@@ -10,6 +10,7 @@ lrg-store.workspace = true
 lrg-ml.workspace = true
 lrg-analysis.workspace = true
 lrg-imaging.workspace = true
+lrg-providers.workspace = true
 
 axum.workspace = true
 log.workspace = true

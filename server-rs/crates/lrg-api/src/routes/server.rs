@@ -1,6 +1,5 @@
-//! Server blueprint — port of `routes/server.py`. M1 scope: everything
-//! except `/models` provider probing, `/unload` model dropping, and
-//! `/update/apply` (those gain real behavior in M4/M7/M9).
+//! Server blueprint — port of `routes/server.py`. `/update/apply` gains
+//! real behavior in M9 (model distribution / self-update pipeline).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +30,69 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/health", get(health))
         .route("/logs", get(get_logs))
         .route("/logs/raw/{log_type}", get(get_raw_log))
+        .route("/models", get(list_models).post(list_models))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ModelsQuery {
+    openai_apikey: Option<String>,
+    gemini_apikey: Option<String>,
+    ollama_base_url: Option<String>,
+    #[allow(dead_code)]
+    lmstudio_base_url: Option<String>,
+}
+
+/// Port of `list_models`. Scope for M7: Ollama (local REST probe) and
+/// OpenAI (vision-model allowlist via `/v1/models`, needs an API key).
+/// Gemini/LM Studio/Qwen return empty lists until their providers land.
+async fn list_models(
+    axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
+    body: Option<Json<Value>>,
+) -> Json<Value> {
+    log::info!("Models request received - checking all providers");
+    let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+
+    let openai_key = data
+        .get("openai_apikey")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(q.openai_apikey);
+    let ollama_base_url = data
+        .get("ollama_base_url")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(q.ollama_base_url);
+    let _gemini_key = data
+        .get("gemini_apikey")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(q.gemini_apikey);
+
+    let ollama = lrg_providers::ollama::OllamaProvider::new(ollama_base_url);
+    let ollama_models = if ollama.is_available().await {
+        ollama.list_available_models().await
+    } else {
+        Vec::new()
+    };
+
+    let openai_models = match openai_key {
+        Some(key) if !key.is_empty() => {
+            lrg_providers::openai::OpenAiProvider::new(key)
+                .list_available_models()
+                .await
+        }
+        _ => Vec::new(),
+    };
+
+    Json(json!({
+        "models": {
+            "qwen": [],
+            "ollama": ollama_models,
+            "lmstudio": [],
+            "chatgpt": openai_models,
+            "gemini": [],
+        }
+    }))
 }
 
 async fn ping() -> &'static str {

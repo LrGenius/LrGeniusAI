@@ -1,11 +1,11 @@
 //! `/index` — port of `routes/index.py::index_images_batch` +
-//! `services/index.py::process_image_task`'s core loop. Scope for M6:
-//! embeddings (SigLIP2), pHash + culling metrics (always computed),
-//! faces (when requested), catalog association, existing-record merge
-//! for `regenerate_metadata=false`. LLM metadata and Vertex AI embedding
-//! generation are M7/M8 — options requesting them get a clear warning
-//! rather than silently doing nothing, matching Python's own behavior
-//! when a provider isn't configured.
+//! `services/index.py::process_image_task`'s core loop: embeddings
+//! (SigLIP2), pHash + culling metrics (always computed), faces (when
+//! requested), catalog association, existing-record merge for
+//! `regenerate_metadata=false`, and LLM metadata generation (Ollama +
+//! OpenAI; Gemini/LM Studio land with the edit-recipe port in M8).
+//! Vertex AI embedding generation is M8 (needs cloud auth) — requesting
+//! it returns a clear "not yet available" warning.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,7 +36,28 @@ struct ParsedOptions {
     catalog_id: Option<String>,
     provider: Option<String>,
     model: Option<String>,
+    api_key: Option<String>,
     capture_time: Option<f64>,
+    metadata_request: MetadataOptions,
+}
+
+/// The metadata-generation-specific subset of `_extract_options`, kept
+/// separate since it's only consulted when `compute_metadata` is set.
+struct MetadataOptions {
+    language: String,
+    temperature: f64,
+    max_tokens: Option<u32>,
+    generate_keywords: bool,
+    generate_caption: bool,
+    generate_title: bool,
+    generate_alt_text: bool,
+    submit_keywords: bool,
+    submit_folder_names: bool,
+    existing_keywords: Option<Vec<String>>,
+    folder_names: Option<String>,
+    user_context: Option<String>,
+    ollama_base_url: Option<String>,
+    lmstudio_base_url: Option<String>,
 }
 
 fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> bool {
@@ -86,6 +107,15 @@ fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             })
         });
 
+    let existing_keywords = fields.get("existing_keywords").map(|raw| {
+        serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| {
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+    });
+
     ParsedOptions {
         compute_embeddings: has_task("embeddings"),
         compute_faces: has_task("faces"),
@@ -96,7 +126,30 @@ fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         catalog_id,
         provider: fields.get("provider").cloned(),
         model: fields.get("model").cloned(),
+        api_key: fields.get("api_key").cloned(),
         capture_time,
+        metadata_request: MetadataOptions {
+            language: fields
+                .get("language")
+                .cloned()
+                .unwrap_or_else(|| "German".to_string()),
+            temperature: fields
+                .get("temperature")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.2),
+            max_tokens: fields.get("max_tokens").and_then(|s| s.parse().ok()),
+            generate_keywords: bool_field(fields, "generate_keywords", true),
+            generate_caption: bool_field(fields, "generate_caption", true),
+            generate_title: bool_field(fields, "generate_title", true),
+            generate_alt_text: bool_field(fields, "generate_alt_text", true),
+            submit_keywords: bool_field(fields, "submit_keywords", false),
+            submit_folder_names: bool_field(fields, "submit_folder_names", false),
+            existing_keywords,
+            folder_names: fields.get("folder_names").cloned(),
+            user_context: fields.get("user_context").cloned(),
+            ollama_base_url: fields.get("ollama_base_url").cloned(),
+            lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+        },
     }
 }
 
@@ -214,15 +267,24 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
     }
 
     let total = triplets.len();
+
+    // Matches process_image_task's early, whole-batch failure: metadata
+    // generation with no model configured can't succeed for any photo.
+    if options.compute_metadata && options.model.as_deref().unwrap_or("").is_empty() {
+        let msg = "AI metadata generation requires an LLM model to be configured. \
+                    Disable 'AI metadata' in the indexing dialog or select a model. ";
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": msg})),
+        )
+            .into_response();
+    }
+
     let mut success_count = 0usize;
     let mut failure_count = conversion_errors.len();
     let mut error_messages = conversion_errors;
     let mut warnings: Vec<String> = Vec::new();
 
-    if options.compute_metadata {
-        warnings
-            .push("AI metadata generation is not yet available in this backend build.".to_string());
-    }
     if options.compute_vertexai {
         warnings
             .push("Vertex AI embeddings are not yet available in this backend build.".to_string());
@@ -408,6 +470,60 @@ async fn index_one(
         }
     }
 
+    if options.compute_metadata {
+        let has_any_metadata = ["title", "caption", "alt_text", "keywords"]
+            .iter()
+            .any(|k| {
+                existing.as_ref().is_some_and(|r| {
+                    r.metadata
+                        .get(*k)
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                })
+            });
+        let need_metadata = options.regenerate_metadata || !has_any_metadata;
+        if need_metadata {
+            match generate_metadata_for_photo(options, image_bytes, photo_id).await {
+                Ok(response) => {
+                    if !response.success {
+                        return Err(response
+                            .error
+                            .unwrap_or_else(|| "Unknown metadata generation error".to_string()));
+                    }
+                    if let Some(title) = response.title.filter(|s| !s.is_empty()) {
+                        main_metadata.insert("title".into(), json!(title));
+                    }
+                    if let Some(caption) = response.caption.filter(|s| !s.is_empty()) {
+                        main_metadata.insert("caption".into(), json!(caption));
+                    }
+                    if let Some(alt) = response.alt_text.filter(|s| !s.is_empty()) {
+                        main_metadata.insert("alt_text".into(), json!(alt));
+                    }
+                    if let Some(keywords) = response.keywords {
+                        if !matches!(&keywords, Value::Array(a) if a.is_empty())
+                            && !matches!(&keywords, Value::Object(o) if o.is_empty())
+                        {
+                            main_metadata.insert("keywords".into(), json!(keywords.to_string()));
+                        }
+                    }
+                    main_metadata.insert(
+                        "provider".into(),
+                        json!(options.provider.clone().unwrap_or_default()),
+                    );
+                    main_metadata.insert(
+                        "model".into(),
+                        json!(options.model.clone().unwrap_or_default()),
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    main_metadata.insert(
+        "run_date".into(),
+        json!(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+    );
+
     let final_vector = match &new_embedding {
         Some(v) => Some(v.clone()),
         None => existing
@@ -573,4 +689,72 @@ async fn apply_face_aggregate(
         .upsert(IMAGE_TABLE, &[updated])
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Builds a `MetadataGenerationRequest` from the parsed options + this
+/// photo's bytes, dispatches to the configured provider, and returns its
+/// response. `provider` accepts "ollama" or "chatgpt"/"openai"; anything
+/// else (gemini, lmstudio) is a clear error until M8.
+async fn generate_metadata_for_photo(
+    options: &ParsedOptions,
+    image_bytes: &[u8],
+    photo_id: &str,
+) -> Result<lrg_providers::types::MetadataGenerationResponse, String> {
+    let provider = options
+        .provider
+        .as_deref()
+        .unwrap_or("ollama")
+        .to_lowercase();
+    let model = options.model.clone().unwrap_or_default();
+    let mo = &options.metadata_request;
+
+    let location_data = lrg_imaging::location::extract_location_tags(image_bytes);
+    let request = lrg_providers::types::MetadataGenerationRequest {
+        image_data: image_bytes.to_vec(),
+        uuid: photo_id.to_string(),
+        provider: provider.clone(),
+        model,
+        api_key: options.api_key.clone(),
+        generate_keywords: mo.generate_keywords,
+        generate_caption: mo.generate_caption,
+        generate_title: mo.generate_title,
+        generate_alt_text: mo.generate_alt_text,
+        language: mo.language.clone(),
+        temperature: mo.temperature,
+        max_tokens: mo.max_tokens,
+        system_prompt: None,
+        user_prompt: None,
+        submit_keywords: mo.submit_keywords,
+        submit_folder_names: mo.submit_folder_names,
+        existing_keywords: mo.existing_keywords.clone(),
+        location_data,
+        folder_names: mo.folder_names.clone(),
+        user_context: mo.user_context.clone(),
+        date_time: None,
+        keyword_categories: None,
+        bilingual_keywords: false,
+        keyword_secondary_language: None,
+        generate_aliases: false,
+        catalog_keywords: None,
+        ollama_base_url: mo.ollama_base_url.clone(),
+        lmstudio_base_url: mo.lmstudio_base_url.clone(),
+    };
+
+    match provider.as_str() {
+        "ollama" => {
+            let client = lrg_providers::ollama::OllamaProvider::new(mo.ollama_base_url.clone());
+            Ok(client.generate_metadata(&request).await)
+        }
+        "chatgpt" | "openai" => {
+            let api_key = request
+                .api_key
+                .clone()
+                .ok_or_else(|| "OpenAI API not configured".to_string())?;
+            let client = lrg_providers::openai::OpenAiProvider::new(api_key);
+            Ok(client.generate_metadata(&request).await)
+        }
+        other => Err(format!(
+            "Provider '{other}' is not yet available in this backend build (planned for M8)."
+        )),
+    }
 }
