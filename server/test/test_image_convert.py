@@ -1,5 +1,5 @@
 """Tests for utils.image_convert.normalize_image_bytes — the ingestion
-normalization used by /index, /index_base64 and /index_by_reference."""
+normalization used by /index and /index_by_reference."""
 
 import io
 

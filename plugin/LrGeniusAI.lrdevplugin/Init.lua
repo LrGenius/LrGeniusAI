@@ -119,10 +119,6 @@ if _G.prefs.exportQuality == nil then
 	_G.prefs.exportQuality = Defaults.defaultExportQuality
 end
 
-if _G.prefs.usePreviewThumbnails == nil then
-	_G.prefs.usePreviewThumbnails = true
-end
-
 if _G.prefs.showPhotoContextDialog == nil then
 	_G.prefs.showPhotoContextDialog = true
 end

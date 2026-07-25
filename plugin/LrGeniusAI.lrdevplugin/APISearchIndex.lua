@@ -27,7 +27,6 @@ local ENDPOINTS = {
 	INDEX = "/index",
 	EDIT = "/edit",
 	INDEX_BY_REFERENCE = "/index_by_reference",
-	INDEX_BASE64 = "/index_base64",
 	EDIT_BASE64 = "/edit_base64",
 	GROUP_SIMILAR = "/group_similar",
 	CULL = "/cull",
@@ -643,156 +642,6 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 		photoIndex = photoIndex + 1
 	end
 	return photoPaths
-end
-
----
--- Gets a JPEG thumbnail from Lightroom's preview system (must be called from LrTasks async context).
--- Uses photo:requestJpegThumbnail(width, height, callback) and waits for the callback with a timeout.
--- @param photo LrPhoto
--- @param minWidth number Minimum width (long edge); nil = smallest preview.
--- @param minHeight number Optional; if minWidth is set, controls height of returned pixels.
--- @param requestState table|nil Optional state/config with timeoutSeconds.
--- @return string|nil JPEG data string, or nil on failure.
--- @return string|nil Error message when JPEG is nil.
---
-function SearchIndexAPI.getJpegThumbnailForPhoto(photo, minWidth, minHeight, requestState)
-	if not photo then
-		return nil, "Photo is nil"
-	end
-	local result = nil
-	local errResult = nil
-	local done = false
-	local callbackCount = 0
-	local timeoutSeconds = tonumber(requestState and requestState.timeoutSeconds)
-		or tonumber(prefs and prefs.previewThumbnailTimeoutSeconds)
-		or 12
-	local deadline = LrDate.currentTime() + timeoutSeconds
-
-	local callback = function(jpegData, err)
-		callbackCount = callbackCount + 1
-
-		-- Adobe reports that the callback may fire more than once. Prefer the
-		-- first non-empty JPEG payload and otherwise keep waiting until timeout.
-		if jpegData and type(jpegData) == "string" and #jpegData > 0 then
-			result = jpegData
-			errResult = nil
-			done = true
-			return
-		end
-
-		if err and err ~= "" then
-			errResult = err
-		elseif not errResult then
-			errResult = "No thumbnail data"
-		end
-	end
-
-	local requestObj = photo:requestJpegThumbnail(minWidth, minHeight, callback)
-	if not requestObj then
-		return nil, "requestJpegThumbnail failed to start"
-	end
-
-	while not done and LrDate.currentTime() < deadline do
-		if MAC_ENV then
-			LrTasks.yield()
-		else
-			LrTasks.sleep(0.05)
-		end
-	end
-
-	if not done then
-		return nil,
-			string.format("Thumbnail request timed out after %.1fs (callbacks=%d)", timeoutSeconds, callbackCount)
-	end
-	if result and type(result) == "string" and #result > 0 then
-		return result, nil
-	end
-	return nil, errResult or "No thumbnail data"
-end
-
----
--- Analyzes and indexes a single photo using base64-encoded JPEG (e.g. from requestJpegThumbnail).
--- Uses the /index_base64 endpoint; same options as analyzeAndIndexPhoto.
--- @param photoId string
--- @param jpegData string Raw JPEG bytes.
--- @param filename string Display filename for logging.
--- @param options table Same as analyzeAndIndexPhoto.
--- @return boolean success, table|string response or error.
---
-function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, options)
-	if not jpegData or type(jpegData) ~= "string" or #jpegData == 0 then
-		log:error("analyzeAndIndexPhotoBase64: no JPEG data")
-		return false, "No image data provided"
-	end
-	if not photoId or photoId == "" then
-		log:error("Photo ID is missing")
-		return false, "No photo ID provided"
-	end
-
-	options = options or {}
-	local base64Image = LrStringUtils.encodeBase64(jpegData)
-	local url = getBaseUrl() .. ENDPOINTS.INDEX_BASE64
-
-	local body = {
-		image = base64Image,
-		photo_id = photoId,
-		filename = filename or "photo.jpg",
-		catalog_id = getCatalogId(),
-		tasks = options.tasks or {},
-		provider = options.provider,
-		model = options.model,
-		api_key = options.api_key,
-		language = options.language or (prefs and prefs.generateLanguage) or "English",
-		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
-		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
-		replace_ss = tostring(options.replace_ss or false),
-		generate_keywords = tostring(options.generate_keywords or false),
-		generate_caption = tostring(options.generate_caption or false),
-		generate_title = tostring(options.generate_title or false),
-		generate_alt_text = tostring(options.generate_alt_text or false),
-		submit_gps = tostring(options.submit_gps or false),
-		submit_keywords = tostring(options.submit_keywords or false),
-		submit_folder_names = tostring(options.submit_folder_names or false),
-		user_context = options.user_context,
-		gps_coordinates = options.gps_coordinates and JSON:encode(options.gps_coordinates) or nil,
-		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
-		folder_names = options.folder_names,
-		prompt = options.prompt,
-		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
-		bilingual_keywords = tostring(options.bilingual_keywords or false),
-		keyword_secondary_language = options.keyword_secondary_language
-			or (prefs and prefs.keywordSecondaryLanguage)
-			or "English",
-		generate_aliases = tostring(options.generate_aliases or false),
-		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
-		date_time = options.date_time,
-		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
-		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
-		vertex_project_id = options.vertex_project_id,
-		vertex_location = options.vertex_location,
-		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
-	}
-
-	log:trace("Analyzing and indexing photo (base64): " .. tostring(filename) .. " id " .. photoId)
-
-	local response, err = _request("POST", url, body, 720)
-
-	if not response then
-		log:error("Failed to analyze/index photo (base64): " .. tostring(err))
-		return false, err or "Unknown error"
-	end
-	if response.status == "processed" then
-		local success_count = response.success_count or 0
-		if success_count > 0 then
-			log:trace("Successfully processed photo (base64): " .. tostring(filename))
-			return true, response
-		else
-			log:error("Photo processing failed (base64): " .. tostring(filename))
-			return false, response.error or "Processing failed"
-		end
-	end
-	log:error("Unexpected response status (base64): " .. tostring(response.status))
-	return false, "Unexpected response status"
 end
 
 ---
@@ -1807,14 +1656,6 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	-- Opt-in fast path: submit the original file instead of exporting a JPEG.
 	-- Local backend gets just the path; remote backends get the raw upload.
 	local useOriginals = (prefs and prefs.indexSubmitOriginals == true)
-	local previewRequestState = {
-		enabled = (prefs and prefs.usePreviewThumbnails ~= false),
-		timeoutSeconds = tonumber(prefs and prefs.previewThumbnailTimeoutSeconds) or 12,
-		cooldownSeconds = tonumber(prefs and prefs.previewThumbnailCooldownSeconds) or 1,
-		disableAfterConsecutiveTimeouts = tonumber(prefs and prefs.previewThumbnailDisableAfterTimeouts) or 3,
-		consecutiveTimeouts = 0,
-		disabledForRun = false,
-	}
 
 	local errorMessages = {}
 	local warningsList = {}
@@ -2024,10 +1865,6 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 						photoOptions.photo_id = photoId
 
 						local success, indexResponse
-						local usePreviewThumbnails = previewRequestState.enabled
-							and not previewRequestState.disabledForRun
-						local thumbnailSize = tonumber(prefs and prefs.exportSize) or 1024
-						local leafName = LrPathUtils.leafName(filename or "photo.jpg")
 
 						if useOriginals then
 							local originalPath = photo:getRawMetadata("path")
@@ -2053,64 +1890,11 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 											.. filename
 											.. " ("
 											.. tostring(indexResponse)
-											.. "); falling back to preview/export"
+											.. "); falling back to export"
 									)
 								end
 							else
-								log:trace(
-									"Original file not available for " .. filename .. "; falling back to preview/export"
-								)
-							end
-						end
-
-						if not success and usePreviewThumbnails then
-							local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(
-								photo,
-								thumbnailSize,
-								thumbnailSize,
-								previewRequestState
-							)
-							if jpegData and #jpegData > 0 then
-								previewRequestState.consecutiveTimeouts = 0
-								log:trace("Using Lightroom preview for " .. filename)
-								success, indexResponse =
-									SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, leafName, photoOptions)
-							else
-								log:trace(
-									"Preview unavailable for "
-										.. filename
-										.. ", falling back to export: "
-										.. tostring(thumbErr)
-								)
-								if thumbErr and string.find(thumbErr, "timed out", 1, true) then
-									previewRequestState.consecutiveTimeouts = previewRequestState.consecutiveTimeouts
-										+ 1
-									if
-										previewRequestState.consecutiveTimeouts
-										>= previewRequestState.disableAfterConsecutiveTimeouts
-									then
-										previewRequestState.disabledForRun = true
-										log:warn(
-											"Disabling Lightroom preview thumbnails for the rest of this batch after "
-												.. tostring(previewRequestState.consecutiveTimeouts)
-												.. " consecutive timeouts."
-										)
-									else
-										log:trace(
-											"Cooling down preview requests after timeout ("
-												.. tostring(previewRequestState.consecutiveTimeouts)
-												.. "/"
-												.. tostring(previewRequestState.disableAfterConsecutiveTimeouts)
-												.. ")"
-										)
-									end
-
-									if previewRequestState.cooldownSeconds > 0 then
-										LrTasks.sleep(previewRequestState.cooldownSeconds)
-									end
-								else
-									previewRequestState.consecutiveTimeouts = 0
-								end
+								log:trace("Original file not available for " .. filename .. "; falling back to export")
 							end
 						end
 

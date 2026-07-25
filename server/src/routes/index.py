@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import time
@@ -330,66 +329,6 @@ def index_images_batch():
             "failure_count": failure_count,
             "error_messages": error_messages,
             "warnings": warnings,
-        }
-    ), 200
-
-
-@index_bp.route("/index_base64", methods=["POST"])
-def index_images_batch_base64():
-    """
-    Receives a single image base64 encoded, processes it, and indexes it.
-    Returns a 200 OK status once processed.
-    """
-    logger.info("Index base64 request received")
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "No JSON payload provided"}), 400
-
-    # Extract required fields
-    image = data.get("image")
-    photo_id = data.get("photo_id") or data.get("uuid")
-    filename = data.get("filename")
-
-    if not image or not photo_id or not filename:
-        logger.info(f"{image}, {photo_id}, {filename}")
-        return jsonify(
-            {"error": "Missing required fields: image, photo_id, filename"}
-        ), 400
-
-    options = _extract_options(data)
-
-    try:
-        image_bytes, filename = normalize_image_bytes(
-            base64.b64decode(image.encode("ascii")), filename
-        )
-    except UnsupportedImageError as exc:
-        logger.warning(f"Cannot index {filename}: {exc}")
-        return jsonify({"error": str(exc)}), 500
-
-    success_count, failure_count, error_messages, warnings = process_image_task(
-        [(image_bytes, photo_id, filename)], options=options
-    )
-
-    logger.info(
-        f"Batch processing complete. Success: {success_count}, Failures: {failure_count}."
-    )
-
-    if success_count == 0:
-        logger.warning("No images were successfully processed in the batch.")
-        err_msg = "No images were successfully processed"
-        if error_messages:
-            unique_errs = list(dict.fromkeys(error_messages))
-            err_msg += ": " + " | ".join(unique_errs[:5])
-        return jsonify({"error": err_msg}), 500
-
-    return jsonify(
-        {
-            "status": "processed",
-            "success_count": success_count,
-            "failure_count": failure_count,
-            "error_messages": error_messages,
-            "warnings": warnings or [],
         }
     ), 200
 

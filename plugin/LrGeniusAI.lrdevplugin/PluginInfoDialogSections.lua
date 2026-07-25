@@ -22,7 +22,6 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	propertyTable.exportSize = prefs.exportSize
 	propertyTable.exportQuality = prefs.exportQuality
-	propertyTable.usePreviewThumbnails = (prefs.usePreviewThumbnails ~= false)
 	propertyTable.indexSubmitOriginals = (prefs.indexSubmitOriginals == true)
 
 	propertyTable.promptTitles = {}
@@ -875,18 +874,18 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:spacer({ width = share("labelWidth") }),
-					f:checkbox({
-						value = bind("usePreviewThumbnails"),
-						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/UsePreviewThumbnails=Use Lightroom previews for faster indexing"
-						),
+					f:radio_button({
+						value = bind("indexSubmitOriginals"),
+						checked_value = false,
+						title = LOC("$$$/LrGeniusAI/PluginInfo/IndexModeExport=Export photos for indexing"),
 					}),
 				}),
 				f:row({
 					fill_horizontal = 1,
 					f:spacer({ width = share("labelWidth") }),
-					f:checkbox({
+					f:radio_button({
 						value = bind("indexSubmitOriginals"),
+						checked_value = true,
 						title = LOC(
 							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginals=Submit original files for fastest indexing (experimental)"
 						),
@@ -1118,7 +1117,6 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		or "us-central1"
 	prefs.exportSize = propertyTable.exportSize
 	prefs.exportQuality = propertyTable.exportQuality
-	prefs.usePreviewThumbnails = (propertyTable.usePreviewThumbnails ~= false)
 	prefs.indexSubmitOriginals = (propertyTable.indexSubmitOriginals == true)
 
 	prefs.prompt = propertyTable.prompt
