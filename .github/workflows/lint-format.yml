@@ -25,3 +25,22 @@ jobs:
         uses: lunarmodules/luacheck@v1
         with:
           args: plugin/LrGeniusAI.lrdevplugin
+
+  format-lint-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-rs
+      - name: Formatting (Rust)
+        working-directory: server-rs
+        run: cargo fmt --all -- --check
+      - name: Linting (Rust)
+        working-directory: server-rs
+        run: cargo clippy --workspace --all-targets -- -D warnings
