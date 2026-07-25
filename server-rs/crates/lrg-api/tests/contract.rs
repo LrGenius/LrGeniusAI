@@ -232,3 +232,58 @@ async fn unknown_raw_log_type_returns_404() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn check_unprocessed_reports_only_missing_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    let db_path_str = db_path.to_str().unwrap().to_string();
+
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    // p1: fully processed (embedding + cull_phash). p2: metadata-only.
+    let mut done = serde_json::Map::new();
+    done.insert("has_embedding".into(), serde_json::json!(true));
+    done.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+    let mut pending = serde_json::Map::new();
+    pending.insert("has_embedding".into(), serde_json::json!(false));
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                lrg_store::StoreRecord {
+                    id: "p1".into(),
+                    vector: Some(vec![0.1; 1152]),
+                    metadata: done,
+                },
+                lrg_store::StoreRecord {
+                    id: "p2".into(),
+                    vector: None,
+                    metadata: pending,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/index/check-unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"photo_ids": ["p1", "p2", "p3"], "tasks": "embeddings",
+                        "regenerate_metadata": "false", "db_path": "{db_path_str}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    // p1 is complete; p2 lacks an embedding; p3 is unknown.
+    assert_eq!(json["photo_ids"], serde_json::json!(["p2", "p3"]));
+    assert_eq!(json["uuids"], json["photo_ids"]);
+}

@@ -266,6 +266,40 @@ impl Store {
         Ok(())
     }
 
+    /// Like `get`, but returns only id + metadata (no vector deserialization).
+    pub async fn get_meta(
+        &self,
+        table: &str,
+        ids: &[String],
+    ) -> Result<Vec<(String, Map<String, Value>)>> {
+        let tbl = self.table(table).await?;
+        let mut out = Vec::new();
+        for chunk in ids.chunks(GET_IDS_CHUNK_SIZE) {
+            let list = chunk
+                .iter()
+                .map(|s| sql_quote(s))
+                .collect::<Vec<_>>()
+                .join(",");
+            let batches: Vec<RecordBatch> = tbl
+                .query()
+                .only_if(format!("id IN ({list})"))
+                .select(lancedb::query::Select::Columns(vec![
+                    "id".to_string(),
+                    "metadata".to_string(),
+                ]))
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+            for batch in &batches {
+                for record in batch_to_records(batch) {
+                    out.push((record.id, record.metadata));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Stream id + metadata for every row (no vectors), the workhorse behind
     /// get_all_image_ids / sync_cleanup / stats.
     pub async fn scan_meta(&self, table: &str) -> Result<Vec<(String, Map<String, Value>)>> {

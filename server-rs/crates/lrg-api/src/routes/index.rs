@@ -25,6 +25,187 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/remove/metadata", post(remove_metadata))
         .route("/sync/claim", post(sync_claim))
         .route("/sync/cleanup", post(sync_cleanup))
+        .route("/index/check-unprocessed", post(check_unprocessed))
+}
+
+/// Port of `get_photo_ids_needing_processing` + the option subset that
+/// matters for the delta check (tasks, regenerate_metadata, catalog_id).
+async fn check_unprocessed(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    let photo_ids: Vec<String> = data
+        .get("photo_ids")
+        .or_else(|| data.get("uuids"))
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .filter_map(|s| meta::normalize_photo_id(Some(s), None))
+                .collect()
+        })
+        .unwrap_or_default();
+    if photo_ids.is_empty() {
+        return Json(json!({"photo_ids": [], "uuids": []})).into_response();
+    }
+
+    // tasks: JSON array, comma string, or list; default ["embeddings"].
+    let tasks: Vec<String> = match data.get("tasks") {
+        Some(Value::String(s)) if !s.is_empty() => {
+            if s.starts_with('[') {
+                serde_json::from_str::<Vec<String>>(s)
+                    .unwrap_or_else(|_| s.split(',').map(|t| t.trim().to_string()).collect())
+            } else {
+                s.split(',').map(|t| t.trim().to_string()).collect()
+            }
+        }
+        Some(Value::Array(list)) if !list.is_empty() => list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => vec!["embeddings".to_string()],
+    };
+    let has_task = |t: &str| tasks.iter().any(|x| x == t);
+    let compute_embeddings = has_task("embeddings");
+    let compute_metadata = has_task("metadata");
+    let compute_faces = has_task("faces");
+    let compute_vertexai = has_task("vertexai");
+    let any_task = compute_embeddings || compute_metadata || compute_faces || compute_vertexai;
+
+    let regenerate_metadata = data
+        .get("regenerate_metadata")
+        .or_else(|| data.get("regenerateMetadata"))
+        .map(|v| match v {
+            Value::String(s) => s.to_lowercase() == "true",
+            Value::Bool(b) => *b,
+            other => other.to_string().to_lowercase() == "true",
+        })
+        .unwrap_or(true);
+    let catalog_id = data
+        .get("catalog_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let Some(store) = state.store() else {
+        // No store bound: everything needs processing (matches empty existing).
+        return Json(json!({"photo_ids": photo_ids, "uuids": photo_ids})).into_response();
+    };
+
+    let result: Result<Vec<String>, String> = async {
+        // Single batch query replaces N individual gets (get_images_batch).
+        let mut existing: Map<String, Value> = Map::new();
+        for (id, m) in store
+            .get_meta(IMAGE_TABLE, &photo_ids)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if let Some(cat) = catalog_id {
+                if !meta::parse_catalog_ids(&m).contains(cat) {
+                    continue;
+                }
+            }
+            existing.insert(id, Value::Object(m));
+        }
+
+        let mut vertex_present: std::collections::HashSet<String> = Default::default();
+        if compute_vertexai && !regenerate_metadata {
+            vertex_present = store
+                .get_meta(VERTEX_TABLE, &photo_ids)
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+        }
+
+        let mut faces_checked: std::collections::HashSet<String> = Default::default();
+        if compute_faces && !regenerate_metadata {
+            let wanted: std::collections::HashSet<&str> =
+                photo_ids.iter().map(String::as_str).collect();
+            // Photos with stored faces...
+            for (_, m) in store
+                .scan_meta(FACE_TABLE)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                if let Some(pid) = m.get("photo_id").and_then(Value::as_str) {
+                    if wanted.contains(pid) {
+                        faces_checked.insert(pid.to_string());
+                    }
+                }
+            }
+            // ...plus photos flagged faces_checked (no faces found).
+            for (id, obj) in &existing {
+                if obj
+                    .get("faces_checked")
+                    .is_some_and(|v| v.as_bool().unwrap_or(false) || v == "true")
+                {
+                    faces_checked.insert(id.clone());
+                }
+            }
+        }
+
+        let needing: Vec<String> = photo_ids
+            .iter()
+            .filter(|pid| {
+                let m = existing
+                    .get(*pid)
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                let has_flag = |k: &str| {
+                    m.get(k).is_some_and(|v| match v {
+                        Value::String(s) => !s.is_empty(),
+                        Value::Bool(b) => *b,
+                        Value::Null => false,
+                        _ => true,
+                    })
+                };
+                let needs_embedding =
+                    compute_embeddings && (regenerate_metadata || !has_flag("has_embedding"));
+                let has_any_metadata = has_flag("title")
+                    || has_flag("caption")
+                    || has_flag("alt_text")
+                    || has_flag("keywords");
+                let needs_metadata = compute_metadata && (regenerate_metadata || !has_any_metadata);
+                let needs_faces =
+                    compute_faces && (regenerate_metadata || !faces_checked.contains(*pid));
+                let needs_vertexai =
+                    compute_vertexai && (regenerate_metadata || !vertex_present.contains(*pid));
+                let needs_cull_phash = any_task && (regenerate_metadata || !has_flag("cull_phash"));
+                needs_embedding
+                    || needs_metadata
+                    || needs_faces
+                    || needs_vertexai
+                    || needs_cull_phash
+            })
+            .cloned()
+            .collect();
+        Ok(needing)
+    }
+    .await;
+
+    match result {
+        Ok(needing) => {
+            log::info!(
+                "check-unprocessed: {} of {} photos need processing",
+                needing.len(),
+                photo_ids.len()
+            );
+            Json(json!({"photo_ids": needing, "uuids": needing})).into_response()
+        }
+        Err(e) => {
+            log::error!("check-unprocessed failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e, "results": null, "warning": null})),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Port of `chroma_service.sync_claim`: add catalog_id to each photo's
