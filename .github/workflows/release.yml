@@ -66,7 +66,13 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          if [[ "$VERSION" == v[0-9]* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            # workflow_dispatch dry runs off a branch (no version tag) — fall
+            # back to the same dev version the binary itself defaults to.
+            VERSION="0.0.0-dev"
+          fi
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
           REVISION=$(echo "$VERSION" | cut -d. -f3)
@@ -85,7 +91,14 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          if [[ "$VERSION" == v[0-9]* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            # workflow_dispatch dry runs off a branch (no version tag) — fall
+            # back to the same dev version the binary itself defaults to, so
+            # the plugin<->backend version-check contract test still passes.
+            VERSION="0.0.0-dev"
+          fi
           BUILD_DATE=$(date +%Y%m%d)
           {
             echo "LRG_BACKEND_VERSION=${VERSION}"
@@ -200,7 +213,11 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          if [[ "$VERSION" == v[0-9]* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
           echo "Building macOS .pkg installer..."
           chmod +x installers/macos/build_pkg.sh
           ./installers/macos/build_pkg.sh "$VERSION" "${{ matrix.arch }}"
@@ -211,7 +228,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          if [[ "$VERSION" == v[0-9]* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
           PKG_PATH="LrGeniusAI-macos-${{ matrix.arch }}-${VERSION}.pkg"
           KEY_PATH="$RUNNER_TEMP/notary_key.p8"
           echo "$APPLE_NOTARIZATION_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
@@ -266,7 +287,11 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          if [[ "$VERSION" == v[0-9]* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
           echo "Building Windows .exe installer with Inno Setup..."
           # Inno Setup is pre-installed on windows-latest
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
@@ -403,7 +428,11 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          if [[ "$VERSION" == v[0-9]* ]]; then
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
           REVISION=$(echo "$VERSION" | cut -d. -f3)
