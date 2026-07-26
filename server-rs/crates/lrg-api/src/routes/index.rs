@@ -125,13 +125,15 @@ async fn check_unprocessed(
         if compute_faces && !regenerate_metadata {
             let wanted: std::collections::HashSet<&str> =
                 photo_ids.iter().map(String::as_str).collect();
-            // Photos with stored faces...
-            for (_, m) in store
-                .scan_meta(FACE_TABLE)
+            // Photos with stored faces: face ids are always `{photo_id}_{n}`,
+            // so an id-only scan (no metadata decode, no base64 thumbnails)
+            // is enough to know which wanted photos have one.
+            for id in store
+                .scan_ids(FACE_TABLE)
                 .await
                 .map_err(|e| e.to_string())?
             {
-                if let Some(pid) = m.get("photo_id").and_then(Value::as_str) {
+                if let Some((pid, _)) = id.rsplit_once('_') {
                     if wanted.contains(pid) {
                         faces_checked.insert(pid.to_string());
                     }

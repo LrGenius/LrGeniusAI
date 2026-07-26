@@ -394,6 +394,33 @@ impl Store {
         Ok(out)
     }
 
+    /// Every row's id, and nothing else — no vector, no metadata (so no
+    /// base64 thumbnail decode on FACE_TABLE). For callers that only need
+    /// id membership/existence, this is far cheaper than `scan_meta` on a
+    /// table whose metadata blobs are large.
+    pub async fn scan_ids(&self, table: &str) -> Result<Vec<String>> {
+        let tbl = self.table(table).await?;
+        let batches: Vec<RecordBatch> = tbl
+            .query()
+            .select(lancedb::query::Select::Columns(vec!["id".to_string()]))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        let mut out = Vec::new();
+        for batch in &batches {
+            if let Some(ids) = batch
+                .column_by_name("id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            {
+                for i in 0..ids.len() {
+                    out.push(ids.value(i).to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Stream id + metadata for every row (no vectors), the workhorse behind
     /// get_all_image_ids / sync_cleanup / stats.
     pub async fn scan_meta(&self, table: &str) -> Result<Vec<(String, Map<String, Value>)>> {
@@ -548,6 +575,12 @@ mod tests {
         assert!(rows
             .iter()
             .all(|(_, m)| m["catalog_ids"] == json!("[\"cat_1\"]")));
+
+        let mut ids = store.scan_ids(IMAGE_TABLE).await.unwrap();
+        ids.sort();
+        let mut expected: Vec<String> = (0..25).map(|i| format!("p{i}")).collect();
+        expected.sort();
+        assert_eq!(ids, expected);
     }
 
     #[tokio::test]
