@@ -115,6 +115,21 @@ fn downscale(image: DynamicImage, max_long_edge: u32) -> DynamicImage {
     DynamicImage::ImageRgb8(dst)
 }
 
+/// Decodes with the `image` crate's default 512 MiB decode-allocation cap
+/// disabled. That cap is meant for untrusted uploads; `data` here is
+/// always the user's own trusted Lightroom catalog file (read from a
+/// server-side path or an already-open multipart body), so the cap just
+/// silently rejects legitimate large scans/panoramas — e.g. a 16-bit
+/// medium-format TIFF comfortably exceeds it. RAW decoding via `rawler`
+/// already has no such cap, so this matches that trust level rather than
+/// introducing a new one.
+fn decode_without_alloc_cap<R: std::io::BufRead + std::io::Seek>(
+    mut reader: ImageReader<R>,
+) -> image::ImageResult<DynamicImage> {
+    reader.no_limits();
+    reader.decode()
+}
+
 fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, UnsupportedImageError> {
     let rgb = image.to_rgb8();
     let mut out = Cursor::new(Vec::new());
@@ -199,10 +214,10 @@ pub fn normalize_image_bytes(
         return Ok((data.to_vec(), filename.to_string()));
     }
 
-    let decoded = ImageReader::new(Cursor::new(data))
+    let reader = ImageReader::new(Cursor::new(data))
         .with_guessed_format()
-        .map(|r| r.decode())
-        .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?
+        .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?;
+    let decoded = decode_without_alloc_cap(reader)
         .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?;
 
     let oriented = match exif_orientation(data) {
@@ -253,6 +268,46 @@ mod tests {
         assert!(normalize_image_bytes(b"x", Some("a.mp4"), 2048, 85).is_err());
         assert!(normalize_image_bytes(b"not an image", Some("a.jpg"), 2048, 85).is_err());
         assert!(normalize_image_bytes(b"", Some("a.jpg"), 2048, 85).is_err());
+    }
+
+    /// A real-world TIFF (16-bit medium-format scan) exceeded the `image`
+    /// crate's default 512 MiB decode-allocation cap and was silently
+    /// skipped during indexing — see `decode_without_alloc_cap`, which
+    /// `normalize_image_bytes` now decodes through instead of a bare
+    /// `reader.decode()`.
+    ///
+    /// Reproducing the real trigger needs a 512+ MiB pixel buffer, which
+    /// is far too slow for a debug-mode unit test (~100s). Instead this
+    /// pins the mechanism on a tiny image: pre-set an artificially low
+    /// cap on the reader (standing in for the default 512 MiB one a real
+    /// oversized file would hit) and confirm `decode_without_alloc_cap` —
+    /// the exact function production code calls — ignores it. Regresses
+    /// (fails) if that function's `no_limits()` call is ever dropped.
+    #[test]
+    fn decode_without_alloc_cap_ignores_a_preset_cap() {
+        let data = png_bytes(64, 64);
+
+        let mut reader = ImageReader::new(Cursor::new(data.clone()))
+            .with_guessed_format()
+            .unwrap();
+        let mut tiny_cap = image::Limits::default();
+        tiny_cap.max_alloc = Some(1);
+        reader.limits(tiny_cap.clone());
+        // Sanity check: pins that this cap really does trigger the same
+        // "Memory limit exceeded" error seen in the field, i.e. that this
+        // test would actually catch a regression rather than passing
+        // vacuously because `tiny_cap` stopped doing anything.
+        let err = reader.decode().unwrap_err().to_string();
+        assert!(
+            err.contains("Memory limit exceeded"),
+            "expected the allocation-cap error, got: {err}"
+        );
+
+        let mut reader = ImageReader::new(Cursor::new(data))
+            .with_guessed_format()
+            .unwrap();
+        reader.limits(tiny_cap);
+        assert!(decode_without_alloc_cap(reader).is_ok());
     }
 
     #[test]
