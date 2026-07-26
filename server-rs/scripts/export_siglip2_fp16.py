@@ -42,11 +42,21 @@ fp32.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import sys
 from pathlib import Path
 
 import numpy as np
+
+# A bare "Process completed with exit code 139" (SIGSEGV) with no
+# traceback is otherwise all CI gives us for a native crash in
+# torch/onnxruntime. faulthandler dumps the interpreter's current Python
+# stack on a fatal signal, which at least says which line was running.
+faulthandler.enable()
+# Line-buffer stdout so progress prints actually reach the CI log before
+# a native crash, instead of sitting lost in a block buffer.
+sys.stdout.reconfigure(line_buffering=True)
 
 MODEL_NAME = "ViT-SO400M-16-SigLIP2-384"
 IMAGE_SIZE = 384
@@ -209,12 +219,27 @@ def _make_golden_image(name: str) -> np.ndarray:
 def verify(output_dir: Path, goldens_path: Path, preprocess=None) -> bool:
     import onnxruntime as ort
 
+    # Leaving intra/inter_op_num_threads on ONNX Runtime's default
+    # (auto-detect from visible CPU count) is a known segfault trigger
+    # on cgroup/cpuset-restricted hosts, where the visible core count
+    # doesn't match the actual scheduling quota — exactly the situation
+    # on GitHub Actions runners. See microsoft/onnxruntime#7207: pinning
+    # both to a small explicit value is the confirmed fix across that
+    # whole issue thread.
+    session_options = ort.SessionOptions()
+    session_options.intra_op_num_threads = 1
+    session_options.inter_op_num_threads = 1
+
     goldens = json.loads(goldens_path.read_text())
     image_sess = ort.InferenceSession(
-        str(output_dir / "siglip2_image_fp16.onnx"), providers=["CPUExecutionProvider"]
+        str(output_dir / "siglip2_image_fp16.onnx"),
+        sess_options=session_options,
+        providers=["CPUExecutionProvider"],
     )
     text_sess = ort.InferenceSession(
-        str(output_dir / "siglip2_text_fp16.onnx"), providers=["CPUExecutionProvider"]
+        str(output_dir / "siglip2_text_fp16.onnx"),
+        sess_options=session_options,
+        providers=["CPUExecutionProvider"],
     )
 
     ok = True
