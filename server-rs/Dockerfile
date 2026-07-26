@@ -15,10 +15,14 @@ WORKDIR /app
 # pkg-config + libssl-dev: openssl-sys (reqwest's native-tls, ureq in ort-sys)
 # links against the system OpenSSL rather than vendoring it.
 # protobuf-compiler: prost-build (pulled in transitively by lancedb/lance).
+# libprotobuf-dev: ships the well-known-types .proto files (google/protobuf/empty.proto
+# etc.) under /usr/include — protobuf-compiler only provides the protoc binary itself,
+# and lance-encoding's build script imports empty.proto.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     protobuf-compiler \
+    libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Baked in via option_env!() at compile time (lrg-common::version) — same
