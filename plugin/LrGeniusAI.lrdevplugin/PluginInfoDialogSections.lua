@@ -849,7 +849,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					fill_horizontal = 1,
 					f:static_text({
 						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected,\nlocation keywords from Lightroom's address lookup are unavailable, and results may\ndiffer slightly from photos indexed the classic way. Re-index to keep search consistent."
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected. Location\ndata from Lightroom's address lookup is read from the .xmp sidecar next to the file when\none exists (enable 'Automatically write changes into XMP', or save metadata to file first);\notherwise it is unavailable. Results may differ slightly from photos indexed the classic\nway. Re-index to keep search consistent."
 						),
 						enabled = false,
 					}),

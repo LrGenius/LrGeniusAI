@@ -119,6 +119,7 @@ async fn index_by_reference(
         images.push(UploadedImage {
             bytes: raw,
             filename,
+            source_path: Some(path.clone()),
         });
         photo_ids.push(photo_id);
     }

@@ -167,6 +167,12 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
 pub(crate) struct UploadedImage {
     pub(crate) bytes: Vec<u8>,
     pub(crate) filename: String,
+    /// On-disk path of the original file, when known (set by
+    /// `/index_by_reference`, which reads straight from the catalog's
+    /// files; unset for `/index`'s multipart uploads). Used to look up a
+    /// `.xmp` sidecar for reverse-geocoded location data — see
+    /// `lrg_imaging::location::extract_location`.
+    pub(crate) source_path: Option<String>,
 }
 
 async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
@@ -197,6 +203,7 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
                     Ok(bytes) => images.push(UploadedImage {
                         bytes: bytes.to_vec(),
                         filename,
+                        source_path: None,
                     }),
                     Err(e) => log::warn!("Skipping unreadable image field: {e}"),
                 }
@@ -299,10 +306,11 @@ pub(crate) async fn process_batch(
     let max_edge = lrg_imaging::convert::default_max_long_edge();
     let quality = lrg_imaging::convert::default_jpeg_quality();
 
-    let mut triplets: Vec<(Vec<u8>, String, String)> = Vec::new();
+    let mut triplets: Vec<(Vec<u8>, String, String, Option<String>)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
     for (img, photo_id) in images.into_iter().zip(photo_ids) {
         let t0 = Instant::now();
+        let source_path = img.source_path.clone();
         let result = normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality);
         log::debug!(
             "Photo {photo_id} ({}): decode+resize+encode took {:?}",
@@ -310,7 +318,7 @@ pub(crate) async fn process_batch(
             t0.elapsed()
         );
         match result {
-            Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename)),
+            Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename, source_path)),
             Err(UnsupportedImageError(msg)) => {
                 log::warn!("Skipping {}: {msg}", img.filename);
                 conversion_errors.push(msg);
@@ -357,7 +365,7 @@ pub(crate) async fn process_batch(
 
     let store = state.store();
 
-    for (image_bytes, photo_id, filename) in triplets {
+    for (image_bytes, photo_id, filename, source_path) in triplets {
         let result = index_one(
             &state,
             store.as_ref(),
@@ -365,6 +373,7 @@ pub(crate) async fn process_batch(
             &image_bytes,
             &photo_id,
             &filename,
+            source_path.as_deref(),
         )
         .await;
         match result {
@@ -427,6 +436,7 @@ async fn index_one(
     image_bytes: &[u8],
     photo_id: &str,
     filename: &str,
+    source_path: Option<&str>,
 ) -> Result<Option<String>, String> {
     let Some(store) = store else {
         return Err("database not initialized (no db_path bound)".to_string());
@@ -550,7 +560,7 @@ async fn index_one(
             });
         let need_metadata = options.regenerate_metadata || !has_any_metadata;
         if need_metadata {
-            match generate_metadata_for_photo(options, image_bytes, photo_id).await {
+            match generate_metadata_for_photo(options, image_bytes, photo_id, source_path).await {
                 Ok(response) => {
                     if !response.success {
                         return Err(response
@@ -792,6 +802,7 @@ async fn generate_metadata_for_photo(
     options: &ParsedOptions,
     image_bytes: &[u8],
     photo_id: &str,
+    source_path: Option<&str>,
 ) -> Result<lrg_providers::types::MetadataGenerationResponse, String> {
     let provider = options
         .provider
@@ -801,7 +812,7 @@ async fn generate_metadata_for_photo(
     let model = options.model.clone().unwrap_or_default();
     let mo = &options.metadata_request;
 
-    let location_data = lrg_imaging::location::extract_location_tags(image_bytes);
+    let location_data = lrg_imaging::location::extract_location(source_path, image_bytes);
     let request = lrg_providers::types::MetadataGenerationRequest {
         image_data: image_bytes.to_vec(),
         uuid: photo_id.to_string(),
