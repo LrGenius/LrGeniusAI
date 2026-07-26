@@ -8,7 +8,7 @@
 # exists — see server-rs/README.md), or the server starts fine but
 # /index and /faces/detect fail until the files are in place.
 
-FROM rust:1-bookworm AS builder
+FROM rust:1-trixie AS builder
 
 WORKDIR /app
 
@@ -46,7 +46,7 @@ RUN mkdir -p /out && \
     cp -L target/release/geniusai-server /out/ && \
     find target/release -maxdepth 1 \( -name '*.so*' -o -name '*.dylib' \) -exec cp -L {} /out/ \;
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
