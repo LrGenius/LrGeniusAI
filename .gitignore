@@ -32,6 +32,7 @@ data/
 models/
 docker-compose.yml
 .claude/settings.local.json
+.claude/settings.json
 .claude/sessions/
 .claude/logs/
 .claude/mcp-settings.json
