@@ -70,12 +70,37 @@ async fn version_returns_backend_info() {
 
 #[tokio::test]
 async fn version_check_dev_fallback() {
+    // Dev fallback (backend "dev" + plugin placeholder 9.9.9 accepted) only
+    // applies when this binary was actually built without LRG_BACKEND_*
+    // baked in (e.g. the release workflow sets those from the git tag before
+    // running this same test suite, so 9.9.9 is correctly incompatible
+    // there). Derive the expectation from the backend's own reported
+    // version instead of assuming a dev build.
     let (app, _) = fresh_app();
+
+    let version_response = app
+        .clone()
+        .oneshot(Request::get("/version").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let version_json = body_json(version_response).await;
+    let backend_version = version_json["backend_version"].as_str().unwrap();
+    let backend_release_tag = version_json["backend_release_tag"].as_str().unwrap();
+    let is_dev_backend = backend_version.to_lowercase().contains("dev")
+        || backend_release_tag.to_lowercase().contains("dev");
+    let plugin_version = if is_dev_backend {
+        "9.9.9".to_string()
+    } else {
+        backend_version.to_string()
+    };
+
     let response = app
         .oneshot(
             Request::post("/version/check")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"plugin_version": "9.9.9"}"#))
+                .body(Body::from(format!(
+                    r#"{{"plugin_version": "{plugin_version}"}}"#
+                )))
                 .unwrap(),
         )
         .await
