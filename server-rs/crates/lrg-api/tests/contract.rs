@@ -139,7 +139,9 @@ async fn initialize_writes_handshake_files_and_is_idempotent() {
     let request = |path: &str| {
         Request::post("/initialize")
             .header("content-type", "application/json")
-            .body(Body::from(format!(r#"{{"db_path": "{path}"}}"#)))
+            .body(Body::from(
+                serde_json::json!({ "db_path": path }).to_string(),
+            ))
             .unwrap()
     };
 
@@ -177,9 +179,13 @@ async fn middleware_auto_binds_db_path_from_json_body() {
         .oneshot(
             Request::post("/version/check")
                 .header("content-type", "application/json")
-                .body(Body::from(format!(
-                    r#"{{"plugin_version": "9.9.9", "db_path": "{db_path_str}"}}"#
-                )))
+                .body(Body::from(
+                    serde_json::json!({
+                        "plugin_version": "9.9.9",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -297,10 +303,15 @@ async fn check_unprocessed_reports_only_missing_work() {
         .oneshot(
             Request::post("/index/check-unprocessed")
                 .header("content-type", "application/json")
-                .body(Body::from(format!(
-                    r#"{{"photo_ids": ["p1", "p2", "p3"], "tasks": "embeddings",
-                        "regenerate_metadata": "false", "db_path": "{db_path_str}"}}"#
-                )))
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["p1", "p2", "p3"],
+                        "tasks": "embeddings",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
