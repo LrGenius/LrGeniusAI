@@ -404,20 +404,15 @@ async fn remove_image(State(state): State<Arc<AppState>>, body: Option<Json<Valu
             .map_err(|e| e.to_string())?;
         // delete_vertex_image failures are swallowed in Python; same here.
         let _ = store.delete(VERTEX_TABLE, &ids).await;
-        // delete_faces_by_photo_uuid: faces matching photo_id or photo_uuid.
-        let face_rows = store
-            .scan_meta(FACE_TABLE)
-            .await
-            .map_err(|e| e.to_string())?;
-        let face_ids: Vec<String> = face_rows
-            .into_iter()
-            .filter(|(_, m)| {
-                m.get("photo_id").and_then(Value::as_str) == Some(photo_id.as_str())
-                    || m.get("photo_uuid").and_then(Value::as_str) == Some(photo_id.as_str())
-            })
-            .map(|(id, _)| id)
-            .collect();
-        let _ = store.delete(FACE_TABLE, &face_ids).await;
+        // delete_faces_by_photo_uuid: face ids are always `{photo_id}_{n}`
+        // (index_upload.rs stamps both photo_id and photo_uuid to the same
+        // value), so a prefix delete finds them without a full-table
+        // scan_meta — see Store::delete_by_id_prefix for why that scan
+        // (decoding every face's metadata, including its base64 thumbnail,
+        // on every call) was a real memory-growth hazard.
+        let _ = store
+            .delete_by_id_prefix(FACE_TABLE, &format!("{photo_id}_"))
+            .await;
         Ok(())
     }
     .await;
