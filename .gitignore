@@ -18,7 +18,6 @@ build/
 dist/
 models/
 tests/results/*.json
-chroma.sqlite3
 lrgenius-server.log
 lrgenius-server.OK
 lrgenius-server.pid
@@ -31,7 +30,6 @@ data/
 gcloud/
 data/
 models/
-server/gcloud/
 docker-compose.yml
 .claude/settings.local.json
 .claude/sessions/

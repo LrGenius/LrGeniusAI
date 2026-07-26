@@ -5,16 +5,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Linting (Python)
-        uses: astral-sh/ruff-action@v3
-        with:
-          args: "check"
-          src: "./server"
-      - name: Formatting (Python)
-        uses: astral-sh/ruff-action@v3
-        with:
-          args: "format --check --diff"
-          src: "./server"
       - name: Formatting (Lua)
         uses: JohnnyMorganz/stylua-action@v4
         with:

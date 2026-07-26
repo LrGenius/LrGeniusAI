@@ -16,7 +16,7 @@ get wrong.
 
 Run once per release, e.g.:
     cd server-rs
-    uv run --project ../server --with onnxscript \
+    uv run --project scripts --with onnxscript \
         python scripts/export_siglip2_fp16.py --output-dir /tmp/siglip2-export
 
 (`--with onnxscript`: torch >=2.9's `torch.onnx.export` imports it
@@ -26,7 +26,7 @@ which is why it's a `uv run --with` flag rather than `uv add`.)
 
 Then verify the exported fp16 model against the fp32 torch goldens —
 this half only needs onnxruntime/numpy/tokenizers, no torch:
-    uv run --project ../server python scripts/export_siglip2_fp16.py --verify-only --output-dir /tmp/siglip2-export
+    uv run --project scripts python scripts/export_siglip2_fp16.py --verify-only --output-dir /tmp/siglip2-export
 
 Verified end-to-end in development: both towers score cosine
 >0.99999 against the fp32 torch goldens (`testdata/siglip_goldens.json`),

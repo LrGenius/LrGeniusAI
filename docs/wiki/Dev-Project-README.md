@@ -7,10 +7,14 @@
   <p><b>A smart Lightroom Classic plugin for AI-powered tagging, describing, semantic search, and develop edits.</b></p>
   
   [![Lua](https://img.shields.io/badge/Lua-2C2D72?style=for-the-badge&logo=lua&logoColor=white)]()
-  [![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)]()
+  [![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)]()
   [![Website](https://img.shields.io/badge/Website-lrgenius.com-00B2FF?style=for-the-badge)]()
   [![Downloads](https://img.shields.io/github/downloads/LrGenius/LrGeniusAI/total?style=for-the-badge&label=Downloads)](https://github.com/LrGenius/LrGeniusAI/releases)
 </div>
+
+---
+
+> **Note:** The lead developer is currently [taking a break from open-source development](https://blog.fokuspunk.de/posts/taking-a-break-from-open-source/). The project remains available, but active maintenance is paused.
 
 ---
 
@@ -35,7 +39,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 - **📝 Photo Context (Contextual Info):** Provide manual hints to the AI before analysis (e.g., names of people or specific background details) that aren't immediately obvious from the image itself. This can be done via a popup dialog or directly in Lightroom's metadata panel.
 - **🗂️ Keyword Management:** Interactive synonym deduplication and automatic de-clutter during indexing to keep your keyword catalog clean.
 - **🎓 Style Training:** Save your own Lightroom edits as AI training examples to teach the AI your personal editing style.
-- **🗄️ Custom Python Backend & Database:** The plugin utilizes a high-performance local server (`geniusai-server`). Existing metadata from your Lightroom catalog can easily be imported prior to the first AI analysis.
+- **🗄️ Custom Backend & Database:** The plugin utilizes a high-performance local server (`geniusai-server`), written in Rust for low memory overhead. Existing metadata from your Lightroom catalog can easily be imported prior to the first AI analysis.
 
 ---
 
@@ -75,10 +79,10 @@ This project is built on the belief that AI tooling for creatives should remain 
 ## 🛠️ Tech Stack
 
 - **Frontend / Lightroom Plugin:** Lua (Lightroom SDK)
-- **Backend / Server:** Python (`geniusai-server`) / Flask / Waitress
-- **AI & Embedding:** Open-CLIP (SigLIP2), PyTorch, ONNX Runtime
-- **Identity & Faces:** InsightFace
-- **Database:** ChromaDB (Vector Search), SQLite (Metadata & Cache)
+- **Backend / Server:** `geniusai-server` — Rust (axum) for deterministic memory behavior
+- **AI & Embedding:** SigLIP2 via ONNX Runtime (`ort` crate)
+- **Identity & Faces:** InsightFace (ONNX)
+- **Database:** LanceDB
 - **Supported Interfaces:** Google Gemini, Vertex AI, ChatGPT/OpenAI, Ollama, LM-Studio
 
 
@@ -97,6 +101,6 @@ Developed with a passion for photography and IT by:
 - **Community** – *Special thanks to all contributors and testers for your valuable input and support.*
 - **Various AI agents** - *For the great support in developing this project.*
 
-This project leverages many incredible open-source libraries, including **InsightFace**, **OpenCLIP**, **PyTorch**, **Hugging Face Transformers**, **ChromaDB**, and **Flask**. 
+This project leverages many incredible open-source libraries, including **InsightFace**, **ONNX Runtime**, and **LanceDB**. 
 
 A huge thank you to the open-source community and the developers of the underlying AI frameworks that make this integration possible!

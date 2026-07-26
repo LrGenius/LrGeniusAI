@@ -463,14 +463,14 @@ jobs:
       - name: Export fp16 SigLIP2 (image + text towers + tokenizer)
         run: |
           set -euo pipefail
-          uv run --project server --with onnxscript \
+          uv run --project server-rs/scripts --with onnxscript \
             python server-rs/scripts/export_siglip2_fp16.py --output-dir model-assets
           echo "=== Exported model assets ==="
           ls -lh model-assets/
 
       - name: Verify exported fp16 model against torch goldens
         run: |
-          uv run --project server \
+          uv run --project server-rs/scripts \
             python server-rs/scripts/export_siglip2_fp16.py --verify-only --output-dir model-assets
 
       - name: Upload model assets

@@ -256,7 +256,7 @@ Returns aggregate database statistics:
 - total persons
 
 ### `GET /db/backup`
-Creates and streams a ZIP backup of the full persistent data directory (ChromaDB, SQLite, config files).
+Creates and streams a ZIP backup of the full persistent LanceDB data directory.
 
 ### `POST /db/migrate-photo-ids`
 One-time migration endpoint: converts legacy Lightroom UUID-based IDs to `photo_id` values.

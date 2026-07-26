@@ -1,11 +1,10 @@
 # LrGeniusAI Backend Server (Rust)
 
-This is the Rust rewrite of the LrGeniusAI backend, replacing the Python
-server under [`../server`](../server). It's a single binary
-(`geniusai-server`) that speaks the exact same HTTP API the Lightroom
-plugin already expects — see [../CLAUDE.md](../CLAUDE.md) for the
-architecture overview and [`docs/wiki/Dev-Backend-API.md`](../docs/wiki/Dev-Backend-API.md)
-for the endpoint reference.
+This is the LrGeniusAI backend. It's a single binary (`geniusai-server`)
+that speaks the HTTP API the Lightroom plugin expects — see
+[../CLAUDE.md](../CLAUDE.md) for the architecture overview and
+[`docs/wiki/Dev-Backend-API.md`](../docs/wiki/Dev-Backend-API.md) for the
+endpoint reference.
 
 Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
@@ -30,8 +29,7 @@ both be clean before sending changes.
 ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
 `tokenizer.json`) from this running binary's own matching GitHub release
 (`LRG_BACKEND_RELEASE_TAG`) and place them at the `LRG_SIGLIP_*` paths
-below — this is the Rust equivalent of Python's `/clip/download/start`,
-just pulling CI-exported ONNX assets from a release instead of the fp32
+below, pulling CI-exported ONNX assets from a release instead of the fp32
 checkpoint from Hugging Face.
 
 **There is no signed release with those assets attached yet**, so right
@@ -42,7 +40,7 @@ with the same script that CI job runs:
 
 ```bash
 cd server-rs
-uv run --project ../server --with onnxscript \
+uv run --project scripts --with onnxscript \
     python scripts/export_siglip2_fp16.py --output-dir /path/to/models/siglip2
 ```
 
@@ -56,7 +54,7 @@ Verify the export against the checked-in goldens (no torch/open_clip
 needed for this half, just onnxruntime/numpy/tokenizers):
 
 ```bash
-uv run --project ../server python scripts/export_siglip2_fp16.py \
+uv run --project scripts python scripts/export_siglip2_fp16.py \
     --verify-only --output-dir /path/to/models/siglip2
 ```
 
@@ -75,10 +73,10 @@ and `~/.cache/lrgenius/models/tokenizer.json`.
 ### InsightFace (face detection/recognition)
 
 No export step needed — `buffalo_l`'s `det_10g.onnx` and `w600k_r50.onnx`
-are already ONNX and are the same files the Python backend used. Point
-`INSIGHTFACE_ROOT` at the directory containing `models/buffalo_l/{det_10g.onnx,w600k_r50.onnx}`
-(default `~/.insightface`, same convention as before — if you previously
-ran the Python backend, the files are very likely already there).
+are already ONNX. Point `INSIGHTFACE_ROOT` at the directory containing
+`models/buffalo_l/{det_10g.onnx,w600k_r50.onnx}` (default `~/.insightface`,
+the same location `insightface`'s own Python library uses, so the files
+are very likely already there if you've used InsightFace before).
 
 ## Docker
 
@@ -97,14 +95,13 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
 
-Not yet ported from the Python backend: the periodic face-clustering and
-database-backup schedulers (`GENIUSAI_FACES_CLUSTER_*` / `GENIUSAI_BACKUP_*`
-env vars documented in [`../server/README.md`](../server/README.md) are
-Python-only for now).
+Not yet implemented: the periodic face-clustering and database-backup
+schedulers — the `GENIUSAI_FACES_CLUSTER_*` / `GENIUSAI_BACKUP_*` env vars
+are currently no-ops here.
 
 ## Status
 
-This backend is under active development on the `rust-rewrite` branch —
-see the plan and progress notes there before assuming a given endpoint or
-feature is fully live. The Python backend at `../server` remains the
-shipping backend until the rewrite is validated end-to-end in Lightroom.
+This is the sole backend implementation (the earlier Python/Flask server
+has been retired). Still under active development on the `rust-rewrite`
+branch — see the plan and progress notes there before assuming a given
+endpoint or feature is fully live.

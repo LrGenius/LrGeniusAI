@@ -18,14 +18,12 @@ By contributing, you agree to abide by the terms of our [LICENSE](LICENSE) (AGPL
 
 ### 2. Set Up the Development Environment
 
-#### Backend (Python)
-We use `uv` for dependency management.
-- Install [uv](https://github.com/astral-sh/uv).
-- Run the setup script:
-  ```bash
-  bash scripts/setup-local-uv-env.sh
-  ```
-- This will create a `.venv`, install dependencies, and set up the environment.
+#### Backend (Rust)
+Standard cargo workspace, no extra tooling beyond `rustup`/`cargo`.
+```bash
+cd server-rs
+cargo build --release -p lrg-server
+```
 
 #### Plugin (Lua)
 - The plugin code is located in the `plugin/LrGeniusAI.lrdevplugin` directory.
@@ -38,7 +36,7 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
   ```bash
   pre-commit install
   ```
-- Now, `ruff` (Python) and `stylua` (Lua) will run automatically on every commit.
+- Now, `stylua` (Lua) and `cargo fmt`/`cargo clippy` (Rust, in `server-rs/`) will run automatically on every commit.
 
 ---
 
@@ -48,7 +46,7 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 - **Error Handling**: All user-facing errors must be surfaced in the Lightroom GUI using `ErrorHandler.handleError`. Avoid silent failures.
 - **Logging**:
     - **Plugin**: Use `log:error`, `log:warn`, `log:info`, and `log:trace`.
-    - **Backend**: Use the configured `logger` and include `exc_info=True` for exceptions.
+    - **Backend**: Use the `log` facade (`log::info!`/`warn!`/`error!`).
 - **Infrastructure**: Update `Dockerfile` and `docker-compose-*.yml` when changing dependencies or environment requirements.
 
 ### Plugin Development (Lua)
@@ -59,13 +57,13 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 - **Utilities**: Use `Util.lua` for common logic.
 - **Photo Identity**: Use `Util.getGlobalPhotoIdForPhoto` (metadata-based) for cross-catalog consistency.
 
-### Backend Development (Python/Flask)
+### Backend Development (Rust)
 - **Structure**:
-    - Endpoints: Use Flask Blueprints (`routes_*.py`).
-    - Business Logic: Keep in the service layer (`service_*.py`).
+    - Routes: `lrg-api::routes`, one axum `Router` per domain.
+    - Business Logic: `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`.
 - **API Response**: Return structured JSON with `results`, `error`, and `warning` fields.
-- **Lifecycle**: Respect `server_lifecycle.py` for PID management.
-- **Formatting**: Format code with `uv run ruff format` and ensure `server/scripts/lint_format.sh` passes.
+- **Lifecycle**: PID file + "OK" signal file handshake, handled in `lrg-common`.
+- **Formatting**: `cargo fmt` and `cargo clippy --workspace --all-targets` must be clean (zero warnings).
 
 ---
 
@@ -78,7 +76,7 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 
 ## ✅ Testing
 - **Smoke Tests**: Run `TaskAutomatedTests.lua` within Lightroom to verify plugin-backend connectivity.
-- **Backend Tests**: Run tests in `server/test/` using `pytest`.
+- **Backend Tests**: `cd server-rs && cargo test --workspace`.
 
 ---
 

@@ -1,19 +1,19 @@
 # Server Guide
 
-The backend (`geniusai-server`) acts as the brains of LrGeniusAI. It runs locally and handles Large Language Model (LLM) inference, image embedding generation, and vector database management. It's being rewritten from Python (Flask/Waitress, OpenCLIP, ChromaDB) to Rust (axum, ONNX Runtime, LanceDB) for lower and more deterministic memory use; both implementations speak the same HTTP API.
+The backend (`geniusai-server`) acts as the brains of LrGeniusAI. It runs locally and handles Large Language Model (LLM) inference, image embedding generation, and vector database management. It's written in Rust (axum, ONNX Runtime, LanceDB) for low and deterministic memory use.
 
 ## Main Documentation
 
-For configuration settings, dependency management, and architecture details, refer to the [`server/README.md`](Dev-Server-README) (Python) or [`server-rs/README.md`](../server-rs/README.md) (Rust, in this repo — not yet mirrored to a wiki page).
+For configuration settings, dependency management, and architecture details, refer to [`server-rs/README.md`](../server-rs/README.md) in this repo.
 
 ## Key Responsibilities
 
 The backend server is responsible for:
-- **Image Indexing:** Offloading heavy ML workloads (like OpenCLIP processing) away from the Lightroom UI.
-- **Semantic Search:** Executing fast, vector-based similarity searches using ChromaDB.
-- **Metadata Persistence:** Keeping a high-performance secondary SQLite database for tags, face matching, and other AI-generated text.
+- **Image Indexing:** Offloading heavy ML workloads (SigLIP2/ONNX Runtime inference) away from the Lightroom UI.
+- **Semantic Search:** Executing fast, vector-based similarity searches using LanceDB.
+- **Metadata Persistence:** Storing tags, face matches, and other AI-generated text alongside the vectors in LanceDB tables.
 - **Face & Person APIs:** Processing and matching facial data to build identity maps over time.
-- **Model Caching:** Automatically downloading and verifying local storage sizes of OpenCLIP and lightweight models to avoid redundant downloads. The `/status` endpoint exposes an `is_model_cached` flag which allows the Lightroom plugin to display warning messages if required assets are missing prior to initiating a task.
+- **Model Caching:** Automatically downloading and verifying local storage of the SigLIP2/InsightFace model files to avoid redundant downloads. The `/status` endpoint exposes an `is_model_cached` flag which allows the Lightroom plugin to display warning messages if required assets are missing prior to initiating a task.
 
 ## Error Handling & Logic
 
@@ -27,7 +27,7 @@ If you are experiencing unexpected backend behavior:
 
 Given the importance of your generated search indexes and AI metadata, the backend exposes a dedicated backup download flow:
 - API endpoint: `GET /db/backup`
-- Output: A comprehensive ZIP archive containing the complete DB directory (Chroma data, SQLite db, and associated JSON files).
+- Output: A comprehensive ZIP archive containing the complete LanceDB data directory.
 
 **To create a backup via Lightroom:**
 Open `File -> Plug-in Manager -> LrGeniusAI -> Backend Server` and click **Download DB backup**.

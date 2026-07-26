@@ -1,0 +1,16 @@
+[project]
+name = "lrg-model-export"
+version = "0.1.0"
+description = "Standalone Python env for exporting/verifying ONNX model assets consumed by the Rust backend (server-rs/lrg-ml). Not part of any shipped backend."
+requires-python = ">=3.12.0"
+dependencies = [
+    "huggingface-hub>=1.12.0",
+    "numpy>=2.4.4",
+    "onnxruntime>=1.25.0",
+    "open-clip-torch>=3.3.0",
+    "pillow>=12.2.0",
+    "timm>=1.0.26",
+    "tokenizers>=0.22.0",
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+]
