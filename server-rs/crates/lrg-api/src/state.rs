@@ -71,14 +71,22 @@ impl AppState {
     /// Background maintenance: idle-unloads ML models and compacts the
     /// LanceDB tables, so a long indexing run doesn't accumulate the
     /// per-photo `merge_insert` write amplification (new fragment +
-    /// dataset version per write) indefinitely. Called periodically from
-    /// `lrg-server`'s maintenance loop, never per-request.
+    /// dataset version per write) indefinitely. Called frequently (every
+    /// few seconds) from `lrg-server`'s maintenance loop, never per-request
+    /// — cheap when idle, since the compaction itself only actually runs
+    /// once `Store::pending_write_ops` crosses `COMPACT_WRITE_THRESHOLD`.
+    /// A fixed wall-clock interval alone isn't enough: at "rocket" indexing
+    /// speed a catalog can mint thousands of fragments/versions well
+    /// before a 10-minute tick, which is what let RSS climb unbounded to
+    /// an OOM kill around ~3600 photos.
     pub async fn run_maintenance(&self) {
         self.siglip.unload_if_idle();
         self.face.unload_if_idle();
         if let Some(store) = self.store() {
-            if let Err(e) = store.optimize_all().await {
-                log::warn!("LanceDB maintenance optimize failed: {e}");
+            if store.pending_write_ops() >= lrg_store::COMPACT_WRITE_THRESHOLD {
+                if let Err(e) = store.optimize_all().await {
+                    log::warn!("LanceDB maintenance optimize failed: {e}");
+                }
             }
         }
     }

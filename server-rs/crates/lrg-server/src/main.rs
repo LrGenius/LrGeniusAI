@@ -232,11 +232,16 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
 }
 
 /// Runs `AppState::run_maintenance` (model idle-unload + LanceDB
-/// compaction) every 10 minutes for the life of the process. Runs for the
-/// whole process lifetime — no shutdown wiring needed, it's just dropped
-/// along with the runtime on exit.
+/// compaction) every 30 seconds for the life of the process. The tick
+/// itself is cheap (an atomic-counter check plus two idle-timestamp
+/// checks) — actual LanceDB compaction only fires once enough write ops
+/// have piled up since the last run, so a short interval just bounds how
+/// long a fast indexing run can mint fragments/versions before they get
+/// compacted, without wasting work while idle. Runs for the whole process
+/// lifetime — no shutdown wiring needed, it's just dropped along with the
+/// runtime on exit.
 async fn maintenance_loop(state: Arc<AppState>) {
-    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
     loop {
         tokio::time::sleep(INTERVAL).await;
         state.run_maintenance().await;

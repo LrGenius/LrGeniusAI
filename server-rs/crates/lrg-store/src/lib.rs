@@ -9,6 +9,7 @@
 //! planned M6 optimization.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arrow_array::builder::{FixedSizeListBuilder, Float32Builder, StringBuilder};
@@ -44,6 +45,11 @@ pub const TABLES: [(&str, i32); 4] = [
 /// GET_IDS_CHUNK_SIZE rationale (bounded query size on large catalogs).
 const GET_IDS_CHUNK_SIZE: usize = 1000;
 
+/// LanceDB's own guidance is to compact after ~20+ write ops; the
+/// maintenance loop uses this as the trigger instead of relying solely on
+/// a wall-clock interval (see `Store::write_ops`).
+pub const COMPACT_WRITE_THRESHOLD: u64 = 25;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("lancedb error: {0}")]
@@ -73,6 +79,17 @@ pub struct StoreRecord {
 
 pub struct Store {
     conn: lancedb::Connection,
+    /// Counts `upsert`/`append` calls since the last `optimize_all`. Each
+    /// call mints a new fragment + dataset version regardless of how many
+    /// rows it carries, so this is a proxy for how much unpruned/
+    /// uncompacted state has piled up. Checked by the maintenance loop
+    /// (`lrg-server::maintenance_loop` via `AppState::run_maintenance`)
+    /// against `COMPACT_WRITE_THRESHOLD` — a purely wall-clock interval
+    /// isn't enough on its own: a fast indexing run can mint thousands of
+    /// fragments/versions well before the next tick, which is what let
+    /// RSS climb unbounded (OOM around ~3600 photos) even with the
+    /// interval-only version of this maintenance loop.
+    write_ops: AtomicU64,
 }
 
 fn table_dim(table: &str) -> Result<i32> {
@@ -192,7 +209,10 @@ impl Store {
                     .await?;
             }
         }
-        let store = Store { conn };
+        let store = Store {
+            conn,
+            write_ops: AtomicU64::new(0),
+        };
         store.ensure_id_indices().await?;
         Ok(store)
     }
@@ -226,20 +246,27 @@ impl Store {
     }
 
     /// Compacts small fragments and prunes old dataset versions on every
-    /// table. `merge_insert`/`add` each mint a new fragment + dataset
-    /// version, so an indexing-heavy catalog accumulates both quickly;
-    /// LanceDB's own guidance is to run this after ~20+ write ops or
-    /// 100k+ modified rows. Called periodically from a background task
-    /// (see `lrg-server`'s maintenance loop), not per-request — compaction
-    /// itself scans/rewrites files, so it's too costly to run inline with
-    /// every batch.
+    /// table, and resets the `write_ops` counter. `merge_insert`/`add` each
+    /// mint a new fragment + dataset version, so an indexing-heavy catalog
+    /// accumulates both quickly; LanceDB's own guidance is to run this
+    /// after ~20+ write ops or 100k+ modified rows (`COMPACT_WRITE_THRESHOLD`).
+    /// Called periodically from a background task (see `lrg-server`'s
+    /// maintenance loop), not per-request — compaction itself scans/rewrites
+    /// files, so it's too costly to run inline with every batch.
     pub async fn optimize_all(&self) -> Result<()> {
         for (name, _) in TABLES {
             let tbl = self.table(name).await?;
             let stats = tbl.optimize(OptimizeAction::All).await?;
             log::debug!("LanceDB optimize({name}): {stats:?}");
         }
+        self.write_ops.store(0, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Number of `upsert`/`append` calls since the last successful
+    /// `optimize_all` — see the `write_ops` field doc for why this exists.
+    pub fn pending_write_ops(&self) -> u64 {
+        self.write_ops.load(Ordering::Relaxed)
     }
 
     /// Insert-or-replace by id (Chroma add/update semantics).
@@ -258,6 +285,7 @@ impl Store {
         builder
             .execute(Box::new(reader) as Box<dyn arrow_array::RecordBatchReader + Send>)
             .await?;
+        self.write_ops.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -269,6 +297,7 @@ impl Store {
         let batch = records_to_batch(table, records)?;
         let tbl = self.table(table).await?;
         tbl.add(batch).execute().await?;
+        self.write_ops.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -448,6 +477,35 @@ mod tests {
 
         store.delete(FACE_TABLE, &["face_a".into()]).await.unwrap();
         assert_eq!(store.count(FACE_TABLE).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn write_ops_counts_calls_not_rows_and_resets_on_optimize() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        assert_eq!(store.pending_write_ops(), 0);
+
+        // One append call carrying many rows still counts as a single
+        // write op — fragments are minted per call, not per row.
+        let records: Vec<StoreRecord> = (0..10)
+            .map(|i| record(&format!("p{i}"), Some(vec![0.0; 1152]), json!({})))
+            .collect();
+        store.append(IMAGE_TABLE, &records).await.unwrap();
+        assert_eq!(store.pending_write_ops(), 1);
+
+        for i in 0..5 {
+            store
+                .upsert(
+                    IMAGE_TABLE,
+                    &[record(&format!("q{i}"), Some(vec![0.0; 1152]), json!({}))],
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.pending_write_ops(), 6);
+
+        store.optimize_all().await.unwrap();
+        assert_eq!(store.pending_write_ops(), 0);
     }
 
     #[tokio::test]
