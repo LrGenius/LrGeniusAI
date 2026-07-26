@@ -7,7 +7,7 @@ pre-commit or CI. Whatever the just-touched file is, we run the same checks CI
 runs — but only on that one file, so it is fast:
 
   * plugin/**/*.lua        -> luacheck (uses the repo .luacheckrc) + stylua --check
-  * server/**/*.py         -> ruff check + ruff format --check
+  * server-rs/**/*.rs      -> cargo fmt --check (whole workspace; cheap) + clippy on the touched package
   * TranslatedStrings_*.txt -> scripts/check_translations.py (key-set parity)
 
 Exit codes (per the Claude Code hook protocol):
@@ -29,7 +29,7 @@ def _project_dir() -> str:
     return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 
 
-def _run(cmd, cwd):
+def _run(cmd, cwd, timeout=60):
     """Run a command. Returns (ran, returncode, output) where ran is False if
     the binary was not found (so we can fail-open)."""
     try:
@@ -39,22 +39,13 @@ def _run(cmd, cwd):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=60,
+            timeout=timeout,
         )
         return True, proc.returncode, proc.stdout
     except FileNotFoundError:
         return False, 0, ""
     except subprocess.TimeoutExpired:
         return False, 0, ""
-
-
-def _ruff_cmd(repo):
-    """Prefer a ruff on PATH; fall back to `uv run` inside server/."""
-    if shutil.which("ruff"):
-        return ["ruff"], os.path.join(repo, "server")
-    if shutil.which("uv"):
-        return ["uv", "run", "ruff"], os.path.join(repo, "server")
-    return None, None
 
 
 def lint(path: str, repo: str):
@@ -70,15 +61,18 @@ def lint(path: str, repo: str):
         if ran and rc != 0:
             problems.append("stylua: file is not formatted. Run `stylua " + rel + "`.")
 
-    elif path.endswith(".py") and rel.startswith("server/"):
-        base, cwd = _ruff_cmd(repo)
-        if base:
-            ran, rc, out = _run(base + ["check", path], cwd=cwd)
-            if ran and rc == 1:
-                problems.append(f"ruff check:\n{out.strip()}")
-            ran, rc, out = _run(base + ["format", "--check", path], cwd=cwd)
-            if ran and rc != 0:
-                problems.append("ruff format: file is not formatted. Run `uv run ruff format " + rel + "`.")
+    elif path.endswith(".rs") and rel.startswith("server-rs/"):
+        server_rs = os.path.join(repo, "server-rs")
+        ran, rc, out = _run(["cargo", "fmt", "--all", "--", "--check"], cwd=server_rs)
+        if ran and rc != 0:
+            problems.append(f"cargo fmt: file is not formatted.\n{out.strip()}")
+        ran, rc, out = _run(
+            ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+            cwd=server_rs,
+            timeout=180,
+        )
+        if ran and rc != 0:
+            problems.append(f"cargo clippy:\n{out.strip()}")
 
     elif os.path.basename(path).startswith("TranslatedStrings_") and path.endswith(".txt"):
         checker = os.path.join(repo, "scripts", "check_translations.py")

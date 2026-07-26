@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lrg-common",
+    "crates/lrg-store",
+    "crates/lrg-chroma-reader",
+    "crates/lrg-imaging",
+    "crates/lrg-ml",
+    "crates/lrg-analysis",
+    "crates/lrg-providers",
+    "crates/lrg-api",
+    "crates/lrg-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+
+[workspace.dependencies]
+lrg-common = { path = "crates/lrg-common" }
+lrg-store = { path = "crates/lrg-store" }
+lrg-chroma-reader = { path = "crates/lrg-chroma-reader" }
+lrg-imaging = { path = "crates/lrg-imaging" }
+lrg-ml = { path = "crates/lrg-ml" }
+lrg-analysis = { path = "crates/lrg-analysis" }
+lrg-providers = { path = "crates/lrg-providers" }
+lrg-api = { path = "crates/lrg-api" }
+
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs"] }
+tower = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+
+# dev/test
+http-body-util = "0.1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

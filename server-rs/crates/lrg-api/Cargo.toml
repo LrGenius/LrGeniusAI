@@ -1,0 +1,32 @@
+[package]
+name = "lrg-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lrg-common.workspace = true
+lrg-store.workspace = true
+lrg-ml.workspace = true
+lrg-analysis.workspace = true
+lrg-imaging.workspace = true
+lrg-providers.workspace = true
+
+axum.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+sha2 = "0.10"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+lrg-store.workspace = true
+http-body-util.workspace = true
+tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ort (ONNX Runtime) links a third-party dylib not signed with our
+         Developer ID; Hardened Runtime's library validation would refuse
+         to load it without this. Safe to keep even if ort turns out to
+         statically link everything on this platform. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

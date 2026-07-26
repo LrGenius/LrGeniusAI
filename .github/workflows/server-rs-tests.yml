@@ -1,0 +1,29 @@
+name: "Server tests (Rust)"
+on:
+  pull_request:
+    paths:
+      - 'server-rs/**'
+      - '.github/workflows/server-rs-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server-rs/**'
+      - '.github/workflows/server-rs-tests.yml'
+jobs:
+  cargo-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-rs
+      - name: Run cargo test
+        working-directory: server-rs
+        run: cargo test --workspace

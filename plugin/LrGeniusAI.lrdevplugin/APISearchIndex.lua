@@ -27,7 +27,6 @@ local ENDPOINTS = {
 	INDEX = "/index",
 	EDIT = "/edit",
 	INDEX_BY_REFERENCE = "/index_by_reference",
-	INDEX_BASE64 = "/index_base64",
 	EDIT_BASE64 = "/edit_base64",
 	GROUP_SIMILAR = "/group_similar",
 	CULL = "/cull",
@@ -646,83 +645,19 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 end
 
 ---
--- Gets a JPEG thumbnail from Lightroom's preview system (must be called from LrTasks async context).
--- Uses photo:requestJpegThumbnail(width, height, callback) and waits for the callback with a timeout.
--- @param photo LrPhoto
--- @param minWidth number Minimum width (long edge); nil = smallest preview.
--- @param minHeight number Optional; if minWidth is set, controls height of returned pixels.
--- @param requestState table|nil Optional state/config with timeoutSeconds.
--- @return string|nil JPEG data string, or nil on failure.
--- @return string|nil Error message when JPEG is nil.
---
-function SearchIndexAPI.getJpegThumbnailForPhoto(photo, minWidth, minHeight, requestState)
-	if not photo then
-		return nil, "Photo is nil"
-	end
-	local result = nil
-	local errResult = nil
-	local done = false
-	local callbackCount = 0
-	local timeoutSeconds = tonumber(requestState and requestState.timeoutSeconds)
-		or tonumber(prefs and prefs.previewThumbnailTimeoutSeconds)
-		or 12
-	local deadline = LrDate.currentTime() + timeoutSeconds
-
-	local callback = function(jpegData, err)
-		callbackCount = callbackCount + 1
-
-		-- Adobe reports that the callback may fire more than once. Prefer the
-		-- first non-empty JPEG payload and otherwise keep waiting until timeout.
-		if jpegData and type(jpegData) == "string" and #jpegData > 0 then
-			result = jpegData
-			errResult = nil
-			done = true
-			return
-		end
-
-		if err and err ~= "" then
-			errResult = err
-		elseif not errResult then
-			errResult = "No thumbnail data"
-		end
-	end
-
-	local requestObj = photo:requestJpegThumbnail(minWidth, minHeight, callback)
-	if not requestObj then
-		return nil, "requestJpegThumbnail failed to start"
-	end
-
-	while not done and LrDate.currentTime() < deadline do
-		if MAC_ENV then
-			LrTasks.yield()
-		else
-			LrTasks.sleep(0.05)
-		end
-	end
-
-	if not done then
-		return nil,
-			string.format("Thumbnail request timed out after %.1fs (callbacks=%d)", timeoutSeconds, callbackCount)
-	end
-	if result and type(result) == "string" and #result > 0 then
-		return result, nil
-	end
-	return nil, errResult or "No thumbnail data"
-end
-
----
--- Analyzes and indexes a single photo using base64-encoded JPEG (e.g. from requestJpegThumbnail).
--- Uses the /index_base64 endpoint; same options as analyzeAndIndexPhoto.
+-- Analyzes and indexes a single photo by submitting only its file path; the
+-- backend reads and converts the original file (RAW/JPEG/HEIC) itself.
+-- Only valid when the backend runs on the same machine (see isLocalBackend).
+-- Uses the /index_by_reference endpoint; same options as analyzeAndIndexPhoto.
 -- @param photoId string
--- @param jpegData string Raw JPEG bytes.
--- @param filename string Display filename for logging.
+-- @param filePath string Absolute path to the original photo file.
 -- @param options table Same as analyzeAndIndexPhoto.
 -- @return boolean success, table|string response or error.
 --
-function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, options)
-	if not jpegData or type(jpegData) ~= "string" or #jpegData == 0 then
-		log:error("analyzeAndIndexPhotoBase64: no JPEG data")
-		return false, "No image data provided"
+function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, options)
+	if not filePath or filePath == "" then
+		log:error("analyzeAndIndexPhotoByReference: no file path")
+		return false, "No file path provided"
 	end
 	if not photoId or photoId == "" then
 		log:error("Photo ID is missing")
@@ -730,13 +665,10 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 	end
 
 	options = options or {}
-	local base64Image = LrStringUtils.encodeBase64(jpegData)
-	local url = getBaseUrl() .. ENDPOINTS.INDEX_BASE64
+	local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
 
 	local body = {
-		image = base64Image,
-		photo_id = photoId,
-		filename = filename or "photo.jpg",
+		images = { { path = filePath, photo_id = photoId } },
 		catalog_id = getCatalogId(),
 		tasks = options.tasks or {},
 		provider = options.provider,
@@ -766,6 +698,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 		generate_aliases = tostring(options.generate_aliases or false),
 		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
 		date_time = options.date_time,
+		date_time_unix = options.date_time_unix,
 		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
 		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
 		vertex_project_id = options.vertex_project_id,
@@ -773,25 +706,32 @@ function SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, filename, 
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
 	}
 
-	log:trace("Analyzing and indexing photo (base64): " .. tostring(filename) .. " id " .. photoId)
+	log:trace("Analyzing and indexing photo (by reference): " .. tostring(filePath) .. " id " .. photoId)
 
 	local response, err = _request("POST", url, body, 720)
 
 	if not response then
-		log:error("Failed to analyze/index photo (base64): " .. tostring(err))
+		log:error("Failed to analyze/index photo (by reference): " .. tostring(err))
 		return false, err or "Unknown error"
 	end
 	if response.status == "processed" then
 		local success_count = response.success_count or 0
 		if success_count > 0 then
-			log:trace("Successfully processed photo (base64): " .. tostring(filename))
+			log:trace("Successfully processed photo (by reference): " .. tostring(filePath))
 			return true, response
-		else
-			log:error("Photo processing failed (base64): " .. tostring(filename))
-			return false, response.error or "Processing failed"
 		end
+		local errMsg = response.error
+		if not errMsg and response.error_messages and #response.error_messages > 0 then
+			errMsg = table.concat(response.error_messages, " | ")
+		end
+		log:error("Photo processing failed (by reference): " .. tostring(filePath))
+		return false, errMsg or "Processing failed"
 	end
-	log:error("Unexpected response status (base64): " .. tostring(response.status))
+	if response.error then
+		log:error("Backend error (by reference): " .. tostring(response.error))
+		return false, response.error
+	end
+	log:error("Unexpected response status (by reference): " .. tostring(response.status))
 	return false, "Unexpected response status"
 end
 
@@ -1026,12 +966,20 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	-- Regeneration control: if false, server will only fill missing fields
 	table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
 
-	-- Add file
+	-- Add file. Originals may be RAW/HEIC/etc. — the backend converts them
+	-- based on the file name, so only the content type header varies here.
+	local extension = string.lower(LrPathUtils.extension(filename) or "")
+	local contentType = "application/octet-stream"
+	if extension == "jpg" or extension == "jpeg" then
+		contentType = "image/jpeg"
+	elseif extension == "png" then
+		contentType = "image/png"
+	end
 	table.insert(mimeChunks, {
 		name = "image",
 		fileName = filename,
 		filePath = filepath,
-		contentType = "image/jpeg",
+		contentType = contentType,
 	})
 
 	log:trace(
@@ -1705,24 +1653,20 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	local processedPhotos = {}
 	local activeWorkers = 0
 	local keepRunning = true
-	local previewRequestState = {
-		enabled = (prefs and prefs.usePreviewThumbnails ~= false),
-		timeoutSeconds = tonumber(prefs and prefs.previewThumbnailTimeoutSeconds) or 12,
-		cooldownSeconds = tonumber(prefs and prefs.previewThumbnailCooldownSeconds) or 1,
-		disableAfterConsecutiveTimeouts = tonumber(prefs and prefs.previewThumbnailDisableAfterTimeouts) or 3,
-		consecutiveTimeouts = 0,
-		disabledForRun = false,
-	}
+	-- Opt-in fast path: submit the original file instead of exporting a JPEG.
+	-- Local backend gets just the path; remote backends get the raw upload.
+	local useOriginals = (prefs and prefs.indexSubmitOriginals == true)
 
 	local errorMessages = {}
 	local warningsList = {}
 
-	if MAC_ENV and numPhotos > 1 then
+	if MAC_ENV and numPhotos > 1 and not useOriginals then
 		-- Pipelined export/index path (macOS only). A producer drives a single
 		-- LrExportSession and pushes rendered JPEG paths into a queue; a consumer
 		-- POSTs each photo to the backend as soon as its export completes, so the
 		-- next export overlaps with the previous photo's backend round-trip.
 		-- Disabled on Windows because earlier multi-worker attempts crashed Lightroom.
+		-- Skipped when originals are submitted directly: there is nothing to export.
 		local tempDir = LrPathUtils.getStandardFilePath("temp")
 		EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
 
@@ -1921,59 +1865,36 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 						photoOptions.photo_id = photoId
 
 						local success, indexResponse
-						local usePreviewThumbnails = previewRequestState.enabled
-							and not previewRequestState.disabledForRun
-						local thumbnailSize = tonumber(prefs and prefs.exportSize) or 1024
-						local leafName = LrPathUtils.leafName(filename or "photo.jpg")
 
-						if usePreviewThumbnails then
-							local jpegData, thumbErr = SearchIndexAPI.getJpegThumbnailForPhoto(
-								photo,
-								thumbnailSize,
-								thumbnailSize,
-								previewRequestState
-							)
-							if jpegData and #jpegData > 0 then
-								previewRequestState.consecutiveTimeouts = 0
-								log:trace("Using Lightroom preview for " .. filename)
-								success, indexResponse =
-									SearchIndexAPI.analyzeAndIndexPhotoBase64(photoId, jpegData, leafName, photoOptions)
-							else
-								log:trace(
-									"Preview unavailable for "
-										.. filename
-										.. ", falling back to export: "
-										.. tostring(thumbErr)
-								)
-								if thumbErr and string.find(thumbErr, "timed out", 1, true) then
-									previewRequestState.consecutiveTimeouts = previewRequestState.consecutiveTimeouts
-										+ 1
-									if
-										previewRequestState.consecutiveTimeouts
-										>= previewRequestState.disableAfterConsecutiveTimeouts
-									then
-										previewRequestState.disabledForRun = true
-										log:warn(
-											"Disabling Lightroom preview thumbnails for the rest of this batch after "
-												.. tostring(previewRequestState.consecutiveTimeouts)
-												.. " consecutive timeouts."
-										)
-									else
-										log:trace(
-											"Cooling down preview requests after timeout ("
-												.. tostring(previewRequestState.consecutiveTimeouts)
-												.. "/"
-												.. tostring(previewRequestState.disableAfterConsecutiveTimeouts)
-												.. ")"
-										)
-									end
-
-									if previewRequestState.cooldownSeconds > 0 then
-										LrTasks.sleep(previewRequestState.cooldownSeconds)
-									end
+						if useOriginals then
+							local originalPath = photo:getRawMetadata("path")
+							local isVideo = photo:getRawMetadata("isVideo")
+							if isVideo then
+								log:trace("Original submission skipped for video " .. filename)
+							elseif originalPath and photo:checkPhotoAvailability() then
+								if SearchIndexAPI.isLocalBackend() then
+									log:trace("Submitting original by reference for " .. filename)
+									success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
+										photoId,
+										originalPath,
+										photoOptions
+									)
 								else
-									previewRequestState.consecutiveTimeouts = 0
+									log:trace("Uploading original file for " .. filename)
+									success, indexResponse =
+										SearchIndexAPI.analyzeAndIndexPhoto(photoId, originalPath, photoOptions)
 								end
+								if not success then
+									log:warn(
+										"Original-file indexing failed for "
+											.. filename
+											.. " ("
+											.. tostring(indexResponse)
+											.. "); falling back to export"
+									)
+								end
+							else
+								log:trace("Original file not available for " .. filename .. "; falling back to export")
 							end
 						end
 

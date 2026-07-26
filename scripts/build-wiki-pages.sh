@@ -8,7 +8,7 @@ mkdir -p "${WIKI_DIR}"
 
 ROOT_README="${ROOT_DIR}/README.md"
 PLUGIN_README="${ROOT_DIR}/plugin/README.md"
-SERVER_README="${ROOT_DIR}/server/README.md"
+SERVER_README="${ROOT_DIR}/server-rs/README.md"
 
 write_generated_page() {
   local target_file="$1"

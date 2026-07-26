@@ -8,7 +8,7 @@ on:
       - "docs/**"
       - "README.md"
       - "plugin/README.md"
-      - "server/README.md"
+      - "server-rs/README.md"
       - "scripts/build-wiki-pages.sh"
       - "scripts/publish-wiki.sh"
       - ".github/workflows/publish-wiki.yml"

@@ -1,0 +1,103 @@
+{
+ "note": "inputs regenerated in Rust tests (see tests/goldens.rs)",
+ "cases": {
+  "gradient_640x480": {
+   "width": 640,
+   "height": 480,
+   "phash": "a13ca1353f417b43",
+   "metrics": {
+    "cull_sharpness": 0.0008,
+    "cull_exposure": 0.9716,
+    "cull_noise": 0.012,
+    "cull_highlight_clip": 0.0193,
+    "cull_shadow_clip": 0.0242,
+    "cull_technical_score": 0.4887,
+    "cull_aesthetic": 0.6443
+   }
+  },
+  "lcg_noise_800x600": {
+   "width": 800,
+   "height": 600,
+   "phash": "c5716268ce3663ae",
+   "metrics": {
+    "cull_sharpness": 0.8503,
+    "cull_exposure": 0.9992,
+    "cull_noise": 0.6962,
+    "cull_highlight_clip": 0.0,
+    "cull_shadow_clip": 0.0,
+    "cull_technical_score": 0.8204,
+    "cull_aesthetic": 0.5552
+   }
+  },
+  "dark_640x480": {
+   "width": 640,
+   "height": 480,
+   "phash": "ea57e855a8555555",
+   "metrics": {
+    "cull_sharpness": 0.0,
+    "cull_exposure": 0.25,
+    "cull_noise": 0.0,
+    "cull_highlight_clip": 0.0,
+    "cull_shadow_clip": 0.0,
+    "cull_technical_score": 0.2375,
+    "cull_aesthetic": 0.05
+   }
+  },
+  "bright_640x480": {
+   "width": 640,
+   "height": 480,
+   "phash": "a8a8a855aa57ea17",
+   "metrics": {
+    "cull_sharpness": 0.0,
+    "cull_exposure": 0.0,
+    "cull_noise": 0.0,
+    "cull_highlight_clip": 1.0,
+    "cull_shadow_clip": 0.0,
+    "cull_technical_score": 0.15,
+    "cull_aesthetic": 0.0
+   }
+  },
+  "checker_512": {
+   "width": 512,
+   "height": 512,
+   "phash": "d5aa55aa55aa55aa",
+   "metrics": {
+    "cull_sharpness": 0.9434,
+    "cull_exposure": 0.75,
+    "cull_noise": 0.3473,
+    "cull_highlight_clip": 0.5,
+    "cull_shadow_clip": 0.5,
+    "cull_technical_score": 0.8321,
+    "cull_aesthetic": 0.6
+   }
+  },
+  "mixed_640x480": {
+   "width": 640,
+   "height": 480,
+   "phash": "c6463939393dc6c6",
+   "metrics": {
+    "cull_sharpness": 0.3634,
+    "cull_exposure": 0.9534,
+    "cull_noise": 0.0941,
+    "cull_highlight_clip": 0.0193,
+    "cull_shadow_clip": 0.0242,
+    "cull_technical_score": 0.6513,
+    "cull_aesthetic": 0.6574
+   }
+  },
+  "small_320x240": {
+   "width": 320,
+   "height": 240,
+   "phash": "e3b48d5c8f99a323",
+   "metrics": {
+    "cull_sharpness": 0.9804,
+    "cull_exposure": 0.9995,
+    "cull_noise": 1.0,
+    "cull_highlight_clip": 0.0001,
+    "cull_shadow_clip": 0.0001,
+    "cull_technical_score": 0.84,
+    "cull_aesthetic": 0.8984
+   }
+  }
+ }
+}

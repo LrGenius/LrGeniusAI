@@ -10,7 +10,7 @@ This repository uses a docs-as-code workflow for GitHub Wiki publishing.
 - Additional generated pages are created from repository READMEs:
   - `Project-README.md` from `/README.md`
   - `Plugin-README.md` from `/plugin/README.md`
-  - `Server-README.md` from `/server/README.md`
+  - `Server-README.md` from `/server-rs/README.md`
 
 ## Automated publishing
 

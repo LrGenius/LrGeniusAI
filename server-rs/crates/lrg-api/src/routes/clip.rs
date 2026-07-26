@@ -1,0 +1,222 @@
+//! Clip blueprint — port of `routes/clip.py`. `/clip/status` checks the
+//! ONNX+tokenizer files are on disk (matching Python's `is_model_cached()`
+//! "ready to lazy-load" semantics — distinct from `/health`'s "currently
+//! loaded in memory" status).
+//!
+//! `/clip/download/*` differs in *source* from Python (which pulls the
+//! fp32 PyTorch checkpoint straight from Hugging Face Hub): this binary
+//! has no PyTorch/onnxscript toolchain to run
+//! `scripts/export_siglip2_fp16.py` itself, so it instead downloads the
+//! fp16 ONNX assets CI already exported and verified.
+//!
+//! Those assets live at a **stable, separate release tag**
+//! (`MODEL_ASSETS_RELEASE_TAG`), not the app's own version tag — the
+//! model (`timm/ViT-SO400M-16-SigLIP2-384`) doesn't change per app
+//! release, so re-exporting/re-publishing it on every `v*` tag would be
+//! pure waste. The `.github/workflows/model-assets.yml` workflow
+//! publishes to that tag only when the export script or its pinned
+//! deps actually change. If the export ever changes in a way that isn't
+//! backward compatible with older binaries, bump both the workflow's
+//! tag and `MODEL_ASSETS_RELEASE_TAG` together (e.g. `model-assets-v2`).
+
+use std::sync::{Arc, Mutex};
+
+use axum::extract::State;
+use axum::{routing::get, routing::post, Json, Router};
+use futures_util::StreamExt;
+use serde::Serialize;
+use serde_json::{json, Value};
+
+use crate::state::AppState;
+
+const RELEASE_REPO: &str = "LrGenius/LrGeniusAI";
+const MODEL_ASSETS_RELEASE_TAG: &str = "model-assets-v1";
+const ASSET_NAMES: [&str; 3] = [
+    "siglip2_image_fp16.onnx",
+    "siglip2_text_fp16.onnx",
+    "tokenizer.json",
+];
+
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/clip/status", get(clip_status))
+        .route("/clip/download/start", post(download_start))
+        .route("/clip/download/status", get(download_status))
+}
+
+async fn clip_status(State(state): State<Arc<AppState>>) -> Json<Value> {
+    if state.siglip.is_cached() {
+        Json(json!({"clip": "ready", "message": "CLIP model is loaded and ready."}))
+    } else {
+        Json(json!({"clip": "not_ready", "message": "CLIP model is not loaded."}))
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct ModelDownloadStatus {
+    status: &'static str,
+    progress: u64,
+    total: u64,
+    current_file: Option<String>,
+    error: Option<String>,
+}
+
+impl Default for ModelDownloadStatus {
+    fn default() -> Self {
+        Self {
+            status: "not_started",
+            progress: 0,
+            total: 0,
+            current_file: None,
+            error: None,
+        }
+    }
+}
+
+async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
+    log::info!("Download CLIP model request received");
+
+    let already_running = {
+        let mut status = state.model_download.lock().unwrap();
+        if status.status == "downloading" {
+            true
+        } else {
+            *status = ModelDownloadStatus {
+                status: "downloading",
+                ..Default::default()
+            };
+            false
+        }
+    };
+    if already_running {
+        log::warn!("Download thread is already running.");
+        return Json(json!({"download": "started"}));
+    }
+
+    let download_state = state.model_download.clone();
+    tokio::spawn(run_download(download_state));
+
+    Json(json!({"download": "started"}))
+}
+
+async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let status = state.model_download.lock().unwrap().clone();
+    Json(json!(status))
+}
+
+fn asset_url(tag: &str, name: &str) -> String {
+    format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}/{name}")
+}
+
+fn set_error(state: &Mutex<ModelDownloadStatus>, msg: String) {
+    log::error!("CLIP model download failed: {msg}");
+    let mut s = state.lock().unwrap();
+    s.status = "error";
+    s.error = Some(msg);
+}
+
+async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
+    let tag = MODEL_ASSETS_RELEASE_TAG;
+    let paths = lrg_ml::model_paths::resolve();
+    let dests = [&paths.image_onnx, &paths.text_onnx, &paths.tokenizer_json];
+
+    let client = reqwest::Client::new();
+
+    // Resolve sizes up front (HEAD per asset) so total progress is known
+    // from the start, matching Python's up-front HfApi files_metadata call.
+    let mut total: u64 = 0;
+    for name in ASSET_NAMES {
+        let url = asset_url(tag, name);
+        let resp = match client.head(&url).send().await {
+            Ok(r) => r,
+            Err(e) => return set_error(&state, format!("failed to resolve {name}: {e}")),
+        };
+        if !resp.status().is_success() {
+            return set_error(
+                &state,
+                format!(
+                    "release asset {name} not found for {tag} (HTTP {}) — the model-assets release may not exist yet",
+                    resp.status()
+                ),
+            );
+        }
+        total += resp.content_length().unwrap_or(0);
+    }
+    state.lock().unwrap().total = total;
+
+    let mut downloaded: u64 = 0;
+    for (name, dest) in ASSET_NAMES.iter().zip(dests.iter()) {
+        state.lock().unwrap().current_file = Some(name.to_string());
+
+        let url = asset_url(tag, name);
+        log::info!("Starting CLIP model asset download: {name} from {url}");
+        let resp = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                return set_error(
+                    &state,
+                    format!("download failed for {name}: HTTP {}", r.status()),
+                )
+            }
+            Err(e) => return set_error(&state, format!("download failed for {name}: {e}")),
+        };
+
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return set_error(
+                    &state,
+                    format!("failed to create model directory {}: {e}", parent.display()),
+                );
+            }
+        }
+
+        let tmp_dest = dest.with_file_name(format!(
+            "{}.part",
+            dest.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let file = match tokio::fs::File::create(&tmp_dest).await {
+            Ok(f) => f,
+            Err(e) => {
+                return set_error(
+                    &state,
+                    format!("failed to create {}: {e}", tmp_dest.display()),
+                )
+            }
+        };
+        let mut writer = tokio::io::BufWriter::new(file);
+        let mut stream = resp.bytes_stream();
+
+        use tokio::io::AsyncWriteExt;
+        loop {
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    if let Err(e) = writer.write_all(&chunk).await {
+                        return set_error(&state, format!("failed writing {name}: {e}"));
+                    }
+                    downloaded += chunk.len() as u64;
+                    state.lock().unwrap().progress = downloaded;
+                }
+                Some(Err(e)) => {
+                    return set_error(&state, format!("download interrupted for {name}: {e}"))
+                }
+                None => break,
+            }
+        }
+        if let Err(e) = writer.flush().await {
+            return set_error(&state, format!("failed writing {name}: {e}"));
+        }
+        drop(writer);
+        if let Err(e) = tokio::fs::rename(&tmp_dest, dest).await {
+            return set_error(
+                &state,
+                format!("failed to place {name} at {}: {e}", dest.display()),
+            );
+        }
+        log::info!("CLIP model asset ready: {}", dest.display());
+    }
+
+    log::info!("CLIP model download complete ({tag}).");
+    let mut s = state.lock().unwrap();
+    s.status = "done";
+    s.current_file = None;
+}

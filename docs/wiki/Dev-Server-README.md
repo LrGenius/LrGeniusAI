@@ -1,219 +1,111 @@
 # Server README
 
-> Auto-generated from `server/README.md`. Do not edit this page manually.
+> Auto-generated from `server-rs/README.md`. Do not edit this page manually.
 
-# 🖥️ LrGeniusAI - Backend Server
+# LrGeniusAI Backend Server (Rust)
 
-This is the Python-based core of **LrGeniusAI**. It acts as the bridge between Adobe Lightroom Classic (Lua) and various AI models, handling image processing, metadata storage, and high-speed semantic search.
+This is the LrGeniusAI backend. It's a single binary (`geniusai-server`)
+that speaks the HTTP API the Lightroom plugin expects — see
+[../CLAUDE.md](../CLAUDE.md) for the architecture overview and
+[`docs/wiki/Dev-Backend-API.md`](../docs/wiki/Dev-Backend-API.md) for the
+endpoint reference.
 
----
+Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
+`lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
+clients), `lrg-api` (axum routers), `lrg-server` (the binary).
 
-## 🛠️ Core Responsibilities
-
-- **📂 Database Management:** Stores image metadata, AI-generated descriptions, and vector embeddings in a local SQLite database to ensure blazing-fast retrieval without re-scanning images.
-- **🧠 AI Orchestration:** - Interfaces with **Cloud APIs** (Google Gemini, Vertex AI, OpenAI).
-    - Connects to **Local LLMs** via Ollama and LM Studio (enhancing privacy and saving costs).
-- **🔎 Semantic Search Engine:** Uses `vertexai` / `SigLip2` to generate image embeddings. This allows users to search their Lightroom catalog using natural language descriptions instead of just keywords.
-- **🎭 Face Intelligence:** Provides face detection and recognition capabilities (powered by `Insightface`).
-- **⚙️ Metadata Sync:** Handles the import of existing keywords and metadata from Lightroom to build a comprehensive search index.
-
----
-
-## 🚀 Technical Architecture
-
-The server is built with **Python** and designed to run as a local background process (provided as a standalone `.exe` for Windows or a binary for macOS).
-
-### Key Components:
-- **API Framework:** FastAPI / Flask-based REST interface for communication with the Lightroom Lua plugin.
-- **Computer Vision:** - `open-clip-torch`: For generating semantic embeddings.
-    - `Insightface`: For advanced face detection and recognition.
-    - `vertexai`: For even better semantic embeddings.
-- **Database:** SQLite (local-first approach).
-- **Task Handling:** Efficient processing of batch image analysis.
-
----
-
-## 🗄️ Database API
-
-The backend exposes dedicated database endpoints for status and backup operations.
-
-### `GET /db/stats`
-
-Returns aggregated counters for the current backend database, including:
-
-- total indexed photos
-- photos with SigLIP embeddings
-- photos with title / caption / keywords
-- photos with Vertex AI embeddings
-- total indexed faces
-- total detected persons
-
-### `GET /db/backup`
-
-Creates and returns a ZIP backup of the persistent backend data directory. This includes the Chroma data as well as accompanying JSON and SQLite files stored under the configured DB path.
-
-Recommended use cases:
-
-- before one-time DB migrations
-- before moving or rebuilding the backend host
-- before larger maintenance work on the server
-
-The ZIP is created temporarily on the server for download and removed again after the response is sent.
-
-### Lightroom plugin integration
-
-In `Plug-in Manager -> LrGeniusAI -> Backend Server`, the button `Download DB backup` downloads this ZIP from the backend and reveals the saved file in Finder or Explorer.
-
----
-
-## ☁️ Persistent Vertex AI Login In Docker Compose
-
-If you run the backend remotely via Docker Compose, authenticate inside the container so Vertex AI uses Application Default Credentials (ADC) from the same runtime that executes the Python code.
-
-The Compose file mounts `./gcloud` to `/root/.config/gcloud`, which keeps the active `gcloud` config and `application_default_credentials.json` persistent across container restarts and rebuilds.
-
-### Recommended setup
+## Build & run locally
 
 ```bash
-mkdir -p gcloud
-docker compose up -d --build
-docker compose exec geniusai-server gcloud config set project YOUR_PROJECT_ID
-docker compose exec geniusai-server gcloud auth application-default login
-docker compose exec geniusai-server gcloud auth application-default print-access-token
+cd server-rs
+cargo build --release -p lrg-server
+./target/release/geniusai-server --db-path /path/to/lrgenius.db
 ```
 
-### Headless remote servers
+`cargo test --workspace` and `cargo clippy --workspace --all-targets` should
+both be clean before sending changes.
 
-If the server is only reachable via SSH and has no browser, use:
+## Model files
+
+### SigLIP2 (semantic embeddings)
+
+`POST /clip/download/start` + `GET /clip/download/status` fetch the fp16
+ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
+`tokenizer.json`) from this running binary's own matching GitHub release
+(`LRG_BACKEND_RELEASE_TAG`) and place them at the `LRG_SIGLIP_*` paths
+below, pulling CI-exported ONNX assets from a release instead of the fp32
+checkpoint from Hugging Face.
+
+**There is no signed release with those assets attached yet**, so right
+now this endpoint fails with a clear "release asset not found" error on
+any build (including released ones, until the first tag with the
+`build-model-assets` CI job runs). Until then, export the model yourself
+with the same script that CI job runs:
 
 ```bash
-docker compose exec geniusai-server gcloud auth application-default login --no-browser
+cd server-rs
+uv run --project scripts --with onnxscript \
+    python scripts/export_siglip2_fp16.py --output-dir /path/to/models/siglip2
 ```
 
-Then complete the remote bootstrap flow on a second trusted machine with a browser and Google Cloud CLI installed.
+`--with onnxscript` is required: torch >=2.9's `torch.onnx.export` imports
+it unconditionally even with `dynamo=False`. This downloads the SigLIP2
+checkpoint from Hugging Face, traces it natively in fp16, and writes
+`siglip2_image_fp16.onnx` (~860 MB), `siglip2_text_fp16.onnx` (~1.4 GB),
+and `tokenizer.json` into the output directory.
 
-### Important notes
+Verify the export against the checked-in goldens (no torch/open_clip
+needed for this half, just onnxruntime/numpy/tokenizers):
 
-- Do not set `GOOGLE_APPLICATION_CREDENTIALS` if you want the backend to use ADC created by `gcloud auth application-default login`.
-- Set `Vertex AI Project ID` and `Vertex AI Location` in the Lightroom plugin settings, or provide `GOOGLE_CLOUD_PROJECT` / `VERTEX_LOCATION` as environment variables.
-- For fully non-interactive deployments, a service account via `GOOGLE_APPLICATION_CREDENTIALS` is still the better option.
+```bash
+uv run --project scripts python scripts/export_siglip2_fp16.py \
+    --verify-only --output-dir /path/to/models/siglip2
+```
 
----
+Both towers should score cosine similarity >0.99999 against the fp32
+goldens. Then point the server at the files:
 
-## 🧹 Automatic Housekeeping (Faces & Backups)
+```bash
+export LRG_SIGLIP_IMAGE_ONNX=/path/to/models/siglip2/siglip2_image_fp16.onnx
+export LRG_SIGLIP_TEXT_ONNX=/path/to/models/siglip2/siglip2_text_fp16.onnx
+export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/tokenizer.json
+```
 
-When running the backend in Docker (or any long‑lived environment), you can enable optional background housekeeping tasks using environment variables.
+Without these set, `lrg-ml` falls back to `~/.cache/lrgenius/models/{siglip2_image,siglip2_text}.onnx`
+and `~/.cache/lrgenius/models/tokenizer.json`.
 
-### Periodic face clustering
+### InsightFace (face detection/recognition)
 
-The server can automatically re‑cluster face embeddings in the background, using the same logic as the `POST /faces/cluster` endpoint:
+No export step needed — `buffalo_l`'s `det_10g.onnx` and `w600k_r50.onnx`
+are already ONNX. Point `INSIGHTFACE_ROOT` at the directory containing
+`models/buffalo_l/{det_10g.onnx,w600k_r50.onnx}` (default `~/.insightface`,
+the same location `insightface`'s own Python library uses, so the files
+are very likely already there if you've used InsightFace before).
 
-- `GENIUSAI_FACES_CLUSTER_ENABLED`  
-  - `true` / `1` / `yes` / `on` to enable.  
-  - Default: disabled.
-- `GENIUSAI_FACES_CLUSTER_INTERVAL`  
-  - Interval in seconds between clustering runs.  
-  - Default: `3600` (1 hour). Minimum effective interval is 60 seconds.
-- `GENIUSAI_FACES_CLUSTER_DISTANCE`  
-  - Cosine distance threshold, same scale as Immich “Maximum recognition distance”.  
-  - Typical range: `0.45–0.65`. Default: `0.5`.
-- `GENIUSAI_FACES_CLUSTER_MIN_FACES`  
-  - Minimum number of faces required to form a person cluster (DBSCAN mode).  
-  - Example: `3` (singletons go to `person_unassigned`).  
-  - If unset/empty, every face is assigned to a cluster (Agglomerative mode).
-- `GENIUSAI_FACES_CLUSTER_LINKAGE`  
-  - `"complete"` (default) = tighter clusters, fewer false merges.  
-  - `"average"` = more merging.
+## Docker
 
-These runs happen entirely in the backend process and do not require Lightroom to be open.
+`Dockerfile` here builds and ships the compiled binary (multi-stage:
+`rust:1-bookworm` builder, `debian:bookworm-slim` runtime). Model files
+still need to be supplied via a mounted `/models` volume following the
+env vars above (the Dockerfile pre-sets them to `/models/siglip2/...` and
+`/models/insightface`) — see the Dockerfile's own comments for the
+`ort`/ONNX-Runtime dylib packaging details.
 
-### Periodic database backups
+```bash
+docker build -t geniusai-server -f server-rs/Dockerfile server-rs
+docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
+    -e GENIUSAI_HOST=0.0.0.0 geniusai-server
+```
 
-The backend can also create periodic ZIP backups of the database directory and prune older backups automatically:
+Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
 
-- `GENIUSAI_BACKUP_ENABLED`  
-  - `true` / `1` / `yes` / `on` to enable.  
-  - Default: disabled.
-- `GENIUSAI_BACKUP_INTERVAL`  
-  - Interval in seconds between backup runs.  
-  - Default: `86400` (once per day). Minimum is 600 seconds.
-- `GENIUSAI_BACKUP_MAX_KEEP`  
-  - Number of newest backup ZIPs to keep under `<db-path>/backups`.  
-  - Default: `14`. Values ≤ 0 are treated as `1`.
+Not yet implemented: the periodic face-clustering and database-backup
+schedulers — the `GENIUSAI_FACES_CLUSTER_*` / `GENIUSAI_BACKUP_*` env vars
+are currently no-ops here.
 
-Each run:
+## Status
 
-1. Calls the same backup logic used by `GET /db/backup` to create a ZIP of the DB path.
-2. Stores a persistent copy under `<db-path>/backups`.
-3. Deletes older ZIPs so that only the newest `GENIUSAI_BACKUP_MAX_KEEP` remain.
-
----
-
-## ⚠️ Breaking Change: `photo_id` Migration
-
-The server switched primary IDs from legacy Lightroom UUIDs to file-based `photo_id` values.
-
-If you run an existing database, perform a one-time migration.
-
-### Migration options
-
-- Trigger from Lightroom plugin UI:
-  - `File -> Plug-in Manager -> LrGeniusAI -> Backend Server -> Migrate existing DB IDs to photo_id`
-- Trigger via API:
-  - `POST /db/migrate-photo-ids`
-  - Body: `{ "mappings": [{ "old_id": "...", "new_id": "..." }] }`
-- Trigger on server startup:
-  - Set `GENIUSAI_MIGRATION_FILE` to a JSON mapping file path
-
-### Affected collections
-
-- `image_embeddings`
-- `image_embeddings_vertex`
-- `face_embeddings` (metadata references)
-
-### Identity scope note
-
-The current `photo_id` / hash / derived `canonicalId` strategy is more stable than legacy Lightroom UUIDs, but it is still not guaranteed to be 100% cross-catalog safe in every workflow.
-
-In practice, backend identity should still be treated as best-effort and mostly catalog-scoped, especially when:
-
-- the same source files exist in multiple Lightroom catalogs
-- files were duplicated, re-exported, or rewritten outside Lightroom
-- ID generation had to fall back to partial file hashes because stable metadata IDs were unavailable
-
-For workflows that depend on strict cross-catalog identity, re-indexing and migration validation are still recommended when moving photos between catalogs or restoring older backend databases.
-
----
-
-## Cross-catalog behavior (soft state, no deletion)
-
-When multiple Lightroom catalogs use the same remote backend, the server **never deletes** photo data. Instead it tracks which catalog “has” each photo.
-
-### Data model
-
-- Each catalog has a stable **catalog_id** (managed by the plugin).
-- Each photo in the backend has metadata **catalog_ids**: a list of catalog_ids that currently “have” that photo.
-- Indexing adds the requesting catalog’s id to **catalog_ids**. All read operations (search, get/ids, stats, check-unprocessed, get photo) accept an optional **catalog_id** and return only photos that include that catalog in **catalog_ids**.
-
-### Endpoints
-
-- **`POST /sync/cleanup`**  
-  Body: `{ "catalog_id": "...", "photo_ids": ["id1", "id2", ...] }`.  
-  Disassociates the given **catalog_id** from any backend photo that is **not** in **photo_ids** (photos removed from the Lightroom catalog). Does **not** delete documents; only updates metadata so other catalogs still see those photos.
-
-- **`POST /sync/claim`**  
-  Body: `{ "catalog_id": "...", "photo_ids": ["id1", "id2", ...] }`.  
-  Adds **catalog_id** to **catalog_ids** for each listed photo. Used to “claim” existing backend photos for a catalog (e.g. after upgrading to this behavior so previously indexed photos become visible to that catalog).
-
-### Behavior summary
-
-- **No physical deletion**: Removing a photo from a catalog only removes that catalog’s id from the photo’s **catalog_ids**.
-- **Catalog-scoped reads**: When **catalog_id** is sent, search, stats, get/ids, and related endpoints filter to photos that have that catalog in **catalog_ids**.
-- **Backward compatibility**: Requests without **catalog_id** are unchanged (no catalog filter).
-
----
-
-## ⚖️ License
-
-The LrGeniusAI core and backend server are released under the **GNU Affero General Public License v3 (AGPL-3.0)**. 
-Project license details can be found in the root [LICENSE](../LICENSE) file.
+This is the sole backend implementation (the earlier Python/Flask server
+has been retired). Still under active development on the `rust-rewrite`
+branch — see the plan and progress notes there before assuming a given
+endpoint or feature is fully live.

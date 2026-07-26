@@ -14,28 +14,29 @@ SetupIconFile=plugin\LrGeniusAI.lrdevplugin\icon.ico
 SourceDir=..\..
 
 [Files]
-; Backend files
-Source: "build\lrgenius-server\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Backend: a single native binary, no bundled Python runtime.
+Source: "build\lrgenius-server\lrgenius-server.exe"; DestDir: "{app}\backend"; Flags: ignoreversion
+Source: "installers\windows\run_hidden.vbs"; DestDir: "{app}\backend"; Flags: ignoreversion
 
 ; Plugin files (Global location for Lightroom)
 Source: "build\LrGeniusAI.lrplugin\*"; DestDir: "{userappdata}\Adobe\Lightroom\Modules\LrGeniusAI.lrplugin"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\LrGeniusAI Backend"; Filename: "{app}\backend\lrgenius-server.cmd"; IconFilename: "{app}\backend\app\src\icon.ico"
+Name: "{group}\LrGeniusAI Backend"; Filename: "{app}\backend\lrgenius-server.exe"; IconFilename: "plugin\LrGeniusAI.lrdevplugin\icon.ico"
 
 [Registry]
-; Run backend at system startup for current user
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LrGeniusAIBackend"; ValueData: """{app}\backend\lrgenius-server.cmd"""; Flags: uninsdeletevalue
+; Run backend at system startup for current user, via the hidden-window
+; wrapper (the exe itself is a normal console-subsystem binary so the
+; `migrate` CLI subcommand keeps working when run from a terminal).
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LrGeniusAIBackend"; ValueData: """wscript.exe"" ""{app}\backend\run_hidden.vbs"" ""{app}\backend\lrgenius-server.exe"""; Flags: uninsdeletevalue
 
 [Run]
-; Start the backend immediately after installation
-Filename: "{app}\backend\lrgenius-server.cmd"; Description: "Start LrGeniusAI Backend"; Flags: nowait postinstall skipifsilent runhidden
+; Start the backend immediately after installation, hidden.
+Filename: "wscript.exe"; Parameters: """{app}\backend\run_hidden.vbs"" ""{app}\backend\lrgenius-server.exe"""; Description: "Start LrGeniusAI Backend"; Flags: nowait postinstall skipifsilent runhidden
 
 [UninstallRun]
 ; Stop existing backend process before uninstalling
-Filename: "taskkill"; Parameters: "/F /IM python.exe /T /FI ""WINDOWTITLE eq lrgenius-server*"""; Flags: runhidden; RunOnceId: "StopBackend"
-Filename: "taskkill"; Parameters: "/F /IM pythonw.exe /T /FI ""WINDOWTITLE eq lrgenius-server*"""; Flags: runhidden; RunOnceId: "StopBackendW"
-Filename: "taskkill"; Parameters: "/F /IM cmd.exe /T /FI ""WINDOWTITLE eq lrgenius-server*"""; Flags: runhidden; RunOnceId: "StopBackendCmd"
+Filename: "taskkill"; Parameters: "/F /IM lrgenius-server.exe /T"; Flags: runhidden; RunOnceId: "StopBackend"
 
 [Code]
 function InitializeSetup(): Boolean;
@@ -43,8 +44,6 @@ var
   ResultCode: Integer;
 begin
   Result := True;
-  // Try to stop the service/process before starting setup (for updates)
-  Exec('taskkill', '/F /IM python.exe /T /FI "WINDOWTITLE eq lrgenius-server*"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('taskkill', '/F /IM pythonw.exe /T /FI "WINDOWTITLE eq lrgenius-server*"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('taskkill', '/F /IM cmd.exe /T /FI "WINDOWTITLE eq lrgenius-server*"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Try to stop the service before starting setup (for updates)
+  Exec('taskkill', '/F /IM lrgenius-server.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;

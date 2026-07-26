@@ -1,0 +1,11 @@
+[package]
+name = "lrg-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lrg-imaging.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
