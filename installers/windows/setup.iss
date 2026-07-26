@@ -17,6 +17,7 @@ SourceDir=..\..
 ; Backend: a single native binary, no bundled Python runtime.
 Source: "build\lrgenius-server\lrgenius-server.exe"; DestDir: "{app}\backend"; Flags: ignoreversion
 Source: "installers\windows\run_hidden.vbs"; DestDir: "{app}\backend"; Flags: ignoreversion
+Source: "installers\windows\download_face_models.ps1"; DestDir: "{app}\backend"; Flags: ignoreversion
 
 ; Plugin files (Global location for Lightroom)
 Source: "build\LrGeniusAI.lrplugin\*"; DestDir: "{userappdata}\Adobe\Lightroom\Modules\LrGeniusAI.lrplugin"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -33,6 +34,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 ; Start the backend immediately after installation, hidden.
 Filename: "wscript.exe"; Parameters: """{app}\backend\run_hidden.vbs"" ""{app}\backend\lrgenius-server.exe"""; Description: "Start LrGeniusAI Backend"; Flags: nowait postinstall skipifsilent runhidden
+; Download InsightFace face-recognition models in the background if not already
+; present (e.g. from a prior Python InsightFace install at %USERPROFILE%\.insightface).
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\backend\download_face_models.ps1"""; Description: "Download face recognition models"; Flags: nowait postinstall skipifsilent runhidden
 
 [UninstallRun]
 ; Stop existing backend process before uninstalling

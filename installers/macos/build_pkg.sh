@@ -119,6 +119,36 @@ if [ -n "\$CURRENT_USER" ] && [ "\$CURRENT_USER" -ne 0 ]; then
     fi
     # Cleanup temp folder
     rm -rf "/Applications/LrGeniusAI/PluginInstallTemp"
+
+    # Download InsightFace face-recognition models if not already present
+    # (same location Python's insightface library uses: ~/.insightface).
+    # Backgrounded + logged since the zip is ~275MB and shouldn't block
+    # the installer UI from finishing.
+    (
+        INSIGHTFACE_DIR="\$CURRENT_USER_HOME/.insightface/models/buffalo_l"
+        if [ ! -f "\$INSIGHTFACE_DIR/det_10g.onnx" ] || [ ! -f "\$INSIGHTFACE_DIR/w600k_r50.onnx" ]; then
+            echo "Downloading InsightFace buffalo_l models..."
+            sudo -u "\$CURRENT_USER_NAME" mkdir -p "\$INSIGHTFACE_DIR"
+            TMP_ZIP=\$(mktemp /tmp/buffalo_l.XXXXXX.zip)
+            TMP_EXTRACT=\$(mktemp -d /tmp/buffalo_l_extract.XXXXXX)
+            if curl -fL -o "\$TMP_ZIP" "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"; then
+                unzip -oq "\$TMP_ZIP" -d "\$TMP_EXTRACT"
+                DET_SRC=\$(find "\$TMP_EXTRACT" -name "det_10g.onnx" -print -quit)
+                REC_SRC=\$(find "\$TMP_EXTRACT" -name "w600k_r50.onnx" -print -quit)
+                if [ -n "\$DET_SRC" ] && [ -n "\$REC_SRC" ]; then
+                    cp "\$DET_SRC" "\$INSIGHTFACE_DIR/det_10g.onnx"
+                    cp "\$REC_SRC" "\$INSIGHTFACE_DIR/w600k_r50.onnx"
+                    chown -R "\$CURRENT_USER" "\$CURRENT_USER_HOME/.insightface"
+                    echo "InsightFace models installed successfully."
+                else
+                    echo "Warning: expected model files not found in buffalo_l.zip" >&2
+                fi
+            else
+                echo "Warning: failed to download InsightFace models; face detection will be unavailable." >&2
+            fi
+            rm -rf "\$TMP_ZIP" "\$TMP_EXTRACT"
+        fi
+    ) >> "\$LOG_DIR/insightface-download.log" 2>&1 &
 fi
 exit 0
 EOF

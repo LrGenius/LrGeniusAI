@@ -3789,7 +3789,10 @@ function SearchIndexAPI.checkServerHealth()
 
 		-- 2. Check Face model
 		if res.face_model == "failed" then
-			log:warn("Face detection model failed to load on server: " .. tostring(res.face_error))
+			ErrorHandler.handleError(
+				LOC("$$$/LrGeniusAI/Health/FaceFailed=Face detection model failed to load."),
+				res.face_error or "Unknown error loading face detection model."
+			)
 		end
 
 		-- 3. Check LLM providers
