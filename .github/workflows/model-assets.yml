@@ -1,0 +1,74 @@
+name: Export Model Assets
+
+# fp16 SigLIP2 export (~2.3 GB) for lrg-ml's model download-on-first-run
+# (server-rs/crates/lrg-api/src/routes/clip.rs). Deliberately NOT wired
+# to app version tags in release.yml: the model (timm/ViT-SO400M-16-
+# SigLIP2-384) doesn't change per app release, so re-exporting/
+# re-publishing it on every `v*` tag was pure waste (and, on
+# ubuntu-latest, was intermittently segfaulting during ONNX Runtime
+# verification for reasons that didn't reproduce locally or match any
+# known fix — see git history on this file for the abandoned attempts).
+# This instead publishes to a stable release tag that only moves when
+# the export script or its pinned deps actually change, and runs on
+# macos-latest, which doesn't hit that CI-only crash class at all.
+#
+# If the export ever changes in a way that isn't backward compatible
+# with older binaries still pointing at the old tag, bump both this
+# workflow's `tag_name` below and `MODEL_ASSETS_RELEASE_TAG` in
+# clip.rs together (e.g. `model-assets-v2`).
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'server-rs/scripts/export_siglip2_fp16.py'
+      - 'server-rs/scripts/pyproject.toml'
+      - 'server-rs/scripts/uv.lock'
+      - 'server-rs/testdata/siglip_goldens.json'
+      - '.github/workflows/model-assets.yml'
+
+jobs:
+  export-model-assets:
+    runs-on: macos-latest
+    name: Export SigLIP2 fp16 ONNX
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Export fp16 SigLIP2 (image + text towers + tokenizer)
+        run: |
+          set -euo pipefail
+          uv run --project server-rs/scripts --with onnxscript \
+            python server-rs/scripts/export_siglip2_fp16.py --output-dir model-assets
+          echo "=== Exported model assets ==="
+          ls -lh model-assets/
+
+      - name: Verify exported fp16 model against torch goldens
+        run: |
+          uv run --project server-rs/scripts \
+            python server-rs/scripts/export_siglip2_fp16.py --verify-only --output-dir model-assets
+
+      - name: Publish to the stable model-assets release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: model-assets-v1
+          name: "SigLIP2 model assets (fp16 ONNX)"
+          body: |
+            Pinned SigLIP2 fp16 ONNX export (`timm/ViT-SO400M-16-SigLIP2-384`), downloaded
+            at runtime by the backend's `/clip/download/start` — **not an app release**,
+            see the tagged `v*` releases for those. Regenerated only when
+            `server-rs/scripts/export_siglip2_fp16.py` or its pinned deps change.
+          files: model-assets/*
+          draft: false
+          prerelease: false
+          make_latest: false
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

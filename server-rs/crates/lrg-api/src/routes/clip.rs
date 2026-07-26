@@ -7,10 +7,17 @@
 //! fp32 PyTorch checkpoint straight from Hugging Face Hub): this binary
 //! has no PyTorch/onnxscript toolchain to run
 //! `scripts/export_siglip2_fp16.py` itself, so it instead downloads the
-//! fp16 ONNX assets CI already exported and verified, attached to this
-//! build's own matching GitHub release. Until a real release with those
-//! assets exists, this fails with a clear "release not found" error
-//! rather than silently doing nothing.
+//! fp16 ONNX assets CI already exported and verified.
+//!
+//! Those assets live at a **stable, separate release tag**
+//! (`MODEL_ASSETS_RELEASE_TAG`), not the app's own version tag — the
+//! model (`timm/ViT-SO400M-16-SigLIP2-384`) doesn't change per app
+//! release, so re-exporting/re-publishing it on every `v*` tag would be
+//! pure waste. The `.github/workflows/model-assets.yml` workflow
+//! publishes to that tag only when the export script or its pinned
+//! deps actually change. If the export ever changes in a way that isn't
+//! backward compatible with older binaries, bump both the workflow's
+//! tag and `MODEL_ASSETS_RELEASE_TAG` together (e.g. `model-assets-v2`).
 
 use std::sync::{Arc, Mutex};
 
@@ -20,11 +27,10 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use lrg_common::version::backend_release_tag;
-
 use crate::state::AppState;
 
 const RELEASE_REPO: &str = "LrGenius/LrGeniusAI";
+const MODEL_ASSETS_RELEASE_TAG: &str = "model-assets-v1";
 const ASSET_NAMES: [&str; 3] = [
     "siglip2_image_fp16.onnx",
     "siglip2_text_fp16.onnx",
@@ -110,7 +116,7 @@ fn set_error(state: &Mutex<ModelDownloadStatus>, msg: String) {
 }
 
 async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
-    let tag = backend_release_tag();
+    let tag = MODEL_ASSETS_RELEASE_TAG;
     let paths = lrg_ml::model_paths::resolve();
     let dests = [&paths.image_onnx, &paths.text_onnx, &paths.tokenizer_json];
 
@@ -129,7 +135,7 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
             return set_error(
                 &state,
                 format!(
-                    "release asset {name} not found for {tag} (HTTP {}) — this build's GitHub release may not exist yet",
+                    "release asset {name} not found for {tag} (HTTP {}) — the model-assets release may not exist yet",
                     resp.status()
                 ),
             );
