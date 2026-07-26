@@ -639,23 +639,19 @@ async fn index_one(
             match face_result {
                 Ok(faces) => {
                     let t_scan = Instant::now();
-                    let existing_faces = store.scan_meta(FACE_TABLE).await.unwrap_or_default();
-                    log::debug!(
-                        "Photo {photo_id}: FACE_TABLE scan_meta ({} rows) took {:?}",
-                        existing_faces.len(),
-                        t_scan.elapsed()
-                    );
-                    let stale: Vec<String> = existing_faces
-                        .into_iter()
-                        .filter(|(_, m)| {
-                            m.get("photo_id").and_then(Value::as_str) == Some(photo_id)
-                        })
-                        .map(|(id, _)| id)
-                        .collect();
+                    // Face ids are `{photo_id}_{n}`; a prefix delete clears
+                    // this photo's stale rows in one shot without pulling
+                    // the whole table's metadata (including every face's
+                    // base64 thumbnail) into memory — see
+                    // `Store::delete_by_id_prefix` for why that mattered.
                     store
-                        .delete(FACE_TABLE, &stale)
+                        .delete_by_id_prefix(FACE_TABLE, &format!("{photo_id}_"))
                         .await
                         .map_err(|e| e.to_string())?;
+                    log::debug!(
+                        "Photo {photo_id}: stale FACE_TABLE rows cleared in {:?}",
+                        t_scan.elapsed()
+                    );
 
                     if !faces.is_empty() {
                         let face_records: Vec<StoreRecord> = faces

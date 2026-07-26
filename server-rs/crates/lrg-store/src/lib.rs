@@ -340,6 +340,26 @@ impl Store {
         Ok(())
     }
 
+    /// Deletes every row whose `id` starts with `prefix` (a plain `DELETE
+    /// ... WHERE id LIKE 'prefix%'`) without ever pulling the matched rows'
+    /// `metadata` into the Rust process. Used to clear a photo's stale
+    /// FACE_TABLE rows (ids are `{photo_id}_{n}`) before re-inserting fresh
+    /// ones — the previous `scan_meta` + filter approach decoded every
+    /// face's metadata blob (including its base64 thumbnail) for the whole
+    /// table on every single indexed photo, which is what drove unbounded
+    /// RSS growth on large face-indexing runs.
+    pub async fn delete_by_id_prefix(&self, table: &str, prefix: &str) -> Result<()> {
+        let tbl = self.table(table).await?;
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+            .replace('\'', "''");
+        tbl.delete(&format!("id LIKE '{escaped}%' ESCAPE '\\'"))
+            .await?;
+        Ok(())
+    }
+
     /// Like `get`, but returns only id + metadata (no vector deserialization).
     pub async fn get_meta(
         &self,
@@ -544,5 +564,58 @@ mod tests {
         assert_eq!(got[0].id, odd_id);
         store.delete(IMAGE_TABLE, &[odd_id.into()]).await.unwrap();
         assert_eq!(store.count(IMAGE_TABLE).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_by_id_prefix_matches_only_the_prefix_and_treats_underscore_literally() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        // "photo_1" as a photo_id, plus a real face id under it, a
+        // lookalike face id under "photo_10" (must NOT be caught by the
+        // "photo_1_" prefix), and an unrelated row.
+        store
+            .append(
+                FACE_TABLE,
+                &[
+                    record(
+                        "photo_1_0",
+                        Some(vec![0.0; 512]),
+                        json!({"photo_id": "photo_1"}),
+                    ),
+                    record(
+                        "photo_1_1",
+                        Some(vec![0.0; 512]),
+                        json!({"photo_id": "photo_1"}),
+                    ),
+                    record(
+                        "photo_10_0",
+                        Some(vec![0.0; 512]),
+                        json!({"photo_id": "photo_10"}),
+                    ),
+                    record(
+                        "other_0",
+                        Some(vec![0.0; 512]),
+                        json!({"photo_id": "other"}),
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        store
+            .delete_by_id_prefix(FACE_TABLE, "photo_1_")
+            .await
+            .unwrap();
+
+        let remaining: Vec<String> = store
+            .scan_meta(FACE_TABLE)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.contains(&"photo_10_0".to_string()));
+        assert!(remaining.contains(&"other_0".to_string()));
     }
 }
