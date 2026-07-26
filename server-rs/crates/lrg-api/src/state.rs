@@ -84,8 +84,22 @@ impl AppState {
         self.face.unload_if_idle();
         if let Some(store) = self.store() {
             if store.pending_write_ops() >= lrg_store::COMPACT_WRITE_THRESHOLD {
-                if let Err(e) = store.optimize_all().await {
-                    log::warn!("LanceDB maintenance optimize failed: {e}");
+                match store.optimize_all().await {
+                    // Logged at info because it's the one recurring signal
+                    // for the memory-growth class of bug this loop exists
+                    // to prevent: fragment counts in the single digits and
+                    // a steady cache size mean compaction is doing bounded
+                    // work, while numbers that scale with catalog size mean
+                    // it has gone back to rewriting everything.
+                    Ok(summary) => log::info!(
+                        "LanceDB maintenance: compacted {} fragment(s) into {}, \
+                         pruned {} old version(s), caches at {} MiB",
+                        summary.fragments_removed,
+                        summary.fragments_added,
+                        summary.old_versions_removed,
+                        summary.cache_bytes / (1024 * 1024),
+                    ),
+                    Err(e) => log::warn!("LanceDB maintenance optimize failed: {e}"),
                 }
             }
         }

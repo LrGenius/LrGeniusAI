@@ -99,6 +99,32 @@ Not yet implemented: the periodic face-clustering and database-backup
 schedulers — the `GENIUSAI_FACES_CLUSTER_*` / `GENIUSAI_BACKUP_*` env vars
 are currently no-ops here.
 
+## Memory tuning
+
+LanceDB's defaults are sized for servers: a 6 GiB index cache and a 1 GiB
+file-metadata cache per session. Running next to Lightroom on a desktop,
+that headroom is indistinguishable from a leak, so `lrg-store` opens its
+connection with an explicit, much smaller session. Both caps are pure
+speed/memory tradeoffs (a miss re-reads from disk) and can be overridden,
+in MiB:
+
+| Env var | Default |
+|---|---|
+| `GENIUSAI_LANCE_INDEX_CACHE_MB` | 128 |
+| `GENIUSAI_LANCE_METADATA_CACHE_MB` | 128 |
+
+The other half of memory behaviour during a long indexing run is
+compaction — see `Store::optimize_all` and the constants above it. To
+reproduce and measure the write-path memory profile without Lightroom in
+the loop:
+
+```bash
+cargo run --release -p lrg-store --example memgrow -- 3000
+```
+
+It replays the exact per-photo write pattern `index_one` performs and
+prints RSS plus LanceDB cache size every 100 photos.
+
 ## Status
 
 This is the sole backend implementation (the earlier Python/Flask server

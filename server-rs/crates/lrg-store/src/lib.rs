@@ -21,7 +21,7 @@ use futures::TryStreamExt;
 use lancedb::index::scalar::BTreeIndexBuilder;
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::table::OptimizeAction;
+use lancedb::table::{CompactionOptions, Duration, OptimizeAction, OptimizeOptions};
 use serde_json::{Map, Value};
 
 pub mod meta;
@@ -45,10 +45,66 @@ pub const TABLES: [(&str, i32); 4] = [
 /// GET_IDS_CHUNK_SIZE rationale (bounded query size on large catalogs).
 const GET_IDS_CHUNK_SIZE: usize = 1000;
 
-/// LanceDB's own guidance is to compact after ~20+ write ops; the
-/// maintenance loop uses this as the trigger instead of relying solely on
-/// a wall-clock interval (see `Store::write_ops`).
-pub const COMPACT_WRITE_THRESHOLD: u64 = 25;
+/// How many write ops must pile up before the maintenance loop compacts.
+///
+/// LanceDB's own guidance ("compact after ~20+ write ops") assumes each
+/// write op is a bulk load; ours is a single photo, so 25 meant compacting
+/// roughly every twelve photos. Since compaction reads and rewrites every
+/// fragment it selects, doing it that often turned indexing into a
+/// continuous rewrite of the whole table — see `compaction_options` for
+/// the other half of that story. At the observed ~4 photos/sec this
+/// threshold lands compaction near the 30s maintenance tick instead.
+pub const COMPACT_WRITE_THRESHOLD: u64 = 200;
+
+/// Rows per fragment that compaction should aim for, and the point past
+/// which a fragment is left alone.
+///
+/// This is the important one. Lance's default is 1,048,576 rows — far more
+/// than any Lightroom catalog puts in one of our tables, so *every*
+/// fragment always qualified as a compaction candidate and each run
+/// re-read and rewrote the entire table. Work per run therefore grew with
+/// the catalog while running every dozen photos, which is what kept RSS
+/// climbing through a long indexing session. With a reachable target,
+/// fragments get sealed and skipped, and each run only touches the small
+/// uncompacted tail.
+const TARGET_ROWS_PER_FRAGMENT: usize = 4096;
+
+/// Version retention for the prune half of `optimize_all`. Every
+/// `merge_insert` mints a dataset version, so a big indexing run leaves
+/// thousands behind; LanceDB's default retention (7 days) means none of
+/// them are reclaimable while the run is still going. Half an hour is well
+/// past any in-flight read on a single-process desktop backend.
+const PRUNE_OLDER_THAN_MINUTES: i64 = 30;
+
+/// Cap for LanceDB's per-session index cache. Lance's own default is
+/// **6 GiB** (`lance::dataset::DEFAULT_INDEX_CACHE_SIZE`), sized for
+/// server deployments; we run alongside Lightroom on a user's desktop,
+/// where a cache that big is indistinguishable from a leak — RSS just
+/// climbs until the OS kills the process. The cache is a pure
+/// speed/memory tradeoff (a miss re-reads the index from disk), and our
+/// only index is the small scalar BTree on `id`, so a modest cap costs
+/// almost nothing.
+const INDEX_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
+/// Cap for LanceDB's per-session file-metadata cache (Lance's default is
+/// 1 GiB). Same reasoning as `INDEX_CACHE_BYTES`; this one grows with the
+/// number of data files, which a long indexing run mints constantly.
+const METADATA_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
+fn cache_bytes_from_env(var: &str, default: usize) -> usize {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|mb| mb * 1024 * 1024)
+        .unwrap_or(default)
+}
+
+fn compaction_options(target_rows: usize) -> CompactionOptions {
+    CompactionOptions {
+        target_rows_per_fragment: target_rows,
+        ..Default::default()
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -69,6 +125,19 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// What one `Store::optimize_all` pass actually did, aggregated over all
+/// tables. Exists so the maintenance loop can log whether compaction is
+/// doing bounded work (a handful of fragments per pass) or has regressed
+/// to rewriting the whole catalog again.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct OptimizeSummary {
+    pub fragments_removed: usize,
+    pub fragments_added: usize,
+    pub old_versions_removed: usize,
+    /// Bytes held by LanceDB's index + file-metadata caches afterwards.
+    pub cache_bytes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreRecord {
     pub id: String,
@@ -79,6 +148,9 @@ pub struct StoreRecord {
 
 pub struct Store {
     conn: lancedb::Connection,
+    /// The session whose caches `conn` uses — held so `session_bytes()`
+    /// can report how much memory LanceDB's caches are currently holding.
+    session: Arc<lancedb::Session>,
     /// Counts `upsert`/`append` calls since the last `optimize_all`. Each
     /// call mints a new fragment + dataset version regardless of how many
     /// rows it carries, so this is a proxy for how much unpruned/
@@ -200,7 +272,17 @@ fn batch_to_records(batch: &RecordBatch) -> Vec<StoreRecord> {
 impl Store {
     /// Open (or create) the store at `root`, ensuring all four tables exist.
     pub async fn open(root: &Path) -> Result<Store> {
-        let conn = lancedb::connect(&root.to_string_lossy()).execute().await?;
+        // Explicit session: without one, lancedb builds a `Session::default()`
+        // whose caches are capped at 6 GiB + 1 GiB. See `INDEX_CACHE_BYTES`.
+        let session = Arc::new(lancedb::Session::new(
+            cache_bytes_from_env("GENIUSAI_LANCE_INDEX_CACHE_MB", INDEX_CACHE_BYTES),
+            cache_bytes_from_env("GENIUSAI_LANCE_METADATA_CACHE_MB", METADATA_CACHE_BYTES),
+            Arc::new(lancedb::ObjectStoreRegistry::default()),
+        ));
+        let conn = lancedb::connect(&root.to_string_lossy())
+            .session(session.clone())
+            .execute()
+            .await?;
         let existing = conn.table_names().execute().await?;
         for (name, dim) in TABLES {
             if !existing.iter().any(|t| t == name) {
@@ -211,6 +293,7 @@ impl Store {
         }
         let store = Store {
             conn,
+            session,
             write_ops: AtomicU64::new(0),
         };
         store.ensure_id_indices().await?;
@@ -245,28 +328,80 @@ impl Store {
         Ok(())
     }
 
-    /// Compacts small fragments and prunes old dataset versions on every
-    /// table, and resets the `write_ops` counter. `merge_insert`/`add` each
-    /// mint a new fragment + dataset version, so an indexing-heavy catalog
-    /// accumulates both quickly; LanceDB's own guidance is to run this
-    /// after ~20+ write ops or 100k+ modified rows (`COMPACT_WRITE_THRESHOLD`).
-    /// Called periodically from a background task (see `lrg-server`'s
-    /// maintenance loop), not per-request — compaction itself scans/rewrites
-    /// files, so it's too costly to run inline with every batch.
-    pub async fn optimize_all(&self) -> Result<()> {
+    /// Compacts small fragments, folds new rows into the `id` index, and
+    /// prunes old dataset versions on every table, then resets the
+    /// `write_ops` counter. `merge_insert`/`add` each mint a new fragment +
+    /// dataset version, so an indexing-heavy catalog accumulates both
+    /// quickly. Called periodically from a background task (see
+    /// `lrg-server`'s maintenance loop), not per-request — compaction
+    /// scans and rewrites files, so it's too costly to run inline with
+    /// every batch.
+    ///
+    /// This deliberately does not use `OptimizeAction::All`: that runs
+    /// compaction with `CompactionOptions::default()`, whose 1M-row
+    /// fragment target no Lightroom catalog reaches, so no fragment is
+    /// ever considered "done" and every run rewrites the whole table.
+    /// Spelling the three steps out lets us bound the compaction target
+    /// and shorten version retention.
+    pub async fn optimize_all(&self) -> Result<OptimizeSummary> {
+        self.optimize_all_with_target(TARGET_ROWS_PER_FRAGMENT)
+            .await
+    }
+
+    /// `optimize_all` with an explicit fragment target, so tests can
+    /// exercise the seal-and-skip behaviour on a handful of rows instead
+    /// of thousands.
+    async fn optimize_all_with_target(&self, target_rows: usize) -> Result<OptimizeSummary> {
+        let mut summary = OptimizeSummary::default();
         for (name, _) in TABLES {
             let tbl = self.table(name).await?;
-            let stats = tbl.optimize(OptimizeAction::All).await?;
-            log::debug!("LanceDB optimize({name}): {stats:?}");
+            let compaction = tbl
+                .optimize(OptimizeAction::Compact {
+                    options: compaction_options(target_rows),
+                    remap_options: None,
+                })
+                .await?;
+            // Rows written since the last run aren't in the BTree yet;
+            // without this they'd be found by a scan of the unindexed
+            // tail, which is exactly what the index exists to avoid.
+            tbl.optimize(OptimizeAction::Index(OptimizeOptions::default()))
+                .await?;
+            let prune = tbl
+                .optimize(OptimizeAction::Prune {
+                    older_than: Some(Duration::minutes(PRUNE_OLDER_THAN_MINUTES)),
+                    delete_unverified: None,
+                    error_if_tagged_old_versions: None,
+                })
+                .await?;
+            if let Some(metrics) = &compaction.compaction {
+                summary.fragments_removed += metrics.fragments_removed;
+                summary.fragments_added += metrics.fragments_added;
+            }
+            if let Some(removal) = &prune.prune {
+                summary.old_versions_removed += removal.old_versions as usize;
+            }
+            log::debug!(
+                "LanceDB optimize({name}): compaction={:?} prune={:?}",
+                compaction.compaction,
+                prune.prune
+            );
         }
+        summary.cache_bytes = self.session_bytes();
         self.write_ops.store(0, Ordering::Relaxed);
-        Ok(())
+        Ok(summary)
     }
 
     /// Number of `upsert`/`append` calls since the last successful
     /// `optimize_all` — see the `write_ops` field doc for why this exists.
     pub fn pending_write_ops(&self) -> u64 {
         self.write_ops.load(Ordering::Relaxed)
+    }
+
+    /// Bytes currently held by LanceDB's index + file-metadata caches.
+    /// Walks the caches, so it's for diagnostics (`/db/stats`, the
+    /// maintenance log line) — not for a hot path.
+    pub fn session_bytes(&self) -> u64 {
+        self.session.size_bytes()
     }
 
     /// Insert-or-replace by id (Chroma add/update semantics).
@@ -553,6 +688,91 @@ mod tests {
 
         store.optimize_all().await.unwrap();
         assert_eq!(store.pending_write_ops(), 0);
+    }
+
+    /// Simulates a slow indexing run at a given fragment target: seed the
+    /// table with `rows` single-row appends (what per-photo indexing
+    /// actually produces), then alternate "three more photos, one
+    /// maintenance pass" a few times to reach steady state. Returns how
+    /// many fragments the table ends up split across.
+    async fn fragments_after_indexing_run(target_rows: usize, rows: usize) -> usize {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        let mut next_id = 0;
+        let append = async |n: usize, next_id: &mut usize| {
+            for _ in 0..n {
+                store
+                    .append(
+                        FACE_TABLE,
+                        &[record(
+                            &format!("f{next_id}"),
+                            Some(vec![0.0; 512]),
+                            json!({}),
+                        )],
+                    )
+                    .await
+                    .unwrap();
+                *next_id += 1;
+            }
+        };
+
+        append(rows, &mut next_id).await;
+        store.optimize_all_with_target(target_rows).await.unwrap();
+        for _ in 0..3 {
+            append(3, &mut next_id).await;
+            store.optimize_all_with_target(target_rows).await.unwrap();
+        }
+        assert_eq!(store.count(FACE_TABLE).await.unwrap(), next_id);
+        store
+            .table(FACE_TABLE)
+            .await
+            .unwrap()
+            .stats()
+            .await
+            .unwrap()
+            .fragment_stats
+            .num_fragments
+    }
+
+    /// Guards the fix for the indexing memory blowup: compaction must
+    /// leave already-compacted fragments alone.
+    ///
+    /// Lance's default fragment target is 1,048,576 rows. No Lightroom
+    /// catalog puts that many rows in one of our tables, so under the
+    /// default *every* fragment stayed a compaction candidate forever and
+    /// each maintenance pass re-read and rewrote the entire table — work
+    /// that grew with the catalog, ran every dozen photos, and drove RSS
+    /// up until the OS killed the process.
+    ///
+    /// How many fragments the table ends up split across is the visible
+    /// proxy: sealed fragments survive a pass, so with a reachable target
+    /// their number tracks the row count, while under the default target
+    /// the table is repeatedly collapsed back into a single fragment —
+    /// which is only possible by re-reading and rewriting all of it.
+    #[tokio::test]
+    async fn compaction_leaves_sealed_fragments_alone() {
+        // Sealing at 4 rows: ~24 rows have to live in several fragments,
+        // and each maintenance pass leaves the full ones alone.
+        let bounded = fragments_after_indexing_run(4, 24).await;
+        assert!(
+            bounded >= 6,
+            "with a reachable fragment target, sealed fragments should \
+             survive each pass; found only {bounded} fragment(s), meaning \
+             compaction is still rewriting everything"
+        );
+
+        // Same run at Lance's default target: nothing ever reaches it, so
+        // every pass folds the accumulated data back into one fragment.
+        // That repeated re-reading of already-compacted data is what
+        // scaled with catalog size and blew up memory.
+        let default = fragments_after_indexing_run(1024 * 1024, 24).await;
+        assert!(
+            default < bounded,
+            "sanity check on the unfixed behaviour: the default target \
+             should keep collapsing the table (got {default} fragment(s) \
+             vs {bounded}) — if it no longer does, the bounded target above \
+             is not what makes the difference"
+        );
     }
 
     #[tokio::test]
