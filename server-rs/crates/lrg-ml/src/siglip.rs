@@ -83,6 +83,13 @@ fn build_session(path: &Path) -> ort::Result<Session> {
             .with_model_cache_dir(std::env::temp_dir().join("lrg-coreml-cache").display())
             .build()])?;
     }
+    // The CPU EP's default arena only ever grows (never returns memory to
+    // the OS) — confirmed via per-photo RSS logging showing this same
+    // pattern on lrg-ml::faces's sessions. CoreML falls back to CPU for
+    // unsupported ops, so this matters on macOS too, not just the
+    // CPU-only platforms. See faces::build_session for the full writeup.
+    builder = builder
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
     builder.commit_from_file(path)
 }
 

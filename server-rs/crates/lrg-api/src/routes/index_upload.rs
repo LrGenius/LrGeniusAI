@@ -638,7 +638,13 @@ async fn index_one(
             log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
             match face_result {
                 Ok(faces) => {
+                    let t_scan = Instant::now();
                     let existing_faces = store.scan_meta(FACE_TABLE).await.unwrap_or_default();
+                    log::debug!(
+                        "Photo {photo_id}: FACE_TABLE scan_meta ({} rows) took {:?}",
+                        existing_faces.len(),
+                        t_scan.elapsed()
+                    );
                     let stale: Vec<String> = existing_faces
                         .into_iter()
                         .filter(|(_, m)| {

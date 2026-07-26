@@ -110,8 +110,18 @@ fn thumbnail_112_jpeg(crop: &[u8], cw: usize, ch: usize) -> String {
     base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
 }
 
+/// Disables ONNX Runtime's CPU arena allocator. The arena's default
+/// extend strategy only ever grows (each `Session::run` can mint a new,
+/// larger chunk instead of reusing freed ones) and never returns memory
+/// to the OS — a well-documented onnxruntime behavior, confirmed here by
+/// per-photo RSS logging showing a ~30-40MB step on every single
+/// `detect_faces` call that never comes back down. Falling back to plain
+/// malloc/free per allocation is slower per call but keeps steady-state
+/// memory bounded, which matters far more for a long indexing run.
 fn build_session(path: &Path) -> ort::Result<Session> {
-    Session::builder()?.commit_from_file(path)
+    Session::builder()?
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?
+        .commit_from_file(path)
 }
 
 impl FaceModel {
