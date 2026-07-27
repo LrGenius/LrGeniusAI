@@ -19,6 +19,7 @@ use serde_json::{json, Map, Value};
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
+use lrg_providers::types::{KeywordCategories, KeywordTree};
 use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
 
 use crate::state::AppState;
@@ -59,8 +60,71 @@ struct MetadataOptions {
     existing_keywords: Option<Vec<String>>,
     folder_names: Option<String>,
     user_context: Option<String>,
+    keyword_categories: Option<KeywordCategories>,
+    bilingual_keywords: bool,
+    keyword_secondary_language: Option<String>,
+    generate_aliases: bool,
+    catalog_keywords: Option<Vec<String>>,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+}
+
+/// Parses the `keyword_categories` multipart field (JSON, sent by the plugin
+/// as either a flat array of category names or a nested object mapping
+/// category -> subcategories) into `KeywordCategories`. Absent, unparsable,
+/// or empty input yields `None` (matching "no hierarchy configured").
+fn parse_keyword_categories(raw: &str) -> Option<KeywordCategories> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    value_to_keyword_categories(&value)
+}
+
+fn value_to_keyword_categories(value: &Value) -> Option<KeywordCategories> {
+    match value {
+        Value::Array(items) => {
+            let list: Vec<String> = items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            if list.is_empty() {
+                None
+            } else {
+                Some(KeywordCategories::Flat(list))
+            }
+        }
+        Value::Object(map) => {
+            if map.is_empty() {
+                None
+            } else {
+                Some(KeywordCategories::Nested(value_to_keyword_tree(value)))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn value_to_keyword_tree(value: &Value) -> KeywordTree {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), value_to_keyword_tree(v)))
+            .collect(),
+        _ => KeywordTree::default(),
+    }
+}
+
+fn parse_string_list(raw: &str) -> Option<Vec<String>> {
+    serde_json::from_str::<Vec<String>>(raw).ok().or_else(|| {
+        let list: Vec<String> = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list)
+        }
+    })
 }
 
 fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> bool {
@@ -158,6 +222,18 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             existing_keywords,
             folder_names: fields.get("folder_names").cloned(),
             user_context: fields.get("user_context").cloned(),
+            keyword_categories: fields
+                .get("keyword_categories")
+                .and_then(|raw| parse_keyword_categories(raw)),
+            bilingual_keywords: bool_field(fields, "bilingual_keywords", false),
+            keyword_secondary_language: fields
+                .get("keyword_secondary_language")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            generate_aliases: bool_field(fields, "generate_aliases", false),
+            catalog_keywords: fields
+                .get("catalog_keywords")
+                .and_then(|s| parse_string_list(s)),
             ollama_base_url: fields.get("ollama_base_url").cloned(),
             lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
         },
@@ -824,11 +900,11 @@ async fn generate_metadata_for_photo(
         folder_names: mo.folder_names.clone(),
         user_context: mo.user_context.clone(),
         date_time: None,
-        keyword_categories: None,
-        bilingual_keywords: false,
-        keyword_secondary_language: None,
-        generate_aliases: false,
-        catalog_keywords: None,
+        keyword_categories: mo.keyword_categories.clone(),
+        bilingual_keywords: mo.bilingual_keywords,
+        keyword_secondary_language: mo.keyword_secondary_language.clone(),
+        generate_aliases: mo.generate_aliases,
+        catalog_keywords: mo.catalog_keywords.clone(),
         ollama_base_url: mo.ollama_base_url.clone(),
         lmstudio_base_url: mo.lmstudio_base_url.clone(),
     };
@@ -860,5 +936,81 @@ async fn generate_metadata_for_photo(
             Ok(client.generate_metadata(&request).await)
         }
         other => Err(format!("Unknown provider '{other}'.")),
+    }
+}
+
+#[cfg(test)]
+mod keyword_option_tests {
+    use super::*;
+
+    fn fields(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn flat_keyword_categories_json_array_parses() {
+        let opts = parse_options(&fields(&[(
+            "keyword_categories",
+            r#"["People","Places","Nature"]"#,
+        )]));
+        match opts.metadata_request.keyword_categories {
+            Some(KeywordCategories::Flat(list)) => {
+                assert_eq!(list, vec!["People", "Places", "Nature"]);
+            }
+            other => panic!("expected Flat categories, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_keyword_categories_json_object_parses() {
+        let opts = parse_options(&fields(&[(
+            "keyword_categories",
+            r#"{"Nature":{"Flower":{},"Animal":{}},"Places":{}}"#,
+        )]));
+        match opts.metadata_request.keyword_categories {
+            Some(KeywordCategories::Nested(tree)) => {
+                assert_eq!(tree.len(), 2);
+                let nature = tree.iter().find(|(name, _)| name == "Nature").unwrap();
+                assert_eq!(nature.1.len(), 2);
+            }
+            other => panic!("expected Nested categories, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_or_absent_keyword_categories_is_none() {
+        assert!(parse_options(&fields(&[("keyword_categories", "{}")]))
+            .metadata_request
+            .keyword_categories
+            .is_none());
+        assert!(parse_options(&fields(&[("keyword_categories", "[]")]))
+            .metadata_request
+            .keyword_categories
+            .is_none());
+        assert!(parse_options(&fields(&[]))
+            .metadata_request
+            .keyword_categories
+            .is_none());
+    }
+
+    #[test]
+    fn bilingual_and_alias_and_language_and_catalog_keywords_are_wired() {
+        let opts = parse_options(&fields(&[
+            ("bilingual_keywords", "true"),
+            ("keyword_secondary_language", "French"),
+            ("generate_aliases", "true"),
+            ("catalog_keywords", r#"["cat","dog"]"#),
+        ]));
+        let mo = &opts.metadata_request;
+        assert!(mo.bilingual_keywords);
+        assert_eq!(mo.keyword_secondary_language.as_deref(), Some("French"));
+        assert!(mo.generate_aliases);
+        assert_eq!(
+            mo.catalog_keywords,
+            Some(vec!["cat".to_string(), "dog".to_string()])
+        );
     }
 }

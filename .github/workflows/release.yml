@@ -73,9 +73,13 @@ jobs:
             # back to the same dev version the binary itself defaults to.
             VERSION="0.0.0-dev"
           fi
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f2)
-          REVISION=$(echo "$VERSION" | cut -d. -f3)
+          # Info.lua's MAJOR/MINOR/REVISION are plain Lua number literals, so
+          # drop any prerelease suffix (e.g. "3.0.0-pre3" -> "3.0.0") before
+          # splitting — they may only contain numbers.
+          VERSION_NUMERIC="${VERSION%%-*}"
+          MAJOR=$(echo "$VERSION_NUMERIC" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NUMERIC" | cut -d. -f2)
+          REVISION=$(echo "$VERSION_NUMERIC" | cut -d. -f3)
           MAJOR=${MAJOR:-0}
           MINOR=${MINOR:-0}
           REVISION=${REVISION:-0}
@@ -433,9 +437,13 @@ jobs:
           else
             VERSION="0.0.0-dev"
           fi
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f2)
-          REVISION=$(echo "$VERSION" | cut -d. -f3)
+          # Info.lua's MAJOR/MINOR/REVISION are plain Lua number literals, so
+          # drop any prerelease suffix (e.g. "3.0.0-pre3" -> "3.0.0") before
+          # splitting — they may only contain numbers.
+          VERSION_NUMERIC="${VERSION%%-*}"
+          MAJOR=$(echo "$VERSION_NUMERIC" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NUMERIC" | cut -d. -f2)
+          REVISION=$(echo "$VERSION_NUMERIC" | cut -d. -f3)
           MAJOR=${MAJOR:-0}
           MINOR=${MINOR:-0}
           REVISION=${REVISION:-0}

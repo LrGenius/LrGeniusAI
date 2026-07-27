@@ -107,7 +107,7 @@ if [ -n "\$CURRENT_USER" ] && [ "\$CURRENT_USER" -ne 0 ]; then
 
     # Relocate Plugin to current user's Library
     CURRENT_USER_NAME=\$(id -un "\$CURRENT_USER")
-    CURRENT_USER_HOME=\$(dscl . -read "/Users/\$CURRENT_USER_NAME" NFSHomeDirectory | awk '{print $2}')
+    CURRENT_USER_HOME=\$(dscl . -read "/Users/\$CURRENT_USER_NAME" NFSHomeDirectory | awk '{print \$2}')
     if [ -d "\$CURRENT_USER_HOME" ]; then
         PLUGIN_TARGET_DIR="\$CURRENT_USER_HOME/Library/Application Support/Adobe/Lightroom/Modules"
         echo "Relocating plugin to \$PLUGIN_TARGET_DIR"
