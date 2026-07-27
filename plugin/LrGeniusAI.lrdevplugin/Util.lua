@@ -1499,22 +1499,39 @@ function Util.addPhotoToRejectedDescriptionsCollection(photo, writeOptions)
 	local setName = LOC("$$$/LrGeniusAI/Rejected/CollectionSetName=LrGeniusAI")
 	local collName = LOC("$$$/LrGeniusAI/Rejected/CollectionName=Rejected AI Descriptions")
 
-	local collectionSet, collection
-
-	local function findSetAndCollection()
-		local children = catalog:getChildCollections()
-		if children then
-			for _, child in ipairs(children) do
-				if child:type() == "LrCollectionSet" and child:getName() == setName then
-					collectionSet = child
-					break
+	-- Creating a collection (or collection set) and then immediately reading/using
+	-- it in the same withWriteAccessDo call can fail with a "can't get collection
+	-- info" error because the object isn't fully committed until the write-access
+	-- block exits. Use separate blocks, matching the pattern used elsewhere
+	-- (TaskFindSimilarFaces.lua, TaskFindSimilarImages.lua, TaskPeople.lua, TaskSemanticSearch.lua).
+	local collectionSet
+	catalog:withWriteAccessDo(
+		LOC("$$$/LrGeniusAI/Rejected/CreateCollectionSet=Create LrGeniusAI Collection Set"),
+		function()
+			local children = catalog:getChildCollections()
+			if children then
+				for _, child in ipairs(children) do
+					if child:type() == "LrCollectionSet" and child:getName() == setName then
+						collectionSet = child
+						break
+					end
 				end
 			end
-		end
-		if not collectionSet then
-			collectionSet = catalog:createCollectionSet(setName, nil, true)
-		end
-		if collectionSet then
+			if not collectionSet then
+				collectionSet = catalog:createCollectionSet(setName, nil, true)
+			end
+		end,
+		writeOptions
+	)
+	if not collectionSet then
+		log:error("Util.addPhotoToRejectedDescriptionsCollection: could not create/find collection set")
+		return
+	end
+
+	local collection
+	catalog:withWriteAccessDo(
+		LOC("$$$/LrGeniusAI/Rejected/CreateCollection=Create Rejected AI Descriptions Collection"),
+		function()
 			local collChildren = collectionSet:getChildCollections()
 			if collChildren then
 				for _, c in ipairs(collChildren) do
@@ -1527,14 +1544,16 @@ function Util.addPhotoToRejectedDescriptionsCollection(photo, writeOptions)
 			if not collection then
 				collection = catalog:createCollection(collName, collectionSet, false)
 			end
-		end
+		end,
+		writeOptions
+	)
+	if not collection then
+		log:error("Util.addPhotoToRejectedDescriptionsCollection: could not create/find collection")
+		return
 	end
 
 	catalog:withWriteAccessDo(LOC("$$$/LrGeniusAI/Rejected/AddToCollection=Add to Rejected AI Descriptions"), function()
-		findSetAndCollection()
-		if collection then
-			collection:addPhotos({ photo })
-		end
+		collection:addPhotos({ photo })
 	end, writeOptions)
 end
 
