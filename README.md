@@ -6,6 +6,8 @@
   [![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)]()
   [![Website](https://img.shields.io/badge/Website-lrgenius.com-00B2FF?style=for-the-badge)]()
   [![Downloads](https://img.shields.io/github/downloads/LrGenius/LrGeniusAI/total?style=for-the-badge&label=Downloads)](https://github.com/LrGenius/LrGeniusAI/releases)
+
+  [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7X2240HF4)
 </div>
 
 ---
