@@ -12,6 +12,15 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- Without an explicit ProcessType, launchd puts this daemon in
+         PRIO_DARWIN_BG, which applies IOPOL_THROTTLE to its disk I/O.
+         Measured on an M4 Pro with the catalog on an external volume:
+         ~1.18s median per indexed photo throttled vs ~0.19s unthrottled,
+         with P-core residency unchanged either way — the cost is I/O, not
+         CPU. The backend only works while Lightroom waits on it, so it is
+         latency-sensitive and must not be treated as background work. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
     <key>StandardOutPath</key>
     <string>/Library/Logs/LrGeniusAI/service.log</string>
     <key>StandardErrorPath</key>
