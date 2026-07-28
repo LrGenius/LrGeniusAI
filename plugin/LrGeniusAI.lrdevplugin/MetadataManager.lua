@@ -165,8 +165,12 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 			)
 		end
 
+		-- The top-level keyword is the container for every generated keyword and is
+		-- independent of the hierarchy setting: hierarchy only controls whether the LLM
+		-- groups keywords into categories underneath it. With hierarchy off the keywords
+		-- become one flat level of children here rather than moving to catalog root.
 		local topKeyword = nil
-		if prefs.useKeywordHierarchy and options.useTopLevelKeyword then
+		if options.useTopLevelKeyword then
 			catalog:withWriteAccessDo(
 				"$$$/lrc-ai-assistant/AnalyzeImageTask/saveTopKeyword=Save AI generated keywords",
 				function()
@@ -193,7 +197,10 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 				end
 			)
 			-- Keep track of used top-level keywords
-			if not Util.table_contains(prefs.knownTopLevelKeywords, options.topLevelKeyword) then
+			if
+				options.topLevelKeyword
+				and not Util.table_contains(prefs.knownTopLevelKeywords, options.topLevelKeyword)
+			then
 				table.insert(prefs.knownTopLevelKeywords, options.topLevelKeyword)
 			end
 		end
@@ -782,7 +789,10 @@ function MetadataManager.addKeywordRecursively(
 					then
 						log:trace("Skipping keyword: " .. tostring(keywordName) .. " as it is reserved.")
 					else
-						local currentParent = prefs.useKeywordHierarchy and parent or nil
+						-- `parent` is already the correct target in both modes: the enclosing
+						-- category with hierarchy on, the top-level keyword (or nil) with
+						-- hierarchy off — the recursion below keeps it pinned there.
+						local currentParent = parent
 
 						-- Bilingual translations + their same-language aliases all land in the
 						-- LR synonym field of the primary keyword. The primary's own aliases
@@ -807,11 +817,14 @@ function MetadataManager.addKeywordRecursively(
 			end
 		end
 		if type(value) == "table" and not isKeywordLeafObject(value) then
+			-- Hierarchy off: never deepen the tree. Keep handing the same parent down so a
+			-- nested response still lands as one flat level under the top-level keyword.
+			local childParent = prefs.useKeywordHierarchy and keyword or parent
 			MetadataManager.addKeywordRecursively(
 				photo,
 				catalog,
 				value,
-				keyword,
+				childParent,
 				existingKeywordNames,
 				currentTopLevelKeyword,
 				sessionCache
