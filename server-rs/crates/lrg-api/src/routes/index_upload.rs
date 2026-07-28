@@ -60,6 +60,11 @@ struct MetadataOptions {
     existing_keywords: Option<Vec<String>>,
     folder_names: Option<String>,
     user_context: Option<String>,
+    /// Custom system prompt from the plugin's "Instructions / Prompt" field
+    /// (multipart/JSON field `prompt`). `None` falls back to
+    /// `DEFAULT_SYSTEM_PROMPT`.
+    system_prompt: Option<String>,
+    date_time: Option<String>,
     keyword_categories: Option<KeywordCategories>,
     bilingual_keywords: bool,
     keyword_secondary_language: Option<String>,
@@ -222,6 +227,14 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             existing_keywords,
             folder_names: fields.get("folder_names").cloned(),
             user_context: fields.get("user_context").cloned(),
+            system_prompt: fields
+                .get("prompt")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            date_time: fields
+                .get("date_time")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             keyword_categories: fields
                 .get("keyword_categories")
                 .and_then(|raw| parse_keyword_categories(raw)),
@@ -891,7 +904,7 @@ async fn generate_metadata_for_photo(
         language: mo.language.clone(),
         temperature: mo.temperature,
         max_tokens: mo.max_tokens,
-        system_prompt: None,
+        system_prompt: mo.system_prompt.clone(),
         user_prompt: None,
         submit_keywords: mo.submit_keywords,
         submit_folder_names: mo.submit_folder_names,
@@ -899,7 +912,7 @@ async fn generate_metadata_for_photo(
         location_data,
         folder_names: mo.folder_names.clone(),
         user_context: mo.user_context.clone(),
-        date_time: None,
+        date_time: mo.date_time.clone(),
         keyword_categories: mo.keyword_categories.clone(),
         bilingual_keywords: mo.bilingual_keywords,
         keyword_secondary_language: mo.keyword_secondary_language.clone(),
@@ -993,6 +1006,29 @@ mod keyword_option_tests {
         assert!(parse_options(&fields(&[]))
             .metadata_request
             .keyword_categories
+            .is_none());
+    }
+
+    #[test]
+    fn custom_prompt_and_date_time_are_wired() {
+        let opts = parse_options(&fields(&[
+            ("prompt", "  You are a bird expert.  "),
+            ("date_time", "2026-07-28 11:18:22"),
+        ]));
+        let mo = &opts.metadata_request;
+        assert_eq!(mo.system_prompt.as_deref(), Some("You are a bird expert."));
+        assert_eq!(mo.date_time.as_deref(), Some("2026-07-28 11:18:22"));
+    }
+
+    #[test]
+    fn blank_or_absent_prompt_falls_back_to_default() {
+        assert!(parse_options(&fields(&[("prompt", "   ")]))
+            .metadata_request
+            .system_prompt
+            .is_none());
+        assert!(parse_options(&fields(&[]))
+            .metadata_request
+            .system_prompt
             .is_none());
     }
 
