@@ -4,6 +4,7 @@
 MetadataManager = {}
 local createKeywordSafely
 local findKeywordByNameInParent
+local mergeKeywordSynonyms
 
 -- Session cache bucket for nil parent (cannot use nil as table key).
 local KEYWORD_CACHE_ROOT = {}
@@ -68,7 +69,9 @@ end
 -- @param photo The LrPhoto object.
 -- @param aiResponse The parsed JSON response from the AI.
 -- @param validatedData The data from the review dialog, indicating what to save.
--- @param ai (AiModelAPI instance) The AI model API instance.
+-- @param options table|nil Apply flags. `options.keywordSessionCache` may hold a table
+--        shared across all photos of a run so the keyword cache and the alias index are
+--        built once rather than per photo; pass a fresh table per run, not per photo.
 --
 function MetadataManager.applyMetadata(photo, response, validatedData, options)
 	log:trace("Applying metadata to photo: " .. photo:getFormattedMetadata("fileName"))
@@ -136,21 +139,30 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 	-- Save keywords (sessionCache avoids LrKeyword:getChildren() when the SDK errors there)
 	log:trace("Saving keywords to catalog")
 	if saveKeywords and keywords ~= nil and type(keywords) == "table" and prefs.generateKeywords then
-		local keywordSessionCache = {}
+		-- Callers processing a batch should pass `options.keywordSessionCache` so the
+		-- keyword lookup cache and the alias index are built once for the whole run
+		-- instead of once per photo (both are O(catalog keywords) to construct).
+		local keywordSessionCache = options.keywordSessionCache or {}
 
 		-- Build alias-dedup index when alias mode is on. Scope follows the user's
 		-- top-level-keyword preference so we don't merge into hand-curated branches.
-		if options.generateAliases then
+		-- Skipped when a shared cache already carries an index from an earlier photo.
+		if options.generateAliases and not keywordSessionCache._aliasIndex then
 			local indexScope = nil
 			if options.useTopLevelKeyword and options.topLevelKeyword and options.topLevelKeyword ~= "" then
 				indexScope = findKeywordByNameInParent(nil, catalog, keywordSessionCache, nil, options.topLevelKeyword)
 			end
 			keywordSessionCache._aliasIndex = MetadataManager.buildAliasIndex(catalog, indexScope)
-			local aliasIndexCount = 0
-			for _ in pairs(keywordSessionCache._aliasIndex) do
-				aliasIndexCount = aliasIndexCount + 1
+			local nameCount, synonymCount = 0, 0
+			for _ in pairs(keywordSessionCache._aliasIndex.byName) do
+				nameCount = nameCount + 1
 			end
-			log:trace("Alias index built with " .. tostring(aliasIndexCount) .. " entries")
+			for _ in pairs(keywordSessionCache._aliasIndex.bySynonym) do
+				synonymCount = synonymCount + 1
+			end
+			log:trace(
+				"Alias index built with " .. tostring(nameCount) .. " names, " .. tostring(synonymCount) .. " synonyms"
+			)
 		end
 
 		local topKeyword = nil
@@ -166,6 +178,10 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 						nil,
 						keywordSessionCache
 					)
+					-- createKeyword ignores its synonyms argument when returnExisting=true
+					-- matches a keyword that already exists, so a top-level keyword created
+					-- before this marker existed (or by hand) would never receive it.
+					mergeKeywordSynonyms(topKeyword, { Defaults.topLevelKeywordSynonym })
 					if topKeyword then
 						local okAdd, errAdd = LrTasks.pcall(function()
 							photo:addKeyword(topKeyword) -- Add top-level keyword to photo. To see the number of tagged photos in keyword list (Gerald Uhl)
@@ -333,7 +349,8 @@ end
 -- Additively merges `incomingSynonyms` into the LR synonym field of `keywordObj`.
 -- Existing synonyms are preserved; entries equal to the keyword name or already
 -- present (case-insensitive) are skipped. No-op when there is nothing to add.
-local function mergeKeywordSynonyms(keywordObj, incomingSynonyms)
+-- Must be called inside a catalog write-access gate (uses LrKeyword:setAttributes).
+mergeKeywordSynonyms = function(keywordObj, incomingSynonyms)
 	if not keywordObj or type(incomingSynonyms) ~= "table" or #incomingSynonyms == 0 then
 		return
 	end
@@ -423,22 +440,27 @@ createKeywordSafely = function(catalog, keywordName, synonyms, includeOnExport, 
 end
 
 ---
--- Builds a flat lookup map of (lower-cased name | synonym) -> LrKeyword by walking
--- the catalog keyword tree once per analysis run. Used for alias-based de-duplication
--- so a newly generated keyword can be matched against an existing keyword that lists
--- it as a synonym.
+-- Builds a two-tier lookup index by walking the catalog keyword tree once per
+-- analysis run. Used for alias-based de-duplication so a newly generated keyword
+-- can be matched against an existing keyword that already covers it.
+--
+--   byName    : lower(keyword name) -> LrKeyword   — authoritative
+--   bySynonym : lower(LR synonym)   -> LrKeyword | false  — fallback only
+--
+-- Keyword names always win. LR synonyms are a strict fallback because that field
+-- can hold junk from older plugin versions (hypernyms / co-occurring terms), and
+-- matching on it too eagerly would re-route fresh keywords into the wrong bucket.
+-- A synonym claimed by two different keywords is stored as `false` and never
+-- matches, which removes the ambiguous cases cheaply.
 -- @param catalog LrCatalog
 -- @param scope LrKeyword|nil If provided, only keywords under this subtree are indexed.
--- @return table Flat map of lower-cased text to LrKeyword.
+-- @return table { byName = {...}, bySynonym = {...} }
 function MetadataManager.buildAliasIndex(catalog, scope)
-	local index = {}
+	local index = { byName = {}, bySynonym = {} }
 	if not catalog then
 		return index
 	end
 
-	-- Index by keyword name only. We deliberately do NOT index by LR synonyms:
-	-- past AI runs may have polluted that field with hypernyms / co-occurring terms,
-	-- and indexing them would silently re-route fresh keywords into the wrong bucket.
 	local function indexKeyword(kw)
 		if not kw or type(kw.getName) ~= "function" then
 			return
@@ -446,10 +468,35 @@ function MetadataManager.buildAliasIndex(catalog, scope)
 		local okName, name = LrTasks.pcall(function()
 			return kw:getName()
 		end)
+		local nameKey
 		if okName and type(name) == "string" then
-			local key = string.lower(Util.trim(name))
-			if key ~= "" and not index[key] then
-				index[key] = kw
+			nameKey = string.lower(Util.trim(name))
+			if nameKey ~= "" and not index.byName[nameKey] then
+				index.byName[nameKey] = kw
+			end
+		end
+
+		if type(kw.getSynonyms) ~= "function" then
+			return
+		end
+		local okSyn, synonyms = LrTasks.pcall(function()
+			return kw:getSynonyms() or {}
+		end)
+		if not okSyn or type(synonyms) ~= "table" then
+			return
+		end
+		for _, synonym in ipairs(synonyms) do
+			if type(synonym) == "string" then
+				local key = string.lower(Util.trim(synonym))
+				if key ~= "" and key ~= nameKey then
+					local existing = index.bySynonym[key]
+					if existing == nil then
+						index.bySynonym[key] = kw
+					elseif existing ~= false and existing ~= kw then
+						-- Two keywords claim this synonym — too ambiguous to merge on.
+						index.bySynonym[key] = false
+					end
+				end
 			end
 		end
 	end
@@ -492,8 +539,11 @@ function MetadataManager.buildAliasIndex(catalog, scope)
 end
 
 ---
--- Looks up a candidate keyword in the alias index by its name first and
--- then by each of its aliases. Returns the matched LrKeyword or nil.
+-- Looks up a candidate keyword in the two-tier alias index. Every term (the
+-- candidate name, then each alias) is tried against keyword names first; only
+-- when all of them miss do we fall back to the LR synonym tier. That ordering
+-- means an existing keyword name always beats a synonym claim.
+-- @return LrKeyword|nil
 local function findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
 	if type(aliasIndex) ~= "table" or type(candidateName) ~= "string" then
 		return nil
@@ -502,19 +552,25 @@ local function findKeywordByAliases(aliasIndex, candidateName, candidateAliases)
 	if nameKey == "" then
 		return nil
 	end
-	local hit = aliasIndex[nameKey]
-	if hit then
-		return hit
-	end
+
+	local terms = { nameKey }
 	if type(candidateAliases) == "table" then
 		for _, alias in ipairs(candidateAliases) do
 			if type(alias) == "string" then
 				local key = string.lower(Util.trim(alias))
 				if key ~= "" then
-					hit = aliasIndex[key]
-					if hit then
-						return hit
-					end
+					table.insert(terms, key)
+				end
+			end
+		end
+	end
+
+	for _, tier in ipairs({ aliasIndex.byName, aliasIndex.bySynonym }) do
+		if type(tier) == "table" then
+			for _, term in ipairs(terms) do
+				local hit = tier[term]
+				if hit then -- `false` (ambiguous synonym) is skipped here
+					return hit
 				end
 			end
 		end
@@ -609,12 +665,19 @@ function MetadataManager.addKeywordRecursively(
 	end
 
 	-- Resolve a keyword by alias-index (if available), then by name within the parent,
-	-- otherwise create it. Same-language `aliases` are kept only in the in-memory alias
-	-- index for run-scoped dedup; they are NOT persisted to LR's synonym field, since
-	-- LLMs unreliably distinguish true synonyms from hypernyms/co-occurring concepts
-	-- and polluted synonyms cascade into the dedup tool's exact-match pass.
-	-- Bilingual translations (passed via `lrSynonyms`) DO land in the LR synonym field
-	-- so cross-language search works; existing keywords get an additive merge.
+	-- otherwise create it.
+	--
+	-- De-clutter and bilingual keywords interact here, and de-clutter wins: exactly one
+	-- keyword ends up on the photo, chosen by the alias index. Bilingual then makes sure
+	-- nothing becomes unfindable — every alternate term for that concept is merged into
+	-- the winner's LR synonym field:
+	--   * bilingual translations and their `synonym_aliases` (passed via `lrSynonyms`)
+	--   * the candidate's own name, when de-clutter routed it to a differently-named
+	--     keyword ("Automobile" -> existing "Car" writes "Automobile" as a synonym of
+	--     "Car", so searching either term still finds the photo)
+	-- Same-language `aliases` stay out of the synonym field: LLMs unreliably distinguish
+	-- true synonyms from hypernyms/co-occurring concepts, so they only feed the in-memory
+	-- index for run-scoped dedup.
 	local aliasIndex = sessionCache and sessionCache._aliasIndex or nil
 	local function resolveAndAttachKeyword(candidateName, candidateAliases, currentParent, lrSynonyms)
 		if type(candidateName) ~= "string" or candidateName == "" then
@@ -637,34 +700,55 @@ function MetadataManager.addKeywordRecursively(
 		if not resolved then
 			resolved = findKeywordByNameInParent(photo, catalog, sessionCache, currentParent, candidateName)
 		end
+
+		-- lower-cased name of the keyword that actually won, or nil if unreadable
+		local resolvedKey
 		if resolved then
+			local okName, resolvedName = LrTasks.pcall(function()
+				return resolved:getName() or ""
+			end)
+			if okName then
+				resolvedKey = string.lower(Util.trim(resolvedName))
+			end
+			-- De-clutter routed the generated name to a differently-named keyword: keep
+			-- the generated name searchable by recording it as a synonym of the winner.
+			if resolvedKey and resolvedKey ~= nameLower then
+				table.insert(filteredLrSynonyms, Util.trim(candidateName))
+			end
 			mergeKeywordSynonyms(resolved, filteredLrSynonyms)
 		else
 			resolved =
 				createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
+			if resolved then
+				resolvedKey = nameLower
+			end
 		end
 
-		-- Register the new keyword (and its aliases / bilingual synonyms) in the alias
-		-- index so the next candidate in the same run can dedupe against it.
+		-- Register the winner in the alias index so later candidates in this run dedupe
+		-- against it. Only an actual keyword name goes into the authoritative name tier;
+		-- aliases, translations and de-cluttered-away names go into the fallback tier.
 		if resolved and aliasIndex then
-			if nameLower ~= "" and not aliasIndex[nameLower] then
-				aliasIndex[nameLower] = resolved
+			if resolvedKey and resolvedKey ~= "" and not aliasIndex.byName[resolvedKey] then
+				aliasIndex.byName[resolvedKey] = resolved
 			end
-			local function indexAll(list)
+			local function indexAsSynonym(list)
 				if type(list) ~= "table" then
 					return
 				end
 				for _, entry in ipairs(list) do
 					if type(entry) == "string" then
 						local key = string.lower(Util.trim(entry))
-						if key ~= "" and not aliasIndex[key] then
-							aliasIndex[key] = resolved
+						-- `== nil`, not falsy: an existing `false` marks a synonym claimed by
+						-- two catalog keywords, and that guard must not be cleared here.
+						if key ~= "" and key ~= resolvedKey and aliasIndex.bySynonym[key] == nil then
+							aliasIndex.bySynonym[key] = resolved
 						end
 					end
 				end
 			end
-			indexAll(candidateAliases)
-			indexAll(filteredLrSynonyms)
+			indexAsSynonym({ candidateName })
+			indexAsSynonym(candidateAliases)
+			indexAsSynonym(filteredLrSynonyms)
 		end
 
 		if resolved then
@@ -736,9 +820,7 @@ function MetadataManager.addKeywordRecursively(
 	end
 end
 
--- @param dedupedKeywords  table|nil  Keyword structure after de-clutter mapping
--- @param mergedPairs      table|nil  {{from="Automobile", to="Car"}, ...}
-function MetadataManager.showValidationDialog(ctx, photo, response, options, dedupedKeywords, mergedPairs)
+function MetadataManager.showValidationDialog(ctx, photo, response, options)
 	local f = LrView.osFactory()
 	local bind = LrView.bind
 
@@ -751,39 +833,14 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 	propertyTable.skipFromHere = false
 
 	-- ── Keyword extraction ────────────────────────────────────────────────
-	-- Original (generated) keywords
-	local origKwVal, origKwMeta, origOrderedIds = Util.extractAllKeywords(keywords or {})
-
-	-- De-cluttered keywords (may be nil if no dedup ran)
-	local dedupKwVal, dedupKwMeta, dedupOrderedIds
-	if dedupedKeywords then
-		dedupKwVal, dedupKwMeta, dedupOrderedIds = Util.extractAllKeywords(dedupedKeywords)
-	end
-
-	-- Decide whether there is actually something to compare
-	local hasDiff = dedupedKeywords ~= nil and #(dedupOrderedIds or {}) > 0
-
-	-- Active set: de-cluttered when available, otherwise original
-	local activeKwVal = hasDiff and dedupKwVal or origKwVal
-	local activeKwMeta = hasDiff and dedupKwMeta or origKwMeta
-	local activeOrderedIds = hasDiff and dedupOrderedIds or origOrderedIds
-
-	-- Build lookup: canonical_lower → list of original names that were merged into it
-	local fromOrigLookup = {} -- canonical_lower → {"Automobile", "Feline", ...}
-	if hasDiff and mergedPairs then
-		for _, pair in ipairs(mergedPairs) do
-			local k = pair.to:lower()
-			if not fromOrigLookup[k] then
-				fromOrigLookup[k] = {}
-			end
-			table.insert(fromOrigLookup[k], pair.from)
-		end
-	end
+	-- The generated keywords as-is. De-clutter (keyword reuse) happens later, at
+	-- apply time in addKeywordRecursively, so there is nothing to preview here.
+	local kwVal, kwMeta, orderedIds = Util.extractAllKeywords(keywords or {})
 
 	-- ── Property table initialisation ────────────────────────────────────
-	for _, id in ipairs(activeOrderedIds) do
-		local fullPath = activeKwVal[id] or ""
-		local prefix = activeKwMeta[id].path
+	for _, id in ipairs(orderedIds) do
+		local fullPath = kwVal[id] or ""
+		local prefix = kwMeta[id].path
 		if prefix and prefix ~= "" then
 			fullPath = prefix .. " > " .. fullPath
 		end
@@ -803,99 +860,23 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 	-- ── Keyword rows ──────────────────────────────────────────────────────
 	local keywordRows = { spacing = 2 }
 
-	if hasDiff then
-		-- Column header row
+	for _, id in ipairs(orderedIds) do
 		table.insert(
 			keywordRows,
 			f:row({
-				spacing = 4,
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/MetadataManager/ColGenerated=Generated"),
-					width = 185,
-					font = "<system/bold>",
-					enabled = false,
+				f:checkbox({
+					value = bind("keywordsSel_" .. id),
+					visible = bind("saveKeywords"),
 				}),
-				f:spacer({ width = 18 }),
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/MetadataManager/ColDeCluttered=De-cluttered"),
-					font = "<system/bold>",
+				f:edit_field({
+					value = bind("keywordsVal_" .. id),
+					width_in_chars = 45,
+					immediate = true,
+					enabled = bind("saveKeywords"),
 				}),
 			})
 		)
-		table.insert(keywordRows, f:separator({ fill_horizontal = 1 }))
-
-		-- One row per de-cluttered keyword, paired with its original(s)
-		for _, id in ipairs(activeOrderedIds) do
-			local dedupName = activeKwVal[id] or ""
-			local fromList = fromOrigLookup[dedupName:lower()] or {}
-			local changed = #fromList > 0
-			local origDisplay = changed and table.concat(fromList, " / ") or dedupName
-
-			table.insert(
-				keywordRows,
-				f:row({
-					spacing = 4,
-					-- Left column: original name, dimmed when it was replaced
-					f:static_text({
-						title = origDisplay,
-						width = 185,
-						enabled = not changed,
-					}),
-					-- Arrow: visible only when the name changed
-					f:static_text({
-						title = changed and "→" or " ",
-						width = 18,
-						alignment = "center",
-					}),
-					-- Right column: the de-cluttered keyword (editable)
-					f:checkbox({
-						value = bind("keywordsSel_" .. id),
-						visible = bind("saveKeywords"),
-					}),
-					f:edit_field({
-						value = bind("keywordsVal_" .. id),
-						width_in_chars = 26,
-						immediate = true,
-						enabled = bind("saveKeywords"),
-					}),
-				})
-			)
-		end
-	else
-		-- Standard single-column view (no dedup)
-		for _, id in ipairs(activeOrderedIds) do
-			table.insert(
-				keywordRows,
-				f:row({
-					f:checkbox({
-						value = bind("keywordsSel_" .. id),
-						visible = bind("saveKeywords"),
-					}),
-					f:edit_field({
-						value = bind("keywordsVal_" .. id),
-						width_in_chars = 45,
-						immediate = true,
-						enabled = bind("saveKeywords"),
-					}),
-				})
-			)
-		end
 	end
-
-	-- ── Merge count label ─────────────────────────────────────────────────
-	local mergeCount = mergedPairs and #mergedPairs or 0
-	local mergeLabel = hasDiff
-			and mergeCount > 0
-			and f:static_text({
-				title = LOC(
-					"$$$/LrGeniusAI/MetadataManager/MergedCount=^1 keyword^2 merged with existing catalog terms",
-					tostring(mergeCount),
-					mergeCount == 1 and "" or "s"
-				),
-				fill_horizontal = 1,
-				enabled = false,
-			})
-		or f:spacer({ fill_horizontal = 1 })
 
 	-- ── Dialog layout ─────────────────────────────────────────────────────
 	local dialogView = f:row({
@@ -929,11 +910,11 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 				title = LOC("$$$/LrGeniusAI/Keywords=Keywords"),
 				fill_horizontal = 1,
 				f:row({
-					mergeLabel,
+					f:spacer({ fill_horizontal = 1 }),
 					f:push_button({
 						title = LOC("$$$/LrGeniusAI/MetadataManager/SelectAll=Select All"),
 						action = function()
-							for _, id in ipairs(activeOrderedIds) do
+							for _, id in ipairs(orderedIds) do
 								propertyTable["keywordsSel_" .. id] = true
 							end
 						end,
@@ -941,7 +922,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 					f:push_button({
 						title = LOC("$$$/LrGeniusAI/MetadataManager/DeselectAll=Deselect All"),
 						action = function()
-							for _, id in ipairs(activeOrderedIds) do
+							for _, id in ipairs(orderedIds) do
 								propertyTable["keywordsSel_" .. id] = false
 							end
 						end,
@@ -953,7 +934,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 				}),
 				f:scrolled_view({
 					height = 250,
-					width = hasDiff and 590 or 560,
+					width = 560,
 					f:column(keywordRows),
 				}),
 			}),
@@ -1013,9 +994,9 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 	local validatedKeywords = {}
 	if propertyTable.saveKeywords then
 		local pathsWithMeta = {}
-		for _, id in ipairs(activeOrderedIds) do
+		for _, id in ipairs(orderedIds) do
 			if propertyTable["keywordsSel_" .. id] then
-				local meta = activeKwMeta[id] or {}
+				local meta = kwMeta[id] or {}
 				table.insert(pathsWithMeta, {
 					path = propertyTable["keywordsVal_" .. id],
 					synonyms = meta.synonyms or {},
@@ -1038,61 +1019,6 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options, ded
 	results.skipFromHere = propertyTable.skipFromHere
 
 	return result, results
-end
-
----
--- Collects up to `limit` unique keyword names from the full catalog keyword tree.
--- Returns a flat sorted list of strings suitable for sending to the backend as
--- catalog vocabulary context.
--- @param catalog LrCatalog
--- @param limit number Max names to return (default 300)
--- @return table Flat list of keyword name strings
-function MetadataManager.collectCatalogKeywordNames(catalog, limit)
-	limit = limit or math.huge
-	local names = {}
-	local seen = {}
-	local count = 0
-
-	local function walk(keywords)
-		if count >= limit or type(keywords) ~= "table" then
-			return
-		end
-		for _, kw in ipairs(keywords) do
-			if count >= limit then
-				break
-			end
-			local okName, name = LrTasks.pcall(function()
-				return kw:getName()
-			end)
-			if okName and type(name) == "string" then
-				local key = string.lower(Util.trim(name))
-				if key ~= "" and not seen[key] then
-					seen[key] = true
-					table.insert(names, Util.trim(name))
-					count = count + 1
-				end
-			end
-			if type(kw.getChildren) == "function" then
-				local okCh, children = LrTasks.pcall(function()
-					return kw:getChildren() or {}
-				end)
-				if okCh then
-					walk(children)
-				end
-			end
-		end
-	end
-
-	local okTop, topKeywords = LrTasks.pcall(function()
-		return catalog:getKeywords() or {}
-	end)
-	if okTop then
-		walk(topKeywords)
-	end
-	table.sort(names, function(a, b)
-		return a:lower() < b:lower()
-	end)
-	return names
 end
 
 ---

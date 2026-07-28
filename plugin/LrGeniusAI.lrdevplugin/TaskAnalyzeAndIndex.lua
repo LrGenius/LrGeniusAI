@@ -692,49 +692,6 @@ local function showPhotoContextDialog(photo)
 	return result, props.photoContextData, props.skipFromHere
 end
 
--- Apply a keyword name mapping to a keyword structure (flat strings, hierarchical dict,
--- or alias-object arrays).  mapping: { lowercase_name = "CanonicalName" }
-local function applyKeywordNameMapping(keywords, mapping)
-	if type(keywords) ~= "table" or not next(mapping) then
-		return keywords
-	end
-	if keywords[1] ~= nil then
-		local result = {}
-		for _, item in ipairs(keywords) do
-			if type(item) == "string" then
-				table.insert(result, mapping[item:lower()] or item)
-			elseif type(item) == "table" and type(item.name) == "string" then
-				local canonical = mapping[item.name:lower()]
-				if canonical then
-					local copy = {}
-					for k, v in pairs(item) do
-						copy[k] = v
-					end
-					copy.name = canonical
-					table.insert(result, copy)
-				else
-					table.insert(result, item)
-				end
-			else
-				table.insert(result, item)
-			end
-		end
-		return result
-	else
-		-- hierarchical dict: keys are keyword/category names
-		local result = {}
-		for key, value in pairs(keywords) do
-			if type(key) == "string" then
-				local canonical = mapping[key:lower()]
-				result[canonical or key] = applyKeywordNameMapping(value, mapping)
-			else
-				result[key] = value
-			end
-		end
-		return result
-	end
-end
-
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("AnalyzeAndIndexTask", function(context)
 		-- Check server connection
@@ -963,16 +920,16 @@ LrTasks.startAsyncTask(function()
 
 		log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
 
+		-- Shared across every applyMetadata call of this run: the keyword lookup cache and
+		-- the alias-dedup index are both O(catalog keywords) to build, so they must not be
+		-- rebuilt per photo. Also lets keywords resolved for earlier photos dedupe later ones.
+		local keywordSessionCache = {}
+
 		-- When validation is disabled, apply metadata inline as each photo's analysis returns
 		-- so keywords/title/caption land on photos progressively instead of all at the end.
 		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
 		local usedInlineApply = false
-		if
-			props.enableMetadata
-			and props.saveDataToCatalog
-			and not props.enableValidation
-			and not props.keywordAliases
-		then
+		if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
 				local response = SearchIndexAPI.getPhotoData(photoId)
@@ -986,6 +943,7 @@ LrTasks.startAsyncTask(function()
 						topLevelKeyword = props.topLevelKeyword,
 						generateAliases = props.keywordAliases,
 						appendMetadata = props.appendMetadata,
+						keywordSessionCache = keywordSessionCache,
 					})
 					SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
 				end
@@ -995,91 +953,6 @@ LrTasks.startAsyncTask(function()
 		local status, processed, failed, processedPhotos, combinedError, combinedWarnings
 		status, processed, failed, processedPhotos, combinedError, combinedWarnings =
 			SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
-
-		-- De-clutter: cluster the generated keywords and build a name-mapping so that
-		-- near-duplicates (e.g. "Automobile" → "Car") are unified before being written
-		-- to the catalog.  Existing catalog keywords are preferred as canonical.
-		-- No LLM validation here — CLIP threshold alone keeps latency reasonable.
-		local keywordMapping = {}
-		local mergedPairs = {} -- {from="Automobile", to="Car"} for dialog display
-		if
-			false
-			and props.keywordAliases
-			and props.generateKeywords
-			and status ~= "allfailed"
-			and #processedPhotos > 0
-		then
-			progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/DeClutterProgress=Deduplicating keywords..."))
-			LrTasks.yield()
-
-			local allNewNames = {}
-			local newNameSet = {}
-			for _, photo in ipairs(processedPhotos) do
-				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
-				if photoId then
-					local resp = SearchIndexAPI.getPhotoData(photoId)
-					if resp and resp.metadata and resp.metadata.keywords then
-						local kwVal, _, orderedIds = Util.extractAllKeywords(resp.metadata.keywords)
-						for _, id in ipairs(orderedIds) do
-							local name = kwVal[id]
-							if name and not newNameSet[name:lower()] then
-								newNameSet[name:lower()] = true
-								table.insert(allNewNames, name)
-							end
-						end
-					end
-				end
-			end
-
-			if #allNewNames >= 2 then
-				local catalogNames = MetadataManager.collectCatalogKeywordNames(LrApplication.activeCatalog(), nil)
-				local existingSet = {}
-				for _, name in ipairs(catalogNames) do
-					existingSet[name:lower()] = name
-				end
-
-				local allNames = {}
-				for _, name in ipairs(catalogNames) do
-					table.insert(allNames, name)
-				end
-				for _, name in ipairs(allNewNames) do
-					if not existingSet[name:lower()] then
-						table.insert(allNames, name)
-					end
-				end
-
-				if #allNames >= 2 then
-					local threshold = prefs.deduplicateThreshold or 0.88
-					local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allNames, threshold, {})
-					if clusterResp and clusterResp.results then
-						for _, cluster in ipairs(clusterResp.results) do
-							if #cluster >= 2 then
-								local canonical = cluster[1]
-								for _, name in ipairs(cluster) do
-									if existingSet[name:lower()] then
-										canonical = existingSet[name:lower()]
-										break
-									end
-								end
-								for _, name in ipairs(cluster) do
-									if name:lower() ~= canonical:lower() then
-										keywordMapping[name:lower()] = canonical
-										table.insert(mergedPairs, { from = name, to = canonical })
-									end
-								end
-							end
-						end
-						local mappingCount = 0
-						for _ in pairs(keywordMapping) do
-							mappingCount = mappingCount + 1
-						end
-						log:trace("De-clutter: " .. mappingCount .. " keyword merges")
-					elseif clusterErr then
-						log:warn("De-clutter: cluster failed: " .. tostring(clusterErr))
-					end
-				end
-			end
-		end
 
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
 			log:trace("Saving metadata for processed photos...")
@@ -1093,13 +966,6 @@ LrTasks.startAsyncTask(function()
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
 					local response = SearchIndexAPI.getPhotoData(photoId)
-
-					-- Pre-compute deduped keywords; the validation dialog shows both
-					-- side-by-side. Non-validation paths apply the mapping automatically.
-					local dedupedKeywords = nil
-					if next(keywordMapping) and response and response.metadata and response.metadata.keywords then
-						dedupedKeywords = applyKeywordNameMapping(response.metadata.keywords, keywordMapping)
-					end
 
 					log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
 					log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
@@ -1115,7 +981,7 @@ LrTasks.startAsyncTask(function()
 								applyCaption = props.generateCaption,
 								applyAltText = props.generateAltText,
 								appendMetadata = props.appendMetadata,
-							}, dedupedKeywords, mergedPairs)
+							})
 
 							if validatedData ~= nil and validatedData.skipFromHere then
 								log:trace("Skipping validation from here for subsequent photos.")
@@ -1133,6 +999,7 @@ LrTasks.startAsyncTask(function()
 									topLevelKeyword = props.topLevelKeyword,
 									generateAliases = props.keywordAliases,
 									appendMetadata = props.appendMetadata,
+									keywordSessionCache = keywordSessionCache,
 								})
 
 								-- Overwrite with validated data
@@ -1153,9 +1020,6 @@ LrTasks.startAsyncTask(function()
 							end
 						else
 							-- Validation has been skipped from here on; apply metadata without showing dialog
-							if dedupedKeywords then
-								response.metadata.keywords = dedupedKeywords
-							end
 							MetadataManager.applyMetadata(photo, response, nil, {
 								applyKeywords = props.generateKeywords,
 								applyTitle = props.generateTitle,
@@ -1165,6 +1029,7 @@ LrTasks.startAsyncTask(function()
 								topLevelKeyword = props.topLevelKeyword,
 								generateAliases = props.keywordAliases,
 								appendMetadata = props.appendMetadata,
+								keywordSessionCache = keywordSessionCache,
 							})
 
 							log:trace(
@@ -1177,9 +1042,6 @@ LrTasks.startAsyncTask(function()
 						end
 					elseif props.enableMetadata and response and response.metadata then
 						-- Directly save generated metadata without validation
-						if dedupedKeywords then
-							response.metadata.keywords = dedupedKeywords
-						end
 						MetadataManager.applyMetadata(photo, response, nil, {
 							applyKeywords = props.generateKeywords,
 							applyTitle = props.generateTitle,
@@ -1189,6 +1051,7 @@ LrTasks.startAsyncTask(function()
 							topLevelKeyword = props.topLevelKeyword,
 							generateAliases = props.keywordAliases,
 							appendMetadata = props.appendMetadata,
+							keywordSessionCache = keywordSessionCache,
 						})
 						savedCount = savedCount + 1
 					end
