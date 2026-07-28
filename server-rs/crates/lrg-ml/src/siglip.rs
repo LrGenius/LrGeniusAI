@@ -71,15 +71,32 @@ fn now_unix() -> i64 {
 /// crashing — the dynamic-batch graphs used here/in CI don't qualify yet.
 /// M9's model export pipeline will ship per-purpose static exports and
 /// this can default to CoreML on macOS at that point.
+///
+/// Measured on an M4 Pro with the current dynamic-batch exports, via
+/// `scripts/bench_index.py --compare-env LRG_ML_EP=coreml`: CoreML claims
+/// only 341 of 1474 graph nodes across 57 partitions, and end-to-end
+/// per-photo latency is unchanged (ratios 0.97x-1.13x, scattered both
+/// ways, n=8-11 per format/size group). So enabling this before M9 buys
+/// nothing — the partition boundaries eat whatever the accelerated nodes
+/// save. Re-measure once static exports land, not before.
 fn build_session(path: &Path) -> ort::Result<Session> {
     let mut builder = Session::builder()?;
     #[cfg(target_os = "macos")]
     if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
         use ort::execution_providers::coreml::{ComputeUnits, ModelFormat};
         use ort::execution_providers::CoreMLExecutionProvider;
+        // `with_static_input_shapes` is load-bearing, not a tuning knob: the
+        // exports here still have a dynamic batch dim, and without this the
+        // EP hands those subgraphs to CoreML anyway, which compiles them and
+        // then aborts the whole process inside MPSGraph ("has unbounded
+        // dimension which is not supported" / "failed assertion `original
+        // module failed verification'"). With it, the EP declines the
+        // dynamic subgraphs and they fall back to the CPU EP registered
+        // below instead of taking the server down.
         builder = builder.with_execution_providers([CoreMLExecutionProvider::default()
             .with_model_format(ModelFormat::MLProgram)
             .with_compute_units(ComputeUnits::All)
+            .with_static_input_shapes(true)
             .with_model_cache_dir(std::env::temp_dir().join("lrg-coreml-cache").display())
             .build()])?;
     }
