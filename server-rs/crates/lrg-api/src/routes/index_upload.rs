@@ -434,6 +434,14 @@ pub(crate) async fn process_batch(
     let mut overrides = overrides;
     overrides.resize(images.len(), PhotoOverrides::default());
 
+    // Per-photo outcomes, keyed by photo_id. A grouped request needs these:
+    // aggregate counts tell the plugin that something in the group failed but
+    // not which photo, and it has to know in order to run its per-photo export
+    // fallback and fire `onPhotoAnalyzed` only for the ones that landed. Any
+    // photo missing from this list did not get far enough to be judged; the
+    // reason is in `error_messages`.
+    let mut results: Vec<Value> = Vec::new();
+
     let mut triplets: Vec<(Vec<u8>, String, String, PhotoOverrides)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
     for ((img, photo_id), photo_overrides) in images.into_iter().zip(photo_ids).zip(overrides) {
@@ -448,6 +456,9 @@ pub(crate) async fn process_batch(
             Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename, photo_overrides)),
             Err(UnsupportedImageError(msg)) => {
                 log::warn!("Skipping {}: {msg}", img.filename);
+                results.push(json!({
+                    "photo_id": photo_id, "success": false, "error": msg.clone(),
+                }));
                 conversion_errors.push(msg);
             }
         }
@@ -498,9 +509,11 @@ pub(crate) async fn process_batch(
     for (image_bytes, photo_id, filename, photo_overrides) in triplets {
         let Some(store_ref) = store.as_ref() else {
             failure_count += 1;
-            error_messages.push(format!(
-                "{filename}: database not initialized (no db_path bound)"
-            ));
+            let msg = "database not initialized (no db_path bound)";
+            results.push(json!({
+                "photo_id": photo_id, "success": false, "error": msg,
+            }));
+            error_messages.push(format!("{filename}: {msg}"));
             continue;
         };
         match prepare_one(
@@ -517,6 +530,9 @@ pub(crate) async fn process_batch(
             Ok(photo) => prepared.push(photo),
             Err(e) => {
                 failure_count += 1;
+                results.push(json!({
+                    "photo_id": photo_id, "success": false, "error": e,
+                }));
                 error_messages.push(format!("{filename}: {e}"));
             }
         }
@@ -581,15 +597,22 @@ pub(crate) async fn process_batch(
     if let Some(store_ref) = store.as_ref() {
         for (photo, llm_response) in prepared.into_iter().zip(llm_responses) {
             let filename = photo.filename.clone();
+            let photo_id = photo.photo_id.clone();
             match finish_one(&state, store_ref, &options, photo, llm_response).await {
                 Ok(warn) => {
                     success_count += 1;
+                    results.push(json!({
+                        "photo_id": photo_id, "success": true, "error": Value::Null,
+                    }));
                     if let Some(w) = warn {
                         warnings.push(w);
                     }
                 }
                 Err(e) => {
                     failure_count += 1;
+                    results.push(json!({
+                        "photo_id": photo_id, "success": false, "error": e,
+                    }));
                     error_messages.push(format!("{filename}: {e}"));
                 }
             }
@@ -617,9 +640,11 @@ pub(crate) async fn process_batch(
                     .join(" | "),
             );
         }
+        // `results` rides along even on the all-failed path: a grouped caller
+        // still needs to know which photo hit which error.
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": msg})),
+            Json(json!({"error": msg, "results": results})),
         )
             .into_response();
     }
@@ -631,6 +656,7 @@ pub(crate) async fn process_batch(
         "failure_count": failure_count,
         "error_messages": error_messages,
         "warnings": warnings,
+        "results": results,
     }))
     .into_response()
 }
