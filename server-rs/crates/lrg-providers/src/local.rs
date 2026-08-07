@@ -58,6 +58,15 @@ pub trait LocalEngine: Send + Sync {
 
     /// Human-readable identifier for the loaded model, as reported to `/models`.
     fn model_name(&self) -> String;
+
+    /// How many photos this engine wants per [`generate`](Self::generate) call.
+    ///
+    /// For llama.cpp this is `n_parallel`: the number of sequences that can
+    /// decode concurrently against the shared prefix. Handing it more than
+    /// that is not wrong, just pointless — the surplus waits for a free slot.
+    fn preferred_batch_size(&self) -> usize {
+        1
+    }
 }
 
 pub type SharedLocalEngine = Arc<dyn LocalEngine>;

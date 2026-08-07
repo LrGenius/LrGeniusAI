@@ -56,6 +56,17 @@ pub trait LlmProvider: Send + Sync {
         true
     }
 
+    /// How many photos this provider wants per
+    /// [`generate_metadata_batch`](Self::generate_metadata_batch) call.
+    ///
+    /// The default of 1 is what keeps the HTTP providers byte-identical to
+    /// their pre-batching behaviour: one photo per call means the default
+    /// [`generate_metadata_batch`] loops exactly once, so they still issue one
+    /// request per photo. Only in-process backends report more.
+    fn preferred_batch_size(&self) -> usize {
+        1
+    }
+
     /// Generate metadata for a group of photos.
     ///
     /// The default is a sequential loop, which is exactly what every caller
@@ -222,6 +233,26 @@ pub fn is_known_provider(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HTTP providers must keep issuing one request per photo. A width of
+    /// 1 makes the default `generate_metadata_batch` loop exactly once, which
+    /// is what makes server-side batching a no-op for them.
+    #[test]
+    fn remote_providers_do_not_batch() {
+        for name in ["chatgpt", "gemini", "ollama", "lmstudio"] {
+            let selection = ProviderSelection {
+                name: name.to_string(),
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            };
+            let provider = build_provider(&selection).expect("should build");
+            assert_eq!(
+                provider.preferred_batch_size(),
+                1,
+                "{name} must not batch photos"
+            );
+        }
+    }
 
     #[test]
     fn openai_alias_resolves_like_chatgpt() {

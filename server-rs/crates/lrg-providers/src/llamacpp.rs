@@ -114,6 +114,10 @@ impl LlmProvider for LlamaCppProvider {
         "llamacpp"
     }
 
+    fn preferred_batch_size(&self) -> usize {
+        self.engine.preferred_batch_size()
+    }
+
     async fn generate_metadata(
         &self,
         request: &MetadataGenerationRequest,

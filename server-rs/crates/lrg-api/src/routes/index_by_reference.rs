@@ -11,8 +11,38 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
-use crate::routes::index_upload::{process_batch, UploadedImage};
+use crate::routes::index_upload::{process_batch, PhotoOverrides, UploadedImage};
 use crate::state::AppState;
+
+/// Pulls the per-photo context out of one `images[]` entry.
+///
+/// A grouped request carries several photos whose capture time, keywords and
+/// folders all differ, but the option fields arrive flat; without these the
+/// whole group would inherit the first photo's context. Absent keys stay
+/// `None` and fall back to the batch-level options, which is exactly what a
+/// single-photo request does today.
+fn image_overrides(item: &Value) -> PhotoOverrides {
+    PhotoOverrides {
+        capture_time: item.get("date_time_unix").and_then(Value::as_f64),
+        date_time: item
+            .get("date_time")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        existing_keywords: item
+            .get("existing_keywords")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            }),
+        folder_names: item
+            .get("folder_names")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }
+}
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route(
@@ -69,6 +99,7 @@ async fn index_by_reference(
 
     let mut paths: Vec<Option<String>> = Vec::with_capacity(images_data.len());
     let mut ids: Vec<Option<String>> = Vec::with_capacity(images_data.len());
+    let mut per_image: Vec<PhotoOverrides> = Vec::with_capacity(images_data.len());
     for item in &images_data {
         let path = item.get("path").and_then(Value::as_str).map(str::to_string);
         let photo_id = item
@@ -78,6 +109,7 @@ async fn index_by_reference(
             .map(str::to_string);
         paths.push(path);
         ids.push(photo_id);
+        per_image.push(image_overrides(item));
     }
 
     let mismatched = paths.len() != ids.len()
@@ -98,7 +130,13 @@ async fn index_by_reference(
     let mut photo_ids: Vec<String> = Vec::new();
     let mut read_errors: Vec<String> = Vec::new();
 
-    for (path, photo_id) in paths.into_iter().flatten().zip(ids.into_iter().flatten()) {
+    let mut overrides: Vec<PhotoOverrides> = Vec::new();
+    for ((path, photo_id), photo_overrides) in paths
+        .into_iter()
+        .flatten()
+        .zip(ids.into_iter().flatten())
+        .zip(per_image)
+    {
         let raw = match tokio::fs::read(&path).await {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -121,8 +159,20 @@ async fn index_by_reference(
             filename,
         });
         photo_ids.push(photo_id);
+        // Pushed here rather than above the `continue`s so a skipped file
+        // cannot shift every later photo's context by one.
+        overrides.push(photo_overrides);
     }
 
     let fields = json_fields_to_string_map(obj);
-    process_batch(state, fields, images, photo_ids, read_errors, false).await
+    process_batch(
+        state,
+        fields,
+        images,
+        photo_ids,
+        overrides,
+        read_errors,
+        false,
+    )
+    .await
 }

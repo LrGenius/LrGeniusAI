@@ -43,7 +43,27 @@ pub(crate) struct ParsedOptions {
     capture_time: Option<f64>,
     vertex_project_id: Option<String>,
     vertex_location: Option<String>,
+    /// How many photos to hand the provider per LLM call. `None` means "ask
+    /// the provider", which is what callers should normally do — the useful
+    /// width is a property of the loaded engine, not of the request.
+    llm_batch_size: Option<usize>,
     metadata_request: MetadataOptions,
+}
+
+/// Per-photo values that must not be shared across a grouped request.
+///
+/// `/index_by_reference` can carry several photos in one call, but the option
+/// fields arrive flat, one set for the whole request. These four are exactly
+/// the ones `prompts.rs` classifies as volatile — reusing one photo's capture
+/// time, keywords or folders for the whole group would feed the model context
+/// belonging to a different photo. Absent entries fall back to the
+/// batch-level options, which is what every single-photo request does.
+#[derive(Default, Clone)]
+pub(crate) struct PhotoOverrides {
+    pub capture_time: Option<f64>,
+    pub date_time: Option<String>,
+    pub existing_keywords: Option<Vec<String>>,
+    pub folder_names: Option<String>,
 }
 
 /// The metadata-generation-specific subset of `_extract_options`, kept
@@ -164,6 +184,13 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    // Absent, unparseable or zero all mean "let the provider decide", so a
+    // stray `llm_batch_size=0` cannot stall a run.
+    let llm_batch_size = fields
+        .get("llm_batch_size")
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0);
+
     let capture_time = fields
         .get("date_time_unix")
         .and_then(|s| s.parse::<f64>().ok())
@@ -201,6 +228,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         model: fields.get("model").cloned(),
         api_key: fields.get("api_key").cloned(),
         capture_time,
+        llm_batch_size,
         vertex_project_id: fields
             .get("vertex_project_id")
             .or_else(|| fields.get("vertexProjectId"))
@@ -314,7 +342,18 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
         photo_ids
     };
 
-    process_batch(state, fields, images, photo_ids, Vec::new(), true).await
+    // Multipart uploads carry no per-image context, so every photo falls back
+    // to the batch-level options exactly as before.
+    process_batch(
+        state,
+        fields,
+        images,
+        photo_ids,
+        Vec::new(),
+        Vec::new(),
+        true,
+    )
+    .await
 }
 
 /// Shared by `/index` (multipart) and `/index_by_reference` (JSON + on-disk
@@ -338,6 +377,7 @@ pub(crate) async fn process_batch(
     fields: HashMap<String, String>,
     images: Vec<UploadedImage>,
     photo_ids: Vec<String>,
+    overrides: Vec<PhotoOverrides>,
     pre_failures: Vec<String>,
     reject_empty_batch: bool,
 ) -> Response {
@@ -389,9 +429,14 @@ pub(crate) async fn process_batch(
     let max_edge = lrg_imaging::convert::default_max_long_edge();
     let quality = lrg_imaging::convert::default_jpeg_quality();
 
-    let mut triplets: Vec<(Vec<u8>, String, String)> = Vec::new();
+    // Short or absent override lists mean "no per-photo context", which is
+    // the single-photo case and every multipart upload.
+    let mut overrides = overrides;
+    overrides.resize(images.len(), PhotoOverrides::default());
+
+    let mut triplets: Vec<(Vec<u8>, String, String, PhotoOverrides)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
-    for (img, photo_id) in images.into_iter().zip(photo_ids) {
+    for ((img, photo_id), photo_overrides) in images.into_iter().zip(photo_ids).zip(overrides) {
         let t0 = Instant::now();
         let result = normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality);
         log::debug!(
@@ -400,7 +445,7 @@ pub(crate) async fn process_batch(
             t0.elapsed()
         );
         match result {
-            Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename)),
+            Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename, photo_overrides)),
             Err(UnsupportedImageError(msg)) => {
                 log::warn!("Skipping {}: {msg}", img.filename);
                 conversion_errors.push(msg);
@@ -447,26 +492,106 @@ pub(crate) async fn process_batch(
 
     let store = state.store();
 
-    for (image_bytes, photo_id, filename) in triplets {
-        let result = index_one(
+    // Phase 1 — everything that does not need the LLM, still strictly
+    // sequential (SigLIP2 and the face detector each want the whole machine).
+    let mut prepared: Vec<PreparedPhoto> = Vec::with_capacity(triplets.len());
+    for (image_bytes, photo_id, filename, photo_overrides) in triplets {
+        let Some(store_ref) = store.as_ref() else {
+            failure_count += 1;
+            error_messages.push(format!(
+                "{filename}: database not initialized (no db_path bound)"
+            ));
+            continue;
+        };
+        match prepare_one(
             &state,
-            store.as_ref(),
+            store_ref,
             &options,
+            &photo_overrides,
             &image_bytes,
             &photo_id,
             &filename,
         )
-        .await;
-        match result {
-            Ok(warn) => {
-                success_count += 1;
-                if let Some(w) = warn {
-                    warnings.push(w);
-                }
-            }
+        .await
+        {
+            Ok(photo) => prepared.push(photo),
             Err(e) => {
                 failure_count += 1;
                 error_messages.push(format!("{filename}: {e}"));
+            }
+        }
+    }
+
+    // Phase 2 — the LLM, in groups. One provider for the whole batch instead
+    // of one per photo. `preferred_batch_size` is 1 for every HTTP provider,
+    // so they still issue exactly one request per photo; only the in-process
+    // backend asks for wider groups, where the group is what shares the
+    // pinned prefix and decodes in parallel sequences.
+    let mut llm_responses: Vec<Option<lrg_providers::types::MetadataGenerationResponse>> =
+        (0..prepared.len()).map(|_| None).collect();
+    let llm_indices: Vec<usize> = prepared
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.llm_request.is_some())
+        .map(|(i, _)| i)
+        .collect();
+
+    if !llm_indices.is_empty() {
+        match provider_for_batch(&state, &options).await {
+            Ok(provider) => {
+                let batch_size = options
+                    .llm_batch_size
+                    .unwrap_or_else(|| provider.preferred_batch_size())
+                    .max(1);
+                for group in llm_indices.chunks(batch_size) {
+                    let requests: Vec<_> = group
+                        .iter()
+                        .filter_map(|&i| prepared[i].llm_request.clone())
+                        .collect();
+                    let t0 = Instant::now();
+                    let responses = provider.generate_metadata_batch(&requests).await;
+                    log::debug!(
+                        "LLM batch of {} photo(s) via {} took {:?}",
+                        group.len(),
+                        provider.name(),
+                        t0.elapsed()
+                    );
+                    for (&i, response) in group.iter().zip(responses) {
+                        llm_responses[i] = Some(response);
+                    }
+                }
+            }
+            Err(e) => {
+                // Resolving the provider is a whole-run problem, but it can
+                // only sink the photos that actually wanted one.
+                for &i in &llm_indices {
+                    llm_responses[i] = Some(lrg_providers::types::MetadataGenerationResponse {
+                        uuid: prepared[i].photo_id.clone(),
+                        success: false,
+                        error: Some(e.clone()),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    // Phase 3 — merge, faces, and the coalesced write. `prepared` is only
+    // non-empty when the store bound, so the `if let` never skips work.
+    if let Some(store_ref) = store.as_ref() {
+        for (photo, llm_response) in prepared.into_iter().zip(llm_responses) {
+            let filename = photo.filename.clone();
+            match finish_one(&state, store_ref, &options, photo, llm_response).await {
+                Ok(warn) => {
+                    success_count += 1;
+                    if let Some(w) = warn {
+                        warnings.push(w);
+                    }
+                }
+                Err(e) => {
+                    failure_count += 1;
+                    error_messages.push(format!("{filename}: {e}"));
+                }
             }
         }
     }
@@ -510,18 +635,43 @@ pub(crate) async fn process_batch(
     .into_response()
 }
 
-async fn index_one(
+/// One photo's state in flight between the two phases of [`process_batch`].
+///
+/// Indexing used to run a photo end to end before touching the next one, which
+/// meant every photo paid a full prompt prefill. Splitting at the LLM call lets
+/// the whole group's requests be handed to the provider at once — the only
+/// point at which a pinned prefix and parallel decode sequences can be shared.
+struct PreparedPhoto {
+    photo_id: String,
+    filename: String,
+    image_bytes: Vec<u8>,
+    pixels: Vec<u8>,
+    width: usize,
+    height: usize,
+    main_metadata: Map<String, Value>,
+    /// The stored embedding, kept so phase 2 can fall back to it when this
+    /// pass did not compute a new one.
+    existing_vector: Option<Vec<f32>>,
+    existing_has_embedding: bool,
+    new_embedding: Option<Vec<f32>>,
+    /// `Some` when this photo still needs an LLM call. `None` covers both
+    /// "metadata generation is off" and "it already has metadata".
+    llm_request: Option<lrg_providers::types::MetadataGenerationRequest>,
+}
+
+/// Phase 1: everything that does not need the LLM.
+///
+/// Deliberately stops short of the `IMAGE_TABLE` write, so a photo whose LLM
+/// call later fails is never persisted — same as when this was one function.
+async fn prepare_one(
     state: &AppState,
-    store: Option<&Arc<lrg_store::Store>>,
+    store: &Arc<lrg_store::Store>,
     options: &ParsedOptions,
+    overrides: &PhotoOverrides,
     image_bytes: &[u8],
     photo_id: &str,
     filename: &str,
-) -> Result<Option<String>, String> {
-    let Some(store) = store else {
-        return Err("database not initialized (no db_path bound)".to_string());
-    };
-
+) -> Result<PreparedPhoto, String> {
     let decoded = image::load_from_memory(image_bytes)
         .map_err(|e| format!("could not decode image: {e}"))?
         .to_rgb8();
@@ -569,7 +719,7 @@ async fn index_one(
         }
     };
 
-    if let Some(ct) = options.capture_time {
+    if let Some(ct) = overrides.capture_time.or(options.capture_time) {
         main_metadata.insert("capture_time".into(), json!(ct));
     }
 
@@ -627,7 +777,7 @@ async fn index_one(
         }
     }
 
-    if options.compute_metadata {
+    let llm_request = if options.compute_metadata {
         let has_any_metadata = ["title", "caption", "alt_text", "keywords"]
             .iter()
             .any(|k| {
@@ -639,48 +789,90 @@ async fn index_one(
                 })
             });
         let need_metadata = options.regenerate_metadata || !has_any_metadata;
-        if need_metadata {
-            match generate_metadata_for_photo(state, options, image_bytes, photo_id).await {
-                Ok(response) => {
-                    if !response.success {
-                        return Err(response
-                            .error
-                            .unwrap_or_else(|| "Unknown metadata generation error".to_string()));
-                    }
-                    if let Some(title) = response.title.filter(|s| !s.is_empty()) {
-                        main_metadata.insert("title".into(), json!(title));
-                    }
-                    if let Some(caption) = response.caption.filter(|s| !s.is_empty()) {
-                        main_metadata.insert("caption".into(), json!(caption));
-                    }
-                    if let Some(alt) = response.alt_text.filter(|s| !s.is_empty()) {
-                        main_metadata.insert("alt_text".into(), json!(alt));
-                    }
-                    if let Some(keywords) = response.keywords {
-                        if !matches!(&keywords, Value::Array(a) if a.is_empty())
-                            && !matches!(&keywords, Value::Object(o) if o.is_empty())
-                        {
-                            main_metadata.insert("keywords".into(), json!(keywords.to_string()));
-                            main_metadata.insert(
-                                "flattened_keywords".into(),
-                                json!(lrg_analysis::keywords::flatten_keywords_to_string(
-                                    &keywords
-                                )),
-                            );
-                        }
-                    }
-                    main_metadata.insert(
-                        "provider".into(),
-                        json!(options.provider.clone().unwrap_or_default()),
-                    );
-                    main_metadata.insert(
-                        "model".into(),
-                        json!(options.model.clone().unwrap_or_default()),
-                    );
-                }
-                Err(e) => return Err(e),
+        need_metadata.then(|| build_metadata_request(options, overrides, image_bytes, photo_id))
+    } else {
+        None
+    };
+
+    Ok(PreparedPhoto {
+        photo_id: photo_id.to_string(),
+        filename: filename.to_string(),
+        image_bytes: image_bytes.to_vec(),
+        pixels,
+        width,
+        height,
+        main_metadata,
+        existing_vector: existing.as_ref().and_then(|r| r.vector.clone()),
+        existing_has_embedding,
+        new_embedding,
+        llm_request,
+    })
+}
+
+/// Phase 2: fold in the LLM result, detect faces, and write the photo.
+///
+/// `llm_response` is `Some` exactly when [`prepare_one`] asked for one.
+async fn finish_one(
+    state: &AppState,
+    store: &Arc<lrg_store::Store>,
+    options: &ParsedOptions,
+    prepared: PreparedPhoto,
+    llm_response: Option<lrg_providers::types::MetadataGenerationResponse>,
+) -> Result<Option<String>, String> {
+    let PreparedPhoto {
+        photo_id,
+        filename,
+        image_bytes,
+        pixels,
+        width,
+        height,
+        mut main_metadata,
+        existing_vector,
+        existing_has_embedding,
+        new_embedding,
+        llm_request,
+    } = prepared;
+    let photo_id = photo_id.as_str();
+    let filename = filename.as_str();
+
+    if llm_request.is_some() {
+        let response =
+            llm_response.ok_or_else(|| "metadata generation returned no response".to_string())?;
+        if !response.success {
+            return Err(response
+                .error
+                .unwrap_or_else(|| "Unknown metadata generation error".to_string()));
+        }
+        if let Some(title) = response.title.filter(|s| !s.is_empty()) {
+            main_metadata.insert("title".into(), json!(title));
+        }
+        if let Some(caption) = response.caption.filter(|s| !s.is_empty()) {
+            main_metadata.insert("caption".into(), json!(caption));
+        }
+        if let Some(alt) = response.alt_text.filter(|s| !s.is_empty()) {
+            main_metadata.insert("alt_text".into(), json!(alt));
+        }
+        if let Some(keywords) = response.keywords {
+            if !matches!(&keywords, Value::Array(a) if a.is_empty())
+                && !matches!(&keywords, Value::Object(o) if o.is_empty())
+            {
+                main_metadata.insert("keywords".into(), json!(keywords.to_string()));
+                main_metadata.insert(
+                    "flattened_keywords".into(),
+                    json!(lrg_analysis::keywords::flatten_keywords_to_string(
+                        &keywords
+                    )),
+                );
             }
         }
+        main_metadata.insert(
+            "provider".into(),
+            json!(options.provider.clone().unwrap_or_default()),
+        );
+        main_metadata.insert(
+            "model".into(),
+            json!(options.model.clone().unwrap_or_default()),
+        );
     }
     main_metadata.insert(
         "run_date".into(),
@@ -689,10 +881,7 @@ async fn index_one(
 
     let final_vector = match &new_embedding {
         Some(v) => Some(v.clone()),
-        None => existing
-            .as_ref()
-            .and_then(|r| r.vector.clone())
-            .filter(|_| existing_has_embedding),
+        None => existing_vector.filter(|_| existing_has_embedding),
     };
     main_metadata.insert("has_embedding".into(), json!(final_vector.is_some()));
     meta::ensure_photo_metadata(photo_id, &mut main_metadata);
@@ -874,26 +1063,51 @@ fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsI
     metadata.insert("cull_faces_present".into(), json!(agg.cull_faces_present));
 }
 
-/// Builds a `MetadataGenerationRequest` from the parsed options + this
-/// photo's bytes, dispatches to the configured provider, and returns its
-/// response. `provider` accepts "ollama", "chatgpt"/"openai", "gemini", or
-/// "lmstudio".
-async fn generate_metadata_for_photo(
-    state: &AppState,
-    options: &ParsedOptions,
-    image_bytes: &[u8],
-    photo_id: &str,
-) -> Result<lrg_providers::types::MetadataGenerationResponse, String> {
-    let provider = options
+/// The wire provider name for this run, lowercased, defaulting to "ollama".
+fn provider_name(options: &ParsedOptions) -> String {
+    options
         .provider
         .as_deref()
         .unwrap_or("ollama")
-        .to_lowercase();
+        .to_lowercase()
+}
+
+/// Resolve the provider once for a whole batch.
+///
+/// This used to happen inside the per-photo path, which for the in-process
+/// backend meant re-resolving the engine for every single photo.
+async fn provider_for_batch(
+    state: &AppState,
+    options: &ParsedOptions,
+) -> Result<Arc<dyn lrg_providers::provider::LlmProvider>, String> {
+    let provider = provider_name(options);
+    let model = options.model.clone().unwrap_or_default();
+    let mo = &options.metadata_request;
+    build_provider(&ProviderSelection {
+        local_engine: crate::routes::llm::engine_for_request(state, &provider, &model).await?,
+        name: provider,
+        api_key: options.api_key.clone(),
+        ollama_base_url: mo.ollama_base_url.clone(),
+        lmstudio_base_url: mo.lmstudio_base_url.clone(),
+    })
+}
+
+/// Builds one photo's `MetadataGenerationRequest` from the parsed options.
+///
+/// Pure and cheap on purpose: phase 1 builds these for the whole group, and
+/// only then does the provider see them.
+fn build_metadata_request(
+    options: &ParsedOptions,
+    overrides: &PhotoOverrides,
+    image_bytes: &[u8],
+    photo_id: &str,
+) -> lrg_providers::types::MetadataGenerationRequest {
+    let provider = provider_name(options);
     let model = options.model.clone().unwrap_or_default();
     let mo = &options.metadata_request;
 
     let location_data = lrg_imaging::location::extract_location_tags(image_bytes);
-    let request = lrg_providers::types::MetadataGenerationRequest {
+    lrg_providers::types::MetadataGenerationRequest {
         image_data: image_bytes.to_vec(),
         uuid: photo_id.to_string(),
         provider: provider.clone(),
@@ -910,11 +1124,17 @@ async fn generate_metadata_for_photo(
         user_prompt: None,
         submit_keywords: mo.submit_keywords,
         submit_folder_names: mo.submit_folder_names,
-        existing_keywords: mo.existing_keywords.clone(),
+        existing_keywords: overrides
+            .existing_keywords
+            .clone()
+            .or_else(|| mo.existing_keywords.clone()),
         location_data,
-        folder_names: mo.folder_names.clone(),
+        folder_names: overrides
+            .folder_names
+            .clone()
+            .or_else(|| mo.folder_names.clone()),
         user_context: mo.user_context.clone(),
-        date_time: mo.date_time.clone(),
+        date_time: overrides.date_time.clone().or_else(|| mo.date_time.clone()),
         keyword_categories: mo.keyword_categories.clone(),
         bilingual_keywords: mo.bilingual_keywords,
         keyword_secondary_language: mo.keyword_secondary_language.clone(),
@@ -922,17 +1142,7 @@ async fn generate_metadata_for_photo(
         catalog_keywords: mo.catalog_keywords.clone(),
         ollama_base_url: mo.ollama_base_url.clone(),
         lmstudio_base_url: mo.lmstudio_base_url.clone(),
-    };
-
-    let client = build_provider(&ProviderSelection {
-        local_engine: crate::routes::llm::engine_for_request(state, &provider, &request.model)
-            .await?,
-        name: provider,
-        api_key: options.api_key.clone(),
-        ollama_base_url: mo.ollama_base_url.clone(),
-        lmstudio_base_url: mo.lmstudio_base_url.clone(),
-    })?;
-    Ok(client.generate_metadata(&request).await)
+    }
 }
 
 #[cfg(test)]
@@ -944,6 +1154,69 @@ mod keyword_option_tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// Without this, a grouped request would hand every photo the first
+    /// photo's capture time, keywords and folders.
+    #[test]
+    fn per_image_context_wins_over_the_batch_wide_fields() {
+        let opts = parse_options(&fields(&[
+            ("date_time", "2026-01-01 00:00:00"),
+            ("existing_keywords", r#"["batch"]"#),
+            ("folder_names", "BatchFolder"),
+        ]));
+        let overrides = PhotoOverrides {
+            capture_time: Some(1234.0),
+            date_time: Some("2026-08-07 12:00:00".to_string()),
+            existing_keywords: Some(vec!["mine".to_string()]),
+            folder_names: Some("MyFolder".to_string()),
+        };
+        let req = build_metadata_request(&opts, &overrides, &[], "p1");
+        assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));
+        assert_eq!(req.existing_keywords, Some(vec!["mine".to_string()]));
+        assert_eq!(req.folder_names.as_deref(), Some("MyFolder"));
+    }
+
+    /// The single-photo path sends no per-image context, so it must keep
+    /// reading the flat fields exactly as it always has.
+    #[test]
+    fn absent_per_image_context_falls_back_to_the_batch_fields() {
+        let opts = parse_options(&fields(&[
+            ("date_time", "2026-01-01 00:00:00"),
+            ("existing_keywords", r#"["batch"]"#),
+            ("folder_names", "BatchFolder"),
+        ]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1");
+        assert_eq!(req.date_time.as_deref(), Some("2026-01-01 00:00:00"));
+        assert_eq!(req.existing_keywords, Some(vec!["batch".to_string()]));
+        assert_eq!(req.folder_names.as_deref(), Some("BatchFolder"));
+    }
+
+    #[test]
+    fn llm_batch_size_defaults_to_asking_the_provider() {
+        assert_eq!(parse_options(&fields(&[])).llm_batch_size, None);
+    }
+
+    #[test]
+    fn llm_batch_size_parses_an_explicit_override() {
+        assert_eq!(
+            parse_options(&fields(&[("llm_batch_size", " 4 ")])).llm_batch_size,
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn llm_batch_size_rejects_zero_and_garbage() {
+        // Both fall back to the provider's own width; a batch of zero photos
+        // would otherwise loop forever producing nothing.
+        assert_eq!(
+            parse_options(&fields(&[("llm_batch_size", "0")])).llm_batch_size,
+            None
+        );
+        assert_eq!(
+            parse_options(&fields(&[("llm_batch_size", "lots")])).llm_batch_size,
+            None
+        );
     }
 
     #[test]

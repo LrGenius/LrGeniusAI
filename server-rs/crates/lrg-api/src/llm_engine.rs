@@ -118,6 +118,13 @@ mod imp {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| self.engine.info().model_path.clone())
         }
+
+        fn preferred_batch_size(&self) -> usize {
+            // `LlamaEngine::new` may have reduced this below the configured
+            // value to fit the context window, so read it back off the engine
+            // rather than off the settings.
+            self.engine.info().n_parallel.max(1) as usize
+        }
     }
 
     fn vec_of_errors(count: usize, message: String) -> Vec<Result<LocalResponse, String>> {
