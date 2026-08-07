@@ -736,6 +736,115 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 end
 
 ---
+-- Analyzes and indexes several photos in one /index_by_reference request.
+--
+-- Only worthwhile for the in-process llama.cpp backend, which evaluates the
+-- run-constant prompt prefix once for the whole group and decodes the photos
+-- in parallel sequences. Remote providers gain nothing and are kept at one
+-- photo per request by Util.groupedBatchSize.
+--
+-- The volatile per-photo context (capture time, existing keywords, folder
+-- names) travels inside each `images` entry rather than as a top-level field,
+-- because the top-level fields apply to the whole request and would otherwise
+-- give every photo in the group the first photo's context.
+--
+-- @param entries table Array of { photoId, filePath, options } — `options`
+--   being that photo's own buildPhotoOptions result.
+-- @param options table Run-wide options; supplies everything not per-photo.
+-- @return boolean overallSuccess True when at least one photo was indexed.
+-- @return table|string response The decoded response, or an error string.
+--
+function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
+	if type(entries) ~= "table" or #entries == 0 then
+		return false, "No photos provided"
+	end
+	options = options or {}
+
+	local images = {}
+	for _, entry in ipairs(entries) do
+		if not entry.filePath or entry.filePath == "" then
+			return false, "No file path provided for " .. tostring(entry.photoId)
+		end
+		if not entry.photoId or entry.photoId == "" then
+			return false, "No photo ID provided"
+		end
+		local po = entry.options or {}
+		table.insert(images, {
+			path = entry.filePath,
+			photo_id = entry.photoId,
+			date_time = po.date_time,
+			date_time_unix = po.date_time_unix,
+			existing_keywords = po.existing_keywords,
+			folder_names = po.folder_names,
+		})
+	end
+
+	-- Everything not per-photo comes from the first entry: those fields are
+	-- run-constant, which is exactly why the server can pin them in its cache.
+	local base = entries[1].options or options
+	local body = {
+		images = images,
+		catalog_id = getCatalogId(),
+		tasks = options.tasks or {},
+		provider = options.provider,
+		model = options.model,
+		api_key = options.api_key,
+		language = options.language or (prefs and prefs.generateLanguage) or "English",
+		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
+		replace_ss = tostring(options.replace_ss or false),
+		generate_keywords = tostring(options.generate_keywords or false),
+		generate_caption = tostring(options.generate_caption or false),
+		generate_title = tostring(options.generate_title or false),
+		generate_alt_text = tostring(options.generate_alt_text or false),
+		submit_gps = tostring(options.submit_gps or false),
+		submit_keywords = tostring(options.submit_keywords or false),
+		submit_folder_names = tostring(options.submit_folder_names or false),
+		user_context = base.user_context or options.user_context,
+		prompt = options.prompt,
+		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
+		bilingual_keywords = tostring(options.bilingual_keywords or false),
+		keyword_secondary_language = options.keyword_secondary_language
+			or (prefs and prefs.keywordSecondaryLanguage)
+			or "English",
+		generate_aliases = tostring(options.generate_aliases or false),
+		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
+		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
+		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		vertex_project_id = options.vertex_project_id,
+		vertex_location = options.vertex_location,
+		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+		llm_batch_size = tostring(#images),
+	}
+
+	log:trace("Analyzing and indexing " .. tostring(#images) .. " photos (grouped by reference)")
+
+	-- Scale the timeout with the group: the single-photo call allows 720s and
+	-- a group of N is roughly N photos' work in one request.
+	local timeout = 720 * #images
+	local response, err = _request("POST", getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE, body, timeout)
+
+	if not response then
+		log:error("Failed to analyze/index photo group (by reference): " .. tostring(err))
+		return false, err or "Unknown error"
+	end
+	if response.status == "processed" then
+		return (response.success_count or 0) > 0, response
+	end
+	if response.error then
+		log:error("Backend error (grouped by reference): " .. tostring(response.error))
+		-- Carry the response through when it names per-photo results, so the
+		-- caller can still tell which photos to retry individually.
+		if response.results then
+			return false, response
+		end
+		return false, response.error
+	end
+	log:error("Unexpected response status (grouped by reference): " .. tostring(response.status))
+	return false, "Unexpected response status"
+end
+
+---
 -- Unified function to analyze and index photos with metadata and embeddings.
 -- Replaces the old separate analyze and index workflows.
 -- @param photoId string The ID of the photo.
@@ -1801,6 +1910,81 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			LrTasks.yield()
 		end
 	else
+		-- Grouped indexing. Only the in-process llama.cpp backend benefits, so
+		-- for every other provider groupSize is 1 and the loop below behaves
+		-- exactly as it always has. maxWorkers stays 1 either way: the
+		-- batching is server-side, not new plugin concurrency.
+		local groupSize = Util.groupedBatchSize(
+			options.provider,
+			useOriginals,
+			SearchIndexAPI.isLocalBackend(),
+			options.llm_batch_size or (prefs and prefs.llmBatchSize)
+		)
+		-- photo -> { success, error, response }. Filled a group at a time and
+		-- consumed one photo at a time, so the per-photo bookkeeping below
+		-- (export fallback, callbacks, progress) is untouched.
+		local groupMemo = {}
+
+		---
+		-- Sends `photo` plus the next photos still on the stack as one request
+		-- and memoises an outcome for each. Photos that cannot go by reference
+		-- (videos, offline, no path, no id) are left out and fall through to
+		-- the single-photo path on their own turn.
+		--
+		local function prefillGroup(photo, photoId)
+			local entries = {
+				{ photoId = photoId, filePath = photo:getRawMetadata("path"), photo = photo },
+			}
+			for i = 1, math.min(groupSize - 1, #photoToProcessStack) do
+				local nextPhoto = photoToProcessStack[i]
+				if nextPhoto ~= nil and not nextPhoto:getRawMetadata("isVideo") then
+					local nextPath = nextPhoto:getRawMetadata("path")
+					if nextPath and nextPhoto:checkPhotoAvailability() then
+						local nextId = getPhotoIdForPhoto(nextPhoto)
+						if nextId then
+							table.insert(entries, { photoId = nextId, filePath = nextPath, photo = nextPhoto })
+						end
+					end
+				end
+			end
+			for _, entry in ipairs(entries) do
+				entry.options = buildPhotoOptions(entry.photo, entry.photoId, options)
+			end
+
+			local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
+			-- A transport-level failure has no per-photo detail; leave the
+			-- memo empty so every photo retries on its own and can still reach
+			-- the export fallback.
+			if type(response) ~= "table" then
+				log:warn("Grouped indexing failed (" .. tostring(response) .. "); falling back to single photos")
+				return
+			end
+
+			local byId = Util.resultsByPhotoId(response.results)
+			local warningsAttached = false
+			for _, entry in ipairs(entries) do
+				local outcome = byId[entry.photoId]
+				if outcome ~= nil then
+					-- Warnings belong to the request, not to a photo, so they
+					-- ride on the first photo that succeeded — attaching them
+					-- to a failed one would put a table where the caller logs
+					-- an error string.
+					local carriesWarnings = outcome.success and not warningsAttached
+					if carriesWarnings then
+						warningsAttached = true
+					end
+					groupMemo[entry.photo] = {
+						success = outcome.success,
+						error = outcome.error,
+						response = carriesWarnings and response or nil,
+					}
+				end
+			end
+			if not ok then
+				log:warn("Grouped indexing reported failures; affected photos fall back to single sends")
+			end
+		end
+
 		local analyzeWorker = function()
 			while #photoToProcessStack > 0 do
 				if progressScope:isCanceled() then
@@ -1824,45 +2008,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								.. ")"
 						)
 
-						-- Prepare analysis options with photo-specific context
-						local photoOptions = {}
-						for k, v in pairs(options) do
-							photoOptions[k] = v
-						end
-						if options.submit_gps then
-							local gps = photo:getRawMetadata("gps")
-							if gps then
-								photoOptions.gps_coordinates = gps
-							end
-						end
-						if options.submit_keywords then
-							local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-							if keywords then
-								-- Lightroom may return a comma-separated string; send as array so server
-								-- does not treat it as iterable of characters (issue #45).
-								if type(keywords) == "string" then
-									photoOptions.existing_keywords = Util.string_split(keywords, ",")
-								else
-									photoOptions.existing_keywords = keywords
-								end
-							end
-						end
-						if options.submit_folder_names then
-							local originalFilePath = photo:getRawMetadata("path")
-							if originalFilePath then
-								photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
-							end
-						end
-						-- Always submit catalog capture time.
-						local datetime = photo:getRawMetadata("dateTime")
-						if datetime ~= nil and type(datetime) == "number" then
-							-- Keep backwards-compatible ISO string for older backends
-							photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-							-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
-							photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
-						end
-						photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-						photoOptions.photo_id = photoId
+						local photoOptions = buildPhotoOptions(photo, photoId, options)
 
 						local success, indexResponse
 
@@ -1873,12 +2019,27 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								log:trace("Original submission skipped for video " .. filename)
 							elseif originalPath and photo:checkPhotoAvailability() then
 								if SearchIndexAPI.isLocalBackend() then
-									log:trace("Submitting original by reference for " .. filename)
-									success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
-										photoId,
-										originalPath,
-										photoOptions
-									)
+									-- Grouped path: fill a group's worth of outcomes on the
+									-- first photo that needs one, then consume them one at a
+									-- time. A photo the group did not cover (or a group that
+									-- failed outright) has no memo and is sent on its own.
+									if groupSize > 1 and groupMemo[photo] == nil then
+										prefillGroup(photo, photoId)
+									end
+									local memo = groupMemo[photo]
+									if memo ~= nil then
+										groupMemo[photo] = nil
+										log:trace("Using grouped result for " .. filename)
+										success = memo.success
+										indexResponse = memo.response or memo.error
+									else
+										log:trace("Submitting original by reference for " .. filename)
+										success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
+											photoId,
+											originalPath,
+											photoOptions
+										)
+									end
 								else
 									log:trace("Uploading original file for " .. filename)
 									success, indexResponse =
