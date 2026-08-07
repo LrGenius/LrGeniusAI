@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use ort::ep::{CoreML, CPU};
+use ort::ep::CPU;
 use ort::session::Session;
 use ort::value::Tensor;
 
@@ -18,8 +18,12 @@ fn main() -> ort::Result<()> {
 
     let builder = Session::builder()?;
     let mut builder = match ep.as_str() {
+        // CoreML is only linked in on macOS — see the target-scoped `ort`
+        // dependency in Cargo.toml.
+        #[cfg(target_os = "macos")]
         "coreml" => {
             use ort::ep::coreml::{ComputeUnits, ModelFormat};
+            use ort::ep::CoreML;
             builder.with_execution_providers([CoreML::default()
                 .with_model_format(ModelFormat::MLProgram)
                 .with_compute_units(ComputeUnits::All)
