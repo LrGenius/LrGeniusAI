@@ -119,15 +119,15 @@ fn thumbnail_112_jpeg(crop: &[u8], cw: usize, ch: usize) -> String {
 /// malloc/free per allocation is slower per call but keeps steady-state
 /// memory bounded, which matters far more for a long indexing run.
 ///
-/// Also disables MLAS's KleidiAI convolution kernels — see
-/// [`crate::DISABLE_KLEIDIAI`]. SCRFD is convolution-heavy and ran every
-/// single `Session::run` through the leaking path, which made this the
-/// single largest source of memory growth during indexing.
+/// SCRFD is convolution-heavy, so it used to be the single largest source
+/// of memory growth during indexing via onnxruntime's leaking KleidiAI
+/// kernels. That leak is gone as of onnxruntime 1.28 and these sessions run
+/// with KleidiAI enabled again — see [`crate::DISABLE_KLEIDIAI`] for the
+/// measurements and the `LRG_DISABLE_KLEIDIAI` escape hatch.
 fn build_session(path: &Path) -> ort::Result<Session> {
-    Session::builder()?
-        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?
-        .with_config_entry(crate::DISABLE_KLEIDIAI, "1")?
-        .commit_from_file(path)
+    let builder = Session::builder()?
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
+    crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
 }
 
 impl FaceModel {

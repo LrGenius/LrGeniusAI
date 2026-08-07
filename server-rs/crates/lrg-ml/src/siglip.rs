@@ -90,12 +90,9 @@ fn build_session(path: &Path) -> ort::Result<Session> {
     // CPU-only platforms. See faces::build_session for the full writeup.
     builder = builder
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
-    // Same leaking KleidiAI convolution kernels as the face sessions (see
-    // `crate::DISABLE_KLEIDIAI`). SigLIP is attention-heavy rather than
-    // convolution-heavy, so it leaked far less per call than SCRFD — but
-    // its patch-embedding conv still runs once per image.
-    builder = builder.with_config_entry(crate::DISABLE_KLEIDIAI, "1")?;
-    builder.commit_from_file(path)
+    // KleidiAI is left enabled: it is worth ~4x on this tower and no longer
+    // leaks on onnxruntime 1.28. See `crate::DISABLE_KLEIDIAI`.
+    crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
 }
 
 impl SiglipModel {
