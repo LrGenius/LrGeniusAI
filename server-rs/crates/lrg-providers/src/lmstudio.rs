@@ -102,6 +102,40 @@ impl LmStudioProvider {
             .unwrap_or_default()
     }
 
+    /// Schema-free chat completion — see [`crate::provider::LlmProvider::generate_text`].
+    pub async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        let model = model.unwrap_or("local-model");
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        });
+        let resp = self
+            .client
+            .post(format!(
+                "{}/v1/chat/completions",
+                normalize_base_url(&self.host)
+            ))
+            .json(&body)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .ok()?;
+        let result: Value = resp.json().await.ok()?;
+        result["choices"][0]["message"]["content"]
+            .as_str()
+            .map(str::to_string)
+    }
+
     pub async fn generate_metadata(
         &self,
         request: &MetadataGenerationRequest,

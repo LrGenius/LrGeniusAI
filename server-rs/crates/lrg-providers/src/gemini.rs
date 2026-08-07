@@ -175,6 +175,41 @@ impl GeminiProvider {
         Ok(result)
     }
 
+    /// Schema-free chat completion — see [`crate::provider::LlmProvider::generate_text`].
+    pub async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        let model = model.unwrap_or("gemini-2.0-flash");
+        let url = format!(
+            "{API_BASE}/models/{model}:generateContent?key={}",
+            self.api_key
+        );
+        let body = json!({
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .ok()?;
+        let result: Value = resp.json().await.ok()?;
+        let parts = result["candidates"][0]["content"]["parts"].as_array()?;
+        let text: String = parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(text)
+    }
+
     pub async fn generate_metadata(
         &self,
         request: &MetadataGenerationRequest,

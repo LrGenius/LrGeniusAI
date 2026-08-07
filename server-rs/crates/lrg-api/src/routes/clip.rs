@@ -19,6 +19,7 @@
 //! backward compatible with older binaries, bump both the workflow's
 //! tag and `MODEL_ASSETS_RELEASE_TAG` together (e.g. `model-assets-v2`).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
@@ -28,6 +29,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::state::AppState;
+
+/// Key for this download group in `AppState::model_download`.
+const DOWNLOAD_KEY: &str = "clip";
 
 const RELEASE_REPO: &str = "LrGenius/LrGeniusAI";
 const MODEL_ASSETS_RELEASE_TAG: &str = "model-assets-v1";
@@ -52,13 +56,44 @@ async fn clip_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
+/// Progress for one download group. Shared with `routes::llm`, which tracks
+/// GGUF downloads under its own key in the same map.
 #[derive(Clone, Serialize)]
 pub struct ModelDownloadStatus {
-    status: &'static str,
-    progress: u64,
-    total: u64,
-    current_file: Option<String>,
-    error: Option<String>,
+    pub(crate) status: &'static str,
+    pub(crate) progress: u64,
+    pub(crate) total: u64,
+    pub(crate) current_file: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
+impl ModelDownloadStatus {
+    pub(crate) fn downloading() -> Self {
+        Self {
+            status: "downloading",
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn set_error(&mut self, msg: String) {
+        self.status = "error";
+        self.error = Some(msg);
+    }
+
+    /// Marks success.
+    ///
+    /// The plugin polls for `"completed"`; the server used to report `"done"`,
+    /// so a successful download fell through the plugin's status match, logged
+    /// "unexpected status" and never showed the success dialog. Both spellings
+    /// are emitted now: `status` stays `"done"` for anything already parsing
+    /// it, and `completed` is the boolean the plugin should key off.
+    pub(crate) fn set_done(&mut self) {
+        self.status = "completed";
+        self.error = None;
+        if self.total == 0 {
+            self.total = self.progress;
+        }
+    }
 }
 
 impl Default for ModelDownloadStatus {
@@ -77,14 +112,12 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Download CLIP model request received");
 
     let already_running = {
-        let mut status = state.model_download.lock().unwrap();
+        let mut downloads = state.model_download.lock().unwrap();
+        let status = downloads.entry(DOWNLOAD_KEY.to_string()).or_default();
         if status.status == "downloading" {
             true
         } else {
-            *status = ModelDownloadStatus {
-                status: "downloading",
-                ..Default::default()
-            };
+            *status = ModelDownloadStatus::downloading();
             false
         }
     };
@@ -100,7 +133,13 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let status = state.model_download.lock().unwrap().clone();
+    let status = state
+        .model_download
+        .lock()
+        .unwrap()
+        .get(DOWNLOAD_KEY)
+        .cloned()
+        .unwrap_or_default();
     Json(json!(status))
 }
 
@@ -108,14 +147,27 @@ fn asset_url(tag: &str, name: &str) -> String {
     format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}/{name}")
 }
 
-fn set_error(state: &Mutex<ModelDownloadStatus>, msg: String) {
+type Downloads = Mutex<HashMap<String, ModelDownloadStatus>>;
+
+fn set_error(state: &Downloads, msg: String) {
     log::error!("CLIP model download failed: {msg}");
-    let mut s = state.lock().unwrap();
-    s.status = "error";
-    s.error = Some(msg);
+    state
+        .lock()
+        .unwrap()
+        .entry(DOWNLOAD_KEY.to_string())
+        .or_default()
+        .set_error(msg);
 }
 
-async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
+fn with_status(state: &Downloads, f: impl FnOnce(&mut ModelDownloadStatus)) {
+    f(state
+        .lock()
+        .unwrap()
+        .entry(DOWNLOAD_KEY.to_string())
+        .or_default());
+}
+
+async fn run_download(state: Arc<Downloads>) {
     let tag = MODEL_ASSETS_RELEASE_TAG;
     let paths = lrg_ml::model_paths::resolve();
     let dests = [&paths.image_onnx, &paths.text_onnx, &paths.tokenizer_json];
@@ -142,11 +194,11 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
         }
         total += resp.content_length().unwrap_or(0);
     }
-    state.lock().unwrap().total = total;
+    with_status(&state, |s| s.total = total);
 
     let mut downloaded: u64 = 0;
     for (name, dest) in ASSET_NAMES.iter().zip(dests.iter()) {
-        state.lock().unwrap().current_file = Some(name.to_string());
+        with_status(&state, |s| s.current_file = Some(name.to_string()));
 
         let url = asset_url(tag, name);
         log::info!("Starting CLIP model asset download: {name} from {url}");
@@ -194,7 +246,7 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
                         return set_error(&state, format!("failed writing {name}: {e}"));
                     }
                     downloaded += chunk.len() as u64;
-                    state.lock().unwrap().progress = downloaded;
+                    with_status(&state, |s| s.progress = downloaded);
                 }
                 Some(Err(e)) => {
                     return set_error(&state, format!("download interrupted for {name}: {e}"))
@@ -216,7 +268,8 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
     }
 
     log::info!("CLIP model download complete ({tag}).");
-    let mut s = state.lock().unwrap();
-    s.status = "done";
-    s.current_file = None;
+    with_status(&state, |s| {
+        s.current_file = None;
+        s.set_done();
+    });
 }

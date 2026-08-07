@@ -2,6 +2,7 @@
 //! (port of `services/chroma.ensure_db_path`): binding opens the LanceDB
 //! store and auto-runs the one-time Chroma migration when needed.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
@@ -12,6 +13,7 @@ use lrg_ml::faces::FaceModel;
 use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
 
+use crate::llm_engine::LlmEngineSlot;
 use crate::routes::clip::ModelDownloadStatus;
 
 pub struct AppState {
@@ -29,9 +31,13 @@ pub struct AppState {
     pub face: Arc<FaceModel>,
     /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
     pub jobs: Arc<JobRegistry>,
-    /// Global — port of `services/clip.py`'s download-thread status, backs
-    /// `/clip/download/start` + `/clip/download/status`.
-    pub model_download: Arc<StdMutex<ModelDownloadStatus>>,
+    /// Download progress, keyed by asset group (`"clip"`, `"llm"`). Keyed
+    /// rather than a single slot because a GGUF download and a SigLIP2
+    /// download can legitimately be in flight at the same time.
+    pub model_download: Arc<StdMutex<HashMap<String, ModelDownloadStatus>>>,
+    /// Global — the in-process LLM, lazily loaded and idle-unloaded exactly
+    /// like `siglip`/`face`.
+    pub llm: Arc<LlmEngineSlot>,
     /// Set by `/update/apply` once the binary swap is done, just before
     /// triggering graceful shutdown. `main.rs` checks this after
     /// `axum::serve`'s graceful shutdown returns (listener fully
@@ -52,7 +58,8 @@ impl AppState {
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
             jobs: Arc::new(JobRegistry::new()),
-            model_download: Arc::new(StdMutex::new(ModelDownloadStatus::default())),
+            model_download: Arc::new(StdMutex::new(HashMap::new())),
+            llm: Arc::default(),
             relaunch_after_shutdown: StdMutex::new(None),
         }
     }
@@ -82,6 +89,7 @@ impl AppState {
     pub async fn run_maintenance(&self) {
         self.siglip.unload_if_idle();
         self.face.unload_if_idle();
+        self.llm.unload_if_idle();
         if let Some(store) = self.store() {
             if store.pending_write_ops() >= lrg_store::COMPACT_WRITE_THRESHOLD {
                 match store.optimize_all().await {

@@ -36,6 +36,31 @@ pub fn resolve() -> ModelPaths {
     }
 }
 
+/// Where GGUF weights for the in-process LLM live.
+///
+/// Same per-artifact env-var convention as SigLIP2, plus `dir` so the download
+/// route and on-disk discovery agree on one location without each rebuilding
+/// the path. Unlike the SigLIP2 files there is no fixed filename: which GGUF is
+/// in play is a user choice, so only the directory is well-known.
+#[derive(Debug, Clone)]
+pub struct LlmModelPaths {
+    /// Directory downloads land in and discovery scans.
+    pub dir: PathBuf,
+    /// Explicit override for the text model, from `LRG_LLAMA_MODEL_GGUF`.
+    pub model_gguf: Option<PathBuf>,
+    /// Explicit override for the multimodal projector, from
+    /// `LRG_LLAMA_MMPROJ_GGUF`.
+    pub mmproj_gguf: Option<PathBuf>,
+}
+
+pub fn resolve_llm() -> LlmModelPaths {
+    LlmModelPaths {
+        dir: env_or_default("LRG_LLAMA_MODEL_DIR", default_models_dir().join("llm")),
+        model_gguf: std::env::var_os("LRG_LLAMA_MODEL_GGUF").map(PathBuf::from),
+        mmproj_gguf: std::env::var_os("LRG_LLAMA_MMPROJ_GGUF").map(PathBuf::from),
+    }
+}
+
 /// buffalo_l's own directory layout is the real InsightFace convention
 /// (`INSIGHTFACE_ROOT`, default `~/.insightface`) — unlike SigLIP2, no
 /// interim convention is needed since these ONNX files are already

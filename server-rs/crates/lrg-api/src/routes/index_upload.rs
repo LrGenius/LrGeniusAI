@@ -19,6 +19,7 @@ use serde_json::{json, Map, Value};
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
+use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree};
 use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
 
@@ -639,7 +640,7 @@ async fn index_one(
             });
         let need_metadata = options.regenerate_metadata || !has_any_metadata;
         if need_metadata {
-            match generate_metadata_for_photo(options, image_bytes, photo_id).await {
+            match generate_metadata_for_photo(state, options, image_bytes, photo_id).await {
                 Ok(response) => {
                     if !response.success {
                         return Err(response
@@ -878,6 +879,7 @@ fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsI
 /// response. `provider` accepts "ollama", "chatgpt"/"openai", "gemini", or
 /// "lmstudio".
 async fn generate_metadata_for_photo(
+    state: &AppState,
     options: &ParsedOptions,
     image_bytes: &[u8],
     photo_id: &str,
@@ -922,34 +924,15 @@ async fn generate_metadata_for_photo(
         lmstudio_base_url: mo.lmstudio_base_url.clone(),
     };
 
-    match provider.as_str() {
-        "ollama" => {
-            let client = lrg_providers::ollama::OllamaProvider::new(mo.ollama_base_url.clone());
-            Ok(client.generate_metadata(&request).await)
-        }
-        "chatgpt" | "openai" => {
-            let api_key = request
-                .api_key
-                .clone()
-                .ok_or_else(|| "OpenAI API not configured".to_string())?;
-            let client = lrg_providers::openai::OpenAiProvider::new(api_key);
-            Ok(client.generate_metadata(&request).await)
-        }
-        "gemini" => {
-            let api_key = request
-                .api_key
-                .clone()
-                .ok_or_else(|| "Gemini API not configured".to_string())?;
-            let client = lrg_providers::gemini::GeminiProvider::new(api_key);
-            Ok(client.generate_metadata(&request).await)
-        }
-        "lmstudio" => {
-            let client =
-                lrg_providers::lmstudio::LmStudioProvider::new(mo.lmstudio_base_url.clone());
-            Ok(client.generate_metadata(&request).await)
-        }
-        other => Err(format!("Unknown provider '{other}'.")),
-    }
+    let client = build_provider(&ProviderSelection {
+        local_engine: crate::routes::llm::engine_for_request(state, &provider, &request.model)
+            .await?,
+        name: provider,
+        api_key: options.api_key.clone(),
+        ollama_base_url: mo.ollama_base_url.clone(),
+        lmstudio_base_url: mo.lmstudio_base_url.clone(),
+    })?;
+    Ok(client.generate_metadata(&request).await)
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use lrg_common::{lifecycle, logging, version};
+use lrg_providers::provider::{build_provider, ProviderSelection};
 
 use crate::state::AppState;
 
@@ -41,10 +42,16 @@ struct ModelsQuery {
     lmstudio_base_url: Option<String>,
 }
 
-/// Port of `list_models` / `AnalysisService.get_available_models`. Ollama
-/// and LM Studio are probed concurrently with the rest (an offline local
-/// server must not block the others); Qwen is unimplemented upstream too.
+/// Port of `list_models` / `AnalysisService.get_available_models`. Every
+/// provider is probed concurrently — an offline Ollama or LM Studio must not
+/// block the others.
+///
+/// The response keys are what the plugin builds its model dropdown from
+/// (`TaskAnalyzeAndIndex.lua`), so a provider absent here is unreachable from
+/// the UI. The long-dead `"qwen"` key, which was always `[]`, is no longer
+/// emitted: the plugin's inner loop produced no entries for it anyway.
 async fn list_models(
+    State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
     body: Option<Json<Value>>,
 ) -> Json<Value> {
@@ -72,46 +79,57 @@ async fn list_models(
         .map(str::to_string)
         .or(q.lmstudio_base_url);
 
-    let ollama = lrg_providers::ollama::OllamaProvider::new(ollama_base_url);
-    let lmstudio = lrg_providers::lmstudio::LmStudioProvider::new(lmstudio_base_url);
+    // `build_provider` returns Err for a cloud provider whose key is missing,
+    // which is exactly the "offer no models" case — hence `unwrap_or_default`
+    // rather than surfacing the error.
+    let models_for = |selection: ProviderSelection| async move {
+        match build_provider(&selection) {
+            Ok(provider) if provider.is_available().await => provider.list_available_models().await,
+            _ => Vec::new(),
+        }
+    };
 
-    let (ollama_models, lmstudio_models) = tokio::join!(
-        async {
-            if ollama.is_available().await {
-                ollama.list_available_models().await
-            } else {
-                Vec::new()
-            }
-        },
-        async {
-            if lmstudio.is_available().await {
-                lmstudio.list_available_models().await
-            } else {
-                Vec::new()
-            }
-        },
+    // Local providers are probed concurrently: an offline Ollama or LM Studio
+    // must not delay the others.
+    let (ollama_models, lmstudio_models, openai_models, gemini_models) = tokio::join!(
+        models_for(ProviderSelection {
+            name: "ollama".to_string(),
+            ollama_base_url,
+            ..Default::default()
+        }),
+        models_for(ProviderSelection {
+            name: "lmstudio".to_string(),
+            lmstudio_base_url,
+            ..Default::default()
+        }),
+        models_for(ProviderSelection {
+            name: "chatgpt".to_string(),
+            api_key: openai_key,
+            ..Default::default()
+        }),
+        models_for(ProviderSelection {
+            name: "gemini".to_string(),
+            api_key: gemini_key,
+            ..Default::default()
+        }),
     );
 
-    let openai_models = match openai_key {
-        Some(key) if !key.is_empty() => {
-            lrg_providers::openai::OpenAiProvider::new(key)
-                .list_available_models()
-                .await
-        }
-        _ => Vec::new(),
-    };
-    let gemini_models = match gemini_key {
-        Some(key) if !key.is_empty() => {
-            lrg_providers::gemini::GeminiProvider::new(key)
-                .list_available_models()
-                .await
-        }
-        _ => Vec::new(),
+    // Listing must never trigger a multi-gigabyte load, so this reports what is
+    // on disk rather than what is loaded. A build without the `llamacpp`
+    // feature offers nothing, which keeps the provider out of the plugin's
+    // dropdown entirely rather than letting it fail on first use.
+    let llamacpp_models: Vec<String> = if state.llm.is_supported() {
+        crate::llm_models::discover_local_models()
+            .into_iter()
+            .map(|m| m.name)
+            .collect()
+    } else {
+        Vec::new()
     };
 
     Json(json!({
         "models": {
-            "qwen": [],
+            "llamacpp": llamacpp_models,
             "ollama": ollama_models,
             "lmstudio": lmstudio_models,
             "chatgpt": openai_models,

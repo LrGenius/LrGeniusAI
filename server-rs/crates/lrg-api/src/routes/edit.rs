@@ -20,6 +20,7 @@ use base64::Engine;
 use chrono::Utc;
 use serde_json::{json, Map, Value};
 
+use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse};
 use lrg_store::{meta, Store, StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
@@ -342,6 +343,7 @@ pub(crate) async fn fetch_training_examples(
 }
 
 pub(crate) async fn generate_edit_recipe_for_photo(
+    state: &AppState,
     store: Option<&Store>,
     options: &EditOptions,
     image_bytes: &[u8],
@@ -395,34 +397,20 @@ pub(crate) async fn generate_edit_recipe_for_photo(
         }
     }
 
-    let mut response = match provider.as_str() {
-        "ollama" => {
-            let client =
-                lrg_providers::ollama::OllamaProvider::new(options.ollama_base_url.clone());
-            client.generate_edit_recipe(&request).await
-        }
-        "chatgpt" | "openai" => match &request.api_key {
-            Some(key) => {
-                lrg_providers::openai::OpenAiProvider::new(key.clone())
-                    .generate_edit_recipe(&request)
-                    .await
-            }
-            None => edit_fail(photo_id, "OpenAI API not configured".to_string()),
-        },
-        "gemini" => match &request.api_key {
-            Some(key) => {
-                lrg_providers::gemini::GeminiProvider::new(key.clone())
-                    .generate_edit_recipe(&request)
-                    .await
-            }
-            None => edit_fail(photo_id, "Gemini API not configured".to_string()),
-        },
-        "lmstudio" => {
-            let client =
-                lrg_providers::lmstudio::LmStudioProvider::new(options.lmstudio_base_url.clone());
-            client.generate_edit_recipe(&request).await
-        }
-        other => edit_fail(photo_id, format!("Unknown provider '{other}'.")),
+    let local_engine =
+        match crate::routes::llm::engine_for_request(state, &provider, &request.model).await {
+            Ok(engine) => engine,
+            Err(e) => return edit_fail(photo_id, e),
+        };
+    let mut response = match build_provider(&ProviderSelection {
+        local_engine,
+        name: provider,
+        api_key: options.api_key.clone(),
+        ollama_base_url: options.ollama_base_url.clone(),
+        lmstudio_base_url: options.lmstudio_base_url.clone(),
+    }) {
+        Ok(client) => client.generate_edit_recipe(&request).await,
+        Err(e) => edit_fail(photo_id, e),
     };
 
     if response.success {
@@ -669,7 +657,8 @@ async fn finish_edit(
 ) -> Response {
     let store = state.store();
     let response =
-        generate_edit_recipe_for_photo(store.as_deref(), options, image_bytes, photo_id).await;
+        generate_edit_recipe_for_photo(state, store.as_deref(), options, image_bytes, photo_id)
+            .await;
 
     let Some(recipe) = response.recipe.filter(|_| response.success) else {
         return (
