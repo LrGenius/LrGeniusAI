@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 lrg-imaging.workspace = true
-ort = { version = "2.0.0-rc.10", features = ["coreml"] }
+ort = { version = "2.0.0-rc.13", features = ["coreml"] }
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 ndarray = "0.16"
 thiserror = "2"

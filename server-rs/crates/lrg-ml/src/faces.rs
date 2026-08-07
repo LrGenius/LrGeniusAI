@@ -118,9 +118,15 @@ fn thumbnail_112_jpeg(crop: &[u8], cw: usize, ch: usize) -> String {
 /// `detect_faces` call that never comes back down. Falling back to plain
 /// malloc/free per allocation is slower per call but keeps steady-state
 /// memory bounded, which matters far more for a long indexing run.
+///
+/// Also disables MLAS's KleidiAI convolution kernels — see
+/// [`crate::DISABLE_KLEIDIAI`]. SCRFD is convolution-heavy and ran every
+/// single `Session::run` through the leaking path, which made this the
+/// single largest source of memory growth during indexing.
 fn build_session(path: &Path) -> ort::Result<Session> {
     Session::builder()?
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?
+        .with_config_entry(crate::DISABLE_KLEIDIAI, "1")?
         .commit_from_file(path)
 }
 

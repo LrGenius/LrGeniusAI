@@ -75,9 +75,9 @@ fn build_session(path: &Path) -> ort::Result<Session> {
     let mut builder = Session::builder()?;
     #[cfg(target_os = "macos")]
     if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
-        use ort::execution_providers::coreml::{ComputeUnits, ModelFormat};
-        use ort::execution_providers::CoreMLExecutionProvider;
-        builder = builder.with_execution_providers([CoreMLExecutionProvider::default()
+        use ort::ep::coreml::{ComputeUnits, ModelFormat};
+        use ort::ep::CoreML;
+        builder = builder.with_execution_providers([CoreML::default()
             .with_model_format(ModelFormat::MLProgram)
             .with_compute_units(ComputeUnits::All)
             .with_model_cache_dir(std::env::temp_dir().join("lrg-coreml-cache").display())
@@ -90,6 +90,11 @@ fn build_session(path: &Path) -> ort::Result<Session> {
     // CPU-only platforms. See faces::build_session for the full writeup.
     builder = builder
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
+    // Same leaking KleidiAI convolution kernels as the face sessions (see
+    // `crate::DISABLE_KLEIDIAI`). SigLIP is attention-heavy rather than
+    // convolution-heavy, so it leaked far less per call than SCRFD — but
+    // its patch-embedding conv still runs once per image.
+    builder = builder.with_config_entry(crate::DISABLE_KLEIDIAI, "1")?;
     builder.commit_from_file(path)
 }
 
