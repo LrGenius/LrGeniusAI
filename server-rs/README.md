@@ -78,6 +78,21 @@ are already ONNX. Point `INSIGHTFACE_ROOT` at the directory containing
 the same location `insightface`'s own Python library uses, so the files
 are very likely already there if you've used InsightFace before).
 
+### Troubleshooting: `LRG_DISABLE_KLEIDIAI`
+
+Setting `LRG_DISABLE_KLEIDIAI=1` turns off ONNX Runtime's arm64 KleidiAI
+convolution kernels for every session. It exists only as a field escape
+hatch: onnxruntime 1.24 leaked ~25-31 MB per photo in those kernels (a
+14k-photo indexing run reached a 45 GB footprint), which is fixed in the
+1.28 build we ship. If unbounded memory growth during indexing ever
+reappears on an arm64 machine, set this to confirm the cause before
+digging further.
+
+It costs roughly **3x indexing throughput on Apple Silicon**
+(measured end to end: SigLIP2 316 ms -> 952 ms per photo, face detection
+37 ms -> 60 ms), so leave it unset in normal use. Embeddings are
+unaffected either way — search rankings and distances are identical.
+
 ## Docker
 
 `Dockerfile` here builds and ships the compiled binary (multi-stage:
