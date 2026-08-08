@@ -19,6 +19,7 @@
 //! work ever runs on a tokio worker. Dropping the [`LlamaEngine`] closes the
 //! channel, the thread returns, and every native resource is freed in order.
 
+mod device;
 mod engine;
 mod worker;
 
