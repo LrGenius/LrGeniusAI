@@ -271,13 +271,19 @@ jobs:
               cp "$dll" "$BUILD_DIR/"
               found=$((found + 1))
             done < <(
-              find server-rs/target/release -maxdepth 2 -name 'ggml*.dll' -print
+              find server-rs/target/release -maxdepth 1 \( -name 'ggml*.dll' -o -name 'llama.dll' \) -print
               find server-rs/target/release/build -path '*/out/backends/*' -name 'ggml*.dll' -print
             )
+            # llama.dll is not optional the way a backend module is: the exe
+            # imports it directly and will not start without it.
+            if [ ! -f "$BUILD_DIR/llama.dll" ]; then
+              echo "::error::llama.dll missing; the packaged exe would not start" && exit 1
+            fi
             echo "Staged $found ggml backend DLL(s)"
             if [ "$found" -eq 0 ]; then
               echo "::error::no ggml*.dll found; a dynamic-backends build must produce them" && exit 1
             fi
+
             # The Vulkan module is the entire point of the Windows build, so a
             # missing one is a hard failure: shipping a silently GPU-less (and
             # here, backend-less) binary is worse than failing the release.
@@ -288,6 +294,9 @@ jobs:
 
           echo "=== Staged binary ==="
           ls -lh "$BUILD_DIR"
+          # The ggml backend modules dominate the download size of the
+          # installer, so make the number easy to find in the log.
+          echo "=== Staged payload size: $(du -sh "$BUILD_DIR" | cut -f1) ==="
 
       - name: Prepare plugin files
         shell: bash
