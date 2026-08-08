@@ -671,9 +671,12 @@ struct PreparedPhoto {
     photo_id: String,
     filename: String,
     image_bytes: Vec<u8>,
-    pixels: Vec<u8>,
-    width: usize,
-    height: usize,
+    // Deliberately no decoded pixels. Phase 1 needs full RGB for the culling
+    // metrics, pHash and the SigLIP2 embedding, but it is done with them by the
+    // time it returns, and carrying them would scale the largest allocation in
+    // the request with the number of photos in flight — roughly 8 MB per photo
+    // against a few hundred KB for the normalised JPEG. Face detection, the one
+    // thing in phase 2 that wants pixels, decodes `image_bytes` again.
     main_metadata: Map<String, Value>,
     /// The stored embedding, kept so phase 2 can fall back to it when this
     /// pass did not compute a new one.
@@ -824,9 +827,6 @@ async fn prepare_one(
         photo_id: photo_id.to_string(),
         filename: filename.to_string(),
         image_bytes: image_bytes.to_vec(),
-        pixels,
-        width,
-        height,
         main_metadata,
         existing_vector: existing.as_ref().and_then(|r| r.vector.clone()),
         existing_has_embedding,
@@ -849,9 +849,6 @@ async fn finish_one(
         photo_id,
         filename,
         image_bytes,
-        pixels,
-        width,
-        height,
         mut main_metadata,
         existing_vector,
         existing_has_embedding,
@@ -938,9 +935,38 @@ async fn finish_one(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if options.regenerate_metadata || !already_checked {
-            let t0 = Instant::now();
-            let face_result = state.face.detect_faces(&pixels, width, height);
-            log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
+            // Decoded here rather than carried from phase 1: full RGB is by far
+            // the largest per-photo allocation, and holding one per photo in
+            // flight is how a bigger group would turn into a memory problem.
+            // The decode is small next to the detector itself, and this is the
+            // only place in phase 2 that needs pixels at all.
+            // A decode failure is reported the same way a detector failure is,
+            // as a warning: faces are optional and must not sink the photo.
+            let t_decode = Instant::now();
+            let face_result: Result<Vec<_>, String> = if !state.face.is_cached() {
+                // Checked before decoding: without the model files the detector
+                // fails anyway, and the decode would be pure waste.
+                Err("model not loaded".to_string())
+            } else {
+                match image::load_from_memory(&image_bytes).map(|img| img.to_rgb8()) {
+                    Ok(decoded) => {
+                        let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+                        let pixels = decoded.into_raw();
+                        log::debug!(
+                            "Photo {photo_id}: re-decode for faces took {:?}",
+                            t_decode.elapsed()
+                        );
+                        let t0 = Instant::now();
+                        let result = state
+                            .face
+                            .detect_faces(&pixels, width, height)
+                            .map_err(|e| e.to_string());
+                        log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
+                        result
+                    }
+                    Err(e) => Err(format!("could not decode image: {e}")),
+                }
+            };
             match face_result {
                 Ok(faces) => {
                     let t_scan = Instant::now();
