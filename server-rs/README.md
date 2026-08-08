@@ -21,6 +21,41 @@ cargo build --release -p lrg-server
 `cargo test --workspace` and `cargo clippy --workspace --all-targets` should
 both be clean before sending changes.
 
+### Optional feature: `llamacpp`
+
+The in-process local LLM is behind a cargo feature that is **off by default**.
+Without it the `llamacpp` provider reports that the build has no local-model
+support and `/llm/catalog` returns `supported: false`, so the plugin's "Local AI
+Model" settings have nothing to work with. It is opt-in because it compiles
+llama.cpp from source: that needs `cmake` and `libclang` (for bindgen) and adds
+minutes to a cold build, which nobody working on an unrelated crate should pay.
+
+```bash
+# macOS: libclang ships with the Xcode command line tools; brew install cmake
+# Linux: apt install cmake libclang-dev
+# Windows: also builds Vulkan, deliberately not CUDA (see crates/lrg-llama/Cargo.toml)
+cargo build --release -p lrg-server --features llamacpp
+cargo clippy --workspace --all-targets --features llamacpp
+```
+
+Then point it at a model — see [Local LLM](#local-llm-in-process-llamacpp) below
+for the env vars — or download one from the plugin's settings. The release
+workflow builds with this feature enabled, so shipped binaries have it.
+
+Tests that exercise a real model are `#[ignore]`d, since they need a multi-GB
+GGUF on disk:
+
+```bash
+export LRG_TEST_MODEL_GGUF=/path/to/model-Q4_K_M.gguf
+export LRG_TEST_MMPROJ_GGUF=/path/to/mmproj-BF16.gguf
+cargo test -p lrg-llama --test engine_smoke -- --ignored
+```
+
+One gotcha when testing through Lightroom: the plugin auto-launches the
+*installed* binary, not your dev build. `startServer` pings port 19819 first and
+short-circuits when something already answers, so start your feature-enabled
+build by hand and the plugin will use that instead.
+
 ## Model files
 
 ### SigLIP2 (semantic embeddings)
