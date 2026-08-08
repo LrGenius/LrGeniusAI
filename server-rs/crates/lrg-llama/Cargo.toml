@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 # In-process llama.cpp inference. Kept in its own crate so that the heavy
-# native toolchain requirement (cmake + libclang for bindgen, plus a CUDA
-# toolkit on Windows) only applies when the `llamacpp` feature is actually
+# native toolchain requirement (cmake + libclang for bindgen, plus the Vulkan
+# SDK on Windows) only applies when the `llamacpp` feature is actually
 # enabled, and so that `cargo build` for anyone touching an unrelated crate
 # stays fast.
 
@@ -28,7 +28,8 @@ llama-cpp-2 = { version = "0.1.154", features = ["mtmd", "llguidance"] }
 # Vulkan is built as a loadable ggml backend (`dynamic-backends`) so one Windows
 # binary starts on any GPU vendor and falls back to CPU when there is none. See
 # the packaging notes in the release workflow: the resulting ggml-*.dll files
-# must ship next to the exe.
+# must ship next to the exe. Building this needs the Vulkan SDK installed with
+# VULKAN_SDK set — llama-cpp-sys-2's build.rs panics without it.
 #
 # CUDA is deliberately *not* enabled. Building it requires a CUDA toolkit on the
 # runner, which is a long install and a long compile, and it cannot be validated

@@ -156,6 +156,62 @@ jobs:
             echo "::error::libclang.dll not found; bindgen cannot run" && exit 1
           fi
 
+      # Windows is the one target that enables llama.cpp's Vulkan backend (see
+      # crates/lrg-llama/Cargo.toml), and that needs the Vulkan SDK: without it
+      # llama-cpp-sys-2's build.rs panics outright ("Please install Vulkan SDK
+      # and ensure that VULKAN_SDK env variable is set"), because it links
+      # vulkan-1.lib from $VULKAN_SDK\Lib and ggml's CMake needs the SDK's
+      # glslc to compile the compute shaders. The version is pinned rather than
+      # tracking `latest` so an SDK release can never break a tagged build;
+      # bump it deliberately.
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os_name == 'windows'
+        shell: pwsh
+        env:
+          VULKAN_SDK_VERSION: '1.4.328.0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:VULKAN_SDK_VERSION
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk-installer.exe'
+          $base = "https://sdk.lunarg.com/sdk/download/$version/windows"
+          # LunarG renamed the Windows installer after 1.4.309.0. Try the
+          # current name first, then the old one, so bumping the pin in either
+          # direction keeps working.
+          $downloaded = $false
+          foreach ($name in @("vulkansdk-windows-X64-$version.exe", "VulkanSDK-$version-Installer.exe")) {
+            try {
+              Invoke-WebRequest -Uri "$base/$name" -OutFile $installer -UseBasicParsing
+              Write-Host "Downloaded $name"
+              $downloaded = $true
+              break
+            } catch {
+              Write-Host "Not available: $name ($($_.Exception.Message))"
+            }
+          }
+          if (-not $downloaded) {
+            throw "could not download Vulkan SDK $version from $base"
+          }
+
+          $sdkDir = "C:\VulkanSDK\$version"
+          # The installer is a Qt Installer Framework GUI binary, so the shell
+          # does not wait for it on its own — hence Start-Process -Wait.
+          $proc = Start-Process -FilePath $installer -Wait -PassThru -NoNewWindow -ArgumentList @(
+            '--root', $sdkDir, '--accept-licenses', '--default-answer', '--confirm-command', 'install'
+          )
+          if ($proc.ExitCode -ne 0) {
+            throw "Vulkan SDK installer exited with $($proc.ExitCode)"
+          }
+
+          foreach ($required in @("$sdkDir\Lib\vulkan-1.lib", "$sdkDir\Bin\glslc.exe")) {
+            if (-not (Test-Path $required)) {
+              throw "Vulkan SDK install incomplete: $required is missing"
+            }
+          }
+
+          "VULKAN_SDK=$sdkDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$sdkDir\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "Vulkan SDK $version installed at $sdkDir"
+
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
