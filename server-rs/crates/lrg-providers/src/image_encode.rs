@@ -22,9 +22,41 @@ pub fn image_to_base64(image_data: &[u8]) -> Result<String, ImageEncodeError> {
     Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
+/// Decode to raw RGB for an in-process engine.
+///
+/// The REST providers must re-encode to JPEG and then base64 it; a local
+/// engine takes pixels directly, so this is the one place that round-trip is
+/// skipped rather than merely optimised.
+pub fn image_to_rgb(image_data: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageEncodeError> {
+    let img = image::load_from_memory(image_data)
+        .map_err(|e| ImageEncodeError(e.to_string()))?
+        .to_rgb8();
+    let (width, height) = (img.width(), img.height());
+    Ok((width, height, img.into_raw()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgb_decode_returns_three_bytes_per_pixel() {
+        let src = image::RgbImage::from_pixel(5, 3, image::Rgb([10, 20, 30]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(src)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+
+        let (w, h, rgb) = image_to_rgb(buf.get_ref()).unwrap();
+        assert_eq!((w, h), (5, 3));
+        assert_eq!(rgb.len(), 5 * 3 * 3);
+        assert_eq!(&rgb[..3], &[10, 20, 30]);
+    }
+
+    #[test]
+    fn rgb_decode_rejects_garbage() {
+        assert!(image_to_rgb(b"not an image").is_err());
+    }
 
     #[test]
     fn jpeg_bytes_pass_through_unmodified() {

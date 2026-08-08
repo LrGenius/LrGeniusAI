@@ -19,14 +19,31 @@ The backend was previously a Python/Flask server (`server/`); that implementatio
 
 ### Backend (Rust)
 
-Standard cargo workspace, no extra tooling beyond `rustup`/`cargo`.
+Standard cargo workspace; the default build needs nothing beyond `rustup`/`cargo`.
 
 ```bash
 cd server-rs
 cargo build --release -p lrg-server
 ```
 
-`POST /clip/download/start` fetches the SigLIP2 fp16 ONNX assets from this build's own GitHub release; until a release with those assets exists, export them yourself — see [server-rs/README.md](server-rs/README.md) for the exact commands and the env vars that point the server at the files (also covers InsightFace's buffalo_l, which needs no export step). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
+**The in-process local LLM is behind the `llamacpp` cargo feature, off by default.** Without it the `llamacpp` provider reports "this backend build has no local-model support" and `/llm/catalog` returns `supported: false` — which is the answer to "why doesn't the Local AI Model section do anything". It is off by default because it compiles llama.cpp from source, so it needs `cmake` and `libclang` (bindgen) and adds minutes to a cold build; anyone touching an unrelated crate should not pay that.
+
+```bash
+# Needs cmake + libclang. macOS: libclang ships with the Xcode CLT, `brew install cmake`.
+# Linux: `apt install cmake libclang-dev`. Windows also builds Vulkan (not CUDA — see lrg-llama/Cargo.toml).
+cargo build --release -p lrg-server --features llamacpp
+cargo clippy --workspace --all-targets --features llamacpp   # must also be clean when you touch this path
+```
+
+Point it at a model with `LRG_LLAMA_MODEL_GGUF` + `LRG_LLAMA_MMPROJ_GGUF` (a GGUF needs both the weights and an `mmproj` vision projector), or download one from the plugin's settings. Discovery also picks up GGUFs already under `~/.lmstudio/models`. The `lrg-llama` tests that exercise a real model are `#[ignore]`d and need `LRG_TEST_MODEL_GGUF`/`LRG_TEST_MMPROJ_GGUF`:
+
+```bash
+cargo test -p lrg-llama --test engine_smoke -- --ignored
+```
+
+When Lightroom is involved, note the plugin auto-launches the *installed* binary (`/Applications/LrGeniusAI/Server/lrgenius-server`), which is not your dev build. `startServer` pings port 19819 first and short-circuits if something already answers, so start your feature-enabled build by hand and the plugin will use it.
+
+`POST /clip/download/start` fetches the SigLIP2 fp16 ONNX assets from the fixed `model-assets-v1` release tag (not the build's own version tag); that release exists with all three assets, so this works on any build. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers InsightFace's buffalo_l, which needs no export step). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
 
 ### Pre-commit hooks (formatting + linting)
 

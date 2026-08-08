@@ -46,6 +46,10 @@ local ENDPOINTS = {
 	START_CLIP_DOWNLOAD = "/clip/download/start",
 	STATUS_CLIP_DOWNLOAD = "/clip/download/status",
 	CLIP_STATUS = "/clip/status",
+	LLM_CATALOG = "/llm/catalog",
+	LLM_STATUS = "/llm/status",
+	START_LLM_DOWNLOAD = "/llm/download/start",
+	STATUS_LLM_DOWNLOAD = "/llm/download/status",
 	CHECK_UNPROCESSED = "/index/check-unprocessed",
 	FACES_CLUSTER = "/faces/cluster",
 	FACES_PERSONS = "/faces/persons",
@@ -704,6 +708,12 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+		-- Local-engine tuning. Ignored by every remote provider; changing one
+		-- makes the server reload the local model, so these are settings the
+		-- user adjusts in Plug-in Manager, not per photo.
+		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
 	}
 
 	log:trace("Analyzing and indexing photo (by reference): " .. tostring(filePath) .. " id " .. photoId)
@@ -732,6 +742,121 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		return false, response.error
 	end
 	log:error("Unexpected response status (by reference): " .. tostring(response.status))
+	return false, "Unexpected response status"
+end
+
+---
+-- Analyzes and indexes several photos in one /index_by_reference request.
+--
+-- Only worthwhile for the in-process llama.cpp backend, which evaluates the
+-- run-constant prompt prefix once for the whole group and decodes the photos
+-- in parallel sequences. Remote providers gain nothing and are kept at one
+-- photo per request by Util.groupedBatchSize.
+--
+-- The volatile per-photo context (capture time, existing keywords, folder
+-- names) travels inside each `images` entry rather than as a top-level field,
+-- because the top-level fields apply to the whole request and would otherwise
+-- give every photo in the group the first photo's context.
+--
+-- @param entries table Array of { photoId, filePath, options } — `options`
+--   being that photo's own buildPhotoOptions result.
+-- @param options table Run-wide options; supplies everything not per-photo.
+-- @return boolean overallSuccess True when at least one photo was indexed.
+-- @return table|string response The decoded response, or an error string.
+--
+function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
+	if type(entries) ~= "table" or #entries == 0 then
+		return false, "No photos provided"
+	end
+	options = options or {}
+
+	local images = {}
+	for _, entry in ipairs(entries) do
+		if not entry.filePath or entry.filePath == "" then
+			return false, "No file path provided for " .. tostring(entry.photoId)
+		end
+		if not entry.photoId or entry.photoId == "" then
+			return false, "No photo ID provided"
+		end
+		local po = entry.options or {}
+		table.insert(images, {
+			path = entry.filePath,
+			photo_id = entry.photoId,
+			date_time = po.date_time,
+			date_time_unix = po.date_time_unix,
+			existing_keywords = po.existing_keywords,
+			folder_names = po.folder_names,
+		})
+	end
+
+	-- Everything not per-photo comes from the first entry: those fields are
+	-- run-constant, which is exactly why the server can pin them in its cache.
+	local base = entries[1].options or options
+	local body = {
+		images = images,
+		catalog_id = getCatalogId(),
+		tasks = options.tasks or {},
+		provider = options.provider,
+		model = options.model,
+		api_key = options.api_key,
+		language = options.language or (prefs and prefs.generateLanguage) or "English",
+		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
+		replace_ss = tostring(options.replace_ss or false),
+		generate_keywords = tostring(options.generate_keywords or false),
+		generate_caption = tostring(options.generate_caption or false),
+		generate_title = tostring(options.generate_title or false),
+		generate_alt_text = tostring(options.generate_alt_text or false),
+		submit_gps = tostring(options.submit_gps or false),
+		submit_keywords = tostring(options.submit_keywords or false),
+		submit_folder_names = tostring(options.submit_folder_names or false),
+		user_context = base.user_context or options.user_context,
+		prompt = options.prompt,
+		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
+		bilingual_keywords = tostring(options.bilingual_keywords or false),
+		keyword_secondary_language = options.keyword_secondary_language
+			or (prefs and prefs.keywordSecondaryLanguage)
+			or "English",
+		generate_aliases = tostring(options.generate_aliases or false),
+		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
+		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
+		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		vertex_project_id = options.vertex_project_id,
+		vertex_location = options.vertex_location,
+		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+		llm_batch_size = tostring(#images),
+		-- Local-engine tuning. Ignored by every remote provider; changing one
+		-- makes the server reload the local model, so these are settings the
+		-- user adjusts in Plug-in Manager, not per photo.
+		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+	}
+
+	log:trace("Analyzing and indexing " .. tostring(#images) .. " photos (grouped by reference)")
+
+	-- Scale the timeout with the group: the single-photo call allows 720s and
+	-- a group of N is roughly N photos' work in one request.
+	local timeout = 720 * #images
+	local response, err = _request("POST", getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE, body, timeout)
+
+	if not response then
+		log:error("Failed to analyze/index photo group (by reference): " .. tostring(err))
+		return false, err or "Unknown error"
+	end
+	if response.status == "processed" then
+		return (response.success_count or 0) > 0, response
+	end
+	if response.error then
+		log:error("Backend error (grouped by reference): " .. tostring(response.error))
+		-- Carry the response through when it names per-photo results, so the
+		-- caller can still tell which photos to retry individually.
+		if response.results then
+			return false, response
+		end
+		return false, response.error
+	end
+	log:error("Unexpected response status (grouped by reference): " .. tostring(response.status))
 	return false, "Unexpected response status"
 end
 
@@ -1801,6 +1926,81 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			LrTasks.yield()
 		end
 	else
+		-- Grouped indexing. Only the in-process llama.cpp backend benefits, so
+		-- for every other provider groupSize is 1 and the loop below behaves
+		-- exactly as it always has. maxWorkers stays 1 either way: the
+		-- batching is server-side, not new plugin concurrency.
+		local groupSize = Util.groupedBatchSize(
+			options.provider,
+			useOriginals,
+			SearchIndexAPI.isLocalBackend(),
+			options.llm_batch_size or (prefs and prefs.llmBatchSize)
+		)
+		-- photo -> { success, error, response }. Filled a group at a time and
+		-- consumed one photo at a time, so the per-photo bookkeeping below
+		-- (export fallback, callbacks, progress) is untouched.
+		local groupMemo = {}
+
+		---
+		-- Sends `photo` plus the next photos still on the stack as one request
+		-- and memoises an outcome for each. Photos that cannot go by reference
+		-- (videos, offline, no path, no id) are left out and fall through to
+		-- the single-photo path on their own turn.
+		--
+		local function prefillGroup(photo, photoId)
+			local entries = {
+				{ photoId = photoId, filePath = photo:getRawMetadata("path"), photo = photo },
+			}
+			for i = 1, math.min(groupSize - 1, #photoToProcessStack) do
+				local nextPhoto = photoToProcessStack[i]
+				if nextPhoto ~= nil and not nextPhoto:getRawMetadata("isVideo") then
+					local nextPath = nextPhoto:getRawMetadata("path")
+					if nextPath and nextPhoto:checkPhotoAvailability() then
+						local nextId = getPhotoIdForPhoto(nextPhoto)
+						if nextId then
+							table.insert(entries, { photoId = nextId, filePath = nextPath, photo = nextPhoto })
+						end
+					end
+				end
+			end
+			for _, entry in ipairs(entries) do
+				entry.options = buildPhotoOptions(entry.photo, entry.photoId, options)
+			end
+
+			local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
+			-- A transport-level failure has no per-photo detail; leave the
+			-- memo empty so every photo retries on its own and can still reach
+			-- the export fallback.
+			if type(response) ~= "table" then
+				log:warn("Grouped indexing failed (" .. tostring(response) .. "); falling back to single photos")
+				return
+			end
+
+			local byId = Util.resultsByPhotoId(response.results)
+			local warningsAttached = false
+			for _, entry in ipairs(entries) do
+				local outcome = byId[entry.photoId]
+				if outcome ~= nil then
+					-- Warnings belong to the request, not to a photo, so they
+					-- ride on the first photo that succeeded — attaching them
+					-- to a failed one would put a table where the caller logs
+					-- an error string.
+					local carriesWarnings = outcome.success and not warningsAttached
+					if carriesWarnings then
+						warningsAttached = true
+					end
+					groupMemo[entry.photo] = {
+						success = outcome.success,
+						error = outcome.error,
+						response = carriesWarnings and response or nil,
+					}
+				end
+			end
+			if not ok then
+				log:warn("Grouped indexing reported failures; affected photos fall back to single sends")
+			end
+		end
+
 		local analyzeWorker = function()
 			while #photoToProcessStack > 0 do
 				if progressScope:isCanceled() then
@@ -1824,45 +2024,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								.. ")"
 						)
 
-						-- Prepare analysis options with photo-specific context
-						local photoOptions = {}
-						for k, v in pairs(options) do
-							photoOptions[k] = v
-						end
-						if options.submit_gps then
-							local gps = photo:getRawMetadata("gps")
-							if gps then
-								photoOptions.gps_coordinates = gps
-							end
-						end
-						if options.submit_keywords then
-							local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-							if keywords then
-								-- Lightroom may return a comma-separated string; send as array so server
-								-- does not treat it as iterable of characters (issue #45).
-								if type(keywords) == "string" then
-									photoOptions.existing_keywords = Util.string_split(keywords, ",")
-								else
-									photoOptions.existing_keywords = keywords
-								end
-							end
-						end
-						if options.submit_folder_names then
-							local originalFilePath = photo:getRawMetadata("path")
-							if originalFilePath then
-								photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
-							end
-						end
-						-- Always submit catalog capture time.
-						local datetime = photo:getRawMetadata("dateTime")
-						if datetime ~= nil and type(datetime) == "number" then
-							-- Keep backwards-compatible ISO string for older backends
-							photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-							-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
-							photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
-						end
-						photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-						photoOptions.photo_id = photoId
+						local photoOptions = buildPhotoOptions(photo, photoId, options)
 
 						local success, indexResponse
 
@@ -1873,12 +2035,27 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								log:trace("Original submission skipped for video " .. filename)
 							elseif originalPath and photo:checkPhotoAvailability() then
 								if SearchIndexAPI.isLocalBackend() then
-									log:trace("Submitting original by reference for " .. filename)
-									success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
-										photoId,
-										originalPath,
-										photoOptions
-									)
+									-- Grouped path: fill a group's worth of outcomes on the
+									-- first photo that needs one, then consume them one at a
+									-- time. A photo the group did not cover (or a group that
+									-- failed outright) has no memo and is sent on its own.
+									if groupSize > 1 and groupMemo[photo] == nil then
+										prefillGroup(photo, photoId)
+									end
+									local memo = groupMemo[photo]
+									if memo ~= nil then
+										groupMemo[photo] = nil
+										log:trace("Using grouped result for " .. filename)
+										success = memo.success
+										indexResponse = memo.response or memo.error
+									else
+										log:trace("Submitting original by reference for " .. filename)
+										success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
+											photoId,
+											originalPath,
+											photoOptions
+										)
+									end
 								else
 									log:trace("Uploading original file for " .. filename)
 									success, indexResponse =
@@ -3734,6 +3911,123 @@ function SearchIndexAPI.startClipDownload()
 			LrTasks.sleep(2)
 		end
 	end)
+end
+
+---
+-- Lists local GGUF models: those already on disk and those offered for download.
+--
+-- @return table|nil catalog { installed, downloadable, supported, model_dir }
+-- @return string|nil error
+--
+function SearchIndexAPI.getLlmCatalog()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_CATALOG)
+	if err then
+		log:error("getLlmCatalog failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Reports whether a local model is loaded, and with which settings.
+--
+-- @return table|nil status { status, model_path, supports_vision, n_ctx, n_parallel }
+-- @return string|nil error
+--
+function SearchIndexAPI.getLlmStatus()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_STATUS)
+	if err then
+		log:error("getLlmStatus failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Downloads a catalog model, showing progress until it finishes.
+--
+-- Multi-gigabyte download, so it runs in its own async task with a progress
+-- scope and polls the server rather than blocking the dialog. Mirrors
+-- startClipDownload; the difference is that the model is chosen by id.
+--
+-- @param modelId string Catalog entry id from getLlmCatalog().downloadable.
+-- @return boolean started
+-- @return string|nil error
+--
+function SearchIndexAPI.startLlmDownload(modelId)
+	if not modelId or modelId == "" then
+		return false, "No model id provided"
+	end
+
+	local status = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+	if status ~= nil and status.status == "downloading" then
+		log:trace("A local model download is already in progress")
+		return true
+	end
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_LLM_DOWNLOAD, { id = modelId })
+	if postErr then
+		log:error("startLlmDownload failed: " .. tostring(postErr))
+		return false, postErr
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/LlmDownload/ProgressTitle=Downloading local AI model"),
+		functionContext = nil,
+	})
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+					loopErr
+				)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				if loopStatus.status == "downloading" then
+					progressScope:setCaption(
+						LOC("$$$/LrGeniusAI/LlmDownload/Downloading=Downloading local AI model...")
+					)
+					if loopStatus.total and loopStatus.total > 0 then
+						progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+					end
+				elseif loopStatus.status == "completed" then
+					log:trace("Local model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
+						LOC(
+							"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+						)
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn("startLlmDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping")
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+
+	return true
 end
 
 local lastClipReadyStatus = nil

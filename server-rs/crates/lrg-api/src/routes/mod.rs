@@ -9,6 +9,7 @@ pub mod index;
 pub mod index_by_reference;
 pub mod index_upload;
 pub mod keywords;
+pub mod llm;
 pub(crate) mod route_util;
 pub mod search;
 pub mod server;

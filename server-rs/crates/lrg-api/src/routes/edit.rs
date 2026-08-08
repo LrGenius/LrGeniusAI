@@ -20,6 +20,7 @@ use base64::Engine;
 use chrono::Utc;
 use serde_json::{json, Map, Value};
 
+use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse};
 use lrg_store::{meta, Store, StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
@@ -62,6 +63,8 @@ pub(crate) struct EditOptions {
     composition_mode: String,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+    /// Engine tuning from the plugin's advanced fields; see `ParsedOptions`.
+    engine: crate::llm_engine::EngineOverrides,
     catalog_id: Option<String>,
     use_training_style: bool,
 }
@@ -101,6 +104,7 @@ impl Default for EditOptions {
             lmstudio_base_url: None,
             catalog_id: None,
             use_training_style: true,
+            engine: crate::llm_engine::EngineOverrides::default(),
         }
     }
 }
@@ -167,6 +171,7 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         composition_mode,
         ollama_base_url: fields.get("ollama_base_url").cloned(),
         lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+        engine: crate::routes::llm::engine_overrides_from_fields(fields),
         catalog_id: fields
             .get("catalog_id")
             .map(|s| s.trim().to_string())
@@ -206,6 +211,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         .clamp(0.0, 1.0);
 
     EditOptions {
+        engine: crate::routes::llm::engine_overrides_from_json(data),
         provider: get_str("provider"),
         model: get_str("model"),
         api_key: get_str("api_key"),
@@ -342,6 +348,7 @@ pub(crate) async fn fetch_training_examples(
 }
 
 pub(crate) async fn generate_edit_recipe_for_photo(
+    state: &AppState,
     store: Option<&Store>,
     options: &EditOptions,
     image_bytes: &[u8],
@@ -395,34 +402,26 @@ pub(crate) async fn generate_edit_recipe_for_photo(
         }
     }
 
-    let mut response = match provider.as_str() {
-        "ollama" => {
-            let client =
-                lrg_providers::ollama::OllamaProvider::new(options.ollama_base_url.clone());
-            client.generate_edit_recipe(&request).await
-        }
-        "chatgpt" | "openai" => match &request.api_key {
-            Some(key) => {
-                lrg_providers::openai::OpenAiProvider::new(key.clone())
-                    .generate_edit_recipe(&request)
-                    .await
-            }
-            None => edit_fail(photo_id, "OpenAI API not configured".to_string()),
-        },
-        "gemini" => match &request.api_key {
-            Some(key) => {
-                lrg_providers::gemini::GeminiProvider::new(key.clone())
-                    .generate_edit_recipe(&request)
-                    .await
-            }
-            None => edit_fail(photo_id, "Gemini API not configured".to_string()),
-        },
-        "lmstudio" => {
-            let client =
-                lrg_providers::lmstudio::LmStudioProvider::new(options.lmstudio_base_url.clone());
-            client.generate_edit_recipe(&request).await
-        }
-        other => edit_fail(photo_id, format!("Unknown provider '{other}'.")),
+    let local_engine = match crate::routes::llm::engine_for_request(
+        state,
+        &provider,
+        &request.model,
+        options.engine,
+    )
+    .await
+    {
+        Ok(engine) => engine,
+        Err(e) => return edit_fail(photo_id, e),
+    };
+    let mut response = match build_provider(&ProviderSelection {
+        local_engine,
+        name: provider,
+        api_key: options.api_key.clone(),
+        ollama_base_url: options.ollama_base_url.clone(),
+        lmstudio_base_url: options.lmstudio_base_url.clone(),
+    }) {
+        Ok(client) => client.generate_edit_recipe(&request).await,
+        Err(e) => edit_fail(photo_id, e),
     };
 
     if response.success {
@@ -669,7 +668,8 @@ async fn finish_edit(
 ) -> Response {
     let store = state.store();
     let response =
-        generate_edit_recipe_for_photo(store.as_deref(), options, image_bytes, photo_id).await;
+        generate_edit_recipe_for_photo(state, store.as_deref(), options, image_bytes, photo_id)
+            .await;
 
     let Some(recipe) = response.recipe.filter(|_| response.success) else {
         return (

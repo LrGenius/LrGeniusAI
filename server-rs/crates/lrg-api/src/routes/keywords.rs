@@ -16,6 +16,11 @@ use lrg_analysis::keywords::{
     replace_in_flattened_keywords, replace_in_keyword_structure,
 };
 use lrg_ml::siglip::l2_normalize;
+// Provider-name resolution lives in `lrg_providers::provider` so every route
+// agrees on which names are valid; this module used to keep its own list, which
+// is why `"openai"` worked for indexing but silently disabled LLM validation
+// here.
+use lrg_providers::provider::is_known_provider;
 use lrg_providers::text_llm::{validate_clusters_with_llm, TextLlmConfig};
 use lrg_store::IMAGE_TABLE;
 
@@ -38,15 +43,16 @@ pub fn router() -> axum::Router<Arc<AppState>> {
         )
 }
 
-const KNOWN_PROVIDERS: &[&str] = &["chatgpt", "gemini", "ollama", "lmstudio"];
-
 struct ClusterRequest {
     unique: Vec<String>,
     threshold: f64,
     config: TextLlmConfig,
 }
 
-fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
+fn parse_cluster_request(
+    data: &Value,
+    local_engine: Option<lrg_providers::local::SharedLocalEngine>,
+) -> Result<ClusterRequest, &'static str> {
     let Some(keyword_names) = data.get("keywords").and_then(Value::as_array) else {
         return Err("keywords must be a list");
     };
@@ -61,7 +67,7 @@ fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let use_llm = KNOWN_PROVIDERS.contains(&provider.as_str());
+    let use_llm = is_known_provider(&provider);
     let default_threshold = if use_llm { 0.85 } else { 0.88 };
     let threshold = clamp_threshold(
         data.get("threshold")
@@ -90,6 +96,7 @@ fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
                 .get("lmstudio_base_url")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            local_engine,
         },
     })
 }
@@ -132,7 +139,7 @@ async fn run_clustering(state: &AppState, req: &ClusterRequest) -> Value {
         .map(|idxs| idxs.into_iter().map(|i| req.unique[i].clone()).collect())
         .collect();
 
-    let use_llm = KNOWN_PROVIDERS.contains(&req.config.provider.as_str());
+    let use_llm = is_known_provider(&req.config.provider);
     log::info!(
         "cluster_keywords: {} keywords -> {} CLIP candidate(s) (threshold={}, llm={})",
         req.unique.len(),
@@ -146,8 +153,7 @@ async fn run_clustering(state: &AppState, req: &ClusterRequest) -> Value {
     );
 
     if use_llm && !candidates.is_empty() {
-        let client = reqwest::Client::new();
-        let clusters = validate_clusters_with_llm(&client, &candidates, &req.config).await;
+        let clusters = validate_clusters_with_llm(&candidates, &req.config).await;
         json!({"results": clusters, "warning": Value::Null})
     } else {
         json!({"results": candidates, "warning": Value::Null})
@@ -159,7 +165,7 @@ async fn cluster_keywords(
     body: Option<Json<Value>>,
 ) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let req = match parse_cluster_request(&data) {
+    let req = match parse_cluster_request(&data, state.llm.current()) {
         Ok(r) => r,
         Err(e) => {
             return (
@@ -179,7 +185,7 @@ async fn cluster_keywords_start(
     body: Option<Json<Value>>,
 ) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let req = match parse_cluster_request(&data) {
+    let req = match parse_cluster_request(&data, state.llm.current()) {
         Ok(r) => r,
         Err(e) => {
             return (

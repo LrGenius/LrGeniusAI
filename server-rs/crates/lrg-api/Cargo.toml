@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Compiles the in-process llama.cpp engine in. Off by default so that anyone
+# building an unrelated crate does not need cmake + libclang (and, on Windows,
+# a CUDA toolkit); the release workflow turns it on.
+llamacpp = ["dep:lrg-llama"]
+
 [dependencies]
+lrg-llama = { workspace = true, optional = true }
 lrg-common.workspace = true
 lrg-store.workspace = true
 lrg-ml.workspace = true
@@ -24,6 +31,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sha2 = "0.10"
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+async-trait = "0.1.91"
 
 [dev-dependencies]
 lrg-store.workspace = true

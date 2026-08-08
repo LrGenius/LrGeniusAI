@@ -3,6 +3,8 @@
 //! this talks to that REST API directly via `reqwest` instead of
 //! depending on an SDK.
 
+use std::time::Duration;
+
 use serde_json::{json, Value};
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
@@ -75,6 +77,34 @@ impl OllamaProvider {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Schema-free chat completion — see [`crate::provider::LlmProvider::generate_text`].
+    pub async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        let model = model.unwrap_or("llama3");
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": false,
+        });
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.base_url))
+            .json(&body)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .ok()?;
+        let result: Value = resp.json().await.ok()?;
+        result["message"]["content"].as_str().map(str::to_string)
     }
 
     pub async fn generate_metadata(

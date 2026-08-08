@@ -249,7 +249,8 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             result.confidence
         );
         let llm_response =
-            generate_edit_recipe_for_photo(Some(&store), &options, &image_bytes, &photo_id).await;
+            generate_edit_recipe_for_photo(&state, Some(&store), &options, &image_bytes, &photo_id)
+                .await;
         let Some(recipe) = llm_response.recipe.filter(|_| llm_response.success) else {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

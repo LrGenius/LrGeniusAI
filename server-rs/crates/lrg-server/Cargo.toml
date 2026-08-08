@@ -8,6 +8,11 @@ license.workspace = true
 name = "geniusai-server"
 path = "src/main.rs"
 
+[features]
+# Pass-through so `cargo build -p lrg-server --features llamacpp` is all the
+# release workflow needs.
+llamacpp = ["lrg-api/llamacpp"]
+
 [dependencies]
 lrg-api.workspace = true
 lrg-common.workspace = true

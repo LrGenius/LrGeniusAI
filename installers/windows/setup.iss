@@ -16,6 +16,10 @@ SourceDir=..\..
 [Files]
 ; Backend: a single native binary, no bundled Python runtime.
 Source: "build\lrgenius-server\lrgenius-server.exe"; DestDir: "{app}\backend"; Flags: ignoreversion
+; llama.cpp's Vulkan backend is a loadable ggml module, so these must sit
+; beside the exe or the server runs CPU-only. skipifsourcedoesntexist keeps
+; the installer buildable when the llamacpp feature is off.
+Source: "build\lrgenius-server\ggml*.dll"; DestDir: "{app}\backend"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "installers\windows\run_hidden.vbs"; DestDir: "{app}\backend"; Flags: ignoreversion
 
 ; Plugin files (Global location for Lightroom)

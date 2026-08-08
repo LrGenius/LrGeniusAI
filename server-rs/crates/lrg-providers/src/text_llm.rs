@@ -5,8 +5,9 @@
 //! Deliberately separate from the metadata/edit-recipe request types —
 //! this is a much smaller, schema-free call shape.
 
-use serde_json::{json, Value};
-use std::time::Duration;
+use serde_json::Value;
+
+use crate::provider::{build_provider, ProviderSelection};
 
 /// Which provider/model/creds to use for a plain-text LLM call.
 pub struct TextLlmConfig {
@@ -15,126 +16,30 @@ pub struct TextLlmConfig {
     pub api_key: Option<String>,
     pub ollama_base_url: Option<String>,
     pub lmstudio_base_url: Option<String>,
+    /// Present only when an in-process model is loaded; see
+    /// [`crate::provider::ProviderSelection::local_engine`].
+    pub local_engine: Option<crate::local::SharedLocalEngine>,
 }
 
 /// Port of `_call_llm_text`. Returns `None` on any failure (network,
 /// missing config, unexpected response shape) — callers fall back to the
 /// raw CLIP candidates, matching Python's try/except-and-continue.
 pub async fn call_llm_text(
-    client: &reqwest::Client,
     config: &TextLlmConfig,
     system_prompt: &str,
     user_prompt: &str,
 ) -> Option<String> {
-    match config.provider.as_str() {
-        "chatgpt" => {
-            let api_key = config.api_key.as_deref()?;
-            let model = config.model.as_deref().unwrap_or("gpt-4.1");
-            let body = json!({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 4096,
-            });
-            let resp = client
-                .post("https://api.openai.com/v1/chat/completions")
-                .bearer_auth(api_key)
-                .json(&body)
-                .timeout(Duration::from_secs(120))
-                .send()
-                .await
-                .ok()?;
-            let result: Value = resp.json().await.ok()?;
-            result["choices"][0]["message"]["content"]
-                .as_str()
-                .map(str::to_string)
-        }
-        "gemini" => {
-            let api_key = config.api_key.as_deref()?;
-            let model = config.model.as_deref().unwrap_or("gemini-2.0-flash");
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}");
-            let body = json!({
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
-            });
-            let resp = client
-                .post(&url)
-                .json(&body)
-                .timeout(Duration::from_secs(120))
-                .send()
-                .await
-                .ok()?;
-            let result: Value = resp.json().await.ok()?;
-            let parts = result["candidates"][0]["content"]["parts"].as_array()?;
-            let text: String = parts
-                .iter()
-                .filter_map(|p| p["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.is_empty()).then_some(text)
-        }
-        "ollama" => {
-            let base = config
-                .ollama_base_url
-                .as_deref()
-                .unwrap_or("http://localhost:11434");
-            let model = config.model.as_deref().unwrap_or("llama3");
-            let body = json!({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "stream": false,
-            });
-            let resp = client
-                .post(format!("{base}/api/chat"))
-                .json(&body)
-                .timeout(Duration::from_secs(120))
-                .send()
-                .await
-                .ok()?;
-            let result: Value = resp.json().await.ok()?;
-            result["message"]["content"].as_str().map(str::to_string)
-        }
-        "lmstudio" => {
-            let raw_base = config
-                .lmstudio_base_url
-                .as_deref()
-                .unwrap_or("localhost:1234");
-            let base = if raw_base.starts_with("http") {
-                raw_base.to_string()
-            } else {
-                format!("http://{raw_base}")
-            };
-            let model = config.model.as_deref().unwrap_or("local-model");
-            let body = json!({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 4096,
-            });
-            let resp = client
-                .post(format!("{base}/v1/chat/completions"))
-                .json(&body)
-                .timeout(Duration::from_secs(120))
-                .send()
-                .await
-                .ok()?;
-            let result: Value = resp.json().await.ok()?;
-            result["choices"][0]["message"]["content"]
-                .as_str()
-                .map(str::to_string)
-        }
-        _ => None,
-    }
+    let provider = build_provider(&ProviderSelection {
+        name: config.provider.clone(),
+        api_key: config.api_key.clone(),
+        ollama_base_url: config.ollama_base_url.clone(),
+        lmstudio_base_url: config.lmstudio_base_url.clone(),
+        local_engine: config.local_engine.clone(),
+    })
+    .ok()?;
+    provider
+        .generate_text(config.model.as_deref(), system_prompt, user_prompt)
+        .await
 }
 
 const VALIDATION_SYSTEM: &str = "You are a photo library metadata expert. Decide which groups of similar-sounding keywords from a photography catalog are true synonyms that should be merged into one keyword.";
@@ -218,7 +123,6 @@ fn parse_validation_response(raw: &str, expected_len: usize) -> Option<Vec<Vec<S
 /// candidates (any group with >=2 members) for any chunk whose LLM call
 /// fails or returns something unparseable.
 pub async fn validate_clusters_with_llm(
-    client: &reqwest::Client,
     candidate_clusters: &[Vec<String>],
     config: &TextLlmConfig,
 ) -> Vec<Vec<String>> {
@@ -230,7 +134,7 @@ pub async fn validate_clusters_with_llm(
     let mut validated = Vec::new();
     for chunk in candidate_clusters.chunks(CHUNK_SIZE) {
         let user_prompt = build_validation_prompt(chunk);
-        let raw = call_llm_text(client, config, VALIDATION_SYSTEM, &user_prompt).await;
+        let raw = call_llm_text(config, VALIDATION_SYSTEM, &user_prompt).await;
 
         let fallback = || {
             chunk

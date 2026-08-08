@@ -1557,4 +1557,72 @@ function Util.addPhotoToRejectedDescriptionsCollection(photo, writeOptions)
 	end, writeOptions)
 end
 
+-- Photos per request when llama.cpp is selected and the user has not said
+-- otherwise. Kept modest because the whole group has to fit the context
+-- window alongside the pinned prefix; the server clamps it further to the
+-- engine's own n_parallel.
+local DEFAULT_GROUPED_BATCH_SIZE = 4
+
+---
+-- How many photos to send per indexing request.
+--
+-- Only the in-process llama.cpp backend benefits: it shares one pinned prompt
+-- prefix across the group and decodes them in parallel sequences. Every remote
+-- provider is billed and rate-limited per request and gains nothing, so they
+-- stay at one photo per request. Grouping also requires sending originals by
+-- reference — the export path hands the server one temp JPEG at a time.
+--
+-- This is deliberately a pure function so it can be tested without Lightroom.
+-- Note it does not touch maxWorkers: batching is server-side, and the plugin
+-- keeps a single worker.
+--
+-- @param provider string|nil Selected provider name.
+-- @param useOriginals boolean Whether originals are submitted by reference.
+-- @param isLocalBackend boolean Whether the backend can read local files.
+-- @param configured number|string|nil Optional user override.
+-- @return number Photos per request; always >= 1.
+--
+function Util.groupedBatchSize(provider, useOriginals, isLocalBackend, configured)
+	if not useOriginals or not isLocalBackend then
+		return 1
+	end
+	if type(provider) ~= "string" or provider:lower() ~= "llamacpp" then
+		return 1
+	end
+	-- An unusable override (absent, unparseable, zero, negative, NaN) means the
+	-- default, matching how the server treats a bad `llm_batch_size`. Zero in
+	-- particular must not become a literal batch of no photos.
+	local n = tonumber(configured)
+	if n == nil or n ~= n or n < 1 then -- n ~= n catches NaN
+		return DEFAULT_GROUPED_BATCH_SIZE
+	end
+	return math.floor(n)
+end
+
+---
+-- Indexes a batch response's `results` array by photo_id.
+--
+-- A grouped request can partly succeed, and the aggregate counts do not say
+-- which photo failed. The caller needs that to retry only the failures and to
+-- fire its per-photo callback only for the ones that landed.
+--
+-- @param results table|nil Array of { photo_id, success, error }.
+-- @return table Map of photo_id -> { success = boolean, error = string|nil }.
+--
+function Util.resultsByPhotoId(results)
+	local byId = {}
+	if type(results) ~= "table" then
+		return byId
+	end
+	for _, entry in ipairs(results) do
+		if type(entry) == "table" and type(entry.photo_id) == "string" then
+			byId[entry.photo_id] = {
+				success = entry.success == true,
+				error = entry.error,
+			}
+		end
+	end
+	return byId
+end
+
 return Util
