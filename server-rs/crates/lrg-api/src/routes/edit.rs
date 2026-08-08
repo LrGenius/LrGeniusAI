@@ -63,6 +63,8 @@ pub(crate) struct EditOptions {
     composition_mode: String,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+    /// Engine tuning from the plugin's advanced fields; see `ParsedOptions`.
+    engine: crate::llm_engine::EngineOverrides,
     catalog_id: Option<String>,
     use_training_style: bool,
 }
@@ -102,6 +104,7 @@ impl Default for EditOptions {
             lmstudio_base_url: None,
             catalog_id: None,
             use_training_style: true,
+            engine: crate::llm_engine::EngineOverrides::default(),
         }
     }
 }
@@ -168,6 +171,7 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         composition_mode,
         ollama_base_url: fields.get("ollama_base_url").cloned(),
         lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+        engine: crate::routes::llm::engine_overrides_from_fields(fields),
         catalog_id: fields
             .get("catalog_id")
             .map(|s| s.trim().to_string())
@@ -207,6 +211,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         .clamp(0.0, 1.0);
 
     EditOptions {
+        engine: crate::routes::llm::engine_overrides_from_json(data),
         provider: get_str("provider"),
         model: get_str("model"),
         api_key: get_str("api_key"),
@@ -397,11 +402,17 @@ pub(crate) async fn generate_edit_recipe_for_photo(
         }
     }
 
-    let local_engine =
-        match crate::routes::llm::engine_for_request(state, &provider, &request.model).await {
-            Ok(engine) => engine,
-            Err(e) => return edit_fail(photo_id, e),
-        };
+    let local_engine = match crate::routes::llm::engine_for_request(
+        state,
+        &provider,
+        &request.model,
+        options.engine,
+    )
+    .await
+    {
+        Ok(engine) => engine,
+        Err(e) => return edit_fail(photo_id, e),
+    };
     let mut response = match build_provider(&ProviderSelection {
         local_engine,
         name: provider,

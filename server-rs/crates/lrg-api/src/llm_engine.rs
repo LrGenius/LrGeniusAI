@@ -314,22 +314,46 @@ mod imp {
 
 pub use imp::LlmEngineSlot;
 
+/// Engine tuning a request may ask for, from the plugin's advanced fields.
+///
+/// All optional: `None` means "not specified", which falls back to the
+/// environment and then to the defaults. Changing any of these makes
+/// [`LlmEngineSlot::get_or_load`] reload the engine, so they are settings a
+/// user adjusts occasionally, not per photo.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EngineOverrides {
+    pub n_ctx: Option<u32>,
+    pub n_parallel: Option<u32>,
+    pub n_gpu_layers: Option<u32>,
+}
+
 /// Build engine settings for a request.
 ///
-/// Tuning knobs come from the environment for now; M6 adds the plugin UI that
-/// writes them. Defaults are deliberately conservative — `n_parallel = 1` means
-/// no extra KV cache is allocated, so enabling the local provider cannot
-/// surprise a small machine with a multi-gigabyte memory jump.
+/// Precedence is request, then environment, then default. Defaults are
+/// deliberately conservative — `n_parallel = 1` means no extra KV cache is
+/// allocated, so enabling the local provider cannot surprise a small machine
+/// with a multi-gigabyte memory jump.
 #[must_use]
-pub fn settings_for(model_path: PathBuf, mmproj_path: Option<PathBuf>) -> LlmEngineSettings {
+pub fn settings_for(
+    model_path: PathBuf,
+    mmproj_path: Option<PathBuf>,
+    overrides: EngineOverrides,
+) -> LlmEngineSettings {
     LlmEngineSettings {
         model_path,
         mmproj_path,
-        n_ctx: env_u32("LRG_LLAMA_N_CTX", 8192),
-        n_parallel: env_u32("LRG_LLAMA_N_PARALLEL", 1).max(1),
+        n_ctx: overrides
+            .n_ctx
+            .unwrap_or_else(|| env_u32("LRG_LLAMA_N_CTX", 8192)),
+        n_parallel: overrides
+            .n_parallel
+            .unwrap_or_else(|| env_u32("LRG_LLAMA_N_PARALLEL", 1))
+            .max(1),
         // "All layers on the GPU" is right for Metal and for any card with
         // enough VRAM; llama.cpp silently keeps what does not fit on the CPU.
-        n_gpu_layers: env_u32("LRG_LLAMA_GPU_LAYERS", u32::MAX),
+        n_gpu_layers: overrides
+            .n_gpu_layers
+            .unwrap_or_else(|| env_u32("LRG_LLAMA_GPU_LAYERS", u32::MAX)),
     }
 }
 
@@ -348,7 +372,7 @@ mod tests {
     fn settings_default_to_a_single_sequence() {
         // Anything else would allocate extra KV cache the moment the provider
         // is selected, which is not a decision to make on the user's behalf.
-        let settings = settings_for("/m/a.gguf".into(), None);
+        let settings = settings_for("/m/a.gguf".into(), None, EngineOverrides::default());
         assert_eq!(settings.n_parallel, 1);
         assert!(settings.n_ctx >= 4096);
     }

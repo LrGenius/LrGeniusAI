@@ -46,6 +46,10 @@ local ENDPOINTS = {
 	START_CLIP_DOWNLOAD = "/clip/download/start",
 	STATUS_CLIP_DOWNLOAD = "/clip/download/status",
 	CLIP_STATUS = "/clip/status",
+	LLM_CATALOG = "/llm/catalog",
+	LLM_STATUS = "/llm/status",
+	START_LLM_DOWNLOAD = "/llm/download/start",
+	STATUS_LLM_DOWNLOAD = "/llm/download/status",
 	CHECK_UNPROCESSED = "/index/check-unprocessed",
 	FACES_CLUSTER = "/faces/cluster",
 	FACES_PERSONS = "/faces/persons",
@@ -704,6 +708,12 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+		-- Local-engine tuning. Ignored by every remote provider; changing one
+		-- makes the server reload the local model, so these are settings the
+		-- user adjusts in Plug-in Manager, not per photo.
+		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
 	}
 
 	log:trace("Analyzing and indexing photo (by reference): " .. tostring(filePath) .. " id " .. photoId)
@@ -815,6 +825,12 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
 		llm_batch_size = tostring(#images),
+		-- Local-engine tuning. Ignored by every remote provider; changing one
+		-- makes the server reload the local model, so these are settings the
+		-- user adjusts in Plug-in Manager, not per photo.
+		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
 	}
 
 	log:trace("Analyzing and indexing " .. tostring(#images) .. " photos (grouped by reference)")
@@ -3895,6 +3911,123 @@ function SearchIndexAPI.startClipDownload()
 			LrTasks.sleep(2)
 		end
 	end)
+end
+
+---
+-- Lists local GGUF models: those already on disk and those offered for download.
+--
+-- @return table|nil catalog { installed, downloadable, supported, model_dir }
+-- @return string|nil error
+--
+function SearchIndexAPI.getLlmCatalog()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_CATALOG)
+	if err then
+		log:error("getLlmCatalog failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Reports whether a local model is loaded, and with which settings.
+--
+-- @return table|nil status { status, model_path, supports_vision, n_ctx, n_parallel }
+-- @return string|nil error
+--
+function SearchIndexAPI.getLlmStatus()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_STATUS)
+	if err then
+		log:error("getLlmStatus failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Downloads a catalog model, showing progress until it finishes.
+--
+-- Multi-gigabyte download, so it runs in its own async task with a progress
+-- scope and polls the server rather than blocking the dialog. Mirrors
+-- startClipDownload; the difference is that the model is chosen by id.
+--
+-- @param modelId string Catalog entry id from getLlmCatalog().downloadable.
+-- @return boolean started
+-- @return string|nil error
+--
+function SearchIndexAPI.startLlmDownload(modelId)
+	if not modelId or modelId == "" then
+		return false, "No model id provided"
+	end
+
+	local status = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+	if status ~= nil and status.status == "downloading" then
+		log:trace("A local model download is already in progress")
+		return true
+	end
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_LLM_DOWNLOAD, { id = modelId })
+	if postErr then
+		log:error("startLlmDownload failed: " .. tostring(postErr))
+		return false, postErr
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/LlmDownload/ProgressTitle=Downloading local AI model"),
+		functionContext = nil,
+	})
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+					loopErr
+				)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				if loopStatus.status == "downloading" then
+					progressScope:setCaption(
+						LOC("$$$/LrGeniusAI/LlmDownload/Downloading=Downloading local AI model...")
+					)
+					if loopStatus.total and loopStatus.total > 0 then
+						progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+					end
+				elseif loopStatus.status == "completed" then
+					log:trace("Local model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
+						LOC(
+							"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+						)
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn("startLlmDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping")
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+
+	return true
 end
 
 local lastClipReadyStatus = nil

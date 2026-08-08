@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 
 use lrg_providers::local::SharedLocalEngine;
 
-use crate::llm_engine::settings_for;
+use crate::llm_engine::{settings_for, EngineOverrides};
 use crate::llm_models::{self, CatalogEntry};
 use crate::routes::clip::ModelDownloadStatus;
 use crate::state::AppState;
@@ -51,6 +51,7 @@ pub async fn engine_for_request(
     state: &AppState,
     provider: &str,
     model: &str,
+    overrides: EngineOverrides,
 ) -> Result<Option<SharedLocalEngine>, String> {
     if provider.trim().to_lowercase() != "llamacpp" {
         return Ok(None);
@@ -61,8 +62,49 @@ pub async fn engine_for_request(
              or set LRG_LLAMA_MODEL_GGUF to a GGUF file."
         ));
     };
-    let settings = settings_for(found.model_path, found.mmproj_path);
+    let settings = settings_for(found.model_path, found.mmproj_path, overrides);
     state.llm.get_or_load(&settings).await.map(Some)
+}
+
+/// Read the engine tuning knobs the plugin's advanced fields send.
+///
+/// Absent, unparseable and zero all mean "unspecified", so a blank field in the
+/// dialog falls back to the environment and then to the default rather than
+/// asking for a zero-sized context window.
+#[must_use]
+pub fn engine_overrides_from_fields(
+    fields: &std::collections::HashMap<String, String>,
+) -> EngineOverrides {
+    let raw = |key: &str| fields.get(key).and_then(|v| v.trim().parse::<u32>().ok());
+    // Zero is nonsense for a context window or a sequence count, but it is a
+    // real choice for GPU layers: it means "run entirely on the CPU".
+    let positive = |key: &str| raw(key).filter(|n| *n > 0);
+    EngineOverrides {
+        n_ctx: positive("llm_n_ctx"),
+        n_parallel: positive("llm_n_parallel"),
+        n_gpu_layers: raw("llm_gpu_layers"),
+    }
+}
+
+/// Same knobs, read from a JSON body.
+///
+/// The plugin sends numbers on the JSON routes and strings on the multipart
+/// ones, so both forms are accepted here rather than making the caller care.
+#[must_use]
+pub fn engine_overrides_from_json(data: &Value) -> EngineOverrides {
+    let raw = |key: &str| {
+        data.get(key).and_then(|v| match v {
+            Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+            Value::String(s) => s.trim().parse::<u32>().ok(),
+            _ => None,
+        })
+    };
+    let positive = |key: &str| raw(key).filter(|n| *n > 0);
+    EngineOverrides {
+        n_ctx: positive("llm_n_ctx"),
+        n_parallel: positive("llm_n_parallel"),
+        n_gpu_layers: raw("llm_gpu_layers"),
+    }
 }
 
 async fn catalog(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -296,11 +338,72 @@ pub fn destination_for(entry: &CatalogEntry) -> (PathBuf, PathBuf) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn engine_overrides_read_the_advanced_fields() {
+        let fields: std::collections::HashMap<String, String> = [
+            ("llm_n_ctx", "16384"),
+            ("llm_n_parallel", "4"),
+            ("llm_gpu_layers", "20"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let o = engine_overrides_from_fields(&fields);
+        assert_eq!(o.n_ctx, Some(16384));
+        assert_eq!(o.n_parallel, Some(4));
+        assert_eq!(o.n_gpu_layers, Some(20));
+    }
+
+    /// A blank or nonsense field must mean "unspecified" so the environment and
+    /// then the built-in default still apply — never a zero-sized context.
+    #[test]
+    fn engine_overrides_ignore_blank_and_zero() {
+        let fields: std::collections::HashMap<String, String> = [
+            ("llm_n_ctx", ""),
+            ("llm_n_parallel", "0"),
+            ("llm_gpu_layers", "lots"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let o = engine_overrides_from_fields(&fields);
+        assert_eq!(o.n_ctx, None);
+        assert_eq!(o.n_parallel, None);
+        assert_eq!(o.n_gpu_layers, None);
+    }
+
+    /// Zero GPU layers is a real request — run on the CPU — so unlike the other
+    /// two knobs it must survive rather than being read as "unspecified".
+    #[test]
+    fn zero_gpu_layers_means_cpu_only() {
+        let fields: std::collections::HashMap<String, String> =
+            [("llm_gpu_layers".to_string(), "0".to_string())].into();
+        assert_eq!(engine_overrides_from_fields(&fields).n_gpu_layers, Some(0));
+        assert_eq!(
+            engine_overrides_from_json(&json!({"llm_gpu_layers": 0})).n_gpu_layers,
+            Some(0)
+        );
+    }
+
+    /// The JSON routes send numbers where the multipart routes send strings.
+    #[test]
+    fn engine_overrides_accept_json_numbers_and_strings() {
+        let o = engine_overrides_from_json(&json!({"llm_n_ctx": 8192, "llm_n_parallel": "3"}));
+        assert_eq!(o.n_ctx, Some(8192));
+        assert_eq!(o.n_parallel, Some(3));
+        assert_eq!(o.n_gpu_layers, None);
+        assert_eq!(
+            engine_overrides_from_json(&json!({"llm_n_ctx": 0})).n_ctx,
+            None
+        );
+    }
+
     #[tokio::test]
     async fn engine_for_request_ignores_other_providers() {
         let state = AppState::new(None, false);
         for provider in ["ollama", "chatgpt", "gemini", "lmstudio"] {
-            let resolved = engine_for_request(&state, provider, "whatever").await;
+            let resolved =
+                engine_for_request(&state, provider, "whatever", EngineOverrides::default()).await;
             assert!(
                 matches!(resolved, Ok(None)),
                 "{provider} must not touch the local engine"
@@ -311,10 +414,15 @@ mod tests {
     #[tokio::test]
     async fn engine_for_request_explains_a_missing_model() {
         let state = AppState::new(None, false);
-        let err = engine_for_request(&state, "llamacpp", "no-such-model.gguf")
-            .await
-            .err()
-            .expect("a missing model must fail loudly, not fall back");
+        let err = engine_for_request(
+            &state,
+            "llamacpp",
+            "no-such-model.gguf",
+            EngineOverrides::default(),
+        )
+        .await
+        .err()
+        .expect("a missing model must fail loudly, not fall back");
         assert!(err.contains("no-such-model.gguf"));
         assert!(err.contains("LRG_LLAMA_MODEL_GGUF"));
     }

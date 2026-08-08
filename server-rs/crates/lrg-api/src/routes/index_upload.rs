@@ -47,6 +47,10 @@ pub(crate) struct ParsedOptions {
     /// the provider", which is what callers should normally do — the useful
     /// width is a property of the loaded engine, not of the request.
     llm_batch_size: Option<usize>,
+    /// Engine tuning from the plugin's advanced fields. Changing any of these
+    /// makes the next request reload the engine, so they are user settings
+    /// rather than per-photo options.
+    engine: crate::llm_engine::EngineOverrides,
     metadata_request: MetadataOptions,
 }
 
@@ -229,6 +233,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         api_key: fields.get("api_key").cloned(),
         capture_time,
         llm_batch_size,
+        engine: crate::routes::llm::engine_overrides_from_fields(fields),
         vertex_project_id: fields
             .get("vertex_project_id")
             .or_else(|| fields.get("vertexProjectId"))
@@ -1136,7 +1141,13 @@ async fn provider_for_batch(
     let model = options.model.clone().unwrap_or_default();
     let mo = &options.metadata_request;
     build_provider(&ProviderSelection {
-        local_engine: crate::routes::llm::engine_for_request(state, &provider, &model).await?,
+        local_engine: crate::routes::llm::engine_for_request(
+            state,
+            &provider,
+            &model,
+            options.engine,
+        )
+        .await?,
         name: provider,
         api_key: options.api_key.clone(),
         ollama_base_url: mo.ollama_base_url.clone(),

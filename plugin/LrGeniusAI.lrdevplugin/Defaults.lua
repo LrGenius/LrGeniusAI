@@ -52,6 +52,17 @@ Defaults.exportSizes = {
 Defaults.defaultOllamaBaseUrl = "http://localhost:11434"
 Defaults.defaultLmStudioBaseUrl = "localhost:1234"
 
+-- Local (in-process) model tuning. The whole group of photos in a request has
+-- to fit the context window alongside the shared prompt prefix, so context size
+-- and parallel sequences trade against each other; the server clamps parallel
+-- sequences down if they will not fit. Deliberately conservative defaults:
+-- selecting the local provider should not cause a multi-gigabyte memory jump.
+Defaults.defaultLlmContextSize = 8192
+Defaults.defaultLlmParallel = 2
+-- llama.cpp keeps on the CPU whatever does not fit, so "all layers" is a safe
+-- request on Metal and on any card with enough VRAM.
+Defaults.defaultLlmGpuLayers = 999
+
 Defaults.defaultBackendServerUrl = "http://127.0.0.1:19819"
 
 Defaults.defaultExportQuality = 50

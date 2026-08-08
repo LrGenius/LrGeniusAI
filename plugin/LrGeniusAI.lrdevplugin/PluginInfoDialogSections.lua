@@ -48,6 +48,76 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.ollamaBaseUrl = prefs.ollamaBaseUrl or Defaults.defaultOllamaBaseUrl
 	propertyTable.lmstudioBaseUrl = prefs.lmstudioBaseUrl or Defaults.defaultLmStudioBaseUrl
 
+	-- Local (in-process) model settings.
+	propertyTable.llmContextSize = prefs.llmContextSize or Defaults.defaultLlmContextSize
+	propertyTable.llmParallel = prefs.llmParallel or Defaults.defaultLlmParallel
+	propertyTable.llmGpuLayers = prefs.llmGpuLayers or Defaults.defaultLlmGpuLayers
+	propertyTable.llmDownloadChoices = {}
+	propertyTable.llmDownloadChoice = nil
+	propertyTable.llmStatusText = LOC("$$$/LrGeniusAI/LocalModel/Checking=Checking for local models...")
+	propertyTable.llmInstalledText = ""
+
+	---
+	-- Refreshes the local-model section from /llm/catalog and /llm/status.
+	--
+	-- Everything here is best-effort: the backend may be down, or built without
+	-- local-model support, and neither should break the settings dialog.
+	--
+	local function updateLlmSection()
+		LrTasks.startAsyncTask(function()
+			local catalog = SearchIndexAPI.getLlmCatalog()
+			if catalog == nil then
+				propertyTable.llmStatusText =
+					LOC("$$$/LrGeniusAI/LocalModel/Unreachable=Backend not reachable — cannot list local models.")
+				return
+			end
+			if catalog.supported == false then
+				propertyTable.llmStatusText = LOC(
+					"$$$/LrGeniusAI/LocalModel/Unsupported=This backend build has no local-model support; use Ollama or LM Studio."
+				)
+				propertyTable.llmDownloadChoices = {}
+				return
+			end
+
+			local installed = catalog.installed or {}
+			local names = {}
+			for _, m in ipairs(installed) do
+				table.insert(names, m.name or "?")
+			end
+			propertyTable.llmInstalledText = #names > 0 and table.concat(names, ", ")
+				or LOC("$$$/LrGeniusAI/LocalModel/NoneInstalled=none yet")
+
+			local choices = {}
+			for _, entry in ipairs(catalog.downloadable or {}) do
+				if not entry.installed then
+					local gb = entry.approx_bytes and string.format(" (%.1f GB)", entry.approx_bytes / 1e9) or ""
+					table.insert(choices, { title = (entry.label or entry.id) .. gb, value = entry.id })
+				end
+			end
+			propertyTable.llmDownloadChoices = choices
+			if #choices > 0 and propertyTable.llmDownloadChoice == nil then
+				propertyTable.llmDownloadChoice = choices[1].value
+			end
+
+			local status = SearchIndexAPI.getLlmStatus()
+			if status ~= nil and status.status == "loaded" then
+				propertyTable.llmStatusText = LOC(
+					"$$$/LrGeniusAI/LocalModel/Loaded=Loaded: ^1 (context ^2, ^3 parallel)",
+					tostring(status.model_path or "?"),
+					tostring(status.n_ctx or "?"),
+					tostring(status.n_parallel or "?")
+				)
+			elseif #names > 0 then
+				propertyTable.llmStatusText =
+					LOC("$$$/LrGeniusAI/LocalModel/ReadyNotLoaded=Installed and ready; loads on first use.")
+			else
+				propertyTable.llmStatusText =
+					LOC("$$$/LrGeniusAI/LocalModel/NothingInstalled=No local model installed yet.")
+			end
+		end)
+	end
+	updateLlmSection()
+
 	-- Training/Style Profile stats (loaded asynchronously).
 	propertyTable.trainingCount = 0
 	propertyTable.styleStats = nil
@@ -787,6 +857,112 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 			}),
 			f:group_box({
 				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model (no external app)"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Status=Status"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("llmStatusText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Installed=Installed"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("llmInstalledText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:popup_menu({
+						items = bind("llmDownloadChoices"),
+						value = bind("llmDownloadChoice"),
+						width_in_chars = 34,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Download=Download"),
+						enabled = bind({
+							key = "llmDownloadChoice",
+							transform = function(v)
+								return v ~= nil
+							end,
+						}),
+						action = function(button)
+							local choice = propertyTable.llmDownloadChoice
+							if not choice then
+								return
+							end
+							LrTasks.startAsyncTask(function()
+								local ok, err = SearchIndexAPI.startLlmDownload(choice)
+								if not ok then
+									ErrorHandler.handleError(
+										LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+										err
+									)
+								end
+							end)
+						end,
+						width = share("setupButtonWidth"),
+					}),
+				}),
+				-- Advanced. The group of photos in a request has to fit the
+				-- context window alongside the shared prompt prefix, so these two
+				-- trade against each other; the server reduces parallel sequences
+				-- rather than overrunning the context.
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/ContextSize=Context size (tokens)"),
+						width = share("setupLabelWidth"),
+					}),
+					f:edit_field({
+						value = bind("llmContextSize"),
+						precision = 0,
+						min = 1024,
+						max = 131072,
+						width_in_chars = 8,
+					}),
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Parallel=Photos in parallel"),
+					}),
+					f:edit_field({
+						value = bind("llmParallel"),
+						precision = 0,
+						min = 1,
+						max = 16,
+						width_in_chars = 4,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/GpuLayers=Layers on the GPU"),
+						width = share("setupLabelWidth"),
+					}),
+					f:edit_field({
+						value = bind("llmGpuLayers"),
+						precision = 0,
+						min = 0,
+						max = 999,
+						width_in_chars = 8,
+					}),
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/LocalModel/GpuLayersHint=999 = all; anything that does not fit stays on the CPU"
+						),
+					}),
+				}),
+			}),
+			f:group_box({
+				width = groupBoxWidth,
 				title = LOC("$$$/LrGeniusAI/UI/Prompts=Prompts"),
 				f:row({
 					fill_horizontal = 1,
@@ -1167,6 +1343,26 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		prefs.lmstudioBaseUrl = propertyTable.lmstudioBaseUrl:gsub("^%s*(.-)%s*$", "%1")
 	else
 		prefs.lmstudioBaseUrl = Defaults.defaultLmStudioBaseUrl
+	end
+
+	-- Local-model tuning. Clamped here rather than trusted: a context of zero
+	-- or a negative parallel count would be rejected by the server anyway, and
+	-- falling back to the default is friendlier than an error on first index.
+	local function positiveIntOr(value, fallback)
+		local n = tonumber(value)
+		if n == nil or n ~= n or n < 1 then
+			return fallback
+		end
+		return math.floor(n)
+	end
+	prefs.llmContextSize = positiveIntOr(propertyTable.llmContextSize, Defaults.defaultLlmContextSize)
+	prefs.llmParallel = positiveIntOr(propertyTable.llmParallel, Defaults.defaultLlmParallel)
+	-- Zero GPU layers is meaningful (pure CPU), so it is allowed through.
+	local gpuLayers = tonumber(propertyTable.llmGpuLayers)
+	if gpuLayers == nil or gpuLayers ~= gpuLayers or gpuLayers < 0 then
+		prefs.llmGpuLayers = Defaults.defaultLlmGpuLayers
+	else
+		prefs.llmGpuLayers = math.floor(gpuLayers)
 	end
 
 	propertyTable.keepChecksRunning = false -- Stop the async task checking for CLIP readiness
