@@ -69,6 +69,46 @@ pub const CATALOG: &[CatalogEntry] = &[
         approx_bytes: 6_500 * 1024 * 1024,
         min_ram_gb: 16,
     },
+    // The current generation. All three are 4-bit and ungated, and
+    // `approx_bytes` is the measured model + mmproj total rather than an
+    // estimate. `lmstudio-community` is preferred over the other mirrors
+    // because its mmproj files are named after the model — `mmproj-BF16.gguf`
+    // on its own is easy to pair with the wrong weights once several models
+    // share a directory.
+    CatalogEntry {
+        id: "gemma4-e4b",
+        label: "Gemma 4 E4B (recommended)",
+        repo: "lmstudio-community/gemma-4-E4B-it-GGUF",
+        revision: "main",
+        model_file: "gemma-4-E4B-it-Q4_K_M.gguf",
+        mmproj_file: "mmproj-gemma-4-E4B-it-BF16.gguf",
+        approx_bytes: 6_326_843_776,
+        min_ram_gb: 16,
+    },
+    CatalogEntry {
+        id: "gemma4-12b",
+        label: "Gemma 4 12B (highest quality, needs more RAM)",
+        // Google's quantization-aware-trained 4-bit release. QAT is Q4_0 rather
+        // than Q4_K_M, but it is trained at 4-bit instead of rounded down to it,
+        // so it holds up better than a post-training quantization of the same
+        // size — which matters more at 12B than the K-quant packing does.
+        repo: "lmstudio-community/gemma-4-12B-it-QAT-GGUF",
+        revision: "main",
+        model_file: "gemma-4-12B-it-QAT-Q4_0.gguf",
+        mmproj_file: "mmproj-gemma-4-12B-it-QAT-BF16.gguf",
+        approx_bytes: 7_150_994_336,
+        min_ram_gb: 24,
+    },
+    CatalogEntry {
+        id: "qwen3.5-9b",
+        label: "Qwen3.5 9B (balanced alternative to Gemma)",
+        repo: "lmstudio-community/Qwen3.5-9B-GGUF",
+        revision: "main",
+        model_file: "Qwen3.5-9B-Q4_K_M.gguf",
+        mmproj_file: "mmproj-Qwen3.5-9B-BF16.gguf",
+        approx_bytes: 6_548_748_736,
+        min_ram_gb: 16,
+    },
 ];
 
 #[must_use]
