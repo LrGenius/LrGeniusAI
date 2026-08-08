@@ -119,6 +119,43 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # The `llamacpp` feature compiles llama.cpp from source: cmake for the
+      # build itself, libclang for bindgen. Installed explicitly rather than
+      # relying on what a runner image happens to ship, because a missing
+      # libclang surfaces as an opaque bindgen failure.
+      - name: Install llama.cpp build prerequisites (Linux)
+        if: matrix.os_name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libclang-dev
+
+      - name: Install llama.cpp build prerequisites (macOS)
+        if: matrix.os_name == 'macos'
+        run: |
+          # libclang comes with the Xcode command line tools; only cmake may be
+          # missing. `brew install` is a no-op when it is already present.
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+
+      - name: Install llama.cpp build prerequisites (Windows)
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install --no-progress -y llvm cmake ninja || true
+          # Find libclang wherever LLVM landed rather than hard-coding a path
+          # that changes with the runner image.
+          for candidate in "/c/Program Files/LLVM/bin" "/c/ProgramData/chocolatey/lib/llvm/tools/LLVM/bin"; do
+            if [ -f "$candidate/libclang.dll" ]; then
+              echo "LIBCLANG_PATH=$(cygpath -w "$candidate")" >> "$GITHUB_ENV"
+              echo "Found libclang in $candidate"
+              break
+            fi
+          done
+          if ! grep -q LIBCLANG_PATH "$GITHUB_ENV"; then
+            echo "::error::libclang.dll not found; bindgen cannot run" && exit 1
+          fi
+
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -128,14 +165,14 @@ jobs:
         shell: bash
         run: |
           cd server-rs
-          cargo test --workspace --release
+          cargo test --workspace --release --features llamacpp
 
       - name: Build backend binary (release)
         shell: bash
         run: |
           cd server-rs
-          cargo build --release --bin geniusai-server
-          cargo clippy --workspace --tests -- -D warnings
+          cargo build --release --bin geniusai-server --features llamacpp
+          cargo clippy --workspace --tests --features llamacpp -- -D warnings
 
       - name: Stage backend binary
         shell: bash
@@ -147,6 +184,26 @@ jobs:
           if [ "${{ matrix.os_name }}" != "windows" ]; then
             chmod +x "$BUILD_DIR/lrgenius-server"
           fi
+
+          # Windows builds llama.cpp's Vulkan backend as a loadable ggml module
+          # (`dynamic-backends`), so the ggml-*.dll files have to travel next to
+          # the exe or the server starts with no GPU support at all. macOS and
+          # Linux link everything statically — verified locally: `otool -L` on
+          # the macOS binary lists no non-system libraries, and the Metal
+          # shaders are embedded in the executable, so there is no metallib to
+          # stage either.
+          if [ "${{ matrix.os_name }}" = "windows" ]; then
+            found=0
+            while IFS= read -r dll; do
+              cp "$dll" "$BUILD_DIR/"
+              found=$((found + 1))
+            done < <(find server-rs/target/release -maxdepth 2 -name 'ggml*.dll' -print)
+            echo "Staged $found ggml backend DLL(s)"
+            if [ "$found" -eq 0 ]; then
+              echo "::error::no ggml*.dll found; a dynamic-backends build must produce them" && exit 1
+            fi
+          fi
+
           echo "=== Staged binary ==="
           ls -lh "$BUILD_DIR"
 
@@ -256,15 +313,18 @@ jobs:
           APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      # SignPath Foundation (Windows Authenticode) signing of the single
-      # Rust binary, before it gets packaged into the installer below.
-      - name: Upload unsigned backend exe for signing
+      # SignPath Foundation (Windows Authenticode) signing of the backend
+      # binary and the loadable ggml backend DLLs beside it, before they get
+      # packaged into the installer below. The whole directory is submitted
+      # rather than just the exe: the DLLs are PE files loaded at runtime, so
+      # leaving them unsigned undercuts signing the exe at all.
+      - name: Upload unsigned backend binaries for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-exe
         uses: actions/upload-artifact@v6
         with:
           name: unsigned-backend-exe-${{ matrix.arch }}
-          path: build/lrgenius-server/lrgenius-server.exe
+          path: build/lrgenius-server/
           retention-days: 1
 
       - name: Submit backend exe to SignPath
@@ -279,12 +339,27 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed-backend-exe
 
-      - name: Replace backend exe with SignPath-signed version
+      - name: Replace backend binaries with SignPath-signed versions
         if: matrix.os_name == 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          cp signed-backend-exe/lrgenius-server.exe build/lrgenius-server/lrgenius-server.exe
+          # Copy back whatever came out signed, tolerating either layout: a
+          # signing policy configured for a single file returns just the exe,
+          # and in that case the DLLs stay as built rather than going missing.
+          copied=0
+          while IFS= read -r f; do
+            cp "$f" "build/lrgenius-server/$(basename "$f")"
+            copied=$((copied + 1))
+          done < <(find signed-backend-exe -type f \( -name '*.exe' -o -name '*.dll' \) -print)
+          echo "Replaced $copied signed file(s)"
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::SignPath returned no signed binaries" && exit 1
+          fi
+          if ! find signed-backend-exe -name 'lrgenius-server.exe' | grep -q .; then
+            echo "::error::signed lrgenius-server.exe missing from SignPath output" && exit 1
+          fi
+          ls -lh build/lrgenius-server/
 
       - name: Build Windows installer
         if: matrix.os_name == 'windows'

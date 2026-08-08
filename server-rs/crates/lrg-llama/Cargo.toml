@@ -25,15 +25,23 @@ toktrie = "1.7"
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 llama-cpp-2 = { version = "0.1.154", features = ["mtmd", "llguidance"] }
 
-# CUDA and Vulkan are built as loadable ggml backends (`dynamic-backends`) so
-# one Windows binary still starts on a machine with no NVIDIA driver and falls
-# back to Vulkan or CPU. See the packaging notes in the release workflow: the
-# resulting ggml-*.dll files must ship next to the exe.
+# Vulkan is built as a loadable ggml backend (`dynamic-backends`) so one Windows
+# binary starts on any GPU vendor and falls back to CPU when there is none. See
+# the packaging notes in the release workflow: the resulting ggml-*.dll files
+# must ship next to the exe.
+#
+# CUDA is deliberately *not* enabled. Building it requires a CUDA toolkit on the
+# runner, which is a long install and a long compile, and it cannot be validated
+# from a development machine — a release build that fails on Windows is far worse
+# than one without CUDA. Vulkan lands within ~10-20% of CUDA for llama.cpp
+# inference and covers NVIDIA, AMD and Intel with a single build. To add CUDA
+# later: put "cuda" back in this list and install the toolkit in the release
+# workflow (e.g. Jimver/cuda-toolkit), then watch a real CI run — with
+# `dynamic-backends` the exe must still start on a machine with no NVIDIA driver.
 [target.'cfg(target_os = "windows")'.dependencies]
 llama-cpp-2 = { version = "0.1.154", features = [
     "mtmd",
     "llguidance",
-    "cuda",
     "vulkan",
     "dynamic-backends",
 ] }
