@@ -125,11 +125,11 @@ pub(crate) fn run(
     };
 
     let supports_vision = mtmd.as_ref().is_some_and(MtmdContext::support_vision);
-    let chat_template = model.chat_template(None).ok();
+    let chat_template = resolve_chat_template(&model);
     if chat_template.is_none() {
         log::warn!(
-            "{} has no built-in chat template; falling back to plain concatenation, which \
-             usually degrades instruction following",
+            "{} has no chat template llama.cpp can apply; falling back to plain concatenation, \
+             which usually degrades instruction following",
             config.model_path.display()
         );
     }
@@ -179,6 +179,74 @@ struct SplitRender {
     tail: String,
 }
 
+/// Pick a chat template llama.cpp will actually apply.
+///
+/// A GGUF carries its chat template as Jinja, but `llama_chat_apply_template`
+/// is the legacy C path: it applies only templates it recognises, by built-in
+/// name or by sniffing familiar markers, and answers anything else with a bare
+/// `-1` that says nothing about why. Current models ship large Jinja templates
+/// for tool calling and thinking — Gemma 4's is 18 KB of macros — so the
+/// model's own template is refused outright and every generation fails.
+///
+/// The template text still identifies the family even when llama.cpp cannot
+/// execute it, so fall back to the matching built-in and confirm by applying
+/// it. Built-ins render the same control tokens the model was trained on
+/// (`<start_of_turn>` for Gemma), which is what actually matters here; what is
+/// lost is only the Jinja-only extras this crate does not use.
+fn resolve_chat_template(model: &LlamaModel) -> Option<LlamaChatTemplate> {
+    // Applying it is the only way to learn whether llama.cpp accepts it.
+    let applies = |template: &LlamaChatTemplate| {
+        LlamaChatMessage::new("user".to_string(), "probe".to_string())
+            .ok()
+            .and_then(|m| model.apply_chat_template(template, &[m], true).ok())
+            .is_some()
+    };
+
+    let own = model.chat_template(None).ok();
+    if let Some(template) = &own {
+        if applies(template) {
+            return own;
+        }
+    }
+
+    // The architecture is the reliable signal. Sniffing the template text does
+    // not work: Gemma 4's builds its turns through macros and contains none of
+    // the control markers verbatim.
+    let arch = model
+        .meta_val_str("general.architecture")
+        .unwrap_or_default()
+        .to_lowercase();
+    let family: &[&str] = if arch.starts_with("gemma") {
+        // Every Gemma generation delimits turns the same way; the built-ins
+        // differ only in extras. Newest first, and each is verified below.
+        &["gemma3", "gemma2", "gemma"]
+    } else if arch.starts_with("llama") {
+        &["llama3", "llama2"]
+    } else if arch.starts_with("mistral") || arch.starts_with("mixtral") {
+        &["mistral-v7", "mistral-v1"]
+    } else if arch.starts_with("qwen") || arch.starts_with("phi") || arch.starts_with("yi") {
+        &["chatml"]
+    } else {
+        &[]
+    };
+
+    // Architecture match first; chatml last, because most instruct models
+    // tolerate it and it still beats plain concatenation.
+    for name in family.iter().copied().chain(std::iter::once("chatml")) {
+        let Ok(template) = LlamaChatTemplate::new(name) else {
+            continue;
+        };
+        if applies(&template) {
+            log::info!(
+                "this model's own chat template is Jinja, which llama.cpp cannot apply; using \
+                 the built-in '{name}' template for architecture '{arch}' instead"
+            );
+            return Some(template);
+        }
+    }
+    None
+}
+
 struct WorkerState<'a> {
     model: &'a LlamaModel,
     mtmd: Option<&'a MtmdContext>,
@@ -189,16 +257,16 @@ struct WorkerState<'a> {
 }
 
 impl WorkerState<'_> {
-    fn render(&self, system: &str, user: &str, add_ass: bool) -> Result<String, LlamaError> {
-        let Some(template) = &self.chat_template else {
-            return Ok(if system.is_empty() {
-                user.to_string()
-            } else {
-                format!("{system}\n\n{user}")
-            });
-        };
+    /// Apply the chat template, optionally with a leading system turn.
+    fn apply_template(
+        &self,
+        template: &LlamaChatTemplate,
+        system: Option<&str>,
+        user: &str,
+        add_ass: bool,
+    ) -> Result<String, LlamaError> {
         let mut messages = Vec::new();
-        if !system.is_empty() {
+        if let Some(system) = system {
             messages.push(
                 LlamaChatMessage::new("system".to_string(), system.to_string())
                     .map_err(|e| LlamaError::Prompt(e.to_string()))?,
@@ -211,6 +279,18 @@ impl WorkerState<'_> {
         self.model
             .apply_chat_template(template, &messages, add_ass)
             .map_err(|e| LlamaError::Prompt(e.to_string()))
+    }
+
+    fn render(&self, system: &str, user: &str, add_ass: bool) -> Result<String, LlamaError> {
+        let Some(template) = &self.chat_template else {
+            return Ok(if system.is_empty() {
+                user.to_string()
+            } else {
+                format!("{system}\n\n{user}")
+            });
+        };
+        let system = (!system.is_empty()).then_some(system);
+        self.apply_template(template, system, user, add_ass)
     }
 
     /// Render the complete prompt once, then cut it immediately after the
@@ -288,6 +368,10 @@ impl WorkerState<'_> {
 
         if let Some(pinned) = &self.prefix {
             if pinned.hash == hash {
+                // Logged because this is the whole point of the crate, and a
+                // silent hit is indistinguishable from no prefix caching at
+                // all when reading a debug log.
+                log::debug!("llama prefix cache hit: reusing {} tokens", pinned.len);
                 return Ok((pinned.len, true));
             }
         }
