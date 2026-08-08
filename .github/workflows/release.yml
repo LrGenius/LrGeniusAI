@@ -259,13 +259,30 @@ jobs:
           # stage either.
           if [ "${{ matrix.os_name }}" = "windows" ]; then
             found=0
+            # Two locations, because llama-cpp-sys-2 treats them differently:
+            # it hard-links the shared libs it installs into OUT_DIR/bin (ggml,
+            # ggml-base, llama) up into target/release, but the *loadable*
+            # backend modules — ggml-vulkan and the ggml-cpu-* variants, which
+            # are the ones that actually compute — are installed to
+            # OUT_DIR/backends and left there. Collecting only the first set
+            # ships an exe whose ggml_backend_load_all() finds nothing next to
+            # it, i.e. no GPU *and* no CPU inference.
             while IFS= read -r dll; do
               cp "$dll" "$BUILD_DIR/"
               found=$((found + 1))
-            done < <(find server-rs/target/release -maxdepth 2 -name 'ggml*.dll' -print)
+            done < <(
+              find server-rs/target/release -maxdepth 2 -name 'ggml*.dll' -print
+              find server-rs/target/release/build -path '*/out/backends/*' -name 'ggml*.dll' -print
+            )
             echo "Staged $found ggml backend DLL(s)"
             if [ "$found" -eq 0 ]; then
               echo "::error::no ggml*.dll found; a dynamic-backends build must produce them" && exit 1
+            fi
+            # The Vulkan module is the entire point of the Windows build, so a
+            # missing one is a hard failure: shipping a silently GPU-less (and
+            # here, backend-less) binary is worse than failing the release.
+            if ! ls "$BUILD_DIR"/ggml-vulkan*.dll >/dev/null 2>&1; then
+              echo "::error::no ggml-vulkan*.dll staged; the Vulkan backend did not build" && exit 1
             fi
           fi
 
