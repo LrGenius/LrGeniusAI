@@ -161,9 +161,10 @@ jobs:
       # llama-cpp-sys-2's build.rs panics outright ("Please install Vulkan SDK
       # and ensure that VULKAN_SDK env variable is set"), because it links
       # vulkan-1.lib from $VULKAN_SDK\Lib and ggml's CMake needs the SDK's
-      # glslc to compile the compute shaders. The version is pinned rather than
-      # tracking `latest` so an SDK release can never break a tagged build;
-      # bump it deliberately.
+      # glslc to compile the compute shaders. A pinned version is preferred so
+      # an SDK release cannot silently change a tagged build, with a fallback
+      # to whatever LunarG currently calls latest so the release does not go
+      # down the day that pinned build is retired from their CDN.
       - name: Install Vulkan SDK (Windows)
         if: matrix.os_name == 'windows'
         shell: pwsh
@@ -171,25 +172,33 @@ jobs:
           VULKAN_SDK_VERSION: '1.4.328.0'
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = $env:VULKAN_SDK_VERSION
           $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk-installer.exe'
-          $base = "https://sdk.lunarg.com/sdk/download/$version/windows"
-          # LunarG renamed the Windows installer after 1.4.309.0. Try the
-          # current name first, then the old one, so bumping the pin in either
-          # direction keeps working.
-          $downloaded = $false
-          foreach ($name in @("vulkansdk-windows-X64-$version.exe", "VulkanSDK-$version-Installer.exe")) {
-            try {
-              Invoke-WebRequest -Uri "$base/$name" -OutFile $installer -UseBasicParsing
-              Write-Host "Downloaded $name"
-              $downloaded = $true
-              break
-            } catch {
-              Write-Host "Not available: $name ($($_.Exception.Message))"
+
+          # LunarG renamed the Windows installer after 1.4.309.0, so try the
+          # current name first and the old one second — that way bumping the
+          # pin in either direction keeps working.
+          function Save-VulkanInstaller($v) {
+            $base = "https://sdk.lunarg.com/sdk/download/$v/windows"
+            foreach ($name in @("vulkansdk-windows-X64-$v.exe", "VulkanSDK-$v-Installer.exe")) {
+              try {
+                Invoke-WebRequest -Uri "$base/$name" -OutFile $installer -UseBasicParsing
+                Write-Host "Downloaded $name"
+                return $true
+              } catch {
+                Write-Host "Not available: $base/$name ($($_.Exception.Message))"
+              }
             }
+            return $false
           }
-          if (-not $downloaded) {
-            throw "could not download Vulkan SDK $version from $base"
+
+          $version = $env:VULKAN_SDK_VERSION
+          if (-not (Save-VulkanInstaller $version)) {
+            $latest = (Invoke-RestMethod -Uri 'https://vulkan.lunarg.com/sdk/latest.json' -UseBasicParsing).windows
+            Write-Host "::warning::pinned Vulkan SDK $version is unavailable; falling back to latest ($latest). Update VULKAN_SDK_VERSION."
+            if (-not $latest -or -not (Save-VulkanInstaller $latest)) {
+              throw "could not download Vulkan SDK $version, nor the current latest"
+            }
+            $version = $latest
           }
 
           $sdkDir = "C:\VulkanSDK\$version"
