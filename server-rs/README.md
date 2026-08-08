@@ -27,16 +27,20 @@ both be clean before sending changes.
 
 `POST /clip/download/start` + `GET /clip/download/status` fetch the fp16
 ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
-`tokenizer.json`) from this running binary's own matching GitHub release
-(`LRG_BACKEND_RELEASE_TAG`) and place them at the `LRG_SIGLIP_*` paths
-below, pulling CI-exported ONNX assets from a release instead of the fp32
+`tokenizer.json`) and place them at the `LRG_SIGLIP_*` paths below,
+pulling CI-exported ONNX assets from a release instead of the fp32
 checkpoint from Hugging Face.
 
-**There is no signed release with those assets attached yet**, so right
-now this endpoint fails with a clear "release asset not found" error on
-any build (including released ones, until the first tag with the
-`build-model-assets` CI job runs). Until then, export the model yourself
-with the same script that CI job runs:
+They come from the fixed `model-assets-v1` tag
+(`MODEL_ASSETS_RELEASE_TAG` in `routes/clip.rs`), **not** from the binary's
+own version tag: the assets change far less often than the app, so
+re-uploading them on every release would be wasted. Bumping them means
+bumping that constant and the tag together (e.g. `model-assets-v2`).
+
+That release exists with all three assets attached, so the endpoint works
+on any build. To export the models yourself instead — for a local change,
+or to avoid the download — run the same script the `build-model-assets` CI
+job runs:
 
 ```bash
 cd server-rs
@@ -77,6 +81,45 @@ are already ONNX. Point `INSIGHTFACE_ROOT` at the directory containing
 `models/buffalo_l/{det_10g.onnx,w600k_r50.onnx}` (default `~/.insightface`,
 the same location `insightface`'s own Python library uses, so the files
 are very likely already there if you've used InsightFace before).
+
+### Local LLM (in-process llama.cpp)
+
+Only present in builds compiled with the `llamacpp` cargo feature; without
+it the `llamacpp` provider reports that the build has no local-model
+support and `/llm/catalog` returns `supported: false`.
+
+Models are GGUF pairs — the weights plus an `mmproj` vision projector,
+which is what lets the model see the photo. `GET /llm/catalog` lists what
+is installed and what can be downloaded; `POST /llm/download/start` fetches
+a catalog entry. Discovery looks at, in order: the explicit env overrides,
+`LRG_LLAMA_MODEL_DIR` (default `~/.cache/lrgenius/models/llm/`), and any
+GGUFs already under `~/.lmstudio/models`, so a model you downloaded in LM
+Studio is offered without a second copy.
+
+```bash
+# Point at specific files (wins over any directory scan)
+export LRG_LLAMA_MODEL_GGUF=/path/to/model-Q4_K_M.gguf
+export LRG_LLAMA_MMPROJ_GGUF=/path/to/mmproj-BF16.gguf
+
+# Tuning. The plugin's "Local AI Model" settings send these per request and
+# take precedence; these are the fallback when it does not.
+export LRG_LLAMA_N_CTX=8192       # context window
+export LRG_LLAMA_N_PARALLEL=1     # photos decoded concurrently
+export LRG_LLAMA_GPU_LAYERS=999   # 0 = CPU only; anything that does not fit stays on the CPU
+```
+
+`n_ctx` and `n_parallel` trade against each other: the whole group of
+photos has to fit the context window alongside the shared prompt prefix, and
+the engine reduces `n_parallel` with a warning rather than overrunning it.
+Changing any of these reloads the model on the next request.
+
+A note on chat templates: llama.cpp's C API applies only templates it
+recognises, so a model shipping a modern Jinja template (Gemma 4's is 18 KB
+of macros) is refused outright. The engine therefore picks a built-in
+template from the GGUF's `general.architecture` and confirms it applies
+before use, logging which one it chose. `cargo run -p lrg-llama --example
+probe_template -- model.gguf` prints what a GGUF reports and which
+templates llama.cpp will accept — start there if a new model misbehaves.
 
 ### Troubleshooting: `LRG_DISABLE_KLEIDIAI`
 
