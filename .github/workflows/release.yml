@@ -156,6 +156,32 @@ jobs:
             echo "::error::libclang.dll not found; bindgen cannot run" && exit 1
           fi
 
+          # Build llama.cpp with Ninja instead of cmake's default Visual Studio
+          # generator. Not a preference — the VS generator cannot build the
+          # Vulkan backend here. ggml-vulkan generates its shaders with a host
+          # tool (`vulkan-shaders-gen`) pulled in via ExternalProject_Add, and
+          # that CMakeLists sets CMP0147 NEW, which asks MSBuild to run custom
+          # build steps in parallel. MSBuild then runs the external project's
+          # steps out of order, so the install step fires before the configure
+          # step has written cmake_install.cmake:
+          #
+          #   CMake error : Not a file: .../vulkan-shaders-gen-build/cmake_install.cmake
+          #   The system cannot find the batch label specified - VCEnd
+          #   error MSB8066: Custom build for '...vulkan-shaders-gen-install.rule;
+          #                  ...vulkan-shaders-gen-complete.rule' exited with code 1
+          #
+          # Ninja expresses those steps as ordinary dependency edges, so they
+          # cannot race, and it builds the whole thing faster besides. Only
+          # llama-cpp-sys-2 uses the cmake crate in this workspace, so this
+          # variable cannot affect any other dependency. cmake-rs skips the
+          # -A/-T flags for Ninja and passes cl.exe plus its INCLUDE/LIB/PATH
+          # environment through to cmake, which is also what lets the nested
+          # vulkan-shaders-gen configure step find a compiler.
+          if ! ninja --version; then
+            echo "::error::ninja not on PATH; the Vulkan build needs it" && exit 1
+          fi
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
       # Windows is the one target that enables llama.cpp's Vulkan backend (see
       # crates/lrg-llama/Cargo.toml), and that needs the Vulkan SDK: without it
       # llama-cpp-sys-2's build.rs panics outright ("Please install Vulkan SDK
@@ -169,7 +195,7 @@ jobs:
         if: matrix.os_name == 'windows'
         shell: pwsh
         env:
-          VULKAN_SDK_VERSION: '1.4.328.0'
+          VULKAN_SDK_VERSION: '1.4.357.0'
         run: |
           $ErrorActionPreference = 'Stop'
           $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk-installer.exe'
