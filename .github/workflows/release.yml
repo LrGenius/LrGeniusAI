@@ -182,6 +182,33 @@ jobs:
           fi
           echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
 
+          # Build into a short target dir, because the Vulkan backend cannot be
+          # built from the default one on Windows. vulkan-shaders-gen is an
+          # ExternalProject nested inside OUT_DIR, so its build tree carries the
+          # whole prefix chain:
+          #
+          #   <target>/release/build/llama-cpp-sys-2-<hash>/out/build/ggml/src/
+          #   ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/
+          #   CMakeFiles/CMakeScratch/TryCompile-XXXXXX/CMakeFiles/cmTC_XXXXX.dir/
+          #
+          # From D:\a\LrGeniusAI\LrGeniusAI\server-rs\target that is 247 of the
+          # 250 characters CMake allows for an object path, and cl.exe resolves
+          # its relative /Fo against that directory — so the compiler check that
+          # opens the sub-build fails on MAX_PATH before any shader is compiled:
+          #
+          #   testCCompiler.c : fatal error C1083: Cannot open compiler
+          #                     generated file: '': Invalid argument
+          #   -- Check for working C compiler: .../cl.exe - broken
+          #
+          # `D:\t` is on the same volume the workspace already builds in and
+          # drops ~39 characters off every path, which clears the limit. Steps
+          # that read build output go through $TARGET_DIR for this reason — and
+          # it carries the POSIX spelling of the same directory, because the
+          # MSYS `find`/`cp` in those bash steps would read a `D:\...` argument
+          # as a relative path.
+          echo 'CARGO_TARGET_DIR=D:\t' >> "$GITHUB_ENV"
+          echo 'TARGET_DIR=/d/t' >> "$GITHUB_ENV"
+
       # Windows is the one target that enables llama.cpp's Vulkan backend (see
       # crates/lrg-llama/Cargo.toml), and that needs the Vulkan SDK: without it
       # llama-cpp-sys-2's build.rs panics outright ("Please install Vulkan SDK
@@ -271,7 +298,11 @@ jobs:
           set -euo pipefail
           BUILD_DIR="build/lrgenius-server"
           mkdir -p "$BUILD_DIR"
-          cp "server-rs/target/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
+          # Windows overrides CARGO_TARGET_DIR to keep llama.cpp's build paths
+          # under MAX_PATH (see the prerequisites step); everywhere else the
+          # workspace default applies.
+          TARGET_DIR="${TARGET_DIR:-server-rs/target}"
+          cp "$TARGET_DIR/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
           if [ "${{ matrix.os_name }}" != "windows" ]; then
             chmod +x "$BUILD_DIR/lrgenius-server"
           fi
@@ -297,8 +328,8 @@ jobs:
               cp "$dll" "$BUILD_DIR/"
               found=$((found + 1))
             done < <(
-              find server-rs/target/release -maxdepth 1 \( -name 'ggml*.dll' -o -name 'llama.dll' \) -print
-              find server-rs/target/release/build -path '*/out/backends/*' -name 'ggml*.dll' -print
+              find "$TARGET_DIR/release" -maxdepth 1 \( -name 'ggml*.dll' -o -name 'llama.dll' \) -print
+              find "$TARGET_DIR/release/build" -path '*/out/backends/*' -name 'ggml*.dll' -print
             )
             # llama.dll is not optional the way a backend module is: the exe
             # imports it directly and will not start without it.
