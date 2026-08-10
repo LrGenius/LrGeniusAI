@@ -292,6 +292,50 @@ jobs:
           cargo build --release --bin geniusai-server --features llamacpp
           cargo clippy --workspace --tests --features llamacpp -- -D warnings
 
+      # The MLX sidecar (Apple silicon only). Two things are non-obvious here:
+      #
+      #  * it must be built with `xcodebuild`, not `swift build`. mlx-swift's
+      #    README is explicit that SwiftPM on the command line cannot compile
+      #    the Metal shaders, and a binary built that way dies at runtime with
+      #    "Failed to load the default metallib".
+      #  * Xcode 26 ships the Metal compiler as a separate downloadable
+      #    component, so it has to be fetched before the shaders will build.
+      #
+      # `-skipPackagePluginValidation` is required because mlx-swift carries a
+      # build plugin (CudaBuild) that Xcode otherwise stops to ask about, which
+      # a non-interactive runner can never answer.
+      - name: Build MLX sidecar (macOS)
+        if: matrix.os_name == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          cd native/mlx-sidecar
+          xcodebuild build \
+            -scheme lrgenius-mlx \
+            -destination 'platform=macOS,arch=arm64' \
+            -configuration Release \
+            -derivedDataPath .build/xcode \
+            -skipPackagePluginValidation \
+            -skipMacroValidation
+
+      - name: Stage MLX sidecar (macOS)
+        if: matrix.os_name == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCTS="native/mlx-sidecar/.build/xcode/Build/Products/Release"
+          BUILD_DIR="build/mlx-sidecar"
+          mkdir -p "$BUILD_DIR"
+          cp "$PRODUCTS/lrgenius-mlx" "$BUILD_DIR/"
+          # The Metal kernels live in mlx-swift_Cmlx.bundle and are located
+          # relative to the executable at runtime, so they travel with it.
+          for bundle in "$PRODUCTS"/*.bundle; do
+            [ -e "$bundle" ] || continue
+            cp -a "$bundle" "$BUILD_DIR/"
+          done
+          ls -la "$BUILD_DIR"
+
       - name: Stage backend binary
         shell: bash
         run: |

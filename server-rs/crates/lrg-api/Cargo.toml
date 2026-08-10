@@ -12,6 +12,11 @@ llamacpp = ["dep:lrg-llama"]
 
 [dependencies]
 lrg-llama = { workspace = true, optional = true }
+# Not optional and not feature-gated: unlike lrg-llama this only spawns and
+# talks to a process, so it adds no native toolchain requirement and no
+# meaningful build time. Whether MLX actually works is a runtime question
+# (Apple silicon + the sidecar binary), answered by `mlx_engine::availability`.
+lrg-mlx.workspace = true
 lrg-common.workspace = true
 lrg-store.workspace = true
 lrg-ml.workspace = true

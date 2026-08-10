@@ -4389,6 +4389,7 @@ dependencies = [
  "lrg-imaging",
  "lrg-llama",
  "lrg-ml",
+ "lrg-mlx",
  "lrg-providers",
  "lrg-store",
  "reqwest",
@@ -4464,6 +4465,18 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokenizers",
+]
+
+[[package]]
+name = "lrg-mlx"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

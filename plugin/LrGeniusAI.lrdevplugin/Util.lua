@@ -1586,6 +1586,11 @@ function Util.groupedBatchSize(provider, useOriginals, isLocalBackend, configure
 	if not useOriginals or not isLocalBackend then
 		return 1
 	end
+	-- Only llama.cpp benefits. MLX is a local backend too, but it decodes one
+	-- photo at a time against a fresh KV cache (no pinned prefix, no parallel
+	-- sequences), so grouping there would only delay the first result without
+	-- producing any of them sooner — the server reports a preferred batch size
+	-- of 1 for it, and this matches.
 	if type(provider) ~= "string" or provider:lower() ~= "llamacpp" then
 		return 1
 	end

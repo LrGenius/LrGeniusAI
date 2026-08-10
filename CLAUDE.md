@@ -36,7 +36,19 @@ cargo build --release -p lrg-server --features llamacpp
 cargo clippy --workspace --all-targets --features llamacpp   # must also be clean when you touch this path
 ```
 
-Point it at a model with `LRG_LLAMA_MODEL_GGUF` + `LRG_LLAMA_MMPROJ_GGUF` (a GGUF needs both the weights and an `mmproj` vision projector), or download one from the plugin's settings. Discovery also picks up GGUFs already under `~/.lmstudio/models`. The `lrg-llama` tests that exercise a real model are `#[ignore]`d and need `LRG_TEST_MODEL_GGUF`/`LRG_TEST_MMPROJ_GGUF`:
+**MLX (Apple silicon) is a second, separate local backend**, selected as the `mlx` provider. It is *not* behind a cargo feature — `lrg-mlx` only spawns and talks to a helper process, so it costs nothing to compile — but it needs that helper built, and the helper needs `xcodebuild` plus the Metal toolchain (`swift build` cannot compile MLX's Metal shaders):
+
+```bash
+xcodebuild -downloadComponent MetalToolchain          # once per machine
+cd native/mlx-sidecar
+xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
+  -configuration Release -derivedDataPath .build/xcode -skipPackagePluginValidation
+export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
+```
+
+Without it, `/llm/catalog` reports `mlx.supported: false` with a reason naming what is missing. See [native/mlx-sidecar/README.md](native/mlx-sidecar/README.md) for the protocol, the model layout (a directory, not a GGUF file), and why MLX has no pinned prompt prefix.
+
+Point llama.cpp at a model with `LRG_LLAMA_MODEL_GGUF` + `LRG_LLAMA_MMPROJ_GGUF` (a GGUF needs both the weights and an `mmproj` vision projector), or download one from the plugin's settings. Discovery also picks up GGUFs already under `~/.lmstudio/models`. The `lrg-llama` tests that exercise a real model are `#[ignore]`d and need `LRG_TEST_MODEL_GGUF`/`LRG_TEST_MMPROJ_GGUF`:
 
 ```bash
 cargo test -p lrg-llama --test engine_smoke -- --ignored
@@ -120,7 +132,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics.
 - `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, SCRFD face detection + ArcFace embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
-- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, Vertex AI via `gcp_auth`), edit-recipe schemas.
+- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, Vertex AI via `gcp_auth`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
+- `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
 - `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry.
 - `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
 

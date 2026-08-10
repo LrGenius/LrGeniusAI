@@ -42,6 +42,46 @@ else
   echo "MACOS_SIGN_IDENTITY not set — building unsigned binary (dev build)."
 fi
 
+# 1.6 Copy the MLX sidecar, when it was built.
+#
+# Optional on purpose: `swift build`/`xcodebuild` for the sidecar needs the
+# Metal toolchain, and a build without it should still produce a working
+# installer — the backend reports MLX as unavailable and everything else
+# carries on. See native/mlx-sidecar/README.md.
+#
+# `mlx-swift_Cmlx.bundle` holds MLX's compiled Metal kernels and must sit
+# beside the executable: the sidecar locates it through `Bundle.module`, which
+# resolves relative to the binary. Ship the binary without it and every MLX
+# request dies with "Failed to load the default metallib".
+MLX_BUILD_DIR="build/mlx-sidecar"
+if [ -f "$MLX_BUILD_DIR/lrgenius-mlx" ]; then
+  echo "Copying MLX sidecar..."
+  cp "$MLX_BUILD_DIR/lrgenius-mlx" "$ROOT_DIR/Applications/LrGeniusAI/Server/lrgenius-mlx"
+  chmod +x "$ROOT_DIR/Applications/LrGeniusAI/Server/lrgenius-mlx"
+  for bundle in "$MLX_BUILD_DIR"/*.bundle; do
+    [ -e "$bundle" ] || continue
+    cp -a "$bundle" "$ROOT_DIR/Applications/LrGeniusAI/Server/"
+  done
+
+  if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
+    echo "Codesigning MLX sidecar with identity: ${MACOS_SIGN_IDENTITY}"
+    # Sign the bundles first: signing the executable last means its signature
+    # covers a payload directory that is already final.
+    for bundle in "$ROOT_DIR/Applications/LrGeniusAI/Server"/*.bundle; do
+      [ -e "$bundle" ] || continue
+      codesign --force --options runtime --timestamp \
+        --sign "$MACOS_SIGN_IDENTITY" "$bundle"
+    done
+    codesign --force --options runtime --timestamp \
+      --entitlements "$SCRIPT_DIR/entitlements.plist" \
+      --sign "$MACOS_SIGN_IDENTITY" \
+      "$ROOT_DIR/Applications/LrGeniusAI/Server/lrgenius-mlx"
+    codesign --verify --verbose "$ROOT_DIR/Applications/LrGeniusAI/Server/lrgenius-mlx"
+  fi
+else
+  echo "No MLX sidecar at $MLX_BUILD_DIR/lrgenius-mlx — packaging without MLX support."
+fi
+
 # 2. Copy Plugin (to temporary location for postinstall relocation)
 echo "Copying plugin..."
 cp -a build/LrGeniusAI.lrplugin "$ROOT_DIR/Applications/LrGeniusAI/PluginInstallTemp/LrGeniusAI.lrplugin"

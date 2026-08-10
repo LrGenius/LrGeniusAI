@@ -1,17 +1,25 @@
-//! The provider that talks to an in-process engine ([`crate::local`]) instead
-//! of an HTTP endpoint.
+//! The provider that talks to a local engine ([`crate::local`]) instead of an
+//! HTTP endpoint.
 //!
 //! Two things make it different from the REST providers, and both come from
 //! owning the inference loop:
 //!
-//! * the prompt is handed over pre-split, so the engine can pin the
-//!   run-constant half in its KV cache instead of re-prefilling it per photo;
+//! * the prompt is handed over pre-split, so an engine that can pin the
+//!   run-constant half in its KV cache does not re-prefill it per photo;
 //! * [`LlmProvider::generate_metadata_batch`] is a real batch — every photo in
-//!   one call shares that pinned prefix and decodes in its own sequence,
-//!   instead of the sequential loop the default impl provides.
+//!   one call goes to the engine together, instead of the sequential loop the
+//!   default impl provides.
 //!
-//! Note there is no `llama-cpp` dependency here, or anywhere in this crate:
-//! the engine arrives as a `dyn LocalEngine` built by `lrg-api`.
+//! This is backend-agnostic and serves both local backends: llama.cpp
+//! (`lrg-llama`) and MLX (`lrg-mlx`). Neither is a dependency here, or anywhere
+//! in this crate — the engine arrives as a `dyn LocalEngine` built by
+//! `lrg-api`, and the only thing the provider knows about which one it got is
+//! the [`LocalProvider::backend`] label it reports in logs.
+//!
+//! The two do differ in what the split prompt buys: llama.cpp genuinely pins
+//! the prefix, while the MLX sidecar re-prefills it per photo (see
+//! `lrg_mlx`'s module docs). Sending the prompt pre-split regardless keeps the
+//! ordering correct for both.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -33,14 +41,30 @@ use crate::types::{
 
 const DEFAULT_MAX_TOKENS: u32 = 2048;
 
-pub struct LlamaCppProvider {
+pub struct LocalProvider {
     engine: SharedLocalEngine,
+    /// Which local backend produced `engine`, as reported by
+    /// [`LlmProvider::name`]. Purely a label: it appears in the indexing logs
+    /// so a run can be attributed to the right backend, and never changes
+    /// behaviour.
+    backend: &'static str,
 }
 
-impl LlamaCppProvider {
+impl LocalProvider {
     #[must_use]
-    pub fn new(engine: SharedLocalEngine) -> Self {
-        LlamaCppProvider { engine }
+    pub fn llamacpp(engine: SharedLocalEngine) -> Self {
+        LocalProvider {
+            engine,
+            backend: "llamacpp",
+        }
+    }
+
+    #[must_use]
+    pub fn mlx(engine: SharedLocalEngine) -> Self {
+        LocalProvider {
+            engine,
+            backend: "mlx",
+        }
     }
 
     /// Translate one metadata request into engine form. Kept separate from
@@ -109,9 +133,9 @@ impl LlamaCppProvider {
 }
 
 #[async_trait]
-impl LlmProvider for LlamaCppProvider {
+impl LlmProvider for LocalProvider {
     fn name(&self) -> &'static str {
-        "llamacpp"
+        self.backend
     }
 
     fn preferred_batch_size(&self) -> usize {
@@ -358,7 +382,7 @@ mod tests {
     #[tokio::test]
     async fn hands_the_engine_a_split_prompt() {
         let engine = FakeEngine::new(vec![FakeEngine::text(r#"{"caption":"a view"}"#)]);
-        let provider = LlamaCppProvider::new(engine.clone());
+        let provider = LocalProvider::llamacpp(engine.clone());
         let response = provider.generate_metadata(&request("p1")).await;
 
         assert!(response.success);
@@ -388,7 +412,7 @@ mod tests {
             FakeEngine::text(r#"{"caption":"two"}"#),
             FakeEngine::text(r#"{"caption":"three"}"#),
         ]);
-        let provider = LlamaCppProvider::new(engine.clone());
+        let provider = LocalProvider::llamacpp(engine.clone());
         let requests = vec![request("p1"), request("p2"), request("p3")];
 
         let responses = provider.generate_metadata_batch(&requests).await;
@@ -410,7 +434,7 @@ mod tests {
             FakeEngine::text(r#"{"caption":"one"}"#),
             FakeEngine::text(r#"{"caption":"three"}"#),
         ]);
-        let provider = LlamaCppProvider::new(engine.clone());
+        let provider = LocalProvider::llamacpp(engine.clone());
         let mut broken = request("p2");
         broken.image_data = b"definitely not an image".to_vec();
         let requests = vec![request("p1"), broken, request("p3")];
@@ -429,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn unparseable_output_reports_a_token_limit_hint() {
         let engine = FakeEngine::new(vec![FakeEngine::text("{\"caption\": \"truncat")]);
-        let provider = LlamaCppProvider::new(engine);
+        let provider = LocalProvider::llamacpp(engine);
         let response = provider.generate_metadata(&request("p1")).await;
 
         assert!(!response.success);
@@ -439,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn engine_errors_surface_against_the_right_photo() {
         let engine = FakeEngine::new(vec![Err("context overflow".to_string())]);
-        let provider = LlamaCppProvider::new(engine);
+        let provider = LocalProvider::llamacpp(engine);
         let response = provider.generate_metadata(&request("p9")).await;
 
         assert!(!response.success);

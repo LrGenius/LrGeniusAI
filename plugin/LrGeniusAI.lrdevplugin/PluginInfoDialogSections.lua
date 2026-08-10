@@ -57,6 +57,15 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.llmStatusText = LOC("$$$/LrGeniusAI/LocalModel/Checking=Checking for local models...")
 	propertyTable.llmInstalledText = ""
 
+	-- MLX (Apple silicon) settings. Deliberately a separate group from the
+	-- llama.cpp one above: the two hold different model formats (a GGUF file
+	-- versus a model directory) and can each have their own model resident, so
+	-- merging them into one control would misrepresent what is installed.
+	propertyTable.mlxDownloadChoices = {}
+	propertyTable.mlxDownloadChoice = nil
+	propertyTable.mlxStatusText = LOC("$$$/LrGeniusAI/MlxModel/Checking=Checking for MLX models...")
+	propertyTable.mlxInstalledText = ""
+
 	---
 	-- Refreshes the local-model section from /llm/catalog and /llm/status.
 	--
@@ -113,6 +122,56 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 			else
 				propertyTable.llmStatusText =
 					LOC("$$$/LrGeniusAI/LocalModel/NothingInstalled=No local model installed yet.")
+			end
+
+			-- The MLX half of the same payload. Absent entirely when talking to
+			-- an older backend, which must read as "not available" rather than
+			-- as an error.
+			local mlx = catalog.mlx
+			if mlx == nil then
+				propertyTable.mlxStatusText =
+					LOC("$$$/LrGeniusAI/MlxModel/Unsupported=This backend does not support MLX.")
+				propertyTable.mlxDownloadChoices = {}
+				return
+			end
+			if mlx.supported == false then
+				-- The backend explains *why* (not Apple silicon, or the helper
+				-- is missing); pass it through rather than inventing a reason.
+				propertyTable.mlxStatusText = mlx.reason
+					or LOC("$$$/LrGeniusAI/MlxModel/Unavailable=MLX is not available on this system.")
+				propertyTable.mlxDownloadChoices = {}
+				return
+			end
+
+			local mlxNames = {}
+			for _, m in ipairs(mlx.installed or {}) do
+				table.insert(mlxNames, m.name or "?")
+			end
+			propertyTable.mlxInstalledText = #mlxNames > 0 and table.concat(mlxNames, ", ")
+				or LOC("$$$/LrGeniusAI/MlxModel/NoneInstalled=none yet")
+
+			local mlxChoices = {}
+			for _, entry in ipairs(mlx.downloadable or {}) do
+				if not entry.installed then
+					local gb = entry.approx_bytes and string.format(" (%.1f GB)", entry.approx_bytes / 1e9) or ""
+					table.insert(mlxChoices, { title = (entry.label or entry.id) .. gb, value = entry.id })
+				end
+			end
+			propertyTable.mlxDownloadChoices = mlxChoices
+			if #mlxChoices > 0 and propertyTable.mlxDownloadChoice == nil then
+				propertyTable.mlxDownloadChoice = mlxChoices[1].value
+			end
+
+			local mlxStatus = status and status.mlx
+			if mlxStatus ~= nil and mlxStatus.status == "loaded" then
+				propertyTable.mlxStatusText =
+					LOC("$$$/LrGeniusAI/MlxModel/Loaded=Loaded: ^1", tostring(mlxStatus.model_name or "?"))
+			elseif #mlxNames > 0 then
+				propertyTable.mlxStatusText =
+					LOC("$$$/LrGeniusAI/MlxModel/ReadyNotLoaded=Installed and ready; loads on first use.")
+			else
+				propertyTable.mlxStatusText =
+					LOC("$$$/LrGeniusAI/MlxModel/NothingInstalled=No MLX model installed yet.")
 			end
 		end)
 	end
@@ -850,6 +909,74 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						title = LOC("$$$/LrGeniusAI/PluginInfo/SetupLmStudio=Setup LM Studio"),
 						action = function(button)
 							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-LM-Studio-Setup")
+						end,
+						width = share("setupButtonWidth"),
+					}),
+				}),
+			}),
+			-- MLX runs the same kind of local model as the group below, but
+			-- through Apple's Metal stack instead of llama.cpp. It is offered
+			-- separately rather than as a hidden implementation detail because
+			-- the two use different model files, so "which one is installed" is
+			-- a question the user has to be able to answer.
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/MlxModel/Status=Status"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("mlxStatusText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/MlxModel/Installed=Installed"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("mlxInstalledText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:popup_menu({
+						items = bind("mlxDownloadChoices"),
+						value = bind("mlxDownloadChoice"),
+						width_in_chars = 34,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/MlxModel/Download=Download"),
+						enabled = bind({
+							key = "mlxDownloadChoice",
+							transform = function(v)
+								return v ~= nil
+							end,
+						}),
+						action = function(button)
+							local choice = propertyTable.mlxDownloadChoice
+							if not choice then
+								return
+							end
+							-- Same endpoint as the GGUF download: the catalog id
+							-- alone picks the backend, so there is one download
+							-- queue and one progress bar rather than two that
+							-- could both claim the network.
+							LrTasks.startAsyncTask(function()
+								local ok, err = SearchIndexAPI.startLlmDownload(choice)
+								if not ok then
+									ErrorHandler.handleError(
+										LOC("$$$/LrGeniusAI/MlxDownload/ErrorTitle=Error downloading MLX model"),
+										err
+									)
+								end
+							end)
 						end,
 						width = share("setupButtonWidth"),
 					}),
