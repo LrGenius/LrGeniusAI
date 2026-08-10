@@ -30,7 +30,8 @@ cargo build --release -p lrg-server
 
 ```bash
 # Needs cmake + libclang. macOS: libclang ships with the Xcode CLT, `brew install cmake`.
-# Linux: `apt install cmake libclang-dev`. Windows also builds Vulkan (not CUDA — see lrg-llama/Cargo.toml).
+# Linux: `apt install cmake libclang-dev`. Windows also builds Vulkan (not CUDA — see
+# lrg-llama/Cargo.toml) and additionally needs the Vulkan SDK with VULKAN_SDK set.
 cargo build --release -p lrg-server --features llamacpp
 cargo clippy --workspace --all-targets --features llamacpp   # must also be clean when you touch this path
 ```

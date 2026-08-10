@@ -35,6 +35,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tokio::sync::oneshot;
 
+use crate::device;
 use crate::engine::{EngineInfo, GenerationOutput, GenerationRequest, LlamaEngineConfig};
 use crate::LlamaError;
 
@@ -68,7 +69,33 @@ pub(crate) fn run(
         }
     };
 
-    let model_params = LlamaModelParams::default().with_n_gpu_layers(config.n_gpu_layers);
+    // Pick one GPU explicitly rather than letting llama.cpp split the model
+    // across every registered device — on a laptop that means splitting it
+    // between the discrete card and the integrated one. See
+    // `device::select_gpu`.
+    let mut model_params = LlamaModelParams::default().with_n_gpu_layers(config.n_gpu_layers);
+    let devices = device::available();
+    if let Some(gpu) = device::select_gpu(&devices) {
+        log::info!(
+            "llama: using {} via {} ({} MiB VRAM), out of {} registered device(s)",
+            gpu.description,
+            gpu.backend,
+            gpu.memory_total / (1024 * 1024),
+            devices.len()
+        );
+        match model_params.with_devices(&[gpu.index]) {
+            Ok(p) => model_params = p,
+            Err(e) => {
+                // Not fatal: llama.cpp's own device choice is still workable,
+                // it just may be the slower duplicate.
+                log::warn!("llama: could not pin device {}: {e}", gpu.index);
+                model_params = LlamaModelParams::default().with_n_gpu_layers(config.n_gpu_layers);
+            }
+        }
+    } else {
+        log::info!("llama: no GPU backend registered, running on CPU");
+    }
+
     let model = match LlamaModel::load_from_file(&backend, &config.model_path, &model_params) {
         Ok(m) => m,
         Err(e) => {

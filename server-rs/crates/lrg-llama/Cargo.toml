@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 # In-process llama.cpp inference. Kept in its own crate so that the heavy
-# native toolchain requirement (cmake + libclang for bindgen, plus a CUDA
-# toolkit on Windows) only applies when the `llamacpp` feature is actually
+# native toolchain requirement (cmake + libclang for bindgen, plus the Vulkan
+# SDK on Windows) only applies when the `llamacpp` feature is actually
 # enabled, and so that `cargo build` for anyone touching an unrelated crate
 # stays fast.
 
@@ -27,17 +27,32 @@ llama-cpp-2 = { version = "0.1.154", features = ["mtmd", "llguidance"] }
 
 # Vulkan is built as a loadable ggml backend (`dynamic-backends`) so one Windows
 # binary starts on any GPU vendor and falls back to CPU when there is none. See
-# the packaging notes in the release workflow: the resulting ggml-*.dll files
-# must ship next to the exe.
+# the packaging notes in the release workflow: llama.dll and the resulting
+# ggml-*.dll files must ship next to the exe. Building this needs the Vulkan SDK
+# installed with VULKAN_SDK set — llama-cpp-sys-2's build.rs panics without it.
 #
-# CUDA is deliberately *not* enabled. Building it requires a CUDA toolkit on the
-# runner, which is a long install and a long compile, and it cannot be validated
-# from a development machine — a release build that fails on Windows is far worse
-# than one without CUDA. Vulkan lands within ~10-20% of CUDA for llama.cpp
-# inference and covers NVIDIA, AMD and Intel with a single build. To add CUDA
-# later: put "cuda" back in this list and install the toolkit in the release
-# workflow (e.g. Jimver/cuda-toolkit), then watch a real CI run — with
-# `dynamic-backends` the exe must still start on a machine with no NVIDIA driver.
+# CUDA is deliberately *not* enabled, and the tradeoff is genuinely close:
+#   * For NVIDIA users CUDA is faster than Vulkan, and by more than the commonly
+#     quoted ~10-20% — that figure describes token generation, while a vision
+#     model spends nearly all its time in prompt processing, where CUDA's lead
+#     is largest.
+#   * Against that: nvcc compiling ggml's kernels across the default
+#     architecture list is a very long CI step, and ggml-cuda.dll links the CUDA
+#     runtime dynamically, so the cuBLAS redistributables would ship in the
+#     installer — hundreds of megabytes for a Lightroom plugin.
+#   * Vulkan covers NVIDIA, AMD and Intel with one build, including the
+#     integrated GPUs common in laptops, which CUDA does nothing for. And users
+#     who want maximum NVIDIA speed can already point the plugin at Ollama or
+#     LM Studio (see lrg-providers), both of which ship their own CUDA builds.
+#
+# To enable it later: add "cuda" to this list and install the toolkit in the
+# release workflow (e.g. Jimver/cuda-toolkit), pinned to a 12.x line — CUDA 13
+# drops the sm_50/61/70 virtual architectures and with them Pascal cards, which
+# are still common in photo workstations. Stage the cudart/cublas/cublasLt
+# redistributables next to ggml-cuda.dll, or the module silently fails to load.
+# `src/device.rs` already handles the consequence of running both: an NVIDIA card
+# then registers twice, once as CUDA0 and once as Vulkan0, and llama.cpp does not
+# deduplicate that on its own.
 [target.'cfg(target_os = "windows")'.dependencies]
 llama-cpp-2 = { version = "0.1.154", features = [
     "mtmd",

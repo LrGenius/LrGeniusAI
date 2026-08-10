@@ -156,6 +156,124 @@ jobs:
             echo "::error::libclang.dll not found; bindgen cannot run" && exit 1
           fi
 
+          # Build llama.cpp with Ninja instead of cmake's default Visual Studio
+          # generator. Not a preference — the VS generator cannot build the
+          # Vulkan backend here. ggml-vulkan generates its shaders with a host
+          # tool (`vulkan-shaders-gen`) pulled in via ExternalProject_Add, and
+          # that CMakeLists sets CMP0147 NEW, which asks MSBuild to run custom
+          # build steps in parallel. MSBuild then runs the external project's
+          # steps out of order, so the install step fires before the configure
+          # step has written cmake_install.cmake:
+          #
+          #   CMake error : Not a file: .../vulkan-shaders-gen-build/cmake_install.cmake
+          #   The system cannot find the batch label specified - VCEnd
+          #   error MSB8066: Custom build for '...vulkan-shaders-gen-install.rule;
+          #                  ...vulkan-shaders-gen-complete.rule' exited with code 1
+          #
+          # Ninja expresses those steps as ordinary dependency edges, so they
+          # cannot race, and it builds the whole thing faster besides. Only
+          # llama-cpp-sys-2 uses the cmake crate in this workspace, so this
+          # variable cannot affect any other dependency. cmake-rs skips the
+          # -A/-T flags for Ninja and passes cl.exe plus its INCLUDE/LIB/PATH
+          # environment through to cmake, which is also what lets the nested
+          # vulkan-shaders-gen configure step find a compiler.
+          if ! ninja --version; then
+            echo "::error::ninja not on PATH; the Vulkan build needs it" && exit 1
+          fi
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
+          # Build into a short target dir, because the Vulkan backend cannot be
+          # built from the default one on Windows. vulkan-shaders-gen is an
+          # ExternalProject nested inside OUT_DIR, so its build tree carries the
+          # whole prefix chain:
+          #
+          #   <target>/release/build/llama-cpp-sys-2-<hash>/out/build/ggml/src/
+          #   ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/
+          #   CMakeFiles/CMakeScratch/TryCompile-XXXXXX/CMakeFiles/cmTC_XXXXX.dir/
+          #
+          # From D:\a\LrGeniusAI\LrGeniusAI\server-rs\target that is 247 of the
+          # 250 characters CMake allows for an object path, and cl.exe resolves
+          # its relative /Fo against that directory — so the compiler check that
+          # opens the sub-build fails on MAX_PATH before any shader is compiled:
+          #
+          #   testCCompiler.c : fatal error C1083: Cannot open compiler
+          #                     generated file: '': Invalid argument
+          #   -- Check for working C compiler: .../cl.exe - broken
+          #
+          # `D:\t` is on the same volume the workspace already builds in and
+          # drops ~39 characters off every path, which clears the limit. Steps
+          # that read build output go through $TARGET_DIR for this reason — and
+          # it carries the POSIX spelling of the same directory, because the
+          # MSYS `find`/`cp` in those bash steps would read a `D:\...` argument
+          # as a relative path.
+          echo 'CARGO_TARGET_DIR=D:\t' >> "$GITHUB_ENV"
+          echo 'TARGET_DIR=/d/t' >> "$GITHUB_ENV"
+
+      # Windows is the one target that enables llama.cpp's Vulkan backend (see
+      # crates/lrg-llama/Cargo.toml), and that needs the Vulkan SDK: without it
+      # llama-cpp-sys-2's build.rs panics outright ("Please install Vulkan SDK
+      # and ensure that VULKAN_SDK env variable is set"), because it links
+      # vulkan-1.lib from $VULKAN_SDK\Lib and ggml's CMake needs the SDK's
+      # glslc to compile the compute shaders. A pinned version is preferred so
+      # an SDK release cannot silently change a tagged build, with a fallback
+      # to whatever LunarG currently calls latest so the release does not go
+      # down the day that pinned build is retired from their CDN.
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os_name == 'windows'
+        shell: pwsh
+        env:
+          VULKAN_SDK_VERSION: '1.4.357.0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk-installer.exe'
+
+          # LunarG renamed the Windows installer after 1.4.309.0, so try the
+          # current name first and the old one second — that way bumping the
+          # pin in either direction keeps working.
+          function Save-VulkanInstaller($v) {
+            $base = "https://sdk.lunarg.com/sdk/download/$v/windows"
+            foreach ($name in @("vulkansdk-windows-X64-$v.exe", "VulkanSDK-$v-Installer.exe")) {
+              try {
+                Invoke-WebRequest -Uri "$base/$name" -OutFile $installer -UseBasicParsing
+                Write-Host "Downloaded $name"
+                return $true
+              } catch {
+                Write-Host "Not available: $base/$name ($($_.Exception.Message))"
+              }
+            }
+            return $false
+          }
+
+          $version = $env:VULKAN_SDK_VERSION
+          if (-not (Save-VulkanInstaller $version)) {
+            $latest = (Invoke-RestMethod -Uri 'https://vulkan.lunarg.com/sdk/latest.json' -UseBasicParsing).windows
+            Write-Host "::warning::pinned Vulkan SDK $version is unavailable; falling back to latest ($latest). Update VULKAN_SDK_VERSION."
+            if (-not $latest -or -not (Save-VulkanInstaller $latest)) {
+              throw "could not download Vulkan SDK $version, nor the current latest"
+            }
+            $version = $latest
+          }
+
+          $sdkDir = "C:\VulkanSDK\$version"
+          # The installer is a Qt Installer Framework GUI binary, so the shell
+          # does not wait for it on its own — hence Start-Process -Wait.
+          $proc = Start-Process -FilePath $installer -Wait -PassThru -NoNewWindow -ArgumentList @(
+            '--root', $sdkDir, '--accept-licenses', '--default-answer', '--confirm-command', 'install'
+          )
+          if ($proc.ExitCode -ne 0) {
+            throw "Vulkan SDK installer exited with $($proc.ExitCode)"
+          }
+
+          foreach ($required in @("$sdkDir\Lib\vulkan-1.lib", "$sdkDir\Bin\glslc.exe")) {
+            if (-not (Test-Path $required)) {
+              throw "Vulkan SDK install incomplete: $required is missing"
+            }
+          }
+
+          "VULKAN_SDK=$sdkDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$sdkDir\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "Vulkan SDK $version installed at $sdkDir"
+
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -180,7 +298,11 @@ jobs:
           set -euo pipefail
           BUILD_DIR="build/lrgenius-server"
           mkdir -p "$BUILD_DIR"
-          cp "server-rs/target/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
+          # Windows overrides CARGO_TARGET_DIR to keep llama.cpp's build paths
+          # under MAX_PATH (see the prerequisites step); everywhere else the
+          # workspace default applies.
+          TARGET_DIR="${TARGET_DIR:-server-rs/target}"
+          cp "$TARGET_DIR/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
           if [ "${{ matrix.os_name }}" != "windows" ]; then
             chmod +x "$BUILD_DIR/lrgenius-server"
           fi
@@ -194,18 +316,44 @@ jobs:
           # stage either.
           if [ "${{ matrix.os_name }}" = "windows" ]; then
             found=0
+            # Two locations, because llama-cpp-sys-2 treats them differently:
+            # it hard-links the shared libs it installs into OUT_DIR/bin (ggml,
+            # ggml-base, llama) up into target/release, but the *loadable*
+            # backend modules — ggml-vulkan and the ggml-cpu-* variants, which
+            # are the ones that actually compute — are installed to
+            # OUT_DIR/backends and left there. Collecting only the first set
+            # ships an exe whose ggml_backend_load_all() finds nothing next to
+            # it, i.e. no GPU *and* no CPU inference.
             while IFS= read -r dll; do
               cp "$dll" "$BUILD_DIR/"
               found=$((found + 1))
-            done < <(find server-rs/target/release -maxdepth 2 -name 'ggml*.dll' -print)
+            done < <(
+              find "$TARGET_DIR/release" -maxdepth 1 \( -name 'ggml*.dll' -o -name 'llama.dll' \) -print
+              find "$TARGET_DIR/release/build" -path '*/out/backends/*' -name 'ggml*.dll' -print
+            )
+            # llama.dll is not optional the way a backend module is: the exe
+            # imports it directly and will not start without it.
+            if [ ! -f "$BUILD_DIR/llama.dll" ]; then
+              echo "::error::llama.dll missing; the packaged exe would not start" && exit 1
+            fi
             echo "Staged $found ggml backend DLL(s)"
             if [ "$found" -eq 0 ]; then
               echo "::error::no ggml*.dll found; a dynamic-backends build must produce them" && exit 1
+            fi
+
+            # The Vulkan module is the entire point of the Windows build, so a
+            # missing one is a hard failure: shipping a silently GPU-less (and
+            # here, backend-less) binary is worse than failing the release.
+            if ! ls "$BUILD_DIR"/ggml-vulkan*.dll >/dev/null 2>&1; then
+              echo "::error::no ggml-vulkan*.dll staged; the Vulkan backend did not build" && exit 1
             fi
           fi
 
           echo "=== Staged binary ==="
           ls -lh "$BUILD_DIR"
+          # The ggml backend modules dominate the download size of the
+          # installer, so make the number easy to find in the log.
+          echo "=== Staged payload size: $(du -sh "$BUILD_DIR" | cut -f1) ==="
 
       - name: Prepare plugin files
         shell: bash

@@ -33,7 +33,8 @@ minutes to a cold build, which nobody working on an unrelated crate should pay.
 ```bash
 # macOS: libclang ships with the Xcode command line tools; brew install cmake
 # Linux: apt install cmake libclang-dev
-# Windows: also builds Vulkan, deliberately not CUDA (see crates/lrg-llama/Cargo.toml)
+# Windows: cmake + LLVM, plus the Vulkan SDK (VULKAN_SDK must be set — the build
+#   panics without it). Vulkan, deliberately not CUDA: see crates/lrg-llama/Cargo.toml
 cargo build --release -p lrg-server --features llamacpp
 cargo clippy --workspace --all-targets --features llamacpp
 ```
