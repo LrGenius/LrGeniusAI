@@ -56,6 +56,12 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.llmDownloadChoice = nil
 	propertyTable.llmStatusText = LOC("$$$/LrGeniusAI/LocalModel/Checking=Checking for local models...")
 	propertyTable.llmInstalledText = ""
+	-- Gates the interactive controls in each group box. Starts false so nothing
+	-- is clickable until the backend has confirmed it can actually run that
+	-- engine; the status line stays readable and says why the rest is greyed.
+	-- Hiding the boxes outright is not an option: per the SDK, a hidden view
+	-- still occupies its full layout space, which would leave a blank hole.
+	propertyTable.llmSupported = false
 
 	-- MLX (Apple silicon) settings. Deliberately a separate group from the
 	-- llama.cpp one above: the two hold different model formats (a GGUF file
@@ -65,6 +71,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.mlxDownloadChoice = nil
 	propertyTable.mlxStatusText = LOC("$$$/LrGeniusAI/MlxModel/Checking=Checking for MLX models...")
 	propertyTable.mlxInstalledText = ""
+	propertyTable.mlxSupported = false
 
 	-- The llama.cpp half of /llm/catalog + /llm/status.
 	local function updateLlamaCppFields(catalog, status)
@@ -73,8 +80,14 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 				"$$$/LrGeniusAI/LocalModel/Unsupported=This backend build has no local-model support; use Ollama or LM Studio."
 			)
 			propertyTable.llmDownloadChoices = {}
+			-- Also clear the selection, not just the list: the Download button is
+			-- gated on it, and a choice left over from an earlier refresh would
+			-- otherwise stay clickable against a backend that cannot serve it.
+			propertyTable.llmDownloadChoice = nil
+			propertyTable.llmSupported = false
 			return
 		end
+		propertyTable.llmSupported = true
 
 		local names = {}
 		for _, m in ipairs(catalog.installed or {}) do
@@ -118,6 +131,8 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 		if mlx == nil then
 			propertyTable.mlxStatusText = LOC("$$$/LrGeniusAI/MlxModel/Unsupported=This backend does not support MLX.")
 			propertyTable.mlxDownloadChoices = {}
+			propertyTable.mlxDownloadChoice = nil
+			propertyTable.mlxSupported = false
 			return
 		end
 		if mlx.supported == false then
@@ -126,8 +141,11 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 			propertyTable.mlxStatusText = mlx.reason
 				or LOC("$$$/LrGeniusAI/MlxModel/Unavailable=MLX is not available on this system.")
 			propertyTable.mlxDownloadChoices = {}
+			propertyTable.mlxDownloadChoice = nil
+			propertyTable.mlxSupported = false
 			return
 		end
+		propertyTable.mlxSupported = true
 
 		local mlxNames = {}
 		for _, m in ipairs(mlx.installed or {}) do
@@ -174,6 +192,10 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 					LOC("$$$/LrGeniusAI/LocalModel/Unreachable=Backend not reachable — cannot list local models.")
 				propertyTable.mlxStatusText =
 					LOC("$$$/LrGeniusAI/MlxModel/Unreachable=Backend not reachable — cannot list MLX models.")
+				propertyTable.llmSupported = false
+				propertyTable.mlxSupported = false
+				propertyTable.llmDownloadChoice = nil
+				propertyTable.mlxDownloadChoice = nil
 				return
 			end
 
@@ -960,6 +982,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:popup_menu({
 						items = bind("mlxDownloadChoices"),
 						value = bind("mlxDownloadChoice"),
+						enabled = bind("mlxSupported"),
 						width_in_chars = 34,
 					}),
 					f:push_button({
@@ -1023,6 +1046,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					f:popup_menu({
 						items = bind("llmDownloadChoices"),
 						value = bind("llmDownloadChoice"),
+						enabled = bind("llmSupported"),
 						width_in_chars = 34,
 					}),
 					f:push_button({
@@ -1063,6 +1087,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					}),
 					f:edit_field({
 						value = bind("llmContextSize"),
+						enabled = bind("llmSupported"),
 						precision = 0,
 						min = 1024,
 						max = 131072,
@@ -1073,6 +1098,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					}),
 					f:edit_field({
 						value = bind("llmParallel"),
+						enabled = bind("llmSupported"),
 						precision = 0,
 						min = 1,
 						max = 16,
@@ -1087,6 +1113,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					}),
 					f:edit_field({
 						value = bind("llmGpuLayers"),
+						enabled = bind("llmSupported"),
 						precision = 0,
 						min = 0,
 						max = 999,
