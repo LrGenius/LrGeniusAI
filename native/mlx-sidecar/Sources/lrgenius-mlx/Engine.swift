@@ -103,6 +103,17 @@ final class Engine {
     /// comes back valid and merely shorter.
     private var closingBias: MLXArray?
 
+    /// Negative bias on tokens that decode to nothing but JSON whitespace,
+    /// plus the ids themselves so the loop's run tracker can spot a run.
+    ///
+    /// JSON grammar permits whitespace almost anywhere, so the grammar mask
+    /// never rules it out, and this model will happily spend hundreds of tokens
+    /// emitting spaces between two fields. Measured on the 13-category schema:
+    /// a two-category cut-down produced seven keywords and burned 1986 of 2048
+    /// tokens getting there. That is what exhausts the budget -- not the actual
+    /// answer, which runs about 200 tokens unconstrained.
+    private var whitespacePenalty: (bias: MLXArray, tokenIDs: Set<Int>)?
+
     var isLoaded: Bool { loaded != nil }
 
     func info() -> EngineInfoPayload? {
@@ -160,6 +171,7 @@ final class Engine {
             container: container, directory: directory, supportsVision: supportsVision)
         grammarTokenizer = nil
         closingBias = nil
+        whitespacePenalty = nil
 
         let payload = EngineInfoPayload(
             modelPath: directory.path,
@@ -175,6 +187,7 @@ final class Engine {
         loaded = nil
         grammarTokenizer = nil
         closingBias = nil
+        whitespacePenalty = nil
         // MLX keeps freed blocks in its own allocator pool, so dropping the
         // container is not by itself enough to return the weights to the OS.
         MLX.GPU.clearCache()
@@ -254,6 +267,7 @@ final class Engine {
             }
 
             let (constraint, vocabSize) = try self.constraint(for: schema, context: context)
+            let whitespace = self.whitespace(for: context)
             var output = ""
             let produced = try GuidedGenerationLoop.run(
                 input: input,
@@ -270,7 +284,9 @@ final class Engine {
                 // `{"title": "19001", "caption": "19002"}`. Junk written into
                 // someone's catalog is worse than a failed photo, so the budget
                 // only ever nudges here, and a genuine overrun stays an error.
-                closingBias: self.bias(for: context)
+                closingBias: self.bias(for: context),
+                whitespaceBias: whitespace.bias,
+                whitespaceTokenIDs: whitespace.tokenIDs
             ) { delta in
                 output += delta
                 return true
@@ -316,6 +332,16 @@ final class Engine {
         let computed = ClosingTokenBias.compute(
             tokenizer: context.tokenizer, eosTokenId: context.tokenizer.eosTokenId)
         closingBias = computed
+        return computed
+    }
+
+    /// The cached whitespace penalty for the loaded model, computed on first use.
+    private func whitespace(for context: ModelContext) -> (bias: MLXArray, tokenIDs: Set<Int>) {
+        if let whitespacePenalty {
+            return whitespacePenalty
+        }
+        let computed = WhitespaceTokenBias.compute(tokenizer: context.tokenizer)
+        whitespacePenalty = computed
         return computed
     }
 
