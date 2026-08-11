@@ -10,8 +10,19 @@ license.workspace = true
 # a CUDA toolkit); the release workflow turns it on.
 llamacpp = ["dep:lrg-llama"]
 
+# Needs the llama.cpp engine to have something to compare MLX against, so it is
+# not built by a plain `cargo build`/`clippy --all-targets`.
+[[example]]
+name = "bench_local_backends"
+required-features = ["llamacpp"]
+
 [dependencies]
 lrg-llama = { workspace = true, optional = true }
+# Not optional and not feature-gated: unlike lrg-llama this only spawns and
+# talks to a process, so it adds no native toolchain requirement and no
+# meaningful build time. Whether MLX actually works is a runtime question
+# (Apple silicon + the sidecar binary), answered by `mlx_engine::availability`.
+lrg-mlx.workspace = true
 lrg-common.workspace = true
 lrg-store.workspace = true
 lrg-ml.workspace = true

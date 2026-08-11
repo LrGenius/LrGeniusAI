@@ -12,9 +12,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::gemini::GeminiProvider;
-use crate::llamacpp::LlamaCppProvider;
 use crate::lmstudio::LmStudioProvider;
 use crate::local::SharedLocalEngine;
+use crate::local_provider::LocalProvider;
 use crate::ollama::OllamaProvider;
 use crate::openai::OpenAiProvider;
 use crate::types::{
@@ -147,9 +147,10 @@ pub struct ProviderSelection {
     pub api_key: Option<String>,
     pub ollama_base_url: Option<String>,
     pub lmstudio_base_url: Option<String>,
-    /// The in-process engine, when one is loaded. Supplied by `lrg-api`, which
-    /// is the only crate that knows about `lrg-llama`; `None` here is why
-    /// `"llamacpp"` reports "no local model loaded" rather than being unknown.
+    /// The local engine, when one is loaded. Supplied by `lrg-api`, the only
+    /// crate that knows `lrg-llama` and `lrg-mlx` exist; `None` here is why
+    /// `"llamacpp"` and `"mlx"` report "no local model loaded" rather than
+    /// being unknown providers.
     pub local_engine: Option<SharedLocalEngine>,
 }
 
@@ -175,7 +176,8 @@ impl ProviderSelection {
 }
 
 /// Provider names accepted on the wire, canonical form first.
-pub const KNOWN_PROVIDERS: &[&str] = &["chatgpt", "gemini", "ollama", "lmstudio", "llamacpp"];
+pub const KNOWN_PROVIDERS: &[&str] =
+    &["chatgpt", "gemini", "ollama", "lmstudio", "llamacpp", "mlx"];
 
 /// Resolve a wire provider name to a live client.
 ///
@@ -210,10 +212,20 @@ pub fn build_provider(selection: &ProviderSelection) -> Result<Arc<dyn LlmProvid
             None => Err("Gemini API not configured".to_string()),
         },
         "llamacpp" => match &selection.local_engine {
-            Some(engine) => Ok(Arc::new(LlamaCppProvider::new(engine.clone()))),
+            Some(engine) => Ok(Arc::new(LocalProvider::llamacpp(engine.clone()))),
             None => Err(
                 "No local model is loaded. Download or select a GGUF model in the plugin \
                  settings first."
+                    .to_string(),
+            ),
+        },
+        // Both local backends share `LocalProvider`; which engine was built is
+        // decided upstream in `lrg-api`, and only the log label differs here.
+        "mlx" => match &selection.local_engine {
+            Some(engine) => Ok(Arc::new(LocalProvider::mlx(engine.clone()))),
+            None => Err(
+                "No MLX model is loaded. Download or select an MLX model in the plugin \
+                 settings first. MLX needs an Apple silicon Mac."
                     .to_string(),
             ),
         },
@@ -226,7 +238,7 @@ pub fn build_provider(selection: &ProviderSelection) -> Result<Arc<dyn LlmProvid
 pub fn is_known_provider(name: &str) -> bool {
     matches!(
         name.trim().to_lowercase().as_str(),
-        "chatgpt" | "openai" | "gemini" | "ollama" | "lmstudio" | "llamacpp"
+        "chatgpt" | "openai" | "gemini" | "ollama" | "lmstudio" | "llamacpp" | "mlx"
     )
 }
 

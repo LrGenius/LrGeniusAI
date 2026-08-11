@@ -61,6 +61,29 @@ pub fn resolve_llm() -> LlmModelPaths {
     }
 }
 
+/// Where MLX models live.
+///
+/// Deliberately a *directory of directories*, unlike [`LlmModelPaths`]: an MLX
+/// model is a Hugging Face repo snapshot (`config.json`, safetensors shards,
+/// tokenizer files), not a single file, so there is nothing analogous to
+/// `LRG_LLAMA_MODEL_GGUF` pointing at one artifact. `model_dir` is the override
+/// for "use exactly this model", and `dir` is the root that downloads land in
+/// and discovery scans.
+#[derive(Debug, Clone)]
+pub struct MlxModelPaths {
+    /// Root directory holding one subdirectory per model.
+    pub dir: PathBuf,
+    /// Explicit override for a single model directory, from `LRG_MLX_MODEL_DIR`.
+    pub model_dir: Option<PathBuf>,
+}
+
+pub fn resolve_mlx() -> MlxModelPaths {
+    MlxModelPaths {
+        dir: env_or_default("LRG_MLX_MODEL_ROOT", default_models_dir().join("mlx")),
+        model_dir: std::env::var_os("LRG_MLX_MODEL_DIR").map(PathBuf::from),
+    }
+}
+
 /// buffalo_l's own directory layout is the real InsightFace convention
 /// (`INSIGHTFACE_ROOT`, default `~/.insightface`) — unlike SigLIP2, no
 /// interim convention is needed since these ONNX files are already

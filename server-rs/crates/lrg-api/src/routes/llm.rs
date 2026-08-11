@@ -27,6 +27,8 @@ use lrg_providers::local::SharedLocalEngine;
 
 use crate::llm_engine::{settings_for, EngineOverrides};
 use crate::llm_models::{self, CatalogEntry};
+use crate::mlx_engine::MlxEngineSettings;
+use crate::mlx_models;
 use crate::routes::clip::ModelDownloadStatus;
 use crate::state::AppState;
 
@@ -43,27 +45,52 @@ pub fn router() -> Router<Arc<AppState>> {
 
 /// Resolve the engine for a request, loading the model if needed.
 ///
-/// Returns `Ok(None)` for every provider other than `llamacpp`, so callers can
-/// use it unconditionally. An unresolvable model name is an `Err` with a
-/// user-facing message rather than a silent fallback: quietly indexing a whole
-/// catalog with the wrong provider would be far worse than a clear failure.
+/// Returns `Ok(None)` for every provider other than the two local backends, so
+/// callers can use it unconditionally. An unresolvable model name is an `Err`
+/// with a user-facing message rather than a silent fallback: quietly indexing a
+/// whole catalog with the wrong provider would be far worse than a clear
+/// failure.
 pub async fn engine_for_request(
     state: &AppState,
     provider: &str,
     model: &str,
     overrides: EngineOverrides,
 ) -> Result<Option<SharedLocalEngine>, String> {
-    if provider.trim().to_lowercase() != "llamacpp" {
-        return Ok(None);
+    match provider.trim().to_lowercase().as_str() {
+        "llamacpp" => {
+            let Some(found) = llm_models::resolve_model(model) else {
+                return Err(format!(
+                    "No local model named '{model}' was found. Download one from the plugin \
+                     settings, or set LRG_LLAMA_MODEL_GGUF to a GGUF file."
+                ));
+            };
+            let settings = settings_for(found.model_path, found.mmproj_path, overrides);
+            state.llm.get_or_load(&settings).await.map(Some)
+        }
+        "mlx" => {
+            // Refuse early on a host that cannot run MLX at all, so the user
+            // gets "needs Apple silicon" rather than a sidecar spawn failure.
+            let availability = state.mlx.availability();
+            if !availability.supported {
+                return Err(availability
+                    .reason
+                    .unwrap_or_else(|| "MLX is not available on this system.".to_string()));
+            }
+            let Some(found) = mlx_models::resolve_model(model) else {
+                return Err(format!(
+                    "No MLX model named '{model}' was found. Download one from the plugin \
+                     settings, or set LRG_MLX_MODEL_DIR to a model directory."
+                ));
+            };
+            // No `overrides`: MLX has no context-size or GPU-layer equivalent
+            // to tune. See `crate::mlx_engine`.
+            let settings = MlxEngineSettings {
+                model_dir: found.model_dir,
+            };
+            state.mlx.get_or_load(&settings).await.map(Some)
+        }
+        _ => Ok(None),
     }
-    let Some(found) = llm_models::resolve_model(model) else {
-        return Err(format!(
-            "No local model named '{model}' was found. Download one from the plugin settings, \
-             or set LRG_LLAMA_MODEL_GGUF to a GGUF file."
-        ));
-    };
-    let settings = settings_for(found.model_path, found.mmproj_path, overrides);
-    state.llm.get_or_load(&settings).await.map(Some)
 }
 
 /// Read the engine tuning knobs the plugin's advanced fields send.
@@ -127,23 +154,69 @@ async fn catalog(State(state): State<Arc<AppState>>) -> Json<Value> {
         })
         .collect();
 
+    // The MLX half is reported alongside rather than as a separate route: the
+    // plugin renders one "Local AI Model" panel and needs both backends'
+    // availability to decide what to offer, and two round-trips to draw one
+    // panel would only invite the two halves to disagree.
+    let mlx_installed = mlx_models::discover_local_models();
+    let mlx_installed_dirs: std::collections::HashSet<&str> = mlx_installed
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mlx_downloadable: Vec<Value> = mlx_models::CATALOG
+        .iter()
+        .map(|entry| {
+            json!({
+                "id": entry.id,
+                "label": entry.label,
+                "approx_bytes": entry.approx_bytes,
+                "min_ram_gb": entry.min_ram_gb,
+                "installed": mlx_installed_dirs.contains(entry.dir_name),
+            })
+        })
+        .collect();
+    let mlx_availability = state.mlx.availability();
+
     Json(json!({
         "installed": installed,
         "downloadable": downloadable,
         "supported": state.llm.is_supported(),
         "model_dir": lrg_ml::model_paths::resolve_llm().dir.display().to_string(),
+        "mlx": {
+            "installed": mlx_installed,
+            "downloadable": mlx_downloadable,
+            "supported": mlx_availability.supported,
+            "reason": mlx_availability.reason,
+            "model_dir": lrg_ml::model_paths::resolve_mlx().dir.display().to_string(),
+        },
     }))
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!(state.llm.status()))
+    let mut body = json!(state.llm.status());
+    // Nested under `mlx` so the existing top-level keys keep meaning exactly
+    // what they meant before: an older plugin reading `status` still sees the
+    // llama.cpp engine and is not confused by a second one.
+    if let Some(object) = body.as_object_mut() {
+        object.insert("mlx".to_string(), json!(state.mlx.status()));
+    }
+    Json(body)
 }
 
 async fn download_start(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
     let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
 
-    let Some(entry) = llm_models::catalog_entry(id) else {
+    // One id space across both catalogs (enforced by a test in `mlx_models`),
+    // so the id alone picks the backend and the plugin needs no extra field.
+    enum Wanted {
+        Gguf(&'static CatalogEntry),
+        Mlx(&'static mlx_models::CatalogEntry),
+    }
+    let wanted = llm_models::catalog_entry(id)
+        .map(Wanted::Gguf)
+        .or_else(|| mlx_models::catalog_entry(id).map(Wanted::Mlx));
+    let Some(wanted) = wanted else {
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({"error": format!("Unknown model id '{id}'.")})),
@@ -167,7 +240,10 @@ async fn download_start(State(state): State<Arc<AppState>>, body: Option<Json<Va
     }
 
     let downloads = state.model_download.clone();
-    tokio::spawn(run_download(downloads, entry));
+    match wanted {
+        Wanted::Gguf(entry) => tokio::spawn(run_download(downloads, entry)),
+        Wanted::Mlx(entry) => tokio::spawn(run_mlx_download(downloads, entry)),
+    };
     Json(json!({"download": "started"})).into_response()
 }
 
@@ -325,6 +401,206 @@ async fn run_download(downloads: Downloads, entry: &'static CatalogEntry) {
     let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
     status.set_done();
     log::info!("Local model {} downloaded", entry.id);
+}
+
+/// Files in a repo snapshot that are never worth downloading.
+///
+/// The `original/` and `onnx/` filter is the one that matters: some Hugging
+/// Face repos carry the unquantized source weights or an unrelated export
+/// alongside the MLX ones, and fetching those would silently double or treble a
+/// multi-gigabyte download for files the loader never opens.
+fn is_skippable_repo_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("original/")
+        || lower.starts_with("onnx/")
+        || lower.starts_with(".git")
+        || lower.ends_with(".md")
+}
+
+/// List a repo's files via the Hugging Face tree API.
+async fn repo_files(
+    client: &reqwest::Client,
+    repo: &str,
+    revision: &str,
+) -> Result<Vec<(String, u64)>, String> {
+    let url = format!("https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("could not list {repo}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("could not list {repo}: HTTP {}", response.status()));
+    }
+    let entries: Vec<Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("could not read the file list for {repo}: {e}"))?;
+
+    let files: Vec<(String, u64)> = entries
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
+        .filter_map(|entry| {
+            let path = entry.get("path").and_then(Value::as_str)?.to_string();
+            let size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
+            (!is_skippable_repo_file(&path)).then_some((path, size))
+        })
+        .collect();
+
+    if files.is_empty() {
+        return Err(format!("{repo} contains no downloadable model files"));
+    }
+    Ok(files)
+}
+
+/// Download a whole MLX model snapshot.
+///
+/// Unlike the GGUF path this fetches a directory, so it stages into a sibling
+/// `.part` directory and renames at the end. Discovery only accepts a directory
+/// holding both a `config.json` and safetensors shards, and a partial download
+/// can satisfy that check partway through — staging elsewhere means a
+/// half-finished model is never offered as loadable.
+async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::CatalogEntry) {
+    let destination = mlx_models::destination_for(entry);
+    if destination.is_dir() {
+        let mut guard = downloads.lock().unwrap();
+        guard
+            .entry(DOWNLOAD_KEY.to_string())
+            .or_default()
+            .set_done();
+        log::info!("MLX model {} is already installed", entry.id);
+        return;
+    }
+    let staging = destination.with_extension("part");
+    // A previous interrupted attempt leaves this behind; start clean rather
+    // than resuming, since we cannot tell which files are complete.
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    if let Err(e) = tokio::fs::create_dir_all(&staging).await {
+        return set_error(
+            &downloads,
+            format!("failed to create {}: {e}", staging.display()),
+        );
+    }
+
+    let client = reqwest::Client::new();
+    let files = match repo_files(&client, entry.repo, entry.revision).await {
+        Ok(files) => files,
+        Err(e) => return set_error(&downloads, e),
+    };
+
+    let total: u64 = files.iter().map(|(_, size)| *size).sum();
+    downloads
+        .lock()
+        .unwrap()
+        .entry(DOWNLOAD_KEY.to_string())
+        .or_default()
+        .total = total;
+
+    let mut downloaded: u64 = 0;
+    for (path, expected) in &files {
+        let target = staging.join(path);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return set_error(
+                    &downloads,
+                    format!("failed to create {}: {e}", parent.display()),
+                );
+            }
+        }
+        downloads
+            .lock()
+            .unwrap()
+            .entry(DOWNLOAD_KEY.to_string())
+            .or_default()
+            .current_file = Some(path.clone());
+
+        let url = llm_models::hf_url(entry.repo, entry.revision, path);
+        log::info!("Downloading MLX model asset {path} from {url}");
+        let response = match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                return set_error(
+                    &downloads,
+                    format!("download failed for {path}: HTTP {}", r.status()),
+                )
+            }
+            Err(e) => return set_error(&downloads, format!("download failed for {path}: {e}")),
+        };
+
+        let handle = match tokio::fs::File::create(&target).await {
+            Ok(f) => f,
+            Err(e) => {
+                return set_error(
+                    &downloads,
+                    format!("failed to create {}: {e}", target.display()),
+                )
+            }
+        };
+        let mut writer = tokio::io::BufWriter::new(handle);
+        let mut stream = response.bytes_stream();
+        let mut written: u64 = 0;
+
+        use tokio::io::AsyncWriteExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&staging).await;
+                    return set_error(&downloads, format!("download interrupted for {path}: {e}"));
+                }
+            };
+            if let Err(e) = writer.write_all(&chunk).await {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return set_error(&downloads, format!("failed writing {path}: {e}"));
+            }
+            written += chunk.len() as u64;
+            downloaded += chunk.len() as u64;
+            downloads
+                .lock()
+                .unwrap()
+                .entry(DOWNLOAD_KEY.to_string())
+                .or_default()
+                .progress = downloaded;
+        }
+        if let Err(e) = writer.flush().await {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            return set_error(&downloads, format!("failed writing {path}: {e}"));
+        }
+        drop(writer);
+
+        if *expected > 0 && written != *expected {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            return set_error(
+                &downloads,
+                format!(
+                    "{path} was truncated: expected {expected} bytes but received {written}. \
+                     Check your connection and try again."
+                ),
+            );
+        }
+    }
+
+    if let Err(e) = tokio::fs::rename(&staging, &destination).await {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return set_error(
+            &downloads,
+            format!(
+                "failed to place the model at {}: {e}",
+                destination.display()
+            ),
+        );
+    }
+
+    let mut guard = downloads.lock().unwrap();
+    guard
+        .entry(DOWNLOAD_KEY.to_string())
+        .or_default()
+        .set_done();
+    log::info!(
+        "MLX model {} downloaded to {}",
+        entry.id,
+        destination.display()
+    );
 }
 
 /// Where a catalog entry's files end up, for tests and for the UI.

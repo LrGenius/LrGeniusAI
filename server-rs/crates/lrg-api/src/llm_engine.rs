@@ -174,6 +174,28 @@ mod imp {
             };
             log::info!("Loading local LLM: {}", settings.model_path.display());
 
+            // Drop any resident engine *before* building the new one.
+            //
+            // Not just to keep peak memory at one model: `LlamaBackend::init()`
+            // is a process-wide singleton that only releases on drop, so while
+            // an old engine is alive a new one cannot initialize at all — it
+            // fails with `BackendAlreadyInitialized`. Loading first and
+            // swapping afterwards made every model switch (and every change of
+            // n_ctx / n_parallel / gpu_layers, since those key the reload) fail
+            // until the server restarted.
+            //
+            // The cost is that a failed load leaves nothing resident rather
+            // than the previous model. That is the right way round: the next
+            // request reloads, whereas the alternative simply never worked.
+            //
+            // This does not cover every case: a request already in flight holds
+            // its own `Arc` to the engine, so a switch racing an active
+            // generation still hits the same error. `load_lock` keeps two loads
+            // from racing each other, but nothing can drop an engine somebody
+            // is still decoding on — that is inherent to llama.cpp's global
+            // backend, and the retry succeeds once the request finishes.
+            self.unload();
+
             // Loading blocks for as long as it takes to read the weights, so it
             // must not run on a tokio worker.
             let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
@@ -182,8 +204,6 @@ mod imp {
                 .map_err(|e| e.to_string())?;
 
             let engine = Arc::new(engine);
-            // Replacing the slot drops the previous engine, which joins its
-            // worker thread and frees the old weights before we return.
             *self.loaded.lock().unwrap() = Some(Loaded {
                 settings: settings.clone(),
                 engine: engine.clone(),

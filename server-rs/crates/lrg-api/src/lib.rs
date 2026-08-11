@@ -4,6 +4,8 @@
 pub mod llm_engine;
 pub mod llm_models;
 pub mod middleware;
+pub mod mlx_engine;
+pub mod mlx_models;
 pub mod routes;
 pub mod state;
 

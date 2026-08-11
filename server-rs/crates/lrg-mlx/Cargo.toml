@@ -1,0 +1,23 @@
+[package]
+name = "lrg-mlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# MLX inference on Apple silicon, via the `lrgenius-mlx` sidecar process built
+# from native/mlx-sidecar. Unlike `lrg-llama` this crate has no native build
+# step of its own: it only spawns and talks to a binary that `swift build`
+# produced, so it compiles anywhere and costs nothing to keep in the workspace.
+# What it needs at *runtime* is Apple silicon and that binary next to the
+# server; `MlxEngine::new` reports a clear error when either is missing.
+
+[dependencies]
+log.workspace = true
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time"] }
+uuid.workspace = true
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

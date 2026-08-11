@@ -127,9 +127,21 @@ async fn list_models(
         Vec::new()
     };
 
+    // Same rule for MLX, except that "supported" is a runtime question — Apple
+    // silicon plus an installed sidecar — rather than a build-time one.
+    let mlx_models: Vec<String> = if state.mlx.is_supported() {
+        crate::mlx_models::discover_local_models()
+            .into_iter()
+            .map(|m| m.name)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Json(json!({
         "models": {
             "llamacpp": llamacpp_models,
+            "mlx": mlx_models,
             "ollama": ollama_models,
             "lmstudio": lmstudio_models,
             "chatgpt": openai_models,

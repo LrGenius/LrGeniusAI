@@ -14,6 +14,7 @@ use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
 
 use crate::llm_engine::LlmEngineSlot;
+use crate::mlx_engine::MlxEngineSlot;
 use crate::routes::clip::ModelDownloadStatus;
 
 pub struct AppState {
@@ -38,6 +39,9 @@ pub struct AppState {
     /// Global — the in-process LLM, lazily loaded and idle-unloaded exactly
     /// like `siglip`/`face`.
     pub llm: Arc<LlmEngineSlot>,
+    /// The MLX engine, held separately from `llm` so that switching provider
+    /// back and forth does not evict the other backend's resident model.
+    pub mlx: Arc<MlxEngineSlot>,
     /// Set by `/update/apply` once the binary swap is done, just before
     /// triggering graceful shutdown. `main.rs` checks this after
     /// `axum::serve`'s graceful shutdown returns (listener fully
@@ -60,6 +64,7 @@ impl AppState {
             jobs: Arc::new(JobRegistry::new()),
             model_download: Arc::new(StdMutex::new(HashMap::new())),
             llm: Arc::default(),
+            mlx: Arc::default(),
             relaunch_after_shutdown: StdMutex::new(None),
         }
     }
@@ -90,6 +95,7 @@ impl AppState {
         self.siglip.unload_if_idle();
         self.face.unload_if_idle();
         self.llm.unload_if_idle();
+        self.mlx.unload_if_idle();
         if let Some(store) = self.store() {
             if store.pending_write_ops() >= lrg_store::COMPACT_WRITE_THRESHOLD {
                 match store.optimize_all().await {
