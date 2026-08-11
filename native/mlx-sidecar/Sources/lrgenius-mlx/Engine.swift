@@ -269,31 +269,68 @@ final class Engine {
             let (constraint, vocabSize) = try self.constraint(for: schema, context: context)
             let whitespace = self.whitespace(for: context)
             var output = ""
-            let produced = try GuidedGenerationLoop.run(
-                input: input,
-                context: context,
-                constraint: constraint,
-                maxTokens: spec.maxTokens,
-                vocabSize: vocabSize,
-                // Soft zone only (the library's default 64-token reserve).
-                // Deliberately no `hardReserve`: the hard zone suppresses every
-                // token that is not "closing", and `ClosingTokenBias` counts
-                // the digits 0-9 as closing (they finish a JSON *number*).
-                // Inside a string that forces digits, which yields structurally
-                // valid, semantically worthless output -- a measured
-                // `{"title": "19001", "caption": "19002"}`. Junk written into
-                // someone's catalog is worse than a failed photo, so the budget
-                // only ever nudges here, and a genuine overrun stays an error.
-                closingBias: self.bias(for: context),
-                whitespaceBias: whitespace.bias,
-                whitespaceTokenIDs: whitespace.tokenIDs
-            ) { delta in
-                output += delta
-                return true
+            // `run` throws away everything it generated when it throws, which
+            // makes an overrun impossible to tell apart from a stall. Keep
+            // enough of a tally to say which one happened.
+            let produced: Int
+            do {
+                produced = try GuidedGenerationLoop.run(
+                    input: input,
+                    context: context,
+                    constraint: constraint,
+                    maxTokens: spec.maxTokens,
+                    vocabSize: vocabSize,
+                    // Soft zone only (the library's default 64-token reserve).
+                    // Deliberately no `hardReserve`: the hard zone suppresses
+                    // every token that is not "closing", and `ClosingTokenBias`
+                    // counts the digits 0-9 as closing (they finish a JSON
+                    // *number*). Inside a string that forces digits, which
+                    // yields structurally valid, semantically worthless output
+                    // -- a measured `{"title": "19001", "caption": "19002"}`.
+                    // Junk written into someone's catalog is worse than a photo
+                    // that failed, so the budget only ever nudges here and a
+                    // genuine overrun stays an error.
+                    //
+                    // The reserve is clamped rather than left at the library's
+                    // flat 64 because the zone is defined as
+                    // `tokenCount >= maxTokens - completionReserve`: at a
+                    // budget of 64 or less that is true from the very first
+                    // token, so the bias -- which lifts digits by +100, they
+                    // being how a JSON *number* ends -- drives the whole
+                    // answer. Measured at `max_tokens: 64`, the model emitted
+                    // `{"keywords": ["19000000000...`. A quarter of the budget
+                    // keeps the nudge to the tail where it belongs.
+                    completionReserve: min(64, max(1, spec.maxTokens / 4)),
+                    closingBias: self.bias(for: context),
+                    whitespaceBias: whitespace.bias,
+                    whitespaceTokenIDs: whitespace.tokenIDs
+                ) { delta in
+                    output += delta
+                    return true
+                }
+            } catch {
+                Log.info(
+                    "guided generation failed after \(output.count) chars "
+                        + "(\(Self.whitespaceShare(of: output))% whitespace, budget "
+                        + "\(spec.maxTokens) tokens); tail: \(String(output.suffix(120)))")
+                throw error
             }
             return .success(
                 text: output, promptTokens: promptTokens, completionTokens: produced)
         }
+    }
+
+    /// Percentage of `text` that is whitespace, rounded to a whole number.
+    ///
+    /// The number that separates "this photo genuinely needs more tokens" from
+    /// "the model stalled emitting spaces again": a healthy JSON answer sits
+    /// around 10-20%.
+    private static func whitespaceShare(of text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        let spaces = text.reduce(into: 0) { count, character in
+            if character.isWhitespace { count += 1 }
+        }
+        return Int((Double(spaces) / Double(text.count) * 100).rounded())
     }
 
     /// A fresh constraint for `schema` plus the vocabulary size the decode loop
@@ -325,12 +362,35 @@ final class Engine {
     }
 
     /// The cached closing-token bias for the loaded model, computed on first use.
+    ///
+    /// Built here rather than taken from `ClosingTokenBias.compute` because that
+    /// one also lifts the digits 0-9, on the grounds that a digit is how a JSON
+    /// *number* ends. No schema this app sends contains a number -- every leaf
+    /// is a string -- so here a digit can never close anything, and boosting it
+    /// only gives the model a way to corrupt the string it is inside. Measured
+    /// with the library's array: a caption ending
+    /// `...glow of a setting sun9999999999999999`. Same tiers otherwise: EOS
+    /// above the structural closers, so a finishable answer prefers to stop.
     private func bias(for context: ModelContext) -> MLXArray {
         if let closingBias {
             return closingBias
         }
-        let computed = ClosingTokenBias.compute(
-            tokenizer: context.tokenizer, eosTokenId: context.tokenizer.eosTokenId)
+        let tokenizer = context.tokenizer
+        var vocabSize = 0
+        while tokenizer.convertIdToToken(vocabSize) != nil {
+            vocabSize += 1
+            if vocabSize > 500_000 { break }
+        }
+        var biases = [Float](repeating: 0.0, count: vocabSize)
+        for id in 0 ..< vocabSize {
+            if let token = tokenizer.convertIdToToken(id), ["\"", "}", "]"].contains(token) {
+                biases[id] = 100.0
+            }
+        }
+        if let eos = tokenizer.eosTokenId, eos >= 0, eos < vocabSize {
+            biases[eos] = 200.0
+        }
+        let computed = MLXArray(biases)
         closingBias = computed
         return computed
     }
