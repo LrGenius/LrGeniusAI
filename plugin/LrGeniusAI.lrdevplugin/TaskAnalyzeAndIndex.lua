@@ -97,6 +97,31 @@ local function showAnalyzeAndIndexDialog(ctx)
 		props.modelKey = modelItems[1].value
 	end
 
+	-- Warn when keyword aliases or bilingual keywords are asked of a local
+	-- model. Both turn every keyword leaf from a plain string into an object
+	-- (`{name, aliases}`), and the local backends decode against a grammar
+	-- built from that schema. Measured on Gemma 4 E4B 4-bit via MLX, same photo
+	-- and budget: plain strings produced 19 keywords, the object form produced
+	-- zero -- every category came back as an empty array. Worse with the
+	-- catalog keyword hierarchy, where the model spends the whole token budget
+	-- emitting an empty placeholder per branch and the photo fails outright.
+	-- Cheap to warn, and it costs a slow run to discover otherwise.
+	local function updateLocalAliasWarning(properties)
+		local key = properties.modelKey or ""
+		local sep = string.find(key, "::", 1, true)
+		local provider = sep and string.sub(key, 1, sep - 1) or key
+		local isLocal = provider == "mlx" or provider == "llamacpp"
+		local wantsObjectLeaves = properties.keywordAliases or properties.bilingualKeywords
+		properties.localAliasWarning = (isLocal and wantsObjectLeaves and properties.generateKeywords) or false
+	end
+	props.localAliasWarning = false
+	updateLocalAliasWarning(props)
+	for _, key in ipairs({ "modelKey", "keywordAliases", "bilingualKeywords", "generateKeywords" }) do
+		props:addObserver(key, function(properties)
+			updateLocalAliasWarning(properties)
+		end)
+	end
+
 	-- Context options
 	props.submitKeywords = prefs.submitKeywords or false
 	props.submitFolderName = prefs.submitFolderName or false
@@ -374,6 +399,18 @@ local function showAnalyzeAndIndexDialog(ctx)
 								"$$$/LrGeniusAI/UI/KeywordAliasesDescription=Reduce catalog clutter by reusing existing keywords"
 							),
 							enabled = bind("generateKeywords"),
+						}),
+					}),
+					-- Manual line breaks: `wrap` on static_text has no effect.
+					f:row({
+						visible = bind("localAliasWarning"),
+						f:spacer({ width = share("labelWidth") }),
+						f:static_text({
+							title = LOC(
+								"$$$/LrGeniusAI/UI/LocalAliasWarning=Warning: local models (MLX / llama.cpp) usually return no\nkeywords at all when aliases or bilingual keywords are on.\nTurn both off, or choose a cloud model."
+							),
+							text_color = LrColor(0.9, 0.55, 0.1),
+							size = "small",
 						}),
 					}),
 				}),
