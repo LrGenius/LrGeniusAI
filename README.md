@@ -10,9 +10,6 @@
   [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7X2240HF4)
 </div>
 
----
-
-> **Note:** The lead developer is currently [taking a break from open-source development](https://blog.fokuspunk.de/posts/taking-a-break-from-open-source/). The project remains available, but active maintenance is paused.
 
 ---
 
