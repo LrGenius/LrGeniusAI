@@ -8,7 +8,7 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 ### Does it send my photos to the cloud?
 
-Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Vertex AI). With local providers (Ollama, LM Studio) your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
+Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Vertex AI). With a local provider — the built-in llama.cpp and MLX engines, or an external Ollama / LM Studio server — your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
 ### Which Lightroom version is supported?
 
@@ -16,7 +16,7 @@ Adobe **Lightroom Classic** only. Lightroom CC (cloud) and other Lightroom versi
 
 ### Is it free?
 
-Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI) incurs costs at the respective provider's standard rates. Local models (Ollama, LM Studio) are completely free to run.
+Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI) incurs costs at the respective provider's standard rates. Local models are completely free to run — including the ones the backend downloads and runs itself, see [Local AI Models](Help-Local-AI-Models).
 
 ### Is there a more minimalist version?
 
@@ -57,8 +57,12 @@ See [Help: Choosing AI Model](Help-Choosing-AI-Model) for a full breakdown. Quic
 | Cheap bulk keywording | `gemini-2.5-flash-lite` or `gpt-5-nano` |
 | Balanced default | `gemini-2.5-flash` |
 | Best quality | `gemini-2.5-pro` or `gpt-5.4-pro` |
-| Privacy / no API cost | Ollama or LM Studio with `qwen3-vl:8b` |
-| Apple Silicon, local | LM Studio MLX build of `qwen3-vl` |
+| Privacy / no API cost | Built-in `llamacpp` with Gemma 4 E4B |
+| Apple Silicon, local | Built-in `mlx` with Gemma 4 E4B |
+
+### Can I run AI analysis without installing Ollama or LM Studio?
+
+Yes. The backend has two built-in engines — **llama.cpp** (GGUF; macOS, Windows, Linux) and **MLX** (Apple silicon). In *Plug-in Manager → LrGeniusAI* find the **Local AI Model** sections, pick a model, and click **Download**. Nothing else to install or keep running. See [Local AI Models](Help-Local-AI-Models).
 
 ### I don't see any models in the dropdown
 
@@ -66,6 +70,11 @@ The model list is loaded from the backend at runtime. If it's empty:
 1. Make sure the backend server is running and reachable (*Plugin Manager → Status*).
 2. Check that the relevant API key or local server URL is configured.
 3. For Ollama/LM Studio: the local server must be started before Lightroom is opened (or before running a task).
+4. For the built-in local engines: a model must be downloaded first — the **Installed** line in the Plug-in Manager tells you whether one is present.
+
+### Why is the MLX section greyed out?
+
+MLX only runs on Apple silicon Macs. On Windows, Linux, or an Intel Mac use the llama.cpp section instead — the status line names the exact reason.
 
 ### Where do I enter my API key?
 
@@ -90,6 +99,7 @@ Yes. Advanced Search only works on photos that have been indexed (embeddings cre
 ### The AI generated wrong or low-quality keywords
 
 - Try a more capable model (e.g. move from a small local model to `gemini-2.5-flash`).
+- With a local model, turn **off** keyword aliases and bilingual keywords — both make the model emit structured keyword objects, which small models handle badly (often returning no keywords at all).
 - Add **Photo Context** (folder names, capture date, GPS coordinates) to give the AI more information.
 - Write a custom **System Prompt** in *Plug-in Manager → Prompts* to guide the output style.
 - Adjust the **Temperature** slider — lower values produce more consistent output.

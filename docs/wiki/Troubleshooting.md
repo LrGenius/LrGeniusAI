@@ -66,7 +66,34 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 
 ---
 
-### 6. Ollama Not Responding / Not Invoked
+### 6. Built-In Local Model (llama.cpp / MLX) Not Available
+
+The backend can run models itself, in two independent engines: `llamacpp`
+(GGUF; macOS/Windows/Linux) and `mlx` (Apple silicon only). See
+[Local AI Models](Help-Local-AI-Models) for the full guide.
+
+- **Symptom:** The **Local AI Model** section says *"This backend does not
+  support MLX"* or *"MLX runs only on Apple silicon Macs"*.
+  - **Resolution:** Expected on Windows, Linux, and Intel Macs. Use the
+    llama.cpp section instead — it offers the same model families as GGUF.
+- **Symptom:** MLX is unavailable on an Apple silicon Mac, with a reason naming
+  a missing helper.
+  - **Resolution:** The `lrgenius-mlx` helper ships next to the server binary in
+    the macOS `.pkg`. Reinstall the backend with the official installer; if you
+    build from source, the helper needs `xcodebuild` plus the Metal toolchain
+    (see [Server README](Dev-Server-README)).
+- **Symptom:** *"This backend build has no local-model support"*.
+  - **Resolution:** The binary was compiled without the `llamacpp` feature.
+    Official releases include it — reinstall from the release page, or rebuild
+    with `cargo build --release -p lrg-server --features llamacpp`.
+- **Symptom:** A downloaded model does not appear in the model dropdown.
+  - **Resolution:** Check the **Installed** line in the Plug-in Manager. An
+    interrupted download is discarded rather than offered as a broken model, so
+    simply run the download again.
+
+---
+
+### 7. Ollama Not Responding / Not Invoked
 
 - **Symptom:** Analysis runs but Ollama shows no activity (`ollama ps` is empty), or connection errors to `localhost:11434`.
 - **Resolution:**
@@ -78,7 +105,7 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 
 ---
 
-### 7. LM Studio Not Responding
+### 8. LM Studio Not Responding
 
 - **Symptom:** Errors connecting to LM Studio, or model list shows no LM Studio models.
 - **Resolution:**
@@ -89,19 +116,20 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 
 ---
 
-### 8. Local Model Timeout
+### 9. Local Model Timeout
 
 Local AI models can take significantly longer than cloud APIs, especially without a dedicated GPU.
 
 - **Symptom:** Lightroom displays a timeout error during image analysis.
 - **Resolution:**
-  1. Ensure the model is fully loaded into memory before starting the batch (run a test prompt in Ollama/LM Studio first).
+  1. Ensure the model is fully loaded into memory before starting the batch. With Ollama/LM Studio, run a test prompt first; with the built-in engines, the first request of a session loads a multi-gigabyte model and is always the slowest.
   2. Process smaller batches (10–20 photos at a time) to avoid cumulative timeouts.
   3. Switch to a smaller model (4B instead of 12B) if your hardware can't sustain the load.
+  4. For the built-in llama.cpp engine: lower **Photos in parallel** to 1, and check **Layers on the GPU** — a model that does not fit in VRAM partially runs on the CPU and is far slower.
 
 ---
 
-### 9. No Metadata Generated
+### 10. No Metadata Generated
 
 - **Symptom:** Analysis completes without errors but no keywords/title/caption appear in Lightroom.
 - **Resolution:**
@@ -112,7 +140,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 10. Search Returns No Results
+### 11. Search Returns No Results
 
 - **Symptom:** Advanced Search runs but the results collection is empty or sparse.
 - **Resolution:**
@@ -123,7 +151,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 11. macOS Filesystem Permission Warning After Update
+### 12. macOS Filesystem Permission Warning After Update
 
 - **Symptom:** Lightroom shows a filesystem permissions warning on startup after installing or updating LrGeniusAI.
 - **Resolution:** Run Adobe's permission repair script:
@@ -133,7 +161,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 12. AI Edit Produces 500 Internal Server Error
+### 13. AI Edit Produces 500 Internal Server Error
 
 - **Symptom:** AI Edit fails with "HTTP status: 500" from the backend.
 - **Resolution:**
@@ -144,7 +172,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 13. Database Initialization Failed After Update
+### 14. Database Initialization Failed After Update
 
 - **Symptom:** "Failed to initialize database at the selected path" error when starting the backend or when Lightroom connects.
 - **Resolution:**
@@ -155,7 +183,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 14. Windows: Restart/Update Endpoint Not Working
+### 15. Windows: Restart/Update Endpoint Not Working
 
 - **Symptom:** "Check for Updates" or backend restart from within Lightroom fails on Windows.
 - **Resolution:** This is a known issue on Windows with the `/restart` endpoint. Restart the backend manually:

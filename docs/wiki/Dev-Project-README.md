@@ -10,6 +10,8 @@
   [![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)]()
   [![Website](https://img.shields.io/badge/Website-lrgenius.com-00B2FF?style=for-the-badge)]()
   [![Downloads](https://img.shields.io/github/downloads/LrGenius/LrGeniusAI/total?style=for-the-badge&label=Downloads)](https://github.com/LrGenius/LrGeniusAI/releases)
+
+  [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7X2240HF4)
 </div>
 
 ---
@@ -34,7 +36,8 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 - **📸 Image Culling *(beta)*:** Group similar photos into bursts or near-duplicate stacks, automatically pick the strongest frames, and create Lightroom collections for picks, alternates, reject candidates, and optional duplicates.
 - **👥 People & Faces:** Detect and cluster faces, assign names to persons, browse person collections, and find similar faces across your catalog.
 - **🔎 Find Similar Images:** Find near-duplicate or visually similar photos for any selected image using perceptual hash or semantic CLIP comparison.
-- **☁️ Local & Cloud Models:** Full support for local AI models via **Ollama** and **LM Studio**, as well as integration with cloud providers like **ChatGPT/OpenAI**, **Google Gemini**, and **Vertex AI**.
+- **🏠 Built-In Local AI (no external app):** The backend runs vision models itself — **llama.cpp** in-process (GGUF, all platforms; Metal on macOS, Vulkan on Windows) and **MLX** on Apple silicon via a small Metal helper process. Pick a model in the Plug-in Manager, click *Download*, and analysis runs entirely on your machine. Models you already have in LM Studio (or the Hugging Face cache) are picked up without a second copy.
+- **☁️ Local & Cloud Models:** Also supports local AI models via **Ollama** and **LM Studio**, as well as integration with cloud providers like **ChatGPT/OpenAI**, **Google Gemini**, and **Vertex AI**.
 - **🎨 Customizable Prompts & Temperature Control:** System prompts for the AI can be added, edited, and deleted directly within the Lightroom Plug-In Manager. Use the temperature slider to control whether the AI should be highly creative or strictly consistent.
 - **📝 Photo Context (Contextual Info):** Provide manual hints to the AI before analysis (e.g., names of people or specific background details) that aren't immediately obvious from the image itself. This can be done via a popup dialog or directly in Lightroom's metadata panel.
 - **🗂️ Keyword Management:** Interactive synonym deduplication and automatic de-clutter during indexing to keep your keyword catalog clean.
@@ -53,7 +56,8 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
      - **Windows:** Click *More info* -> *Run anyway*.
      - **macOS:** Right-click the `.pkg` -> *Open* -> *Open anyway*.
    - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
-4. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
+4. **Pick an AI model.** Either enter a cloud API key in the **Plug-in Manager**, or stay fully local: the **Local AI Model** sections offer a curated list of vision models (Gemma 4, Qwen3-VL, Qwen2.5-VL) — choose one and click *Download*. On Apple silicon use the **MLX** section, elsewhere the llama.cpp one. See [Local AI Models](https://github.com/LrGenius/LrGeniusAI/wiki/Help-Local-AI-Models).
+5. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
    - **Analyze & Index Photos...** — AI tagging, descriptions, and search index
    - **AI Edit Photos...** *(beta)* — generate and apply Lightroom develop edits
    - **Advanced Search...** — semantic free-text search
@@ -61,7 +65,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
    - **People...** — face clusters and named person collections
    - **Find Similar Images...** — find near-duplicates or visually similar photos
    - **Deduplicate Keyword Synonyms...** — clean up synonym sprawl in your catalog
-5. For AI Edit, start with defaults, keep **Review each proposed edit before applying it** enabled, and tune style via **Overall look** + **Style strength**.
+6. For AI Edit, start with defaults, keep **Review each proposed edit before applying it** enabled, and tune style via **Overall look** + **Style strength**.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
 
@@ -82,8 +86,9 @@ This project is built on the belief that AI tooling for creatives should remain 
 - **Backend / Server:** `geniusai-server` — Rust (axum) for deterministic memory behavior
 - **AI & Embedding:** SigLIP2 via ONNX Runtime (`ort` crate)
 - **Identity & Faces:** InsightFace (ONNX)
+- **Local Inference:** llama.cpp compiled into the backend (Metal / Vulkan / CPU), plus an MLX Swift helper (`lrgenius-mlx`) for Apple silicon
 - **Database:** LanceDB
-- **Supported Interfaces:** Google Gemini, Vertex AI, ChatGPT/OpenAI, Ollama, LM-Studio
+- **Supported Interfaces:** built-in llama.cpp, built-in MLX (Apple silicon), Google Gemini, Vertex AI, ChatGPT/OpenAI, Ollama, LM-Studio
 
 
 ---
@@ -101,6 +106,6 @@ Developed with a passion for photography and IT by:
 - **Community** – *Special thanks to all contributors and testers for your valuable input and support.*
 - **Various AI agents** - *For the great support in developing this project.*
 
-This project leverages many incredible open-source libraries, including **InsightFace**, **ONNX Runtime**, and **LanceDB**. 
+This project leverages many incredible open-source libraries, including **InsightFace**, **ONNX Runtime**, **LanceDB**, **llama.cpp**, and **MLX / mlx-swift-lm**. 
 
 A huge thank you to the open-source community and the developers of the underlying AI frameworks that make this integration possible!

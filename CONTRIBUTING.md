@@ -25,6 +25,21 @@ cd server-rs
 cargo build --release -p lrg-server
 ```
 
+The two **local inference engines** are opt-in for exactly this reason — nobody
+working on an unrelated crate should pay for their toolchains:
+
+- **llama.cpp** sits behind the `llamacpp` cargo feature (off by default), since
+  it compiles llama.cpp from source: needs `cmake` + `libclang`, and the Vulkan
+  SDK on Windows. Build with `--features llamacpp`, and keep
+  `cargo clippy --workspace --all-targets --features llamacpp` clean when you
+  touch that path.
+- **MLX** (Apple silicon) needs no cargo feature, but does need the
+  `lrgenius-mlx` sidecar built with `xcodebuild` plus the Metal toolchain.
+
+See [`server-rs/README.md`](server-rs/README.md) and
+[`native/mlx-sidecar/README.md`](native/mlx-sidecar/README.md) for the exact
+commands and the environment variables that point the server at models.
+
 #### Plugin (Lua)
 - The plugin code is located in the `plugin/LrGeniusAI.lrdevplugin` directory.
 - To test changes, you can link this directory into your Lightroom `Modules` folder or add it via the Lightroom **Plug-in Manager**.

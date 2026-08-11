@@ -140,8 +140,14 @@ If strict cross-catalog identity is important for your workflow, plan for re-ind
 In the plugin settings dialog you can configure:
 
 - Backend server URL
-- Ollama base URL
+- Ollama and LM Studio base URLs
 - API keys and Vertex settings
+- **Local AI Model (no external app)** — browse, download and select GGUF vision
+  models run in-process by the backend's llama.cpp engine, plus the advanced
+  knobs (context size, photos in parallel, layers on the GPU)
+- **Local AI Model — MLX (Apple silicon)** — the same, for models run through
+  Apple's MLX stack; the section reports why it is unavailable on hosts that
+  cannot use it
 - Export size and quality used for AI processing
 - Prompt presets
 - Optional CLIP model download for advanced search
