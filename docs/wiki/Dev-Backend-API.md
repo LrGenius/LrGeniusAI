@@ -24,7 +24,7 @@ Checks whether the backend version is compatible with the plugin version passed 
 Called by the Lightroom plugin on first connect. Accepts catalog/configuration parameters and initializes per-catalog state.
 
 ### `GET /models` / `POST /models`
-Returns the list of available AI models grouped by provider (Gemini, OpenAI, Ollama, LM Studio). Filters out providers that are not configured or not reachable.
+Returns the list of available AI models grouped by provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`). Filters out providers that are not configured or not reachable; the two local backends report what is installed on disk, so they are empty when no local model has been downloaded.
 
 ### `GET /logs`
 Returns recent log lines from the server log.
@@ -57,8 +57,11 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 |---|---|---|
 | `photo_id` | string | Stable file-based photo identifier |
 | `catalog_id` | string | Lightroom catalog identifier |
-| `provider` | string | LLM provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`) |
-| `model` | string | Model name within the provider |
+| `provider` | string | LLM provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`) |
+| `model` | string | Model name within the provider (for `llamacpp` the GGUF file name, for `mlx` the model directory name) |
+| `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = default) |
+| `llm_n_parallel` | int | `llamacpp` only: photos decoded concurrently |
+| `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
 | `generate_metadata` | bool | Generate keywords/title/caption/alt_text |
 | `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
 | `detect_faces` | bool | Run InsightFace detection on the photo |
@@ -241,6 +244,42 @@ Triggers a background download of the CLIP model.
 
 ### `GET /clip/download/status`
 Returns the current progress of an ongoing CLIP model download.
+
+---
+
+## Local LLM Management (llama.cpp & MLX)
+
+The backend hosts two local inference engines: `llamacpp` (in-process llama.cpp, GGUF models, present only in builds compiled with the `llamacpp` cargo feature) and `mlx` (an `lrgenius-mlx` helper process, Apple silicon only, no cargo feature). Both are exposed through the same routes — the MLX half is nested under an `mlx` key so that older plugins reading the top-level fields still see the llama.cpp engine.
+
+### `GET /llm/catalog`
+Lists local models that are installed and those offered for download.
+
+```json
+{
+  "installed":    [{ "name": "...", "model_path": "...", "mmproj_path": "...", "source": "downloaded|env|lmstudio" }],
+  "downloadable": [{ "id": "gemma4-e4b", "label": "...", "approx_bytes": 0, "min_ram_gb": 16, "installed": false }],
+  "supported":    true,
+  "model_dir":    "~/.cache/lrgenius/models/llm",
+  "mlx": {
+    "installed":    [{ "name": "gemma-4-e4b-it-4bit", "model_dir": "...", "source": "downloaded|env|lmstudio|huggingface" }],
+    "downloadable": [{ "id": "mlx-gemma4-e4b", "label": "...", "approx_bytes": 0, "min_ram_gb": 16, "installed": false }],
+    "supported":    false,
+    "reason":       "MLX runs only on Apple silicon Macs. …",
+    "model_dir":    "~/.cache/lrgenius/models/mlx"
+  }
+}
+```
+
+`supported: false` always carries a `reason` for MLX; for llama.cpp it means the binary was built without the `llamacpp` feature.
+
+### `GET /llm/status`
+Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with the MLX engine's equivalent nested under `mlx`.
+
+### `POST /llm/download/start`
+Starts a background download of a catalog entry. Body: `{ "id": "gemma4-e4b" }`. The id space is shared across both catalogs and the id alone selects the backend, so there is a single download queue: a GGUF pair is fetched as two files, an MLX entry as a repo snapshot staged into a `.part` directory and renamed on success.
+
+### `GET /llm/download/status`
+Progress of the current local-model download (same shape as the CLIP download status).
 
 ---
 

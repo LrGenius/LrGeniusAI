@@ -8,7 +8,15 @@ endpoint reference.
 
 Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
-clients), `lrg-api` (axum routers), `lrg-server` (the binary).
+clients), `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
+`lrg-mlx` (supervises the Apple silicon MLX sidecar), `lrg-api` (axum
+routers), `lrg-server` (the binary).
+
+There are two *local* LLM backends, selected as the `llamacpp` and `mlx`
+providers. They are independent — a build can have either, both, or neither —
+and both are served by the same `LocalEngine` trait in
+`lrg-providers/src/local_provider.rs`. Their build requirements differ, so they
+are covered separately below.
 
 ## Build & run locally
 
@@ -56,6 +64,37 @@ One gotcha when testing through Lightroom: the plugin auto-launches the
 *installed* binary, not your dev build. `startServer` pings port 19819 first and
 short-circuits when something already answers, so start your feature-enabled
 build by hand and the plugin will use that instead.
+
+### Optional native helper: the MLX sidecar (Apple silicon)
+
+`mlx` is the second local backend, and it is **not** behind a cargo feature:
+`lrg-mlx` only spawns and talks to a helper process, so it costs nothing to
+compile and availability is a runtime question (Apple silicon + an installed
+helper). What it does need is that helper built, and `swift build` will not do
+— SwiftPM on the command line cannot compile MLX's Metal shaders, and the
+binary it produces dies on the first inference with "Failed to load the default
+metallib":
+
+```bash
+xcodebuild -downloadComponent MetalToolchain          # ~690 MB, once per machine
+cd native/mlx-sidecar
+xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
+  -configuration Release -derivedDataPath .build/xcode \
+  -skipPackagePluginValidation -skipMacroValidation
+export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
+```
+
+Without it, `/llm/catalog` reports `mlx.supported: false` with a reason naming
+what is missing (wrong architecture, or no helper found). The sidecar is
+resolved from `LRG_MLX_SIDECAR`, then from next to the running server, which is
+how the shipped `.pkg` finds it. See
+[`native/mlx-sidecar/README.md`](../native/mlx-sidecar/README.md) for the
+JSON-lines protocol, why it is a separate process, and the model layout.
+
+```bash
+export LRG_TEST_MLX_MODEL_DIR=/path/to/mlx-community/gemma-4-e4b-it-4bit
+cargo test -p lrg-mlx --test sidecar_smoke -- --ignored
+```
 
 ## Model files
 
@@ -157,6 +196,38 @@ before use, logging which one it chose. `cargo run -p lrg-llama --example
 probe_template -- model.gguf` prints what a GGUF reports and which
 templates llama.cpp will accept — start there if a new model misbehaves.
 
+### Local LLM (MLX, Apple silicon)
+
+Same role as the section above, different artifacts: **an MLX model is a
+directory, not a file** — a Hugging Face repo snapshot with `config.json`, one
+or more safetensors shards, and the tokenizer files. Discovery therefore looks
+for directories that contain a `config.json` *and* at least one `.safetensors`
+(the config alone would match a half-finished download).
+
+`GET /llm/catalog` reports MLX under a nested `mlx` key alongside the GGUF half,
+including `supported`/`reason`, and `POST /llm/download/start` takes an MLX
+catalog id on the same route — the id alone picks the backend, so there is one
+download queue rather than two competing for the network.
+
+```bash
+# Use exactly this model (wins over any directory scan)
+export LRG_MLX_MODEL_DIR=/path/to/mlx-community/gemma-4-e4b-it-4bit
+
+# Root that downloads land in and discovery scans
+export LRG_MLX_MODEL_ROOT=~/.cache/lrgenius/models/mlx
+```
+
+Discovery also picks up `~/.lmstudio/models` (LM Studio has shipped an MLX
+engine for a long time) and the `huggingface-cli` cache at
+`~/.cache/huggingface/hub`, so a model pulled by hand needs no second copy.
+
+There are no tuning knobs to match llama.cpp's `n_ctx`/`n_parallel`/GPU layers,
+and that is not an oversight: `GuidedGenerationLoop.run` in mlx-swift-lm
+allocates a fresh KV cache per call, so there is no pinned prompt prefix to
+size a context window around, the preferred batch size is 1, and the grammar is
+compiled per request. The prompt is still sent pre-split and stable-first so the
+ordering is right if that changes upstream.
+
 ### Troubleshooting: `LRG_DISABLE_KLEIDIAI`
 
 Setting `LRG_DISABLE_KLEIDIAI=1` turns off ONNX Runtime's arm64 KleidiAI
@@ -188,6 +259,12 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 ```
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
+
+The image is built **without** the `llamacpp` feature and has no MLX sidecar, so
+neither local backend is available in a container — point the containerized
+server at Ollama or LM Studio, or use a cloud provider. Add
+`--features llamacpp` to the Dockerfile's `cargo build` (plus `cmake` and
+`libclang-dev` in the builder stage) if you want in-process inference there.
 
 Not yet implemented: the periodic face-clustering and database-backup
 schedulers — the `GENIUSAI_FACES_CLUSTER_*` / `GENIUSAI_BACKUP_*` env vars
@@ -222,6 +299,6 @@ prints RSS plus LanceDB cache size every 100 photos.
 ## Status
 
 This is the sole backend implementation (the earlier Python/Flask server
-has been retired). Still under active development on the `rust-rewrite`
-branch — see the plan and progress notes there before assuming a given
-endpoint or feature is fully live.
+has been retired) and it ships on `main`. Still under active development,
+so check `git log` before assuming a given endpoint or feature behaves the
+way an older note describes.

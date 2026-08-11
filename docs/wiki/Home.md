@@ -27,6 +27,7 @@ Welcome to the project wiki.
 ### AI model setup
 
 - [Help: Choosing AI Model](Help-Choosing-AI-Model) — cloud vs local, model comparison table
+- [Help: Local AI Models](Help-Local-AI-Models) — built-in llama.cpp & MLX engines, no external app
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
 - [Google Vertex AI Login](Google-Vertex-AI-Login)
@@ -57,7 +58,7 @@ Welcome to the project wiki.
 
 LrGeniusAI is an AI extension for Lightroom Classic. It runs a local backend server and connects it to the Lightroom plugin to provide:
 
-- **AI metadata generation** — keywords, titles, captions, alt text
+- **AI metadata generation** — keywords, titles, captions, alt text, via cloud APIs or models the backend runs locally itself
 - **AI develop edits** *(beta)* — per-photo Lightroom develop recipes with style presets
 - **Semantic free-text search** — find photos by describing them in natural language
 - **Image culling** *(beta)* — burst grouping, scoring, Picks/Alternates/Rejects collections

@@ -4,7 +4,7 @@ Welcome to LrGeniusAI! This guide will walk you through setting up the plugin, i
 
 ## 1. Install Plugin and Server
 
-To begin, you must install both the Lightroom Classic plugin frontend and the Python backend server. These components communicate locally to process your images without freezing the Lightroom UI. 
+To begin, you must install both the Lightroom Classic plugin frontend and the backend server (`geniusai-server`, a single Rust binary). These components communicate locally to process your images without freezing the Lightroom UI. 
 Please refer to the high-level installation instructions on the [root `README.md`](Dev-Project-README) or the detailed steps in the [`plugin/README.md`](Dev-Plugin-README).
 
 ### ⚠️ Bypassing Security Warnings (Unsigned Installers)
@@ -29,10 +29,24 @@ When you try to open the `.pkg` installer or the backend binary:
 
 Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:
 - **Set the Backend Server URL:** This defaults to `http://127.0.0.1:19819` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
-- **Configure Provider/API Keys:** If you plan to use cloud providers like OpenAI or Google Gemini, enter your API keys. For local providers like Ollama or LM Studio, ensure their respective base URLs are correctly configured.
+- **Configure Provider/API Keys:** If you plan to use cloud providers like OpenAI or Google Gemini, enter your API keys. For external local servers like Ollama or LM Studio, ensure their respective base URLs are correctly configured.
 - **Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.
 
 *Having trouble? Refer to the [Troubleshooting](Troubleshooting) guide for connectivity and API issues.*
+
+### Prefer to stay fully local? (no API key, no extra app)
+
+The backend can run vision models itself. In the same settings dialog, scroll to
+the **Local AI Model** sections:
+
+- **Local AI Model — MLX (Apple silicon)** on an Apple silicon Mac.
+- **Local AI Model (no external app)** — the built-in llama.cpp engine — on
+  Windows, Linux, or an Intel Mac.
+
+Pick a model (start with **Gemma 4 E4B**), click **Download**, and wait for the
+**Installed** line to list it. It then appears in the **AI Model** dropdown of
+every task as `mlx: …` or `llamacpp: …`. Full guide:
+[Local AI Models](Help-Local-AI-Models).
 
 ## 3. Index Photos
 
@@ -105,6 +119,7 @@ The `./gcloud:/root/.config/gcloud` bind mount keeps your ADC credentials intact
 - [Help: Find Similar Images](Help-Find-Similar)
 - [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter)
 - [Help: Choosing AI Model](Help-Choosing-AI-Model)
+- [Help: Local AI Models](Help-Local-AI-Models) — built-in llama.cpp and MLX engines
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
 - [Troubleshooting](Troubleshooting)

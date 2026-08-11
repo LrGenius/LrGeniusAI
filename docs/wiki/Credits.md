@@ -3,14 +3,18 @@
 LrGeniusAI is made possible by these amazing open-source projects and AI frameworks.
 
 ## Core Backend Dependencies
-- **InsightFace**: State-of-the-art face analysis and recognition. [GitHub](https://github.com/deepinsight/insightface)
-- **OpenCLIP**: Open-source implementation of OpenAI's CLIP. [GitHub](https://github.com/mlfoundations/open_clip)
-- **PyTorch**: Tensors and Dynamic neural networks in Python with strong GPU acceleration. [Website](https://pytorch.org/)
-- **ChromaDB**: The AI-native open-source embedding database. [Website](https://www.trychroma.com/)
-- **Transformers (Hugging Face)**: State-of-the-art Machine Learning for Pytorch, TensorFlow, and JAX. [Website](https://huggingface.co/transformers/)
-- **Flask / Waitress**: Lightweight WSGI web application framework and production-grade server.
-- **ONNX Runtime**: Cross-platform, high performance ML inferencing and training accelerator. [Website](https://onnxruntime.ai/)
-- **Scikit-learn**: Simple and efficient tools for predictive data analysis. [Website](https://scikit-learn.org/)
+- **InsightFace**: State-of-the-art face analysis and recognition; the `buffalo_l` models power face detection and recognition. [GitHub](https://github.com/deepinsight/insightface)
+- **SigLIP2 / OpenCLIP**: The vision-language models behind semantic search. [GitHub](https://github.com/mlfoundations/open_clip)
+- **ONNX Runtime**: Cross-platform, high performance ML inferencing, used via the `ort` crate for SigLIP2 and InsightFace. [Website](https://onnxruntime.ai/)
+- **LanceDB**: Embedded vector database storing embeddings and metadata. [Website](https://lancedb.com/)
+- **axum / tokio**: Async HTTP server and runtime for `geniusai-server`. [GitHub](https://github.com/tokio-rs/axum)
+- **Hugging Face Tokenizers**: Fast tokenizers used for the SigLIP2 text tower. [GitHub](https://github.com/huggingface/tokenizers)
+
+## Local Inference Engines
+- **llama.cpp**: Runs GGUF vision models in-process (Metal on macOS, Vulkan on Windows), via the `llama-cpp-2` bindings. [GitHub](https://github.com/ggml-org/llama.cpp)
+- **llguidance**: Turns JSON Schemas into decode-time constraints, so local models return valid structured output. [GitHub](https://github.com/guidance-ai/llguidance)
+- **MLX & mlx-swift-lm**: Apple's array framework and its language-model package, powering the `lrgenius-mlx` sidecar on Apple silicon. [GitHub](https://github.com/ml-explore/mlx-swift-lm)
+- **Gemma, Qwen-VL and SmolVLM**: The open-weights vision models offered in the built-in model catalogs.
 
 ## AI Model Providers & Interfaces
 - **Google Gemini**: Large language models for multimodal analysis.
@@ -21,10 +25,8 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 
 ## Utilities & SDKs
 - **JSON.lua**: A complete JSON encoder/decoder in Lua by Jeffrey Friedl.
-- **Pillow**: The friendly PIL fork for Python image processing.
-- **NumPy & Pandas**: Fundamental packages for scientific computing and data manipulation.
-- **Psutil**: Cross-platform library for process and system monitoring.
-- **Requests**: Elegant and simple HTTP library for Python built for human beings.
+- **Adobe Lightroom Classic SDK**: The Lua API the plugin frontend is built on.
+- **Hugging Face Hub**: Distribution for the downloadable local models.
 
 ---
 Developed by **Bastian Machek (LrGenius / Fokuspunk)** and **AI agents**.
