@@ -615,6 +615,11 @@ pub(crate) async fn process_batch(
                 }
                 Err(e) => {
                     failure_count += 1;
+                    // Logged, not just returned: the count on the line below is
+                    // all the log used to carry, so a run where every photo
+                    // failed for one fixable reason looked identical to one
+                    // where they each failed differently.
+                    log::warn!("Indexing failed for {filename}: {e}");
                     results.push(json!({
                         "photo_id": photo_id, "success": false, "error": e,
                     }));

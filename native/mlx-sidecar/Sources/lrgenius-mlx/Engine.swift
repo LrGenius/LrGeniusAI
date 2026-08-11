@@ -45,6 +45,16 @@ enum EngineError: LocalizedError {
 /// 6.)", which tells the user nothing and tells a maintainer almost nothing.
 /// `String(reflecting:)` prints the case name and its payload.
 func describe(_ error: Error) -> String {
+    // The one guided-generation failure a user can act on. It means the model
+    // was still mid-object when the token budget ran out, even after the
+    // closing bias tried to wind the answer down -- so say which setting moves,
+    // rather than surfacing "GuidedGenerationError.incompleteOutput".
+    if let guided = error as? GuidedGenerationError, case .incompleteOutput = guided {
+        return
+            "the model ran out of output tokens before it finished its JSON answer. Raise Max "
+            + "Tokens in the plugin (General tab → AI Model section) — try 4096 or higher. A large "
+            + "keyword taxonomy increases token usage significantly."
+    }
     if error is LocalizedError {
         return error.localizedDescription
     }
@@ -79,6 +89,19 @@ final class Engine {
     /// starts working upstream, caching a pristine template and cloning it is
     /// the optimization to make here.
     private var grammarTokenizer: GrammarTokenizer?
+
+    /// Logit bias favouring the tokens that *close* a JSON value (`"`, `}`,
+    /// `]`, digits, EOS), cached for the same reason as `grammarTokenizer`:
+    /// computing it walks the whole vocabulary.
+    ///
+    /// Without it, `GuidedGenerationLoop` disables its entire budget policy —
+    /// every zone check sits behind `if let bias = closingBias` — so a model
+    /// that is still mid-object when `maxTokens` runs out throws
+    /// `incompleteOutput` and the photo yields nothing at all. A photo with
+    /// many keywords hits that every time. With the bias in place the loop
+    /// steers toward closing the object as the budget runs down, so the answer
+    /// comes back valid and merely shorter.
+    private var closingBias: MLXArray?
 
     var isLoaded: Bool { loaded != nil }
 
@@ -136,6 +159,7 @@ final class Engine {
         loaded = Loaded(
             container: container, directory: directory, supportsVision: supportsVision)
         grammarTokenizer = nil
+        closingBias = nil
 
         let payload = EngineInfoPayload(
             modelPath: directory.path,
@@ -150,6 +174,7 @@ final class Engine {
         guard loaded != nil else { return }
         loaded = nil
         grammarTokenizer = nil
+        closingBias = nil
         // MLX keeps freed blocks in its own allocator pool, so dropping the
         // container is not by itself enough to return the weights to the OS.
         MLX.GPU.clearCache()
@@ -235,7 +260,17 @@ final class Engine {
                 context: context,
                 constraint: constraint,
                 maxTokens: spec.maxTokens,
-                vocabSize: vocabSize
+                vocabSize: vocabSize,
+                // Soft zone only (the library's default 64-token reserve).
+                // Deliberately no `hardReserve`: the hard zone suppresses every
+                // token that is not "closing", and `ClosingTokenBias` counts
+                // the digits 0-9 as closing (they finish a JSON *number*).
+                // Inside a string that forces digits, which yields structurally
+                // valid, semantically worthless output -- a measured
+                // `{"title": "19001", "caption": "19002"}`. Junk written into
+                // someone's catalog is worse than a failed photo, so the budget
+                // only ever nudges here, and a genuine overrun stays an error.
+                closingBias: self.bias(for: context)
             ) { delta in
                 output += delta
                 return true
@@ -271,6 +306,17 @@ final class Engine {
             fastForward: true,
             hostTokenizer: context.tokenizer)
         return (constraint, tokenizer.vocabSize)
+    }
+
+    /// The cached closing-token bias for the loaded model, computed on first use.
+    private func bias(for context: ModelContext) -> MLXArray {
+        if let closingBias {
+            return closingBias
+        }
+        let computed = ClosingTokenBias.compute(
+            tokenizer: context.tokenizer, eosTokenId: context.tokenizer.eosTokenId)
+        closingBias = computed
+        return computed
     }
 
     // MARK: - Images

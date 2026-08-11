@@ -42,7 +42,8 @@ cargo clippy --workspace --all-targets --features llamacpp   # must also be clea
 xcodebuild -downloadComponent MetalToolchain          # once per machine
 cd native/mlx-sidecar
 xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
-  -configuration Release -derivedDataPath .build/xcode -skipPackagePluginValidation
+  -configuration Release -derivedDataPath .build/xcode \
+  -skipPackagePluginValidation -skipMacroValidation
 export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
 ```
 
