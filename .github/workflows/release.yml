@@ -852,8 +852,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           docker buildx imagetools create \
             --tag "${IMG}:latest" \
-            "${IMG}:${TAG}-x64" \
-            "${IMG}:${TAG}-aarch64"
+            "${IMG}:${TAG}-x64" 
 
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')
