@@ -193,12 +193,28 @@ impl LlmProvider for LocalProvider {
                     return fail(&request.uuid, e);
                 }
                 match engine_results.next() {
-                    Some(Ok(output)) => Self::metadata_from_text(
-                        request,
-                        &output.text,
-                        output.prompt_tokens,
-                        output.completion_tokens,
-                    ),
+                    Some(Ok(output)) => {
+                        // `prefix_reused` exists only here — it is not part of
+                        // `MetadataGenerationResponse`. It is the one signal
+                        // that says whether the run-constant half of the
+                        // prompt (system prompt, keyword taxonomy) is being
+                        // re-prefilled for every photo, which silently turns
+                        // prefill into the dominant per-photo cost. The MLX
+                        // sidecar always reports false; llama.cpp reporting
+                        // false means its prefix cache did not engage.
+                        log::debug!(
+                            "local engine: prompt={} completion={} prefix_reused={}",
+                            output.prompt_tokens,
+                            output.completion_tokens,
+                            output.prefix_reused
+                        );
+                        Self::metadata_from_text(
+                            request,
+                            &output.text,
+                            output.prompt_tokens,
+                            output.completion_tokens,
+                        )
+                    }
                     Some(Err(e)) => fail(&request.uuid, e),
                     None => fail(
                         &request.uuid,
