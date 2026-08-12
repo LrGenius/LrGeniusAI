@@ -98,9 +98,9 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 ## 📬 Pull Request Process
 1. Create a new branch for your feature or bugfix: `git checkout -b feature/my-cool-feature`.
 2. Commit your changes. Ensure pre-commit hooks pass.
-3. Update `CHANGELOG.md` with a summary of your changes under the `[Unreleased]` section.
-4. Push to your fork and open a Pull Request against the `main` branch.
-5. Provide a clear description of the changes and how you verified them.
+3. Push to your fork and open a Pull Request against the `main` branch.
+4. Provide a clear description of the changes and how you verified them.
+5. Say in one sentence what changes for someone *using* the plugin (or "no user-visible change"). The release notes are generated from PR titles and descriptions — see [Release notes](#-release-notes) below.
 
 ---
 
@@ -111,6 +111,33 @@ When adding or modifying user-facing strings, you **must** update all three tran
 - `TranslatedStrings_fr.txt` (French)
 
 You can use the `sync_translations.py` script to help maintain consistency.
+
+---
+
+## 📝 Release notes
+Nobody writes the release notes by hand. When a `v*` tag is pushed, the release
+workflow runs `scripts/generate_release_notes.py`, which collects every pull
+request in the release and has a model on GitHub Models rewrite it for
+photographers — what is new, what got better, what was fixed — with the usual
+list of PR titles kept in a collapsed section below.
+
+What this means for you as a contributor:
+- The PR **title and description are the source material.** A description that
+  says what the change does for someone using the plugin produces a good line;
+  a title like `fix(server): handle nil in resolver` on its own produces a
+  vague one or gets dropped.
+- Purely internal work (tests, CI, refactors, dependency bumps) is deliberately
+  left out of the user-facing part, so there is no need to dress it up.
+
+Releases are created as **drafts**, so the generated text can be read and edited
+before publishing. To preview the notes for an existing tag:
+
+```bash
+GITHUB_TOKEN=<a token with repo read access> \
+  python3 scripts/generate_release_notes.py --repo LrGenius/LrGeniusAI --tag v2.20.1 --output -
+```
+
+Add `--no-llm` to see only the static download and troubleshooting sections.
 
 ---
 

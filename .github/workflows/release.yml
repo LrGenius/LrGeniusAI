@@ -861,6 +861,9 @@ jobs:
     name: Create Release
     permissions:
       contents: write
+      # Lets the release-notes step call GitHub Models with the built-in
+      # GITHUB_TOKEN, so no extra provider secret is needed.
+      models: read
 
     steps:
       - name: Checkout repository
@@ -961,11 +964,32 @@ jobs:
           echo "Generated update-manifest-${VERSION}.json"
           cat "update-manifest-${VERSION}.json" | python3 -c "import sys,json; m=json.load(sys.stdin); print(f'Manifest: {len(m[\"platforms\"])} platform binaries, {len(m[\"plugin_files\"])} plugin files, breaking={m[\"breaking_changes\"]}')"
 
+      # Rewrites the changelog for the people who actually install this: the
+      # release body becomes plain-language notes, with GitHub's PR-title list
+      # kept in a collapsed section underneath. Reads the manifest generated
+      # above to say whether the in-Lightroom updater can handle this release
+      # or the full installer is required, so this step must run after it.
+      # Never fails the release — without the model it falls back to the
+      # auto-generated changelog and logs a warning.
+      - name: Generate user-facing release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          python3 scripts/generate_release_notes.py \
+            --repo "${{ github.repository }}" \
+            --tag "${VERSION}" \
+            --manifest "update-manifest-${VERSION}.json" \
+            --output release_notes.md
+          echo "=== Release body ==="
+          cat release_notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ steps.release-meta.outputs.release_name }}
+          body_path: release_notes.md
           files: |
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
             artifacts/lrgenius-ai-macos-arm64/*.pkg
@@ -974,6 +998,5 @@ jobs:
             update-manifest-${{ github.ref_name }}.json
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
