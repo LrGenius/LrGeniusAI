@@ -1,18 +1,13 @@
 //! Port of `services/index.py::_aggregate_face_culling_metrics`: rolls a
 //! photo's per-face quality scores into one set of photo-level culling
-//! fields. Constants from `config.BASE_CULLING_CONFIG["face_metrics"]`.
+//! fields.
+//!
+//! Tunables come from [`FaceMetricsConfig`]; they used to be private `const`s
+//! here that shadowed the identically-named preset fields, so no culling preset
+//! could move them. `FaceMetricsConfig::defaults()` reproduces the old values
+//! exactly.
 
-const PROMINENCE_NORMALIZER: f64 = 0.12;
-const VISIBILITY_DET_WEIGHT: f64 = 0.5;
-const VISIBILITY_CENTER_WEIGHT: f64 = 0.5;
-const OCCLUSION_DET_WEIGHT: f64 = 0.55;
-const OCCLUSION_CENTER_WEIGHT: f64 = 0.20;
-const OCCLUSION_EYE_WEIGHT: f64 = 0.25;
-const SCORE_WEIGHT_SHARPNESS: f64 = 0.35;
-const SCORE_WEIGHT_PROMINENCE: f64 = 0.25;
-const SCORE_WEIGHT_VISIBILITY: f64 = 0.20;
-const SCORE_WEIGHT_EYE_OPENNESS: f64 = 0.20;
-const SCORE_WEIGHT_OCCLUSION: f64 = 0.15;
+use lrg_imaging::cull_config::FaceMetricsConfig;
 
 fn unit(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
@@ -65,7 +60,10 @@ impl AggregatedFaceMetrics {
     }
 }
 
-pub fn aggregate_face_culling_metrics(faces: &[FaceMetricsInput]) -> AggregatedFaceMetrics {
+pub fn aggregate_face_culling_metrics(
+    faces: &[FaceMetricsInput],
+    cfg: &FaceMetricsConfig,
+) -> AggregatedFaceMetrics {
     if faces.is_empty() {
         return AggregatedFaceMetrics::empty();
     }
@@ -73,14 +71,14 @@ pub fn aggregate_face_culling_metrics(faces: &[FaceMetricsInput]) -> AggregatedF
     let sharpness: Vec<f64> = faces.iter().map(|f| unit(f.sharpness)).collect();
     let prominence: Vec<f64> = faces
         .iter()
-        .map(|f| unit(f.area_ratio / PROMINENCE_NORMALIZER))
+        .map(|f| unit(f.area_ratio / cfg.prominence_normalizer))
         .collect();
     let visibility: Vec<f64> = faces
         .iter()
         .map(|f| {
             unit(
-                VISIBILITY_DET_WEIGHT * unit(f.det_score)
-                    + VISIBILITY_CENTER_WEIGHT * unit(f.center_proximity),
+                cfg.visibility_det_weight * unit(f.det_score)
+                    + cfg.visibility_center_weight * unit(f.center_proximity),
             )
         })
         .collect();
@@ -91,9 +89,9 @@ pub fn aggregate_face_culling_metrics(faces: &[FaceMetricsInput]) -> AggregatedF
         .map(|f| match f.occlusion {
             Some(v) => unit(v),
             None => unit(
-                1.0 - (OCCLUSION_DET_WEIGHT * unit(f.det_score)
-                    + OCCLUSION_CENTER_WEIGHT * unit(f.center_proximity)
-                    + OCCLUSION_EYE_WEIGHT * unit(f.eye_openness)),
+                1.0 - (cfg.occlusion_det_weight * unit(f.det_score)
+                    + cfg.occlusion_center_weight * unit(f.center_proximity)
+                    + cfg.occlusion_eye_weight * unit(f.eye_openness)),
             ),
         })
         .collect();
@@ -109,16 +107,16 @@ pub fn aggregate_face_culling_metrics(faces: &[FaceMetricsInput]) -> AggregatedF
     let blink_penalty_agg = min_of(&blink_penalty);
     let occlusion_agg = min_of(&occlusion);
 
-    let weight_total = SCORE_WEIGHT_SHARPNESS
-        + SCORE_WEIGHT_PROMINENCE
-        + SCORE_WEIGHT_VISIBILITY
-        + SCORE_WEIGHT_EYE_OPENNESS
-        + SCORE_WEIGHT_OCCLUSION;
-    let face_score_raw = SCORE_WEIGHT_SHARPNESS * face_sharpness
-        + SCORE_WEIGHT_PROMINENCE * face_prominence
-        + SCORE_WEIGHT_VISIBILITY * face_visibility
-        + SCORE_WEIGHT_EYE_OPENNESS * eye_openness_agg
-        + SCORE_WEIGHT_OCCLUSION * (1.0 - occlusion_agg);
+    let weight_total = cfg.score_weight_sharpness
+        + cfg.score_weight_prominence
+        + cfg.score_weight_visibility
+        + cfg.score_weight_eye_openness
+        + cfg.score_weight_occlusion;
+    let face_score_raw = cfg.score_weight_sharpness * face_sharpness
+        + cfg.score_weight_prominence * face_prominence
+        + cfg.score_weight_visibility * face_visibility
+        + cfg.score_weight_eye_openness * eye_openness_agg
+        + cfg.score_weight_occlusion * (1.0 - occlusion_agg);
     let face_score = unit(face_score_raw / weight_total.max(1e-6));
 
     AggregatedFaceMetrics {
@@ -138,9 +136,13 @@ pub fn aggregate_face_culling_metrics(faces: &[FaceMetricsInput]) -> AggregatedF
 mod tests {
     use super::*;
 
+    fn fm() -> FaceMetricsConfig {
+        FaceMetricsConfig::defaults()
+    }
+
     #[test]
     fn empty_input_returns_documented_defaults() {
-        let m = aggregate_face_culling_metrics(&[]);
+        let m = aggregate_face_culling_metrics(&[], &fm());
         assert_eq!(m.cull_face_count, 0);
         assert_eq!(m.cull_blink_penalty, 1.0);
         assert!(!m.cull_faces_present);
@@ -150,14 +152,14 @@ mod tests {
     fn single_perfect_face_scores_near_one() {
         let faces = vec![FaceMetricsInput {
             sharpness: 1.0,
-            area_ratio: PROMINENCE_NORMALIZER, // ratio 1.0 after normalize
+            area_ratio: fm().prominence_normalizer, // ratio 1.0 after normalize
             det_score: 1.0,
             center_proximity: 1.0,
             eye_openness: 1.0,
             blink_penalty: 0.0,
             occlusion: Some(0.0),
         }];
-        let m = aggregate_face_culling_metrics(&faces);
+        let m = aggregate_face_culling_metrics(&faces, &fm());
         assert_eq!(m.cull_face_count, 1);
         assert!(m.cull_face_score > 0.95, "score {}", m.cull_face_score);
         assert_eq!(m.cull_blink_penalty, 0.0);
@@ -180,8 +182,8 @@ mod tests {
             occlusion: Some(0.0),
             ..Default::default()
         }];
-        let a = aggregate_face_culling_metrics(&with_none);
-        let b = aggregate_face_culling_metrics(&with_zero);
+        let a = aggregate_face_culling_metrics(&with_none, &fm());
+        let b = aggregate_face_culling_metrics(&with_zero, &fm());
         assert_ne!(a.cull_occlusion, b.cull_occlusion);
         // recomputed: 1 - (0.55*0.5 + 0.20*0.5 + 0.25*0.5) = 1 - 0.5 = 0.5
         assert!((a.cull_occlusion - 0.5).abs() < 1e-9);
@@ -205,7 +207,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let m = aggregate_face_culling_metrics(&faces);
+        let m = aggregate_face_culling_metrics(&faces, &fm());
         assert_eq!(m.cull_face_sharpness, 0.8); // max
         assert_eq!(m.cull_eye_openness, 0.9); // max
         assert_eq!(m.cull_blink_penalty, 0.1); // min

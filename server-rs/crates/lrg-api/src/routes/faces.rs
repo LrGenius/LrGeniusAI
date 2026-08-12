@@ -11,6 +11,7 @@ use axum::{
     Json, Router,
 };
 use base64::Engine;
+use lrg_imaging::cull_config::FaceMetricsConfig;
 use serde_json::{json, Value};
 
 use lrg_analysis::{clustering, persons};
@@ -70,7 +71,10 @@ async fn detect(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    match state.face.detect_faces(&pixels, w, h) {
+    match state
+        .face
+        .detect_faces(&pixels, w, h, &FaceMetricsConfig::defaults())
+    {
         Ok(faces) => {
             let result: Vec<Value> = faces
                 .iter()
@@ -100,7 +104,10 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
     let n_results = data.get("n_results").and_then(Value::as_u64).unwrap_or(10) as usize;
     let face_index = data.get("face_index").and_then(Value::as_u64).unwrap_or(0) as usize;
 
-    let faces = match state.face.detect_faces(&pixels, w, h) {
+    let faces = match state
+        .face
+        .detect_faces(&pixels, w, h, &FaceMetricsConfig::defaults())
+    {
         Ok(f) => f,
         Err(e) => {
             log::error!("Face detection failed: {e}");

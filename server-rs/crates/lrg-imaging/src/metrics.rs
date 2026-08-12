@@ -2,6 +2,7 @@
 //! 64-bit DCT pHash, bit-exact with the Python implementation thanks to
 //! the Pillow-exact resampler) and `_compute_culling_metrics`.
 
+use crate::cull_config::ImageMetricsConfig;
 use crate::pil_resample::{resize_plane, rgb_to_luma, Filter};
 
 /// An 8-bit RGB image in row-major interleaved layout.
@@ -108,24 +109,6 @@ impl CullingMetrics {
     }
 }
 
-// Defaults from BASE_CULLING_CONFIG["image_metrics"] in config.py.
-const SHARPNESS_DENOMINATOR: f64 = 0.015;
-const HIGHLIGHT_THRESHOLD: f32 = 0.98;
-const SHADOW_THRESHOLD: f32 = 0.02;
-const HIGHLIGHT_CLIP_WEIGHT: f64 = 2.5;
-const SHADOW_CLIP_WEIGHT: f64 = 2.0;
-const EXPOSURE_TARGET: f64 = 0.5;
-const EXPOSURE_TOLERANCE: f64 = 0.35;
-const EXPOSURE_BALANCE_WEIGHT: f64 = 0.75;
-const EXPOSURE_CLIP_WEIGHT: f64 = 0.25;
-const NOISE_DENOMINATOR: f64 = 0.08;
-const TECHNICAL_WEIGHT_SHARPNESS: f64 = 0.5;
-const TECHNICAL_WEIGHT_EXPOSURE: f64 = 0.35;
-const TECHNICAL_WEIGHT_NOISE: f64 = 0.15;
-const AESTHETIC_CONTRAST_WEIGHT: f64 = 0.45;
-const AESTHETIC_COLORFULNESS_WEIGHT: f64 = 0.35;
-const AESTHETIC_EXPOSURE_WEIGHT: f64 = 0.20;
-
 fn unit(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
@@ -143,7 +126,10 @@ fn py_round(v: f64) -> i64 {
 /// Port of `_compute_culling_metrics`. Mean/variance accumulate in f64,
 /// matching numpy's pairwise-summation accuracy closely enough for the
 /// 1e-4 rounding in the output.
-pub fn culling_metrics(image: &RgbImage) -> CullingMetrics {
+///
+/// `cfg` carries what used to be file-private constants; passing
+/// [`ImageMetricsConfig::default`] reproduces the historical numbers exactly.
+pub fn culling_metrics(image: &RgbImage, cfg: &ImageMetricsConfig) -> CullingMetrics {
     let (w, h) = (image.width, image.height);
     if w == 0 || h == 0 {
         return CullingMetrics::failed();
@@ -208,8 +194,11 @@ pub fn culling_metrics(image: &RgbImage) -> CullingMetrics {
     let lap_n = (iw * ih) as f64;
     let lap_mean = lap_sum / lap_n;
     let sharpness_raw = lap_sq_sum / lap_n - lap_mean * lap_mean;
-    let sharpness = unit(sharpness_raw / (sharpness_raw + SHARPNESS_DENOMINATOR));
+    let sharpness = unit(sharpness_raw / (sharpness_raw + cfg.sharpness_denominator));
 
+    // Compared against f32 luma, so narrow once rather than widening per pixel.
+    let highlight_threshold = cfg.highlight_threshold as f32;
+    let shadow_threshold = cfg.shadow_threshold as f32;
     let mut lum_sum = 0.0f64;
     let mut highlight = 0usize;
     let mut shadow = 0usize;
@@ -217,10 +206,10 @@ pub fn culling_metrics(image: &RgbImage) -> CullingMetrics {
     for &v in &gray {
         lum_sum += v as f64;
         gray_sq_sum += (v as f64) * (v as f64);
-        if v >= HIGHLIGHT_THRESHOLD {
+        if v >= highlight_threshold {
             highlight += 1;
         }
-        if v <= SHADOW_THRESHOLD {
+        if v <= shadow_threshold {
             shadow += 1;
         }
     }
@@ -228,12 +217,12 @@ pub fn culling_metrics(image: &RgbImage) -> CullingMetrics {
     let highlight_clip = highlight as f64 / n as f64;
     let shadow_clip = shadow as f64 / n as f64;
     let clipping_penalty =
-        unit(highlight_clip * HIGHLIGHT_CLIP_WEIGHT + shadow_clip * SHADOW_CLIP_WEIGHT);
+        unit(highlight_clip * cfg.highlight_clip_weight + shadow_clip * cfg.shadow_clip_weight);
     let exposure_balance =
-        unit(1.0 - ((luminance_mean - EXPOSURE_TARGET).abs() / EXPOSURE_TOLERANCE));
+        unit(1.0 - ((luminance_mean - cfg.exposure_target).abs() / cfg.exposure_tolerance));
     let exposure = unit(
-        EXPOSURE_BALANCE_WEIGHT * exposure_balance
-            + EXPOSURE_CLIP_WEIGHT * (1.0 - clipping_penalty),
+        cfg.exposure_balance_weight * exposure_balance
+            + cfg.exposure_clip_weight * (1.0 - clipping_penalty),
     );
 
     // 3x3 box-blur residual noise estimate over the interior.
@@ -263,21 +252,21 @@ pub fn culling_metrics(image: &RgbImage) -> CullingMetrics {
     } else {
         resid_all_sum / lap_n
     };
-    let noise_penalty = unit(noise_raw / NOISE_DENOMINATOR);
+    let noise_penalty = unit(noise_raw / cfg.noise_denominator);
 
     let technical_score = unit(
-        TECHNICAL_WEIGHT_SHARPNESS * sharpness
-            + TECHNICAL_WEIGHT_EXPOSURE * exposure
-            + TECHNICAL_WEIGHT_NOISE * (1.0 - noise_penalty),
+        cfg.technical_weight_sharpness * sharpness
+            + cfg.technical_weight_exposure * exposure
+            + cfg.technical_weight_noise * (1.0 - noise_penalty),
     );
 
     let gray_var = gray_sq_sum / n as f64 - luminance_mean * luminance_mean;
     let contrast = unit(gray_var.max(0.0).sqrt() / 0.25);
     let colorfulness = unit(rg_yb_sum / n as f64 / 0.35);
     let aesthetic_score = unit(
-        AESTHETIC_CONTRAST_WEIGHT * contrast
-            + AESTHETIC_COLORFULNESS_WEIGHT * colorfulness
-            + AESTHETIC_EXPOSURE_WEIGHT * exposure,
+        cfg.aesthetic_contrast_weight * contrast
+            + cfg.aesthetic_colorfulness_weight * colorfulness
+            + cfg.aesthetic_exposure_weight * exposure,
     );
 
     CullingMetrics {

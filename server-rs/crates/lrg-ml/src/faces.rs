@@ -11,6 +11,7 @@ use base64::Engine;
 use ort::session::Session;
 use ort::value::Tensor;
 
+use lrg_imaging::cull_config::FaceMetricsConfig;
 use lrg_imaging::pil_resample::{resize_plane, Filter};
 
 use crate::{arcface, face_quality, scrfd, umeyama};
@@ -201,6 +202,7 @@ impl FaceModel {
         pixels: &[u8],
         width: usize,
         height: usize,
+        cfg: &FaceMetricsConfig,
     ) -> Result<Vec<FaceResult>, FaceError> {
         self.ensure_loaded()?;
         let mut guard = self.loaded.lock().unwrap();
@@ -252,9 +254,9 @@ impl FaceModel {
             );
 
             let area_ratio = (((x2 - x1) * (y2 - y1)) as f64 / image_area).clamp(0.0, 1.0);
-            let sharpness = face_quality::face_sharpness(&crop, cw, ch);
+            let sharpness = face_quality::face_sharpness(&crop, cw, ch, cfg);
             let eye_openness =
-                face_quality::eye_openness_proxy(&crop, cw, ch, [x1, y1, x2, y2], &kps_f64);
+                face_quality::eye_openness_proxy(&crop, cw, ch, [x1, y1, x2, y2], &kps_f64, cfg);
 
             let center_x = (x1 + x2) as f64 / 2.0;
             let center_y = (y1 + y2) as f64 / 2.0;
@@ -264,7 +266,7 @@ impl FaceModel {
 
             let det_score = det.score as f64;
             let occlusion =
-                face_quality::occlusion_proxy(det_score, center_proximity, eye_openness);
+                face_quality::occlusion_proxy(det_score, center_proximity, eye_openness, cfg);
             let thumbnail_base64 = thumbnail_112_jpeg(&crop, cw, ch);
 
             results.push(FaceResult {

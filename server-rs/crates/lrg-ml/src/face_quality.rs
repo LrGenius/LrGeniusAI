@@ -1,16 +1,14 @@
 //! Face-crop quality proxies — port of the numpy math in
 //! `services/face.py`: Laplacian sharpness, a cheap vertical-gradient
 //! eye-openness proxy, and an occlusion proxy blending det/center/eye
-//! signals. Constants from `config.BASE_CULLING_CONFIG["face_metrics"]`.
+//! signals.
+//!
+//! Tunables come from [`FaceMetricsConfig`]; they used to be private `const`s
+//! here that shadowed the identically-named preset fields, so no culling preset
+//! could move them. `FaceMetricsConfig::defaults()` reproduces the old values
+//! exactly.
 
-const FACE_SHARPNESS_DENOMINATOR: f64 = 0.02;
-const EYE_PATCH_RATIO: f64 = 0.08;
-const EYE_PATCH_RADIUS_MIN: i64 = 2;
-const EYE_PATCH_RADIUS_MAX: i64 = 8;
-const EYE_OPENNESS_DENOMINATOR: f64 = 0.07;
-const OCCLUSION_DET_WEIGHT: f64 = 0.55;
-const OCCLUSION_CENTER_WEIGHT: f64 = 0.20;
-const OCCLUSION_EYE_WEIGHT: f64 = 0.25;
+use lrg_imaging::cull_config::FaceMetricsConfig;
 
 fn unit(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
@@ -22,7 +20,7 @@ fn luma(rgb: &[u8], w: usize, x: usize, y: usize) -> f64 {
 }
 
 /// Port of `_compute_face_sharpness`.
-pub fn face_sharpness(crop: &[u8], w: usize, h: usize) -> f64 {
+pub fn face_sharpness(crop: &[u8], w: usize, h: usize, cfg: &FaceMetricsConfig) -> f64 {
     if w == 0 || h == 0 || w < 3 || h < 3 {
         return 0.0;
     }
@@ -46,7 +44,7 @@ pub fn face_sharpness(crop: &[u8], w: usize, h: usize) -> f64 {
     }
     let mean = sum / n as f64;
     let variance = sq_sum / n as f64 - mean * mean;
-    unit(variance / (variance + FACE_SHARPNESS_DENOMINATOR))
+    unit(variance / (variance + cfg.face_sharpness_denominator))
 }
 
 /// Port of `_compute_eye_openness_proxy`. `kps` are crop-local-origin
@@ -59,14 +57,15 @@ pub fn eye_openness_proxy(
     h: usize,
     bbox: [i64; 4],
     kps: &[[f64; 2]; 5],
+    cfg: &FaceMetricsConfig,
 ) -> f64 {
     if w == 0 || h == 0 || w < 6 || h < 6 {
         return 0.0;
     }
     let (x1, y1, x2, y2) = (bbox[0], bbox[1], bbox[2], bbox[3]);
     let face_span = ((x2 - x1).min(y2 - y1) as f64).max(4.0);
-    let patch_radius = ((face_span * EYE_PATCH_RATIO).round() as i64)
-        .clamp(EYE_PATCH_RADIUS_MIN, EYE_PATCH_RADIUS_MAX);
+    let patch_radius = ((face_span * cfg.eye_patch_ratio).round() as i64)
+        .clamp(cfg.eye_patch_radius_min, cfg.eye_patch_radius_max);
 
     let mut scores = Vec::new();
     for eye in kps.iter().take(2) {
@@ -94,7 +93,7 @@ pub fn eye_openness_proxy(
             continue;
         }
         let score_raw = grad_sum / grad_n as f64;
-        scores.push(unit(score_raw / (score_raw + EYE_OPENNESS_DENOMINATOR)));
+        scores.push(unit(score_raw / (score_raw + cfg.eye_openness_denominator)));
     }
     if scores.is_empty() {
         0.0
@@ -104,11 +103,16 @@ pub fn eye_openness_proxy(
 }
 
 /// Port of `_compute_occlusion_proxy`.
-pub fn occlusion_proxy(det_score: f64, center_proximity: f64, eye_openness: f64) -> f64 {
+pub fn occlusion_proxy(
+    det_score: f64,
+    center_proximity: f64,
+    eye_openness: f64,
+    cfg: &FaceMetricsConfig,
+) -> f64 {
     unit(
-        1.0 - (OCCLUSION_DET_WEIGHT * unit(det_score)
-            + OCCLUSION_CENTER_WEIGHT * unit(center_proximity)
-            + OCCLUSION_EYE_WEIGHT * unit(eye_openness)),
+        1.0 - (cfg.occlusion_det_weight * unit(det_score)
+            + cfg.occlusion_center_weight * unit(center_proximity)
+            + cfg.occlusion_eye_weight * unit(eye_openness)),
     )
 }
 
@@ -119,19 +123,22 @@ mod tests {
     #[test]
     fn flat_crop_has_zero_sharpness() {
         let crop = vec![128u8; 20 * 20 * 3];
-        assert_eq!(face_sharpness(&crop, 20, 20), 0.0);
+        assert_eq!(
+            face_sharpness(&crop, 20, 20, &FaceMetricsConfig::defaults()),
+            0.0
+        );
     }
 
     #[test]
     fn occlusion_is_low_when_all_signals_strong() {
         // High det score, centered, eyes open -> low occlusion.
-        let occ = occlusion_proxy(0.95, 0.9, 0.8);
+        let occ = occlusion_proxy(0.95, 0.9, 0.8, &FaceMetricsConfig::defaults());
         assert!(occ < 0.15, "occlusion {occ} should be low");
     }
 
     #[test]
     fn occlusion_is_high_when_all_signals_weak() {
-        let occ = occlusion_proxy(0.1, 0.1, 0.1);
+        let occ = occlusion_proxy(0.1, 0.1, 0.1, &FaceMetricsConfig::defaults());
         assert!(occ > 0.85, "occlusion {occ} should be high");
     }
 }

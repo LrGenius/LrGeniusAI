@@ -323,3 +323,239 @@ async fn check_unprocessed_reports_only_missing_work() {
     assert_eq!(json["photo_ids"], serde_json::json!(["p2", "p3"]));
     assert_eq!(json["uuids"], json["photo_ids"]);
 }
+
+// ---------------------------------------------------------------------------
+// /cull + /group_similar
+//
+// These had no contract coverage at all, which is how several of the fields
+// below drifted: `debug` was always serialized even though the plugin never
+// reads it, and the `warning` string was driven by whether SigLIP happened to
+// be resident in RAM rather than by whether the photos had embeddings.
+// ---------------------------------------------------------------------------
+
+/// Seeds `count` photos one second apart with identical pHashes, i.e. an
+/// obvious burst that grouping must collapse into a single group.
+async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
+    let store = state.store().unwrap();
+    let records: Vec<lrg_store::StoreRecord> = (0..count)
+        .map(|i| {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "filename".into(),
+                serde_json::json!(format!("burst{i}.jpg")),
+            );
+            meta.insert("capture_time".into(), serde_json::json!(1_700_000_000 + i));
+            meta.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+            // Descending sharpness so the winner is deterministic: photo 0.
+            meta.insert(
+                "cull_sharpness".into(),
+                serde_json::json!(0.9 - 0.1 * i as f64),
+            );
+            meta.insert("cull_exposure".into(), serde_json::json!(0.8));
+            meta.insert("cull_noise".into(), serde_json::json!(0.1));
+            lrg_store::StoreRecord {
+                id: format!("burst{i}"),
+                vector: with_embedding.then(|| vec![0.5f32; 1152]),
+                metadata: meta,
+            }
+        })
+        .collect();
+    store
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+async fn cull_request(app: axum::Router, body: serde_json::Value) -> serde_json::Value {
+    let response = app
+        .oneshot(
+            Request::post("/cull")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body_json(response).await
+}
+
+#[tokio::test]
+async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    assert_eq!(json["status"], "success");
+    // TaskCullPhotos.lua reads every one of these summary fields.
+    let summary = &json["summary"];
+    assert_eq!(summary["group_count"], 1);
+    assert_eq!(summary["pick_count"], 1);
+    assert_eq!(summary["culling_preset"], "default");
+    assert_eq!(summary["unindexed_count"], 0);
+
+    let group = &json["groups"][0];
+    assert_eq!(group["group_size"], 3);
+    assert_eq!(group["winner_photo_id"], "burst0", "sharpest must win");
+    assert!(group["photo_ids"].as_array().unwrap().len() == 3);
+
+    // Per-photo fields the plugin writes into catalog metadata.
+    let winner = &group["photos"][0];
+    assert_eq!(winner["winner"], true);
+    assert_eq!(winner["rank"], 1);
+    assert!(winner["cull_score"].is_number());
+    assert!(winner["reason_codes"].is_array());
+    assert!(winner["explanation"].is_string());
+    assert!(winner["metrics"].is_object());
+}
+
+#[tokio::test]
+async fn cull_omits_debug_block_unless_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app.clone(),
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db_path_str}),
+    )
+    .await;
+    assert!(
+        json["groups"][0]["debug"].is_null(),
+        "debug must be off by default: it is O(k^2) floats the plugin never reads"
+    );
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "include_debug": true,
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+    let debug = &json["groups"][0]["debug"];
+    assert!(debug["thresholds"].is_object());
+    assert!(debug["pairwise_distances"].is_array());
+    assert_eq!(debug["culling_preset"], "default");
+}
+
+#[tokio::test]
+async fn cull_warns_about_unindexed_photos_instead_of_dropping_them_silently() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 2, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "never-indexed"],
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    assert_eq!(json["summary"]["unindexed_count"], 1);
+    let warning = json["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("not been analyzed"),
+        "expected an unindexed-photo warning, got {warning:?}"
+    );
+}
+
+#[tokio::test]
+async fn cull_warning_tracks_stored_embeddings_not_model_residency() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    // Embeddings present, SigLIP definitely not resident in this test process.
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db_path_str}),
+    )
+    .await;
+
+    assert!(
+        json["warning"].is_null(),
+        "an idle-unloaded model must not be reported as broken grouping, got {:?}",
+        json["warning"]
+    );
+}
+
+#[tokio::test]
+async fn cull_warns_when_no_embeddings_are_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, false).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db_path_str}),
+    )
+    .await;
+
+    let warning = json["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("perceptual hashes"),
+        "expected a pHash-only fallback warning, got {warning:?}"
+    );
+    // Grouping still works from pHash + capture time.
+    assert_eq!(json["summary"]["group_count"], 1);
+}
+
+#[tokio::test]
+async fn cull_rejects_unknown_preset_with_the_available_list() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/cull")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"photo_ids": ["a"], "culling_preset": "nope"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    let presets = json["available_presets"].as_array().unwrap();
+    assert!(presets.iter().any(|p| p == "portrait"), "got {presets:?}");
+}
+
+#[tokio::test]
+async fn group_similar_requires_photo_ids() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/group_similar")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

@@ -68,9 +68,14 @@ struct Thresholds {
 fn derive_grouping_thresholds(
     phash_threshold: Option<f64>,
     clip_threshold: Option<f64>,
-    time_delta: i64,
+    time_delta: Option<i64>,
     cfg: &CullingConfig,
 ) -> Thresholds {
+    // `None` means the caller did not specify a burst window, so the preset's
+    // own default applies. That field existed since the Python port but nothing
+    // ever read it: the window was taken from the request unconditionally, with
+    // a hardcoded fallback of 1, so `event`'s 2s and `sports`'s 3s were dead.
+    let time_delta = time_delta.unwrap_or(cfg.grouping.time_window_default_seconds);
     let time_window_seconds = time_delta.max(0) as f64;
 
     let burst_distance_threshold = clip_threshold
@@ -478,7 +483,7 @@ pub fn group_and_sort_images(
     mut records: Vec<GroupingInput>,
     phash_threshold: Option<f64>,
     clip_threshold: Option<f64>,
-    time_delta: i64,
+    time_delta: Option<i64>,
     culling_preset: &str,
 ) -> Vec<Group> {
     if records.is_empty() {

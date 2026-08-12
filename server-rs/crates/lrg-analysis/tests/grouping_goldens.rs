@@ -53,7 +53,7 @@ fn matches_real_python_output() {
 
     // Same call as the golden generator: phash_threshold="auto",
     // clip_threshold="auto" (both None here), time_delta=1, "default" preset.
-    let groups = group_and_sort_images(records, None, None, 1, "default");
+    let groups = group_and_sort_images(records, None, None, Some(1), "default");
 
     let expected_groups = expected.as_array().unwrap();
     assert_eq!(groups.len(), expected_groups.len(), "group count mismatch");

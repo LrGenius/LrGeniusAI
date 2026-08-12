@@ -18,6 +18,7 @@ use serde_json::{json, Map, Value};
 
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
+use lrg_imaging::cull_config::{FaceMetricsConfig, ImageMetricsConfig};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree};
@@ -763,7 +764,18 @@ async fn prepare_one(
     }
 
     // Culling metrics + pHash are cheap enough to compute on every pass.
-    let metrics = culling_metrics(&rgb);
+    //
+    // Deliberately the *default* config, never a preset's: indexing happens
+    // long before the user picks a culling preset, and these values are stored
+    // once and read by every later cull run. Storing preset-flavoured numbers
+    // would silently bind a catalog to whichever preset happened to be active
+    // during import. Presets instead re-derive `cull_technical_score` and
+    // `cull_aesthetic` from the stored sub-scores at rank time (see
+    // `lrg_analysis::grouping::rank_group_records`), which is where their
+    // weights belong. The threshold-shaped fields here (denominators, exposure
+    // target, clip thresholds) genuinely need pixels, so changing those still
+    // requires a re-index.
+    let metrics = culling_metrics(&rgb, &ImageMetricsConfig::default());
     main_metadata.insert("cull_sharpness".into(), json!(metrics.cull_sharpness));
     main_metadata.insert("cull_exposure".into(), json!(metrics.cull_exposure));
     main_metadata.insert("cull_noise".into(), json!(metrics.cull_noise));
@@ -969,7 +981,7 @@ async fn finish_one(
                         let t0 = Instant::now();
                         let result = state
                             .face
-                            .detect_faces(&pixels, width, height)
+                            .detect_faces(&pixels, width, height, &FaceMetricsConfig::defaults())
                             .map_err(|e| e.to_string());
                         log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
                         result
@@ -1107,7 +1119,7 @@ async fn finish_one(
 }
 
 fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsInput]) {
-    let agg = aggregate_face_culling_metrics(faces);
+    let agg = aggregate_face_culling_metrics(faces, &FaceMetricsConfig::defaults());
     metadata.insert("cull_face_count".into(), json!(agg.cull_face_count));
     metadata.insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
     metadata.insert(
