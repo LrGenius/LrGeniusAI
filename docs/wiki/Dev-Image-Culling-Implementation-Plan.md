@@ -1,5 +1,12 @@
 # Image Culling Implementation Plan
 
+> **Status: a performance and correctness pass has landed on top of the MVP
+> described below.** See [Current state](#current-state-after-the-performance--quality-pass)
+> at the end of this document for what changed, what the measured numbers are,
+> and what is still outstanding. Several items in the original checklist were
+> ticked optimistically — in particular the evaluation benchmark set does not
+> exist.
+
 ## Goal
 
 Build an `Image Culling` workflow that is useful for real photographers, explainable, affordable to run, and compatible with the existing `Lightroom + local backend` architecture.
@@ -274,8 +281,8 @@ For each set, compare:
 - [x] Create Lightroom culling task
 - [x] Create collections for picks / alternates / reject candidates
 - [x] Add explanation fields and debug output
-- [x] Build small benchmark dataset for evaluation
-- [x] Evaluate optional aesthetic model as secondary signal
+- [ ] Build small benchmark dataset for evaluation *(not present in the repo — see Current state)*
+- [ ] Evaluate optional aesthetic model as secondary signal *(still a contrast/colourfulness heuristic)*
 
 ## Branch Start Package
 
@@ -409,3 +416,131 @@ If implementation happens in a separate branch, use this order:
 - user-adjustable presets for `portrait`, `event`, `action`
 - in-plugin review dialog for thresholds and debug explanations
 - learning from user keep/reject feedback
+
+---
+
+## Current state after the performance & quality pass
+
+### What was actually wrong
+
+**`/cull` was never the bottleneck.** It does no image I/O and no inference —
+it reads stored metrics out of `IMAGE_TABLE` and ranks them. The wall was the
+mandatory Analyze & Index pass, which computes two things culling never reads:
+the SigLIP2 embedding (~316–480 ms/photo, the single largest cost) and LLM
+keywords/caption (seconds). A wedding import was 30–60 minutes before culling
+could start at all.
+
+**Grouping did not scale.** `group_and_sort_images` compared every pair with a
+1152-dimensional f64 cosine and recomputed both L2 norms inside that loop. The
+only early-exit required a pair to have *neither* an embedding nor a pHash,
+which never happens for indexed photos.
+
+**Most preset knobs were dead code.** Every image and face tunable existed
+twice — once in `culling_config`, where presets set it, and again as a private
+`const` next to the algorithm, which is what got read. No preset could move any
+image or face metric. `grouping.time_window_default_seconds` was dead the same
+way, so `event`'s 2s and `sports`'s 3s burst windows did nothing.
+
+### Measured results
+
+Grouping, via `cargo run --release -p lrg-analysis --example bench_grouping`
+(synthetic bursts of 8 frames, 30s between bursts):
+
+| photos | before | after | speedup |
+|---|---|---|---|
+| 500 | 544 ms | 10.8 ms | 50× |
+| 2000 | 8.85 s | 45.9 ms | 193× |
+| 5000 | 56.1 s | 114.7 ms | 489× |
+| 10000 | — | 236 ms | — |
+
+Throughput was collapsing quadratically (919 → 226 → 89 photos/s) and is now
+flat at ~43k photos/s. At 5000 photos the old path burned 56s of the plugin's
+300s request budget.
+
+Per-photo cull signals, via
+`cargo run --release -p lrg-imaging --example bench_cull_metrics`: 39 ms for
+`culling_metrics` plus 12 ms for `perceptual_hash` on a 2048px frame. These now
+run in parallel across the batch (rayon, inside `spawn_blocking`) instead of
+inline in a sequential loop.
+
+### Landed
+
+- **`tasks=cull`** — a cull-only ingest computing pHash, image metrics and face
+  quality, skipping the embedding, the LLM, ArcFace and face thumbnails.
+  `FacePass::QualityOnly` writes no `FACE_TABLE` rows and leaves `faces_checked`
+  unset, so person clustering is untouched and a later `faces` run still does
+  the real pass.
+- **Sliding-window grouping** — exactly equivalent, not approximate: both edge
+  predicates already required the time gap to fall inside the duplicate window,
+  and records are already sorted with timed ones as an ascending prefix. L2
+  norms hoisted out of the pair loop; a matching pHash short-circuits the
+  cosine.
+- **Config unification** — `ImageMetricsConfig`/`FaceMetricsConfig` moved to
+  `lrg-imaging::cull_config` (below both `lrg-ml` and `lrg-analysis`) with a
+  single definition presets actually reach. Note the split: threshold-shaped
+  fields are baked into stored sub-scores at index time and need a re-index;
+  weight-shaped fields apply at rank time and move per run.
+- **Group-shot eye aggregation** — was `max` (best face), so one open pair of
+  eyes among nine blinks scored as flawless. Now the worst *prominent* face,
+  gated at 25% of the largest face's area so a bystander cannot veto a frame.
+- **Pre-flight** — the plugin checks `/index/check-unprocessed` with
+  `tasks=cull` and offers to prepare missing photos. Previously unindexed
+  photos were dropped silently and the user saw "No groups found".
+- **Warning correctness** — the "SigLIP model not loaded" dialog tested model
+  *residency in RAM*. SigLIP idle-unloads after 30 minutes, so every cull run on
+  an idle server claimed visual grouping was disabled while it worked fine. It
+  now inspects stored embeddings.
+- **`debug` is opt-in** (`include_debug`) — it was O(k²) floats per group,
+  always serialized, never read by the plugin.
+- Contract tests for `/cull` and `/group_similar`, which had none.
+- Repo tooling: `sync_translations.py` hardcoded an absolute path to one
+  developer's machine and wrote UTF-8 over UTF-16 files, so running the
+  documented command silently corrupted all three translations for Lightroom.
+
+### Still outstanding
+
+Ordered by value.
+
+1. **Subject-region sharpness.** Global Laplacian variance on a 512px
+   downscale still penalises correct shallow depth of field (sports, wildlife,
+   f/1.4 portraits) and cannot resolve eye-vs-nose focus. Needs tile-max plus
+   the sharp region's *location*, and a native-resolution crop around the eye
+   for portraits.
+2. **Bracket / focus-stack / panorama detection.** Nothing detects these, so
+   the grouper nominates a winner and marks the rest reject candidates,
+   destroying intentional sets. This is the most damaging failure mode for
+   landscape, architecture and real-estate work. Needs `exposureBias` and focus
+   distance carried through from the plugin at index time.
+3. **A real eye-state classifier.** `blink_penalty` is still exactly
+   `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
+   a patch clamped to ≤8px radius that stops scaling with face size. SCRFD's
+   single keypoint per eye cannot support an eye-aspect-ratio measure.
+4. **Learned aesthetic / IQA.** `cull_aesthetic` is contrast + colourfulness +
+   exposure, which floors muted, low-key and foggy work. A LAION-style linear
+   head or CLIP-IQA antonym prompts ride on the SigLIP2 embedding that already
+   exists — close to zero marginal cost.
+5. **Relative-within-group normalisation.** Exposure targets absolute mean
+   luminance 0.5 and the noise estimate is a high-pass residual that rises with
+   real detail, so it partly cancels the sharpness reward. Both should be
+   scored relative to the group.
+6. **`occlusion` does not measure occlusion** — it is a recombination of
+   detector confidence, distance from frame centre and eye openness, so it is
+   collinear with `det_score`.
+7. **Job/progress/cancellation.** `/cull` is still one blocking request with a
+   binary 0→100% progress bar. `JobRegistry` has no progress field, no
+   cancellation, and destroys a finished job on first read.
+8. **Genre auto-detection.** Zero-shot classification against the existing
+   SigLIP2 embeddings is a dot product. More importantly, genre must change
+   *which signals are trusted*, not just their weights — a weights-only preset
+   system cannot express "ignore background sharpness" or "suppress culling for
+   bracket sets".
+9. **Hardware acceleration.** CPU is the only default execution provider.
+   CoreML is macOS-only and env-gated behind `LRG_ML_EP=coreml`; the face
+   sessions have no EP path at all. No CUDA, no DirectML. Both ONNX models are
+   batch-size 1 behind a `Mutex`.
+10. **An evaluation benchmark.** The checklist above ticks "Build small
+    benchmark dataset for evaluation" and "Evaluate optional aesthetic model",
+    but no such fixture set exists in the repository. Nothing above item 1 can
+    be validated as an *improvement* rather than a *change* without it: labelled
+    groups per genre, scored on top-1 winner accuracy, reject precision, NDCG,
+    and bracket/stack/pano preservation rate.
