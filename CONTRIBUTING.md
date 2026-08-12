@@ -117,17 +117,32 @@ You can use the `sync_translations.py` script to help maintain consistency.
 ## 📝 Release notes
 Nobody writes the release notes by hand. When a `v*` tag is pushed, the release
 workflow runs `scripts/generate_release_notes.py`, which collects every pull
-request in the release and has a model on GitHub Models rewrite it for
-photographers — what is new, what got better, what was fixed — with the usual
-list of PR titles kept in a collapsed section below.
+request in the release and sorts it into **New**, **Improved** and **Fixed**
+sections for the photographers who install the plugin — with the usual list of
+PR titles kept in a collapsed section below.
 
-What this means for you as a contributor:
-- The PR **title and description are the source material.** A description that
-  says what the change does for someone using the plugin produces a good line;
-  a title like `fix(server): handle nil in resolver` on its own produces a
-  vague one or gets dropped.
-- Purely internal work (tests, CI, refactors, dependency bumps) is deliberately
-  left out of the user-facing part, so there is no need to dress it up.
+**Your PR title becomes the release-note line, so write it for a photographer.**
+`fix(plugin): apply top-level keyword when hierarchy is disabled` becomes
+"Apply top-level keyword when hierarchy is disabled" under **Fixed** — the
+`type(scope):` prefix is stripped, nothing else is rewritten. A title that only
+makes sense to someone who knows the code produces a note that only makes sense
+to them too.
+
+How a PR is sorted:
+
+| Signal | Result |
+| --- | --- |
+| Label `feature` / `enhancement`, or a `feat:` title | **New** |
+| Label `bug` / `fix`, or a `fix:` title | **Fixed** |
+| Label `performance` / `improvement`, or a `perf:` title | **Improved** |
+| Label `documentation` / `chore` / `ci` / `build` / `test` / `refactor` / `dependencies`, or the matching title prefix | Left out of the user-facing part |
+| An internal scope — `fix(ci):`, `chore(deps):`, `fix(release):` | Left out, whatever the type says |
+| Anything else | **Other changes** |
+
+Labels win over title prefixes, so a mislabelled prefix can always be corrected
+by labelling the PR. Purely internal work is deliberately left out of the
+user-facing sections — it still appears in the collapsed technical changelog, so
+there is no need to dress it up.
 
 Releases are created as **drafts**, so the generated text can be read and edited
 before publishing. To preview the notes for an existing tag:
@@ -136,8 +151,6 @@ before publishing. To preview the notes for an existing tag:
 GITHUB_TOKEN=<a token with repo read access> \
   python3 scripts/generate_release_notes.py --repo LrGenius/LrGeniusAI --tag v2.20.1 --output -
 ```
-
-Add `--no-llm` to see only the static download and troubleshooting sections.
 
 ---
 

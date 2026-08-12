@@ -3,19 +3,20 @@
 
 GitHub's own auto-generated notes are a list of pull request titles, which read
 like a commit log to the photographers who actually install this plugin. This
-script rewrites them for that audience:
+script rewrites them for that audience, without an AI service and without any
+API key beyond the workflow's built-in GITHUB_TOKEN:
 
   1. ask GitHub for the auto-generated notes of the tag (which also resolves
      "since which previous tag" for us),
-  2. pull the title/body/labels of every PR referenced in them,
-  3. have a model on GitHub Models turn that into plain-language notes,
+  2. pull the title and labels of every PR referenced in them,
+  3. sort those into New / Improved / Fixed using the PR's labels and its
+     conventional-commit prefix, dropping changes with no user-visible effect,
   4. wrap the result in the static download/troubleshooting sections and keep
      the technical list in a collapsed <details> block.
 
-Everything except step 3 is deterministic, and step 3 degrades gracefully: if
-the model is unreachable, disabled for the org, or returns nothing usable, the
-notes fall back to GitHub's auto-generated body so a release is never blocked
-on this script.
+Everything here is deterministic: the same release always produces the same
+notes. The wording of each bullet is the PR title with its `type(scope):`
+prefix stripped — so a clear PR title is what makes a clear release note.
 
 Only the standard library is used, so it runs on a bare runner.
 
@@ -25,7 +26,7 @@ Usage (in CI):
         --manifest "update-manifest-$GITHUB_REF_NAME.json" \
         --output release_notes.md
 
-Preview locally (needs a token with public repo read + models access):
+Preview locally (needs a token with read access to the repo):
     GITHUB_TOKEN=... python3 scripts/generate_release_notes.py \
         --repo LrGenius/LrGeniusAI --tag v2.20.1 --output -
 """
@@ -41,62 +42,100 @@ import urllib.error
 import urllib.request
 
 GITHUB_API = "https://api.github.com"
-MODELS_API = "https://models.github.ai/inference/chat/completions"
 
-# Overridable so the model can be swapped without touching the workflow.
-DEFAULT_MODEL = os.getenv("LRG_NOTES_MODEL", "openai/gpt-4o-mini")
-
-# Cap on how much PR prose is fed to the model. Long PR bodies are mostly
-# implementation discussion; the first paragraphs carry the intent.
-MAX_PR_BODY_CHARS = 1500
 MAX_PRS = 60
 
-SYSTEM_PROMPT = """\
-You write the release notes for LrGeniusAI, a plug-in for Adobe Lightroom \
-Classic that adds AI photo tagging, descriptions, semantic search, culling, \
-face recognition and automatic develop edits.
+# Section order and headings. "other" catches anything that looks user-facing
+# but doesn't classify — better a vague bullet than a silently dropped change.
+SECTIONS = [
+    ("new", "### New"),
+    ("improved", "### Improved"),
+    ("fixed", "### Fixed"),
+    ("other", "### Other changes"),
+]
 
-Your readers are photographers. Most of them are not programmers, and they do \
-not know how the plug-in is built. They want to know one thing: what is \
-different for me when I use this update?
+# A label wins over the title prefix: it is a deliberate human judgement, while
+# the prefix is a habit. `None` means "not worth telling a photographer about".
+LABEL_CATEGORY = {
+    "feature": "new",
+    "features": "new",
+    "enhancement": "new",
+    "bug": "fixed",
+    "bugfix": "fixed",
+    "fix": "fixed",
+    "performance": "improved",
+    "perf": "improved",
+    "improvement": "improved",
+    "documentation": None,
+    "docs": None,
+    "chore": None,
+    "ci": None,
+    "build": None,
+    "test": None,
+    "tests": None,
+    "refactor": None,
+    "internal": None,
+    "dependencies": None,
+}
 
-Rules:
-- Write about what the reader can observe: what is new, what got faster or \
-more reliable, what no longer goes wrong.
-- Never name internal machinery: file names, function names, crate or module \
-names, API endpoints, database or library names, CI, linting, refactors.
-- Translate jargon into what it does. "delta-mode indexing" is "only \
-re-analysing photos that changed"; "embedding" is "the way photos are matched \
-to your search words".
-- Leave out changes with no effect for the reader (documentation, tests, \
-build tooling, dependency bumps, internal cleanups) unless they visibly change \
-speed, stability, or installation.
-- One line per change, starting with a verb. No sub-bullets.
-- Be specific and factual. No marketing language, no superlatives, no emoji, \
-no promises about future releases.
-- Only state what the input supports. If you cannot tell what a change does \
-for the reader, leave it out rather than guessing.
+# Scopes naming an internal area. These override the type, because the area is
+# the better signal: `fix(ci):` fixes the build, not anything a photographer
+# can see, whereas `fix(server):` or `fix(plugin):` usually is visible.
+INTERNAL_SCOPES = {
+    "ci",
+    "build",
+    "release",
+    "docs",
+    "doc",
+    "deps",
+    "dependencies",
+    "test",
+    "tests",
+    "meta",
+    "workflow",
+    "workflows",
+}
 
-Output format — Markdown, nothing else:
-- Start with one or two sentences summarising the release in plain language. \
-No heading above it.
-- Then, only for the sections that actually have content, in this order: \
-"### New", "### Improved", "### Fixed". Omit any section that would be empty.
-- At most 8 bullets in total across all sections.
-- Do not add a title, a version number, a date, download links, or a \
-changelog list. Those are added separately.
-"""
+# Conventional-commit types (`feat(plugin): ...`).
+TYPE_CATEGORY = {
+    "feat": "new",
+    "feature": "new",
+    "fix": "fixed",
+    "bugfix": "fixed",
+    "perf": "improved",
+    "improve": "improved",
+    "docs": None,
+    "doc": None,
+    "chore": None,
+    "ci": None,
+    "build": None,
+    "test": None,
+    "tests": None,
+    "refactor": None,
+    "style": None,
+}
+
+# Fallback for titles written as a plain sentence ("Add Dependabot config").
+VERB_CATEGORY = [
+    (r"^(add|introduce|support|enable|implement)\b", "new"),
+    (r"^(fix|resolve|correct|prevent|stop|repair)\b", "fixed"),
+    (r"^(improve|speed up|reduce|optimi[sz]e|make .* faster)\b", "improved"),
+    (r"^(bump|revert|refactor|rename|document|delete .*(workflow|config|file))\b", None),
+]
+
+CONVENTIONAL_PREFIX = re.compile(r"^(?P<type>[a-zA-Z]+)(?:\((?P<scope>[^)]*)\))?!?:\s*")
+TRAILING_PR_NUMBER = re.compile(r"\s*\(#\d+\)\s*$")
 
 
 def log(message):
     print(message, file=sys.stderr)
 
 
-def http_json(url, token, payload=None, accept="application/vnd.github+json"):
+def http_json(url, token, payload=None):
     """POST/GET JSON with a couple of retries on transient failures."""
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {
-        "Accept": accept,
+        "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "lrgeniusai-release-notes",
@@ -142,26 +181,25 @@ def extract_pr_numbers(generated_body):
     return seen[:MAX_PRS]
 
 
-def fetch_pull_requests(repo, numbers, token):
-    pulls = []
+def fetch_changes(repo, numbers, token):
+    """Title + labels for each referenced PR."""
+    changes = []
     for number in numbers:
         try:
             data = http_json(f"{GITHUB_API}/repos/{repo}/pulls/{number}", token)
         except RuntimeError as error:
             log(f"WARNING: could not read PR #{number}: {error}")
             continue
-        pulls.append(
+        changes.append(
             {
-                "number": number,
                 "title": data.get("title") or "",
-                "body": (data.get("body") or "").strip()[:MAX_PR_BODY_CHARS],
-                "labels": [label.get("name", "") for label in data.get("labels") or []],
+                "labels": [(label.get("name") or "").lower() for label in data.get("labels") or []],
             }
         )
-    return pulls
+    return changes
 
 
-def commit_subjects(tag):
+def commit_changes(tag):
     """Commit subjects since the previous tag — used when no PRs are referenced."""
     try:
         tags = subprocess.run(
@@ -181,72 +219,85 @@ def commit_subjects(tag):
     except (subprocess.CalledProcessError, OSError) as error:
         log(f"WARNING: could not read commit subjects: {error}")
         return []
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    return [{"title": line.strip(), "labels": []} for line in output.splitlines() if line.strip()]
 
 
-def build_user_prompt(tag, pulls, subjects):
-    lines = [f"Release {tag} of LrGeniusAI contains the following changes.", ""]
-    if pulls:
-        for pull in pulls:
-            lines.append(f"--- change #{pull['number']} ---")
-            lines.append(f"Title: {pull['title']}")
-            if pull["labels"]:
-                lines.append(f"Labels: {', '.join(pull['labels'])}")
-            if pull["body"]:
-                lines.append(f"Description:\n{pull['body']}")
-            lines.append("")
-    else:
-        lines.append("Commit subjects (no pull requests were referenced):")
-        lines.extend(f"- {subject}" for subject in subjects)
-        lines.append("")
-    lines.append(
-        "Write the release notes for these changes, following your instructions."
-    )
-    return "\n".join(lines)
+def classify(change):
+    """Which section a change belongs in, or None to leave it out entirely."""
+    for label in change["labels"]:
+        if label in LABEL_CATEGORY:
+            return LABEL_CATEGORY[label]
+
+    match = CONVENTIONAL_PREFIX.match(change["title"])
+    if match:
+        scope = (match.group("scope") or "").strip().lower()
+        if scope in INTERNAL_SCOPES:
+            return None
+        kind = match.group("type").lower()
+        if kind in TYPE_CATEGORY:
+            return TYPE_CATEGORY[kind]
+
+    lowered = change["title"].strip().lower()
+    for pattern, category in VERB_CATEGORY:
+        if re.match(pattern, lowered):
+            return category
+
+    return "other"
 
 
-def strip_code_fence(text):
-    """Models occasionally wrap the whole answer in a ```markdown fence."""
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if len(lines) >= 2 and lines[-1].strip().startswith("```"):
-        return "\n".join(lines[1:-1]).strip()
-    return stripped
+def clean_title(title):
+    """Strip the `type(scope):` prefix and tidy the sentence."""
+    text = CONVENTIONAL_PREFIX.sub("", title.strip())
+    text = TRAILING_PR_NUMBER.sub("", text).strip().rstrip(".")
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    return text
 
 
-def generate_summary(token, model, tag, pulls, subjects):
-    """Plain-language notes from GitHub Models, or None if that is unavailable."""
-    if not pulls and not subjects:
-        log("WARNING: nothing to summarise (no PRs, no commits).")
-        return None
-
-    payload = {
-        "model": model,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_prompt(tag, pulls, subjects)},
-        ],
+def lead_sentence(counts):
+    """One plain sentence counting what is in the release."""
+    nouns = {
+        "new": ("new feature", "new features"),
+        "improved": ("improvement", "improvements"),
+        "fixed": ("fix", "fixes"),
+        "other": ("other change", "other changes"),
     }
-    try:
-        result = http_json(MODELS_API, token, payload, accept="application/json")
-    except RuntimeError as error:
-        log(f"WARNING: GitHub Models request failed: {error}")
+    parts = []
+    for key, _ in SECTIONS:
+        count = counts.get(key, 0)
+        if count:
+            singular, plural = nouns[key]
+            parts.append(f"{count} {singular if count == 1 else plural}")
+    if not parts:
+        return None
+    if len(parts) == 1:
+        listed = parts[0]
+    else:
+        listed = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+    return f"This update brings {listed}."
+
+
+def build_summary(changes):
+    """The user-facing section, or None when nothing classified."""
+    buckets = {key: [] for key, _ in SECTIONS}
+    for change in changes:
+        category = classify(change)
+        if category is None:
+            continue
+        title = clean_title(change["title"])
+        if title and title not in buckets[category]:
+            buckets[category].append(title)
+
+    counts = {key: len(items) for key, items in buckets.items()}
+    lead = lead_sentence(counts)
+    if lead is None:
         return None
 
-    try:
-        content = result["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        log(f"WARNING: unexpected response shape from GitHub Models: {str(result)[:300]}")
-        return None
-
-    summary = strip_code_fence(content or "")
-    if len(summary) < 20:
-        log("WARNING: model returned an empty or too-short summary.")
-        return None
-    return summary
+    parts = [lead]
+    for key, heading in SECTIONS:
+        if buckets[key]:
+            parts.append(heading + "\n" + "\n".join(f"- {item}" for item in buckets[key]))
+    return "\n\n".join(parts)
 
 
 def read_breaking_flag(manifest_path):
@@ -339,9 +390,7 @@ def main():
     parser.add_argument("--repo", default=os.getenv("GITHUB_REPOSITORY", "LrGenius/LrGeniusAI"))
     parser.add_argument("--tag", default=os.getenv("GITHUB_REF_NAME"), help="Release tag, e.g. v2.20.1")
     parser.add_argument("--manifest", help="Path to the update manifest, to tell whether the full installer is needed")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"GitHub Models model id (default: {DEFAULT_MODEL})")
     parser.add_argument("--target", help="Commit-ish to generate notes against when the tag does not exist yet")
-    parser.add_argument("--no-llm", action="store_true", help="Skip the model call; emit the deterministic parts only")
     parser.add_argument("--output", default="release_notes.md", help='Output file, or "-" for stdout')
     args = parser.parse_args()
 
@@ -358,22 +407,17 @@ def main():
         log(f"WARNING: could not fetch GitHub's generated notes: {error}")
         generated_body = ""
 
-    pulls = fetch_pull_requests(args.repo, extract_pr_numbers(generated_body), token)
-    subjects = [] if pulls else commit_subjects(args.tag)
-    log(f"Collected {len(pulls)} pull request(s), {len(subjects)} commit subject(s).")
+    changes = fetch_changes(args.repo, extract_pr_numbers(generated_body), token)
+    if not changes:
+        changes = commit_changes(args.tag)
+    log(f"Collected {len(changes)} change(s).")
 
-    summary = None
-    if args.no_llm:
-        log("Skipping the model call (--no-llm).")
-    else:
-        summary = generate_summary(token, args.model, args.tag, pulls, subjects)
-
-    if summary is None and not args.no_llm:
-        # Never block a release on this: fall back to GitHub's own notes, but
-        # make the workflow log say so, since the body will read technical.
+    summary = build_summary(changes)
+    if summary is None:
+        # Everything was internal, or there was nothing to read at all.
         print(
-            "::warning title=Release notes::Could not generate plain-language "
-            "release notes; falling back to the auto-generated changelog."
+            "::warning title=Release notes::No user-facing changes could be "
+            "identified; falling back to the technical changelog."
         )
 
     notes = assemble(summary, generated_body, args.tag, read_breaking_flag(args.manifest))
