@@ -72,7 +72,13 @@ async fn check_unprocessed(
     let compute_metadata = has_task("metadata");
     let compute_faces = has_task("faces");
     let compute_vertexai = has_task("vertexai");
-    let any_task = compute_embeddings || compute_metadata || compute_faces || compute_vertexai;
+    // The fast cull ingest. Deliberately does not set `compute_faces`: that
+    // pass writes no FACE_TABLE rows (it has no identity embedding), so keying
+    // off stored faces would report every cull-processed photo as outstanding
+    // forever. It has its own completion flag below.
+    let compute_cull = has_task("cull");
+    let any_task =
+        compute_embeddings || compute_metadata || compute_faces || compute_vertexai || compute_cull;
 
     let regenerate_metadata = data
         .get("regenerate_metadata")
@@ -178,11 +184,18 @@ async fn check_unprocessed(
                 let needs_vertexai =
                     compute_vertexai && (regenerate_metadata || !vertex_present.contains(*pid));
                 let needs_cull_phash = any_task && (regenerate_metadata || !has_flag("cull_phash"));
+                // `cull_faces_present` is legitimately `false` for a photo with
+                // no faces, so completion is "the key exists", not "it is
+                // truthy" — otherwise every faceless photo would be reported as
+                // outstanding on every run.
+                let needs_cull_faces =
+                    compute_cull && (regenerate_metadata || !m.contains_key("cull_faces_present"));
                 needs_embedding
                     || needs_metadata
                     || needs_faces
                     || needs_vertexai
                     || needs_cull_phash
+                    || needs_cull_faces
             })
             .cloned()
             .collect();

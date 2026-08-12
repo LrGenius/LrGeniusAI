@@ -559,3 +559,88 @@ async fn group_similar_requires_photo_ids() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+/// The `cull` task is the fast ingest path. Its delta check cannot key off
+/// FACE_TABLE rows (it writes none) and cannot treat `cull_faces_present:
+/// false` as incomplete (that is the correct value for a photo with no faces).
+#[tokio::test]
+async fn check_unprocessed_understands_the_cull_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    let row = |phash: Option<&str>, faces_present: Option<bool>| {
+        let mut m = serde_json::Map::new();
+        if let Some(p) = phash {
+            m.insert("cull_phash".into(), serde_json::json!(p));
+        }
+        if let Some(f) = faces_present {
+            m.insert("cull_faces_present".into(), serde_json::json!(f));
+        }
+        m
+    };
+
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                // Fully culled, and genuinely has no faces.
+                lrg_store::StoreRecord {
+                    id: "done_faceless".into(),
+                    vector: None,
+                    metadata: row(Some("abcd0123abcd0123"), Some(false)),
+                },
+                // Fully culled, has faces.
+                lrg_store::StoreRecord {
+                    id: "done_with_faces".into(),
+                    vector: None,
+                    metadata: row(Some("abcd0123abcd0124"), Some(true)),
+                },
+                // Has a pHash from an older index pass but never a cull face pass.
+                lrg_store::StoreRecord {
+                    id: "needs_face_pass".into(),
+                    vector: None,
+                    metadata: row(Some("abcd0123abcd0125"), None),
+                },
+                // Indexed for embeddings only, no cull data at all.
+                lrg_store::StoreRecord {
+                    id: "needs_everything".into(),
+                    vector: Some(vec![0.1; 1152]),
+                    metadata: row(None, None),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/index/check-unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": [
+                            "done_faceless", "done_with_faces",
+                            "needs_face_pass", "needs_everything", "unknown",
+                        ],
+                        "tasks": "cull",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["photo_ids"],
+        serde_json::json!(["needs_face_pass", "needs_everything", "unknown"]),
+        "a faceless photo that has been culled must not be reported forever"
+    );
+}

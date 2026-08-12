@@ -20,6 +20,7 @@ use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsIn
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
 use lrg_imaging::cull_config::{FaceMetricsConfig, ImageMetricsConfig};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
+use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree};
 use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
@@ -33,6 +34,9 @@ pub fn router() -> axum::Router<Arc<AppState>> {
 pub(crate) struct ParsedOptions {
     compute_embeddings: bool,
     compute_faces: bool,
+    /// How much of the face pipeline to run. The `cull` task only reads the
+    /// quality proxies, so it skips ArcFace and the thumbnail encode.
+    face_pass: FacePass,
     compute_metadata: bool,
     compute_vertexai: bool,
     regenerate_metadata: bool,
@@ -179,6 +183,15 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     };
     let has_task = |t: &str| tasks.iter().any(|x| x == t);
 
+    // `cull` is the fast ingest path: everything culling actually reads
+    // (pHash, image metrics, face quality) and nothing it does not. It
+    // deliberately does *not* imply `embeddings` or `metadata` — the SigLIP2
+    // embedding is ~316-480ms/photo and the LLM is seconds, while culling uses
+    // the embedding only as a secondary near-duplicate signal that pHash plus
+    // capture time already covers for bursts. A later full Analyze & Index run
+    // backfills embeddings without redoing any of this.
+    let cull_pass = has_task("cull");
+
     let reg_val = fields
         .get("regenerate_metadata")
         .or_else(|| fields.get("regenerateMetadata"));
@@ -223,7 +236,12 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
 
     ParsedOptions {
         compute_embeddings: has_task("embeddings"),
-        compute_faces: has_task("faces"),
+        compute_faces: has_task("faces") || cull_pass,
+        face_pass: if has_task("faces") {
+            FacePass::Full
+        } else {
+            FacePass::QualityOnly
+        },
         compute_metadata: has_task("metadata"),
         compute_vertexai: has_task("vertexai"),
         regenerate_metadata,
@@ -981,7 +999,13 @@ async fn finish_one(
                         let t0 = Instant::now();
                         let result = state
                             .face
-                            .detect_faces(&pixels, width, height, &FaceMetricsConfig::defaults())
+                            .detect_faces(
+                                &pixels,
+                                width,
+                                height,
+                                &FaceMetricsConfig::defaults(),
+                                options.face_pass,
+                            )
                             .map_err(|e| e.to_string());
                         log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
                         result
@@ -990,6 +1014,32 @@ async fn finish_one(
                 }
             };
             match face_result {
+                // The quality-only pass has no identity embedding and no
+                // thumbnail, so it must not touch FACE_TABLE at all: writing
+                // empty vectors would corrupt person clustering, and clearing
+                // the photo's existing rows would destroy identities a previous
+                // full run had established. It also deliberately leaves
+                // `faces_checked` unset, so `/index/check-unprocessed` still
+                // reports the photo as needing a real face pass later.
+                Ok(faces) if options.face_pass == FacePass::QualityOnly => {
+                    let inputs: Vec<FaceMetricsInput> = faces
+                        .iter()
+                        .map(|f| FaceMetricsInput {
+                            sharpness: f.sharpness,
+                            area_ratio: f.area_ratio,
+                            det_score: f.det_score,
+                            center_proximity: f.center_proximity,
+                            eye_openness: f.eye_openness,
+                            blink_penalty: f.blink_penalty,
+                            occlusion: Some(f.occlusion),
+                        })
+                        .collect();
+                    apply_face_aggregate(&mut main_metadata, &inputs);
+                    log::debug!(
+                        "Photo {photo_id}: cull pass scored {} face(s), no identity written.",
+                        faces.len()
+                    );
+                }
                 Ok(faces) => {
                     let t_scan = Instant::now();
                     // Face ids are `{photo_id}_{n}`; a prefix delete clears

@@ -60,6 +60,7 @@ fn detects_and_embeds_real_face_matching_insightface() {
             width,
             height,
             &lrg_imaging::cull_config::FaceMetricsConfig::defaults(),
+            lrg_ml::faces::FacePass::Full,
         )
         .unwrap();
     let expected_faces = case["faces"].as_array().unwrap();
