@@ -32,6 +32,18 @@ pub struct AppState {
     pub face: Arc<FaceModel>,
     /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
     pub jobs: Arc<JobRegistry>,
+    /// CLIP-IQA prompt embeddings, computed on first use and kept for the
+    /// process lifetime.
+    ///
+    /// These are a pure function of the model weights and a compile-time list
+    /// of strings, so recomputing them would be waste — but the first call
+    /// costs a text-tower pass and, if SigLIP2 has idle-unloaded, a model load.
+    /// Deliberately *not* cleared alongside `siglip.unload()`: the embeddings
+    /// stay valid across an unload/reload cycle, and dropping them would make
+    /// every cull run after an idle period pay the load again.
+    /// Keyed by prompt set, since quality and action are embedded separately
+    /// and a catalog may only ever need one of them.
+    pub clip_iqa: Arc<StdMutex<HashMap<&'static str, lrg_ml::clip_iqa::IqaPrompts>>>,
     /// Download progress, keyed by asset group (`"clip"`, `"llm"`). Keyed
     /// rather than a single slot because a GGUF download and a SigLIP2
     /// download can legitimately be in flight at the same time.
@@ -62,6 +74,7 @@ impl AppState {
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
             jobs: Arc::new(JobRegistry::new()),
+            clip_iqa: Arc::new(StdMutex::new(HashMap::new())),
             model_download: Arc::new(StdMutex::new(HashMap::new())),
             llm: Arc::default(),
             mlx: Arc::default(),

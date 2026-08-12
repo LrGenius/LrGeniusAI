@@ -54,7 +54,15 @@ fn detects_and_embeds_real_face_matching_insightface() {
     let (width, height) = (decoded.width() as usize, decoded.height() as usize);
     let pixels = decoded.into_raw();
 
-    let got = model.detect_faces(&pixels, width, height).unwrap();
+    let got = model
+        .detect_faces(
+            &pixels,
+            width,
+            height,
+            &lrg_imaging::cull_config::FaceMetricsConfig::defaults(),
+            lrg_ml::faces::FacePass::Full,
+        )
+        .unwrap();
     let expected_faces = case["faces"].as_array().unwrap();
     assert_eq!(got.len(), expected_faces.len(), "face count mismatch");
 

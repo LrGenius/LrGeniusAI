@@ -136,6 +136,76 @@ local function photosFromIds(photoIds, photoById)
 	return photos
 end
 
+---
+-- Runs the fast cull-only ingest for photos the backend has no culling data
+-- for. Sends `tasks = {"cull"}`, which computes exactly what culling reads —
+-- pHash, image metrics and face quality — and skips the SigLIP2 embedding and
+-- the LLM. That is the difference between seconds and tens of minutes on a
+-- freshly imported shoot.
+--
+-- Originals are sent by path when the backend is on this machine; otherwise
+-- each photo is exported to a temporary JPEG and uploaded, and the temp file
+-- is removed afterwards.
+-- @return number|nil processed count, string|nil error
+local function cullPrepare(missingIds, photoById, progressScope)
+	local total = #missingIds
+	local processed = 0
+	local failures = 0
+	local byReference = SearchIndexAPI.isLocalBackend()
+
+	for i, photoId in ipairs(missingIds) do
+		if progressScope and progressScope:isCanceled() then
+			return processed, nil
+		end
+		local photo = photoById[photoId]
+		if photo then
+			-- Rebuilt per photo rather than hoisted: exposure_bias is the one
+			-- per-photo field this fast path carries, and it is what lets the
+			-- backend recognise an exposure bracket instead of nominating most
+			-- of it for deletion. Sharing one table across the loop would give
+			-- every photo the first one's compensation.
+			local indexOptions = { tasks = { "cull" }, regenerate_metadata = false }
+			local exposureBias = photo:getRawMetadata("exposureBias")
+			if type(exposureBias) == "number" then
+				indexOptions.exposure_bias = exposureBias
+			end
+			local ok, err
+			if byReference then
+				local path = photo:getRawMetadata("path")
+				ok, err = SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, path, indexOptions)
+			else
+				local exported = SearchIndexAPI.exportPhotoForIndexing(photo)
+				if exported then
+					ok, err = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exported, indexOptions)
+					LrFileUtils.delete(exported)
+				else
+					ok, err = false, "could not export photo for upload"
+				end
+			end
+			if ok then
+				processed = processed + 1
+			else
+				failures = failures + 1
+				log:warn("Cull prepare failed for " .. tostring(photoId) .. ": " .. tostring(err))
+			end
+		end
+		if progressScope then
+			progressScope:setPortionComplete(i, total)
+			progressScope:setCaption(
+				LOC("$$$/LrGeniusAI/CullTask/PrepProgress=Preparing ^1/^2...", tostring(i), tostring(total))
+			)
+		end
+		LrTasks.yield()
+	end
+
+	-- Partial failure is not fatal: culling still runs on whatever succeeded,
+	-- and the backend reports the rest via summary.unindexed_count.
+	if processed == 0 and failures > 0 then
+		return nil, LOC("$$$/LrGeniusAI/CullTask/PrepAllFailed=None of the photos could be prepared.")
+	end
+	return processed, nil
+end
+
 local function joinReasonCodes(reasonCodes)
 	if type(reasonCodes) ~= "table" or #reasonCodes == 0 then
 		return ""
@@ -201,6 +271,40 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
+		-- Pre-flight: the backend drops photos it has no record for, so an
+		-- unanalyzed folder used to come back as an empty result with no
+		-- explanation. Ask first, and offer the fast cull-only ingest, which
+		-- computes just what culling reads (pHash, image metrics, face quality)
+		-- and skips the embedding and the LLM entirely.
+		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, { "cull" })
+		if missingErr then
+			log:warn("Cull pre-flight check failed, continuing anyway: " .. tostring(missingErr))
+		elseif missing and #missing > 0 then
+			local answer = LrDialogs.confirm(
+				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepTitle=Some photos need preparing"),
+				LOC(
+					"$$$/LrGeniusAI/CullTask/NeedsPrepMessage=^1 of ^2 selected photos have no culling data yet and would be skipped. Prepare them now? This only computes culling signals, so it is much faster than a full Analyze & Index.",
+					tostring(#missing),
+					tostring(#photoIds)
+				),
+				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepPrepare=Prepare now"),
+				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
+			)
+			if answer == "ok" then
+				local prepScope = LrProgressScope({
+					title = LOC("$$$/LrGeniusAI/CullTask/PrepProgressTitle=Preparing photos for culling..."),
+					functionContext = context,
+				})
+				local prepared, prepErr = cullPrepare(missing, photoById, prepScope)
+				prepScope:done()
+				if prepErr then
+					ErrorHandler.handleError(LOC("$$$/LrGeniusAI/CullTask/PrepErrorTitle=Preparation failed"), prepErr)
+					return
+				end
+				log:info("Cull prepare completed for " .. tostring(prepared) .. " photo(s)")
+			end
+		end
+
 		local progressScope = LrProgressScope({
 			title = LOC("$$$/LrGeniusAI/CullTask/ProgressTitle=Culling similar photos..."),
 			functionContext = context,
@@ -247,7 +351,9 @@ LrTasks.startAsyncTask(function()
 		local alternateIds = {}
 		local rejectIds = {}
 		local duplicateIds = {}
+		local setIds = {}
 		local nearDuplicateGroupCount = 0
+		local setGroupCount = 0
 
 		for _, group in ipairs(groups) do
 			local winnerPhotoId = group["winner_photo_id"]
@@ -255,6 +361,12 @@ LrTasks.startAsyncTask(function()
 			local rejectCandidatePhotoIds = group["reject_candidate_photo_ids"] or {}
 			local groupType = group["group_type"]
 			local groupPhotoIds = group["photo_ids"] or {}
+			-- The backend flags brackets, focus stacks and panoramas as
+			-- keep_all: every frame is part of one picture. It already returns
+			-- an empty reject list for them, so nothing here can nominate one
+			-- by accident; the collection exists so the user can see that these
+			-- frames were recognised rather than just quietly not culled.
+			local keepAll = group["keep_all"] == true
 
 			if winnerPhotoId then
 				table.insert(picksIds, winnerPhotoId)
@@ -265,7 +377,12 @@ LrTasks.startAsyncTask(function()
 			for _, photoId in ipairs(rejectCandidatePhotoIds) do
 				table.insert(rejectIds, photoId)
 			end
-			if options.createDuplicatesCollection and groupType == "near_duplicate" then
+			if keepAll then
+				setGroupCount = setGroupCount + 1
+				for _, photoId in ipairs(groupPhotoIds) do
+					table.insert(setIds, photoId)
+				end
+			elseif options.createDuplicatesCollection and groupType == "near_duplicate" then
 				nearDuplicateGroupCount = nearDuplicateGroupCount + 1
 				for _, photoId in ipairs(groupPhotoIds) do
 					if photoId ~= winnerPhotoId then
@@ -281,6 +398,7 @@ LrTasks.startAsyncTask(function()
 		local alternatePhotos = photosFromIds(alternateIds, photoById)
 		local rejectPhotos = photosFromIds(rejectIds, photoById)
 		local duplicatePhotos = photosFromIds(duplicateIds, photoById)
+		local setPhotos = photosFromIds(setIds, photoById)
 
 		local catalog = LrApplication.activeCatalog()
 		local timestamp = LrDate.timeToW3CDate(LrDate.currentTime())
@@ -382,6 +500,14 @@ LrTasks.startAsyncTask(function()
 					duplicatePhotos
 				)
 			end
+			-- Only created when something was actually detected: an empty
+			-- collection on every run would train the user to ignore it.
+			if #setPhotos > 0 then
+				createResultCollection(
+					LOC("$$$/LrGeniusAI/CullTask/Sets=Brackets / Stacks / Panoramas (keep all)"),
+					setPhotos
+				)
+			end
 		end, Defaults.catalogWriteAccessOptions)
 
 		if picksCollection then
@@ -389,17 +515,28 @@ LrTasks.startAsyncTask(function()
 			LrApplicationView.gridView()
 		end
 
-		LrDialogs.message(
-			LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"),
-			LOC(
-				"$$$/LrGeniusAI/CullTask/CompletionMessage=Created culling collections for ^1 groups. Picks: ^2, Alternates: ^3, Reject candidates: ^4. Near-duplicate groups: ^5. Preset: ^6.",
-				tostring(summary.group_count or #groups),
-				tostring(summary.pick_count or #picksPhotos),
-				tostring(summary.alternate_count or #alternatePhotos),
-				tostring(summary.reject_candidate_count or #rejectPhotos),
-				tostring(summary.near_duplicate_group_count or nearDuplicateGroupCount),
-				tostring(summary.culling_preset or options.cullingPreset or "default")
-			)
+		-- The set line is appended rather than folded into the main message so
+		-- that a run with no brackets or stacks reads exactly as it did before.
+		local completionMessage = LOC(
+			"$$$/LrGeniusAI/CullTask/CompletionMessage=Created culling collections for ^1 groups. Picks: ^2, Alternates: ^3, Reject candidates: ^4. Near-duplicate groups: ^5. Preset: ^6.",
+			tostring(summary.group_count or #groups),
+			tostring(summary.pick_count or #picksPhotos),
+			tostring(summary.alternate_count or #alternatePhotos),
+			tostring(summary.reject_candidate_count or #rejectPhotos),
+			tostring(summary.near_duplicate_group_count or nearDuplicateGroupCount),
+			tostring(summary.culling_preset or options.cullingPreset or "default")
 		)
+		local setGroups = summary.intentional_set_group_count or setGroupCount
+		if setGroups and setGroups > 0 then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. LOC(
+					"$$$/LrGeniusAI/CullTask/CompletionSets=^1 group(s) covering ^2 photo(s) were recognised as exposure brackets, focus stacks or panoramas. Every frame in those was kept — none was suggested for rejection.",
+					tostring(setGroups),
+					tostring(summary.intentional_set_photo_count or #setPhotos)
+				)
+		end
+
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage)
 	end)
 end)

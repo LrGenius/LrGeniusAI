@@ -4369,6 +4369,7 @@ name = "lrg-analysis"
 version = "0.1.0"
 dependencies = [
  "lrg-imaging",
+ "serde",
  "serde_json",
 ]
 
@@ -4392,6 +4393,7 @@ dependencies = [
  "lrg-mlx",
  "lrg-providers",
  "lrg-store",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",

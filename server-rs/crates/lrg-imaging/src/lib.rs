@@ -3,6 +3,7 @@
 //! HEIC (libheif) decoding is still not wired in.
 
 pub mod convert;
+pub mod cull_config;
 pub mod location;
 pub mod metrics;
 pub mod pil_resample;

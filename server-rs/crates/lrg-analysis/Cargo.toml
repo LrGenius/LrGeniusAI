@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lrg-imaging.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [dev-dependencies]

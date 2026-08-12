@@ -1,0 +1,156 @@
+{
+  "name": "landscape-brackets",
+  "notes": "Synthetic. Two tripod AEB sequences (-2/0/+2 EV) plus one handheld pair. The bracket frames carry deliberately unrelated pHashes, because that is what a real bracket looks like: measured on a real +2 EV frame of an otherwise identical scene, the Hamming distance to the base frame was 61 of 64 bits. Before bracket-aware grouping the frames did not even land in one group; before set detection two thirds of each sequence was offered for deletion.",
+  "culling_preset": "default",
+  "time_delta_seconds": 2,
+  "groups_are_authoritative": true,
+  "groups": [
+    {
+      "group_id": "l1",
+      "intentional_set": "bracket",
+      "photos": [
+        {
+          "photo_id": "l1_0",
+          "filename": "l1_0.jpg",
+          "capture_time": 2000.0,
+          "phash": "0000000000000000",
+          "metadata": {
+            "cull_sharpness": 0.72,
+            "cull_sharpness_peak": 0.8,
+            "cull_exposure": 0.16,
+            "cull_noise": 0.1,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.3,
+            "exposure_bias": -2.0
+          }
+        },
+        {
+          "photo_id": "l1_1",
+          "filename": "l1_1.jpg",
+          "capture_time": 2000.7,
+          "phash": "ffffffffffffffff",
+          "metadata": {
+            "cull_sharpness": 0.72,
+            "cull_sharpness_peak": 0.8,
+            "cull_exposure": 0.86,
+            "cull_noise": 0.1,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0,
+            "exposure_bias": 0.0
+          }
+        },
+        {
+          "photo_id": "l1_2",
+          "filename": "l1_2.jpg",
+          "capture_time": 2001.4,
+          "phash": "0f0f0f0f0f0f0f0f",
+          "metadata": {
+            "cull_sharpness": 0.72,
+            "cull_sharpness_peak": 0.8,
+            "cull_exposure": 0.19,
+            "cull_noise": 0.1,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.27,
+            "cull_shadow_clip": 0.0,
+            "exposure_bias": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "group_id": "l2",
+      "intentional_set": "bracket",
+      "photos": [
+        {
+          "photo_id": "l2_0",
+          "filename": "l2_0.jpg",
+          "capture_time": 3000.0,
+          "phash": "a5a5a5a500000000",
+          "metadata": {
+            "cull_sharpness": 0.72,
+            "cull_sharpness_peak": 0.8,
+            "cull_exposure": 0.16,
+            "cull_noise": 0.1,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.3,
+            "exposure_bias": -2.0
+          }
+        },
+        {
+          "photo_id": "l2_1",
+          "filename": "l2_1.jpg",
+          "capture_time": 3000.7,
+          "phash": "5a5a5a5affffffff",
+          "metadata": {
+            "cull_sharpness": 0.72,
+            "cull_sharpness_peak": 0.8,
+            "cull_exposure": 0.86,
+            "cull_noise": 0.1,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0,
+            "exposure_bias": 0.0
+          }
+        },
+        {
+          "photo_id": "l2_2",
+          "filename": "l2_2.jpg",
+          "capture_time": 3001.4,
+          "phash": "3333333333333333",
+          "metadata": {
+            "cull_sharpness": 0.72,
+            "cull_sharpness_peak": 0.8,
+            "cull_exposure": 0.19,
+            "cull_noise": 0.1,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.27,
+            "cull_shadow_clip": 0.0,
+            "exposure_bias": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "group_id": "l3",
+      "photos": [
+        {
+          "photo_id": "l3_keeper",
+          "filename": "l3_keeper.jpg",
+          "capture_time": 4000.0,
+          "phash": "1234123412341234",
+          "metadata": {
+            "cull_sharpness": 0.78,
+            "cull_sharpness_peak": 0.82,
+            "cull_exposure": 0.72,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.5,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 1
+        },
+        {
+          "photo_id": "l3_shaken",
+          "filename": "l3_shaken.jpg",
+          "capture_time": 4000.6,
+          "phash": "1234123412341234",
+          "metadata": {
+            "cull_sharpness": 0.08,
+            "cull_sharpness_peak": 0.11,
+            "cull_exposure": 0.7,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.5,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0,
+            "cull_motion_anisotropy": 0.88
+          },
+          "rank": 2,
+          "reject": true
+        }
+      ]
+    }
+  ]
+}

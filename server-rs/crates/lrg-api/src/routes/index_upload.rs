@@ -18,7 +18,9 @@ use serde_json::{json, Map, Value};
 
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
+use lrg_imaging::cull_config::{FaceMetricsConfig, ImageMetricsConfig};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
+use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree};
 use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
@@ -32,6 +34,9 @@ pub fn router() -> axum::Router<Arc<AppState>> {
 pub(crate) struct ParsedOptions {
     compute_embeddings: bool,
     compute_faces: bool,
+    /// How much of the face pipeline to run. The `cull` task only reads the
+    /// quality proxies, so it skips ArcFace and the thumbnail encode.
+    face_pass: FacePass,
     compute_metadata: bool,
     compute_vertexai: bool,
     regenerate_metadata: bool,
@@ -41,6 +46,10 @@ pub(crate) struct ParsedOptions {
     model: Option<String>,
     api_key: Option<String>,
     capture_time: Option<f64>,
+    /// Batch-level exposure compensation, from the single-photo multipart
+    /// path. `/index_by_reference` carries it per photo instead — see
+    /// [`PhotoOverrides::exposure_bias`].
+    exposure_bias: Option<f64>,
     vertex_project_id: Option<String>,
     vertex_location: Option<String>,
     /// How many photos to hand the provider per LLM call. `None` means "ask
@@ -57,8 +66,8 @@ pub(crate) struct ParsedOptions {
 /// Per-photo values that must not be shared across a grouped request.
 ///
 /// `/index_by_reference` can carry several photos in one call, but the option
-/// fields arrive flat, one set for the whole request. These four are exactly
-/// the ones `prompts.rs` classifies as volatile — reusing one photo's capture
+/// fields arrive flat, one set for the whole request. These are exactly the
+/// ones `prompts.rs` classifies as volatile — reusing one photo's capture
 /// time, keywords or folders for the whole group would feed the model context
 /// belonging to a different photo. Absent entries fall back to the
 /// batch-level options, which is what every single-photo request does.
@@ -68,6 +77,13 @@ pub(crate) struct PhotoOverrides {
     pub date_time: Option<String>,
     pub existing_keywords: Option<Vec<String>>,
     pub folder_names: Option<String>,
+    /// Exposure compensation in EV (`exposureBias` in the Lightroom SDK).
+    ///
+    /// Not prompt context like the others — it is the decisive evidence for
+    /// bracket detection during culling, which has no other way to tell an AEB
+    /// sequence from a burst, and there is no batch-level fallback because a
+    /// per-photo EV shared across a group would be actively misleading.
+    pub exposure_bias: Option<f64>,
 }
 
 /// The metadata-generation-specific subset of `_extract_options`, kept
@@ -178,6 +194,15 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     };
     let has_task = |t: &str| tasks.iter().any(|x| x == t);
 
+    // `cull` is the fast ingest path: everything culling actually reads
+    // (pHash, image metrics, face quality) and nothing it does not. It
+    // deliberately does *not* imply `embeddings` or `metadata` — the SigLIP2
+    // embedding is ~316-480ms/photo and the LLM is seconds, while culling uses
+    // the embedding only as a secondary near-duplicate signal that pHash plus
+    // capture time already covers for bursts. A later full Analyze & Index run
+    // backfills embeddings without redoing any of this.
+    let cull_pass = has_task("cull");
+
     let reg_val = fields
         .get("regenerate_metadata")
         .or_else(|| fields.get("regenerateMetadata"));
@@ -222,7 +247,12 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
 
     ParsedOptions {
         compute_embeddings: has_task("embeddings"),
-        compute_faces: has_task("faces"),
+        compute_faces: has_task("faces") || cull_pass,
+        face_pass: if has_task("faces") {
+            FacePass::Full
+        } else {
+            FacePass::QualityOnly
+        },
         compute_metadata: has_task("metadata"),
         compute_vertexai: has_task("vertexai"),
         regenerate_metadata,
@@ -232,6 +262,9 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         model: fields.get("model").cloned(),
         api_key: fields.get("api_key").cloned(),
         capture_time,
+        exposure_bias: fields
+            .get("exposure_bias")
+            .and_then(|s| s.trim().parse::<f64>().ok()),
         llm_batch_size,
         engine: crate::routes::llm::engine_overrides_from_fields(fields),
         vertex_project_id: fields
@@ -508,10 +541,38 @@ pub(crate) async fn process_batch(
 
     let store = state.store();
 
+    // Phase 0 — decode, culling metrics and pHash for the whole batch, in
+    // parallel. Pure CPU work with no model behind it, so unlike phase 1 there
+    // is nothing here that wants the whole machine to itself.
+    let t_cull = Instant::now();
+    let image_blobs: Vec<Vec<u8>> = triplets.iter().map(|(b, _, _, _)| b.clone()).collect();
+    let mut cull_signals =
+        tokio::task::spawn_blocking(move || precompute_cull_signals(&image_blobs))
+            .await
+            .unwrap_or_else(|e| vec![Err(format!("cull metric pass panicked: {e}"))]);
+    if !triplets.is_empty() {
+        log::debug!(
+            "Cull signals for {} photo(s) took {:?}",
+            triplets.len(),
+            t_cull.elapsed()
+        );
+    }
+    // A join failure yields a single error; widen it so the zip below still
+    // lines up one entry per photo.
+    if cull_signals.len() != triplets.len() {
+        let msg = cull_signals
+            .first()
+            .and_then(|r| r.as_ref().err().cloned())
+            .unwrap_or_else(|| "cull metric pass produced no result".to_string());
+        cull_signals = triplets.iter().map(|_| Err(msg.clone())).collect();
+    }
+
     // Phase 1 — everything that does not need the LLM, still strictly
     // sequential (SigLIP2 and the face detector each want the whole machine).
     let mut prepared: Vec<PreparedPhoto> = Vec::with_capacity(triplets.len());
-    for (image_bytes, photo_id, filename, photo_overrides) in triplets {
+    for ((image_bytes, photo_id, filename, photo_overrides), cull) in
+        triplets.into_iter().zip(cull_signals)
+    {
         let Some(store_ref) = store.as_ref() else {
             failure_count += 1;
             let msg = "database not initialized (no db_path bound)";
@@ -521,6 +582,17 @@ pub(crate) async fn process_batch(
             error_messages.push(format!("{filename}: {msg}"));
             continue;
         };
+        let cull = match cull {
+            Ok(c) => c,
+            Err(e) => {
+                failure_count += 1;
+                results.push(json!({
+                    "photo_id": photo_id, "success": false, "error": e,
+                }));
+                error_messages.push(format!("{filename}: {e}"));
+                continue;
+            }
+        };
         match prepare_one(
             &state,
             store_ref,
@@ -529,6 +601,7 @@ pub(crate) async fn process_batch(
             &image_bytes,
             &photo_id,
             &filename,
+            cull,
         )
         .await
         {
@@ -702,6 +775,66 @@ struct PreparedPhoto {
 ///
 /// Deliberately stops short of the `IMAGE_TABLE` write, so a photo whose LLM
 /// call later fails is never persisted — same as when this was one function.
+/// The per-photo culling signals, computed once per batch off the hot path.
+pub(crate) struct CullSignals {
+    metrics: lrg_imaging::metrics::CullingMetrics,
+    phash: String,
+}
+
+/// Decodes each image and computes its culling metrics and pHash, in parallel
+/// across the batch.
+///
+/// This used to happen inline in `prepare_one`, inside a loop the surrounding
+/// comment describes as "strictly sequential (SigLIP2 and the face detector
+/// each want the whole machine)". That reasoning holds for the two ONNX models
+/// — both sit behind a `Mutex`, so concurrency there buys nothing — but it does
+/// not hold for decode, resampling and the metric passes, which are pure CPU
+/// and embarrassingly parallel. At ~51ms/photo measured on a 2048px frame
+/// (39ms metrics + 12ms pHash) that was invisible next to a ~400ms embedding
+/// and is the dominant cost once `tasks=cull` removes the embedding.
+///
+/// Decoded pixels are dropped immediately rather than carried forward: a
+/// 2048px RGB8 frame is ~8MB, and holding a whole batch of them across the LLM
+/// phase is exactly the memory blowup the phase split exists to avoid.
+///
+/// The config is deliberately the *default*, never a preset's: indexing happens
+/// long before the user picks a culling preset, and these values are stored
+/// once and read by every later cull run. Storing preset-flavoured numbers
+/// would silently bind a catalog to whichever preset happened to be active
+/// during import. Presets instead re-derive `cull_technical_score` and
+/// `cull_aesthetic` from the stored sub-scores at rank time (see
+/// `lrg_analysis::grouping::rank_group_records`), which is where their weights
+/// belong. The threshold-shaped fields (denominators, exposure target, clip
+/// thresholds) genuinely need pixels, so changing those still requires a
+/// re-index.
+fn precompute_cull_signals(images: &[Vec<u8>]) -> Vec<Result<CullSignals, String>> {
+    use rayon::prelude::*;
+    let cfg = ImageMetricsConfig::default();
+    images
+        .par_iter()
+        .map(|bytes| {
+            let decoded = image::load_from_memory(bytes)
+                .map_err(|e| format!("could not decode image: {e}"))?
+                .to_rgb8();
+            let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+            let pixels = decoded.into_raw();
+            let rgb = RgbImage {
+                pixels: &pixels,
+                width,
+                height,
+            };
+            Ok(CullSignals {
+                metrics: culling_metrics(&rgb, &cfg),
+                phash: perceptual_hash(&rgb),
+            })
+        })
+        .collect()
+}
+
+// Six of these are the per-photo inputs the batch loop already carries as a
+// tuple; bundling them into a struct here would just move the same list one
+// level out without making any call site clearer.
+#[allow(clippy::too_many_arguments)]
 async fn prepare_one(
     state: &AppState,
     store: &Arc<lrg_store::Store>,
@@ -710,16 +843,19 @@ async fn prepare_one(
     image_bytes: &[u8],
     photo_id: &str,
     filename: &str,
+    cull: CullSignals,
 ) -> Result<PreparedPhoto, String> {
-    let decoded = image::load_from_memory(image_bytes)
-        .map_err(|e| format!("could not decode image: {e}"))?
-        .to_rgb8();
-    let (width, height) = (decoded.width() as usize, decoded.height() as usize);
-    let pixels = decoded.into_raw();
-    let rgb = RgbImage {
-        pixels: &pixels,
-        width,
-        height,
+    // The cull signals arrive precomputed from the parallel pass, so the only
+    // reason left to decode here is the SigLIP2 embedding. A cull-only run
+    // therefore never decodes in this function at all.
+    let decoded_for_embedding = if options.compute_embeddings {
+        let decoded = image::load_from_memory(image_bytes)
+            .map_err(|e| format!("could not decode image: {e}"))?
+            .to_rgb8();
+        let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+        Some((decoded.into_raw(), width, height))
+    } else {
+        None
     };
 
     let existing = if options.regenerate_metadata {
@@ -761,9 +897,27 @@ async fn prepare_one(
     if let Some(ct) = overrides.capture_time.or(options.capture_time) {
         main_metadata.insert("capture_time".into(), json!(ct));
     }
+    // Only written when the plugin sent it. Never defaulted to 0.0: bracket
+    // detection requires *every* frame in a group to carry a value, and a
+    // fabricated zero would turn "we do not know" into "all frames identical",
+    // which is exactly the shape a focus stack is matched on.
+    if let Some(ev) = overrides.exposure_bias.or(options.exposure_bias) {
+        main_metadata.insert("exposure_bias".into(), json!(ev));
+    }
 
     // Culling metrics + pHash are cheap enough to compute on every pass.
-    let metrics = culling_metrics(&rgb);
+    //
+    // Deliberately the *default* config, never a preset's: indexing happens
+    // long before the user picks a culling preset, and these values are stored
+    // once and read by every later cull run. Storing preset-flavoured numbers
+    // would silently bind a catalog to whichever preset happened to be active
+    // during import. Presets instead re-derive `cull_technical_score` and
+    // `cull_aesthetic` from the stored sub-scores at rank time (see
+    // `lrg_analysis::grouping::rank_group_records`), which is where their
+    // weights belong. The threshold-shaped fields here (denominators, exposure
+    // target, clip thresholds) genuinely need pixels, so changing those still
+    // requires a re-index.
+    let CullSignals { metrics, phash } = cull;
     main_metadata.insert("cull_sharpness".into(), json!(metrics.cull_sharpness));
     main_metadata.insert("cull_exposure".into(), json!(metrics.cull_exposure));
     main_metadata.insert("cull_noise".into(), json!(metrics.cull_noise));
@@ -777,7 +931,30 @@ async fn prepare_one(
         json!(metrics.cull_technical_score),
     );
     main_metadata.insert("cull_aesthetic".into(), json!(metrics.cull_aesthetic));
-    let phash = perceptual_hash(&rgb);
+    // Subject-region signals. Older rows predate these; every consumer treats
+    // an absent value as "fall back to the frame-wide number", so a catalog
+    // indexed before this shipped keeps working and simply does not benefit
+    // until it is re-indexed.
+    main_metadata.insert(
+        "cull_sharpness_peak".into(),
+        json!(metrics.cull_sharpness_peak),
+    );
+    main_metadata.insert(
+        "cull_focus_concentration".into(),
+        json!(metrics.cull_focus_concentration),
+    );
+    main_metadata.insert(
+        "cull_sharp_region_x".into(),
+        json!(metrics.cull_sharp_region_x),
+    );
+    main_metadata.insert(
+        "cull_sharp_region_y".into(),
+        json!(metrics.cull_sharp_region_y),
+    );
+    main_metadata.insert(
+        "cull_motion_anisotropy".into(),
+        json!(metrics.cull_motion_anisotropy),
+    );
     if !phash.is_empty() {
         main_metadata.insert("cull_phash".into(), json!(phash));
         main_metadata.insert("phash".into(), json!(phash));
@@ -797,9 +974,13 @@ async fn prepare_one(
     let mut new_embedding: Option<Vec<f32>> = None;
     if need_embedding {
         let t0 = Instant::now();
+        let (pixels, width, height) = decoded_for_embedding
+            .as_ref()
+            .map(|(p, w, h)| (p.as_slice(), *w, *h))
+            .ok_or_else(|| "internal: embedding requested without decoded pixels".to_string())?;
         let mut emb = state
             .siglip
-            .embed_image(&pixels, width, height)
+            .embed_image(pixels, width, height)
             .map_err(|e| format!("Embedding generation failed: {e}"))?;
         log::debug!("Photo {photo_id}: SigLIP2 embed took {:?}", t0.elapsed());
         lrg_ml::siglip::l2_normalize(&mut emb);
@@ -969,7 +1150,13 @@ async fn finish_one(
                         let t0 = Instant::now();
                         let result = state
                             .face
-                            .detect_faces(&pixels, width, height)
+                            .detect_faces(
+                                &pixels,
+                                width,
+                                height,
+                                &FaceMetricsConfig::defaults(),
+                                options.face_pass,
+                            )
                             .map_err(|e| e.to_string());
                         log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
                         result
@@ -978,6 +1165,32 @@ async fn finish_one(
                 }
             };
             match face_result {
+                // The quality-only pass has no identity embedding and no
+                // thumbnail, so it must not touch FACE_TABLE at all: writing
+                // empty vectors would corrupt person clustering, and clearing
+                // the photo's existing rows would destroy identities a previous
+                // full run had established. It also deliberately leaves
+                // `faces_checked` unset, so `/index/check-unprocessed` still
+                // reports the photo as needing a real face pass later.
+                Ok(faces) if options.face_pass == FacePass::QualityOnly => {
+                    let inputs: Vec<FaceMetricsInput> = faces
+                        .iter()
+                        .map(|f| FaceMetricsInput {
+                            sharpness: f.sharpness,
+                            area_ratio: f.area_ratio,
+                            det_score: f.det_score,
+                            center_proximity: f.center_proximity,
+                            eye_openness: f.eye_openness,
+                            blink_penalty: f.blink_penalty,
+                            occlusion: Some(f.occlusion),
+                        })
+                        .collect();
+                    apply_face_aggregate(&mut main_metadata, &inputs);
+                    log::debug!(
+                        "Photo {photo_id}: cull pass scored {} face(s), no identity written.",
+                        faces.len()
+                    );
+                }
                 Ok(faces) => {
                     let t_scan = Instant::now();
                     // Face ids are `{photo_id}_{n}`; a prefix delete clears
@@ -1107,7 +1320,7 @@ async fn finish_one(
 }
 
 fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsInput]) {
-    let agg = aggregate_face_culling_metrics(faces);
+    let agg = aggregate_face_culling_metrics(faces, &FaceMetricsConfig::defaults());
     metadata.insert("cull_face_count".into(), json!(agg.cull_face_count));
     metadata.insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
     metadata.insert(
@@ -1238,6 +1451,7 @@ mod keyword_option_tests {
             date_time: Some("2026-08-07 12:00:00".to_string()),
             existing_keywords: Some(vec!["mine".to_string()]),
             folder_names: Some("MyFolder".to_string()),
+            exposure_bias: None,
         };
         let req = build_metadata_request(&opts, &overrides, &[], "p1");
         assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));

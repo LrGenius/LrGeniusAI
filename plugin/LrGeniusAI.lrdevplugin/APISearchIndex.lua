@@ -672,7 +672,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 	local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
 
 	local body = {
-		images = { { path = filePath, photo_id = photoId } },
+		images = { { path = filePath, photo_id = photoId, exposure_bias = options.exposure_bias } },
 		catalog_id = getCatalogId(),
 		tasks = options.tasks or {},
 		provider = options.provider,
@@ -786,6 +786,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			date_time_unix = po.date_time_unix,
 			existing_keywords = po.existing_keywords,
 			folder_names = po.folder_names,
+			exposure_bias = po.exposure_bias,
 		})
 	end
 
@@ -1071,6 +1072,11 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
+	end
+	-- Exposure compensation, needed by culling's bracket detection. Only sent
+	-- when the camera recorded it; see the note in buildPhotoOptions.
+	if type(options.exposure_bias) == "number" then
+		table.insert(mimeChunks, { name = "exposure_bias", value = tostring(options.exposure_bias) })
 	end
 	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
 		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
@@ -1397,6 +1403,35 @@ function SearchIndexAPI.groupSimilarPhotos(photoIds, options)
 	return result
 end
 
+---
+-- Groups and ranks photos for culling.
+--
+-- Each returned group carries `keep_all` (boolean) and `intentional_set`
+-- ("bracket" | "focus_stack" | "panorama" | null). A keep-all group is an
+-- exposure bracket, focus stack or panorama — one picture spread across several
+-- frames — and the backend guarantees its `reject_candidate_photo_ids` is
+-- empty. Branch on `keep_all`, not on `group_type`: the type field gained new
+-- values and an older client would treat an unfamiliar one as an ordinary
+-- group.
+--
+-- `summary` additionally reports `intentional_set_group_count` and
+-- `intentional_set_photo_count`.
+--
+-- Each photo's `metrics` may carry `semantic` plus `semantic_axis`
+-- ("action" | "expression" | "candid") — a zero-shot score for what the genre
+-- is actually judged on, which the technical signals cannot express. Absent
+-- when the photo has no embedding (the fast cull ingest skips it) or the preset
+-- names no axis.
+--
+-- @param photoIds table Array of stable photo IDs.
+-- @param options table phash_threshold, clip_threshold, time_delta_seconds,
+--   culling_preset, use_iqa (defaults true; scores the aesthetic term with
+--   CLIP-IQA over stored embeddings), semantic_weight (overrides the preset's
+--   weight for the genre axis; 0 disables it), and include_stored_metadata
+--   (echoes each photo's stored cull_* inputs under photos[].stored_metadata,
+--   for building evaluation fixtures).
+-- @return table|nil result, string|nil error
+---
 function SearchIndexAPI.cullPhotos(photoIds, options)
 	options = options or {}
 	if type(photoIds) ~= "table" or #photoIds == 0 then
@@ -1410,6 +1445,15 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		time_delta_seconds = options.time_delta_seconds or 2,
 		culling_preset = options.culling_preset or "default",
 	}
+	if options.include_stored_metadata then
+		body.include_stored_metadata = true
+	end
+	-- Overrides the preset's own weight for the genre semantic axis (peak
+	-- action, expression, candid moment). Exposed so the signal can be swept
+	-- from outside without a backend rebuild; nil leaves the preset in charge.
+	if type(options.semantic_weight) == "number" then
+		body.semantic_weight = options.semantic_weight
+	end
 
 	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CULL, body, 300)
 	if err then
@@ -1417,6 +1461,34 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		return nil, err
 	end
 	return result
+end
+
+---
+-- Ask the backend which of the given photo IDs still lack data for `tasks`.
+--
+-- `SearchIndexAPI.getMissingPhotosFromIndex` answers the same question but
+-- always walks the entire catalog first, which is far too heavy for a
+-- pre-flight over a selection. This checks exactly the IDs it is handed.
+-- @param photoIds table Array of photo IDs to test.
+-- @param tasks table Array of task names, e.g. { "cull" }.
+-- @return table|nil Array of photo IDs needing work, or nil plus an error.
+function SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, tasks)
+	if type(photoIds) ~= "table" or #photoIds == 0 then
+		return {}, nil
+	end
+
+	local body = {
+		photo_ids = photoIds,
+		tasks = tasks or { "cull" },
+		regenerate_metadata = false,
+	}
+
+	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body, 120)
+	if err then
+		log:error("checkUnprocessedPhotoIds failed: " .. tostring(err))
+		return nil, err
+	end
+	return (result and result.photo_ids) or {}, nil
 end
 
 ---
@@ -1722,6 +1794,13 @@ local function buildPhotoOptions(photo, photoId, options)
 	if datetime ~= nil and type(datetime) == "number" then
 		photoOptions.date_time = LrDate.timeToW3CDate(datetime)
 		photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
+	end
+	-- Exposure compensation, stored so culling can recognise an exposure
+	-- bracket instead of nominating four of its five frames for deletion. Left
+	-- absent when the camera did not record it — see Util.getPhotoExif.
+	local exposureBias = photo:getRawMetadata("exposureBias")
+	if type(exposureBias) == "number" then
+		photoOptions.exposure_bias = exposureBias
 	end
 	photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
 	photoOptions.photo_id = photoId
