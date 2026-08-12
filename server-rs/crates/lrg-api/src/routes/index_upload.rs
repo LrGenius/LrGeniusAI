@@ -817,6 +817,10 @@ fn precompute_cull_signals(images: &[Vec<u8>]) -> Vec<Result<CullSignals, String
         .collect()
 }
 
+// Six of these are the per-photo inputs the batch loop already carries as a
+// tuple; bundling them into a struct here would just move the same list one
+// level out without making any call site clearer.
+#[allow(clippy::too_many_arguments)]
 async fn prepare_one(
     state: &AppState,
     store: &Arc<lrg_store::Store>,

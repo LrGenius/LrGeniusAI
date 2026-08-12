@@ -87,6 +87,18 @@ pub struct FaceMetricsConfig {
     pub occlusion_det_weight: f64,
     pub occlusion_center_weight: f64,
     pub occlusion_eye_weight: f64,
+    /// Which faces count as "prominent" when rolling per-face eye, blink and
+    /// occlusion scores up to the photo, as a fraction of the largest face's
+    /// area. A face below this is treated as background and cannot veto the
+    /// frame.
+    ///
+    /// Photo-level eyes-open is the *worst* prominent face, not the best. A
+    /// ten-person group shot where nine people blink and one has their eyes
+    /// open is a reject, and taking the max — which is what this used to do —
+    /// scored it as perfect. Without the size gate, though, any half-visible
+    /// bystander at the edge of the frame would sink every frame equally and
+    /// the signal would stop discriminating.
+    pub prominent_face_area_fraction: f64,
 }
 
 impl FaceMetricsConfig {
@@ -109,6 +121,7 @@ impl FaceMetricsConfig {
             occlusion_det_weight: 0.55,
             occlusion_center_weight: 0.20,
             occlusion_eye_weight: 0.25,
+            prominent_face_area_fraction: 0.25,
         }
     }
 }
