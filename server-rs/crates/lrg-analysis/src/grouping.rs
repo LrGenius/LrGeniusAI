@@ -44,6 +44,16 @@ fn cosine_distance(a: Option<&[f32]>, b: Option<&[f32]>) -> Option<f64> {
     Some(1.0 - similarity)
 }
 
+/// [`cosine_distance`] with the L2 norms supplied by the caller instead of
+/// recomputed per pair. Arithmetic is otherwise identical, so results match
+/// bit-for-bit; the point is to pay O(n) norms instead of O(n^2).
+fn cosine_distance_pre(a: Option<(&[f32], f64)>, b: Option<(&[f32], f64)>) -> Option<f64> {
+    let ((va, norm_a), (vb, norm_b)) = (a?, b?);
+    let dot: f64 = va.iter().zip(vb).map(|(x, y)| *x as f64 * *y as f64).sum();
+    let similarity = (dot / (norm_a * norm_b)).clamp(-1.0, 1.0);
+    Some(1.0 - similarity)
+}
+
 fn phash_hamming(a: Option<u64>, b: Option<u64>) -> Option<u32> {
     Some((a? ^ b?).count_ones())
 }
@@ -505,46 +515,104 @@ pub fn group_and_sort_images(
     // sorted-pair (i,j) with i<j -> "near_duplicate" | "burst"
     let mut edge_kinds: HashMap<(usize, usize), &'static str> = HashMap::new();
 
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let (left, right) = (&records[i], &records[j]);
-            let distance = cosine_distance(
-                effective_embedding(&left.embedding),
-                effective_embedding(&right.embedding),
-            );
-            let phash_distance = phash_hamming(left.phash, right.phash);
-
-            let mut time_gap = None;
-            if let (Some(lt), Some(rt)) = (left.capture_time, right.capture_time) {
-                let gap = (rt - lt).abs();
-                time_gap = Some(gap);
-                if gap > th.duplicate_time_window_seconds
-                    && distance.is_none()
-                    && phash_distance.is_none()
-                {
-                    break;
-                }
+    // Hoist the L2 norms out of the pair loop. `cosine_distance` recomputed
+    // both of them on every call, which is two thirds of the work in an
+    // O(n^2) sweep over 1152-dimensional vectors. The arithmetic is unchanged,
+    // so distances stay bit-identical.
+    let normed: Vec<Option<(&[f32], f64)>> = records
+        .iter()
+        .map(|r| {
+            let v = effective_embedding(&r.embedding)?;
+            let norm: f64 = v.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+            if norm == 0.0 {
+                None
+            } else {
+                Some((v, norm))
             }
+        })
+        .collect();
 
-            let is_near_duplicate = (phash_distance
-                .is_some_and(|d| d as f64 <= th.phash_hamming_threshold as f64)
+    // `record_sort_key` puts records that *have* a capture time first (the key
+    // leads with `capture_time.is_none()`), ascending. So the timed records are
+    // a sorted prefix and the undated ones are a suffix.
+    let timed = records
+        .iter()
+        .take_while(|r| r.capture_time.is_some())
+        .count();
+
+    // Neither edge type can survive a time gap wider than this:
+    //   - near-duplicate requires `gap <= duplicate_time_window_seconds`
+    //   - burst requires `gap <= time_window_seconds`
+    // so once a pair exceeds the wider of the two, every later `j` (sorted
+    // ascending) is further still and can be skipped. Taking the max rather
+    // than assuming `duplicate >= burst` keeps this correct even if a config
+    // sets `duplicate_time_window_multiplier` below 1.
+    let max_edge_gap = th.duplicate_time_window_seconds.max(th.time_window_seconds);
+
+    let consider = |i: usize,
+                    j: usize,
+                    uf: &mut UnionFind,
+                    edge_kinds: &mut HashMap<(usize, usize), &'static str>| {
+        let (left, right) = (&records[i], &records[j]);
+        let time_gap = match (left.capture_time, right.capture_time) {
+            (Some(lt), Some(rt)) => Some((rt - lt).abs()),
+            _ => None,
+        };
+
+        let phash_distance = phash_hamming(left.phash, right.phash);
+        let time_ok_for_duplicate = time_gap.is_none_or(|g| g <= th.duplicate_time_window_seconds);
+        let phash_says_duplicate =
+            phash_distance.is_some_and(|d| d as f64 <= th.phash_hamming_threshold as f64);
+
+        // A matching pHash already settles it: the pair is a near-duplicate and
+        // the edge is labelled `near_duplicate` whatever the cosine says, so
+        // skip the embedding comparison entirely. This is the common case
+        // inside a burst, where consecutive frames hash identically.
+        let (is_near_duplicate, is_burst) = if phash_says_duplicate && time_ok_for_duplicate {
+            (true, false)
+        } else {
+            let distance = cosine_distance_pre(normed[i], normed[j]);
+            let is_near_duplicate = (phash_says_duplicate
                 || distance.is_some_and(|d| d <= th.duplicate_distance_threshold))
-                && time_gap.is_none_or(|g| g <= th.duplicate_time_window_seconds);
+                && time_ok_for_duplicate;
             let is_burst = distance.is_some_and(|d| d <= th.burst_distance_threshold)
                 && time_gap.is_some_and(|g| g <= th.time_window_seconds);
+            (is_near_duplicate, is_burst)
+        };
 
-            if !is_near_duplicate && !is_burst {
-                continue;
+        if !is_near_duplicate && !is_burst {
+            return;
+        }
+        uf.union(i, j);
+        edge_kinds.insert(
+            (i, j),
+            if is_near_duplicate {
+                "near_duplicate"
+            } else {
+                "burst"
+            },
+        );
+    };
+
+    // Timed records against the sliding window of timed records that follow.
+    let times: Vec<f64> = records
+        .iter()
+        .take(timed)
+        .map(|r| r.capture_time.unwrap_or(f64::INFINITY))
+        .collect();
+    for (i, &ti) in times.iter().enumerate() {
+        for (offset, &tj) in times[(i + 1)..].iter().enumerate() {
+            if (tj - ti).abs() > max_edge_gap {
+                break;
             }
-            uf.union(i, j);
-            edge_kinds.insert(
-                (i, j),
-                if is_near_duplicate {
-                    "near_duplicate"
-                } else {
-                    "burst"
-                },
-            );
+            consider(i, i + 1 + offset, &mut uf, &mut edge_kinds);
+        }
+    }
+    // Undated records still need the full sweep: with no capture time the gap
+    // is unknown, and `is_near_duplicate` treats that as "not disqualifying".
+    for i in 0..n {
+        for j in (i + 1).max(timed)..n {
+            consider(i, j, &mut uf, &mut edge_kinds);
         }
     }
 
@@ -688,4 +756,144 @@ pub fn group_and_sort_images(
     });
 
     groups
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(id: &str, capture_time: Option<f64>, phash: Option<u64>) -> GroupingInput {
+        GroupingInput {
+            photo_id: id.to_string(),
+            filename: format!("{id}.jpg"),
+            capture_time,
+            embedding: None,
+            phash,
+            metadata: Map::new(),
+        }
+    }
+
+    /// Group id per photo, for comparing partitions regardless of ordering.
+    fn partition(groups: &[Group]) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for g in groups {
+            for id in &g.photo_ids {
+                out.insert(id.clone(), g.group_id.clone());
+            }
+        }
+        out
+    }
+
+    fn run(records: Vec<GroupingInput>) -> Vec<Group> {
+        group_and_sort_images(records, None, None, Some(1), "default")
+    }
+
+    /// The sliding window skips pairs beyond the duplicate window. That is only
+    /// sound because no edge can form there — this pins the behaviour.
+    #[test]
+    fn identical_hashes_far_apart_in_time_do_not_group() {
+        let hash = Some(0xffff_ffff_ffff_ffff);
+        // Default duplicate window is max(1*4, 10) = 10s; 60s apart is well out.
+        let groups = run(vec![
+            rec("a", Some(1000.0), hash),
+            rec("b", Some(1060.0), hash),
+            rec("c", Some(1120.0), hash),
+        ]);
+        assert_eq!(groups.len(), 3, "each frame should stand alone");
+        assert!(groups.iter().all(|g| g.group_type == "single"));
+    }
+
+    #[test]
+    fn identical_hashes_inside_the_window_group() {
+        let hash = Some(0xffff_ffff_ffff_ffff);
+        let groups = run(vec![
+            rec("a", Some(1000.0), hash),
+            rec("b", Some(1002.0), hash),
+            rec("c", Some(1004.0), hash),
+        ]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].group_size, 3);
+    }
+
+    /// A chain of frames each within the window of the next spans further than
+    /// the window overall. Union-find must still connect them transitively —
+    /// the window prunes *pair* checks, not connectivity.
+    #[test]
+    fn window_pruning_preserves_transitive_chains() {
+        let hash = Some(0xffff_ffff_ffff_ffff);
+        let records: Vec<GroupingInput> = (0..12)
+            .map(|i| rec(&format!("p{i}"), Some(1000.0 + i as f64 * 3.0), hash))
+            .collect();
+        // Span is 33s, far wider than the 10s window, but consecutive gaps are 3s.
+        let groups = run(records);
+        assert_eq!(groups.len(), 1, "chain must stay connected");
+        assert_eq!(groups[0].group_size, 12);
+    }
+
+    /// Records with no capture time cannot be pruned by the window, because
+    /// `is_near_duplicate` treats an unknown gap as "not disqualifying".
+    #[test]
+    fn undated_records_still_match_across_the_whole_set() {
+        let hash = Some(0xffff_ffff_ffff_ffff);
+        let groups = run(vec![
+            rec("timed", Some(1000.0), hash),
+            rec("undated_a", None, hash),
+            rec("undated_b", None, hash),
+        ]);
+        assert_eq!(groups.len(), 1, "undated frames join on pHash alone");
+        assert_eq!(groups[0].group_size, 3);
+    }
+
+    /// Undated records sort last, so they are exactly the suffix the second
+    /// loop sweeps. A dated frame far from another dated frame must still not
+    /// join, even when undated frames are present in the same request.
+    #[test]
+    fn undated_suffix_does_not_leak_edges_between_distant_dated_frames() {
+        let groups = run(vec![
+            rec("a", Some(1000.0), Some(0x0000_0000_0000_0000)),
+            rec("b", Some(9000.0), Some(0xffff_ffff_ffff_ffff)),
+            rec("c", None, Some(0x0f0f_0f0f_0f0f_0f0f)),
+        ]);
+        let p = partition(&groups);
+        assert_ne!(p["a"], p["b"], "distinct hashes, 8000s apart");
+        assert_eq!(groups.len(), 3);
+    }
+
+    /// Differing pHashes beyond the threshold must not group even when the
+    /// frames are adjacent in time, otherwise the pHash short-circuit would be
+    /// masking a real comparison.
+    #[test]
+    fn distinct_hashes_close_in_time_do_not_group_without_embeddings() {
+        let groups = run(vec![
+            rec("a", Some(1000.0), Some(0x0000_0000_0000_0000)),
+            rec("b", Some(1001.0), Some(0xffff_ffff_ffff_ffff)),
+        ]);
+        assert_eq!(groups.len(), 2);
+    }
+
+    /// Embeddings and pHashes must agree with the pre-normed distance path.
+    #[test]
+    fn embedding_only_records_group_by_cosine() {
+        let mut a = rec("a", Some(1000.0), None);
+        let mut b = rec("b", Some(1001.0), None);
+        let mut far = rec("far", Some(1002.0), None);
+        a.embedding = Some(vec![1.0, 0.0, 0.0]);
+        b.embedding = Some(vec![1.0, 0.001, 0.0]); // cosine distance ~5e-7
+        far.embedding = Some(vec![0.0, 1.0, 0.0]); // orthogonal
+        let groups = run(vec![a, b, far]);
+        let p = partition(&groups);
+        assert_eq!(p["a"], p["b"], "near-identical vectors group");
+        assert_ne!(p["a"], p["far"], "orthogonal vector stays separate");
+    }
+
+    /// Hoisting the L2 norms out of the pair loop must not change any distance.
+    #[test]
+    fn pre_normed_cosine_matches_the_original() {
+        let a: Vec<f32> = (0..64).map(|i| (i as f32 * 0.37).sin()).collect();
+        let b: Vec<f32> = (0..64).map(|i| (i as f32 * 0.11).cos()).collect();
+        let norm = |v: &[f32]| -> f64 { v.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt() };
+        let want = cosine_distance(Some(&a), Some(&b)).unwrap();
+        let got = cosine_distance_pre(Some((&a, norm(&a))), Some((&b, norm(&b)))).unwrap();
+        assert_eq!(want.to_bits(), got.to_bits(), "must be bit-identical");
+    }
 }
