@@ -1,216 +1,434 @@
 #!/usr/bin/env python3
-"""
-Generate AI-powered release notes for LrGeniusAI and maintain CHANGELOG.md.
-Uses Google Gemini with a technical and concise tone.
+"""Generate end-user-facing release notes for a LrGeniusAI release.
+
+GitHub's own auto-generated notes are a list of pull request titles, which read
+like a commit log to the photographers who actually install this plugin. This
+script rewrites them for that audience, without an AI service and without any
+API key beyond the workflow's built-in GITHUB_TOKEN:
+
+  1. ask GitHub for the auto-generated notes of the tag (which also resolves
+     "since which previous tag" for us),
+  2. pull the title and labels of every PR referenced in them,
+  3. sort those into New / Improved / Fixed using the PR's labels and its
+     conventional-commit prefix, dropping changes with no user-visible effect,
+  4. wrap the result in the static download/troubleshooting sections and keep
+     the technical list in a collapsed <details> block.
+
+Everything here is deterministic: the same release always produces the same
+notes. The wording of each bullet is the PR title with its `type(scope):`
+prefix stripped — so a clear PR title is what makes a clear release note.
+
+Only the standard library is used, so it runs on a bare runner.
+
+Usage (in CI):
+    python3 scripts/generate_release_notes.py \
+        --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" \
+        --manifest "update-manifest-$GITHUB_REF_NAME.json" \
+        --output release_notes.md
+
+Preview locally (needs a token with read access to the repo):
+    GITHUB_TOKEN=... python3 scripts/generate_release_notes.py \
+        --repo LrGenius/LrGeniusAI --tag v2.20.1 --output -
 """
 
+import argparse
+import json
 import os
+import re
 import subprocess
 import sys
-import json
-import re
-from datetime import datetime
+import time
+import urllib.error
+import urllib.request
 
-CHANGELOG_FILE = "CHANGELOG.md"
-RELEASE_NOTES_FILE = "release_notes.md"
-MODEL_ID = "gemini-3.1-flash-lite-preview"
+GITHUB_API = "https://api.github.com"
 
-# Static footer for the latest release notes (GitHub Release body)
-STATIC_FOOTER = """
-## Installers & System Integration
-- The backend now runs as a persistent system service (LaunchAgent on macOS, Startup Registry on Windows).
-- It starts automatically at login and remains active to manage background AI tasks even when Lightroom is closed.
-- Manual management (troubleshooting):
-  - Windows: Run `{commonpf}\\LrGeniusAI\\backend\\lrgenius-server.cmd`
-  - macOS: Service `com.lrgenius.server` (managed via `launchctl`)
+MAX_PRS = 60
 
-### Security & Permissions
-- **Windows**: You may see a SmartScreen warning ("Windows protected your PC") during installation because the installer is not signed. Click "More info" and "Run anyway" to proceed.
-- **macOS**: If Gatekeeper blocks the installer, go to **System Settings > Privacy & Security** and click **"Open Anyway"** under the Security section. Alternatively, run `xattr -d com.apple.quarantine <path-to-pkg>` in Terminal to clear the block.
+# Section order and headings. "other" catches anything that looks user-facing
+# but doesn't classify — better a vague bullet than a silently dropped change.
+SECTIONS = [
+    ("new", "### New"),
+    ("improved", "### Improved"),
+    ("fixed", "### Fixed"),
+    ("other", "### Other changes"),
+]
 
-## Docker Deployment
-- For containerized environments, use the `LrGeniusAI-plugin-docker-backend-<version>.zip` asset which includes the pre-configured plugin and Docker setup.
-"""
+# A label wins over the title prefix: it is a deliberate human judgement, while
+# the prefix is a habit. `None` means "not worth telling a photographer about".
+LABEL_CATEGORY = {
+    "feature": "new",
+    "features": "new",
+    "enhancement": "new",
+    "bug": "fixed",
+    "bugfix": "fixed",
+    "fix": "fixed",
+    "performance": "improved",
+    "perf": "improved",
+    "improvement": "improved",
+    "documentation": None,
+    "docs": None,
+    "chore": None,
+    "ci": None,
+    "build": None,
+    "test": None,
+    "tests": None,
+    "refactor": None,
+    "internal": None,
+    "dependencies": None,
+}
 
-def run_command(cmd):
+# Scopes naming an internal area. These override the type, because the area is
+# the better signal: `fix(ci):` fixes the build, not anything a photographer
+# can see, whereas `fix(server):` or `fix(plugin):` usually is visible.
+INTERNAL_SCOPES = {
+    "ci",
+    "build",
+    "release",
+    "docs",
+    "doc",
+    "deps",
+    "dependencies",
+    "test",
+    "tests",
+    "meta",
+    "workflow",
+    "workflows",
+}
+
+# Conventional-commit types (`feat(plugin): ...`).
+TYPE_CATEGORY = {
+    "feat": "new",
+    "feature": "new",
+    "fix": "fixed",
+    "bugfix": "fixed",
+    "perf": "improved",
+    "improve": "improved",
+    "docs": None,
+    "doc": None,
+    "chore": None,
+    "ci": None,
+    "build": None,
+    "test": None,
+    "tests": None,
+    "refactor": None,
+    "style": None,
+}
+
+# Fallback for titles written as a plain sentence ("Add Dependabot config").
+VERB_CATEGORY = [
+    (r"^(add|introduce|support|enable|implement)\b", "new"),
+    (r"^(fix|resolve|correct|prevent|stop|repair)\b", "fixed"),
+    (r"^(improve|speed up|reduce|optimi[sz]e|make .* faster)\b", "improved"),
+    (r"^(bump|revert|refactor|rename|document|delete .*(workflow|config|file))\b", None),
+]
+
+CONVENTIONAL_PREFIX = re.compile(r"^(?P<type>[a-zA-Z]+)(?:\((?P<scope>[^)]*)\))?!?:\s*")
+TRAILING_PR_NUMBER = re.compile(r"\s*\(#\d+\)\s*$")
+
+
+def log(message):
+    print(message, file=sys.stderr)
+
+
+def http_json(url, token, payload=None):
+    """POST/GET JSON with a couple of retries on transient failures."""
+    data = json.dumps(payload).encode() if payload is not None else None
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "lrgeniusai-release-notes",
+    }
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+
+    last_error = None
+    for attempt in range(3):
+        request = urllib.request.Request(url, data=data, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as error:
+            body = error.read().decode(errors="replace")[:400]
+            last_error = f"HTTP {error.code} from {url}: {body}"
+            # 4xx other than rate limiting will not fix themselves.
+            if error.code < 500 and error.code != 429:
+                break
+        except (urllib.error.URLError, TimeoutError, ValueError) as error:
+            last_error = f"{type(error).__name__} from {url}: {error}"
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(last_error or f"request to {url} failed")
+
+
+def fetch_generated_notes(repo, tag, token, target=None):
+    """GitHub's own release notes for the tag — the technical changelog."""
+    payload = {"tag_name": tag}
+    if target:
+        payload["target_commitish"] = target
+    result = http_json(f"{GITHUB_API}/repos/{repo}/releases/generate-notes", token, payload)
+    return result.get("body", "").strip()
+
+
+def extract_pr_numbers(generated_body):
+    """PR numbers referenced by the generated notes, in order, de-duplicated."""
+    seen = []
+    for match in re.finditer(r"/pull/(\d+)", generated_body):
+        number = int(match.group(1))
+        if number not in seen:
+            seen.append(number)
+    return seen[:MAX_PRS]
+
+
+def fetch_changes(repo, numbers, token):
+    """Title + labels for each referenced PR."""
+    changes = []
+    for number in numbers:
+        try:
+            data = http_json(f"{GITHUB_API}/repos/{repo}/pulls/{number}", token)
+        except RuntimeError as error:
+            log(f"WARNING: could not read PR #{number}: {error}")
+            continue
+        changes.append(
+            {
+                "title": data.get("title") or "",
+                "labels": [(label.get("name") or "").lower() for label in data.get("labels") or []],
+            }
+        )
+    return changes
+
+
+def commit_changes(tag):
+    """Commit subjects since the previous tag — used when no PRs are referenced."""
     try:
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print(f"Error running command '{cmd}': {e.stderr}")
+        tags = subprocess.run(
+            ["git", "tag", "--sort=-creatordate"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        previous = next((t for t in tags if t != tag), None)
+        range_spec = f"{previous}..{tag}" if previous else tag
+        output = subprocess.run(
+            ["git", "log", range_spec, "--no-merges", "--pretty=format:%s"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError) as error:
+        log(f"WARNING: could not read commit subjects: {error}")
+        return []
+    return [{"title": line.strip(), "labels": []} for line in output.splitlines() if line.strip()]
+
+
+def classify(change):
+    """Which section a change belongs in, or None to leave it out entirely."""
+    for label in change["labels"]:
+        if label in LABEL_CATEGORY:
+            return LABEL_CATEGORY[label]
+
+    match = CONVENTIONAL_PREFIX.match(change["title"])
+    if match:
+        scope = (match.group("scope") or "").strip().lower()
+        if scope in INTERNAL_SCOPES:
+            return None
+        kind = match.group("type").lower()
+        if kind in TYPE_CATEGORY:
+            return TYPE_CATEGORY[kind]
+
+    lowered = change["title"].strip().lower()
+    for pattern, category in VERB_CATEGORY:
+        if re.match(pattern, lowered):
+            return category
+
+    return "other"
+
+
+def clean_title(title):
+    """Strip the `type(scope):` prefix and tidy the sentence."""
+    text = CONVENTIONAL_PREFIX.sub("", title.strip())
+    text = TRAILING_PR_NUMBER.sub("", text).strip().rstrip(".")
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    return text
+
+
+def lead_sentence(counts):
+    """One plain sentence counting what is in the release."""
+    nouns = {
+        "new": ("new feature", "new features"),
+        "improved": ("improvement", "improvements"),
+        "fixed": ("fix", "fixes"),
+        "other": ("other change", "other changes"),
+    }
+    parts = []
+    for key, _ in SECTIONS:
+        count = counts.get(key, 0)
+        if count:
+            singular, plural = nouns[key]
+            parts.append(f"{count} {singular if count == 1 else plural}")
+    if not parts:
+        return None
+    if len(parts) == 1:
+        listed = parts[0]
+    else:
+        listed = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+    return f"This update brings {listed}."
+
+
+def build_summary(changes):
+    """The user-facing section, or None when nothing classified."""
+    buckets = {key: [] for key, _ in SECTIONS}
+    for change in changes:
+        category = classify(change)
+        if category is None:
+            continue
+        title = clean_title(change["title"])
+        if title and title not in buckets[category]:
+            buckets[category].append(title)
+
+    counts = {key: len(items) for key, items in buckets.items()}
+    lead = lead_sentence(counts)
+    if lead is None:
         return None
 
-def get_tag_date(tag):
-    date_str = run_command(f"git log -1 --format=%ai {tag}")
-    if date_str:
-        return date_str.split(' ')[0] # YYYY-MM-DD
-    return "Unknown Date"
+    parts = [lead]
+    for key, heading in SECTIONS:
+        if buckets[key]:
+            parts.append(heading + "\n" + "\n".join(f"- {item}" for item in buckets[key]))
+    return "\n\n".join(parts)
 
-def get_all_tags():
-    tags = run_command("git tag --sort=v:refname")
-    if not tags:
-        return []
-    return [t for t in tags.split('\n') if t.strip()]
 
-def get_commits(range_str):
-    return run_command(f'git log {range_str} --pretty=format:"- %s" --no-merges')
-
-def get_recorded_versions():
-    if not os.path.exists(CHANGELOG_FILE):
-        return []
-    with open(CHANGELOG_FILE, "r") as f:
-        content = f.read()
-    # Match ## [v2.1.3] or ## v2.1.3 or ## [2.1.3]
-    versions = re.findall(r"##\s*\[?v?([\d\.]+[\w\-]*)\]?", content)
-    return versions
-
-def generate_ai_notes(api_key, tag, commits, date):
-    if not commits:
-        return f"## [{tag}] - {date}\n\nNo technical changes detected."
-
+def read_breaking_flag(manifest_path):
+    """Whether this release needs the full installer, per the update manifest."""
+    if not manifest_path or not os.path.exists(manifest_path):
+        return None
     try:
-        import google.genai as genai
-        from google.genai import types
-        
-        client = genai.Client(api_key=api_key)
-        
-        system_instruction = (
-            "You are a technical release manager for LrGeniusAI, an AI-powered Lightroom plugin. "
-            "Your task is to generate concise, technical release notes based on a list of git commits. "
-            "Group changes into logical sections: Features, Fixes, Architecture/Refactoring, and Documentation. "
-            "Use a professional and efficient tone. Avoid marketing fluff. "
-            "Only include significant technical changes. If a commit is a 'chore' or minor 'refactor' that doesn't impact "
-            "functionality, you can group them or omit them if they are too trivial."
-        )
-        
-        prompt = (
-            f"Generate technical release notes for version {tag}.\n\n"
-            "Here is the list of commits:\n"
-            f"{commits}\n\n"
-            f"Format the output as clean Markdown starting with the heading: ## [{tag}] - {date}"
-        )
-        
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.2,
-        )
-        
-        response = client.models.generate_content(
-            model=MODEL_ID,
-            contents=prompt,
-            config=config
-        )
-        
-        return response.text
-    except Exception as e:
-        print(f"Error calling Gemini API for {tag}: {e}")
-        return f"## [{tag}] - {date}\n\n{commits}"
+        with open(manifest_path, encoding="utf-8") as handle:
+            return bool(json.load(handle).get("breaking_changes"))
+    except (OSError, ValueError) as error:
+        log(f"WARNING: could not read {manifest_path}: {error}")
+        return None
+
+
+def download_section(tag, breaking):
+    version = tag[1:] if tag.startswith("v") else tag
+    lines = [
+        "## Download",
+        "",
+        "| If you are on | Download |",
+        "| --- | --- |",
+        f"| Windows (64-bit) | `LrGeniusAI-windows-x64-{version}.exe` |",
+        f"| macOS (Apple silicon) | `LrGeniusAI-macos-arm64-{version}.pkg` |",
+        f"| Your own server or Docker | `LrGeniusAI-plugin-docker-backend-{tag}.zip` |",
+        "",
+    ]
+    if breaking is True:
+        lines += [
+            "**Already have LrGeniusAI installed?** This update changes parts that "
+            "the in-Lightroom updater cannot replace on its own, so please install "
+            "it with the full installer above. Your catalog, settings and everything "
+            "already analysed stay as they are.",
+        ]
+    elif breaking is False:
+        lines += [
+            "**Already have LrGeniusAI installed?** You do not need the installer. "
+            "LrGeniusAI offers this update inside Lightroom — choose **Update Now** "
+            "when it appears, then restart Lightroom.",
+        ]
+    else:
+        lines += [
+            "**Already have LrGeniusAI installed?** If LrGeniusAI offers the update "
+            "inside Lightroom, choose **Update Now** and restart Lightroom. "
+            "Otherwise use the installer above.",
+        ]
+    return "\n".join(lines)
+
+
+HELP_SECTION = """\
+## If your computer warns about the download
+
+Both installers are downloaded rarely enough that Windows and macOS may not
+recognise them yet. This is about how well known the file is, not about
+anything found in it.
+
+- **Windows** — if SmartScreen says "Windows protected your PC", click
+  **More info**, then **Run anyway**.
+- **macOS** — if the installer is blocked, open **System Settings → Privacy &
+  Security** and click **Open Anyway**. In Terminal, `xattr -d
+  com.apple.quarantine <path to the .pkg>` does the same thing.
+
+Something not working? Please open an issue at
+https://github.com/LrGenius/LrGeniusAI/issues — a description of what you did
+and what happened is enough to get started."""
+
+
+def assemble(summary, generated_body, tag, breaking):
+    parts = []
+    if summary:
+        parts.append(summary)
+    parts.append(download_section(tag, breaking))
+    parts.append(HELP_SECTION)
+    if generated_body:
+        if summary:
+            parts.append(
+                "<details>\n<summary>Technical changelog</summary>\n\n"
+                f"{generated_body}\n\n</details>"
+            )
+        else:
+            # Without the plain-language summary this list is the only account
+            # of what changed, so it must not be hidden behind a toggle.
+            parts.append(generated_body)
+    return "\n\n".join(parts) + "\n"
+
 
 def main():
-    api_key = os.getenv('GEMINI_API_KEY')
-    all_tags = get_all_tags()
-    recorded_versions = get_recorded_versions()
-    
-    if not all_tags:
-        print("No tags found in repository.")
-        return
+    parser = argparse.ArgumentParser(
+        description="Generate end-user-facing release notes for a LrGeniusAI release"
+    )
+    parser.add_argument("--repo", default=os.getenv("GITHUB_REPOSITORY", "LrGenius/LrGeniusAI"))
+    parser.add_argument("--tag", default=os.getenv("GITHUB_REF_NAME"), help="Release tag, e.g. v2.20.1")
+    parser.add_argument("--manifest", help="Path to the update manifest, to tell whether the full installer is needed")
+    parser.add_argument("--target", help="Commit-ish to generate notes against when the tag does not exist yet")
+    parser.add_argument("--output", default="release_notes.md", help='Output file, or "-" for stdout')
+    args = parser.parse_args()
 
-    # Filter out tags already in CHANGELOG.md
-    # Handle version normalization (v9.9.9 -> 9.9.9) for comparison
-    def normalize(v): return v.lstrip('v')
-    missing_tags = [t for t in all_tags if normalize(t) not in [normalize(rv) for rv in recorded_versions]]
+    if not args.tag:
+        parser.error("--tag is required (or set GITHUB_REF_NAME)")
 
-    new_entries = []
-    
-    # Check for unreleased changes since the last tag regardless of missing tags
-    latest_tag = all_tags[-1]
-    unreleased_commits = get_commits(f"{latest_tag}..HEAD")
-    if unreleased_commits and not os.getenv('GITHUB_REF_TYPE') == 'tag':
-        print(f"Detected unreleased changes since {latest_tag}. Generating preview...")
-        date = datetime.now().strftime("%Y-%m-%d")
-        tag = "Unreleased"
-        if not api_key:
-            entry = f"## [{tag}] - {date}\n\n{unreleased_commits}"
-        else:
-            entry = generate_ai_notes(api_key, tag, unreleased_commits, date)
-        
-        print("\n--- BEGIN GENERATED CHANGELOG (UNRELEASED PREVIEW) ---")
-        print(entry)
-        print("--- END GENERATED CHANGELOG ---\n")
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        parser.error("GITHUB_TOKEN is not set")
 
-    if not missing_tags:
-        print("CHANGELOG.md is up to date with existing tags.")
+    try:
+        generated_body = fetch_generated_notes(args.repo, args.tag, token, args.target)
+    except RuntimeError as error:
+        log(f"WARNING: could not fetch GitHub's generated notes: {error}")
+        generated_body = ""
+
+    changes = fetch_changes(args.repo, extract_pr_numbers(generated_body), token)
+    if not changes:
+        changes = commit_changes(args.tag)
+    log(f"Collected {len(changes)} change(s).")
+
+    summary = build_summary(changes)
+    if summary is None:
+        # Everything was internal, or there was nothing to read at all.
+        print(
+            "::warning title=Release notes::No user-facing changes could be "
+            "identified; falling back to the technical changelog."
+        )
+
+    notes = assemble(summary, generated_body, args.tag, read_breaking_flag(args.manifest))
+
+    if args.output == "-":
+        sys.stdout.write(notes)
     else:
-        print(f"Found {len(missing_tags)} missing versions. Generating...")
-        
-        for i, tag in enumerate(missing_tags):
-            date = get_tag_date(tag)
-            
-            # Range logic
-            prev_idx = all_tags.index(tag) - 1
-            if prev_idx >= 0:
-                commits_range = f"{all_tags[prev_idx]}..{tag}"
-            else:
-                commits_range = tag
-            
-            commits = get_commits(commits_range)
-            
-            if not api_key:
-                print(f"Skipping AI for {tag} (no API key)")
-                entry = f"## [{tag}] - {date}\n\n{commits or 'No changes.'}"
-            else:
-                print(f"Generating AI notes for {tag} ({i+1}/{len(missing_tags)})...")
-                entry = generate_ai_notes(api_key, tag, commits, date)
-            
-            print(f"\n--- BEGIN GENERATED CHANGELOG ({tag}) ---")
-            print(entry)
-            print("--- END GENERATED CHANGELOG ---\n")
-            
-            new_entries.append(entry)
+        with open(args.output, "w", encoding="utf-8") as handle:
+            handle.write(notes)
+        log(f"Wrote {args.output} ({len(notes)} characters, summary={'yes' if summary else 'no'}).")
 
-        # Update CHANGELOG.md
-        if new_entries:
-            if not os.path.exists(CHANGELOG_FILE):
-                content = "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n"
-                # Reverse for bootstrap: latest at the top
-                content += "\n\n".join(reversed(new_entries))
-                with open(CHANGELOG_FILE, "w") as f:
-                    f.write(content)
-            else:
-                with open(CHANGELOG_FILE, "r") as f:
-                    current_content = f.read()
-                
-                # Find the position after the header
-                header_end = current_content.find("\n\n") + 2
-                if header_end < 2: header_end = 0
-                
-                # Insert new entries after header
-                updated_content = (
-                    current_content[:header_end] + 
-                    "\n\n".join(reversed(new_entries)) + 
-                    "\n\n" + 
-                    current_content[header_end:]
-                )
-                with open(CHANGELOG_FILE, "w") as f:
-                    f.write(updated_content)
-            
-            print(f"Updated {CHANGELOG_FILE}")
-
-    # Always generate release_notes.md for the current run (GitHub Release body)
-    # We take the latest section from CHANGELOG.md or the one we just generated
-    current_tag = os.getenv('GITHUB_REF_NAME')
-    if current_tag and os.path.exists(CHANGELOG_FILE):
-        with open(CHANGELOG_FILE, "r") as f:
-            content = f.read()
-        
-        # Extract the first ## section matching the current tag
-        match = re.search(r"(##\s*\[?" + re.escape(current_tag) + r".*?)(?=\n##|$)", content, re.DOTALL)
-        if match:
-            latest_notes = match.group(1).strip()
-            # Append footer
-            with open(RELEASE_NOTES_FILE, "w") as f:
-                f.write(latest_notes + "\n" + STATIC_FOOTER)
-            print(f"Latest notes written to {RELEASE_NOTES_FILE}")
 
 if __name__ == "__main__":
     main()
