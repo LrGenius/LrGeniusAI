@@ -394,11 +394,23 @@ pub fn resolve_sidecar() -> Result<PathBuf, MlxError> {
 
             // A cargo dev build lives at server-rs/target/<profile>/, so the
             // sidecar's build directory is three levels up plus native/.
-            let from_target = dir.ancestors().nth(3).map(|root| {
-                root.join("native/mlx-sidecar/.build/release")
-                    .join(SIDECAR_BIN)
+            //
+            // The xcodebuild output comes first because it is the only one
+            // that runs: `swift build` cannot compile MLX's Metal shaders, so
+            // the binary it produces dies at load with "Failed to load the
+            // default metallib". Its path is still checked second, because a
+            // stale one being found is better than no sidecar at all — it
+            // fails with a message naming metallib rather than one naming
+            // nothing.
+            let roots = dir.ancestors().nth(3).map(|root| {
+                [
+                    root.join("native/mlx-sidecar/.build/xcode/Build/Products/Release")
+                        .join(SIDECAR_BIN),
+                    root.join("native/mlx-sidecar/.build/release")
+                        .join(SIDECAR_BIN),
+                ]
             });
-            if let Some(candidate) = from_target {
+            for candidate in roots.into_iter().flatten() {
                 if candidate.is_file() {
                     return Ok(candidate);
                 }
@@ -409,7 +421,9 @@ pub fn resolve_sidecar() -> Result<PathBuf, MlxError> {
 
     Err(MlxError::SidecarMissing(format!(
         "The MLX helper '{SIDECAR_BIN}' was not found. Looked in: {}. Build it with \
-         `cd native/mlx-sidecar && swift build -c release`, or set LRG_MLX_SIDECAR.",
+         `cd native/mlx-sidecar && xcodebuild build -scheme lrgenius-mlx -destination \
+         'platform=macOS,arch=arm64' -configuration Release -derivedDataPath .build/xcode` \
+         (plain `swift build` cannot compile the Metal shaders), or set LRG_MLX_SIDECAR.",
         tried
             .iter()
             .map(|p| p.display().to_string())

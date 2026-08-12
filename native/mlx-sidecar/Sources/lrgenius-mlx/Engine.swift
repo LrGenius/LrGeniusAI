@@ -247,28 +247,72 @@ final class Engine {
 
         let userInput = UserInput(chat: messages)
 
+        // The same turns without the photo. Used only to price the image half
+        // of the prompt — see `textOnlyTokens` below.
+        var textOnlyMessages: [Chat.Message] = []
+        if !spec.systemPrompt.isEmpty {
+            textOnlyMessages.append(.system(spec.systemPrompt))
+        }
+        textOnlyMessages.append(.user(userText))
+        let textOnlyInput = UserInput(chat: textOnlyMessages)
+
         return try await loaded.container.perform { context in
+            let tStart = DispatchTime.now().uptimeNanoseconds
             let input = try await context.processor.prepare(input: userInput)
             let promptTokens = input.text.tokens.size
+            let prepareMs = Self.msSince(tStart)
+
+            // The processor splices the image's placeholder tokens straight
+            // into `input.text.tokens`, so `promptTokens` already counts them
+            // and no separate image-token tally is missing. What it hides is
+            // the *split*: Gemma 4 spends a fixed budget per photo regardless
+            // of pixel size (measured: 262 tokens for both a 187x125 and a
+            // 2048x1365 input), so a prompt that looks large may be mostly
+            // picture, or mostly keyword taxonomy, and those have very
+            // different fixes. Re-rendering the turns without the photo is a
+            // template render plus a tokenize — no model forward — and it is
+            // the only way to tell the two apart. Best effort: a failure here
+            // must never cost the photo its answer.
+            var textOnlyTokens = promptTokens
+            if image != nil,
+                let textOnly = try? await context.processor.prepare(input: textOnlyInput)
+            {
+                textOnlyTokens = textOnly.text.tokens.size
+            }
 
             guard let schema = spec.schema, !schema.isEmpty else {
                 let parameters = GenerateParameters(
                     maxTokens: spec.maxTokens, temperature: spec.temperature)
+                let genStart = DispatchTime.now().uptimeNanoseconds
+                var firstTokenNs: UInt64?
                 // The closure parameter is spelled out because `generate` is
                 // overloaded on `([Int]) -> _` and `(Int) -> _`, and only the
                 // former hands back the full token list this needs.
                 let result = try MLXLMCommon.generate(
                     input: input, parameters: parameters, context: context
-                ) { (_: [Int]) -> GenerateDisposition in .more }
+                ) { (_: [Int]) -> GenerateDisposition in
+                    if firstTokenNs == nil { firstTokenNs = DispatchTime.now().uptimeNanoseconds }
+                    return .more
+                }
+                Self.logStages(
+                    prepareMs: prepareMs, grammarMs: nil, genStart: genStart,
+                    firstTokenNs: firstTokenNs, textTokens: textOnlyTokens,
+                    promptTokens: promptTokens, produced: result.tokenIds.count)
                 return .success(
                     text: result.output,
                     promptTokens: promptTokens,
                     completionTokens: result.tokenIds.count)
             }
 
+            let tGrammar = DispatchTime.now().uptimeNanoseconds
             let (constraint, vocabSize) = try self.constraint(for: schema, context: context)
             let whitespace = self.whitespace(for: context)
+            let grammarMs = Self.msSince(tGrammar)
             var output = ""
+            // Marks the end of vision-encode + prefill: everything after the
+            // first token is pure decode.
+            var firstTokenNs: UInt64?
+            let genStart = DispatchTime.now().uptimeNanoseconds
             // `run` throws away everything it generated when it throws, which
             // makes an overrun impossible to tell apart from a stall. Keep
             // enough of a tally to say which one happened.
@@ -305,6 +349,7 @@ final class Engine {
                     whitespaceBias: whitespace.bias,
                     whitespaceTokenIDs: whitespace.tokenIDs
                 ) { delta in
+                    if firstTokenNs == nil { firstTokenNs = DispatchTime.now().uptimeNanoseconds }
                     output += delta
                     return true
                 }
@@ -315,9 +360,53 @@ final class Engine {
                         + "\(spec.maxTokens) tokens); tail: \(String(output.suffix(120)))")
                 throw error
             }
+            Self.logStages(
+                prepareMs: prepareMs, grammarMs: grammarMs, genStart: genStart,
+                firstTokenNs: firstTokenNs, textTokens: textOnlyTokens,
+                promptTokens: promptTokens, produced: produced)
             return .success(
                 text: output, promptTokens: promptTokens, completionTokens: produced)
         }
+    }
+
+    /// Milliseconds since a `DispatchTime.now().uptimeNanoseconds` reading.
+    /// Monotonic, so a clock adjustment mid-run cannot skew it.
+    @inline(__always)
+    static func msSince(_ startNanos: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds &- startNanos) / 1_000_000
+    }
+
+    /// One line per photo, splitting a generation into the stages that have
+    /// different fixes.
+    ///
+    /// `ttft` (time to first token) is vision-encode plus prefill: everything
+    /// the model does before it can emit anything. What follows is pure
+    /// decode, which is memory-bandwidth bound and scales with the number of
+    /// output tokens. Reading the two against each other is what says whether
+    /// a slow run wants a shorter prompt or a shorter answer — and `grammar`
+    /// prices the constraint compile this backend pays per photo, because
+    /// `GrammarConstraint` cannot be cloned in this build.
+    static func logStages(
+        prepareMs: Double, grammarMs: Double?, genStart: UInt64, firstTokenNs: UInt64?,
+        textTokens: Int, promptTokens: Int, produced: Int
+    ) {
+        let totalMs = msSince(genStart)
+        let ttftMs = firstTokenNs.map { Double($0 &- genStart) / 1_000_000 }
+        let decodeMs = ttftMs.map { totalMs - $0 }
+        // The first token is charged to ttft, so the rate covers the rest;
+        // with one token or none there is no rate worth printing.
+        let decodeRate: Double? = decodeMs.flatMap { elapsed in
+            produced > 1 && elapsed > 0 ? Double(produced - 1) / (elapsed / 1000) : nil
+        }
+        func fmt(_ value: Double?) -> String {
+            value.map { String(format: "%.1f", $0) } ?? "n/a"
+        }
+        var line = "stages: prepare=\(fmt(prepareMs))ms"
+        if let grammarMs { line += " grammar=\(fmt(grammarMs))ms" }
+        line += " ttft=\(fmt(ttftMs))ms decode=\(fmt(decodeMs))ms"
+        line += " | tokens: text=\(textTokens) image=\(promptTokens - textTokens) out=\(produced)"
+        if let decodeRate { line += " | decode \(fmt(decodeRate)) tok/s" }
+        Log.info(line)
     }
 
     /// Percentage of `text` that is whitespace, rounded to a whole number.
