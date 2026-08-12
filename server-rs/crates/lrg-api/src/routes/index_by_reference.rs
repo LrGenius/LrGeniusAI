@@ -41,6 +41,7 @@ fn image_overrides(item: &Value) -> PhotoOverrides {
             .get("folder_names")
             .and_then(Value::as_str)
             .map(str::to_string),
+        exposure_bias: item.get("exposure_bias").and_then(Value::as_f64),
     }
 }
 

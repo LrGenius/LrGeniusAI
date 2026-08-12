@@ -36,6 +36,16 @@ pub struct ImageMetricsConfig {
     pub aesthetic_contrast_weight: f64,
     pub aesthetic_colorfulness_weight: f64,
     pub aesthetic_exposure_weight: f64,
+    /// Side of the square tile grid the frame is divided into for the
+    /// subject-region sharpness pass. 8 gives 64 tiles of ~64px on the 512px
+    /// working image — small enough to isolate a face or a bird against a
+    /// smooth background, large enough that each tile's Laplacian variance is
+    /// still a stable estimate.
+    pub sharpness_tile_grid: usize,
+    /// A tile counts as "in focus" at this fraction of the sharpest tile's
+    /// variance. Drives `cull_focus_concentration` and the sharp-region
+    /// centroid.
+    pub sharpness_tile_focus_fraction: f64,
 }
 
 impl ImageMetricsConfig {
@@ -58,6 +68,8 @@ impl ImageMetricsConfig {
             aesthetic_contrast_weight: 0.45,
             aesthetic_colorfulness_weight: 0.35,
             aesthetic_exposure_weight: 0.20,
+            sharpness_tile_grid: 8,
+            sharpness_tile_focus_fraction: 0.5,
         }
     }
 }
@@ -84,9 +96,25 @@ pub struct FaceMetricsConfig {
     pub score_weight_visibility: f64,
     pub score_weight_eye_openness: f64,
     pub score_weight_occlusion: f64,
-    pub occlusion_det_weight: f64,
-    pub occlusion_center_weight: f64,
-    pub occlusion_eye_weight: f64,
+    /// Weight of the landmark-geometry term in `cull_occlusion`.
+    ///
+    /// The three fields this replaces — `occlusion_det_weight`,
+    /// `occlusion_center_weight`, `occlusion_eye_weight` — combined
+    /// `1 - (0.55·det_score + 0.20·center_proximity + 0.25·eye_openness)`, which
+    /// never looked at the image at all. It was near-collinear with detector
+    /// confidence, and `center_proximity` measures *composition*: a face near
+    /// the edge of the frame is not occluded. `reject_occlusion_threshold` was
+    /// therefore a second confidence gate wearing a different name.
+    pub occlusion_geometry_weight: f64,
+    /// Weight of the mirror-asymmetry term in `cull_occlusion`.
+    pub occlusion_symmetry_weight: f64,
+    /// RMS landmark-fit residual, as a fraction of the aligned crop's width,
+    /// that counts as a fully implausible face geometry.
+    ///
+    /// 0.06 is ~6.7px of RMS error on the 112px aligned crop: comfortably above
+    /// the couple of pixels a clean frontal detection produces, and reached by
+    /// a face with a feature covered or turned well off-axis.
+    pub occlusion_geometry_normalizer: f64,
     /// Which faces count as "prominent" when rolling per-face eye, blink and
     /// occlusion scores up to the photo, as a fraction of the largest face's
     /// area. A face below this is treated as background and cannot veto the
@@ -118,9 +146,11 @@ impl FaceMetricsConfig {
             score_weight_visibility: 0.20,
             score_weight_eye_openness: 0.20,
             score_weight_occlusion: 0.15,
-            occlusion_det_weight: 0.55,
-            occlusion_center_weight: 0.20,
-            occlusion_eye_weight: 0.25,
+            // Geometry leads: it is the term that actually distinguishes a
+            // covered feature, while symmetry also fires on hard side light.
+            occlusion_geometry_weight: 0.65,
+            occlusion_symmetry_weight: 0.35,
+            occlusion_geometry_normalizer: 0.06,
             prominent_face_area_fraction: 0.25,
         }
     }

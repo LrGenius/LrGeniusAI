@@ -46,6 +46,10 @@ pub(crate) struct ParsedOptions {
     model: Option<String>,
     api_key: Option<String>,
     capture_time: Option<f64>,
+    /// Batch-level exposure compensation, from the single-photo multipart
+    /// path. `/index_by_reference` carries it per photo instead — see
+    /// [`PhotoOverrides::exposure_bias`].
+    exposure_bias: Option<f64>,
     vertex_project_id: Option<String>,
     vertex_location: Option<String>,
     /// How many photos to hand the provider per LLM call. `None` means "ask
@@ -62,8 +66,8 @@ pub(crate) struct ParsedOptions {
 /// Per-photo values that must not be shared across a grouped request.
 ///
 /// `/index_by_reference` can carry several photos in one call, but the option
-/// fields arrive flat, one set for the whole request. These four are exactly
-/// the ones `prompts.rs` classifies as volatile — reusing one photo's capture
+/// fields arrive flat, one set for the whole request. These are exactly the
+/// ones `prompts.rs` classifies as volatile — reusing one photo's capture
 /// time, keywords or folders for the whole group would feed the model context
 /// belonging to a different photo. Absent entries fall back to the
 /// batch-level options, which is what every single-photo request does.
@@ -73,6 +77,13 @@ pub(crate) struct PhotoOverrides {
     pub date_time: Option<String>,
     pub existing_keywords: Option<Vec<String>>,
     pub folder_names: Option<String>,
+    /// Exposure compensation in EV (`exposureBias` in the Lightroom SDK).
+    ///
+    /// Not prompt context like the others — it is the decisive evidence for
+    /// bracket detection during culling, which has no other way to tell an AEB
+    /// sequence from a burst, and there is no batch-level fallback because a
+    /// per-photo EV shared across a group would be actively misleading.
+    pub exposure_bias: Option<f64>,
 }
 
 /// The metadata-generation-specific subset of `_extract_options`, kept
@@ -251,6 +262,9 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         model: fields.get("model").cloned(),
         api_key: fields.get("api_key").cloned(),
         capture_time,
+        exposure_bias: fields
+            .get("exposure_bias")
+            .and_then(|s| s.trim().parse::<f64>().ok()),
         llm_batch_size,
         engine: crate::routes::llm::engine_overrides_from_fields(fields),
         vertex_project_id: fields
@@ -883,6 +897,13 @@ async fn prepare_one(
     if let Some(ct) = overrides.capture_time.or(options.capture_time) {
         main_metadata.insert("capture_time".into(), json!(ct));
     }
+    // Only written when the plugin sent it. Never defaulted to 0.0: bracket
+    // detection requires *every* frame in a group to carry a value, and a
+    // fabricated zero would turn "we do not know" into "all frames identical",
+    // which is exactly the shape a focus stack is matched on.
+    if let Some(ev) = overrides.exposure_bias.or(options.exposure_bias) {
+        main_metadata.insert("exposure_bias".into(), json!(ev));
+    }
 
     // Culling metrics + pHash are cheap enough to compute on every pass.
     //
@@ -910,6 +931,30 @@ async fn prepare_one(
         json!(metrics.cull_technical_score),
     );
     main_metadata.insert("cull_aesthetic".into(), json!(metrics.cull_aesthetic));
+    // Subject-region signals. Older rows predate these; every consumer treats
+    // an absent value as "fall back to the frame-wide number", so a catalog
+    // indexed before this shipped keeps working and simply does not benefit
+    // until it is re-indexed.
+    main_metadata.insert(
+        "cull_sharpness_peak".into(),
+        json!(metrics.cull_sharpness_peak),
+    );
+    main_metadata.insert(
+        "cull_focus_concentration".into(),
+        json!(metrics.cull_focus_concentration),
+    );
+    main_metadata.insert(
+        "cull_sharp_region_x".into(),
+        json!(metrics.cull_sharp_region_x),
+    );
+    main_metadata.insert(
+        "cull_sharp_region_y".into(),
+        json!(metrics.cull_sharp_region_y),
+    );
+    main_metadata.insert(
+        "cull_motion_anisotropy".into(),
+        json!(metrics.cull_motion_anisotropy),
+    );
     if !phash.is_empty() {
         main_metadata.insert("cull_phash".into(), json!(phash));
         main_metadata.insert("phash".into(), json!(phash));
@@ -1406,6 +1451,7 @@ mod keyword_option_tests {
             date_time: Some("2026-08-07 12:00:00".to_string()),
             existing_keywords: Some(vec!["mine".to_string()]),
             folder_names: Some("MyFolder".to_string()),
+            exposure_bias: None,
         };
         let req = build_metadata_request(&opts, &overrides, &[], "p1");
         assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));

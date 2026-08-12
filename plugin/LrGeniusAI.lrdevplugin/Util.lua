@@ -230,6 +230,18 @@ function Util.getPhotoExif(photo)
 		exif.shutter_speed = ss
 	end
 
+	-- Exposure compensation in EV. This is the only thing that lets culling
+	-- tell an exposure bracket apart from a burst, and without it a bracketed
+	-- sequence gets one frame nominated as the winner and the rest offered up
+	-- as reject candidates. Deliberately left nil rather than defaulted to 0
+	-- when the camera did not record it: the backend requires every frame in a
+	-- group to carry a value, and a fabricated 0 would read as "all frames shot
+	-- at the same compensation", which is how a focus stack is recognised.
+	local eb = safeGetRawMetadata(photo, "exposureBias")
+	if type(eb) == "number" then
+		exif.exposure_bias = eb
+	end
+
 	return exif
 end
 

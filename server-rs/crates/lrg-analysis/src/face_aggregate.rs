@@ -84,16 +84,21 @@ pub fn aggregate_face_culling_metrics(
         .collect();
     let eye_openness: Vec<f64> = faces.iter().map(|f| unit(f.eye_openness)).collect();
     let blink_penalty: Vec<f64> = faces.iter().map(|f| unit(f.blink_penalty)).collect();
+    // A missing per-face occlusion used to be reconstructed here from
+    // `det_score`, `center_proximity` and `eye_openness`. That was possible
+    // only because the stored value was itself just those three numbers
+    // recombined. It is now a measurement over the aligned face crop
+    // (`lrg_ml::face_quality::occlusion_from_crop`) and nothing in this record
+    // can stand in for it.
+    //
+    // So absent means absent, and absent scores 0. The alternative — guessing
+    // high — would let an old `FACE_TABLE` row trip `reject_occlusion_threshold`
+    // on no evidence, and a reject nominated from missing data is worse than a
+    // reject missed. Photos indexed before this shipped therefore rank on their
+    // other face signals until they are re-indexed.
     let occlusion: Vec<f64> = faces
         .iter()
-        .map(|f| match f.occlusion {
-            Some(v) => unit(v),
-            None => unit(
-                1.0 - (cfg.occlusion_det_weight * unit(f.det_score)
-                    + cfg.occlusion_center_weight * unit(f.center_proximity)
-                    + cfg.occlusion_eye_weight * unit(f.eye_openness)),
-            ),
-        })
+        .map(|f| f.occlusion.map(unit).unwrap_or(0.0))
         .collect();
 
     let max_of = |v: &[f64]| v.iter().cloned().fold(f64::MIN, f64::max);
@@ -192,27 +197,34 @@ mod tests {
         assert!(m.cull_faces_present);
     }
 
+    /// This used to assert the opposite: a missing occlusion was reconstructed
+    /// as `1 - (0.55·det + 0.20·center + 0.25·eye)`. That only worked because
+    /// the stored value *was* those three numbers, and it is now a measurement
+    /// over the aligned face crop that nothing here can stand in for.
+    ///
+    /// Absent must therefore score 0, not high. A row indexed before the
+    /// measurement existed carries no evidence of occlusion, and inventing some
+    /// would trip `reject_occlusion_threshold` and nominate the photo for
+    /// deletion on the strength of a missing field.
     #[test]
-    fn missing_occlusion_field_is_recomputed_not_zeroed() {
-        let with_none = vec![FaceMetricsInput {
-            det_score: 0.5,
-            center_proximity: 0.5,
-            eye_openness: 0.5,
-            occlusion: None,
-            ..Default::default()
-        }];
-        let with_zero = vec![FaceMetricsInput {
-            det_score: 0.5,
-            center_proximity: 0.5,
-            eye_openness: 0.5,
-            occlusion: Some(0.0),
-            ..Default::default()
-        }];
-        let a = aggregate_face_culling_metrics(&with_none, &fm());
-        let b = aggregate_face_culling_metrics(&with_zero, &fm());
-        assert_ne!(a.cull_occlusion, b.cull_occlusion);
-        // recomputed: 1 - (0.55*0.5 + 0.20*0.5 + 0.25*0.5) = 1 - 0.5 = 0.5
-        assert!((a.cull_occlusion - 0.5).abs() < 1e-9);
+    fn a_missing_occlusion_field_scores_zero_rather_than_being_guessed() {
+        let inputs = |occlusion| {
+            vec![FaceMetricsInput {
+                det_score: 0.5,
+                center_proximity: 0.5,
+                eye_openness: 0.5,
+                occlusion,
+                ..Default::default()
+            }]
+        };
+        let absent = aggregate_face_culling_metrics(&inputs(None), &fm());
+        let zero = aggregate_face_culling_metrics(&inputs(Some(0.0)), &fm());
+        assert_eq!(absent.cull_occlusion, 0.0);
+        assert_eq!(absent.cull_occlusion, zero.cull_occlusion);
+
+        // A real stored measurement still comes through untouched.
+        let measured = aggregate_face_culling_metrics(&inputs(Some(0.8)), &fm());
+        assert!((measured.cull_occlusion - 0.8).abs() < 1e-9);
     }
 
     /// The group-shot case this aggregation exists for: one person with their

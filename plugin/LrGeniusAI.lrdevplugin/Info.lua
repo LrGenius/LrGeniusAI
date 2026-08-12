@@ -39,6 +39,10 @@ return {
 			file = "TaskCullPhotos.lua",
 		},
 		{
+			title = LOC("$$$/LrGeniusAI/Menu/ExportCullFixture=Export Culling Fixture..."),
+			file = "TaskExportCullFixture.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend..."),
 			file = "TaskRetrieveMetadata.lua",
 		},
@@ -84,6 +88,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/CullPhotos=Cull Similar Photos..."),
 			file = "TaskCullPhotos.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/Menu/ExportCullFixture=Export Culling Fixture..."),
+			file = "TaskExportCullFixture.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend..."),

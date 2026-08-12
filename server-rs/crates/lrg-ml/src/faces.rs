@@ -293,8 +293,14 @@ impl FaceModel {
             let center_proximity = (1.0 - (offset_x + offset_y) / 2.0).clamp(0.0, 1.0);
 
             let det_score = det.score as f64;
-            let occlusion =
-                face_quality::occlusion_proxy(det_score, center_proximity, eye_openness, cfg);
+            // The occlusion measure needs the *aligned* crop, not the raw box:
+            // mirror asymmetry is only meaningful once the face has been
+            // rotated and scaled onto the canonical template. That warp is the
+            // same one the recognition pass does, and it runs on both passes —
+            // it is a 112x112 bilinear sample, three orders of magnitude
+            // cheaper than the ArcFace inference `QualityOnly` exists to skip.
+            let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
+            let occlusion = face_quality::occlusion_from_crop(&aligned, 112, &kps_f64, cfg);
             let thumbnail_base64 = match pass {
                 FacePass::Full => thumbnail_112_jpeg(&crop, cw, ch),
                 FacePass::QualityOnly => String::new(),

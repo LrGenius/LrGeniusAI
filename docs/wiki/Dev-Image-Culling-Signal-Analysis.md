@@ -11,7 +11,7 @@ them as signposts rather than exact addresses.
 
 ## Where the quality ceiling is
 
-### Sharpness is global, and that is the wrong question — OUTSTANDING
+### Sharpness is global, and that is the wrong question — FIXED (region), OUTSTANDING (eye crop)
 `metrics.rs:196-211` takes Laplacian variance over the whole 512 px frame.
 
 - **Shallow DOF is punished.** An f/1.4 portrait or a 400 mm wildlife frame has a razor-sharp
@@ -30,6 +30,16 @@ them as signposts rather than exact addresses.
    2048 px working image. Face boxes are already available from SCRFD.
 3. Add a **motion-blur direction** estimate (anisotropy of the gradient orientation histogram)
    so directional camera shake is separable from defocus and from intentional panning.
+
+> **Status.** Points 1 and 3 shipped. Tiling accumulates per-tile Laplacian variance in the
+> existing pass, giving `cull_sharpness_peak`, `cull_focus_concentration` and
+> `cull_sharp_region_{x,y}`; ranking blends peak into effective sharpness at
+> `sharpness_peak_weight` (0.70 `sports`, 0.55 `portrait`, 0.25 `street`). Point 3 uses the
+> structure tensor rather than an orientation histogram — the coherence
+> `√((Jxx−Jyy)² + 4Jxy²)/(Jxx+Jyy)` is the same quantity for two axes and costs three
+> accumulators. It is **not scored**, only used to label a soft frame `motion_blur` instead of
+> `blurred`, because directional *content* (architecture, horizons, rain) raises it identically.
+> Point 2 — the native-resolution eye crop — is still outstanding.
 
 ### Eye-openness: the aggregation is inverted for group shots — FIXED
 `face_aggregate.rs:68-135` rolls multiple faces up as `eye_openness = max`,
@@ -58,14 +68,28 @@ keep `max` only for prominence. Currently nothing is weighted by face size at al
 measure, so this genuinely needs a model. Remove `blink_penalty` as a separate field or derive
 it from the classifier's confidence.
 
-### `occlusion` does not measure occlusion — OUTSTANDING
+### `occlusion` does not measure occlusion — FIXED
 `face_quality.rs:107`: `1 − (0.55·det_score + 0.20·center_proximity + 0.25·eye_openness)`. It
 never looks at the image beyond signals it already has, and `center_proximity` is a
 *composition* heuristic — a face near the frame edge is not occluded. The field is ~collinear
 with `det_score`, so `reject_occlusion_threshold` is effectively a second detector-confidence
 gate. Either replace it with a real measurement or delete it and stop pretending.
 
-### "Aesthetic" is contrast + colorfulness — OUTSTANDING
+> **Status.** Replaced, not deleted. `occlusion_from_crop` combines two measurements that fail
+> on different inputs: the **landmark-fit residual** against the ArcFace template (a similarity
+> transform absorbs translation, rotation and scale, so only the face's *shape* changing moves
+> it — which is what a covered feature does to the detector's estimate) and **mirror asymmetry**
+> on the aligned 112 px crop, normalised by the crop's own luminance spread so it is not just
+> re-measuring contrast. Neither `det_score` nor `center_proximity` is an input any more.
+>
+> Two honest caveats. Strong out-of-plane rotation raises the geometry term, and hard side
+> lighting raises the symmetry term; the field measures "obstructed *or* turned away", which is
+> what the plan calls "occlusion / poor facial visibility" but is not pure occlusion. And a
+> `FACE_TABLE` row written before this existed carries no substitute — `face_aggregate` now
+> scores a missing value 0 rather than reconstructing it, because a reject nominated from a
+> missing field is worse than a reject missed.
+
+### "Aesthetic" is contrast + colorfulness — FIXED
 `AESTHETIC_CONTRAST_WEIGHT 0.45 / COLORFULNESS 0.35 / EXPOSURE 0.20` (`metrics.rs:125`). This
 rewards punchy saturated frames and floors muted fine-art portraiture, fog, snow, and every
 desaturated editorial look.
@@ -79,7 +103,21 @@ desaturated editorial look.
 Both are ~zero marginal cost per photo and replace a heuristic that is actively wrong. They
 apply only when embeddings exist, so the fast cull path degrades to technical signals.
 
-### Exposure and noise are absolute, and they fight each other — OUTSTANDING
+> **Status.** The CLIP-IQA route shipped (`lrg-ml/src/clip_iqa.rs`); the LAION head did not,
+> because it would mean shipping and versioning another weights file for a signal the prompt
+> pairs already provide. Five pairs, embedded once per server lifetime and cached in `AppState`,
+> then a two-way softmax over cosine similarity per pair. The **logit scale of 100 is load
+> bearing**: raw cosines for a prompt pair differ by a few hundredths, which a plain softmax
+> flattens to ~0.5 for every image. Blended against the heuristic at `aesthetic_iqa_weight`
+> (0.8) rather than replacing it outright, and skipped silently when there is no embedding or
+> the text tower will not load.
+>
+> Note the prompts deliberately do **not** ask about sharpness or exposure, though the passage
+> above suggests "a sharp photo" vs "a blurry photo". Those are measured directly from pixels
+> far more reliably than a 1152-dim embedding can judge them, and asking twice only adds a noisy
+> second opinion to a question already answered.
+
+### Exposure and noise are absolute, and they fight each other — FIXED (exposure), OUTSTANDING (noise)
 `EXPOSURE_TARGET: 0.5`, `EXPOSURE_TOLERANCE: 0.35` (`metrics.rs:117`) penalise low-key
 portraits, concert and stage work, night, silhouettes and high-key fashion for being correctly
 exposed for their genre. Meanwhile the noise estimate (`metrics.rs:243-266`) is a 3×3 box-blur
@@ -90,13 +128,23 @@ scores as noisier and `0.5·sharpness` partly cancels `0.15·(1−noise)`.
 not against absolutes. Keep absolute clipping fractions, which are genuinely absolute. For
 noise, gate the residual on low-gradient regions only so texture stops registering as grain.
 
-### Ranking is absolute where it should be relative — OUTSTANDING
+> **Correction after implementing it.** Exposure was normalised against the group and benefits.
+> **Noise was not, and must not be.** Relative scoring assumes the metric is at least pointing
+> the right way; this one is not. Measured on two frames of one scene differing only in focus,
+> the raw estimator scores the *sharp* frame 0.082 and the blurred one 0.012 — so rescaling to
+> the group's range stretched the gap to 0.535, amplifying the error eightfold. The stated
+> motivation does not hold either: a group shot entirely at high ISO is penalised *equally*, and
+> a constant offset cannot change a within-group ranking. Only the second half of the fix above
+> — gating the residual on low-gradient regions so texture stops registering as grain — actually
+> addresses this, and it remains outstanding.
+
+### Ranking is absolute where it should be relative — FIXED
 `rank_group_records` (`grouping.rs:223`) weight-sums absolute 0–1 metrics. Reason codes use
 within-group deltas, but the *score* does not. A group shot entirely in dim light gets uniformly
 crushed technical scores and the ordering falls to whichever metric happens to retain dynamic
 range. Normalise each metric within its group before weighting.
 
-### Intentional multi-frame sets are destroyed — OUTSTANDING
+### Intentional multi-frame sets are destroyed — FIXED
 Nothing detects HDR brackets, focus stacks or panorama sequences. They are near-identical frames
 close in time — precisely the grouper's signature — so it nominates a winner and marks the rest
 reject candidates. This is the most damaging single failure mode for landscape, architecture and
@@ -108,6 +156,27 @@ real-estate users.
 - **Focus stack**: same scene, static framing, sharp-region *location* migrating across frames.
 - **Panorama**: sequential frames, consistent exposure, partial content overlap with a
   translational shift.
+
+> **Correction after implementing it.** "Same scene" cannot be verified by pHash for a bracket,
+> and the first implementation's attempt to do so rejected every bracket it was meant to confirm.
+> Measured against a real +2 EV frame of an otherwise identical scene, the Hamming distance to
+> the base frame is **61 of 64 bits**: clipping into the highlights flips which DCT coefficients
+> sit above the median, so the hash comes back near-complemented. Changing the exposure is
+> exactly what destroys a perceptual hash, which makes it useless on the one input that matters
+> here.
+>
+> Worse, the same failure meant the grouper never put the frames in one group to begin with — on
+> the fast `tasks=cull` path there is no embedding, so pHash was its only similarity signal.
+> Detection was running on groups that could never contain a bracket.
+>
+> The replacement evidence is the exposure pattern itself: three or more **evenly spaced** stops
+> spanning at least a full EV, shot within a few seconds. Only auto exposure bracketing produces
+> that, and the false positive it needs to exclude — a photographer riding the compensation dial
+> through a burst — lands on uneven steps. Grouping gained a matching `bracket_edges` rule that
+> joins frames close in time whose exposure compensation differs, without asking pHash.
+>
+> Focus-stack detection *does* still check framing, and correctly: there the exposure is
+> constant, so the hash means what it says.
 
 ## Dead config that silently did nothing — FIXED
 

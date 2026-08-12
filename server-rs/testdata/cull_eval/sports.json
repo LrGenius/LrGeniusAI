@@ -1,0 +1,63 @@
+{
+  "name": "sports-long-lens",
+  "notes": "Synthetic. 400mm f/2.8 action burst: almost the whole frame is out of focus by design. Only the peak tile says whether the athlete is sharp.",
+  "culling_preset": "sports",
+  "time_delta_seconds": 3,
+  "groups_are_authoritative": true,
+  "groups": [
+    {
+      "group_id": "s1",
+      "photos": [
+        {
+          "photo_id": "s1_peak",
+          "filename": "s1_peak.jpg",
+          "capture_time": 7000.0,
+          "phash": "0badc0de0badc0de",
+          "metadata": {
+            "cull_sharpness": 0.22,
+            "cull_sharpness_peak": 0.93,
+            "cull_exposure": 0.68,
+            "cull_noise": 0.3,
+            "cull_aesthetic": 0.5,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 1
+        },
+        {
+          "photo_id": "s1_early",
+          "filename": "s1_early.jpg",
+          "capture_time": 7000.3,
+          "phash": "0badc0de0badc0de",
+          "metadata": {
+            "cull_sharpness": 0.26,
+            "cull_sharpness_peak": 0.61,
+            "cull_exposure": 0.67,
+            "cull_noise": 0.3,
+            "cull_aesthetic": 0.5,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 2
+        },
+        {
+          "photo_id": "s1_missed",
+          "filename": "s1_missed.jpg",
+          "capture_time": 7000.6,
+          "phash": "0badc0de0badc0de",
+          "metadata": {
+            "cull_sharpness": 0.12,
+            "cull_sharpness_peak": 0.15,
+            "cull_exposure": 0.66,
+            "cull_noise": 0.31,
+            "cull_aesthetic": 0.5,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 3,
+          "reject": true
+        }
+      ]
+    }
+  ]
+}

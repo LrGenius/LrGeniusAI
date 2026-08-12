@@ -281,8 +281,11 @@ For each set, compare:
 - [x] Create Lightroom culling task
 - [x] Create collections for picks / alternates / reject candidates
 - [x] Add explanation fields and debug output
-- [ ] Build small benchmark dataset for evaluation *(not present in the repo — see Current state)*
-- [ ] Evaluate optional aesthetic model as secondary signal *(still a contrast/colourfulness heuristic)*
+- [x] Build small benchmark dataset for evaluation *(harness + synthetic
+      regression fixtures in `server-rs/testdata/cull_eval/`; real labelled
+      shoots still wanted — see Signal-quality pass below)*
+- [x] Evaluate optional aesthetic model as secondary signal *(CLIP-IQA over the
+      stored SigLIP2 embedding, `lrg-ml/src/clip_iqa.rs`)*
 
 ## Branch Start Package
 
@@ -499,48 +502,287 @@ inline in a sequential loop.
 
 ### Still outstanding
 
-Ordered by value.
+Ordered by value. Items 1, 2, 4, 5, 6 and 10 of the original list are done —
+see [Signal-quality pass](#signal-quality-pass) below, and
+[Moment scoring](#moment-scoring-for-action-work) for the follow-up that came
+out of a real complaint about a soccer series.
 
-1. **Subject-region sharpness.** Global Laplacian variance on a 512px
-   downscale still penalises correct shallow depth of field (sports, wildlife,
-   f/1.4 portraits) and cannot resolve eye-vs-nose focus. Needs tile-max plus
-   the sharp region's *location*, and a native-resolution crop around the eye
-   for portraits.
-2. **Bracket / focus-stack / panorama detection.** Nothing detects these, so
-   the grouper nominates a winner and marks the rest reject candidates,
-   destroying intentional sets. This is the most damaging failure mode for
-   landscape, architecture and real-estate work. Needs `exposureBias` and focus
-   distance carried through from the plugin at index time.
-3. **A real eye-state classifier.** `blink_penalty` is still exactly
+1. **A real eye-state classifier.** `blink_penalty` is still exactly
    `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
    a patch clamped to ≤8px radius that stops scaling with face size. SCRFD's
-   single keypoint per eye cannot support an eye-aspect-ratio measure.
-4. **Learned aesthetic / IQA.** `cull_aesthetic` is contrast + colourfulness +
-   exposure, which floors muted, low-key and foggy work. A LAION-style linear
-   head or CLIP-IQA antonym prompts ride on the SigLIP2 embedding that already
-   exists — close to zero marginal cost.
-5. **Relative-within-group normalisation.** Exposure targets absolute mean
-   luminance 0.5 and the noise estimate is a high-pass residual that rises with
-   real detail, so it partly cancels the sharpness reward. Both should be
-   scored relative to the group.
-6. **`occlusion` does not measure occlusion** — it is a recombination of
-   detector confidence, distance from frame centre and eye openness, so it is
-   collinear with `det_score`.
-7. **Job/progress/cancellation.** `/cull` is still one blocking request with a
+   single keypoint per eye cannot support an eye-aspect-ratio measure, so this
+   needs a small ONNX eye-state model shipped as a new asset.
+2. **A noise estimator that does not compete with sharpness.** The current one
+   is a 3×3 box-blur residual, so real detail reads as grain: measured on two
+   frames of one scene differing only in focus, it scores the *sharp* frame
+   0.082 and the blurred one 0.012. That is why noise was deliberately left out
+   of the group-relative pass (see below) — normalising a signal that points the
+   wrong way only amplifies it.
+3. **Native-resolution eye-region sharpness.** Tiled sharpness fixed the
+   shallow-depth-of-field failure, but eye-vs-nose focus — the most common
+   portrait cull decision there is — still is not resolvable, because face
+   sharpness is measured on the 2048px working image rather than a
+   native-resolution crop around the eye.
+4. **Job/progress/cancellation.** `/cull` is still one blocking request with a
    binary 0→100% progress bar. `JobRegistry` has no progress field, no
    cancellation, and destroys a finished job on first read.
-8. **Genre auto-detection.** Zero-shot classification against the existing
+5. **Genre auto-detection.** Zero-shot classification against the existing
    SigLIP2 embeddings is a dot product. More importantly, genre must change
-   *which signals are trusted*, not just their weights — a weights-only preset
-   system cannot express "ignore background sharpness" or "suppress culling for
-   bracket sets".
-9. **Hardware acceleration.** CPU is the only default execution provider.
+   *which signals are trusted*, not just their weights. The preset system is now
+   closer to being able to express that — `sharpness_peak_weight`,
+   `relative_normalization_weight` and `sets.enabled` are all trust-shaped
+   rather than weight-shaped — but nothing selects a preset automatically.
+6. **Hardware acceleration.** CPU is the only default execution provider.
    CoreML is macOS-only and env-gated behind `LRG_ML_EP=coreml`; the face
    sessions have no EP path at all. No CUDA, no DirectML. Both ONNX models are
    batch-size 1 behind a `Mutex`.
-10. **An evaluation benchmark.** The checklist above ticks "Build small
-    benchmark dataset for evaluation" and "Evaluate optional aesthetic model",
-    but no such fixture set exists in the repository. Nothing above item 1 can
-    be validated as an *improvement* rather than a *change* without it: labelled
-    groups per genre, scored on top-1 winner accuracy, reject precision, NDCG,
-    and bracket/stack/pano preservation rate.
+7. **Real labelled fixtures.** The evaluation harness exists and runs in CI, but
+   every fixture in `server-rs/testdata/cull_eval/` is synthetic and was written
+   by the same person who wrote the code it scores. They are regression tests for
+   known bugs, not a benchmark. One real hand-culled shoot per genre would be the
+   single highest-value contribution to culling quality available; see that
+   directory's README for the format.
+
+---
+
+## Signal-quality pass
+
+Covers outstanding items 1, 2, 4, 5, 6 and 10 of the previous list.
+
+### Landed
+
+- **Subject-region sharpness** (`lrg-imaging::metrics`). The frame-wide
+  Laplacian variance answers "is this frame busy?", not "is anything in focus?",
+  so an f/1.4 portrait or a 400mm wildlife frame scored *below* a mediocre f/8
+  frame of foliage. The pass now also accumulates per-tile variance over an 8×8
+  grid in the same loop, yielding `cull_sharpness_peak` (sharpest tile),
+  `cull_focus_concentration` (how localized the focus is — what separates
+  *shallow* from *soft*), `cull_sharp_region_{x,y}` (where it is), and
+  `cull_motion_anisotropy` (structure-tensor coherence, which labels a soft
+  frame `motion_blur` rather than `blurred`; never scored, because directional
+  *content* raises it too). Ranking blends peak into effective sharpness per
+  `sharpness_peak_weight` — 0.70 for `sports`, 0.55 for `portrait`, 0.25 for
+  `street`.
+- **Intentional-set protection** (`lrg-analysis::sets`). Brackets, focus stacks
+  and panoramas are detected and ranking's usual output is suppressed: ordering
+  still happens so the set has a representative frame, but nothing is ever
+  nominated for rejection. Surfaced as `keep_all` / `intentional_set` on each
+  group and a dedicated Lightroom collection.
+- **CLIP-IQA aesthetics** (`lrg-ml::clip_iqa`). Five antonym prompt pairs
+  embedded once per server lifetime; every photo is then a handful of dot
+  products against the SigLIP2 vector already in the database. Blended against
+  the old heuristic at `aesthetic_iqa_weight` (0.8). Degrades silently to the
+  heuristic when there is no embedding or no reachable text tower.
+- **Group-relative exposure.** The absolute target of mean luminance 0.5 marks
+  every frame of a low-key set as badly exposed and then cannot tell them apart.
+  Exposure is now blended toward its position in the group's own range
+  (`relative_normalization_weight`, 0.65 for `event` and `sports`).
+- **`cull_occlusion` measures the image.** It was
+  `1 - (0.55·det_score + 0.20·center_proximity + 0.25·eye_openness)` — three
+  numbers the caller already had, recombined, so it was collinear with detector
+  confidence and `reject_occlusion_threshold` was a second confidence gate. It
+  is now a landmark-fit residual against the ArcFace template (a similarity
+  transform absorbs position, rotation and scale, so only the face's *shape*
+  changing moves it) plus mirror asymmetry on the aligned crop.
+- **`cull_technical_score` is re-derived at rank time.** The stored composite is
+  frozen at index time under the default config, so no preset weight and no
+  later signal could reach it — despite the indexing code's own comment claiming
+  otherwise.
+- **Evaluation harness** (`lrg-analysis::eval`, `--example cull_eval`, fixtures
+  in `server-rs/testdata/cull_eval/`, CI test `cull_eval_fixtures.rs`). Scores
+  top-1 winner accuracy, reject precision/recall, NDCG, set preservation, set
+  recognition and pair-counting grouping agreement, with `--compare` against
+  `CullingConfig::python_parity` and `--ablate` for attributing a delta to one
+  knob.
+- **`exposure_bias` plumbed** from `LrPhoto`'s `exposureBias` through both index
+  routes to `IMAGE_TABLE`, per photo rather than per batch.
+
+### Two things only the live test found
+
+Both were caught by running the real binary against real JPEGs, not by unit
+tests, and both changed the design.
+
+**A bracket's frames do not hash alike.** The first version of the detector
+required all frames to share a pHash, as evidence the camera had not moved.
+Measured against an actual +2 EV frame of an otherwise identical scene, the
+Hamming distance to the base frame was **61 of 64 bits** — pushing the histogram
+into the highlights flips which DCT coefficients sit above the median, so the
+hash comes back near-complemented. The framing gate rejected every bracket it
+existed to confirm, and worse, the grouper never put the frames in one group at
+all (the embedding is absent on the fast cull path, and pHash was the only other
+signal). Fixed by dropping the framing check from bracket detection in favour of
+requiring *evenly spaced* exposure stops shot back to back — a pattern only AEB
+produces — and by adding an explicit bracket edge to grouping
+(`GroupingConfig::bracket_edges`). Focus-stack detection still checks framing,
+where the exposure is constant and the hash is meaningful.
+
+**Group-relative noise makes things worse, so it was dropped.** The plan called
+for normalising exposure *and* noise against the group. Exposure benefits.
+Noise does not: the estimator is a high-pass residual that already ranks a sharp
+frame dirtier than a blurred one (0.082 vs 0.012 on two frames of one scene),
+and rescaling to the group's range stretched that gap to 0.535 — an eightfold
+amplification of a signal pointing the wrong way. The stated justification does
+not survive either: a group shot entirely at high ISO is penalised *equally*,
+and a constant offset cannot change a within-group ranking. Fixing the estimator
+is now outstanding item 2.
+
+### Measured on the fixtures
+
+`cargo run --release -p lrg-analysis --example cull_eval -- testdata/cull_eval --compare`,
+current configuration against `python_parity`:
+
+| metric | before | after |
+|---|---|---|
+| winner top-1 | 66.7% | 100.0% |
+| NDCG | 0.974 | 1.000 |
+| reject precision | 71.4% | 83.3% |
+| reject recall | 100.0% | 100.0% |
+| set preservation | 100.0% | 100.0% |
+| set recognition | 0.0% | 100.0% |
+| grouping recall | 66.7% | 100.0% |
+
+**These fixtures are synthetic and encode the failure modes this pass fixed, so
+the table shows that the named bugs are gone — not that culling is accurate on
+real photographs.** The 100% preservation in the "before" column is itself
+instructive: the old code protected nothing, it simply failed to group the
+bracket frames, and singletons are never nominated for rejection. That is why
+preservation and recognition are separate numbers.
+
+Reject precision at 83.3% is a known open cost, not an oversight: group-relative
+exposure widens the score spread, which makes `reject_score_delta` fire on the
+third frame of a three-frame low-key burst labelled "keep". `--ablate relative`
+shows both sides of the trade.
+
+---
+
+## Moment scoring for action work
+
+Prompted by a real complaint: on a soccer series, the picks and rejects did not
+match the photographer's taste.
+
+### Why that happens
+
+Players are small in frame and SCRFD runs on a 640×640 letterbox, so an action
+burst usually detects **no faces** — which removes the entire face branch
+(expression, eyes, blink) from the score. What is left is:
+
+```
+score = (technical + 0.08 × aesthetic) / 1.08
+      = 46% sharpness + 32% exposure + 14% low-noise + 7.4% aesthetic
+```
+
+Within one burst of one play, exposure and noise barely move. So the winner is
+decided almost entirely by which frame carries the most high-frequency detail —
+crowd texture, grass, how far the player's limbs are spread. Nothing in that
+formula knows whether the ball is at their foot.
+
+The genre table in
+[Dev-Image-Culling-Signal-Analysis.md](Dev-Image-Culling-Signal-Analysis.md)
+says the sports pick is decided by *peak action*. No signal measured it.
+
+### What shipped
+
+- **`ACTION_PROMPT_PAIRS`** in `lrg-ml/src/clip_iqa.rs`, a second prompt set
+  alongside the quality one, asking about visible facts rather than judgements —
+  "the ball is clearly visible in the frame", "an athlete with both feet off the
+  ground". `PromptSet` keeps the two sets separate because they are weighted
+  separately; averaging them would let a pretty frame of nothing outrank a
+  slightly softer frame of the goal.
+- **`ranking.moment_weight`**, 0.30 for `sports` and **0 everywhere else**. The
+  question is meaningless for a portrait, and a signal that fires on everything
+  is worse than one switched off. Applied as a convex blend over the quality
+  score, so a genuinely unusable frame cannot be promoted just because the ball
+  is in it.
+- **`peak_action` reason code** on the winner when the moment score is what
+  carried it, so a surprising pick explains itself.
+- The action pass only runs when the chosen preset would use it — otherwise the
+  score would be computed and discarded.
+
+### Extended to the other genres
+
+The same mechanism now covers three axes, one per preset, selected by
+`ranking.semantic_prompt_set`:
+
+| preset | axis | weight | what it asks |
+|---|---|---|---|
+| `sports` | `action` | 0.30 | ball visible, feet off the ground, mid-play vs between plays |
+| `street` | `candid` | 0.32 | unposed vs posed, people reacting to each other |
+| `event` | `candid` | 0.22 | the same, weighted lower — event work still has to be deliverable |
+| `portrait` | `expression` | 0.20 | warm genuine smile vs flat awkward expression |
+| `default` | — | 0 | spans every genre; no one question is right for all of them |
+
+`street` carries the highest weight because it is the one genre the analysis is
+explicit about: grain and motion blur are legitimate there, and ranking frames
+by how tidy they are is close to the opposite of the job.
+
+**One axis per preset, deliberately.** Blending two doubles the text-tower work,
+dilutes both, and — with no validated fixture — is exactly the sort of
+plausible-sounding over-reach that left a contrast heuristic in charge of
+"aesthetics". If a genre needs two, demonstrate it on a fixture first.
+
+**What was deliberately left out**, because CLIP answers it badly and something
+else answers it well: sharpness and exposure (measured directly, far better);
+eyes open / blink (fine facial detail is these models' weakest point, and this
+needs a real classifier — a prompt pair would look like progress while changing
+nothing); horizon level and verticals (geometric relations are a known blind
+spot); animal eye sharpness (needs detection, not a scene judgement).
+
+### Tuning it from outside
+
+`/cull` accepts `semantic_weight` to override the preset's own, and the plugin
+passes it through. `0.0` switches the axis off, `0.5` lets it lead. The shipped
+weights are a guess; this is the fastest way to find out whether the signal
+suits a particular photographer's eye without a rebuild. `--ablate semantic` in
+`cull_eval` does the same against a fixture.
+
+### Calibrate expectations
+
+CLIP-family models read object presence, coarse pose and affect well, and fine
+temporal ordering and geometry poorly. The action axis should reliably separate
+*the play* from *between plays*; it should **not** be expected to pick the single
+peak frame out of five adjacent ones at 20fps. The expression axis is a
+*whole-frame* judgement, so on a group shot it reports the mood of the picture
+rather than of any one face. All of them need embeddings, so every axis is inert
+on the fast `tasks=cull` path — a catalog prepared that way ranks exactly as it
+did before.
+
+**It has not been validated on real photographs.** That is not an oversight: the
+prompts are a hypothesis, and this repository has now twice shipped a
+plausible-sounding signal that was wrong. Which is why the other half of this
+work is the fixture exporter.
+
+### Export Culling Fixture
+
+New Lightroom task (`TaskExportCullFixture.lua`, *Library → Plug-in Extras*).
+It turns a hand-culled selection into a scoring fixture: reject flags become
+`reject`, pick flags and star ratings become the ranking, and the metrics come
+from a real `/cull` call with the new `include_stored_metadata` flag.
+
+Two details that matter:
+
+- **`stored_metadata`, not `metrics`.** The ranked `metrics` block is what
+  ranking concluded — short names, derived values, preset weights folded in. The
+  new block is what it read, under the store's own keys. Only the second
+  reproduces a run.
+- **`groups_are_authoritative`.** Unless the photographer stacked the photos, the
+  group boundaries come from the backend itself, and scoring them would compare
+  the grouper against its own answer and report 100%. The harness now skips the
+  grouping metrics for such a fixture rather than reporting a flattering number.
+
+No photographs leave the machine — a fixture holds measurements, capture times,
+hashes and opaque ids.
+
+### Also fixed on the way past
+
+`sync_translations.py` had two bugs that were corrupting shipped UI strings:
+
+- Its LOC regex used `[^"\']+`, so **every default containing an apostrophe was
+  truncated at it** and the truncation was written to all three translation
+  files. `"Create 'Duplicates / Near Duplicates' collection"` shipped as
+  `"Create "`, along with a dozen others.
+- The writer escaped `"` as `\"` and the reader never unescaped, so backslashes
+  **accumulated on every run** — one string had reached sixteen.
+
+Both fixed, English re-derived from the Lua source (which is what "sync" should
+mean and previously did not), the damaged German and French strings retranslated,
+and the round trip is now idempotent.
