@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_rgb;
 use crate::local::{LocalImage, LocalRequest, SharedLocalEngine};
-use crate::normalize::normalize_keywords_structure;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt_split, prepare_system_prompt,
     prepare_user_prompt_split,
@@ -110,20 +110,24 @@ impl LocalProvider {
             }
         };
 
-        let keywords =
-            normalize_keywords_structure(&parsed.get("keywords").cloned().unwrap_or(json!([])));
+        let keywords = normalize_keywords(
+            &parsed.get("keywords").cloned().unwrap_or(json!([])),
+            request.keyword_categories.as_ref(),
+        );
         let field = |name: &str, wanted: bool| {
             wanted
                 .then(|| parsed.get(name).and_then(Value::as_str).map(str::to_string))
                 .flatten()
         };
+        let caption = field("caption", request.generate_caption);
+        let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
-            caption: field("caption", request.generate_caption),
+            caption,
             title: field("title", request.generate_title),
-            alt_text: field("alt_text", request.generate_alt_text),
+            alt_text,
             input_tokens: prompt_tokens,
             output_tokens: completion_tokens,
             error: None,

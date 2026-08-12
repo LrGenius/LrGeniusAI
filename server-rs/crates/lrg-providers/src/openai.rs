@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
-use crate::normalize::normalize_keywords_structure;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
@@ -225,20 +225,24 @@ impl OpenAiProvider {
             Err(e) => return fail(&request.uuid, format!("JSON parsing error: {e}")),
         };
 
-        let keywords =
-            normalize_keywords_structure(&parsed.get("keywords").cloned().unwrap_or(json!([])));
+        let keywords = normalize_keywords(
+            &parsed.get("keywords").cloned().unwrap_or(json!([])),
+            request.keyword_categories.as_ref(),
+        );
+        let caption = if request.generate_caption {
+            parsed
+                .get("caption")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        };
+        let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
-            caption: if request.generate_caption {
-                parsed
-                    .get("caption")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            caption,
             title: if request.generate_title {
                 parsed
                     .get("title")
@@ -247,14 +251,7 @@ impl OpenAiProvider {
             } else {
                 None
             },
-            alt_text: if request.generate_alt_text {
-                parsed
-                    .get("alt_text")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            alt_text,
             input_tokens,
             output_tokens,
             error: None,

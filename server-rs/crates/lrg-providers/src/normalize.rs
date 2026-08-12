@@ -9,6 +9,9 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
+use crate::keyword_taxonomy::CategoryLabels;
+use crate::types::KeywordCategories;
+
 /// Port of `_clean_string_list`: trims, drops empties, de-dupes
 /// case-insensitively (seeded with `reserved_lower`, e.g. the keyword's
 /// own name so a keyword can't list itself as a synonym).
@@ -137,10 +140,216 @@ pub fn normalize_keywords_structure(value: &Value) -> Value {
     }
 }
 
+/// Insert `items` at `path`, creating intermediate objects and merging into
+/// an array that is already there.
+fn insert_at_path(root: &mut Map<String, Value>, path: &[String], items: Vec<Value>) {
+    let Some((leaf, parents)) = path.split_last() else {
+        return;
+    };
+    let mut cursor = root;
+    for segment in parents {
+        let slot = cursor
+            .entry(segment.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
+        // A taxonomy where one path is both a leaf and a parent is malformed;
+        // preferring the parent keeps the deeper keywords rather than the
+        // shallower ones.
+        if !slot.is_object() {
+            *slot = Value::Object(Map::new());
+        }
+        cursor = slot.as_object_mut().expect("set to an object just above");
+    }
+    match cursor
+        .entry(leaf.clone())
+        .or_insert_with(|| Value::Array(Vec::new()))
+    {
+        Value::Array(existing) => existing.extend(items),
+        other => *other = Value::Array(items),
+    }
+}
+
+/// Rebuild the nested category tree from the flat `[{category, items}]`
+/// groups the model now returns.
+///
+/// The taxonomy is known input, so the model is asked only *which* category
+/// applies, never to re-emit the tree around it — that redundancy was pure
+/// output tokens. See [`crate::keyword_taxonomy`].
+///
+/// Anything that is not the group shape passes through untouched: a bare
+/// keyword list (no taxonomy configured), or an older nested object from a
+/// model that ignored the schema. A category that does not resolve keeps its
+/// keywords under its own name rather than dropping them — the same thing
+/// that used to happen when a model invented a category.
+pub fn rebuild_keyword_groups(value: &Value, labels: &CategoryLabels) -> Value {
+    let Value::Array(groups) = value else {
+        return value.clone();
+    };
+    // A bare keyword list is an array too. Only treat this as groups when the
+    // entries actually look like groups.
+    let looks_like_groups = groups.iter().any(|g| {
+        g.as_object()
+            .is_some_and(|o| o.contains_key("category") && o.contains_key("items"))
+    });
+    if !looks_like_groups {
+        return value.clone();
+    }
+
+    let mut root = Map::new();
+    for group in groups {
+        let Some(obj) = group.as_object() else {
+            continue;
+        };
+        let Some(category) = obj.get("category").and_then(Value::as_str) else {
+            continue;
+        };
+        let items = match obj.get("items") {
+            Some(Value::Array(items)) => items.clone(),
+            _ => continue,
+        };
+        if items.is_empty() {
+            continue;
+        }
+        match labels.path_for(category) {
+            Some(path) => insert_at_path(&mut root, path, items),
+            None => {
+                let fallback = category.trim();
+                if !fallback.is_empty() {
+                    insert_at_path(&mut root, &[fallback.to_string()], items);
+                }
+            }
+        }
+    }
+    Value::Object(root)
+}
+
+/// Alt text for the response, derived from the caption when the model was
+/// not asked for it separately.
+///
+/// Alt text and caption are near-identical prose about the same photo, and
+/// prose is the most expensive thing a model emits. When both are requested
+/// the schema asks only for `caption` (see `schema.rs`) and the caption is
+/// reused here. An explicitly returned `alt_text` still wins, so a model that
+/// volunteers one — or a provider that ignored the schema — loses nothing.
+pub fn alt_text_from(
+    parsed: &Value,
+    generate_alt_text: bool,
+    caption: Option<&String>,
+) -> Option<String> {
+    if !generate_alt_text {
+        return None;
+    }
+    parsed
+        .get("alt_text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| caption.cloned())
+}
+
+/// The one entry point providers should call for the `keywords` field:
+/// rebuild the tree from flat groups (when a taxonomy was requested), then
+/// normalize.
+pub fn normalize_keywords(value: &Value, categories: Option<&KeywordCategories>) -> Value {
+    match categories {
+        Some(categories) => {
+            let labels = CategoryLabels::from_categories(categories);
+            if labels.is_empty() {
+                return normalize_keywords_structure(value);
+            }
+            normalize_keywords_structure(&rebuild_keyword_groups(value, &labels))
+        }
+        None => normalize_keywords_structure(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::KeywordTree;
     use serde_json::json;
+
+    fn taxonomy() -> KeywordCategories {
+        KeywordCategories::Nested(KeywordTree(vec![
+            (
+                "Natur".to_string(),
+                KeywordTree(vec![
+                    ("Landschaft".to_string(), KeywordTree(vec![])),
+                    ("Wasser".to_string(), KeywordTree(vec![])),
+                ]),
+            ),
+            (
+                "Reise".to_string(),
+                KeywordTree(vec![("Landschaft".to_string(), KeywordTree(vec![]))]),
+            ),
+        ]))
+    }
+
+    #[test]
+    fn groups_rebuild_into_the_nested_tree() {
+        let raw = json!([
+            {"category": "Wasser", "items": ["See", "Fluss"]},
+            {"category": "Natur/Landschaft", "items": ["Berg"]},
+        ]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(
+            out,
+            json!({"Natur": {"Wasser": ["See", "Fluss"], "Landschaft": ["Berg"]}})
+        );
+    }
+
+    #[test]
+    fn ambiguous_leaf_names_land_in_the_right_branch() {
+        let raw = json!([
+            {"category": "Natur/Landschaft", "items": ["Berg"]},
+            {"category": "Reise/Landschaft", "items": ["Hotel"]},
+        ]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(out["Natur"]["Landschaft"], json!(["Berg"]));
+        assert_eq!(out["Reise"]["Landschaft"], json!(["Hotel"]));
+    }
+
+    #[test]
+    fn repeated_categories_merge_and_empty_groups_vanish() {
+        let raw = json!([
+            {"category": "Wasser", "items": ["See"]},
+            {"category": "Wasser", "items": ["Fluss"]},
+            {"category": "Natur/Landschaft", "items": []},
+        ]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(out, json!({"Natur": {"Wasser": ["See", "Fluss"]}}));
+    }
+
+    #[test]
+    fn an_unknown_category_keeps_its_keywords() {
+        let raw = json!([{"category": "Erfunden", "items": ["Etwas"]}]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(out, json!({"Erfunden": ["Etwas"]}));
+    }
+
+    #[test]
+    fn a_bare_keyword_list_passes_through_untouched() {
+        let raw = json!(["Berg", "See"]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(out, json!(["Berg", "See"]));
+    }
+
+    #[test]
+    fn a_model_that_returns_the_old_nested_shape_still_works() {
+        let raw = json!({"Natur": {"Wasser": ["See"]}});
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(out, json!({"Natur": {"Wasser": ["See"]}}));
+    }
+
+    #[test]
+    fn leaf_objects_inside_groups_are_normalized() {
+        let raw = json!([
+            {"category": "Wasser", "items": [{"name": "See", "synonyms": ["lake", "See"]}]},
+        ]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        assert_eq!(out["Natur"]["Wasser"][0]["name"], "See");
+        assert_eq!(out["Natur"]["Wasser"][0]["synonyms"], json!(["lake"]));
+    }
 
     #[test]
     fn plain_string_list_normalizes_trimmed() {

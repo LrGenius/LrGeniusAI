@@ -13,6 +13,7 @@
 
 use lrg_imaging::location::format_location_for_prompt;
 
+use crate::keyword_taxonomy::CategoryLabels;
 use crate::types::{EditGenerationRequest, KeywordCategories, MetadataGenerationRequest};
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a professional photography analyst with expertise in object recognition and computer-generated image description. \nYou also try to identify famous buildings and landmarks as well as the location where the photo was taken. \nFurthermore, you aim to specify animal and plant species as accurately as possible. \nYou also describe objects—such as vehicle types and manufacturers—as specifically as you can.";
@@ -145,20 +146,17 @@ pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPr
 
     if request.generate_keywords {
         if let Some(categories) = &request.keyword_categories {
-            match categories {
-                KeywordCategories::Nested(_) => {
-                    let flat = flatten_keyword_categories(categories);
-                    context_additions.push(format!(
-                        "Please organize keywords into these categories: {}. Use the hierarchical structure to organize keywords logically.",
-                        flat.join(", ")
-                    ));
-                }
-                KeywordCategories::Flat(list) => {
-                    context_additions.push(format!(
-                        "Please organize keywords into these categories: {}",
-                        list.join(", ")
-                    ));
-                }
+            let labels = CategoryLabels::from_categories(categories);
+            if !labels.is_empty() {
+                // These are exactly the strings the schema's `category` enum
+                // permits, so the prompt and the grammar cannot drift apart.
+                let joined = labels.labels().collect::<Vec<_>>().join(", ");
+                context_additions.push(format!(
+                    "Return keywords as a list of groups, each with a `category` and its \
+                     `items`. Use exactly these category names: {joined}. Include a group \
+                     ONLY for categories that genuinely apply to this photo — omit every \
+                     other category entirely rather than returning it with an empty list."
+                ));
             }
         }
     }
@@ -623,7 +621,7 @@ mod tests {
         for run_constant in [
             "Existing catalog vocabulary",
             "Landschaft, Portrait",
-            "Please organize keywords into these categories",
+            "Use exactly these category names",
             "Context: client shoot",
         ] {
             assert!(
@@ -667,6 +665,37 @@ mod tests {
         let split = prepare_user_prompt_split(&req);
         assert!(split.per_photo.is_empty());
         assert_eq!(split.joined(), split.stable);
+    }
+
+    /// The schema lets a model omit categories that do not apply; without
+    /// this instruction it will keep emitting every one of them with an empty
+    /// list, which is exactly the output-token waste the flat group shape
+    /// exists to remove.
+    #[test]
+    fn category_prompt_permits_omitting_categories_and_lists_the_enum_labels() {
+        use crate::types::KeywordTree;
+        let mut req = base_request();
+        req.generate_keywords = true;
+        // "Landschaft" is ambiguous, so the prompt must offer the full paths —
+        // the same strings the schema's `category` enum permits.
+        req.keyword_categories = Some(KeywordCategories::Nested(KeywordTree(vec![
+            (
+                "Natur".to_string(),
+                KeywordTree(vec![("Landschaft".to_string(), KeywordTree(vec![]))]),
+            ),
+            (
+                "Reise".to_string(),
+                KeywordTree(vec![("Landschaft".to_string(), KeywordTree(vec![]))]),
+            ),
+        ])));
+
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("Natur/Landschaft"));
+        assert!(prompt.contains("Reise/Landschaft"));
+        assert!(
+            prompt.contains("omit every other category entirely"),
+            "the prompt must tell the model that omission is expected"
+        );
     }
 
     #[test]
