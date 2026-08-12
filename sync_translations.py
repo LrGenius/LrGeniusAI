@@ -77,16 +77,27 @@ def sync_translations(lua_dir, target_path, base_strings=None):
         new_content.append(f'"{key}" = "{val}"')
     
     output = '\n'.join(new_content)
-    with open(target_path, 'w', encoding='utf-8') as f:
+    # UTF-16 LE with a BOM, matching what Lightroom reads and what these files
+    # have always been committed as. The writer used to emit UTF-8 while the
+    # reader below correctly tried UTF-16 first, so running this script — the
+    # command CLAUDE.md and the edit hook both tell you to run — silently
+    # rewrote all three files into an encoding Lightroom cannot read.
+    with open(target_path, 'w', encoding='utf-16') as f:
         f.write(output)
     return load_translated_strings(target_path)
 
 if __name__ == "__main__":
-    lua_dir = "/Users/bm/src/LrGeniusAI/plugin/LrGeniusAI.lrdevplugin"
-    trans_en = "/Users/bm/src/LrGeniusAI/plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_en.txt"
-    trans_de = "/Users/bm/src/LrGeniusAI/plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_de.txt"
-    trans_fr = "/Users/bm/src/LrGeniusAI/plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_fr.txt"
-    
+    # Resolved from this file's location rather than hardcoded, so the script
+    # runs on any checkout. It previously pointed at an absolute path on one
+    # developer's machine, which made it fail everywhere else — including CI
+    # and the edit hook that tells you to run it.
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    lua_dir = os.path.join(repo_root, "plugin", "LrGeniusAI.lrdevplugin")
+    trans_en = os.path.join(lua_dir, "TranslatedStrings_en.txt")
+    trans_de = os.path.join(lua_dir, "TranslatedStrings_de.txt")
+    trans_fr = os.path.join(lua_dir, "TranslatedStrings_fr.txt")
+
+
     en_strings = sync_translations(lua_dir, trans_en)
     print("Synched English.")
     sync_translations(lua_dir, trans_de, en_strings)

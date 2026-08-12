@@ -1420,6 +1420,34 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 end
 
 ---
+-- Ask the backend which of the given photo IDs still lack data for `tasks`.
+--
+-- `SearchIndexAPI.getMissingPhotosFromIndex` answers the same question but
+-- always walks the entire catalog first, which is far too heavy for a
+-- pre-flight over a selection. This checks exactly the IDs it is handed.
+-- @param photoIds table Array of photo IDs to test.
+-- @param tasks table Array of task names, e.g. { "cull" }.
+-- @return table|nil Array of photo IDs needing work, or nil plus an error.
+function SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, tasks)
+	if type(photoIds) ~= "table" or #photoIds == 0 then
+		return {}, nil
+	end
+
+	local body = {
+		photo_ids = photoIds,
+		tasks = tasks or { "cull" },
+		regenerate_metadata = false,
+	}
+
+	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body, 120)
+	if err then
+		log:error("checkUnprocessedPhotoIds failed: " .. tostring(err))
+		return nil, err
+	end
+	return (result and result.photo_ids) or {}, nil
+end
+
+---
 -- Find photos similar to the given photo by perceptual hash (and optionally CLIP).
 -- @param photoId string Reference photo ID (must be indexed with phash).
 -- @param options table Optional: scope_photo_ids (table), max_results (number), phash_max_hamming (number), use_clip (boolean), catalog_id (string).
