@@ -4392,6 +4392,7 @@ dependencies = [
  "lrg-mlx",
  "lrg-providers",
  "lrg-store",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",

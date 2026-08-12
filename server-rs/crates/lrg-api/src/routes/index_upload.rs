@@ -527,10 +527,38 @@ pub(crate) async fn process_batch(
 
     let store = state.store();
 
+    // Phase 0 — decode, culling metrics and pHash for the whole batch, in
+    // parallel. Pure CPU work with no model behind it, so unlike phase 1 there
+    // is nothing here that wants the whole machine to itself.
+    let t_cull = Instant::now();
+    let image_blobs: Vec<Vec<u8>> = triplets.iter().map(|(b, _, _, _)| b.clone()).collect();
+    let mut cull_signals =
+        tokio::task::spawn_blocking(move || precompute_cull_signals(&image_blobs))
+            .await
+            .unwrap_or_else(|e| vec![Err(format!("cull metric pass panicked: {e}"))]);
+    if !triplets.is_empty() {
+        log::debug!(
+            "Cull signals for {} photo(s) took {:?}",
+            triplets.len(),
+            t_cull.elapsed()
+        );
+    }
+    // A join failure yields a single error; widen it so the zip below still
+    // lines up one entry per photo.
+    if cull_signals.len() != triplets.len() {
+        let msg = cull_signals
+            .first()
+            .and_then(|r| r.as_ref().err().cloned())
+            .unwrap_or_else(|| "cull metric pass produced no result".to_string());
+        cull_signals = triplets.iter().map(|_| Err(msg.clone())).collect();
+    }
+
     // Phase 1 — everything that does not need the LLM, still strictly
     // sequential (SigLIP2 and the face detector each want the whole machine).
     let mut prepared: Vec<PreparedPhoto> = Vec::with_capacity(triplets.len());
-    for (image_bytes, photo_id, filename, photo_overrides) in triplets {
+    for ((image_bytes, photo_id, filename, photo_overrides), cull) in
+        triplets.into_iter().zip(cull_signals)
+    {
         let Some(store_ref) = store.as_ref() else {
             failure_count += 1;
             let msg = "database not initialized (no db_path bound)";
@@ -540,6 +568,17 @@ pub(crate) async fn process_batch(
             error_messages.push(format!("{filename}: {msg}"));
             continue;
         };
+        let cull = match cull {
+            Ok(c) => c,
+            Err(e) => {
+                failure_count += 1;
+                results.push(json!({
+                    "photo_id": photo_id, "success": false, "error": e,
+                }));
+                error_messages.push(format!("{filename}: {e}"));
+                continue;
+            }
+        };
         match prepare_one(
             &state,
             store_ref,
@@ -548,6 +587,7 @@ pub(crate) async fn process_batch(
             &image_bytes,
             &photo_id,
             &filename,
+            cull,
         )
         .await
         {
@@ -721,6 +761,62 @@ struct PreparedPhoto {
 ///
 /// Deliberately stops short of the `IMAGE_TABLE` write, so a photo whose LLM
 /// call later fails is never persisted — same as when this was one function.
+/// The per-photo culling signals, computed once per batch off the hot path.
+pub(crate) struct CullSignals {
+    metrics: lrg_imaging::metrics::CullingMetrics,
+    phash: String,
+}
+
+/// Decodes each image and computes its culling metrics and pHash, in parallel
+/// across the batch.
+///
+/// This used to happen inline in `prepare_one`, inside a loop the surrounding
+/// comment describes as "strictly sequential (SigLIP2 and the face detector
+/// each want the whole machine)". That reasoning holds for the two ONNX models
+/// — both sit behind a `Mutex`, so concurrency there buys nothing — but it does
+/// not hold for decode, resampling and the metric passes, which are pure CPU
+/// and embarrassingly parallel. At ~51ms/photo measured on a 2048px frame
+/// (39ms metrics + 12ms pHash) that was invisible next to a ~400ms embedding
+/// and is the dominant cost once `tasks=cull` removes the embedding.
+///
+/// Decoded pixels are dropped immediately rather than carried forward: a
+/// 2048px RGB8 frame is ~8MB, and holding a whole batch of them across the LLM
+/// phase is exactly the memory blowup the phase split exists to avoid.
+///
+/// The config is deliberately the *default*, never a preset's: indexing happens
+/// long before the user picks a culling preset, and these values are stored
+/// once and read by every later cull run. Storing preset-flavoured numbers
+/// would silently bind a catalog to whichever preset happened to be active
+/// during import. Presets instead re-derive `cull_technical_score` and
+/// `cull_aesthetic` from the stored sub-scores at rank time (see
+/// `lrg_analysis::grouping::rank_group_records`), which is where their weights
+/// belong. The threshold-shaped fields (denominators, exposure target, clip
+/// thresholds) genuinely need pixels, so changing those still requires a
+/// re-index.
+fn precompute_cull_signals(images: &[Vec<u8>]) -> Vec<Result<CullSignals, String>> {
+    use rayon::prelude::*;
+    let cfg = ImageMetricsConfig::default();
+    images
+        .par_iter()
+        .map(|bytes| {
+            let decoded = image::load_from_memory(bytes)
+                .map_err(|e| format!("could not decode image: {e}"))?
+                .to_rgb8();
+            let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+            let pixels = decoded.into_raw();
+            let rgb = RgbImage {
+                pixels: &pixels,
+                width,
+                height,
+            };
+            Ok(CullSignals {
+                metrics: culling_metrics(&rgb, &cfg),
+                phash: perceptual_hash(&rgb),
+            })
+        })
+        .collect()
+}
+
 async fn prepare_one(
     state: &AppState,
     store: &Arc<lrg_store::Store>,
@@ -729,16 +825,19 @@ async fn prepare_one(
     image_bytes: &[u8],
     photo_id: &str,
     filename: &str,
+    cull: CullSignals,
 ) -> Result<PreparedPhoto, String> {
-    let decoded = image::load_from_memory(image_bytes)
-        .map_err(|e| format!("could not decode image: {e}"))?
-        .to_rgb8();
-    let (width, height) = (decoded.width() as usize, decoded.height() as usize);
-    let pixels = decoded.into_raw();
-    let rgb = RgbImage {
-        pixels: &pixels,
-        width,
-        height,
+    // The cull signals arrive precomputed from the parallel pass, so the only
+    // reason left to decode here is the SigLIP2 embedding. A cull-only run
+    // therefore never decodes in this function at all.
+    let decoded_for_embedding = if options.compute_embeddings {
+        let decoded = image::load_from_memory(image_bytes)
+            .map_err(|e| format!("could not decode image: {e}"))?
+            .to_rgb8();
+        let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+        Some((decoded.into_raw(), width, height))
+    } else {
+        None
     };
 
     let existing = if options.regenerate_metadata {
@@ -793,7 +892,7 @@ async fn prepare_one(
     // weights belong. The threshold-shaped fields here (denominators, exposure
     // target, clip thresholds) genuinely need pixels, so changing those still
     // requires a re-index.
-    let metrics = culling_metrics(&rgb, &ImageMetricsConfig::default());
+    let CullSignals { metrics, phash } = cull;
     main_metadata.insert("cull_sharpness".into(), json!(metrics.cull_sharpness));
     main_metadata.insert("cull_exposure".into(), json!(metrics.cull_exposure));
     main_metadata.insert("cull_noise".into(), json!(metrics.cull_noise));
@@ -807,7 +906,6 @@ async fn prepare_one(
         json!(metrics.cull_technical_score),
     );
     main_metadata.insert("cull_aesthetic".into(), json!(metrics.cull_aesthetic));
-    let phash = perceptual_hash(&rgb);
     if !phash.is_empty() {
         main_metadata.insert("cull_phash".into(), json!(phash));
         main_metadata.insert("phash".into(), json!(phash));
@@ -827,9 +925,13 @@ async fn prepare_one(
     let mut new_embedding: Option<Vec<f32>> = None;
     if need_embedding {
         let t0 = Instant::now();
+        let (pixels, width, height) = decoded_for_embedding
+            .as_ref()
+            .map(|(p, w, h)| (p.as_slice(), *w, *h))
+            .ok_or_else(|| "internal: embedding requested without decoded pixels".to_string())?;
         let mut emb = state
             .siglip
-            .embed_image(&pixels, width, height)
+            .embed_image(pixels, width, height)
             .map_err(|e| format!("Embedding generation failed: {e}"))?;
         log::debug!("Photo {photo_id}: SigLIP2 embed took {:?}", t0.elapsed());
         lrg_ml::siglip::l2_normalize(&mut emb);
