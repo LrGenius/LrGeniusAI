@@ -4140,8 +4140,15 @@ function SearchIndexAPI.isClipReady()
 end
 
 ---
--- Checks the health of the backend server and its components (models, providers).
--- Surfaces critical loading failures to the user.
+-- Checks the health of the backend server's local models (CLIP, face
+-- detection) and surfaces critical loading failures to the user.
+--
+-- LLM provider availability (Gemini/ChatGPT/Ollama/LM Studio) is not covered
+-- here: the backend has no stored API keys or base URLs to probe on a bare
+-- `/health` GET, so it never reports provider status -- see
+-- SearchIndexAPI.getDetailedHealth() / Util.checkPluginHealth(), which check
+-- providers from the plugin side instead (stored keys + a direct ping) and
+-- back the Plugin Manager's "System Health" panel and the Setup Wizard.
 --
 function SearchIndexAPI.checkServerHealth()
 	local url = getBaseUrl() .. ENDPOINTS.HEALTH
@@ -4163,32 +4170,6 @@ function SearchIndexAPI.checkServerHealth()
 		-- 2. Check Face model
 		if res.face_model == "failed" then
 			log:warn("Face detection model failed to load on server: " .. tostring(res.face_error))
-		end
-
-		-- 3. Check LLM providers
-		local providers = res.llm_providers or {}
-		local hasAvailable = false
-		local failedProviders = {}
-		for provider, status in pairs(providers) do
-			if status == "available" or status == "registered" then
-				hasAvailable = true
-			elseif status == "failed" then
-				table.insert(
-					failedProviders,
-					provider .. ": " .. (res.llm_errors and res.llm_errors[provider] or "unknown error")
-				)
-			end
-		end
-
-		if not hasAvailable and next(providers) ~= nil then
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Health/NoProviders=No AI metadata providers are available."),
-				LOC(
-					"$$$/LrGeniusAI/Health/NoProvidersDetail=Please configure Ollama, LM Studio, ChatGPT, or Gemini in the plugin preferences."
-				)
-			)
-		elseif #failedProviders > 0 then
-			log:warn("Some AI providers failed to initialize: " .. table.concat(failedProviders, ", "))
 		end
 	end
 
