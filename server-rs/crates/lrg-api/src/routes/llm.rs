@@ -437,7 +437,7 @@ async fn repo_files(
         .await
         .map_err(|e| format!("could not read the file list for {repo}: {e}"))?;
 
-    let files: Vec<(String, u64)> = entries
+    let mut files: Vec<(String, u64)> = entries
         .iter()
         .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
         .filter_map(|entry| {
@@ -446,6 +446,27 @@ async fn repo_files(
             (!is_skippable_repo_file(&path)).then_some((path, size))
         })
         .collect();
+
+    // Some repos carry a stale `model.safetensors.index.json` left over from
+    // before the weights were consolidated into a single `model.safetensors`
+    // (observed on lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit — the
+    // index's weight_map still points at `model-0000N-of-0000N.safetensors`
+    // shards that no longer exist in the repo). mlx-swift-lm trusts the index
+    // over the consolidated file when both are present, so downloading it
+    // produces a directory that fails to load with a confusing "not
+    // supported" error. A monolithic `model.safetensors` needs no index, so
+    // drop the index whenever both live in the same directory.
+    let monolithic_dirs: std::collections::HashSet<String> = files
+        .iter()
+        .filter_map(|(path, _)| {
+            let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
+            (name == "model.safetensors").then(|| dir.to_string())
+        })
+        .collect();
+    files.retain(|(path, _)| {
+        let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
+        name != "model.safetensors.index.json" || !monolithic_dirs.contains(dir)
+    });
 
     if files.is_empty() {
         return Err(format!("{repo} contains no downloadable model files"));
