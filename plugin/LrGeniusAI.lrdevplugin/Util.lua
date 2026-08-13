@@ -1642,4 +1642,138 @@ function Util.resultsByPhotoId(results)
 	return byId
 end
 
+---
+-- Flattens a keyword-category structure into a plain list of names.
+--
+-- Accepts both shapes the plugin sends as `keyword_categories`: the flat array
+-- from KeywordConfigProvider, and the nested tree from
+-- MetadataManager.getCatalogKeywordHierarchy() (parent name -> child table).
+-- Every node name is returned, at every depth, because the backend derives its
+-- category labels from that tree and a name at any level can end up as one.
+--
+-- @param categories table|nil Flat array or nested table of category names.
+-- @return table Array of names, in no particular order, with duplicates kept.
+--
+function Util.flattenKeywordCategoryNames(categories)
+	local names = {}
+	if type(categories) ~= "table" then
+		return names
+	end
+	local seenTables = {}
+	local function recurse(node)
+		if seenTables[node] then -- a malformed/cyclic table must not hang the task
+			return
+		end
+		seenTables[node] = true
+		for key, value in pairs(node) do
+			if type(key) == "string" then
+				table.insert(names, key)
+			end
+			if type(value) == "string" then
+				table.insert(names, value)
+			elseif type(value) == "table" then
+				recurse(value)
+			end
+		end
+	end
+	recurse(categories)
+	return names
+end
+
+---
+-- Picks the catalog keyword vocabulary to send to the LLM.
+--
+-- Selection is by usage: the keywords applied to the most photos are the ones
+-- the model should reuse, and a big catalog has far more keywords than fit in a
+-- prompt. Category names are pinned — they are the labels the model must sort
+-- into, so they survive the cap regardless of how often they are used, and they
+-- are merged into this one list instead of being repeated as separate
+-- vocabulary entries.
+--
+-- The selected names come back sorted alphabetically, not by count. This block
+-- is run-constant context in the backend prompt, so a stable order keeps the
+-- cacheable prefix identical between runs when the selected *set* has not
+-- changed — which is the common case, since ordinary tagging shifts counts
+-- without changing which keywords are the popular ones.
+--
+-- @param entries table Array of { name = string, count = number }.
+-- @param limit number|nil Maximum names to return (default 500).
+-- @param options table|nil { pinned = array of names always included }.
+-- @return table Array of keyword names, alphabetically sorted.
+--
+function Util.rankKeywordsByUsage(entries, limit, options)
+	limit = tonumber(limit) or 500
+	options = options or {}
+
+	local selected = {} -- lowercased name -> display name
+	local selectedCount = 0
+
+	local function claim(name)
+		if type(name) ~= "string" then
+			return false
+		end
+		local trimmed = name:gsub("^%s*(.-)%s*$", "%1")
+		if trimmed == "" then
+			return false
+		end
+		local key = trimmed:lower()
+		if selected[key] then
+			return false
+		end
+		selected[key] = trimmed
+		selectedCount = selectedCount + 1
+		return true
+	end
+
+	-- Pinned names first: they take their slots before the cap applies.
+	for _, name in ipairs(options.pinned or {}) do
+		if selectedCount >= limit then
+			break
+		end
+		claim(name)
+	end
+
+	-- Fold duplicate names (the same word under two parents is one term to the
+	-- model) by summing their photo counts.
+	local totals, order = {}, {}
+	for _, entry in ipairs(entries or {}) do
+		if type(entry) == "table" and type(entry.name) == "string" then
+			local trimmed = entry.name:gsub("^%s*(.-)%s*$", "%1")
+			local key = trimmed:lower()
+			if trimmed ~= "" and not selected[key] then
+				if not totals[key] then
+					totals[key] = { name = trimmed, count = 0 }
+					table.insert(order, key)
+				end
+				totals[key].count = totals[key].count + (tonumber(entry.count) or 0)
+			end
+		end
+	end
+
+	local ranked = {}
+	for _, key in ipairs(order) do
+		table.insert(ranked, totals[key])
+	end
+	table.sort(ranked, function(a, b)
+		if a.count ~= b.count then
+			return a.count > b.count
+		end
+		return a.name < b.name -- ties resolved by name so the result is deterministic
+	end)
+
+	for _, entry in ipairs(ranked) do
+		if selectedCount >= limit then
+			break
+		end
+		claim(entry.name)
+	end
+
+	local result = {}
+	for _, name in pairs(selected) do
+		table.insert(result, name)
+	end
+	table.sort(result)
+	return result
+end
+
 return Util

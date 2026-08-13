@@ -22,6 +22,12 @@ Defaults.defaultBilingualKeywords = false
 Defaults.defaultKeywordSecondaryLanguage = "English"
 Defaults.defaultKeywordAliases = false
 
+-- How many catalog keywords are sent to the LLM as existing vocabulary. Enough
+-- to cover a working photographer's live vocabulary without turning the
+-- run-constant part of the prompt into the bulk of the context on small local
+-- models.
+Defaults.catalogKeywordLimit = 500
+
 Defaults.defaultTemperature = 0.1
 Defaults.defaultMaxTokens = 2048
 

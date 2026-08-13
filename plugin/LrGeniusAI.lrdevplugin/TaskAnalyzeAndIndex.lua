@@ -845,6 +845,18 @@ LrTasks.startAsyncTask(function()
 			functionContext = context,
 		})
 
+		-- Give the model the vocabulary it already has, so it reuses existing
+		-- terms instead of inventing near-synonyms with different casing. Counting
+		-- keyword usage walks the whole keyword tree, so it runs under the progress
+		-- scope rather than silently freezing the UI on a large catalog.
+		if props.generateKeywords then
+			progressScope:setCaption(
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ReadingCatalogKeywords=Reading catalog keywords...")
+			)
+			options.catalog_keywords =
+				MetadataManager.collectCatalogKeywordNames(Defaults.catalogKeywordLimit, options.keyword_categories)
+		end
+
 		-- Get photos to process
 		-- For scope 'missing', pass task options so backend checks which photos need the selected tasks
 		local taskOptionsForScope = (props.scope == "missing")
