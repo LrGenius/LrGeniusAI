@@ -25,6 +25,46 @@ use crate::types::{KeywordCategories, KeywordTree};
 /// lookups in [`CategoryLabels::path_for`] more forgiving.
 pub const PATH_SEPARATOR: &str = "/";
 
+/// How one keyword is encoded in the model's answer.
+///
+/// Named field are readable but expensive: a keyword with a translation and
+/// aliases costs 93 characters as an object and 39 as positional arrays, and
+/// the difference is decoded one forward pass at a time. Measured on
+/// gemma-4-e4b (same photo, same nine keywords): 546 output tokens for the
+/// object form against 344 for the arrays — 2.4 seconds of decode on a single
+/// photo. What the field names carried is explained once in the prompt
+/// instead, where it rides along in the run-constant prefix and is prefilled
+/// rather than decoded.
+///
+/// [`crate::schema`] builds the matching schema and [`crate::normalize`]
+/// decodes the answer back into the named form; both derive the variant from
+/// the same request flags via [`Self::for_request`], so neither has to guess
+/// the shape from the data. That matters because `Aliased` and `Translated`
+/// are both flat string arrays and are told apart only by which was asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeywordLeafEncoding {
+    /// `"Berg"` — nothing but the keyword itself.
+    Plain,
+    /// `["Berg", "Gipfel"]` — the keyword, then any further terms for it.
+    Aliased,
+    /// `["Berg", "mountain"]` — the keyword and its translation.
+    Translated,
+    /// `[["Berg", "Gipfel"], ["mountain", "peak"]]` — one group per language,
+    /// each holding the term first and any further terms after it.
+    TranslatedAliased,
+}
+
+impl KeywordLeafEncoding {
+    pub fn for_request(bilingual: bool, aliases: bool) -> Self {
+        match (bilingual, aliases) {
+            (false, false) => Self::Plain,
+            (false, true) => Self::Aliased,
+            (true, false) => Self::Translated,
+            (true, true) => Self::TranslatedAliased,
+        }
+    }
+}
+
 /// The leaf categories of a taxonomy plus the label each is addressed by.
 #[derive(Debug, Clone, Default)]
 pub struct CategoryLabels {

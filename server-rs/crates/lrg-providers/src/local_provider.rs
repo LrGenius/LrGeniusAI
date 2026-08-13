@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_rgb;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
 use crate::local::{LocalImage, LocalRequest, SharedLocalEngine};
 use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
@@ -113,6 +114,7 @@ impl LocalProvider {
         let keywords = normalize_keywords(
             &parsed.get("keywords").cloned().unwrap_or(json!([])),
             request.keyword_categories.as_ref(),
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
         );
         let field = |name: &str, wanted: bool| {
             wanted

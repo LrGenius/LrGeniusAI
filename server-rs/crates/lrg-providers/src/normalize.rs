@@ -9,8 +9,90 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
-use crate::keyword_taxonomy::CategoryLabels;
+use crate::keyword_taxonomy::{CategoryLabels, KeywordLeafEncoding};
 use crate::types::KeywordCategories;
+
+/// Turn one positional keyword leaf back into the named form the rest of this
+/// module works in (`{name, synonyms, aliases, synonym_aliases}`).
+///
+/// This has to run *before* [`normalize_keywords_structure`], which treats
+/// every array as a container and would otherwise scatter one keyword's terms
+/// across several keywords.
+///
+/// Deliberately lenient in both directions. A model that ignored the schema
+/// and sent the old named object, or a bare string, is passed straight
+/// through — and it has to be, because `schema_strict` strips the
+/// `minItems`/`maxItems` bound for OpenAI, so on that path nothing enforces
+/// the group count. Under-filled shapes degrade to the next simpler reading
+/// rather than being dropped: half an answer beats none.
+fn expand_leaf(value: &Value, encoding: KeywordLeafEncoding) -> Value {
+    let Value::Array(slots) = value else {
+        // A string, or an object from a model that answered in the old shape.
+        return value.clone();
+    };
+    if encoding == KeywordLeafEncoding::Plain {
+        return value.clone();
+    }
+
+    // `[["Berg","Gipfel"],["mountain","peak"]]` — one group per language.
+    if encoding == KeywordLeafEncoding::TranslatedAliased
+        && slots.iter().any(|s| matches!(s, Value::Array(_)))
+    {
+        let group = |i: usize| match slots.get(i) {
+            Some(Value::Array(terms)) => terms.clone(),
+            _ => Vec::new(),
+        };
+        let (primary, secondary) = (group(0), group(1));
+        let Some(name) = primary.first() else {
+            return Value::Null;
+        };
+        let mut out = Map::new();
+        out.insert("name".into(), name.clone());
+        if primary.len() > 1 {
+            out.insert("aliases".into(), Value::Array(primary[1..].to_vec()));
+        }
+        if let Some((first, rest)) = secondary.split_first() {
+            out.insert("synonyms".into(), Value::Array(vec![first.clone()]));
+            if !rest.is_empty() {
+                out.insert("synonym_aliases".into(), Value::Array(rest.to_vec()));
+            }
+        }
+        return Value::Object(out);
+    }
+
+    // A flat string list. Which field the tail belongs to is not visible in
+    // the data — `["Berg","Gipfel"]` and `["Berg","mountain"]` are the same
+    // JSON — so it is decided by what was asked for, never by inspection.
+    let Some((name, rest)) = slots.split_first() else {
+        return Value::Null;
+    };
+    let mut out = Map::new();
+    out.insert("name".into(), name.clone());
+    if !rest.is_empty() {
+        let field = match encoding {
+            KeywordLeafEncoding::Aliased => "aliases",
+            // Includes a `TranslatedAliased` answer that arrived flat: the
+            // translation is the one thing that must not be lost.
+            _ => "synonyms",
+        };
+        out.insert(field.into(), Value::Array(rest.to_vec()));
+    }
+    Value::Object(out)
+}
+
+/// `expand_leaf` across a list of keywords, dropping what it could not read.
+fn expand_leaf_list(value: &Value, encoding: KeywordLeafEncoding) -> Value {
+    let Value::Array(items) = value else {
+        return value.clone();
+    };
+    Value::Array(
+        items
+            .iter()
+            .map(|item| expand_leaf(item, encoding))
+            .filter(|item| !item.is_null())
+            .collect(),
+    )
+}
 
 /// Port of `_clean_string_list`: trims, drops empties, de-dupes
 /// case-insensitively (seeded with `reserved_lower`, e.g. the keyword's
@@ -180,7 +262,11 @@ fn insert_at_path(root: &mut Map<String, Value>, path: &[String], items: Vec<Val
 /// model that ignored the schema. A category that does not resolve keeps its
 /// keywords under its own name rather than dropping them — the same thing
 /// that used to happen when a model invented a category.
-pub fn rebuild_keyword_groups(value: &Value, labels: &CategoryLabels) -> Value {
+pub fn rebuild_keyword_groups(
+    value: &Value,
+    labels: &CategoryLabels,
+    encoding: KeywordLeafEncoding,
+) -> Value {
     let Value::Array(groups) = value else {
         return value.clone();
     };
@@ -203,7 +289,10 @@ pub fn rebuild_keyword_groups(value: &Value, labels: &CategoryLabels) -> Value {
             continue;
         };
         let items = match obj.get("items") {
-            Some(Value::Array(items)) => items.clone(),
+            Some(items @ Value::Array(_)) => match expand_leaf_list(items, encoding) {
+                Value::Array(items) => items,
+                _ => continue,
+            },
             _ => continue,
         };
         if items.is_empty() {
@@ -248,18 +337,26 @@ pub fn alt_text_from(
 }
 
 /// The one entry point providers should call for the `keywords` field:
-/// rebuild the tree from flat groups (when a taxonomy was requested), then
-/// normalize.
-pub fn normalize_keywords(value: &Value, categories: Option<&KeywordCategories>) -> Value {
+/// expand the positional leaves, rebuild the tree from flat groups (when a
+/// taxonomy was requested), then normalize.
+///
+/// `encoding` must be the one `schema.rs` built the request with — it is what
+/// says whether the tail of `["Berg","Gipfel"]` is an alias or a translation,
+/// and no amount of looking at the value can tell.
+pub fn normalize_keywords(
+    value: &Value,
+    categories: Option<&KeywordCategories>,
+    encoding: KeywordLeafEncoding,
+) -> Value {
     match categories {
         Some(categories) => {
             let labels = CategoryLabels::from_categories(categories);
             if labels.is_empty() {
-                return normalize_keywords_structure(value);
+                return normalize_keywords_structure(&expand_leaf_list(value, encoding));
             }
-            normalize_keywords_structure(&rebuild_keyword_groups(value, &labels))
+            normalize_keywords_structure(&rebuild_keyword_groups(value, &labels, encoding))
         }
-        None => normalize_keywords_structure(value),
+        None => normalize_keywords_structure(&expand_leaf_list(value, encoding)),
     }
 }
 
@@ -291,7 +388,7 @@ mod tests {
             {"category": "Wasser", "items": ["See", "Fluss"]},
             {"category": "Natur/Landschaft", "items": ["Berg"]},
         ]);
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(
             out,
             json!({"Natur": {"Wasser": ["See", "Fluss"], "Landschaft": ["Berg"]}})
@@ -304,7 +401,7 @@ mod tests {
             {"category": "Natur/Landschaft", "items": ["Berg"]},
             {"category": "Reise/Landschaft", "items": ["Hotel"]},
         ]);
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(out["Natur"]["Landschaft"], json!(["Berg"]));
         assert_eq!(out["Reise"]["Landschaft"], json!(["Hotel"]));
     }
@@ -316,28 +413,28 @@ mod tests {
             {"category": "Wasser", "items": ["Fluss"]},
             {"category": "Natur/Landschaft", "items": []},
         ]);
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(out, json!({"Natur": {"Wasser": ["See", "Fluss"]}}));
     }
 
     #[test]
     fn an_unknown_category_keeps_its_keywords() {
         let raw = json!([{"category": "Erfunden", "items": ["Etwas"]}]);
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(out, json!({"Erfunden": ["Etwas"]}));
     }
 
     #[test]
     fn a_bare_keyword_list_passes_through_untouched() {
         let raw = json!(["Berg", "See"]);
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(out, json!(["Berg", "See"]));
     }
 
     #[test]
     fn a_model_that_returns_the_old_nested_shape_still_works() {
         let raw = json!({"Natur": {"Wasser": ["See"]}});
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(out, json!({"Natur": {"Wasser": ["See"]}}));
     }
 
@@ -346,9 +443,112 @@ mod tests {
         let raw = json!([
             {"category": "Wasser", "items": [{"name": "See", "synonyms": ["lake", "See"]}]},
         ]);
-        let out = normalize_keywords(&raw, Some(&taxonomy()));
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Plain);
         assert_eq!(out["Natur"]["Wasser"][0]["name"], "See");
         assert_eq!(out["Natur"]["Wasser"][0]["synonyms"], json!(["lake"]));
+    }
+
+    #[test]
+    fn positional_leaf_expands_into_both_languages() {
+        let raw = json!([{
+            "category": "Wasser",
+            "items": [[["See", "Gewässer"], ["lake", "pond"]]],
+        }]);
+        let out = normalize_keywords(
+            &raw,
+            Some(&taxonomy()),
+            KeywordLeafEncoding::TranslatedAliased,
+        );
+        let leaf = &out["Natur"]["Wasser"][0];
+        assert_eq!(leaf["name"], "See");
+        assert_eq!(leaf["aliases"], json!(["Gewässer"]));
+        assert_eq!(leaf["synonyms"], json!(["lake"]));
+        assert_eq!(leaf["synonym_aliases"], json!(["pond"]));
+    }
+
+    #[test]
+    fn the_same_flat_pair_reads_differently_per_encoding() {
+        // `["See","lake"]` carries no hint of what its tail is. Only the
+        // encoding the request was built with can say, which is why it is
+        // threaded through rather than sniffed.
+        let raw = json!([{"category": "Wasser", "items": [["See", "lake"]]}]);
+        let aliased = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Aliased);
+        assert_eq!(aliased["Natur"]["Wasser"][0]["aliases"], json!(["lake"]));
+        assert!(aliased["Natur"]["Wasser"][0].get("synonyms").is_none());
+
+        let translated =
+            normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Translated);
+        assert_eq!(
+            translated["Natur"]["Wasser"][0]["synonyms"],
+            json!(["lake"])
+        );
+        assert!(translated["Natur"]["Wasser"][0].get("aliases").is_none());
+    }
+
+    #[test]
+    fn a_leaf_that_lost_its_second_group_keeps_the_translation() {
+        // `schema_strict` drops minItems/maxItems for OpenAI, so a flat answer
+        // where two groups were asked for is possible. The translation is the
+        // thing that must not be misfiled as an alias.
+        let raw = json!([{"category": "Wasser", "items": [["See", "lake"]]}]);
+        let out = normalize_keywords(
+            &raw,
+            Some(&taxonomy()),
+            KeywordLeafEncoding::TranslatedAliased,
+        );
+        assert_eq!(out["Natur"]["Wasser"][0]["synonyms"], json!(["lake"]));
+    }
+
+    #[test]
+    fn a_model_answering_in_the_old_named_shape_is_still_understood() {
+        // Nothing forces a cloud model to follow the positional layout.
+        let raw = json!([{
+            "category": "Wasser",
+            "items": [{"name": "See", "synonyms": ["lake"]}],
+        }]);
+        let out = normalize_keywords(
+            &raw,
+            Some(&taxonomy()),
+            KeywordLeafEncoding::TranslatedAliased,
+        );
+        assert_eq!(out["Natur"]["Wasser"][0]["name"], "See");
+        assert_eq!(out["Natur"]["Wasser"][0]["synonyms"], json!(["lake"]));
+    }
+
+    #[test]
+    fn positional_leaves_dedupe_like_the_named_ones() {
+        // Models pad the alias slot by repeating the keyword — measured on
+        // gemma-4 with `[["Astronautin","Astronaut"],["astronaut","astronaut"]]`.
+        let raw = json!([{
+            "category": "Wasser",
+            "items": [[["See", "see"], ["lake", "lake"]]],
+        }]);
+        let out = normalize_keywords(
+            &raw,
+            Some(&taxonomy()),
+            KeywordLeafEncoding::TranslatedAliased,
+        );
+        let leaf = &out["Natur"]["Wasser"][0];
+        assert!(leaf.get("aliases").is_none(), "self-repeat is not an alias");
+        assert_eq!(leaf["synonyms"], json!(["lake"]));
+        assert!(leaf.get("synonym_aliases").is_none());
+    }
+
+    #[test]
+    fn positional_leaves_survive_without_a_taxonomy() {
+        let raw = json!([["Berg", "mountain"], ["See", "lake"]]);
+        let out = normalize_keywords(&raw, None, KeywordLeafEncoding::Translated);
+        assert_eq!(out[0]["name"], "Berg");
+        assert_eq!(out[0]["synonyms"], json!(["mountain"]));
+        assert_eq!(out[1]["name"], "See");
+    }
+
+    #[test]
+    fn an_empty_positional_leaf_is_dropped_not_kept_as_a_blank() {
+        let raw = json!([{"category": "Wasser", "items": [[], ["See", "lake"]]}]);
+        let out = normalize_keywords(&raw, Some(&taxonomy()), KeywordLeafEncoding::Translated);
+        assert_eq!(out["Natur"]["Wasser"].as_array().map(Vec::len), Some(1));
+        assert_eq!(out["Natur"]["Wasser"][0]["name"], "See");
     }
 
     #[test]

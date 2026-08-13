@@ -22,46 +22,34 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::keyword_taxonomy::CategoryLabels;
+use crate::keyword_taxonomy::{CategoryLabels, KeywordLeafEncoding};
 use crate::types::MetadataGenerationRequest;
 
-/// One keyword: a bare string, or an object when translations/aliases are
-/// requested.
+/// One keyword, positional rather than named once anything beyond the bare
+/// term is asked for. See [`KeywordLeafEncoding`] for what each slot means and
+/// why the field names moved into the prompt.
 ///
-/// `aliases` and `synonym_aliases` are deliberately *not* required: the
-/// prompt tells the model to omit them when no genuine synonym exists
-/// (`prompts.rs`), and a schema that requires them makes that impossible —
-/// the model then emits an empty array per keyword instead, which is the
-/// most expensive way to say nothing.
-fn keyword_leaf_item_schema(bilingual: bool, aliases: bool) -> Value {
-    if !bilingual && !aliases {
-        return json!({"type": "string"});
+/// `minItems`/`maxItems` are what make the positional reading safe: they stop
+/// a model from returning one group where two are meant, which would silently
+/// file a translation as an alias. `schema_strict` drops them again for
+/// OpenAI, whose strict mode rejects the keywords outright — the decoder in
+/// `normalize.rs` stays lenient for exactly that reason.
+fn keyword_leaf_item_schema(encoding: KeywordLeafEncoding) -> Value {
+    let string_list = json!({"type": "array", "minItems": 1, "items": {"type": "string"}});
+    match encoding {
+        KeywordLeafEncoding::Plain => json!({"type": "string"}),
+        // The term first, then any further terms for it. No upper bound: how
+        // many alternatives a keyword genuinely has is the model's call.
+        KeywordLeafEncoding::Aliased => string_list,
+        // Exactly the term and its translation.
+        KeywordLeafEncoding::Translated => json!({
+            "type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}
+        }),
+        // One group per language, each shaped like `Aliased`.
+        KeywordLeafEncoding::TranslatedAliased => json!({
+            "type": "array", "minItems": 2, "maxItems": 2, "items": string_list
+        }),
     }
-    let mut properties = Map::new();
-    let mut required = vec!["name".to_string()];
-    properties.insert("name".into(), json!({"type": "string"}));
-    if aliases {
-        properties.insert(
-            "aliases".into(),
-            json!({"type": "array", "items": {"type": "string"}}),
-        );
-    }
-    if bilingual {
-        properties.insert(
-            "synonyms".into(),
-            json!({"type": "array", "items": {"type": "string"}}),
-        );
-        // The bilingual prompt asks for `synonyms` unconditionally, so this
-        // one stays required — schema and prompt agree.
-        required.push("synonyms".to_string());
-        if aliases {
-            properties.insert(
-                "synonym_aliases".into(),
-                json!({"type": "array", "items": {"type": "string"}}),
-            );
-        }
-    }
-    json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 }
 
 /// The flat `{category, items}` group list. Only categories that actually
@@ -69,7 +57,14 @@ fn keyword_leaf_item_schema(bilingual: bool, aliases: bool) -> Value {
 ///
 /// `category` is an `enum` of the hybrid labels, so the grammar itself rules
 /// out an invented category — no post-hoc validation needed.
-fn keyword_groups_schema(labels: &CategoryLabels, bilingual: bool, aliases: bool) -> Value {
+///
+/// Keying the object by category name instead would save the `"category"` and
+/// `"items"` labels, but it cannot ship: `schema_strict::make_schema_strict`
+/// forces every property into `required` for OpenAI, so every category in the
+/// taxonomy would become mandatory — the exact failure this flat shape was
+/// introduced to fix. It is worth roughly 9 tokens per group against the
+/// leaf's ~200 per photo, so the trade is not close.
+fn keyword_groups_schema(labels: &CategoryLabels, encoding: KeywordLeafEncoding) -> Value {
     let categories: Vec<&str> = labels.labels().collect();
     json!({
         "type": "array",
@@ -77,7 +72,7 @@ fn keyword_groups_schema(labels: &CategoryLabels, bilingual: bool, aliases: bool
             "type": "object",
             "properties": {
                 "category": {"type": "string", "enum": categories},
-                "items": {"type": "array", "items": keyword_leaf_item_schema(bilingual, aliases)},
+                "items": {"type": "array", "items": keyword_leaf_item_schema(encoding)},
             },
             "required": ["category", "items"],
             "additionalProperties": false,
@@ -107,24 +102,21 @@ pub fn prepare_response_structure(request: &MetadataGenerationRequest) -> Value 
         required.push("alt_text");
     }
     if request.generate_keywords {
+        let encoding =
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases);
+        let flat_list = || json!({"type": "array", "items": keyword_leaf_item_schema(encoding)});
         let keywords_schema = match &request.keyword_categories {
             Some(categories) => {
                 let labels = CategoryLabels::from_categories(categories);
                 if labels.is_empty() {
                     // A taxonomy that contains nothing usable is the same as
                     // no taxonomy at all.
-                    json!({"type": "array", "items": keyword_leaf_item_schema(request.bilingual_keywords, request.generate_aliases)})
+                    flat_list()
                 } else {
-                    keyword_groups_schema(
-                        &labels,
-                        request.bilingual_keywords,
-                        request.generate_aliases,
-                    )
+                    keyword_groups_schema(&labels, encoding)
                 }
             }
-            None => {
-                json!({"type": "array", "items": keyword_leaf_item_schema(request.bilingual_keywords, request.generate_aliases)})
-            }
+            None => flat_list(),
         };
         properties.insert("keywords".into(), keywords_schema);
         required.push("keywords");
@@ -153,23 +145,51 @@ mod tests {
     }
 
     #[test]
-    fn optional_alias_fields_are_not_required() {
+    fn aliases_alone_are_one_flat_string_list() {
+        let mut req = base_request();
+        req.generate_keywords = true;
+        req.generate_aliases = true;
+        let item = &prepare_response_structure(&req)["properties"]["keywords"]["items"];
+        assert_eq!(item["type"], "array");
+        assert_eq!(item["items"]["type"], "string");
+        // No upper bound: a keyword may have any number of further terms.
+        assert_eq!(item["minItems"], json!(1));
+        assert!(item.get("maxItems").is_none());
+    }
+
+    #[test]
+    fn translation_alone_is_a_pair_of_strings() {
+        let mut req = base_request();
+        req.generate_keywords = true;
+        req.bilingual_keywords = true;
+        let item = &prepare_response_structure(&req)["properties"]["keywords"]["items"];
+        assert_eq!(item["items"]["type"], "string");
+        assert_eq!(
+            (&item["minItems"], &item["maxItems"]),
+            (&json!(2), &json!(2))
+        );
+    }
+
+    #[test]
+    fn translation_with_aliases_is_two_groups_of_strings() {
         let mut req = base_request();
         req.generate_keywords = true;
         req.bilingual_keywords = true;
         req.generate_aliases = true;
-        let schema = prepare_response_structure(&req);
-        let item = &schema["properties"]["keywords"]["items"];
-        assert_eq!(item["type"], "object");
-        // All four fields remain available...
-        for field in ["name", "aliases", "synonyms", "synonym_aliases"] {
-            assert!(
-                item["properties"].get(field).is_some(),
-                "{field} should still be offered"
-            );
-        }
-        // ...but only the two the prompt asks for unconditionally are required.
-        assert_eq!(item["required"], json!(["name", "synonyms"]));
+        let item = &prepare_response_structure(&req)["properties"]["keywords"]["items"];
+        // Exactly two groups — one per language. Without the bound a model
+        // could return a single group and its translation would be read as an
+        // alias of the keyword.
+        assert_eq!(
+            (&item["minItems"], &item["maxItems"]),
+            (&json!(2), &json!(2))
+        );
+        assert_eq!(item["items"]["type"], "array");
+        assert_eq!(item["items"]["items"]["type"], "string");
+        assert_eq!(item["items"]["minItems"], json!(1));
+        // The named form is gone: it cost 546 output tokens where this costs
+        // 344 for the same nine keywords.
+        assert!(item.get("properties").is_none());
     }
 
     #[test]

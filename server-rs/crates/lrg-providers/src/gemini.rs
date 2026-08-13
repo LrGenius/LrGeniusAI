@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use crate::edit_recipe::{gemini_edit_recipe_schema, normalize_edit_recipe};
 use crate::gemini_schema::prepare_gemini_response_schema;
 use crate::image_encode::image_to_base64;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
 use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
@@ -293,6 +294,7 @@ impl GeminiProvider {
         let keywords = normalize_keywords(
             &parsed.get("keywords").cloned().unwrap_or(json!([])),
             request.keyword_categories.as_ref(),
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
         );
         let caption = if request.generate_caption {
             parsed

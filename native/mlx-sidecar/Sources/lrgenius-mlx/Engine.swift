@@ -363,6 +363,17 @@ final class Engine {
 
             let (constraint, vocabSize, grammarMs) = grammar
             let whitespace = self.whitespace(for: context)
+            // Splits the answer into what the model chose and what the grammar
+            // forced. Both cost the same: `GuidedGenerationLoop` runs a forward
+            // pass per fast-forward token just as it does per sampled one, so a
+            // high `ff` share is JSON punctuation being decoded at full price.
+            // That is the number that says whether a leaner response *shape*
+            // would pay off, as opposed to a shorter answer.
+            //
+            // The sink is the library's own injection point and every recording
+            // site is nil-guarded, so binding it costs two array appends per
+            // token and changes nothing about the generation.
+            let telemetry = GuidedGenerationDiagnosticSink()
             var output = ""
             // Marks the end of vision-encode + prefill: everything after the
             // first token is pure decode.
@@ -373,40 +384,46 @@ final class Engine {
             // enough of a tally to say which one happened.
             let produced: Int
             do {
-                produced = try GuidedGenerationLoop.run(
-                    input: input,
-                    context: context,
-                    constraint: constraint,
-                    maxTokens: spec.maxTokens,
-                    vocabSize: vocabSize,
-                    // Soft zone only (the library's default 64-token reserve).
-                    // Deliberately no `hardReserve`: the hard zone suppresses
-                    // every token that is not "closing", and `ClosingTokenBias`
-                    // counts the digits 0-9 as closing (they finish a JSON
-                    // *number*). Inside a string that forces digits, which
-                    // yields structurally valid, semantically worthless output
-                    // -- a measured `{"title": "19001", "caption": "19002"}`.
-                    // Junk written into someone's catalog is worse than a photo
-                    // that failed, so the budget only ever nudges here and a
-                    // genuine overrun stays an error.
-                    //
-                    // The reserve is clamped rather than left at the library's
-                    // flat 64 because the zone is defined as
-                    // `tokenCount >= maxTokens - completionReserve`: at a
-                    // budget of 64 or less that is true from the very first
-                    // token, so the bias -- which lifts digits by +100, they
-                    // being how a JSON *number* ends -- drives the whole
-                    // answer. Measured at `max_tokens: 64`, the model emitted
-                    // `{"keywords": ["19000000000...`. A quarter of the budget
-                    // keeps the nudge to the tail where it belongs.
-                    completionReserve: min(64, max(1, spec.maxTokens / 4)),
-                    closingBias: self.bias(for: context),
-                    whitespaceBias: whitespace.bias,
-                    whitespaceTokenIDs: whitespace.tokenIDs
-                ) { delta in
-                    if firstTokenNs == nil { firstTokenNs = DispatchTime.now().uptimeNanoseconds }
-                    output += delta
-                    return true
+                produced = try GuidedGenerationDiagnosticSink.$current.withValue(telemetry) {
+                    try GuidedGenerationLoop.run(
+                        input: input,
+                        context: context,
+                        constraint: constraint,
+                        maxTokens: spec.maxTokens,
+                        vocabSize: vocabSize,
+                        // Soft zone only (the library's default 64-token
+                        // reserve). Deliberately no `hardReserve`: the hard zone
+                        // suppresses every token that is not "closing", and
+                        // `ClosingTokenBias` counts the digits 0-9 as closing
+                        // (they finish a JSON *number*). Inside a string that
+                        // forces digits, which yields structurally valid,
+                        // semantically worthless output -- a measured
+                        // `{"title": "19001", "caption": "19002"}`. Junk written
+                        // into someone's catalog is worse than a photo that
+                        // failed, so the budget only ever nudges here and a
+                        // genuine overrun stays an error.
+                        //
+                        // The reserve is clamped rather than left at the
+                        // library's flat 64 because the zone is defined as
+                        // `tokenCount >= maxTokens - completionReserve`: at a
+                        // budget of 64 or less that is true from the very first
+                        // token, so the bias -- which lifts digits by +100, they
+                        // being how a JSON *number* ends -- drives the whole
+                        // answer. Measured at `max_tokens: 64`, the model
+                        // emitted `{"keywords": ["19000000000...`. A quarter of
+                        // the budget keeps the nudge to the tail where it
+                        // belongs.
+                        completionReserve: min(64, max(1, spec.maxTokens / 4)),
+                        closingBias: self.bias(for: context),
+                        whitespaceBias: whitespace.bias,
+                        whitespaceTokenIDs: whitespace.tokenIDs
+                    ) { delta in
+                        if firstTokenNs == nil {
+                            firstTokenNs = DispatchTime.now().uptimeNanoseconds
+                        }
+                        output += delta
+                        return true
+                    }
                 }
             } catch {
                 Log.info(
@@ -418,7 +435,9 @@ final class Engine {
             Self.logStages(
                 prepareMs: prepareMs, grammarMs: grammarMs, genStart: genStart,
                 firstTokenNs: firstTokenNs, textTokens: textOnlyTokens,
-                promptTokens: promptTokens, produced: produced)
+                promptTokens: promptTokens, produced: produced,
+                sampled: telemetry.sampledTokenIDs.count,
+                forced: telemetry.fastForwardTokenIDs.count)
             return .success(
                 text: output, promptTokens: promptTokens, completionTokens: produced)
         }
@@ -443,9 +462,16 @@ final class Engine {
     /// cost to compile. The compile still runs per photo (see
     /// `grammarTokenizer`), but off the critical path, so anything above a
     /// millisecond or two here means the prefetch did not land in time.
+    ///
+    /// `sampled`/`forced` split `out` into what the model chose and what the
+    /// grammar forced. They cost the same wall-clock, so a large `ff` share is
+    /// the signal that the *shape* of the response is expensive rather than its
+    /// content — punctuation and field names decoded one forward pass at a time.
+    /// Omitted on the unconstrained path, where nothing is forced.
     static func logStages(
         prepareMs: Double, grammarMs: Double?, genStart: UInt64, firstTokenNs: UInt64?,
-        textTokens: Int, promptTokens: Int, produced: Int
+        textTokens: Int, promptTokens: Int, produced: Int,
+        sampled: Int? = nil, forced: Int? = nil
     ) {
         let totalMs = msSince(genStart)
         let ttftMs = firstTokenNs.map { Double($0 &- genStart) / 1_000_000 }
@@ -462,6 +488,10 @@ final class Engine {
         if let grammarMs { line += " grammar=\(fmt(grammarMs))ms" }
         line += " ttft=\(fmt(ttftMs))ms decode=\(fmt(decodeMs))ms"
         line += " | tokens: text=\(textTokens) image=\(promptTokens - textTokens) out=\(produced)"
+        if let sampled, let forced {
+            let share = produced > 0 ? Int((Double(forced) / Double(produced) * 100).rounded()) : 0
+            line += " (sampled=\(sampled) ff=\(forced), \(share)% forced)"
+        }
         if let decodeRate { line += " | decode \(fmt(decodeRate)) tok/s" }
         Log.info(line)
     }
