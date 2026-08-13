@@ -79,16 +79,38 @@ final class Engine {
     /// depends only on the loaded model — so it is rebuilt on `load` and never
     /// per request.
     ///
-    /// Note what is *not* cached: the `GrammarConstraint` itself.
-    /// `GrammarConstraint` carries mutable matcher state, so reusing one across
-    /// photos would need `clone()` — and `clone()` (xgrammar's
-    /// `GrammarMatcher::Fork()`) fails with `forkFailed` in this build. So each
-    /// request compiles its own constraint. That costs a grammar compile per
-    /// photo, which the README warns is hundreds of milliseconds; it is still
-    /// small against a VLM prefill, and correctness beats the saving. If fork
-    /// starts working upstream, caching a pristine template and cloning it is
-    /// the optimization to make here.
+    /// Note what is *not* cached: the `GrammarConstraint` itself. It carries
+    /// mutable matcher state, so one cannot be shared across photos, and the
+    /// two ways to get a pristine one are both closed here. `clone()`
+    /// (xgrammar's `GrammarMatcher::Fork()`) fails with `forkFailed` in this
+    /// build. Rewinding a used constraint with `rollback` is worse than it
+    /// looks: the loop's token count is not the matcher's acceptance count
+    /// (truncated fast-forward tokens are accepted but never counted), and the
+    /// obvious guard — compare the rewound mask against the pristine one — has
+    /// real collisions, because in an array-of-objects schema the state after
+    /// `"keywords": [` admits exactly the same tokens as the very start.
+    ///
+    /// So every request compiles its own constraint, at a measured ~450ms.
+    /// What removes that from the clock is `pendingGrammar`: the compile is
+    /// pure CPU work in xgrammar with no MLX involvement, so it runs for the
+    /// *next* photo while the current one decodes on the GPU.
     private var grammarTokenizer: GrammarTokenizer?
+
+    /// The model's own tokenizer, kept so a grammar compile can be started
+    /// from outside `ModelContainer.perform`.
+    ///
+    /// `GrammarConstraint` only stores this (it encodes fast-forward strings
+    /// during generation, long after construction), so holding the reference
+    /// here adds no concurrent use of the tokenizer.
+    /// (`Tokenizer` is spelled out because `Tokenizers` exports one too.)
+    private var hostTokenizer: (any MLXLMCommon.Tokenizer)?
+
+    /// A grammar compile started ahead of the photo that will use it.
+    ///
+    /// At most one is ever in flight: the compile for photo *i+1* is started
+    /// only once photo *i* has taken its own constraint, so two threads never
+    /// sit in xgrammar at the same time.
+    private var pendingGrammar: (schema: String, task: Task<GrammarConstraint, Error>)?
 
     /// Logit bias favouring the tokens that *close* a JSON value (`"`, `}`,
     /// `]`, digits, EOS), cached for the same reason as `grammarTokenizer`:
@@ -169,7 +191,7 @@ final class Engine {
 
         loaded = Loaded(
             container: container, directory: directory, supportsVision: supportsVision)
-        grammarTokenizer = nil
+        dropGrammarState()
         closingBias = nil
         whitespacePenalty = nil
 
@@ -185,13 +207,25 @@ final class Engine {
     func unload() {
         guard loaded != nil else { return }
         loaded = nil
-        grammarTokenizer = nil
+        dropGrammarState()
         closingBias = nil
         whitespacePenalty = nil
         // MLX keeps freed blocks in its own allocator pool, so dropping the
         // container is not by itself enough to return the weights to the OS.
         MLX.GPU.clearCache()
         Log.info("Unloaded MLX model")
+    }
+
+    /// Forget everything tied to the outgoing model's vocabulary.
+    ///
+    /// A grammar in flight is cancelled and dropped rather than awaited: it was
+    /// compiled against a tokenizer that is going away, so its only remaining
+    /// use would be to produce masks over the wrong vocabulary.
+    private func dropGrammarState() {
+        pendingGrammar?.task.cancel()
+        pendingGrammar = nil
+        grammarTokenizer = nil
+        hostTokenizer = nil
     }
 
     // MARK: - Generation
@@ -207,11 +241,23 @@ final class Engine {
     func generate(specs: [GenerationSpec]) async throws -> [GenerationResultPayload] {
         guard let loaded else { throw EngineError.noModelLoaded }
 
+        // Only pay for the vocabulary walk when something in this batch is
+        // actually schema-constrained; `generate_text` callers are not.
+        if specs.contains(where: { !($0.schema ?? "").isEmpty }) {
+            try await prepareGrammarVocabulary(loaded)
+        }
+
         var results: [GenerationResultPayload] = []
         results.reserveCapacity(specs.count)
-        for spec in specs {
+        startGrammarCompile(for: specs.first?.schema)
+        for (index, spec) in specs.enumerated() {
             do {
-                results.append(try await generateOne(spec: spec, loaded: loaded))
+                let grammar = try await takeConstraint(for: spec.schema)
+                // Started before the photo runs, so the compile overlaps this
+                // photo's prefill and decode instead of preceding the next one.
+                startGrammarCompile(for: index + 1 < specs.count ? specs[index + 1].schema : nil)
+                results.append(
+                    try await generateOne(spec: spec, loaded: loaded, grammar: grammar))
             } catch {
                 results.append(.failure(describe(error)))
             }
@@ -219,7 +265,12 @@ final class Engine {
         return results
     }
 
-    private func generateOne(spec: GenerationSpec, loaded: Loaded) async throws
+    /// A constraint, the vocabulary size the decode loop needs, and the
+    /// milliseconds this photo actually spent waiting for the compile — near
+    /// zero whenever the prefetch landed in time.
+    private typealias Grammar = (constraint: GrammarConstraint, vocabSize: Int, waitMs: Double)
+
+    private func generateOne(spec: GenerationSpec, loaded: Loaded, grammar: Grammar?) async throws
         -> GenerationResultPayload
     {
         if spec.image != nil && !loaded.supportsVision {
@@ -230,8 +281,14 @@ final class Engine {
 
         // Ordering matters: the run-constant half goes first so that whatever
         // prefix reuse the stack can manage has the longest possible common
-        // head. It buys nothing today (a fresh cache per call), but putting the
-        // volatile half first would make it impossible later.
+        // head. It buys nothing today, and on Gemma it would buy nothing even
+        // with a warm cache: `Gemma4MessageGenerator` builds the user turn as
+        // image parts *then* the text part, so the photo — the one thing that
+        // changes every request — sits ahead of all of this. llama.cpp puts its
+        // media marker last for exactly that reason (`worker.rs::split_render`),
+        // but the ordering inside an MLX chat turn is the model's to decide.
+        // Reusing the taxonomy prefix here would mean moving it into the
+        // *system* message, which renders before the user turn.
         var userText = spec.stablePrompt
         if !spec.perPhotoPrompt.isEmpty {
             if !userText.isEmpty { userText += "\n\n" }
@@ -280,7 +337,7 @@ final class Engine {
                 textOnlyTokens = textOnly.text.tokens.size
             }
 
-            guard let schema = spec.schema, !schema.isEmpty else {
+            guard let grammar else {
                 let parameters = GenerateParameters(
                     maxTokens: spec.maxTokens, temperature: spec.temperature)
                 let genStart = DispatchTime.now().uptimeNanoseconds
@@ -304,10 +361,8 @@ final class Engine {
                     completionTokens: result.tokenIds.count)
             }
 
-            let tGrammar = DispatchTime.now().uptimeNanoseconds
-            let (constraint, vocabSize) = try self.constraint(for: schema, context: context)
+            let (constraint, vocabSize, grammarMs) = grammar
             let whitespace = self.whitespace(for: context)
-            let grammarMs = Self.msSince(tGrammar)
             var output = ""
             // Marks the end of vision-encode + prefill: everything after the
             // first token is pure decode.
@@ -384,8 +439,10 @@ final class Engine {
     /// decode, which is memory-bandwidth bound and scales with the number of
     /// output tokens. Reading the two against each other is what says whether
     /// a slow run wants a shorter prompt or a shorter answer — and `grammar`
-    /// prices the constraint compile this backend pays per photo, because
-    /// `GrammarConstraint` cannot be cloned in this build.
+    /// is what this photo *waited* for its constraint, not what the constraint
+    /// cost to compile. The compile still runs per photo (see
+    /// `grammarTokenizer`), but off the critical path, so anything above a
+    /// millisecond or two here means the prefetch did not land in time.
     static func logStages(
         prepareMs: Double, grammarMs: Double?, genStart: UInt64, firstTokenNs: UInt64?,
         textTokens: Int, promptTokens: Int, produced: Int
@@ -422,32 +479,87 @@ final class Engine {
         return Int((Double(spaces) / Double(text.count) * 100).rounded())
     }
 
-    /// A fresh constraint for `schema` plus the vocabulary size the decode loop
-    /// needs.
+    /// Build the grammar vocabulary once per loaded model.
     ///
-    /// The size comes back alongside the constraint because `GrammarConstraint`
-    /// keeps its own copy private; only the tokenizer exposes one.
-    private func constraint(for schema: String, context: ModelContext) throws
-        -> (GrammarConstraint, Int)
-    {
-        let tokenizer: GrammarTokenizer
-        if let existing = grammarTokenizer {
-            tokenizer = existing
-        } else {
+    /// Taken out of the per-photo path so a compile can be started without
+    /// holding `ModelContainer.perform` — the container is busy generating for
+    /// the whole time the prefetch wants to run.
+    private func prepareGrammarVocabulary(_ loaded: Loaded) async throws {
+        if grammarTokenizer != nil, hostTokenizer != nil { return }
+        try await loaded.container.perform { context in
+            let tVocab = DispatchTime.now().uptimeNanoseconds
             let vocab = TokenizerVocabExtractor.extractForGrammar(from: context.tokenizer)
-            tokenizer = try GrammarTokenizer(
+            self.grammarTokenizer = try GrammarTokenizer(
                 vocab: vocab.vocab,
                 vocabType: vocab.vocabType,
                 eosTokenId: Int32(context.tokenizer.eosTokenId ?? 0))
-            grammarTokenizer = tokenizer
-        }
+            self.hostTokenizer = context.tokenizer
+            let vocabMs = Self.msSince(tVocab)
 
+            // Warmed here rather than on first use so the whole one-time cost
+            // lands in this line instead of inflating the first photo's stage
+            // timings. Each of these walks the model's full vocabulary, which
+            // is where the ~450ms once attributed to "grammar compile per
+            // photo" actually went — see the numbers this logs.
+            let tBias = DispatchTime.now().uptimeNanoseconds
+            _ = self.bias(for: context)
+            _ = self.whitespace(for: context)
+            Log.info(
+                String(
+                    format: "grammar vocabulary ready: extract=%.1fms bias=%.1fms (%d tokens)",
+                    vocabMs, Self.msSince(tBias), vocab.vocab.count))
+        }
+    }
+
+    /// Start compiling `schema` in the background, to be picked up by
+    /// `takeConstraint` when the photo that needs it comes round.
+    ///
+    /// Silently does nothing when there is no schema or no vocabulary yet;
+    /// `takeConstraint` then compiles inline, which is exactly the old
+    /// behaviour. Nothing here can make a photo fail — a compile error is
+    /// stored in the task and surfaces at the point that photo asks for it.
+    private func startGrammarCompile(for schema: String?) {
+        guard let schema, !schema.isEmpty,
+            let tokenizer = grammarTokenizer, let host = hostTokenizer
+        else { return }
+        if let pending = pendingGrammar, pending.schema == schema { return }
+        pendingGrammar?.task.cancel()
+        pendingGrammar = (
+            schema,
+            Task.detached(priority: .userInitiated) {
+                try GrammarConstraint(
+                    tokenizer: tokenizer,
+                    jsonSchema: schema,
+                    fastForward: true,
+                    hostTokenizer: host)
+            }
+        )
+    }
+
+    /// The constraint for `schema`, from the prefetch when it matches and from
+    /// a fresh compile otherwise.
+    ///
+    /// The vocabulary size comes back alongside because `GrammarConstraint`
+    /// keeps its own copy private; only the tokenizer exposes one.
+    private func takeConstraint(for schema: String?) async throws -> Grammar? {
+        guard let schema, !schema.isEmpty else { return nil }
+        guard let tokenizer = grammarTokenizer, let host = hostTokenizer else {
+            throw EngineError.noModelLoaded
+        }
+        let start = DispatchTime.now().uptimeNanoseconds
+        if let pending = pendingGrammar, pending.schema == schema {
+            pendingGrammar = nil
+            return (try await pending.task.value, tokenizer.vocabSize, Self.msSince(start))
+        }
+        // A different schema than the one queued: that compile is now waste.
+        pendingGrammar?.task.cancel()
+        pendingGrammar = nil
         let constraint = try GrammarConstraint(
             tokenizer: tokenizer,
             jsonSchema: schema,
             fastForward: true,
-            hostTokenizer: context.tokenizer)
-        return (constraint, tokenizer.vocabSize)
+            hostTokenizer: host)
+        return (constraint, tokenizer.vocabSize, Self.msSince(start))
     }
 
     /// The cached closing-token bias for the loaded model, computed on first use.

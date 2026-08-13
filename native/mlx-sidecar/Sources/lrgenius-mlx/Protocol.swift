@@ -109,9 +109,20 @@ struct GenerationResultPayload: Encodable {
     let text: String?
     let promptTokens: Int?
     let completionTokens: Int?
-    /// Always false on this backend. `GuidedGenerationLoop.run` allocates a
-    /// fresh KV cache per call (`model.newCache`) with no seam to hand it a
-    /// pre-filled one, so the stable prefix is re-prefilled for every photo.
+    /// Always false on this backend, for two reasons that both have to be
+    /// fixed before it could ever be true.
+    ///
+    /// `GuidedGenerationLoop.run` allocates a fresh KV cache per call
+    /// (`model.newCache`) and neither accepts nor returns one, so there is no
+    /// seam to hand it a pre-filled cache. Still true at mlx-swift-lm HEAD as
+    /// of 2026-08-13; the prompt-cache work in #475 landed in MLXLMCommon, not
+    /// in the guided loop.
+    ///
+    /// And even with that seam there would be almost nothing to reuse: Gemma's
+    /// message generator orders the user turn as image-then-text, so the photo
+    /// precedes the run-constant prompt and only the system turn is common
+    /// across photos. See the ordering note in `Engine.generateOne`.
+    ///
     /// Reported honestly rather than optimistically: the llama.cpp backend
     /// really does pin its prefix, and conflating the two would make the
     /// `--debug` logs lie about where the time goes.
