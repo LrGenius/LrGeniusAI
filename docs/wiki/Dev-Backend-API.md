@@ -12,7 +12,14 @@ This reference is intended for developers integrating with or extending the back
 Minimal liveness check. Returns `{"status": "ok"}`.
 
 ### `GET /health`
-Detailed health check. Returns server status, CLIP model cache state, and configured provider availability.
+Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
+`face_model`/`face_error` (SCRFD/ArcFace), each `"loaded"`, `"not_loaded"`, or
+`"failed"`. It does **not** report cloud/local LLM provider availability —
+the backend has no stored API keys or base URLs to probe on a bare GET. The
+plugin checks provider availability itself (stored keys plus a direct ping to
+Ollama/LM Studio); see `SearchIndexAPI.getDetailedHealth()` in
+`APISearchIndex.lua`, which backs the Plugin Manager's "System Health" panel
+and the Setup Wizard.
 
 ### `GET /version`
 Returns the running backend version string.

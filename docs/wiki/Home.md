@@ -11,6 +11,7 @@ Welcome to the project wiki.
 - [Getting Started](Getting-Started) — installation, first index run, initial setup
 - [FAQ](FAQ) — common questions and quick answers
 - [Troubleshooting](Troubleshooting) — connection issues, API errors, missing models
+- [Performance Tips](Help-Performance-Tips) — which features are LLM-costly and how to speed them up
 
 ### Feature guides
 

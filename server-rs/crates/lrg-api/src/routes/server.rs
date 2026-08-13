@@ -242,7 +242,11 @@ async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
     let (face_status, face_error) = state.face.status();
-    // M7 adds real LLM provider health.
+    // Deliberately no LLM provider status here: this GET carries no API keys
+    // or base URLs to probe (unlike POST /models, which accepts them), so
+    // there is nothing to report. The plugin checks provider availability
+    // itself from stored prefs plus a direct ping (SearchIndexAPI.getDetailedHealth
+    // in APISearchIndex.lua) rather than through this endpoint.
     Json(json!({
         "clip_model": clip_status,
         "clip_error": clip_error,
