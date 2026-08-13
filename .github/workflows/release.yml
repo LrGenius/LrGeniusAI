@@ -49,10 +49,6 @@ jobs:
             os_name: macos
             arch: arm64
             bin_ext: ''
-          - os: ubuntu-latest
-            os_name: linux
-            arch: x64
-            bin_ext: ''
 
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
