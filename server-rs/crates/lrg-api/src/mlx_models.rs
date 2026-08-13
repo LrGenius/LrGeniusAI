@@ -81,6 +81,18 @@ pub const CATALOG: &[CatalogEntry] = &[
         min_ram_gb: 32,
     },
     CatalogEntry {
+        id: "mlx-ministral3-8b",
+        label: "Ministral 3 8B (balanced alternative to Gemma)",
+        // `model_type: mistral3` with a Pixtral vision tower, which
+        // mlx-swift-lm's VLM factory registers, so the sidecar loads it as a
+        // vision model rather than falling back to the text-only factory.
+        repo: "mlx-community/Ministral-3-8B-Instruct-2512-4bit",
+        revision: "main",
+        dir_name: "Ministral-3-8B-Instruct-2512-4bit",
+        approx_bytes: 5_630_652_158,
+        min_ram_gb: 16,
+    },
+    CatalogEntry {
         id: "mlx-qwen3vl-4b",
         label: "Qwen3-VL 4B (balanced alternative to Gemma)",
         repo: "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",

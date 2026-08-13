@@ -75,11 +75,12 @@ it then appears in the model dropdown as `llamacpp: <model>` or `mlx: <model>`.
 - **`llamacpp`** — llama.cpp compiled into the backend, using GGUF models.
   Available on macOS (Metal), Windows (Vulkan, any GPU vendor), and Linux
   (CPU). Recommended entries: **Gemma 4 E4B** as the default, **Gemma 4 12B
-  (QAT)** if you have 24 GB of RAM, **Qwen3.5 9B** as an alternative,
-  **Qwen2.5-VL 3B** on modest hardware.
+  (QAT)** if you have 24 GB of RAM, **Ministral 3 8B** or **Qwen3.5 9B** as
+  alternatives, **Qwen2.5-VL 3B** on modest hardware.
 - **`mlx`** — Apple's MLX stack via a small Metal helper process, **Apple
   silicon only**. Recommended entries: **Gemma 4 E4B** as the default,
-  **Gemma 4 E2B** for speed, **Qwen3-VL 4B** as an alternative.
+  **Gemma 4 E2B** for speed, **Ministral 3 8B** or **Qwen3-VL 4B** as
+  alternatives.
 
 On an Apple silicon Mac both are available and worth a side-by-side run on the
 same 10–20 photos: MLX is Apple's native inference stack, while llama.cpp reuses

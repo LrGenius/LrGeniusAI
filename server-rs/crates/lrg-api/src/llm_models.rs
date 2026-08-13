@@ -100,6 +100,21 @@ pub const CATALOG: &[CatalogEntry] = &[
         min_ram_gb: 24,
     },
     CatalogEntry {
+        id: "ministral3-8b",
+        label: "Ministral 3 8B (balanced alternative to Gemma)",
+        // `mistral3` architecture with a Pixtral projector, both of which the
+        // vendored llama.cpp handles. Its Jinja chat template names
+        // `[SYSTEM_PROMPT]` verbatim, so llama.cpp's legacy detector maps it to
+        // the built-in `mistral-v7` renderer rather than refusing it the way it
+        // refuses Gemma 4's — see `resolve_chat_template` in lrg-llama.
+        repo: "lmstudio-community/Ministral-3-8B-Instruct-2512-GGUF",
+        revision: "main",
+        model_file: "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+        mmproj_file: "mmproj-Ministral-3-8B-Instruct-2512-F16.gguf",
+        approx_bytes: 6_055_465_568,
+        min_ram_gb: 16,
+    },
+    CatalogEntry {
         id: "qwen3.5-9b",
         label: "Qwen3.5 9B (balanced alternative to Gemma)",
         repo: "lmstudio-community/Qwen3.5-9B-GGUF",
@@ -143,12 +158,47 @@ fn is_mmproj(file_name: &str) -> bool {
     file_name.to_ascii_lowercase().contains("mmproj")
 }
 
+/// `true` for a name segment that names a quantization rather than the model.
+///
+/// Covers the two shapes publishers use: a K-quant or legacy quant (`q4_k_m`,
+/// `q8_0`, `iq3_xs`) and a float format (`bf16`, `f16`).
+fn is_quant_tag(segment: &str) -> bool {
+    matches!(segment, "f16" | "f32" | "bf16" | "fp16" | "fp8" | "mxfp4")
+        || segment
+            .trim_start_matches('i')
+            .strip_prefix('q')
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// The part of a file name that identifies *which model* it belongs to, with
+/// the `mmproj` marker and the quantization tag dropped:
+/// `mmproj-gemma-4-E4B-it-BF16.gguf` → `gemma-4-e4b-it`.
+///
+/// A pair is almost never quantized the same way — a Q4_K_M model ships with a
+/// BF16 or F16 projector — so the two file names match only once both tags are
+/// gone.
+fn pairing_key(file_name: &str) -> String {
+    let stem = file_name
+        .rsplit_once('.')
+        .map_or(file_name, |(stem, _)| stem)
+        .to_ascii_lowercase();
+    let mut parts: Vec<&str> = stem.split('-').filter(|part| *part != "mmproj").collect();
+    while parts.last().is_some_and(|part| is_quant_tag(part)) {
+        parts.pop();
+    }
+    parts.join("-")
+}
+
 /// Pair each text model with a projector from the same directory.
 ///
-/// Publishers name the pair consistently (`X.gguf` ↔ `mmproj-X.gguf`), so
-/// prefer a projector whose name shares the model's stem; otherwise fall back
-/// to the only projector present. Guessing across directories would be worse
-/// than offering the model as text-only.
+/// Publishers name the pair after the same model (`X-Q4_K_M.gguf` ↔
+/// `mmproj-X-BF16.gguf`), so prefer a projector with the model's
+/// [`pairing_key`], then one whose name contains the model's stem outright, and
+/// only then fall back to the single projector present. The fallback alone is
+/// not enough: models are downloaded into one flat directory, so as soon as a
+/// user has two of them every projector becomes ambiguous and both models would
+/// be offered as text-only. Guessing across directories would be worse than
+/// offering the model as text-only.
 fn pair_models(files: &[PathBuf], source: &'static str) -> Vec<LocalModel> {
     let (projectors, models): (Vec<&PathBuf>, Vec<&PathBuf>) = files
         .iter()
@@ -162,12 +212,20 @@ fn pair_models(files: &[PathBuf], source: &'static str) -> Vec<LocalModel> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_ascii_lowercase();
+            let key = pairing_key(&model_path.file_name().unwrap_or_default().to_string_lossy());
+            let name_of = |p: &PathBuf| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            };
             let matching = projectors
                 .iter()
-                .find(|p| {
-                    let name = p.file_name().unwrap_or_default().to_string_lossy();
-                    let name = name.to_ascii_lowercase();
-                    name.contains(stem.as_str())
+                .find(|p| pairing_key(&name_of(p)) == key)
+                .or_else(|| {
+                    projectors
+                        .iter()
+                        .find(|p| name_of(p).to_ascii_lowercase().contains(stem.as_str()))
                 })
                 .or(if projectors.len() == 1 {
                     projectors.first()
@@ -322,6 +380,54 @@ mod tests {
             paired[1].mmproj_path,
             Some(PathBuf::from("/m/mmproj-beta-Q4.gguf"))
         );
+    }
+
+    /// The real catalog case: every pair is published with the model quantized
+    /// and the projector in a float format, and downloads share one flat
+    /// directory. Matching file names outright pairs none of these, and the
+    /// single-projector fallback cannot fire, so both would be text-only.
+    #[test]
+    fn pairs_across_differing_quantization_tags() {
+        let files = vec![
+            PathBuf::from("/m/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"),
+            PathBuf::from("/m/gemma-4-E4B-it-Q4_K_M.gguf"),
+            PathBuf::from("/m/mmproj-Ministral-3-8B-Instruct-2512-F16.gguf"),
+            PathBuf::from("/m/mmproj-gemma-4-E4B-it-BF16.gguf"),
+        ];
+        let mut paired = pair_models(&files, "downloaded");
+        paired.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(paired.len(), 2);
+        assert_eq!(
+            paired[0].mmproj_path,
+            Some(PathBuf::from(
+                "/m/mmproj-Ministral-3-8B-Instruct-2512-F16.gguf"
+            ))
+        );
+        assert_eq!(
+            paired[1].mmproj_path,
+            Some(PathBuf::from("/m/mmproj-gemma-4-E4B-it-BF16.gguf"))
+        );
+    }
+
+    /// Every catalog pair must survive discovery, or the model downloads and
+    /// then silently cannot see photos.
+    #[test]
+    fn every_catalog_pair_survives_discovery() {
+        let files: Vec<PathBuf> = CATALOG
+            .iter()
+            .flat_map(|e| [PathBuf::from(e.model_file), PathBuf::from(e.mmproj_file)])
+            .collect();
+        let paired = pair_models(&files, "downloaded");
+        assert_eq!(paired.len(), CATALOG.len());
+        for entry in CATALOG {
+            let model = paired.iter().find(|m| m.name == entry.model_file).unwrap();
+            assert_eq!(
+                model.mmproj_path,
+                Some(PathBuf::from(entry.mmproj_file)),
+                "{} paired with the wrong projector",
+                entry.id
+            );
+        }
     }
 
     #[test]
