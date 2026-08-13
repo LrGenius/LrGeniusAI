@@ -631,6 +631,17 @@ pub(crate) async fn process_batch(
         .collect();
 
     if !llm_indices.is_empty() {
+        // Token accounting for the run. The per-photo lines are `debug` — a
+        // few thousand photos would drown the log — but the aggregate below
+        // is `info`, because it is the number to compare across changes to
+        // the prompt or the response schema. Output tokens are the expensive
+        // ones: each costs a full pass over the model weights, so the
+        // out-tokens-per-second figure is what says whether decode dominates.
+        let mut llm_photos: u64 = 0;
+        let mut total_in: u64 = 0;
+        let mut total_out: u64 = 0;
+        let mut total_llm_secs: f64 = 0.0;
+
         match provider_for_batch(&state, &options).await {
             Ok(provider) => {
                 let batch_size = options
@@ -644,13 +655,24 @@ pub(crate) async fn process_batch(
                         .collect();
                     let t0 = Instant::now();
                     let responses = provider.generate_metadata_batch(&requests).await;
+                    let elapsed = t0.elapsed();
+                    total_llm_secs += elapsed.as_secs_f64();
                     log::debug!(
                         "LLM batch of {} photo(s) via {} took {:?}",
                         group.len(),
                         provider.name(),
-                        t0.elapsed()
+                        elapsed
                     );
                     for (&i, response) in group.iter().zip(responses) {
+                        log::debug!(
+                            "Photo {}: LLM tokens in={} out={}",
+                            prepared[i].photo_id,
+                            response.input_tokens,
+                            response.output_tokens
+                        );
+                        llm_photos += 1;
+                        total_in += u64::from(response.input_tokens);
+                        total_out += u64::from(response.output_tokens);
                         llm_responses[i] = Some(response);
                     }
                 }
@@ -667,6 +689,22 @@ pub(crate) async fn process_batch(
                     });
                 }
             }
+        }
+
+        if llm_photos > 0 {
+            let photos = llm_photos as f64;
+            log::info!(
+                "LLM tokens over {llm_photos} photo(s): in={total_in} out={total_out} \
+                 (mean per photo: in={:.0} out={:.0}); {:.1}s total, {:.1} output tok/s",
+                total_in as f64 / photos,
+                total_out as f64 / photos,
+                total_llm_secs,
+                if total_llm_secs > 0.0 {
+                    total_out as f64 / total_llm_secs
+                } else {
+                    0.0
+                }
+            );
         }
     }
 

@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
-use crate::normalize::normalize_keywords_structure;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
@@ -299,19 +300,25 @@ fn build_success(
     parsed: &Value,
 ) -> MetadataGenerationResponse {
     let keywords_raw = parsed.get("keywords").cloned().unwrap_or(json!([]));
-    let keywords = normalize_keywords_structure(&keywords_raw);
+    let keywords = normalize_keywords(
+        &keywords_raw,
+        request.keyword_categories.as_ref(),
+        KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
+    );
+    let caption = if request.generate_caption {
+        parsed
+            .get("caption")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    } else {
+        None
+    };
+    let alt_text = alt_text_from(parsed, request.generate_alt_text, caption.as_ref());
     MetadataGenerationResponse {
         uuid: request.uuid.clone(),
         success: true,
         keywords: Some(keywords),
-        caption: if request.generate_caption {
-            parsed
-                .get("caption")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        } else {
-            None
-        },
+        caption,
         title: if request.generate_title {
             parsed
                 .get("title")
@@ -320,14 +327,7 @@ fn build_success(
         } else {
             None
         },
-        alt_text: if request.generate_alt_text {
-            parsed
-                .get("alt_text")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        } else {
-            None
-        },
+        alt_text,
         input_tokens: 0,
         output_tokens: 0,
         error: None,

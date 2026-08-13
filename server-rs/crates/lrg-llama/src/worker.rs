@@ -457,6 +457,17 @@ impl WorkerState<'_> {
         let mut slots: Vec<Slot> = Vec::new();
         let mut prefix_reused = false;
 
+        // Stage timing, batch-level because that is the unit that is real
+        // here: every live sequence decodes together, one token per sequence
+        // per step, so per-photo decode time does not exist to be measured.
+        // `prefill` covers vision-encode, prompt evaluation, the grammar
+        // setup in `build_sampler` and the first sampled token — everything
+        // before the decode loop. Splitting the grammar out separately is
+        // worth it on the MLX backend, where the constraint compile runs into
+        // hundreds of milliseconds; llguidance builds its parser here and has
+        // not shown up as a cost worth its own timer.
+        let t_prefill = std::time::Instant::now();
+
         for (idx, request) in requests.iter().enumerate() {
             let seq_id = i32::try_from(idx).unwrap_or(i32::MAX) + 1;
             match self.prefill_one(ctx, request, idx, seq_id, &mut prefix_reused) {
@@ -473,6 +484,10 @@ impl WorkerState<'_> {
             }
         }
 
+        let prefill_ms = t_prefill.elapsed().as_secs_f64() * 1000.0;
+        let photos = slots.len();
+
+        let t_decode = std::time::Instant::now();
         if !slots.is_empty() {
             if let Err(e) = self.decode(ctx, &mut slots) {
                 for slot in &slots {
@@ -480,12 +495,17 @@ impl WorkerState<'_> {
                 }
             }
         }
+        let decode_ms = t_decode.elapsed().as_secs_f64() * 1000.0;
 
+        let mut total_prompt: u32 = 0;
+        let mut total_completion: u32 = 0;
         let prefix_len = self.prefix.as_ref().map_or(0, |p| p.len);
         for slot in slots {
             // Release only this photo's tail; sequence 0 keeps the prefix.
             let _ = ctx.kv_cache_seq_rm(slot.seq_id, Some(prefix_len.cast_unsigned()), None);
             if results[slot.idx].is_ok() {
+                total_prompt = total_prompt.saturating_add(slot.prompt_tokens);
+                total_completion = total_completion.saturating_add(slot.completion_tokens);
                 results[slot.idx] = Ok(GenerationOutput {
                     text: slot.text,
                     prompt_tokens: slot.prompt_tokens,
@@ -493,6 +513,24 @@ impl WorkerState<'_> {
                     prefix_reused,
                 });
             }
+        }
+
+        if photos > 0 {
+            // Tokens per second is over the batch: with `n_parallel > 1` the
+            // weights are read once per step for every sequence at once, so
+            // the rate rises with batch width while per-photo latency does
+            // not. That is the whole point of batching, and reading the rate
+            // as a per-photo figure would misread it.
+            let rate = if decode_ms > 0.0 {
+                f64::from(total_completion) / (decode_ms / 1000.0)
+            } else {
+                0.0
+            };
+            log::debug!(
+                "stages: photos={photos} prefill={prefill_ms:.1}ms decode={decode_ms:.1}ms | \
+                 tokens: prompt={total_prompt} out={total_completion} | \
+                 decode {rate:.1} tok/s (batch) | prefix_reused={prefix_reused}"
+            );
         }
         results
     }

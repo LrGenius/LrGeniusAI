@@ -26,8 +26,9 @@ use serde_json::{json, Value};
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_rgb;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
 use crate::local::{LocalImage, LocalRequest, SharedLocalEngine};
-use crate::normalize::normalize_keywords_structure;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt_split, prepare_system_prompt,
     prepare_user_prompt_split,
@@ -110,20 +111,25 @@ impl LocalProvider {
             }
         };
 
-        let keywords =
-            normalize_keywords_structure(&parsed.get("keywords").cloned().unwrap_or(json!([])));
+        let keywords = normalize_keywords(
+            &parsed.get("keywords").cloned().unwrap_or(json!([])),
+            request.keyword_categories.as_ref(),
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
+        );
         let field = |name: &str, wanted: bool| {
             wanted
                 .then(|| parsed.get(name).and_then(Value::as_str).map(str::to_string))
                 .flatten()
         };
+        let caption = field("caption", request.generate_caption);
+        let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
-            caption: field("caption", request.generate_caption),
+            caption,
             title: field("title", request.generate_title),
-            alt_text: field("alt_text", request.generate_alt_text),
+            alt_text,
             input_tokens: prompt_tokens,
             output_tokens: completion_tokens,
             error: None,
@@ -189,12 +195,28 @@ impl LlmProvider for LocalProvider {
                     return fail(&request.uuid, e);
                 }
                 match engine_results.next() {
-                    Some(Ok(output)) => Self::metadata_from_text(
-                        request,
-                        &output.text,
-                        output.prompt_tokens,
-                        output.completion_tokens,
-                    ),
+                    Some(Ok(output)) => {
+                        // `prefix_reused` exists only here — it is not part of
+                        // `MetadataGenerationResponse`. It is the one signal
+                        // that says whether the run-constant half of the
+                        // prompt (system prompt, keyword taxonomy) is being
+                        // re-prefilled for every photo, which silently turns
+                        // prefill into the dominant per-photo cost. The MLX
+                        // sidecar always reports false; llama.cpp reporting
+                        // false means its prefix cache did not engage.
+                        log::debug!(
+                            "local engine: prompt={} completion={} prefix_reused={}",
+                            output.prompt_tokens,
+                            output.completion_tokens,
+                            output.prefix_reused
+                        );
+                        Self::metadata_from_text(
+                            request,
+                            &output.text,
+                            output.prompt_tokens,
+                            output.completion_tokens,
+                        )
+                    }
                     Some(Err(e)) => fail(&request.uuid, e),
                     None => fail(
                         &request.uuid,
