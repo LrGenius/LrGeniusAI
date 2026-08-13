@@ -68,6 +68,19 @@ pub const CATALOG: &[CatalogEntry] = &[
         min_ram_gb: 16,
     },
     CatalogEntry {
+        id: "mlx-gemma4-12b",
+        label: "Gemma 4 12B (highest quality, needs more RAM)",
+        // Google's quantization-aware-trained 4-bit release, same rationale as
+        // the GGUF QAT build in llm_models.rs. Larger on disk than that GGUF
+        // (11.0 GB vs. 7.15 GB) for the same parameter count, so it gets a
+        // higher RAM floor here.
+        repo: "mlx-community/gemma-4-12B-it-qat-4bit",
+        revision: "main",
+        dir_name: "gemma-4-12B-it-qat-4bit",
+        approx_bytes: 11_020_138_609,
+        min_ram_gb: 32,
+    },
+    CatalogEntry {
         id: "mlx-qwen3vl-4b",
         label: "Qwen3-VL 4B (balanced alternative to Gemma)",
         repo: "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",
