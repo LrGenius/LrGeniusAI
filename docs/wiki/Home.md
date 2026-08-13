@@ -40,6 +40,7 @@ Welcome to the project wiki.
 
 ## Developer Documentation
 
+- [Build Environment Setup](Dev-Build-Environment-Setup) — Windows & macOS toolchain setup for `server-rs`, including the `llamacpp` feature and MLX sidecar
 - [Backend API Reference](Dev-Backend-API) — all REST endpoints documented
 - [Server Guide](Dev-Server-Guide) — backend architecture, database backup, lifecycle
 - [Dev: Testing the Update Mechanism](Dev-Testing-Update-Mechanism)
