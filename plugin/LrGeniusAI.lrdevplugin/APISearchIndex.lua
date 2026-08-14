@@ -3098,7 +3098,7 @@ _request = function(method, url, body, timeout, options)
 			return result, hdrs
 		end
 		if result and #result > 0 then
-			log:trace("_request: decoding JSON result of length " .. #result)
+			-- log:trace("_request: decoding JSON result of length " .. #result)
 			local ok2, decoded = LrTasks.pcall(JSON.decode, JSON, result)
 			if ok2 then
 				return decoded
