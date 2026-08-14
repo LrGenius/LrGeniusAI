@@ -41,6 +41,7 @@ require("UpdateCheck")
 require("ErrorHandler")
 require("APISearchIndex")
 require("PhotoSelector")
+require("LocalModelCatalog")
 require("OnboardingWizard")
 
 if _G.prefs.ai == nil then
