@@ -18,7 +18,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 
 ## AI Model Providers & Interfaces
 - **Google Gemini**: Large language models for multimodal analysis.
-- **Google Vertex AI**: Enterprise AI platform for training and deploying models.
+- ~~**Google Vertex AI**: Enterprise AI platform for training and deploying models.~~ *(removed from the plugin in August 2026; the backend client code remains but is unused.)*
 - **OpenAI / ChatGPT**: Advanced conversational AI and embeddings.
 - **Ollama**: Run open-source large language models locally. [Website](https://ollama.ai/)
 - **LM Studio**: Discover, download, and run local LLMs. [Website](https://lmstudio.ai/)

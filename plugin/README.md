@@ -67,7 +67,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Optional API keys depending on provider:
   - Gemini
   - OpenAI / ChatGPT
-  - Vertex AI (project + location)
+  - ~~Vertex AI (project + location)~~ — **removed**, the plugin no longer offers Vertex AI
 
 ---
 
@@ -96,7 +96,9 @@ Notes:
 
 - Migration is incremental and skips photos that are not indexed in backend.
 - Existing migrated entries are skipped automatically.
-- Main embeddings, vertex embeddings, and face references are migrated.
+- Main embeddings, vertex embeddings, and face references are migrated. (Vertex embeddings
+  are legacy — they are still migrated if present, but no new ones are created since Vertex AI
+  was removed.)
 
 ---
 
@@ -141,7 +143,7 @@ In the plugin settings dialog you can configure:
 
 - Backend server URL
 - Ollama and LM Studio base URLs
-- API keys and Vertex settings
+- API keys (the Vertex AI project/location fields were removed)
 - **Local AI Model (no external app)** — browse, download and select GGUF vision
   models run in-process by the backend's llama.cpp engine, plus the advanced
   knobs (context size, photos in parallel, layers on the GPU)
@@ -154,7 +156,12 @@ In the plugin settings dialog you can configure:
 
 ---
 
-## Google Vertex AI Login (gcloud)
+## Google Vertex AI Login (gcloud) — REMOVED
+
+> **⚠️ Vertex AI was removed from the plugin in August 2026.** The project ID / location
+> fields, the *Create Vertex AI embeddings* option in Analyze & Index, and the
+> *Semantic (Vertex AI)* search option are gone from the Lightroom UI. The section below is
+> kept for reference only and no longer describes a working setup path.
 
 If you want to use Vertex AI from LrGeniusAI, run the login on the machine where the backend server runs.
 
@@ -219,7 +226,7 @@ If you migrated from legacy UUID-based IDs to `photo_id`:
 
 - The plugin can trigger backend migration from the Plugin Manager UI.
 - Migration uses a progress scope and batch requests.
-- Existing collections (main embeddings, vertex embeddings, faces) are migrated through backend migration endpoints.
+- Existing collections (main embeddings, legacy vertex embeddings, faces) are migrated through backend migration endpoints.
 
 ---
 

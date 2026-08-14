@@ -30,7 +30,7 @@ When you try to open the `.pkg` installer or the backend binary:
 Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:
 - **Set the Backend Server URL:** This defaults to `http://127.0.0.1:19819` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
 - **Configure Provider/API Keys:** If you plan to use cloud providers like OpenAI or Google Gemini, enter your API keys. For external local servers like Ollama or LM Studio, ensure their respective base URLs are correctly configured.
-- **Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.
+- ~~**Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.~~ **Removed** — the Vertex AI fields no longer exist in the Plug-in Manager (see [section 7](#7-vertex-ai-login--removed)).
 
 *Having trouble? Refer to the [Troubleshooting](Troubleshooting) guide for connectivity and API issues.*
 
@@ -83,7 +83,11 @@ We highly recommend creating regular backups of your backend data, especially be
 2. Navigate to `Backend Server` and click **Download DB backup**.
 3. Save the resulting `.zip` file somewhere safe. The backup contains the full persistent backend directory including your embeddings and metadata databases.
 
-## 7. Vertex AI Login
+## 7. Vertex AI Login — REMOVED
+
+> **⚠️ Vertex AI was removed from LrGeniusAI in August 2026.** The plugin no longer exposes
+> Vertex AI project/location settings, Vertex embeddings, or *Semantic (Vertex AI)* search,
+> so this step is no longer needed. It is kept here for reference only.
 
 For users of Google's Vertex AI, you need to use Google Cloud ADC (Application Default Credentials) on the host running the server.
 

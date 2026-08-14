@@ -8,7 +8,7 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 ### Does it send my photos to the cloud?
 
-Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Vertex AI). With a local provider — the built-in llama.cpp and MLX engines, or an external Ollama / LM Studio server — your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
+Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini; Vertex AI was removed in August 2026). With a local provider — the built-in llama.cpp and MLX engines, or an external Ollama / LM Studio server — your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
 ### Which Lightroom version is supported?
 
