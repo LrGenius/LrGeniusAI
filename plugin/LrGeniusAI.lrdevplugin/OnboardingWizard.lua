@@ -157,6 +157,9 @@ function OnboardingWizard.show(manualTrigger)
 									title = LOC("$$$/LrGeniusAI/Onboarding/BackendStatus=Server Status:"),
 									width = share("label"),
 								}),
+								Util.statusIcon(f, "backendRunning", function(v)
+									return v == true
+								end),
 								f:static_text({
 									title = bind({
 										key = "backendRunning",

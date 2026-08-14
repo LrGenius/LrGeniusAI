@@ -1317,6 +1317,31 @@ function Util.waitForServerDialog(options)
 	return result
 end
 
+--- Bare check/cross icon reflecting a property, for use next to a status text
+-- that says more than the icon can (a tri-state, a reason, a colour).
+-- @param f the LrView factory
+-- @param key name of the property driving the icon
+-- @param isOk optional predicate mapping the property value to a boolean;
+--        defaults to the value's own truthiness
+function Util.statusIcon(f, key, isOk)
+	return f:picture({
+		value = LrView.bind({
+			key = key,
+			transform = function(value)
+				local ok
+				if isOk then
+					ok = isOk(value)
+				else
+					ok = value
+				end
+				return _PLUGIN:resourceId(ok and "ok.png" or "nok.png")
+			end,
+		}),
+		width = 16,
+		height = 16,
+	})
+end
+
 --- Read-only status indicator: a check or cross icon plus a label.
 -- Used instead of a permanently disabled checkbox, which looks like a control
 -- the user could toggle but cannot.
@@ -1326,16 +1351,7 @@ end
 function Util.statusIndicator(f, key, title)
 	return f:row({
 		spacing = f:label_spacing(),
-		f:picture({
-			value = LrView.bind({
-				key = key,
-				transform = function(value)
-					return _PLUGIN:resourceId(value and "ok.png" or "nok.png")
-				end,
-			}),
-			width = 16,
-			height = 16,
-		}),
+		Util.statusIcon(f, key),
 		f:static_text({ title = title }),
 	})
 end

@@ -301,6 +301,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						font = "<system/bold>",
 						alignment = "right",
 					}),
+					Util.statusIcon(f, "healthStatus", function(v)
+						return v == "healthy"
+					end),
 					f:static_text({
 						title = bind({
 							key = "healthStatus",
