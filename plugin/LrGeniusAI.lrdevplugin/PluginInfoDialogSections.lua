@@ -1063,68 +1063,6 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				}),
 				f:row({
 					f:push_button({
-						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/GeneratePhotoIds=Generate hash-based photo IDs (catalog only)"
-						),
-						width = share("longBackendButtonWidth"),
-						action = function(button)
-							LrTasks.startAsyncTask(function()
-								local ok, msg = SearchIndexAPI.generateGlobalPhotoIdsForCatalog()
-								if ok then
-									LrDialogs.message(
-										LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdGenTitle=Photo-ID Generation"),
-										msg or LOC("$$$/LrGeniusAI/common/GenerationCompleted=Generation completed.")
-									)
-								else
-									LrDialogs.message(
-										LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdGenFailed=Photo-ID Generation failed"),
-										msg or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"),
-										"critical"
-									)
-								end
-							end)
-						end,
-					}),
-					-- 	f:push_button({
-					-- 		title = LOC("$$$/LrGeniusAI/PluginInfo/MigratePhotoIds=Migrate existing DB IDs to photo_id"),
-					-- 		width = share("longBackendButtonWidth"),
-					-- 		action = function(button)
-					-- 			LrTasks.startAsyncTask(function()
-					-- 				local status, ok, msg
-					-- 				if type(LrTasks) == "table" and type(LrTasks.pcall) == "function" then
-					-- 					status, ok, msg = LrTasks.pcall(function()
-					-- 						return SearchIndexAPI.migratePhotoIdsFromCatalog()
-					-- 					end)
-					-- 				else
-					-- 					ok, msg = SearchIndexAPI.migratePhotoIdsFromCatalog()
-					-- 					status = true
-					-- 				end
-
-					-- 				if not status then
-					-- 					log:error("Photo-ID migration crashed.")
-					-- 					LrDialogs.message(
-					-- 						LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateFailed=Photo-ID Migration failed"),
-					-- 						tostring(ok),
-					-- 						"critical"
-					-- 					)
-					-- 				elseif ok then
-					-- 					LrDialogs.message(
-					-- 						LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateTitle=Photo-ID Migration"),
-					-- 						msg or LOC("$$$/LrGeniusAI/common/MigrationCompleted=Migration completed.")
-					-- 					)
-					-- 				else
-					-- 					LrDialogs.message(
-					-- 						LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateFailed=Photo-ID Migration failed"),
-					-- 						msg or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"),
-					-- 						"critical"
-					-- 					)
-					-- 				end
-					-- 			end)
-					-- 		end,
-					-- 	}),
-				}),
-				f:row({
-					f:push_button({
 						title = LOC("$$$/LrGeniusAI/PluginInfo/ClaimPhotos=Claim photos for this catalog"),
 						width = share("backendButtonWidth"),
 						action = function(button)
