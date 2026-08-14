@@ -1070,11 +1070,11 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					title = LOC("$$$/LrGeniusAI/PluginInfo/AdvancedSearchTitle=Advanced search"),
 					f:row({
 						fill_horizontal = 1,
-						f:checkbox({
-							value = bind("clipReady"),
-							enabled = false,
-							title = LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=AI search model is ready"),
-						}),
+						Util.statusIndicator(
+							f,
+							"clipReady",
+							LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=AI search model is ready")
+						),
 						f:push_button({
 							title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
 							action = function(button)

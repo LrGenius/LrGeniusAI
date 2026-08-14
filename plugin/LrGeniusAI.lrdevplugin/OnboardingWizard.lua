@@ -252,13 +252,13 @@ function OnboardingWizard.show(manualTrigger)
 								value = bind("useClip"),
 							}),
 							f:row({
-								f:checkbox({
-									title = LOC(
+								Util.statusIndicator(
+									f,
+									"clipReady",
+									LOC(
 										"$$$/LrGeniusAI/Onboarding/ClipAlreadyDownloaded=Search model is already available."
-									),
-									value = bind("clipReady"),
-									enabled = false,
-								}),
+									)
+								),
 								f:push_button({
 									title = LOC("$$$/LrGeniusAI/Onboarding/DownloadClip=Download AI Search Model"),
 									action = function()

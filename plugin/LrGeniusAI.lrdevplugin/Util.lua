@@ -1317,6 +1317,29 @@ function Util.waitForServerDialog(options)
 	return result
 end
 
+--- Read-only status indicator: a check or cross icon plus a label.
+-- Used instead of a permanently disabled checkbox, which looks like a control
+-- the user could toggle but cannot.
+-- @param f the LrView factory
+-- @param key name of the boolean property driving the icon
+-- @param title the label shown next to the icon
+function Util.statusIndicator(f, key, title)
+	return f:row({
+		spacing = f:label_spacing(),
+		f:picture({
+			value = LrView.bind({
+				key = key,
+				transform = function(value)
+					return _PLUGIN:resourceId(value and "ok.png" or "nok.png")
+				end,
+			}),
+			width = 16,
+			height = 16,
+		}),
+		f:static_text({ title = title }),
+	})
+end
+
 function Util.showDiagnosticFailureDialog(diag)
 	local f = LrView.osFactory()
 
