@@ -48,7 +48,13 @@ Note: GPT-5 and GPT-5.4 models ignore the `temperature` slider and use a
 fixed reasoning effort — small differences in plugin temperature settings
 will not affect output for these models.
 
-### Vertex AI (embeddings only)
+### ~~Vertex AI (embeddings only)~~ — REMOVED
+
+> **⚠️ Removed in August 2026.** The plugin no longer offers Vertex AI anywhere: no
+> project/location settings, no Vertex embeddings during *Analyze & Index*, no
+> *Semantic (Vertex AI)* search option. Semantic search now runs on the built-in SigLIP2
+> embeddings only. Existing Vertex embeddings stay in the database but are not updated or
+> queried. Description below kept for reference.
 
 Vertex AI is used for the `multimodalembedding@001` model that powers the
 `image_embeddings_vertex` semantic-search collection. It is **not** an

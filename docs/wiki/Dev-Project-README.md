@@ -14,9 +14,6 @@
   [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7X2240HF4)
 </div>
 
----
-
-> **Note:** The lead developer is currently [taking a break from open-source development](https://blog.fokuspunk.de/posts/taking-a-break-from-open-source/). The project remains available, but active maintenance is paused.
 
 ---
 
@@ -37,7 +34,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 - **👥 People & Faces:** Detect and cluster faces, assign names to persons, browse person collections, and find similar faces across your catalog.
 - **🔎 Find Similar Images:** Find near-duplicate or visually similar photos for any selected image using perceptual hash or semantic CLIP comparison.
 - **🏠 Built-In Local AI (no external app):** The backend runs vision models itself — **llama.cpp** in-process (GGUF, all platforms; Metal on macOS, Vulkan on Windows) and **MLX** on Apple silicon via a small Metal helper process. Pick a model in the Plug-in Manager, click *Download*, and analysis runs entirely on your machine. Models you already have in LM Studio (or the Hugging Face cache) are picked up without a second copy.
-- **☁️ Local & Cloud Models:** Also supports local AI models via **Ollama** and **LM Studio**, as well as integration with cloud providers like **ChatGPT/OpenAI**, **Google Gemini**, and **Vertex AI**.
+- **☁️ Local & Cloud Models:** Also supports local AI models via **Ollama** and **LM Studio**, as well as integration with cloud providers like **ChatGPT/OpenAI** and **Google Gemini**. (~~**Vertex AI**~~ — *removed*, see below.)
 - **🎨 Customizable Prompts & Temperature Control:** System prompts for the AI can be added, edited, and deleted directly within the Lightroom Plug-In Manager. Use the temperature slider to control whether the AI should be highly creative or strictly consistent.
 - **📝 Photo Context (Contextual Info):** Provide manual hints to the AI before analysis (e.g., names of people or specific background details) that aren't immediately obvious from the image itself. This can be done via a popup dialog or directly in Lightroom's metadata panel.
 - **🗂️ Keyword Management:** Interactive synonym deduplication and automatic de-clutter during indexing to keep your keyword catalog clean.
@@ -71,7 +68,12 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 
 ---
 
-For detailed instructions on how to use Google Vertex AI, please see our [Google Vertex AI Login Wiki Page](https://github.com/LrGenius/LrGeniusAI/wiki/Google-Vertex-AI-Login).
+> **⚠️ Google Vertex AI has been removed (August 2026).**
+> The Vertex AI controls are gone from the Lightroom plugin: no project ID / location
+> settings, no Vertex embeddings during *Analyze & Index*, and no *Semantic (Vertex AI)*
+> search option. Existing Vertex embeddings in your database stay untouched but are no
+> longer created or queried. The old setup instructions are kept for reference on the
+> [Google Vertex AI Login Wiki Page](https://github.com/LrGenius/LrGeniusAI/wiki/Google-Vertex-AI-Login).
 
 ## ⚖️ License
 
@@ -88,7 +90,7 @@ This project is built on the belief that AI tooling for creatives should remain 
 - **Identity & Faces:** InsightFace (ONNX)
 - **Local Inference:** llama.cpp compiled into the backend (Metal / Vulkan / CPU), plus an MLX Swift helper (`lrgenius-mlx`) for Apple silicon
 - **Database:** LanceDB
-- **Supported Interfaces:** built-in llama.cpp, built-in MLX (Apple silicon), Google Gemini, Vertex AI, ChatGPT/OpenAI, Ollama, LM-Studio
+- **Supported Interfaces:** built-in llama.cpp, built-in MLX (Apple silicon), Google Gemini, ChatGPT/OpenAI, Ollama, LM-Studio (~~Vertex AI~~ — *removed*)
 
 
 ---

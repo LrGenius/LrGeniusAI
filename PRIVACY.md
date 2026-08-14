@@ -22,7 +22,7 @@ You have full control over where your data is processed. This is how we handle i
 When using local models like **Ollama** or **LM Studio**, all analysis, tagging, and semantic indexing happen entirely on your machine. No image data or metadata is transmitted to external servers.
 
 ### 🌐 Cloud Processing (Optional)
-If you choose to enable cloud providers (OpenAI, Google Gemini, Vertex AI), only the necessary data is sent to these services:
+If you choose to enable cloud providers (OpenAI, Google Gemini; Vertex AI was removed in August 2026 and is no longer contacted), only the necessary data is sent to these services:
 - **Image Content**: Temporary transmission of image pixels or descriptive prompts for analysis.
 - **Contextual Hints**: Any manual photo context you provide.
 - **API Keys**: Stored locally and sent only to the respective provider.
@@ -53,7 +53,7 @@ If you choose to enable cloud providers (OpenAI, Google Gemini, Vertex AI), only
 We use **InsightFace** for local face clustering. These biometric templates are stored in your local backend database and are **never** shared with us or any third party.
 
 ### 🔑 API Keys
-Your API keys for services like OpenAI or Vertex AI are stored in the Lightroom plugin configuration (on your disk). They are transmitted only to the service provider via encrypted HTTPS requests.
+Your API keys for services like OpenAI or Google Gemini are stored in the Lightroom plugin configuration (on your disk). They are transmitted only to the service provider via encrypted HTTPS requests.
 
 ---
 
@@ -62,7 +62,7 @@ Your API keys for services like OpenAI or Vertex AI are stored in the Lightroom 
 If you utilize cloud features, please refer to the privacy policies of the supported providers:
 
 *   [OpenAI Privacy Policy](https://openai.com/policies/privacy-policy)
-*   [Google Cloud (Vertex AI) Privacy Notice](https://cloud.google.com/terms/cloud-privacy-notice)
+*   ~~[Google Cloud (Vertex AI) Privacy Notice](https://cloud.google.com/terms/cloud-privacy-notice)~~ - *Vertex AI removed, no longer used*
 *   [Ollama (Local)](https://ollama.com/) - *Fully Private*
 *   [LM Studio (Local)](https://lmstudio.ai/) - *Fully Private*
 

@@ -8,7 +8,9 @@ build/test commands once the environment is ready, see the
 There are three layers, each opt-in on top of the last:
 
 1. **Baseline** — builds `geniusai-server` with cloud providers only (Gemini,
-   OpenAI, Ollama, LM Studio, Vertex AI). No local-model support.
+   OpenAI, Ollama, LM Studio, and the now-unused Vertex AI client — Vertex AI was
+   removed from the plugin UI in August 2026, so nothing requests it). No
+   local-model support.
 2. **`llamacpp` feature** — adds in-process local inference via llama.cpp.
    Compiles llama.cpp from source, so it needs `cmake` + `libclang` (for
    `bindgen`), and on Windows a GPU backend (Vulkan, not CUDA — see

@@ -296,7 +296,9 @@ Progress of the current local-model download (same shape as the CLIP download st
 Returns aggregate database statistics:
 - total indexed photos
 - photos with SigLIP embeddings
-- photos with Vertex AI embeddings
+- photos with Vertex AI embeddings *(legacy — Vertex AI was removed from the plugin in
+  August 2026; the field is still returned but the plugin no longer displays it and the
+  count no longer grows)*
 - photos with title / caption / keywords
 - total detected faces
 - total persons

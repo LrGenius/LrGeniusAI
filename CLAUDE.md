@@ -133,7 +133,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics.
 - `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, SCRFD face detection + ArcFace embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
-- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, Vertex AI via `gcp_auth`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
+- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
 - `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry.
 - `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
@@ -143,7 +143,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 ### Data & Identity
 
 - Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
-- Vector search: LanceDB tables `IMAGE_TABLE`/`VERTEX_TABLE`/`FACE_TABLE` in `lrg_store` (SigLIP2, Vertex AI, and face embeddings respectively).
+- Vector search: LanceDB tables `IMAGE_TABLE`/`VERTEX_TABLE`/`FACE_TABLE` in `lrg_store` (SigLIP2, Vertex AI, and face embeddings respectively). `VERTEX_TABLE` is legacy: the plugin stopped writing and querying it when Vertex AI was removed (August 2026), existing rows are kept.
 - Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
 
 ---
