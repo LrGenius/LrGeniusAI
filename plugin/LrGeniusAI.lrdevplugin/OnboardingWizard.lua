@@ -206,70 +206,6 @@ function OnboardingWizard.show(manualTrigger)
 						}),
 					}),
 
-					-- PROVIDERS TAB
-					f:tab_view_item({
-						title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=AI Providers"),
-						identifier = "providers",
-
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=AI Providers"),
-							fill_horizontal = 1,
-							f:static_text({
-								title = LOC(
-									"$$$/LrGeniusAI/Onboarding/ProvidersDesc=Choose which AI models you want to use for metadata generation\nand edits. Prefer to keep your photos on this machine? Skip the\nkeys and set up a local model under AI Models instead."
-								),
-								width_in_chars = 60,
-							}),
-						}),
-
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/GeminiTitle=Google Gemini (Recommended)"),
-							fill_horizontal = 1,
-							f:row({
-								f:static_text({
-									title = LOC("$$$/LrGeniusAI/Onboarding/ApiKeyLabel=API Key:"),
-									width = share("label"),
-								}),
-								f:edit_field({ value = bind("geminiApiKey"), width_in_chars = 40 }),
-								f:push_button({
-									title = "?",
-									action = function()
-										LrHttp.openUrlInBrowser("https://aistudio.google.com/app/apikey")
-									end,
-								}),
-							}),
-						}),
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/ChatGPTTitle=OpenAI ChatGPT"),
-							fill_horizontal = 1,
-							f:row({
-								f:static_text({
-									title = LOC("$$$/LrGeniusAI/Onboarding/ApiKeyLabel=API Key:"),
-									width = share("label"),
-								}),
-								f:edit_field({ value = bind("chatgptApiKey"), width_in_chars = 40 }),
-								f:push_button({
-									title = "?",
-									action = function()
-										LrHttp.openUrlInBrowser("https://platform.openai.com/api-keys")
-									end,
-								}),
-							}),
-						}),
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/LocalTitle=Local AI (Ollama / LM Studio)"),
-							fill_horizontal = 1,
-							f:row({
-								f:push_button({
-									title = LOC("$$$/LrGeniusAI/Onboarding/LocalTitle=Local AI (Ollama / LM Studio)"),
-									action = function()
-										LrHttp.openUrlInBrowser("https://lrgenius.com/help/ollama-setup/")
-									end,
-								}),
-							}),
-						}),
-					}),
-
 					-- MODELS TAB
 					f:tab_view_item({
 						title = LOC("$$$/LrGeniusAI/Onboarding/ModelsTitle=AI Models"),
@@ -381,6 +317,70 @@ function OnboardingWizard.show(manualTrigger)
 									"$$$/LrGeniusAI/Onboarding/FinishDesc=Configuration complete. LrGeniusAI is ready to help you manage\nyour Lightroom catalog. You can change any of this later under\nFile → Plug-in Manager → LrGeniusAI."
 								),
 								width_in_chars = 60,
+							}),
+						}),
+					}),
+
+					-- PROVIDERS TAB
+					f:tab_view_item({
+						title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=Optional AI Providers"),
+						identifier = "providers",
+
+						f:group_box({
+							title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=AI Providers"),
+							fill_horizontal = 1,
+							f:static_text({
+								title = LOC(
+									"$$$/LrGeniusAI/Onboarding/ProvidersDesc=Choose which AI models you want to use for metadata generation\nand edits. Prefer to keep your photos on this machine? Skip the\nkeys and set up a local model under AI Models instead."
+								),
+								width_in_chars = 60,
+							}),
+						}),
+
+						f:group_box({
+							title = LOC("$$$/LrGeniusAI/Onboarding/GeminiTitle=Google Gemini"),
+							fill_horizontal = 1,
+							f:row({
+								f:static_text({
+									title = LOC("$$$/LrGeniusAI/Onboarding/ApiKeyLabel=API Key:"),
+									width = share("label"),
+								}),
+								f:edit_field({ value = bind("geminiApiKey"), width_in_chars = 40 }),
+								f:push_button({
+									title = "?",
+									action = function()
+										LrHttp.openUrlInBrowser("https://aistudio.google.com/app/apikey")
+									end,
+								}),
+							}),
+						}),
+						f:group_box({
+							title = LOC("$$$/LrGeniusAI/Onboarding/ChatGPTTitle=OpenAI ChatGPT"),
+							fill_horizontal = 1,
+							f:row({
+								f:static_text({
+									title = LOC("$$$/LrGeniusAI/Onboarding/ApiKeyLabel=API Key:"),
+									width = share("label"),
+								}),
+								f:edit_field({ value = bind("chatgptApiKey"), width_in_chars = 40 }),
+								f:push_button({
+									title = "?",
+									action = function()
+										LrHttp.openUrlInBrowser("https://platform.openai.com/api-keys")
+									end,
+								}),
+							}),
+						}),
+						f:group_box({
+							title = LOC("$$$/LrGeniusAI/Onboarding/LocalTitle=Local AI (Ollama / LM Studio)"),
+							fill_horizontal = 1,
+							f:row({
+								f:push_button({
+									title = LOC("$$$/LrGeniusAI/Onboarding/LocalTitle=Local AI (Ollama / LM Studio)"),
+									action = function()
+										LrHttp.openUrlInBrowser("https://lrgenius.com/help/ollama-setup/")
+									end,
+								}),
 							}),
 						}),
 					}),
