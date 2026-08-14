@@ -24,7 +24,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.enableEmbeddings = (prefs.enableEmbeddings ~= false) and props.clipReady -- default true
 	props.enableMetadata = prefs.enableMetadata ~= false -- default true
 	props.enableFaces = prefs.enableFaces or false
-	props.enableVertexAI = prefs.enableVertexAI or false
+	-- Vertex AI is disabled in the GUI; the backend code is untouched.
+	props.enableVertexAI = false
+	-- props.enableVertexAI = prefs.enableVertexAI or false
 	props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
 	props.regenerateMetadata = prefs.regenerateMetadata or false
 
@@ -261,14 +263,15 @@ local function showAnalyzeAndIndexDialog(ctx)
 							),
 						}),
 					}),
-					f:row({
-						f:checkbox({
-							value = bind("enableVertexAI"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
-							),
-						}),
-					}),
+					-- Vertex AI is disabled in the GUI; the backend code is untouched.
+					-- f:row({
+					-- 	f:checkbox({
+					-- 		value = bind("enableVertexAI"),
+					-- 		title = LOC(
+					-- 			"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
+					-- 		),
+					-- 	}),
+					-- }),
 				}),
 			}), -- end General tab
 
@@ -570,7 +573,8 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.enableEmbeddings = props.enableEmbeddings
 		prefs.enableMetadata = props.enableMetadata
 		prefs.enableFaces = props.enableFaces
-		prefs.enableVertexAI = props.enableVertexAI
+		-- Vertex AI is disabled in the GUI; the backend code is untouched.
+		-- prefs.enableVertexAI = props.enableVertexAI
 		prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
 		prefs.regenerateMetadata = props.regenerateMetadata
 		prefs.appendMetadata = props.appendMetadata
