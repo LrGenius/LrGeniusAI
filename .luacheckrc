@@ -17,6 +17,7 @@ globals = {
     "UpdateCheck",
     "Defaults",
     "KeywordConfigProvider",
+    "LocalModelCatalog",
     "MetadataManager",
     "OnboardingWizard",
     "PhotoContextData",
