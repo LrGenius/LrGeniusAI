@@ -17,8 +17,9 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.logging = prefs.logging
 	propertyTable.geminiApiKey = prefs.geminiApiKey
 	propertyTable.chatgptApiKey = prefs.chatgptApiKey
-	propertyTable.vertexProjectId = prefs.vertexProjectId
-	propertyTable.vertexLocation = prefs.vertexLocation or "us-central1"
+	-- Vertex AI is disabled in the GUI; the backend code is untouched.
+	-- propertyTable.vertexProjectId = prefs.vertexProjectId
+	-- propertyTable.vertexLocation = prefs.vertexLocation or "us-central1"
 
 	propertyTable.exportSize = prefs.exportSize
 	propertyTable.exportQuality = prefs.exportQuality
@@ -394,30 +395,31 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						width = share("apiKeyButtonWidth"),
 					}),
 				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/VertexProjectId=Vertex AI Project ID"),
-						alignment = "right",
-						width = share("apiKeyLabelWidth"),
-					}),
-					f:edit_field({
-						value = bind("vertexProjectId"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/VertexLocation=Vertex AI Location"),
-						alignment = "right",
-						width = share("apiKeyLabelWidth"),
-					}),
-					f:edit_field({
-						value = bind("vertexLocation"),
-						width_in_chars = 20,
-					}),
-				}),
+				-- Vertex AI is disabled in the GUI; the backend code is untouched.
+				-- f:row({
+				-- 	fill_horizontal = 1,
+				-- 	f:static_text({
+				-- 		title = LOC("$$$/LrGeniusAI/PluginInfo/VertexProjectId=Vertex AI Project ID"),
+				-- 		alignment = "right",
+				-- 		width = share("apiKeyLabelWidth"),
+				-- 	}),
+				-- 	f:edit_field({
+				-- 		value = bind("vertexProjectId"),
+				-- 		fill_horizontal = 1,
+				-- 	}),
+				-- }),
+				-- f:row({
+				-- 	fill_horizontal = 1,
+				-- 	f:static_text({
+				-- 		title = LOC("$$$/LrGeniusAI/PluginInfo/VertexLocation=Vertex AI Location"),
+				-- 		alignment = "right",
+				-- 		width = share("apiKeyLabelWidth"),
+				-- 	}),
+				-- 	f:edit_field({
+				-- 		value = bind("vertexLocation"),
+				-- 		width_in_chars = 20,
+				-- 	}),
+				-- }),
 			}),
 			f:group_box({
 				width = groupBoxWidth,
@@ -1266,10 +1268,11 @@ end
 function PluginInfoDialogSections.endDialog(propertyTable)
 	prefs.geminiApiKey = propertyTable.geminiApiKey
 	prefs.chatgptApiKey = propertyTable.chatgptApiKey
-	prefs.vertexProjectId = (propertyTable.vertexProjectId and propertyTable.vertexProjectId:gsub("^%s*(.-)%s*$", "%1"))
-		or ""
-	prefs.vertexLocation = (propertyTable.vertexLocation and propertyTable.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
-		or "us-central1"
+	-- Vertex AI is disabled in the GUI; the backend code is untouched.
+	-- prefs.vertexProjectId = (propertyTable.vertexProjectId and propertyTable.vertexProjectId:gsub("^%s*(.-)%s*$", "%1"))
+	-- 	or ""
+	-- prefs.vertexLocation = (propertyTable.vertexLocation and propertyTable.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
+	-- 	or "us-central1"
 	prefs.exportSize = propertyTable.exportSize
 	prefs.exportQuality = propertyTable.exportQuality
 	prefs.indexSubmitOriginals = (propertyTable.indexSubmitOriginals == true)
