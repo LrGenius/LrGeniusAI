@@ -301,7 +301,7 @@ function OnboardingWizard.show(manualTrigger)
 
 						localModelGroup({
 							kind = "llm",
-							title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model (no external app)"),
+							title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model — llama.cpp (all platforms)"),
 							description = LOC(
 								"$$$/LrGeniusAI/Onboarding/LlamaDesc=The built-in llama.cpp engine runs GGUF models on any machine,\nwith or without a GPU. Download one if you are not on Apple\nsilicon, or if you prefer GGUF models."
 							),
