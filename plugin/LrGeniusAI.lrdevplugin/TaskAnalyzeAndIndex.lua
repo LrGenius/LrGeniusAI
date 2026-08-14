@@ -234,6 +234,14 @@ local function showAnalyzeAndIndexDialog(ctx)
 					fill_horizontal = 1,
 					f:row({
 						f:checkbox({
+							value = bind("enableMetadata"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableMetadata=Generate AI metadata (Keywords, Title, Caption)"
+							),
+						}),
+					}),
+					f:row({
+						f:checkbox({
 							value = bind("enableEmbeddings"),
 							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableEmbeddings=Enable smart photo search"),
 							enabled = props.clipReady,
@@ -249,18 +257,8 @@ local function showAnalyzeAndIndexDialog(ctx)
 					}),
 					f:row({
 						f:checkbox({
-							value = bind("enableMetadata"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableMetadata=Generate AI metadata (Keywords, Title, Caption)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
 							value = bind("enableFaces"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Create face embeddings (Find similar people)"
-							),
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Enable face detection"),
 						}),
 					}),
 					-- Vertex AI is disabled in the GUI; the backend code is untouched.

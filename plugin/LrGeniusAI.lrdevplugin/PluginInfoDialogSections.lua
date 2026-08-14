@@ -259,10 +259,21 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 				width = 600,
 				title = LOC("$$$/LrGeniusAI/PluginInfo/Credits=CREDITS"),
 				f:row({
-					f:static_text({
-						title = Defaults.copyrightString,
-						width_in_chars = 140,
+					-- The list is far longer than the box, so it scrolls. The
+					-- static_text inside still needs its own full height: it
+					-- clips to height_in_lines rather than growing to fit, so
+					-- without it only the first entry shows.
+					f:scrolled_view({
+						horizontal_scroller = false,
+						vertical_scroller = true,
+						fill_horizontal = 1,
 						height_in_lines = 20,
+						width = 580,
+						f:static_text({
+							title = Defaults.copyrightString,
+							width_in_chars = 100,
+							height_in_lines = Defaults.copyrightLineCount,
+						}),
 					}),
 				}),
 			}),
@@ -283,13 +294,14 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 		value = bind("prompt"),
 	})
 
+	-- One collapsible block per section, in the order someone actually meets
+	-- them: is it working at all, which model does the analysis, then search,
+	-- then the knobs you only reach for once you want different behaviour, and
+	-- the backend plumbing last.
 	return {
-
 		{
 			bind_to_object = propertyTable,
-
-			title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/header=LrGeniusAI configuration"),
-
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionStatus=Status"),
 			f:group_box({
 				width = groupBoxWidth,
 				title = LOC("$$$/LrGeniusAI/Health/SummaryTitle=System Health"),
@@ -301,6 +313,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						font = "<system/bold>",
 						alignment = "right",
 					}),
+					Util.statusIcon(f, "healthStatus", function(v)
+						return v == "healthy"
+					end),
 					f:static_text({
 						title = bind({
 							key = "healthStatus",
@@ -353,6 +368,437 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki")
 					end,
 				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionLocalAi=AI model (on this computer)"),
+			f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/PluginInfo/LocalAiHint=The analysis runs on this computer by default, so no account is\nneeded. MLX is the faster option on Apple silicon, llama.cpp works\neverywhere. Download one model below and the plug-in is ready."
+				),
+			}),
+			-- MLX runs the same kind of local model as the group below, but
+			-- through Apple's Metal stack instead of llama.cpp. It is offered
+			-- separately rather than as a hidden implementation detail because
+			-- the two use different model files, so "which one is installed" is
+			-- a question the user has to be able to answer.
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/MlxModel/Status=Status"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("mlxStatusText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/MlxModel/Installed=Installed"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("mlxInstalledText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:popup_menu({
+						items = bind("mlxDownloadChoices"),
+						value = bind("mlxDownloadChoice"),
+						enabled = bind("mlxSupported"),
+						width_in_chars = 34,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/MlxModel/Download=Download"),
+						enabled = bind({
+							key = "mlxDownloadChoice",
+							transform = function(v)
+								return v ~= nil
+							end,
+						}),
+						action = function(button)
+							LocalModelCatalog.startDownload(propertyTable, "mlx")
+						end,
+						width = share("setupButtonWidth"),
+					}),
+				}),
+			}),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model — llama.cpp (all platforms)"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Status=Status"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("llmStatusText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Installed=Installed"),
+						width = share("setupLabelWidth"),
+					}),
+					f:static_text({
+						title = bind("llmInstalledText"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:popup_menu({
+						items = bind("llmDownloadChoices"),
+						value = bind("llmDownloadChoice"),
+						enabled = bind("llmSupported"),
+						width_in_chars = 34,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Download=Download"),
+						enabled = bind({
+							key = "llmDownloadChoice",
+							transform = function(v)
+								return v ~= nil
+							end,
+						}),
+						action = function(button)
+							LocalModelCatalog.startDownload(propertyTable, "llm")
+						end,
+						width = share("setupButtonWidth"),
+					}),
+				}),
+				f:group_box({
+					fill_horizontal = 1,
+					title = LOC("$$$/LrGeniusAI/LocalModel/AdvancedTitle=Advanced"),
+					-- The group of photos in a request has to fit the context
+					-- window alongside the shared prompt prefix, so these two trade
+					-- against each other; the server reduces parallel sequences
+					-- rather than overrunning the context.
+					f:row({
+						fill_horizontal = 1,
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/LocalModel/ContextSize=Context size (tokens)"),
+							width = share("setupLabelWidth"),
+						}),
+						f:edit_field({
+							value = bind("llmContextSize"),
+							enabled = bind("llmSupported"),
+							precision = 0,
+							min = 1024,
+							max = 131072,
+							width_in_chars = 8,
+						}),
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/LocalModel/Parallel=Photos in parallel"),
+						}),
+						f:edit_field({
+							value = bind("llmParallel"),
+							enabled = bind("llmSupported"),
+							precision = 0,
+							min = 1,
+							max = 16,
+							width_in_chars = 4,
+						}),
+					}),
+					f:row({
+						fill_horizontal = 1,
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/LocalModel/GpuLayers=Layers on the GPU"),
+							width = share("setupLabelWidth"),
+						}),
+						f:edit_field({
+							value = bind("llmGpuLayers"),
+							enabled = bind("llmSupported"),
+							precision = 0,
+							min = 0,
+							max = 999,
+							width_in_chars = 8,
+						}),
+						f:static_text({
+							title = LOC(
+								"$$$/LrGeniusAI/LocalModel/GpuLayersHint=999 = all; anything that does not fit stays on the CPU"
+							),
+						}),
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionSearch=Smart photo search"),
+			f:checkbox({
+				value = bind("useClip"),
+				title = LOC("$$$/LrGeniusAI/PluginInfo/UseOpenClip=Use AI model for smart photo search"),
+			}),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/PluginInfo/AdvancedSearchTitle=Advanced search"),
+				f:row({
+					fill_horizontal = 1,
+					Util.statusIndicator(
+						f,
+						"clipReady",
+						LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=AI search model is ready")
+					),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
+						action = function(button)
+							LrTasks.startAsyncTask(function()
+								SearchIndexAPI.startClipDownload()
+							end)
+						end,
+						enabled = bind("useClip"),
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/UI/Prompts=Prompts"),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/UI/Prompts=Prompts"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						alignment = "right",
+						width = share("promptLabelWidth"),
+						title = LOC("$$$/LrGeniusAI/UI/PromptTitle=Title"),
+					}),
+					propertyTable.promptTitleMenu,
+					f:push_button({
+						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/add=Add"),
+						action = function(button)
+							PromptConfigProvider.addPrompt(propertyTable)
+						end,
+					}),
+					f:push_button({
+						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/delete=Delete"),
+						action = function(button)
+							PromptConfigProvider.deletePrompt(propertyTable)
+						end,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						alignment = "right",
+						width = share("promptLabelWidth"),
+						title = LOC("$$$/LrGeniusAI/PromptConfig/PromptField=Prompt"),
+					}),
+					f:scrolled_view({
+						horizontal_scroller = false,
+						vertical_scroller = true,
+						fill_horizontal = 1,
+						height_in_lines = 15,
+						width = 500,
+						f:edit_field({
+							value = bind("selectedPrompt"),
+							fill_horizontal = 1,
+							height_in_lines = 30,
+							wraps = true,
+							width = 480,
+						}),
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/Training/SectionTitle=My Style Profile"),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/Training/SectionTitle=My Style Profile"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/Training/EngineStatus=Style Engine Status:"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						title = bind("styleReadyText"),
+						text_color = bind("styleReadyColor"),
+						font = "<system/bold>",
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/Training/SavedExamples=Saved training examples:"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						title = bind({
+							key = "trainingCount",
+							transform = function(v)
+								return tostring(v or 0)
+							end,
+						}),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/Training/TopScenes=Top Scene Types:"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						fill_horizontal = 1,
+						title = bind({
+							key = "styleStats",
+							transform = function(s)
+								if not s or not s.scene_distribution then
+									return "..."
+								end
+								local sorted = {}
+								for k, v in pairs(s.scene_distribution) do
+									table.insert(sorted, { name = k, count = v })
+								end
+								table.sort(sorted, function(a, b)
+									return a.count > b.count
+								end)
+								local top = {}
+								for i = 1, math.min(3, #sorted) do
+									local name = sorted[i].name:gsub("^scene_", ""):gsub("_", " ")
+									table.insert(top, name:sub(1, 1):upper() .. name:sub(2))
+								end
+								return #top > 0 and table.concat(top, ", ") or "None yet"
+							end,
+						}),
+						font = "<system/italic>",
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/Training/LearnedCameras=Learned Cameras:"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						fill_horizontal = 1,
+						title = bind({
+							key = "styleStats",
+							transform = function(s)
+								if not s or not s.camera_distribution then
+									return "..."
+								end
+								local sorted = {}
+								for k, v in pairs(s.camera_distribution) do
+									table.insert(sorted, { name = k, count = v })
+								end
+								table.sort(sorted, function(a, b)
+									return a.count > b.count
+								end)
+								local top = {}
+								for i = 1, math.min(5, #sorted) do
+									table.insert(top, string.format("%s (%d)", sorted[i].name, sorted[i].count))
+								end
+								return #top > 0 and table.concat(top, "\n") or "None yet"
+							end,
+						}),
+						font = "<system/italic>",
+						height_in_lines = 5,
+						wrap = true,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/Training/StyleDNA=Your Average Style Settings:"),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						fill_horizontal = 1,
+						title = bind({
+							key = "styleStats",
+							transform = function(s)
+								if not s or not s.exposure then
+									return "..."
+								end
+								local e = s.exposure
+								local parts = {}
+								if e.mean_luminance then
+									table.insert(parts, string.format("Lum: %.0f%%", e.mean_luminance * 100))
+								end
+								if e.mean_contrast then
+									table.insert(parts, string.format("Con: %.0f%%", e.mean_contrast * 100))
+								end
+								if e.mean_colorfulness then
+									table.insert(parts, string.format("Color: %.0f%%", e.mean_colorfulness * 100))
+								end
+								return #parts > 0 and table.concat(parts, " | ") or "..."
+							end,
+						}),
+					}),
+				}),
+				f:row({
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/common/Refresh=Refresh"),
+						action = function(button)
+							propertyTable.refreshStyleStats()
+						end,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/Training/ClearAll=Clear all training examples"),
+						action = function(button)
+							local confirm = LrDialogs.confirm(
+								LOC("$$$/LrGeniusAI/Training/ClearConfirmTitle=Clear Training Examples"),
+								LOC(
+									"$$$/LrGeniusAI/Training/ClearConfirmMsg=This will permanently delete all saved training examples. The Style Engine will be reset to Cold Start. Continue?"
+								),
+								LOC("$$$/LrGeniusAI/Training/ClearConfirmOk=Delete All"),
+								LOC("$$$/LrGeniusAI/Training/ClearConfirmCancel=Cancel")
+							)
+							if confirm == "ok" then
+								LrTasks.startAsyncTask(function()
+									local ok, err = SearchIndexAPI.clearAllTrainingExamples()
+									if ok then
+										propertyTable.refreshStyleStats()
+										LrDialogs.message(
+											LOC("$$$/LrGeniusAI/Training/ClearedTitle=Training Data Cleared"),
+											LOC(
+												"$$$/LrGeniusAI/Training/ClearedMsg=All training examples have been removed."
+											),
+											"info"
+										)
+									else
+										ErrorHandler.handleError(
+											LOC("$$$/LrGeniusAI/Training/ClearFailedTitle=Clear Failed"),
+											tostring(err or "Unknown error")
+										)
+									end
+								end)
+							end
+						end,
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionOptionalProviders=Optional AI providers"),
+			f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/PluginInfo/OptionalProvidersHint=None of this is required. Fill in a key or a URL only if you would\nrather have a cloud service, or a separate app you already run, do\nthe analysis instead of the local model above."
+				),
 			}),
 			f:group_box({
 				width = groupBoxWidth,
@@ -421,6 +867,131 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				-- 	}),
 				-- }),
 			}),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/ollamaSettings=Ollama Settings"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaBaseUrl=Ollama Base URL"),
+						width = share("setupLabelWidth"),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:edit_field({
+						value = bind("ollamaBaseUrl"),
+						width_in_chars = 40,
+					}),
+					f:push_button({
+						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaSetup=Setup Ollama"),
+						action = function(button)
+							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-Ollama-Setup")
+						end,
+						width = share("setupButtonWidth"),
+					}),
+				}),
+			}),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/PluginInfo/LmStudioSettings=LM Studio Settings"),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/LmStudioUrl=LM Studio Base URL (host:port)"),
+						width = share("setupLabelWidth"),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:edit_field({
+						value = bind("lmstudioBaseUrl"),
+						width_in_chars = 40,
+					}),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/SetupLmStudio=Setup LM Studio"),
+						action = function(button)
+							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-LM-Studio-Setup")
+						end,
+						width = share("setupButtonWidth"),
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionIndexing=Indexing and export"),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSettings=Export settings"),
+				f:row({
+					fill_horizontal = 1,
+					f:radio_button({
+						value = bind("indexSubmitOriginals"),
+						checked_value = true,
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginals=Submit original files for fastest indexing (experimental)"
+						),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected,\nlocation keywords from Lightroom's address lookup are unavailable, and results may\ndiffer slightly from photos indexed the classic way. Re-index to keep search consistent."
+						),
+						enabled = false,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:radio_button({
+						value = bind("indexSubmitOriginals"),
+						checked_value = false,
+						title = LOC("$$$/LrGeniusAI/PluginInfo/IndexModeExport=Export photos for indexing"),
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSize=Export size in pixel (long edge)"
+						),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:popup_menu({
+						value = bind("exportSize"),
+						items = Defaults.exportSizes,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC(
+							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportQuality=Export JPEG quality in percent"
+						),
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:slider({
+						value = bind("exportQuality"),
+						min = 1,
+						max = 100,
+						integral = true,
+						immediate = true,
+						fill_horizontal = 1,
+					}),
+					f:static_text({
+						title = bind("exportQuality"),
+						width_in_chars = 5,
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServer=Backend Server"),
 			f:group_box({
 				width = groupBoxWidth,
 				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/BackendServer=Backend Server"),
@@ -740,523 +1311,6 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									)
 								end
 							end)
-						end,
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/ollamaSettings=Ollama Settings"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaBaseUrl=Ollama Base URL"),
-						width = share("setupLabelWidth"),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:edit_field({
-						value = bind("ollamaBaseUrl"),
-						width_in_chars = 40,
-					}),
-					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaSetup=Setup Ollama"),
-						action = function(button)
-							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-Ollama-Setup")
-						end,
-						width = share("setupButtonWidth"),
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/PluginInfo/LmStudioSettings=LM Studio Settings"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/LmStudioUrl=LM Studio Base URL (host:port)"),
-						width = share("setupLabelWidth"),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:edit_field({
-						value = bind("lmstudioBaseUrl"),
-						width_in_chars = 40,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/SetupLmStudio=Setup LM Studio"),
-						action = function(button)
-							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-LM-Studio-Setup")
-						end,
-						width = share("setupButtonWidth"),
-					}),
-				}),
-			}),
-			-- MLX runs the same kind of local model as the group below, but
-			-- through Apple's Metal stack instead of llama.cpp. It is offered
-			-- separately rather than as a hidden implementation detail because
-			-- the two use different model files, so "which one is installed" is
-			-- a question the user has to be able to answer.
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/MlxModel/Status=Status"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("mlxStatusText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/MlxModel/Installed=Installed"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("mlxInstalledText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:popup_menu({
-						items = bind("mlxDownloadChoices"),
-						value = bind("mlxDownloadChoice"),
-						enabled = bind("mlxSupported"),
-						width_in_chars = 34,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/MlxModel/Download=Download"),
-						enabled = bind({
-							key = "mlxDownloadChoice",
-							transform = function(v)
-								return v ~= nil
-							end,
-						}),
-						action = function(button)
-							LocalModelCatalog.startDownload(propertyTable, "mlx")
-						end,
-						width = share("setupButtonWidth"),
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model (no external app)"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Status=Status"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("llmStatusText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Installed=Installed"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("llmInstalledText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:popup_menu({
-						items = bind("llmDownloadChoices"),
-						value = bind("llmDownloadChoice"),
-						enabled = bind("llmSupported"),
-						width_in_chars = 34,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Download=Download"),
-						enabled = bind({
-							key = "llmDownloadChoice",
-							transform = function(v)
-								return v ~= nil
-							end,
-						}),
-						action = function(button)
-							LocalModelCatalog.startDownload(propertyTable, "llm")
-						end,
-						width = share("setupButtonWidth"),
-					}),
-				}),
-				-- Advanced. The group of photos in a request has to fit the
-				-- context window alongside the shared prompt prefix, so these two
-				-- trade against each other; the server reduces parallel sequences
-				-- rather than overrunning the context.
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/ContextSize=Context size (tokens)"),
-						width = share("setupLabelWidth"),
-					}),
-					f:edit_field({
-						value = bind("llmContextSize"),
-						enabled = bind("llmSupported"),
-						precision = 0,
-						min = 1024,
-						max = 131072,
-						width_in_chars = 8,
-					}),
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Parallel=Photos in parallel"),
-					}),
-					f:edit_field({
-						value = bind("llmParallel"),
-						enabled = bind("llmSupported"),
-						precision = 0,
-						min = 1,
-						max = 16,
-						width_in_chars = 4,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/GpuLayers=Layers on the GPU"),
-						width = share("setupLabelWidth"),
-					}),
-					f:edit_field({
-						value = bind("llmGpuLayers"),
-						enabled = bind("llmSupported"),
-						precision = 0,
-						min = 0,
-						max = 999,
-						width_in_chars = 8,
-					}),
-					f:static_text({
-						title = LOC(
-							"$$$/LrGeniusAI/LocalModel/GpuLayersHint=999 = all; anything that does not fit stays on the CPU"
-						),
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/UI/Prompts=Prompts"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						alignment = "right",
-						width = share("promptLabelWidth"),
-						title = LOC("$$$/LrGeniusAI/UI/PromptTitle=Title"),
-					}),
-					propertyTable.promptTitleMenu,
-					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/add=Add"),
-						action = function(button)
-							PromptConfigProvider.addPrompt(propertyTable)
-						end,
-					}),
-					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/delete=Delete"),
-						action = function(button)
-							PromptConfigProvider.deletePrompt(propertyTable)
-						end,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						alignment = "right",
-						width = share("promptLabelWidth"),
-						title = LOC("$$$/LrGeniusAI/PromptConfig/PromptField=Prompt"),
-					}),
-					f:scrolled_view({
-						horizontal_scroller = false,
-						vertical_scroller = true,
-						fill_horizontal = 1,
-						height_in_lines = 15,
-						width = 500,
-						f:edit_field({
-							value = bind("selectedPrompt"),
-							fill_horizontal = 1,
-							height_in_lines = 30,
-							wraps = true,
-							width = 480,
-						}),
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSettings=Export settings"),
-				f:row({
-					fill_horizontal = 1,
-					f:radio_button({
-						value = bind("indexSubmitOriginals"),
-						checked_value = true,
-						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginals=Submit original files for fastest indexing (experimental)"
-						),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC(
-							"$$$/LrGeniusAI/PluginInfo/IndexSubmitOriginalsInfo=The backend reads the original file (RAW/JPEG/HEIC) directly, skipping the export step.\nNote: uses the camera preview, so crops and develop edits are not reflected,\nlocation keywords from Lightroom's address lookup are unavailable, and results may\ndiffer slightly from photos indexed the classic way. Re-index to keep search consistent."
-						),
-						enabled = false,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:radio_button({
-						value = bind("indexSubmitOriginals"),
-						checked_value = false,
-						title = LOC("$$$/LrGeniusAI/PluginInfo/IndexModeExport=Export photos for indexing"),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC(
-							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportSize=Export size in pixel (long edge)"
-						),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:popup_menu({
-						value = bind("exportSize"),
-						items = Defaults.exportSizes,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC(
-							"$$$/lrc-ai-assistant/PluginInfoDialogSections/exportQuality=Export JPEG quality in percent"
-						),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:slider({
-						value = bind("exportQuality"),
-						min = 1,
-						max = 100,
-						integral = true,
-						immediate = true,
-						fill_horizontal = 1,
-					}),
-					f:static_text({
-						title = bind("exportQuality"),
-						width_in_chars = 5,
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				f:checkbox({
-					value = bind("useClip"),
-					title = LOC("$$$/LrGeniusAI/PluginInfo/UseOpenClip=Use AI model for smart photo search"),
-				}),
-				f:group_box({
-					fill_horizontal = 1,
-					title = LOC("$$$/LrGeniusAI/PluginInfo/AdvancedSearchTitle=Advanced search"),
-					f:row({
-						fill_horizontal = 1,
-						f:checkbox({
-							value = bind("clipReady"),
-							enabled = false,
-							title = LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=AI search model is ready"),
-						}),
-						f:push_button({
-							title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
-							action = function(button)
-								LrTasks.startAsyncTask(function()
-									SearchIndexAPI.startClipDownload()
-								end)
-							end,
-							enabled = bind("useClip"),
-						}),
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/Training/SectionTitle=My Style Profile"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/Training/EngineStatus=Style Engine Status:"),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:static_text({
-						title = bind("styleReadyText"),
-						text_color = bind("styleReadyColor"),
-						font = "<system/bold>",
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/Training/SavedExamples=Saved training examples:"),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:static_text({
-						title = bind({
-							key = "trainingCount",
-							transform = function(v)
-								return tostring(v or 0)
-							end,
-						}),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/Training/TopScenes=Top Scene Types:"),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:static_text({
-						fill_horizontal = 1,
-						title = bind({
-							key = "styleStats",
-							transform = function(s)
-								if not s or not s.scene_distribution then
-									return "..."
-								end
-								local sorted = {}
-								for k, v in pairs(s.scene_distribution) do
-									table.insert(sorted, { name = k, count = v })
-								end
-								table.sort(sorted, function(a, b)
-									return a.count > b.count
-								end)
-								local top = {}
-								for i = 1, math.min(3, #sorted) do
-									local name = sorted[i].name:gsub("^scene_", ""):gsub("_", " ")
-									table.insert(top, name:sub(1, 1):upper() .. name:sub(2))
-								end
-								return #top > 0 and table.concat(top, ", ") or "None yet"
-							end,
-						}),
-						font = "<system/italic>",
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/Training/LearnedCameras=Learned Cameras:"),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:static_text({
-						fill_horizontal = 1,
-						title = bind({
-							key = "styleStats",
-							transform = function(s)
-								if not s or not s.camera_distribution then
-									return "..."
-								end
-								local sorted = {}
-								for k, v in pairs(s.camera_distribution) do
-									table.insert(sorted, { name = k, count = v })
-								end
-								table.sort(sorted, function(a, b)
-									return a.count > b.count
-								end)
-								local top = {}
-								for i = 1, math.min(5, #sorted) do
-									table.insert(top, string.format("%s (%d)", sorted[i].name, sorted[i].count))
-								end
-								return #top > 0 and table.concat(top, "\n") or "None yet"
-							end,
-						}),
-						font = "<system/italic>",
-						height_in_lines = 5,
-						wrap = true,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/Training/StyleDNA=Your Average Style Settings:"),
-						alignment = "right",
-						width = share("labelWidth"),
-					}),
-					f:static_text({
-						fill_horizontal = 1,
-						title = bind({
-							key = "styleStats",
-							transform = function(s)
-								if not s or not s.exposure then
-									return "..."
-								end
-								local e = s.exposure
-								local parts = {}
-								if e.mean_luminance then
-									table.insert(parts, string.format("Lum: %.0f%%", e.mean_luminance * 100))
-								end
-								if e.mean_contrast then
-									table.insert(parts, string.format("Con: %.0f%%", e.mean_contrast * 100))
-								end
-								if e.mean_colorfulness then
-									table.insert(parts, string.format("Color: %.0f%%", e.mean_colorfulness * 100))
-								end
-								return #parts > 0 and table.concat(parts, " | ") or "..."
-							end,
-						}),
-					}),
-				}),
-				f:row({
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/common/Refresh=Refresh"),
-						action = function(button)
-							propertyTable.refreshStyleStats()
-						end,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/Training/ClearAll=Clear all training examples"),
-						action = function(button)
-							local confirm = LrDialogs.confirm(
-								LOC("$$$/LrGeniusAI/Training/ClearConfirmTitle=Clear Training Examples"),
-								LOC(
-									"$$$/LrGeniusAI/Training/ClearConfirmMsg=This will permanently delete all saved training examples. The Style Engine will be reset to Cold Start. Continue?"
-								),
-								LOC("$$$/LrGeniusAI/Training/ClearConfirmOk=Delete All"),
-								LOC("$$$/LrGeniusAI/Training/ClearConfirmCancel=Cancel")
-							)
-							if confirm == "ok" then
-								LrTasks.startAsyncTask(function()
-									local ok, err = SearchIndexAPI.clearAllTrainingExamples()
-									if ok then
-										propertyTable.refreshStyleStats()
-										LrDialogs.message(
-											LOC("$$$/LrGeniusAI/Training/ClearedTitle=Training Data Cleared"),
-											LOC(
-												"$$$/LrGeniusAI/Training/ClearedMsg=All training examples have been removed."
-											),
-											"info"
-										)
-									else
-										ErrorHandler.handleError(
-											LOC("$$$/LrGeniusAI/Training/ClearFailedTitle=Clear Failed"),
-											tostring(err or "Unknown error")
-										)
-									end
-								end)
-							end
 						end,
 					}),
 				}),

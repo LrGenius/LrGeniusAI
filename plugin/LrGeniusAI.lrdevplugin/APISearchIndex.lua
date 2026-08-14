@@ -1,5 +1,5 @@
 -- lrgenius-server API Wrapper
--- Provides functions to interact with the Python-based search index server.
+-- Provides functions to interact with the lrgenius-server backend (Rust).
 
 SearchIndexAPI = {}
 
@@ -2889,7 +2889,8 @@ function SearchIndexAPI.startServer(opts)
 		local startServerCmd
 		local serverDir = LrPathUtils.parent(serverBinary)
 		if WIN_ENV then
-			-- The .cmd launcher handles environment variables and uses pythonw.exe for invisible execution.
+			-- `start /b` detaches the backend so it keeps running without a
+			-- console window of its own.
 			startServerCmd = 'start /b /d "'
 				.. serverDir
 				.. '" "" "'
