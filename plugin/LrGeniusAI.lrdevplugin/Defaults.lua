@@ -272,4 +272,8 @@ for _, group in ipairs(Defaults.credits) do
 	Defaults.copyrightString = Defaults.copyrightString .. "\n"
 end
 
+-- An LrView static_text does not grow to fit a multi-line string, it clips to
+-- height_in_lines, so the Credits view has to be told how tall the text is.
+Defaults.copyrightLineCount = select(2, Defaults.copyrightString:gsub("\n", "\n"))
+
 return Defaults

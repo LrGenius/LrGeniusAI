@@ -259,8 +259,10 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 				width = 600,
 				title = LOC("$$$/LrGeniusAI/PluginInfo/Credits=CREDITS"),
 				f:row({
-					-- The list is far longer than it used to be, so it scrolls
-					-- instead of being clipped at a fixed line count.
+					-- The list is far longer than the box, so it scrolls. The
+					-- static_text inside still needs its own full height: it
+					-- clips to height_in_lines rather than growing to fit, so
+					-- without it only the first entry shows.
 					f:scrolled_view({
 						horizontal_scroller = false,
 						vertical_scroller = true,
@@ -270,6 +272,7 @@ function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 						f:static_text({
 							title = Defaults.copyrightString,
 							width_in_chars = 100,
+							height_in_lines = Defaults.copyrightLineCount,
 						}),
 					}),
 				}),
