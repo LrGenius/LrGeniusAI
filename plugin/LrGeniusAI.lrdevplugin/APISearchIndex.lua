@@ -1310,7 +1310,8 @@ function SearchIndexAPI.formatStats(stats)
 		"Photos with title: " .. tostring(photos.with_title or 0),
 		"Photos with caption: " .. tostring(photos.with_caption or 0),
 		"Photos with keywords: " .. tostring(photos.with_keywords or 0),
-		"Photos with Vertex AI: " .. tostring(photos.with_vertexai or 0),
+		-- Vertex AI is disabled in the GUI; the backend code is untouched.
+		-- "Photos with Vertex AI: " .. tostring(photos.with_vertexai or 0),
 		"Faces total: " .. tostring(faces.total or 0),
 		"Persons total: " .. tostring(persons.total or 0),
 	}, "\n")

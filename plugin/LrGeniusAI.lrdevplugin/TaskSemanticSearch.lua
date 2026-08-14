@@ -11,7 +11,9 @@ local function showAdvancedSearchDialog(ctx)
 	-- Scope and search-in options from prefs (persisted)
 	props.searchScope = prefs.searchScope or "all"
 	props.searchInSemanticSiglip = prefs.searchInSemanticSiglip ~= false
-	props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
+	-- Vertex AI is disabled in the GUI; the backend code is untouched.
+	props.searchInSemanticVertex = false
+	-- props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
 	props.searchInMetadata = prefs.searchInMetadata ~= false
 	props.searchInMetadataKeywords = prefs.searchInMetadataKeywords ~= false
 	props.searchInMetadataCaption = prefs.searchInMetadataCaption ~= false
@@ -118,10 +120,11 @@ local function showAdvancedSearchDialog(ctx)
 							"$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)"
 						),
 					}),
-					f:checkbox({
-						value = bind("searchInSemanticVertex"),
-						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)"),
-					}),
+					-- Vertex AI is disabled in the GUI; the backend code is untouched.
+					-- f:checkbox({
+					-- 	value = bind("searchInSemanticVertex"),
+					-- 	title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)"),
+					-- }),
 					f:checkbox({
 						value = bind("searchInMetadata"),
 						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata"),
@@ -180,7 +183,8 @@ local function showAdvancedSearchDialog(ctx)
 		-- Persist dialog options to prefs for next time
 		prefs.searchScope = props.searchScope
 		prefs.searchInSemanticSiglip = props.searchInSemanticSiglip
-		prefs.searchInSemanticVertex = props.searchInSemanticVertex
+		-- Vertex AI is disabled in the GUI; the backend code is untouched.
+		-- prefs.searchInSemanticVertex = props.searchInSemanticVertex
 		prefs.searchInMetadata = props.searchInMetadata
 		prefs.searchInMetadataKeywords = props.searchInMetadataKeywords
 		prefs.searchInMetadataCaption = props.searchInMetadataCaption
