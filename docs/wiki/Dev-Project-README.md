@@ -56,7 +56,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
      - **Windows:** Click *More info* -> *Run anyway*.
      - **macOS:** Right-click the `.pkg` -> *Open* -> *Open anyway*.
    - Optional troubleshooting: if you want to start it manually, run `lrgenius-server/lrgenius-server.cmd` on Windows or `lrgenius-server/lrgenius-server` on macOS.
-4. **Pick an AI model.** Either enter a cloud API key in the **Plug-in Manager**, or stay fully local: the **Local AI Model** sections offer a curated list of vision models (Gemma 4, Qwen3-VL, Qwen2.5-VL) — choose one and click *Download*. On Apple silicon use the **MLX** section, elsewhere the llama.cpp one. See [Local AI Models](https://github.com/LrGenius/LrGeniusAI/wiki/Help-Local-AI-Models).
+4. **Pick an AI model.** Either enter a cloud API key in the **Plug-in Manager**, or stay fully local: the **Local AI Model** sections offer a curated list of vision models (Gemma 4, Ministral 3, Qwen3-VL, Qwen2.5-VL) — choose one and click *Download*. On Apple silicon use the **MLX** section, elsewhere the llama.cpp one. See [Local AI Models](https://github.com/LrGenius/LrGeniusAI/wiki/Help-Local-AI-Models).
 5. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
    - **Analyze & Index Photos...** — AI tagging, descriptions, and search index
    - **AI Edit Photos...** *(beta)* — generate and apply Lightroom develop edits

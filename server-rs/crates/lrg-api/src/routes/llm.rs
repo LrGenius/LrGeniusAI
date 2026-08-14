@@ -14,7 +14,7 @@
 //! is TLS-authenticated, and a length check catches the failure mode that
 //! actually occurs (an interrupted stream).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
@@ -437,7 +437,7 @@ async fn repo_files(
         .await
         .map_err(|e| format!("could not read the file list for {repo}: {e}"))?;
 
-    let mut files: Vec<(String, u64)> = entries
+    let files: Vec<(String, u64)> = entries
         .iter()
         .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
         .filter_map(|entry| {
@@ -447,31 +447,84 @@ async fn repo_files(
         })
         .collect();
 
-    // Some repos carry a stale `model.safetensors.index.json` left over from
-    // before the weights were consolidated into a single `model.safetensors`
-    // (observed on lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit — the
-    // index's weight_map still points at `model-0000N-of-0000N.safetensors`
-    // shards that no longer exist in the repo). mlx-swift-lm trusts the index
-    // over the consolidated file when both are present, so downloading it
-    // produces a directory that fails to load with a confusing "not
-    // supported" error. A monolithic `model.safetensors` needs no index, so
-    // drop the index whenever both live in the same directory.
-    let monolithic_dirs: std::collections::HashSet<String> = files
-        .iter()
-        .filter_map(|(path, _)| {
-            let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
-            (name == "model.safetensors").then(|| dir.to_string())
-        })
-        .collect();
-    files.retain(|(path, _)| {
-        let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
-        name != "model.safetensors.index.json" || !monolithic_dirs.contains(dir)
-    });
-
     if files.is_empty() {
         return Err(format!("{repo} contains no downloadable model files"));
     }
     Ok(files)
+}
+
+/// The weight files a `model.safetensors.index.json` names that are not in
+/// `present`, plus a description of an index that cannot be used at all.
+///
+/// An unreadable index counts as unusable rather than fine: mlx-swift-lm
+/// decodes the same JSON and would fail on it too.
+fn missing_from_shard_index(
+    index_json: &str,
+    present: &std::collections::HashSet<&str>,
+) -> Vec<String> {
+    let Ok(index) = serde_json::from_str::<Value>(index_json) else {
+        return vec!["the index is not readable JSON".to_string()];
+    };
+    let Some(map) = index.get("weight_map").and_then(Value::as_object) else {
+        return vec!["the index has no weight_map".to_string()];
+    };
+    let mut missing: Vec<String> = map
+        .values()
+        .filter_map(Value::as_str)
+        .filter(|file| !present.contains(file))
+        .map(str::to_string)
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
+/// Delete a `model.safetensors.index.json` that does not describe the weights
+/// sitting next to it.
+///
+/// Repos ship indexes left over from an earlier revision. Two have been seen:
+/// lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit, whose index still names
+/// the shards from before the weights were consolidated into one
+/// `model.safetensors`, and mlx-community/Ministral-3-8B-Instruct-2512-4bit,
+/// whose index describes a three-shard layout over a repo that has two.
+///
+/// mlx-swift-lm loads exactly the files the `weight_map` names and fails on the
+/// first one missing — the error surfaces as "this MLX model is not supported",
+/// which sends the reader looking in entirely the wrong place. With no index it
+/// loads every `.safetensors` in the directory instead, which is correct both
+/// for a monolithic file and for a complete shard set. So an index naming a
+/// file that is not there is strictly worse than no index.
+///
+/// Only ever called on a freshly staged snapshot, where every file the repo
+/// listed has been downloaded and verified for length: a name the index gets
+/// wrong here is the repo disagreeing with itself, not a partial download.
+async fn prune_stale_shard_index(dir: &Path) {
+    let index_path = dir.join("model.safetensors.index.json");
+    let Ok(index_json) = tokio::fs::read_to_string(&index_path).await else {
+        return;
+    };
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return;
+    };
+    let mut present: Vec<String> = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        present.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    let present: std::collections::HashSet<&str> = present.iter().map(String::as_str).collect();
+
+    let missing = missing_from_shard_index(&index_json, &present);
+    if missing.is_empty() {
+        return;
+    }
+    log::warn!(
+        "{} does not match the downloaded weights ({}); removing it so every \
+         safetensors file in the directory is loaded instead",
+        index_path.display(),
+        missing.join(", ")
+    );
+    if let Err(e) = tokio::fs::remove_file(&index_path).await {
+        log::warn!("could not remove {}: {e}", index_path.display());
+    }
 }
 
 /// Download a whole MLX model snapshot.
@@ -601,6 +654,8 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
         }
     }
 
+    prune_stale_shard_index(&staging).await;
+
     if let Err(e) = tokio::fs::rename(&staging, &destination).await {
         let _ = tokio::fs::remove_dir_all(&staging).await;
         return set_error(
@@ -634,6 +689,79 @@ pub fn destination_for(entry: &CatalogEntry) -> (PathBuf, PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn present<'a>(names: impl IntoIterator<Item = &'a str>) -> std::collections::HashSet<&'a str> {
+        names.into_iter().collect()
+    }
+
+    #[test]
+    fn an_index_matching_the_downloaded_shards_is_kept() {
+        let index = r#"{"weight_map":{"a":"model-00001-of-00002.safetensors",
+                                      "b":"model-00002-of-00002.safetensors"}}"#;
+        let files = present([
+            "model-00001-of-00002.safetensors",
+            "model-00002-of-00002.safetensors",
+            "config.json",
+        ]);
+        assert!(missing_from_shard_index(index, &files).is_empty());
+    }
+
+    /// mlx-community/Ministral-3-8B-Instruct-2512-4bit: a three-shard index
+    /// over a repo that ships two.
+    #[test]
+    fn an_index_describing_a_different_shard_layout_is_stale() {
+        let index = r#"{"weight_map":{"a":"model-00001-of-00003.safetensors",
+                                      "b":"model-00003-of-00003.safetensors"}}"#;
+        let files = present([
+            "model-00001-of-00002.safetensors",
+            "model-00002-of-00002.safetensors",
+        ]);
+        assert_eq!(
+            missing_from_shard_index(index, &files),
+            vec![
+                "model-00001-of-00003.safetensors",
+                "model-00003-of-00003.safetensors"
+            ]
+        );
+    }
+
+    /// lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit: an index left over
+    /// from before the weights were consolidated into one file.
+    #[test]
+    fn an_index_naming_shards_beside_a_consolidated_file_is_stale() {
+        let index = r#"{"weight_map":{"a":"model-00001-of-00002.safetensors"}}"#;
+        let files = present(["model.safetensors", "config.json"]);
+        assert_eq!(
+            missing_from_shard_index(index, &files),
+            vec!["model-00001-of-00002.safetensors"]
+        );
+    }
+
+    #[test]
+    fn an_index_that_cannot_be_parsed_counts_as_unusable() {
+        let files = present(["model.safetensors"]);
+        assert!(!missing_from_shard_index("not json", &files).is_empty());
+        assert!(!missing_from_shard_index("{}", &files).is_empty());
+    }
+
+    #[tokio::test]
+    async fn pruning_removes_only_a_stale_index() {
+        for (index, stays) in [
+            (r#"{"weight_map":{"a":"model.safetensors"}}"#, true),
+            (
+                r#"{"weight_map":{"a":"model-00001-of-00003.safetensors"}}"#,
+                false,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let index_path = dir.path().join("model.safetensors.index.json");
+            std::fs::write(dir.path().join("model.safetensors"), b"w").unwrap();
+            std::fs::write(&index_path, index).unwrap();
+
+            prune_stale_shard_index(dir.path()).await;
+            assert_eq!(index_path.is_file(), stays);
+        }
+    }
 
     #[test]
     fn engine_overrides_read_the_advanced_fields() {

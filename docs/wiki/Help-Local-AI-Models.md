@@ -44,6 +44,7 @@ would look selectable and then fail on the first photo.
 |---|---|---|
 | Gemma 4 E4B *(recommended)* | ~6.3 GB | 16 GB |
 | Gemma 4 12B (QAT, highest quality) | ~7.2 GB | 24 GB |
+| Ministral 3 8B (balanced alternative) | ~6.1 GB | 16 GB |
 | Qwen3.5 9B (balanced alternative) | ~6.5 GB | 16 GB |
 | Qwen2.5-VL 3B / 7B | ~3.4 / 6.5 GB | 8 / 16 GB |
 | SmolVLM 500M (testing only) | ~0.7 GB | 4 GB |
@@ -58,6 +59,8 @@ both.
 |---|---|---|
 | Gemma 4 E4B *(recommended)* | ~5.2 GB | 16 GB |
 | Gemma 4 E2B (faster, lower quality) | ~3.6 GB | 8 GB |
+| Gemma 4 12B (QAT, highest quality) | ~11.0 GB | 32 GB |
+| Ministral 3 8B (balanced alternative) | ~5.6 GB | 16 GB |
 | Qwen3-VL 4B (balanced alternative) | ~3.1 GB | 8 GB |
 
 An MLX model is a **directory** (config, safetensors shards, tokenizer), not a
