@@ -13,16 +13,4 @@
       }
     ]
   },
-  "permissions": {
-    "allow": [
-      "Bash(bash server/scripts/lint_format.sh)",
-      "Bash(uv run pytest *)",
-      "Bash(uv run ruff *)",
-      "Bash(luacheck *)",
-      "Bash(stylua *)",
-      "Bash(busted *)",
-      "Bash(python sync_translations.py)",
-      "Bash(python3 scripts/check_translations.py)"
-    ]
-  }
 }
