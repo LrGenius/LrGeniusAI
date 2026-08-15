@@ -9,7 +9,6 @@ globals = {
     "_PLUGIN",
     "prefs",
     "log",
-    "recipe",
     "JSON",
     "Util",
     "ErrorHandler",

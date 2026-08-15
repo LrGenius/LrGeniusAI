@@ -644,3 +644,122 @@ async fn check_unprocessed_understands_the_cull_task() {
         "a faceless photo that has been culled must not be reported forever"
     );
 }
+
+// ---------------------------------------------------------------------------
+// /style_edit
+//
+// The plugin's edit workflow routes here whenever "apply my saved edit style" is
+// on, which is the default, so this is the first endpoint a new user's edit run
+// touches. It had no contract coverage, and the plugin branches on the exact
+// shapes below.
+// ---------------------------------------------------------------------------
+
+/// Builds a `multipart/form-data` body. `/style_edit` and `/edit` are the only
+/// multipart endpoints the plugin calls, and both are driven from
+/// `_requestMultipart` in APISearchIndex.lua.
+fn multipart_body(fields: &[(&str, &str)], image: Option<(&str, &[u8])>) -> (String, Vec<u8>) {
+    const BOUNDARY: &str = "----lrgtestboundary";
+    let mut body: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    if let Some((filename, bytes)) = image {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"image\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: image/jpeg\r\n\r\n");
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
+async fn style_edit_request(
+    app: axum::Router,
+    fields: &[(&str, &str)],
+    image: Option<(&str, &[u8])>,
+) -> (StatusCode, serde_json::Value) {
+    let (content_type, body) = multipart_body(fields, image);
+    let response = app
+        .oneshot(
+            Request::post("/style_edit")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn style_edit_rejects_a_request_without_an_image() {
+    let (app, _) = fresh_app();
+    let (_, json) = style_edit_request(app.clone(), &[("photo_id", "photo1")], None).await;
+
+    // The plugin checks `response.status` first; this branch carries only `error`,
+    // so styleEdit reports "Unexpected response" rather than the actual reason.
+    assert!(
+        json.get("error").is_some(),
+        "expected an error field, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn style_edit_reports_an_unbound_database_rather_than_panicking() {
+    let (app, _) = fresh_app();
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[("photo_id", "photo1")],
+        Some(("photo1.jpg", b"not-a-real-jpeg")),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("db_path"),
+        "expected the unbound-database message, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
+    // With no training examples and no LLM fallback the style engine cannot
+    // answer, and this is what a first run hits. Pinned because the edit workflow
+    // is moving to an LLM-free path: this 422 is exactly the response the
+    // deterministic cold-start path has to replace, and a silent change of shape
+    // here would strand the plugin.
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[
+            ("photo_id", "photo1"),
+            ("db_path", db_path_str.as_str()),
+            ("use_llm_fallback", "false"),
+        ],
+        Some(("photo1.jpg", b"not-a-real-jpeg")),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["engine"], "none");
+    assert_eq!(json["matched_examples"], 0);
+    assert!(json["error"].is_string());
+}

@@ -192,6 +192,56 @@ under Program Files on Windows), not your dev build — `startServer` pings port
 feature-enabled dev build by hand first and the plugin will talk to that
 instead.
 
+## Building behind a restricted network
+
+`ort` (the ONNX Runtime bindings) downloads prebuilt binaries from `cdn.pyke.io`
+at build time. Where that host is unreachable — a sandbox, a CI image with an
+egress allowlist, an air-gapped machine — the build fails with:
+
+```
+error: ort-sys@2.0.0-rc.13: ort-sys failed to download prebuilt binaries from
+`https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/...`
+```
+
+No source change is needed. ONNX Runtime's Python wheel ships the same shared
+library, and PyPI is reachable in most such environments:
+
+```bash
+# The version must match what ort expects: 2.0.0-rc.13 targets ONNX Runtime 1.28.0.
+pip download onnxruntime==1.28.0 --no-deps -d /tmp/ort_whl
+unzip -q /tmp/ort_whl/*.whl -d /tmp/ort_ext
+sudo mkdir -p /opt/ort/lib
+sudo cp /tmp/ort_ext/onnxruntime/capi/libonnxruntime.so* /opt/ort/lib/
+sudo ln -sf /opt/ort/lib/libonnxruntime.so.1.28.0 /opt/ort/lib/libonnxruntime.so
+sudo ln -sf /opt/ort/lib/libonnxruntime.so.1.28.0 /opt/ort/lib/libonnxruntime.so.1
+```
+
+Then build and test with:
+
+```bash
+export ORT_STRATEGY=system
+export ORT_LIB_LOCATION=/opt/ort/lib   # the directory holding the .so, not its parent
+export ORT_PREFER_DYNAMIC_LINK=1       # without this ort-sys attempts a *static* link
+export LD_LIBRARY_PATH=/opt/ort/lib
+cargo test --workspace
+```
+
+Three details that are easy to get wrong:
+
+- `ORT_LIB_LOCATION` is used verbatim as the library directory (see `ort-sys`'s
+  `build/main.rs`), so pointing it at a parent directory that contains `lib/`
+  does not work.
+- Without `ORT_PREFER_DYNAMIC_LINK=1`, `ort-sys` falls through to static linking
+  and reports `could not link to the ONNX Runtime build in ...`, which reads like
+  a missing library rather than the wrong link mode.
+- The second symlink (`libonnxruntime.so.1`) is the soname the binary requests at
+  *runtime*; without it the build succeeds and every test aborts with
+  `error while loading shared libraries`.
+
+On a bare image `lance` also needs `protoc` (`apt-get install protobuf-compiler`),
+and the headless Lua tests need `lua5.1` plus `busted` and `luacheck` from
+LuaRocks.
+
 ## Related
 
 - [Server README](Dev-Server-README) — day-to-day build/test/run commands, model file setup

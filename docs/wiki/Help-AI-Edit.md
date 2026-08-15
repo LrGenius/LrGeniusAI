@@ -68,15 +68,18 @@ Default: Subtle crop.
 
 When enabled, a **review dialog** opens for each photo before the edit is applied. You see:
 
-- A before/after comparison.
-- The proposed develop values.
-- Options to **Apply**, **Skip**, or provide a **Per-photo instruction override** (free text to tell the AI to adjust something specific for this photo).
+- The proposed develop values, plus which engine produced them and how confident it was.
+- Options to **Apply** or **Skip**.
 
 **Recommended for first use.** Disable only after you've validated the results for your shooting style.
 
-### Per-photo instruction override (in review dialog)
+> **No before/after preview yet.** The review dialog lists values; it does not render a comparison. A rendered before/after is planned. Until then, Lightroom's own History panel is the fastest way to judge a result — every run is a single undo step named *Apply AI Lightroom develop settings*.
 
-A free-text field where you can give the AI a specific instruction for the current photo — for example "Make the sky more dramatic" or "Reduce noise in shadows". This re-runs generation for this single photo with the override applied.
+### Per-photo instruction
+
+If **Allow per-photo instructions** is enabled, a free-text field opens *before* the edit is generated — for example "Make the sky more dramatic" or "Reduce noise in shadows". A checkbox carries the same instruction to all following photos.
+
+Note this happens before generation, not after: there is currently no way to re-run a single photo from the review dialog with a changed instruction. Skip the photo and run it again to do that.
 
 ---
 
@@ -91,6 +94,5 @@ If you want AI Edit to match your personal editing style, use **Save Edits as AI
 - Start with **Review each proposed edit** enabled — review the first batch before applying to hundreds of photos.
 - Choose a preset that matches your genre (portrait, landscape, wedding, etc.) rather than using *Custom* initially.
 - **Style strength 40–60%** is a good starting range. Higher values push the style harder; lower values stay close to a neutral technical correction.
-- For portraits, enable **face detection** during indexing — the AI uses detected faces to make better masking decisions.
 - If results are inconsistent, try a higher-quality model (e.g. `gemini-2.5-pro` or `gpt-5.4-pro`).
 - Use **Save Edits as AI Training Examples** after a manual editing session to teach the AI your preferences.
