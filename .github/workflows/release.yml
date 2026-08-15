@@ -405,7 +405,6 @@ jobs:
 
           echo "Copying plugin files..."
           cp plugin/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
-          cp plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
       # macOS Developer ID codesigning + notarization. Skipped (with a
       # warning, not a failure) when the secrets aren't configured, so
