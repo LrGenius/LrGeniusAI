@@ -21,6 +21,30 @@ The recipe is applied via the Lightroom SDK. No raw pixel editing happens outsid
 
 ---
 
+## What the frame allows
+
+A model that cannot see how the light actually falls will happily add contrast
+to a scene that already has too much of it. So before a recipe reaches your
+photo, the backend measures the image itself — how hard the light is, how many
+stops of dynamic range there are, how much of the frame is specular highlight,
+how far the shadows are already clipped — and works out how much contrast,
+clarity, shadow lift and whites this particular frame can take. Values above
+that ceiling are pulled back down.
+
+The review dialog shows why, in plain sentences: hard midday light means no
+extra contrast, flat overcast light means there is room for it, an already
+clipped sky means the whites stay where they are. When the recipe stayed inside
+the budget anyway, nothing is shown — there is no point reporting a limit that
+never bit.
+
+The judgement changes with the file type: raw files still hold detail behind
+clipped highlights, JPEGs do not, so the same blown sky earns a stricter budget
+on a JPEG. The plugin tells the backend which it is, since the photo is
+exported to JPEG before upload and the original encoding is otherwise
+invisible from the server side.
+
+---
+
 ## Dialog options
 
 ### Scope
@@ -64,11 +88,29 @@ Whether the AI may suggest a crop:
 
 Default: Subtle crop.
 
+### Creative Controls
+
+Each checkbox switches off a whole family of adjustments, so you can let the AI
+work on tone but keep your own color, or the other way round:
+
+- Adjust white balance
+- Adjust basic tone (exposure/contrast/highlights/shadows/whites/blacks)
+- Adjust presence (texture/clarity/dehaze)
+- Adjust color mix (vibrance/saturation/HSL)
+- Do color grading
+- Use tone curve, and within it Use point curve
+- Adjust detail, Adjust effects, Adjust lens corrections
+- Include local masks
+
+Anything you switch off is stripped from the recipe before it reaches your
+photo, whatever the model proposed.
+
 ### Review each proposed edit before applying it
 
 When enabled, a **review dialog** opens for each photo before the edit is applied. You see:
 
 - The proposed develop values, plus which engine produced them and how confident it was.
+- Any guardrail explanations — what the frame allowed, and what got capped.
 - Options to **Apply** or **Skip**.
 
 **Recommended for first use.** Disable only after you've validated the results for your shooting style.
