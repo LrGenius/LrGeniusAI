@@ -11,7 +11,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **Hugging Face Tokenizers**: Fast tokenizers used for the SigLIP2 text tower. [GitHub](https://github.com/huggingface/tokenizers)
 
 ## Local Inference Engines
-- **llama.cpp**: Runs GGUF vision models in-process (Metal on macOS, Vulkan on Windows), via the `llama-cpp-2` bindings. [GitHub](https://github.com/ggml-org/llama.cpp)
+- **llama.cpp**: Runs GGUF vision models in-process on Windows (Vulkan), via the `llama-cpp-2` bindings. [GitHub](https://github.com/ggml-org/llama.cpp)
 - **llguidance**: Turns JSON Schemas into decode-time constraints, so local models return valid structured output. [GitHub](https://github.com/guidance-ai/llguidance)
 - **MLX & mlx-swift-lm**: Apple's array framework and its language-model package, powering the `lrgenius-mlx` sidecar on Apple silicon. [GitHub](https://github.com/ml-explore/mlx-swift-lm)
 - **Gemma, Qwen-VL and SmolVLM**: The open-weights vision models offered in the built-in model catalogs.

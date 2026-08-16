@@ -41,14 +41,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `cargo_features` is what makes the two platforms differ in which
+          # local engine they ship. Windows builds llama.cpp (with the Vulkan
+          # backend); macOS deliberately builds neither the feature nor its
+          # prerequisites, because MLX is the only local engine there — see the
+          # MLX sidecar steps below. Shipping llama.cpp alongside it would mean
+          # compiling it from source on every release for an engine that is
+          # slower on Apple silicon and that the plug-in no longer offers.
           - os: windows-latest
             os_name: windows
             arch: x64
             bin_ext: .exe
+            cargo_features: --features llamacpp
           - os: macos-latest
             os_name: macos
             arch: arm64
             bin_ext: ''
+            cargo_features: ''
 
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
@@ -121,20 +130,9 @@ jobs:
       # build itself, libclang for bindgen. Installed explicitly rather than
       # relying on what a runner image happens to ship, because a missing
       # libclang surfaces as an opaque bindgen failure.
-      - name: Install llama.cpp build prerequisites (Linux)
-        if: matrix.os_name == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libclang-dev
-
-      - name: Install llama.cpp build prerequisites (macOS)
-        if: matrix.os_name == 'macos'
-        run: |
-          # libclang comes with the Xcode command line tools; only cmake may be
-          # missing. `brew install` is a no-op when it is already present.
-          brew list cmake >/dev/null 2>&1 || brew install cmake
-          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
-
+      #
+      # Windows only. macOS builds without the feature (see `cargo_features` in
+      # the matrix), so it needs none of this.
       - name: Install llama.cpp build prerequisites (Windows)
         if: matrix.os_name == 'windows'
         shell: bash
@@ -281,14 +279,14 @@ jobs:
         shell: bash
         run: |
           cd server-rs
-          cargo test --workspace --release --features llamacpp
+          cargo test --workspace --release ${{ matrix.cargo_features }}
 
       - name: Build backend binary (release)
         shell: bash
         run: |
           cd server-rs
-          cargo build --release --bin geniusai-server --features llamacpp
-          cargo clippy --workspace --tests --features llamacpp -- -D warnings
+          cargo build --release --bin geniusai-server ${{ matrix.cargo_features }}
+          cargo clippy --workspace --tests ${{ matrix.cargo_features }} -- -D warnings
 
       # The MLX sidecar (Apple silicon only). Two things are non-obvious here:
       #
@@ -328,10 +326,21 @@ jobs:
           cp "$PRODUCTS/lrgenius-mlx" "$BUILD_DIR/"
           # The Metal kernels live in mlx-swift_Cmlx.bundle and are located
           # relative to the executable at runtime, so they travel with it.
+          bundles=0
           for bundle in "$PRODUCTS"/*.bundle; do
             [ -e "$bundle" ] || continue
             cp -a "$bundle" "$BUILD_DIR/"
+            bundles=$((bundles + 1))
           done
+          # Hard failure rather than a warning: MLX is the only local engine on
+          # macOS, and a sidecar shipped without its metallib does not fail at
+          # build time — it starts and then dies on the first inference with
+          # "Failed to load the default metallib". Catching that here is the
+          # difference between a red build and a release that looks fine until a
+          # user tries to analyse a photo.
+          if [ "$bundles" -eq 0 ]; then
+            echo "::error::no .bundle staged next to lrgenius-mlx; the Metal kernels are missing" && exit 1
+          fi
           ls -la "$BUILD_DIR"
 
       - name: Stage backend binary
@@ -351,11 +360,9 @@ jobs:
 
           # Windows builds llama.cpp's Vulkan backend as a loadable ggml module
           # (`dynamic-backends`), so the ggml-*.dll files have to travel next to
-          # the exe or the server starts with no GPU support at all. macOS and
-          # Linux link everything statically — verified locally: `otool -L` on
-          # the macOS binary lists no non-system libraries, and the Metal
-          # shaders are embedded in the executable, so there is no metallib to
-          # stage either.
+          # the exe or the server starts with no GPU support at all. macOS has
+          # nothing to stage here at all: it builds without the `llamacpp`
+          # feature, and its local engine is the MLX sidecar staged above.
           if [ "${{ matrix.os_name }}" = "windows" ]; then
             found=0
             # Two locations, because llama-cpp-sys-2 treats them differently:

@@ -286,31 +286,37 @@ function OnboardingWizard.show(manualTrigger)
 							}),
 						}),
 
-						localModelGroup({
-							kind = "mlx",
-							title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
-							description = LOC(
-								"$$$/LrGeniusAI/Onboarding/MlxDesc=On Apple silicon, MLX is the fastest way to run an AI model\nlocally. Pick a model and download it to generate keywords,\ntitles and captions without a cloud account."
-							),
-							statusKey = "mlxStatusText",
-							installedKey = "mlxInstalledText",
-							choicesKey = "mlxDownloadChoices",
-							choiceKey = "mlxDownloadChoice",
-							supportedKey = "mlxSupported",
-						}),
-
-						localModelGroup({
-							kind = "llm",
-							title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model — llama.cpp (all platforms)"),
-							description = LOC(
-								"$$$/LrGeniusAI/Onboarding/LlamaDesc=The built-in llama.cpp engine runs GGUF models on any machine,\nwith or without a GPU. Download one if you are not on Apple\nsilicon, or if you prefer GGUF models."
-							),
-							statusKey = "llmStatusText",
-							installedKey = "llmInstalledText",
-							choicesKey = "llmDownloadChoices",
-							choiceKey = "llmDownloadChoice",
-							supportedKey = "llmSupported",
-						}),
+						-- One engine per platform, never both. macOS ships MLX
+						-- only (the release build does not compile the llamacpp
+						-- feature there), and MLX is Apple silicon only, so the
+						-- other box would always be a dead group reporting that
+						-- its backend is unsupported. Same reasoning as in
+						-- PluginInfoDialogSections.sectionsForTopOfDialog.
+						MAC_ENV
+								and localModelGroup({
+									kind = "mlx",
+									title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
+									description = LOC(
+										"$$$/LrGeniusAI/Onboarding/MlxDesc=On Apple silicon, MLX is the fastest way to run an AI model\nlocally. Pick a model and download it to generate keywords,\ntitles and captions without a cloud account."
+									),
+									statusKey = "mlxStatusText",
+									installedKey = "mlxInstalledText",
+									choicesKey = "mlxDownloadChoices",
+									choiceKey = "mlxDownloadChoice",
+									supportedKey = "mlxSupported",
+								})
+							or localModelGroup({
+								kind = "llm",
+								title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model — llama.cpp"),
+								description = LOC(
+									"$$$/LrGeniusAI/Onboarding/LlamaDesc=The built-in llama.cpp engine runs GGUF models with or without\na GPU. Pick a model and download it to generate keywords, titles\nand captions without a cloud account."
+								),
+								statusKey = "llmStatusText",
+								installedKey = "llmInstalledText",
+								choicesKey = "llmDownloadChoices",
+								choiceKey = "llmDownloadChoice",
+								supportedKey = "llmSupported",
+							}),
 
 						f:group_box({
 							title = LOC("$$$/LrGeniusAI/Onboarding/FinishTitle=All Set!"),

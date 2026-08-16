@@ -124,7 +124,13 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 				end
 				table.insert(issues, LOC("$$$/LrGeniusAI/Health/ClipMissing=AI search model is missing."))
 			end
-			if not health.gemini and not health.chatgpt and not health.ollama and not health.lmstudio then
+			if
+				not health.localEngine
+				and not health.gemini
+				and not health.chatgpt
+				and not health.ollama
+				and not health.lmstudio
+			then
 				if status ~= "critical" then
 					status = "warning"
 					color = { 0.8, 0.8, 0 }
@@ -294,6 +300,174 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 		value = bind("prompt"),
 	})
 
+	-- Exactly one local engine is offered, and which one is a property of the
+	-- platform rather than a choice the user makes.
+	--
+	-- macOS ships MLX only: the macOS release build does not compile the
+	-- `llamacpp` cargo feature at all (see `cargo_features` in
+	-- .github/workflows/release.yml), so a llama.cpp box there could never do
+	-- anything but report "this backend build has no local-model support".
+	-- Windows is the mirror image — MLX is Apple silicon only, and its half of
+	-- /llm/catalog always comes back unsupported.
+	--
+	-- Building only the box that applies, rather than hiding the other one,
+	-- keeps the dialog free of a dead group and means neither set of bindings
+	-- is created on a platform that cannot serve them.
+	local localEngineBox
+	if MAC_ENV then
+		localEngineBox = f:group_box({
+			width = groupBoxWidth,
+			title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = LOC("$$$/LrGeniusAI/MlxModel/Status=Status"),
+					width = share("setupLabelWidth"),
+				}),
+				f:static_text({
+					title = bind("mlxStatusText"),
+					fill_horizontal = 1,
+				}),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = LOC("$$$/LrGeniusAI/MlxModel/Installed=Installed"),
+					width = share("setupLabelWidth"),
+				}),
+				f:static_text({
+					title = bind("mlxInstalledText"),
+					fill_horizontal = 1,
+				}),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:popup_menu({
+					items = bind("mlxDownloadChoices"),
+					value = bind("mlxDownloadChoice"),
+					enabled = bind("mlxSupported"),
+					width_in_chars = 34,
+				}),
+				f:push_button({
+					title = LOC("$$$/LrGeniusAI/MlxModel/Download=Download"),
+					enabled = bind({
+						key = "mlxDownloadChoice",
+						transform = function(v)
+							return v ~= nil
+						end,
+					}),
+					action = function(button)
+						LocalModelCatalog.startDownload(propertyTable, "mlx")
+					end,
+					width = share("setupButtonWidth"),
+				}),
+			}),
+		})
+	else
+		localEngineBox = f:group_box({
+			width = groupBoxWidth,
+			title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model — llama.cpp"),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = LOC("$$$/LrGeniusAI/LocalModel/Status=Status"),
+					width = share("setupLabelWidth"),
+				}),
+				f:static_text({
+					title = bind("llmStatusText"),
+					fill_horizontal = 1,
+				}),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = LOC("$$$/LrGeniusAI/LocalModel/Installed=Installed"),
+					width = share("setupLabelWidth"),
+				}),
+				f:static_text({
+					title = bind("llmInstalledText"),
+					fill_horizontal = 1,
+				}),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:popup_menu({
+					items = bind("llmDownloadChoices"),
+					value = bind("llmDownloadChoice"),
+					enabled = bind("llmSupported"),
+					width_in_chars = 34,
+				}),
+				f:push_button({
+					title = LOC("$$$/LrGeniusAI/LocalModel/Download=Download"),
+					enabled = bind({
+						key = "llmDownloadChoice",
+						transform = function(v)
+							return v ~= nil
+						end,
+					}),
+					action = function(button)
+						LocalModelCatalog.startDownload(propertyTable, "llm")
+					end,
+					width = share("setupButtonWidth"),
+				}),
+			}),
+			f:group_box({
+				fill_horizontal = 1,
+				title = LOC("$$$/LrGeniusAI/LocalModel/AdvancedTitle=Advanced"),
+				-- The group of photos in a request has to fit the context
+				-- window alongside the shared prompt prefix, so these two trade
+				-- against each other; the server reduces parallel sequences
+				-- rather than overrunning the context.
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/ContextSize=Context size (tokens)"),
+						width = share("setupLabelWidth"),
+					}),
+					f:edit_field({
+						value = bind("llmContextSize"),
+						enabled = bind("llmSupported"),
+						precision = 0,
+						min = 1024,
+						max = 131072,
+						width_in_chars = 8,
+					}),
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/Parallel=Photos in parallel"),
+					}),
+					f:edit_field({
+						value = bind("llmParallel"),
+						enabled = bind("llmSupported"),
+						precision = 0,
+						min = 1,
+						max = 16,
+						width_in_chars = 4,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = LOC("$$$/LrGeniusAI/LocalModel/GpuLayers=Layers on the GPU"),
+						width = share("setupLabelWidth"),
+					}),
+					f:edit_field({
+						value = bind("llmGpuLayers"),
+						enabled = bind("llmSupported"),
+						precision = 0,
+						min = 0,
+						max = 999,
+						width_in_chars = 8,
+					}),
+					f:static_text({
+						title = LOC(
+							"$$$/LrGeniusAI/LocalModel/GpuLayersHint=999 = all; anything that does not fit stays on the CPU"
+						),
+					}),
+				}),
+			}),
+		})
+	end
+
 	-- One collapsible block per section, in the order someone actually meets
 	-- them: is it working at all, which model does the analysis, then search,
 	-- then the knobs you only reach for once you want different behaviour, and
@@ -374,165 +548,15 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 			bind_to_object = propertyTable,
 			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionLocalAi=AI model (on this computer)"),
 			f:static_text({
-				title = LOC(
-					"$$$/LrGeniusAI/PluginInfo/LocalAiHint=The analysis runs on this computer by default, so no account is\nneeded. MLX is the faster option on Apple silicon, llama.cpp works\neverywhere. Download one model below and the plug-in is ready."
-				),
+				title = MAC_ENV
+						and LOC(
+							"$$$/LrGeniusAI/PluginInfo/LocalAiHintMac=The analysis runs on this computer by default, so no account is\nneeded. On Apple silicon it uses MLX, Apple's own machine learning\nstack. Download one model below and the plug-in is ready."
+						)
+					or LOC(
+						"$$$/LrGeniusAI/PluginInfo/LocalAiHintWin=The analysis runs on this computer by default, so no account is\nneeded. Download one model below and the plug-in is ready."
+					),
 			}),
-			-- MLX runs the same kind of local model as the group below, but
-			-- through Apple's Metal stack instead of llama.cpp. It is offered
-			-- separately rather than as a hidden implementation detail because
-			-- the two use different model files, so "which one is installed" is
-			-- a question the user has to be able to answer.
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/MlxModel/Status=Status"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("mlxStatusText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/MlxModel/Installed=Installed"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("mlxInstalledText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:popup_menu({
-						items = bind("mlxDownloadChoices"),
-						value = bind("mlxDownloadChoice"),
-						enabled = bind("mlxSupported"),
-						width_in_chars = 34,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/MlxModel/Download=Download"),
-						enabled = bind({
-							key = "mlxDownloadChoice",
-							transform = function(v)
-								return v ~= nil
-							end,
-						}),
-						action = function(button)
-							LocalModelCatalog.startDownload(propertyTable, "mlx")
-						end,
-						width = share("setupButtonWidth"),
-					}),
-				}),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/LocalModel/Title=Local AI Model — llama.cpp (all platforms)"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Status=Status"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("llmStatusText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Installed=Installed"),
-						width = share("setupLabelWidth"),
-					}),
-					f:static_text({
-						title = bind("llmInstalledText"),
-						fill_horizontal = 1,
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:popup_menu({
-						items = bind("llmDownloadChoices"),
-						value = bind("llmDownloadChoice"),
-						enabled = bind("llmSupported"),
-						width_in_chars = 34,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/LocalModel/Download=Download"),
-						enabled = bind({
-							key = "llmDownloadChoice",
-							transform = function(v)
-								return v ~= nil
-							end,
-						}),
-						action = function(button)
-							LocalModelCatalog.startDownload(propertyTable, "llm")
-						end,
-						width = share("setupButtonWidth"),
-					}),
-				}),
-				f:group_box({
-					fill_horizontal = 1,
-					title = LOC("$$$/LrGeniusAI/LocalModel/AdvancedTitle=Advanced"),
-					-- The group of photos in a request has to fit the context
-					-- window alongside the shared prompt prefix, so these two trade
-					-- against each other; the server reduces parallel sequences
-					-- rather than overrunning the context.
-					f:row({
-						fill_horizontal = 1,
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/LocalModel/ContextSize=Context size (tokens)"),
-							width = share("setupLabelWidth"),
-						}),
-						f:edit_field({
-							value = bind("llmContextSize"),
-							enabled = bind("llmSupported"),
-							precision = 0,
-							min = 1024,
-							max = 131072,
-							width_in_chars = 8,
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/LocalModel/Parallel=Photos in parallel"),
-						}),
-						f:edit_field({
-							value = bind("llmParallel"),
-							enabled = bind("llmSupported"),
-							precision = 0,
-							min = 1,
-							max = 16,
-							width_in_chars = 4,
-						}),
-					}),
-					f:row({
-						fill_horizontal = 1,
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/LocalModel/GpuLayers=Layers on the GPU"),
-							width = share("setupLabelWidth"),
-						}),
-						f:edit_field({
-							value = bind("llmGpuLayers"),
-							enabled = bind("llmSupported"),
-							precision = 0,
-							min = 0,
-							max = 999,
-							width_in_chars = 8,
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/LocalModel/GpuLayersHint=999 = all; anything that does not fit stays on the CPU"
-							),
-						}),
-					}),
-				}),
-			}),
+			localEngineBox,
 		},
 		{
 			bind_to_object = propertyTable,
