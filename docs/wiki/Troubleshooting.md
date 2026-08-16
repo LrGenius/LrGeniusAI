@@ -69,13 +69,15 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 ### 6. Built-In Local Model (llama.cpp / MLX) Not Available
 
 The backend can run models itself, in two independent engines: `llamacpp`
-(GGUF; macOS/Windows/Linux) and `mlx` (Apple silicon only). See
+(GGUF) and `mlx`. Releases ship exactly one per platform — MLX on macOS,
+llama.cpp on Windows — so you only ever see the section that applies. See
 [Local AI Models](Help-Local-AI-Models) for the full guide.
 
 - **Symptom:** The **Local AI Model** section says *"This backend does not
-  support MLX"* or *"MLX runs only on Apple silicon Macs"*.
-  - **Resolution:** Expected on Windows, Linux, and Intel Macs. Use the
-    llama.cpp section instead — it offers the same model families as GGUF.
+  support MLX"*.
+  - **Resolution:** Expected on Windows, where the section is llama.cpp instead
+    and offers the same model families as GGUF. On macOS it means a build
+    without the MLX helper — reinstall with the official `.pkg`.
 - **Symptom:** MLX is unavailable on an Apple silicon Mac, with a reason naming
   a missing helper.
   - **Resolution:** The `lrgenius-mlx` helper ships next to the server binary in

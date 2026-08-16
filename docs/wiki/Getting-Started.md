@@ -39,9 +39,12 @@ Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager
 The backend can run vision models itself. In the same settings dialog, scroll to
 the **Local AI Model** sections:
 
-- **Local AI Model — MLX (Apple silicon)** on an Apple silicon Mac.
+- **Local AI Model — MLX** on macOS.
 - **Local AI Model (no external app)** — the built-in llama.cpp engine — on
-  Windows, Linux, or an Intel Mac.
+  Windows.
+
+Each platform ships exactly one of them, so you will only ever see the section
+that applies to your machine.
 
 Pick a model (start with **Gemma 4 E4B**), click **Download**, and wait for the
 **Installed** line to list it. It then appears in the **AI Model** dropdown of
@@ -57,15 +60,16 @@ Before semantic search or AI-assisted culling can work, the backend needs to pro
 
 Once indexing finishes, try out **Advanced Search**, the **People** workflows, use **Retrieve Metadata** to inject the generated tags straight back into your catalog, or run **AI Edit Photos** *(beta)* to get AI-suggested develop settings for each photo.
 
-## 4. Run One-Time ID Migration (Upgrade Path)
+## 4. Upgrading From a UUID-Era Database
 
-*Note: This step is only relevant if you are upgrading from an older version of LrGeniusAI.*
+*Only relevant if you are upgrading from a version of LrGeniusAI that predates
+file-based `photo_id` values.*
 
-If your previous database relied on Lightroom catalog UUIDs, you must migrate to the new `photo_id` system:
-1. Open `File -> Plug-in Manager`.
-2. Open LrGeniusAI settings.
-3. In the `Backend Server` section, click **Migrate existing DB IDs to photo_id**.
-4. Wait for the progress dialog to complete. This ensures you do not lose any previously generated metadata or semantic search indexes.
+Those versions keyed everything on Lightroom catalog UUIDs, which the backend
+cannot match against your photos any more. There is no migration — the one the
+plugin used to offer never worked and has been removed. Run
+**Analyze & Index Photos** over the catalog again; photos already indexed under
+the current IDs are skipped.
 
 ## 5. Run Culling on Similar Photos
 
