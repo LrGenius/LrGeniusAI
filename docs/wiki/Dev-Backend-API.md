@@ -338,6 +338,35 @@ Returns the current progress of an ongoing CLIP model download.
 
 ---
 
+## Species Model Management (BioCLIP 2)
+
+BioCLIP 2 identifies animals, plants and fungi down to species. It ships as
+three assets — the ViT-L/14 image tower as fp16 ONNX, a pruned Tree-of-Life
+zero-shot head (`bioclip2_taxa.bin`) and its interned labels
+(`bioclip2_taxa.json`) — from their **own** release tag
+(`bioclip-assets-v1`), independent of the SigLIP2 `model-assets-v1` tag.
+Roughly 750 MB in total.
+
+The head is pruned from upstream's 867,455 taxa; see
+`server-rs/scripts/bioclip_taxa_filter.toml` for the rules and for what
+pruning costs at the species rank.
+
+### `GET /bioclip/status`
+Returns whether the BioCLIP assets are on disk (`bioclip: "ready" | "not_ready"`),
+plus `model` — the head identifier, e.g. `bioclip-2/taxa-v1`, once the model
+has been loaded at least once. Deliberately distinct from `/health`'s
+`species_model`, which reports whether it is currently resident in memory.
+
+### `POST /bioclip/download/start`
+Triggers a background download of the BioCLIP assets.
+
+### `GET /bioclip/download/status`
+Returns the current progress of an ongoing BioCLIP download. Same shape as the
+CLIP and LLM download status; all three share one progress map keyed by asset
+group, so a species download and a GGUF download can be in flight at once.
+
+---
+
 ## Local LLM Management (llama.cpp & MLX)
 
 The backend hosts two local inference engines: `llamacpp` (in-process llama.cpp, GGUF models, present only in builds compiled with the `llamacpp` cargo feature) and `mlx` (an `lrgenius-mlx` helper process, Apple silicon only, no cargo feature). Both are exposed through the same routes — the MLX half is nested under an `mlx` key so that older plugins reading the top-level fields still see the llama.cpp engine.

@@ -19,11 +19,18 @@ local function showAnalyzeAndIndexDialog(ctx)
 
 	-- Check if CLIP model is ready on server
 	props.clipReady = SearchIndexAPI.isClipReady() and prefs.useClip
+	-- Same "files on disk" question for BioCLIP. No `useX` preference gate:
+	-- unlike CLIP, having the species model downloaded *is* the opt-in.
+	props.bioclipReady = SearchIndexAPI.isBioclipReady()
 
 	-- Tasks to perform
 	props.enableEmbeddings = (prefs.enableEmbeddings ~= false) and props.clipReady -- default true
 	props.enableMetadata = prefs.enableMetadata ~= false -- default true
 	props.enableFaces = prefs.enableFaces or false
+	props.enableSpecies = (prefs.enableSpecies or false) and props.bioclipReady
+	props.speciesPrefilter = prefs.speciesPrefilter ~= false -- default true
+	props.speciesKeywords = prefs.speciesKeywords or Defaults.speciesKeywords
+	props.speciesMinConfidence = prefs.speciesMinConfidence or Defaults.speciesMinConfidence
 	-- Vertex AI is disabled in the GUI; the backend code is untouched.
 	props.enableVertexAI = false
 	-- props.enableVertexAI = prefs.enableVertexAI or false
@@ -264,6 +271,43 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:checkbox({
 							value = bind("enableFaces"),
 							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Enable face detection"),
+						}),
+					}),
+					f:row({
+						f:checkbox({
+							value = bind("enableSpecies"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableSpecies=Identify animal and plant species"
+							),
+							enabled = props.bioclipReady,
+						}),
+						f:static_text({
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/BioclipNotReady=(Species model is missing. Please download it in the Plugin Manager)"
+							),
+							text_color = LrColor(1, 0, 0),
+							visible = not props.bioclipReady,
+							size = "small",
+						}),
+					}),
+					f:row({
+						f:spacer({ width = 20 }),
+						f:checkbox({
+							value = bind("speciesPrefilter"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesPrefilter=Only where an animal or plant is detected (much faster)"
+							),
+							enabled = bind("enableSpecies"),
+						}),
+					}),
+					f:row({
+						f:spacer({ width = 20 }),
+						f:checkbox({
+							value = bind("speciesKeywords"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesKeywords=Also write the taxonomy as keywords"
+							),
+							enabled = bind("enableSpecies"),
 						}),
 					}),
 					-- Vertex AI is disabled in the GUI; the backend code is untouched.
@@ -585,6 +629,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.enableEmbeddings = props.enableEmbeddings
 		prefs.enableMetadata = props.enableMetadata
 		prefs.enableFaces = props.enableFaces
+		prefs.enableSpecies = props.enableSpecies
+		prefs.speciesPrefilter = props.speciesPrefilter
+		prefs.speciesKeywords = props.speciesKeywords
 		-- Vertex AI is disabled in the GUI; the backend code is untouched.
 		-- prefs.enableVertexAI = props.enableVertexAI
 		prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
@@ -762,6 +809,9 @@ LrTasks.startAsyncTask(function()
 		if props.enableFaces then
 			table.insert(tasks, "faces")
 		end
+		if props.enableSpecies then
+			table.insert(tasks, "species")
+		end
 		if props.enableVertexAI then
 			table.insert(tasks, "vertexai")
 		end
@@ -800,6 +850,8 @@ LrTasks.startAsyncTask(function()
 			enableMetadata = props.enableMetadata,
 			enableFaces = props.enableFaces,
 			enableVertexAI = props.enableVertexAI,
+			species_prefilter = props.speciesPrefilter,
+			species_min_confidence = props.speciesMinConfidence,
 			replace_ss = props.replaceSS,
 			regenerate_metadata = props.regenerateMetadata,
 			prompt = props.selectedPrompt,
@@ -963,6 +1015,12 @@ LrTasks.startAsyncTask(function()
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
 				local response = SearchIndexAPI.getPhotoData(photoId)
+				if response and response.species then
+					MetadataManager.applySpecies(photo, response.species, {
+						applySpeciesKeywords = props.speciesKeywords,
+						keywordSessionCache = keywordSessionCache,
+					})
+				end
 				if response and response.metadata then
 					MetadataManager.applyMetadata(photo, response, nil, {
 						applyKeywords = props.generateKeywords,
@@ -984,6 +1042,37 @@ LrTasks.startAsyncTask(function()
 		status, processed, failed, processedPhotos, combinedError, combinedWarnings =
 			SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
 
+		-- Species results have their own save pass for the one case the metadata
+		-- paths cannot cover: a run with "Identify species" ticked but metadata
+		-- off would index the photos and then write nothing to the catalog,
+		-- because every other save path here is gated on `enableMetadata`. When
+		-- metadata *is* on, species rides along on that path's /get instead
+		-- (inline callback above, or the two-phase loop below).
+		if
+			status ~= "allfailed"
+			and props.enableSpecies
+			and props.saveDataToCatalog
+			and not usedInlineApply
+			and not props.enableMetadata
+		then
+			log:trace("Saving species identifications for processed photos...")
+			local speciesCount = 0
+			for _, photo in ipairs(processedPhotos) do
+				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
+				if photoId then
+					local response = SearchIndexAPI.getPhotoData(photoId)
+					if response and response.species then
+						MetadataManager.applySpecies(photo, response.species, {
+							applySpeciesKeywords = props.speciesKeywords,
+							keywordSessionCache = keywordSessionCache,
+						})
+						speciesCount = speciesCount + 1
+					end
+				end
+			end
+			log:trace("Saved species data for " .. speciesCount .. " photo(s)")
+		end
+
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
 			log:trace("Saving metadata for processed photos...")
 			local savedCount = 0
@@ -996,6 +1085,17 @@ LrTasks.startAsyncTask(function()
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
 					local response = SearchIndexAPI.getPhotoData(photoId)
+
+					-- Applied here rather than in the species-only pass below so
+					-- both features share this loop's one /get per photo. Species
+					-- deliberately skips the validation dialog: a taxonomic
+					-- identification is not free text to review and edit.
+					if props.enableSpecies and response and response.species then
+						MetadataManager.applySpecies(photo, response.species, {
+							applySpeciesKeywords = props.speciesKeywords,
+							keywordSessionCache = keywordSessionCache,
+						})
+					end
 
 					log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
 					log:trace("Response: " .. (Util.dumpTable(response) or "nil"))

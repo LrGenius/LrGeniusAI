@@ -179,6 +179,7 @@ async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Unload request received via API");
     state.siglip.unload();
     state.face.unload();
+    state.bioclip.unload();
     // Store handles stay open (LanceDB keeps its own lazy IO, nothing to
     // proactively drop).
     Json(json!({"status": "Resources unloaded successfully."}))
@@ -242,6 +243,7 @@ async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
     let (face_status, face_error) = state.face.status();
+    let (species_status, species_error) = state.bioclip.status();
     // Deliberately no LLM provider status here: this GET carries no API keys
     // or base URLs to probe (unlike POST /models, which accepts them), so
     // there is nothing to report. The plugin checks provider availability
@@ -252,6 +254,8 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "clip_error": clip_error,
         "face_model": face_status,
         "face_error": face_error,
+        "species_model": species_status,
+        "species_error": species_error,
     }))
 }
 

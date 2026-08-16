@@ -249,6 +249,46 @@ return {
 			browsable = true,
 		},
 		{
+			id = "speciesCommonName",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesCommonName=Species (common name)"),
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
+			id = "speciesScientificName",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesScientificName=Species (scientific name)"),
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
+			id = "speciesRank",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesRank=Species rank"),
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
+			id = "speciesConfidence",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesConfidence=Species confidence"),
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
+			id = "speciesTaxonomy",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesTaxonomy=Species taxonomy"),
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
 			id = "globalPhotoId",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoId=Global Photo ID"),
 			dataType = "string",
@@ -285,7 +325,7 @@ return {
 		},
 	},
 
-	schemaVersion = 31,
+	schemaVersion = 32,
 	updateFromEarlierSchemaVersion = function(catalog, previousSchemaVersion, progressScope)
 		catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then

@@ -157,6 +157,43 @@ export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/tokenizer.json
 Without these set, `lrg-ml` falls back to `~/.cache/lrgenius/models/{siglip2_image,siglip2_text}.onnx`
 and `~/.cache/lrgenius/models/tokenizer.json`.
 
+### BioCLIP 2 (species identification)
+
+Two artifacts, because BioCLIP is a CLIP rather than a classifier: the ViT-L/14
+image tower, and a precomputed Tree-of-Life zero-shot head that the taxonomy
+actually lives in. Upstream's head is 2.66 GB fp32 over 867,455 taxa — larger
+than the model — so the export prunes it per
+`scripts/bioclip_taxa_filter.toml`, which documents both the rules and what
+pruning costs at the species rank.
+
+```bash
+uv run --project scripts --with onnxscript \
+    python scripts/export_bioclip2_fp16.py --output-dir /path/to/models/bioclip2
+```
+
+The script prints the kept taxon count and every asset's size; the target for
+the whole set is <= 800 MB. Verify without re-exporting, and optionally compare
+the pruned head's top-1 against the *full* upstream head on real photos — the
+measurement that justifies the pruning rules:
+
+```bash
+uv run --project scripts python scripts/export_bioclip2_fp16.py \
+    --verify-only --output-dir /path/to/models/bioclip2 \
+    --fixtures /path/to/some/wildlife/photos
+```
+
+Then point the server at the files:
+
+```bash
+export LRG_BIOCLIP_IMAGE_ONNX=/path/to/models/bioclip2/bioclip2_image_fp16.onnx
+export LRG_BIOCLIP_TAXA_BIN=/path/to/models/bioclip2/bioclip2_taxa.bin
+export LRG_BIOCLIP_TAXA_JSON=/path/to/models/bioclip2/bioclip2_taxa.json
+```
+
+Without these, `lrg-ml` falls back to
+`~/.cache/lrgenius/models/bioclip2_{image.onnx,taxa.bin,taxa.json}`, which is
+where `POST /bioclip/download/start` puts them.
+
 ### InsightFace (face detection/recognition)
 
 No export step needed — `buffalo_l`'s `det_10g.onnx` and `w600k_r50.onnx`

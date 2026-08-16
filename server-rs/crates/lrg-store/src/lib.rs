@@ -33,12 +33,21 @@ pub const IMAGE_TABLE: &str = "image_embeddings";
 pub const FACE_TABLE: &str = "face_embeddings";
 pub const VERTEX_TABLE: &str = "image_embeddings_vertex";
 pub const TRAINING_TABLE: &str = "edit_training";
+/// BioCLIP 2 image embeddings, one row per photo keyed by `photo_id`.
+///
+/// Stored separately from the taxonomy *result* (which lives in the
+/// IMAGE_TABLE metadata blob) so that swapping the pruned zero-shot head —
+/// widening the taxa whitelist, moving to a newer checkpoint's head — can
+/// re-classify the whole catalog from these vectors without re-running the
+/// ViT-L/14 over every photo again.
+pub const SPECIES_TABLE: &str = "species_embeddings";
 
-pub const TABLES: [(&str, i32); 4] = [
+pub const TABLES: [(&str, i32); 5] = [
     (IMAGE_TABLE, 1152),
     (FACE_TABLE, 512),
     (VERTEX_TABLE, 1408),
     (TRAINING_TABLE, 1152),
+    (SPECIES_TABLE, 768),
 ];
 
 /// Chunk size for `id IN (...)` predicates, mirroring the Python

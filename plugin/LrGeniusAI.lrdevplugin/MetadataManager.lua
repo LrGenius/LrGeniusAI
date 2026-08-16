@@ -1268,3 +1268,152 @@ function MetadataManager.getPhotoKeywordHierarchy(photo)
 	-- log:trace("Photo keyword hierarchy: " .. Util.dumpTable(hierarchy))
 	return hierarchy
 end
+
+---
+-- Turns a backend species block into the ordered chain of keyword names to
+-- create, coarsest first.
+--
+-- Split out from `MetadataManager.applySpecies` because it is the only part
+-- with real logic and the only part testable without a live catalog (see
+-- `plugin/spec/metadata_manager_spec.lua`).
+--
+-- The backend reports the deepest rank it is confident about, so the chain is
+-- naturally short for an uncertain call ("Animalia > Arthropoda > Insecta")
+-- and full-depth for a confident one. The leaf carries the human-readable name
+-- when there is one, with the scientific name as an LR synonym — that way the
+-- keyword list reads "Great Tit" rather than "major", and a search for
+-- "Parus major" still finds it.
+--
+-- @param species table|nil Backend block: taxonomy, scientific_name, common_name, rank.
+-- @return table|nil Array of `{ name = <string>, synonyms = <table> }`, or nil when
+--         there is nothing identified.
+function MetadataManager.speciesKeywordChain(species)
+	if type(species) ~= "table" then
+		return nil
+	end
+	local rank = species.rank
+	if rank == nil or rank == "" or rank == "none" then
+		return nil
+	end
+	local taxonomy = species.taxonomy
+	if type(taxonomy) ~= "string" or taxonomy == "" then
+		return nil
+	end
+
+	local parts = {}
+	for part in string.gmatch(taxonomy, "([^>]+)") do
+		local trimmed = Util.trim(part)
+		if trimmed ~= "" then
+			table.insert(parts, trimmed)
+		end
+	end
+	if #parts == 0 then
+		return nil
+	end
+
+	local chain = {}
+	for i, part in ipairs(parts) do
+		local isLeaf = i == #parts
+		local name = part
+		local synonyms = {}
+		if isLeaf then
+			-- At species rank the taxonomy's last element is the bare epithet
+			-- ("major"), which is meaningless on its own — the binomial and the
+			-- common name both live in their own fields.
+			local scientific = species.scientific_name
+			if type(scientific) == "string" and scientific ~= "" then
+				name = scientific
+			end
+			local common = species.common_name
+			if type(common) == "string" and common ~= "" then
+				table.insert(synonyms, name)
+				name = common
+			end
+		end
+		table.insert(chain, { name = name, synonyms = synonyms })
+	end
+	return chain
+end
+
+---
+-- Writes a species identification to the catalog.
+--
+-- Two independent outputs, because they answer different needs:
+--   * the plugin metadata fields, always — searchable, filterable, and
+--     contained inside the catalog;
+--   * a keyword branch under `Defaults.defaultSpeciesKeyword`, only when
+--     `options.applySpeciesKeywords` — portable, exports with the file.
+--
+-- The keyword branch deliberately does not go through
+-- `addKeywordRecursively`: that path runs every leaf through the alias index
+-- so LLM output can be de-cluttered onto existing keywords. Taxonomic names
+-- are canonical and must not be re-routed onto whatever they happen to
+-- resemble.
+--
+-- @param photo LrPhoto
+-- @param species table|nil Backend block from `/get`'s metadata.
+-- @param options table|nil `applySpeciesKeywords`, `keywordSessionCache`.
+function MetadataManager.applySpecies(photo, species, options)
+	if type(species) ~= "table" then
+		return
+	end
+	options = options or {}
+	local catalog = LrApplication.activeCatalog()
+
+	-- Written unconditionally, empty values included: a re-run that downgrades
+	-- a confident species to "none" has to clear the old answer, not leave an
+	-- identification the backend no longer stands behind.
+	catalog:withPrivateWriteAccessDo(function()
+		photo:setPropertyForPlugin(_PLUGIN, "speciesRank", tostring(species.rank or "none"))
+		photo:setPropertyForPlugin(_PLUGIN, "speciesTaxonomy", tostring(species.taxonomy or ""))
+		photo:setPropertyForPlugin(_PLUGIN, "speciesScientificName", tostring(species.scientific_name or ""))
+		photo:setPropertyForPlugin(_PLUGIN, "speciesCommonName", tostring(species.common_name or ""))
+		-- Stored as a string like every other numeric AI field (see the cull*
+		-- fields) because the metadata schema declares them all as strings.
+		local confidence = tonumber(species.confidence)
+		photo:setPropertyForPlugin(_PLUGIN, "speciesConfidence", confidence and string.format("%.2f", confidence) or "")
+	end, Defaults.catalogWriteAccessOptions)
+
+	if not options.applySpeciesKeywords then
+		return
+	end
+	local chain = MetadataManager.speciesKeywordChain(species)
+	if not chain then
+		return
+	end
+
+	local sessionCache = options.keywordSessionCache
+	catalog:withWriteAccessDo(LOC("$$$/LrGeniusAI/Species/SaveKeywords=Save AI identified species"), function()
+		local parent = createKeywordSafely(catalog, Defaults.defaultSpeciesKeyword, {}, false, nil, sessionCache)
+		if not parent then
+			log:error("Could not create the species root keyword; skipping the taxonomy branch")
+			return
+		end
+		for i, entry in ipairs(chain) do
+			local isLeaf = i == #chain
+			-- Only the leaf is exported. A JPEG tagged "Animalia,
+			-- Chordata, Aves, Great Tit" in IPTC would be noise in every
+			-- downstream tool.
+			local keyword = createKeywordSafely(catalog, entry.name, entry.synonyms, isLeaf, parent, sessionCache)
+			if not keyword then
+				log:warn("Could not create species keyword '" .. tostring(entry.name) .. "'")
+				return
+			end
+			-- createKeyword drops its synonyms argument when returnExisting
+			-- matches, so a rank keyword created by an earlier run without
+			-- the binomial would never gain it.
+			if #entry.synonyms > 0 then
+				mergeKeywordSynonyms(keyword, entry.synonyms)
+			end
+			if isLeaf then
+				local okAdd, errAdd = LrTasks.pcall(function()
+					photo:addKeyword(keyword)
+				end)
+				if not okAdd then
+					log:error("Failed to add species keyword to photo: " .. tostring(errAdd))
+				end
+			end
+			parent = keyword
+		end
+	end, Defaults.catalogWriteAccessOptions)
+end

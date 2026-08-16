@@ -14,6 +14,18 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 			end
 		end)
 	end
+
+	-- No `useBioclip` preference to gate on: for species recognition, having
+	-- the model downloaded *is* the opt-in, so the only state worth tracking is
+	-- whether the files are there.
+	propertyTable.bioclipReady = false
+	LrTasks.startAsyncTask(function(context)
+		propertyTable.bioclipReady = SearchIndexAPI.isBioclipReady()
+		while propertyTable.keepChecksRunning do
+			LrTasks.sleep(5)
+			propertyTable.bioclipReady = SearchIndexAPI.isBioclipReady()
+		end
+	end)
 	propertyTable.logging = prefs.logging
 	propertyTable.geminiApiKey = prefs.geminiApiKey
 	propertyTable.chatgptApiKey = prefs.chatgptApiKey
@@ -583,6 +595,35 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 							end)
 						end,
 						enabled = bind("useClip"),
+					}),
+				}),
+			}),
+		},
+		{
+			bind_to_object = propertyTable,
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionSpecies=Species recognition"),
+			f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/PluginInfo/SpeciesHint=Identifies animals, plants and fungi down to the species,\nusing BioCLIP 2. Runs entirely on this computer.\nThe model is a one-time download of roughly 750 MB."
+				),
+			}),
+			f:group_box({
+				width = groupBoxWidth,
+				title = LOC("$$$/LrGeniusAI/PluginInfo/SpeciesModelTitle=Species model"),
+				f:row({
+					fill_horizontal = 1,
+					Util.statusIndicator(
+						f,
+						"bioclipReady",
+						LOC("$$$/LrGeniusAI/PluginInfo/BioclipReady=Species model is ready")
+					),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
+						action = function(button)
+							LrTasks.startAsyncTask(function()
+								SearchIndexAPI.startBioclipDownload()
+							end)
+						end,
 					}),
 				}),
 			}),
