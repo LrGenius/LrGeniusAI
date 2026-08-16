@@ -690,3 +690,92 @@ async fn finish_edit(
     payload["output_tokens"] = json!(response.output_tokens);
     Json(payload).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exactly the multipart field names `SearchIndexAPI.generateEditRecipePhoto`
+    /// and `SearchIndexAPI.styleEdit` put on the wire. Both plugin functions feed
+    /// this same parser (`style_edit.rs` calls it too), so this is the one place
+    /// the plugin/backend field-name contract can be pinned.
+    fn plugin_fields() -> HashMap<String, String> {
+        [
+            ("style_strength", "0.8"),
+            ("composition_mode", "aggressive"),
+            ("adjust_white_balance", "false"),
+            ("adjust_basic_tone", "false"),
+            ("adjust_presence", "false"),
+            ("adjust_color_mix", "false"),
+            ("do_color_grading", "false"),
+            ("use_tone_curve", "false"),
+            ("use_point_curve", "false"),
+            ("adjust_detail", "false"),
+            ("adjust_effects", "false"),
+            ("adjust_lens_corrections", "false"),
+            ("allow_auto_crop", "false"),
+            ("include_masks", "false"),
+            ("api_key", "sk-test"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn creative_controls_from_the_plugin_reach_the_options() {
+        // Regression: the plugin assembled all of these and sent only
+        // `include_masks`, so every checkbox in the Creative Controls group and the
+        // style-strength slider silently did nothing.
+        let opts = parse_edit_options_form(&plugin_fields());
+
+        assert!(!opts.adjust_white_balance);
+        assert!(!opts.adjust_basic_tone);
+        assert!(!opts.adjust_presence);
+        assert!(!opts.adjust_color_mix);
+        assert!(!opts.do_color_grading);
+        assert!(!opts.use_tone_curve);
+        assert!(!opts.use_point_curve);
+        assert!(!opts.adjust_detail);
+        assert!(!opts.adjust_effects);
+        assert!(!opts.adjust_lens_corrections);
+        assert!(!opts.allow_auto_crop);
+        assert!(!opts.include_masks);
+        assert_eq!(opts.style_strength, 0.8);
+        assert_eq!(opts.composition_mode, "aggressive");
+    }
+
+    #[test]
+    fn api_key_survives_the_style_edit_fallback_path() {
+        // The style-engine fallback used to omit `api_key`, and there is no
+        // environment-variable fallback further down, so the first run of a new
+        // user reached the provider with an empty bearer token.
+        let opts = parse_edit_options_form(&plugin_fields());
+        assert_eq!(opts.api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn omitted_toggles_default_to_on() {
+        // Why the plugin must send an explicit "false" rather than omitting the
+        // field: absent booleans are read as enabled.
+        let opts = parse_edit_options_form(&HashMap::new());
+
+        assert!(opts.adjust_white_balance);
+        assert!(opts.do_color_grading);
+        assert!(opts.allow_auto_crop);
+        assert!(opts.include_masks);
+        assert_eq!(opts.style_strength, 0.5);
+        assert_eq!(opts.composition_mode, "subtle");
+    }
+
+    #[test]
+    fn style_strength_is_clamped_and_composition_mode_validated() {
+        let mut fields = HashMap::new();
+        fields.insert("style_strength".to_string(), "9.5".to_string());
+        fields.insert("composition_mode".to_string(), "wild".to_string());
+        let opts = parse_edit_options_form(&fields);
+
+        assert_eq!(opts.style_strength, 1.0);
+        assert_eq!(opts.composition_mode, "subtle", "unknown mode falls back");
+    }
+}

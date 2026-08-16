@@ -926,6 +926,33 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 	table.insert(mimeChunks, { name = "include_masks", value = tostring(options.include_masks ~= false) })
+
+	-- The Creative Controls group and the style-strength slider. These were
+	-- assembled by the dialog and then never sent, so the backend applied its own
+	-- defaults (every control on, style strength 0.5) and the whole group box was a
+	-- no-op. The backend reads absent booleans as `true`, so an unchecked box has to
+	-- travel as an explicit "false" rather than simply being omitted.
+	local function addBoolOpt(name, value)
+		table.insert(mimeChunks, { name = name, value = tostring(value ~= false) })
+	end
+	addBoolOpt("adjust_white_balance", options.adjust_white_balance)
+	addBoolOpt("adjust_basic_tone", options.adjust_basic_tone)
+	addBoolOpt("adjust_presence", options.adjust_presence)
+	addBoolOpt("adjust_color_mix", options.adjust_color_mix)
+	addBoolOpt("do_color_grading", options.do_color_grading)
+	addBoolOpt("use_tone_curve", options.use_tone_curve)
+	addBoolOpt("use_point_curve", options.use_point_curve)
+	addBoolOpt("adjust_detail", options.adjust_detail)
+	addBoolOpt("adjust_effects", options.adjust_effects)
+	addBoolOpt("adjust_lens_corrections", options.adjust_lens_corrections)
+	addBoolOpt("allow_auto_crop", options.allow_auto_crop)
+	if options.style_strength ~= nil then
+		table.insert(mimeChunks, { name = "style_strength", value = tostring(options.style_strength) })
+	end
+	if options.composition_mode then
+		table.insert(mimeChunks, { name = "composition_mode", value = tostring(options.composition_mode) })
+	end
+
 	if options.user_context then
 		table.insert(mimeChunks, { name = "user_context", value = options.user_context })
 	end
@@ -4387,7 +4414,15 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addStr("aperture")
 	addStr("shutter_speed")
 
-	-- Standard edit options forwarded for LLM fallback compatibility
+	-- Standard edit options forwarded for LLM fallback compatibility.
+	--
+	-- The fallback fires exactly when the style engine cannot answer — which for a
+	-- new user with no training examples is the *first* run, since
+	-- `aiEditUseTrainingStyle` defaults on. It used to omit `api_key` entirely, and
+	-- there is no environment-variable fallback in `provider.rs`/`openai.rs`, so
+	-- that first run reached the provider with an empty bearer token and 401'd.
+	-- Everything `generateEditRecipePhoto` sends has to travel here too, or the
+	-- fallback silently produces a different edit than the direct path would.
 	local function addEditOpt(key, value)
 		if value ~= nil then
 			table.insert(mimeChunks, { name = key, value = tostring(value) })
@@ -4395,9 +4430,19 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	end
 	addEditOpt("provider", options.provider)
 	addEditOpt("model", options.model)
+	addEditOpt("api_key", options.api_key)
 	addEditOpt("language", options.language)
 	addEditOpt("temperature", options.temperature)
 	addEditOpt("max_tokens", options.max_tokens)
+	addEditOpt("prompt", options.prompt)
+	addEditOpt("edit_intent", options.edit_intent)
+	addEditOpt("user_context", options.user_context)
+	addEditOpt("style_strength", options.style_strength)
+	addEditOpt("composition_mode", options.composition_mode)
+	addEditOpt("date_time", options.date_time)
+	addEditOpt("folder_names", options.folder_names)
+	addEditOpt("submit_keywords", options.submit_keywords)
+	addEditOpt("submit_folder_names", options.submit_folder_names)
 	addEditOpt("include_masks", options.include_masks)
 	addEditOpt("adjust_white_balance", options.adjust_white_balance)
 	addEditOpt("adjust_basic_tone", options.adjust_basic_tone)
@@ -4405,9 +4450,21 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("adjust_color_mix", options.adjust_color_mix)
 	addEditOpt("do_color_grading", options.do_color_grading)
 	addEditOpt("use_tone_curve", options.use_tone_curve)
+	addEditOpt("use_point_curve", options.use_point_curve)
 	addEditOpt("adjust_detail", options.adjust_detail)
 	addEditOpt("adjust_effects", options.adjust_effects)
+	addEditOpt("adjust_lens_corrections", options.adjust_lens_corrections)
 	addEditOpt("allow_auto_crop", options.allow_auto_crop)
+	addEditOpt("ollama_base_url", options.ollama_base_url or (prefs and prefs.ollamaBaseUrl))
+	addEditOpt("lmstudio_base_url", options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl))
+
+	local styleCatalogId = getCatalogId()
+	if styleCatalogId then
+		table.insert(mimeChunks, { name = "catalog_id", value = styleCatalogId })
+	end
+	if options.existing_keywords then
+		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
+	end
 
 	if filepath and LrFileUtils.exists(filepath) then
 		local filename = LrPathUtils.leafName(filepath)

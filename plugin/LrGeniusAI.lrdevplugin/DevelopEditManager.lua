@@ -73,48 +73,25 @@ local HSL_LABELS = {
 	magenta = "Magenta",
 }
 
-local ADDITIVE_GLOBAL_KEYS = {
-	Exposure2012 = true,
-	Contrast2012 = true,
-	Highlights2012 = true,
-	Shadows2012 = true,
-	Whites2012 = true,
-	Blacks2012 = true,
-	Temp = true,
-	Tint = true,
-	Texture = true,
-	Clarity2012 = true,
-	Dehaze = true,
-	Vibrance = true,
-	Saturation = true,
-	Sharpness = true,
-	SharpenRadius = true,
-	SharpenDetail = true,
-	SharpenEdgeMasking = true,
-	LuminanceSmoothing = true,
-	LuminanceNoiseReductionDetail = true,
-	LuminanceNoiseReductionContrast = true,
-	ColorNoiseReduction = true,
-	ColorNoiseReductionDetail = true,
-	ColorNoiseReductionSmoothness = true,
-	PostCropVignetteAmount = true,
-	PostCropVignetteMidpoint = true,
-	PostCropVignetteRoundness = true,
-	PostCropVignetteFeather = true,
-	PostCropVignetteHighlightContrast = true,
-	GrainAmount = true,
-	GrainSize = true,
-	GrainFrequency = true,
-	SplitToningShadowHue = true,
-	SplitToningShadowSaturation = true,
-	SplitToningHighlightHue = true,
-	SplitToningHighlightSaturation = true,
-	SplitToningBalance = true,
-	ParametricHighlights = true,
-	ParametricLights = true,
-	ParametricDarks = true,
-	ParametricShadows = true,
-}
+-- Global recipe values are ABSOLUTE Lightroom slider values, never deltas.
+--
+-- Both producers agree on this: the LLM schema declares Lightroom's own absolute
+-- ranges (`temperature` 2000..50000 Kelvin, `sharpening` 0..150), and the style
+-- engine blends `canonical_settings`, which are read straight off the user's real
+-- develop settings. Decisive is what the backend *measures*: the RAW decode, not
+-- the photo's current edited state. Adding a recipe value on top of an existing
+-- edit therefore double-counts that edit.
+--
+-- This used to be an additive merge for most keys, which was catastrophic for
+-- `Temp` (as-shot 5500 K + a recommended 5600 K produced 11100 K) and silently
+-- wrong wherever Lightroom's default is non-zero: `ColorNoiseReduction` (25),
+-- `SharpenDetail` (25), `GrainSize`, the vignette midpoints, and the wrapping
+-- `SplitToning*Hue` angles.
+--
+-- Note the contrast with mask adjustments: `MASK_ADJUSTMENT_RANGES` in
+-- `edit_recipe.rs` gives local temperature/tint as -100..100, because Lightroom's
+-- *local* white balance genuinely is relative. That path is handled separately in
+-- `applyMaskEdits` and is unaffected by this.
 
 local DEVELOP_VALUE_BOUNDS = {
 	Exposure2012 = { min = -5, max = 5 },
@@ -171,9 +148,6 @@ for _, label in pairs(HSL_LABELS) do
 	DEVELOP_VALUE_BOUNDS["HueAdjustment" .. label] = { min = -100, max = 100 }
 	DEVELOP_VALUE_BOUNDS["SaturationAdjustment" .. label] = { min = -100, max = 100 }
 	DEVELOP_VALUE_BOUNDS["LuminanceAdjustment" .. label] = { min = -100, max = 100 }
-	ADDITIVE_GLOBAL_KEYS["HueAdjustment" .. label] = true
-	ADDITIVE_GLOBAL_KEYS["SaturationAdjustment" .. label] = true
-	ADDITIVE_GLOBAL_KEYS["LuminanceAdjustment" .. label] = true
 end
 
 local function appendWarning(warnings, text)
@@ -509,16 +483,11 @@ local function mergeGlobalDevelopSettings(currentSettings, aiSettings)
 		end
 	end
 
+	-- Recipe values are absolute (see the note next to DEVELOP_VALUE_BOUNDS), so a
+	-- key the recipe carries replaces the current value rather than adding to it.
+	-- Keys the recipe does not mention keep whatever the photo already had.
 	for key, value in pairs(aiSettings or {}) do
-		if ADDITIVE_GLOBAL_KEYS[key] and type(value) == "number" then
-			local baseValue = currentSettings and currentSettings[key]
-			if type(baseValue) ~= "number" then
-				baseValue = 0
-			end
-			merged[key] = normalizeDevelopValue(key, baseValue + value)
-		else
-			merged[key] = normalizeDevelopValue(key, value)
-		end
+		merged[key] = normalizeDevelopValue(key, value)
 	end
 	return merged
 end
@@ -555,6 +524,7 @@ local function formatGlobalSettings(globalSettings)
 end
 
 function DevelopEditManager.formatRecipeDetails(response)
+	local recipe = getRecipeFromResponse(response)
 	if not recipe then
 		return LOC("$$$/LrGeniusAI/DevelopEdit/NoRecipe=No edit recipe available.")
 	end
@@ -704,9 +674,15 @@ local function buildDevelopSettings(recipe, warnings)
 		end
 	end
 
-	-- Respect the RAW profile (Adobe Adaptive, etc.) to ensure baseline parity
+	-- Respect the RAW profile (Adobe Color, Camera Neutral, ...) so the baseline the
+	-- recipe was solved against is the one Lightroom actually renders.
+	--
+	-- This wrote `CameraConfig` for a long time, which is not a Lightroom develop
+	-- key at all — the SDK calls it `CameraProfile`. The branch was doubly dead
+	-- because `profile` is not in the recipe schema either, so nothing reached it.
+	-- The key is corrected here so the branch works once the schema carries it.
 	if globalSettings.profile then
-		developSettings["CameraConfig"] = globalSettings.profile
+		developSettings["CameraProfile"] = globalSettings.profile
 	end
 
 	mergeSettings(developSettings, buildHslDevelopSettings(globalSettings.hsl))
@@ -717,6 +693,16 @@ local function buildDevelopSettings(recipe, warnings)
 
 	return developSettings
 end
+
+-- Internal seams exposed for the headless unit tests in `plugin/spec`. These are
+-- the functions that turn a recipe into Lightroom develop settings, which is
+-- where value-semantics bugs surface; they are not part of the module's contract
+-- for callers running inside Lightroom.
+DevelopEditManager.internal = {
+	normalizeDevelopValue = normalizeDevelopValue,
+	mergeGlobalDevelopSettings = mergeGlobalDevelopSettings,
+	buildDevelopSettings = buildDevelopSettings,
+}
 
 local function focusPhotoInDevelop(photo, warnings)
 	local catalog = LrApplication.activeCatalog()
