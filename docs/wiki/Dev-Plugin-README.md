@@ -16,6 +16,8 @@ LrGeniusAI adds a backend-powered AI layer to Lightroom Classic. It helps you:
 - Run semantic search on your catalog
 - Detect, cluster, and browse people/faces
 - Run image culling on selections or the current view and create result collections for fast review
+- Generate and apply Develop edits, optionally trained on your own edits
+- Deduplicate and declutter the keywords already in your catalog
 - Re-import generated metadata back into Lightroom
 
 The plugin is designed to work with local and cloud providers, while keeping Lightroom as your main workspace.
@@ -43,6 +45,25 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Rename persons
 - Jump from a person directly to a Lightroom collection
 
+### AI Develop Edits
+
+- Generate a Develop recipe per photo and apply it non-destructively
+- Choose an overall look, or let the backend match the photo against edits you
+  saved yourself
+- Recipes are constrained to what the frame can take: the backend measures the
+  image and caps contrast, clarity, shadow lift and whites accordingly, and
+  reports why
+
+### Style Training
+
+- Save your own Develop settings as labeled training examples
+- Used both as few-shot context for the LLM and by the LLM-free Style Engine
+
+### Keyword Dedup & Declutter
+
+- Cluster near-duplicate keywords in the catalog and merge them under a chosen
+  primary term
+
 ### Metadata Sync
 
 - Import existing Lightroom metadata to backend
@@ -60,6 +81,9 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   - `Alternates`
   - `Reject Candidates`
   - optional `Duplicates / Near Duplicates`
+- Detect exposure brackets, focus stacks and panoramas and route them to a
+  `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
+  off — every frame of such a set is part of one picture
 - Create a dedicated Lightroom collection set for each culling run and switch you directly to the picks collection for review
 
 ---
@@ -89,14 +113,14 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 The plugin/backend now use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
 The stable ID algorithm was updated again to avoid ID changes when metadata is written into files (for example DNG metadata updates).
 
-If you already have an indexed backend database from older versions, run this one-time migration:
+> **⚠️ The migration does not currently work.** The plugin still offers
+> **Migrate existing DB IDs to photo_id** (in `Plug-in Manager -> LrGeniusAI ->
+> Backend Server`, and as a dialog on upgrade), but the backing endpoint
+> `POST /db/migrate-photo-ids` was not carried over from the retired Python
+> backend, so the request fails. If you are coming from a UUID-era database,
+> re-index rather than migrate.
 
-1. Open `File -> Plug-in Manager`
-2. Select `LrGeniusAI`
-3. In the `Backend Server` section, click **Migrate existing DB IDs to photo_id**
-4. Wait for the `LrProgressScope` migration to finish
-
-Notes:
+How it was meant to work, for reference:
 
 - Migration is incremental and skips photos that are not indexed in backend.
 - Existing migrated entries are skipped automatically.
@@ -148,12 +172,12 @@ In the plugin settings dialog you can configure:
 - Backend server URL
 - Ollama and LM Studio base URLs
 - API keys (the Vertex AI project/location fields were removed)
-- **Local AI Model (no external app)** — browse, download and select GGUF vision
-  models run in-process by the backend's llama.cpp engine, plus the advanced
-  knobs (context size, photos in parallel, layers on the GPU)
-- **Local AI Model — MLX (Apple silicon)** — the same, for models run through
-  Apple's MLX stack; the section reports why it is unavailable on hosts that
-  cannot use it
+- **Local AI Model (no external app)** — browse, download and select vision
+  models the backend runs itself, plus the advanced knobs (context size, photos
+  in parallel, layers on the GPU). Which engine backs this section is decided
+  per platform: **MLX** on macOS (Apple silicon), **llama.cpp** with GGUF
+  models on Windows. The section reports why it is unavailable on hosts that
+  cannot use it — an Intel Mac, for instance, has no built-in local engine.
 - Export size and quality used for AI processing
 - Prompt presets
 - Optional CLIP model download for advanced search
