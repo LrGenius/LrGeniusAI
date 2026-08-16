@@ -17,7 +17,7 @@ jobs:
     name: Validate tag is on main
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Ensure tag commit is on main
@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -510,7 +510,7 @@ jobs:
       - name: Upload unsigned backend binaries for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-exe
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-backend-exe-${{ matrix.arch }}
           path: build/lrgenius-server/
@@ -579,7 +579,7 @@ jobs:
       - name: Upload unsigned installer for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-installer
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-installer-${{ matrix.arch }}
           path: ${{ steps.locate-installer.outputs.path }}
@@ -670,7 +670,7 @@ jobs:
           tar -C build -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
           path: |
@@ -688,7 +688,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -736,7 +736,7 @@ jobs:
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload plugin-only artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lrgenius-ai-plugin-docker-backend
           path: artifact-payload/lrgenius-ai-plugin-docker-backend.tar
@@ -761,7 +761,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Resolve backend version build-args from tag
         id: backend-version
@@ -861,7 +861,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -980,7 +980,7 @@ jobs:
           cat release_notes.md
 
       - name: Create release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ steps.release-meta.outputs.release_name }}
