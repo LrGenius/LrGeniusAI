@@ -47,9 +47,10 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 
 ### AI Develop Edits
 
-- Generate a Develop recipe per photo and apply it non-destructively
-- Choose an overall look, or let the backend match the photo against edits you
-  saved yourself
+- Generate a Develop recipe per photo and apply it non-destructively, either to
+  the photo itself or to a virtual copy
+- No LLM involved: the backend matches the photo against the edits you saved
+  yourself and interpolates theirs
 - Recipes are constrained to what the frame can take: the backend measures the
   image and caps contrast, clarity, shadow lift and whites accordingly, and
   reports why
@@ -57,7 +58,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ### Style Training
 
 - Save your own Develop settings as labeled training examples
-- Used both as few-shot context for the LLM and by the LLM-free Style Engine
+- The sole input to AI Develop Edits, which needs at least five of them
 
 ### Keyword Dedup & Declutter
 
