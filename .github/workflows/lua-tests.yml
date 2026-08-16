@@ -15,7 +15,7 @@ jobs:
   busted:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Lua 5.1 (matches the Lightroom runtime)
         uses: leafo/gh-actions-lua@35bcb06abec04ec87df82e08caa84d545348536e # v10.0.0
         with:
