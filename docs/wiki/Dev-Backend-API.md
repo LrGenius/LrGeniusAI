@@ -82,7 +82,13 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 `images` array instead, since both are properties of the individual photo.
 
 ### `POST /index_by_reference`
-Indexes photos using server-side file paths instead of uploading image data (for local-backend setups where the server has filesystem access).
+Indexes photos using server-side file paths instead of uploading image data (for local-backend
+setups where the server has filesystem access).
+
+Files are read one at a time, immediately before each is normalised, so a group of raw
+originals is never all resident at once — the normalised JPEG is a few hundred KB and the raw
+bytes are released the moment it exists. A file that cannot be read is reported as a failure
+against its own `photo_id` in `results`, not as an anonymous error for the batch.
 
 ### `POST /get`
 Returns stored metadata and embedding status for one or more `photo_id` values.
@@ -215,6 +221,20 @@ scene and time of day, and interpolates their develop settings. Needs at least
 five stored examples. The result passes through the same guardrail budget as
 `/edit` and carries the same `guardrail_reasons`.
 
+`temperature` is blended only from examples whose `is_raw` matches the photo
+being edited, because Lightroom's temperature is Kelvin for raw and a relative
+-100..100 for everything else — averaging the two produces a number that is
+meaningless on either scale. When no matched example qualifies the field is
+omitted entirely, and either way the reason is in `warning`. Examples saved
+before `is_raw` was recorded count as compatible with anything. Every other
+develop setting means the same on both kinds of file and is blended normally;
+`tint` differs only in range, which the clamp handles.
+
+The `/edit` few-shot path applies the same rule: an example whose raw status
+conflicts with the target has its white balance stripped before it reaches the
+prompt, so the model is never anchored on a number the schema it must answer in
+cannot express.
+
 ---
 
 ## Face Detection & Persons
@@ -282,6 +302,10 @@ Applies a list of approved keyword merge pairs to the backend's metadata records
 ## Style Training
 
 ### `POST /training/add`
+Stores one photo's develop settings as a training example. `is_raw` is recorded
+with it and decides, later, whether the example may contribute a temperature —
+see `POST /style_edit`.
+
 Saves a photo's Lightroom develop settings as a labeled training example.
 
 ### `GET /training/list`

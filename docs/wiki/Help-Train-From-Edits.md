@@ -61,6 +61,24 @@ embedding to compare your saved edits against. AI Edit then falls back to the
 plain style preset and says so in the result, rather than silently producing a
 generic edit.
 
+## Raw and non-raw examples are kept apart
+
+Only for white balance, and only because Lightroom forces the issue: its
+temperature slider is Kelvin on a raw file and a relative −100..+100 on a JPEG.
+Averaging an example edited from a raw with one edited from a JPEG would produce
+a number that means nothing on either scale — and it would land on a real photo.
+
+So when the backend blends a white balance, it uses only the examples whose file
+type matches the photo you are editing. If none of the matched examples qualify,
+it leaves white balance alone and tells you why. Everything else — exposure,
+contrast, presence, colour, curves — means the same on both, and is blended from
+all matched examples as usual.
+
+Practically: if you shoot raw and JPEG both, keep saving examples from both.
+Nothing is wasted; the pool simply narrows for that one field. Examples you saved
+before this existed count as compatible with anything, so nothing you already
+have stops working.
+
 ---
 
 ## Tips
