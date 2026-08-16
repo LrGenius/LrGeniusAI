@@ -55,7 +55,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The Rust extractor resolves the dependency graph with `cargo metadata`,
       # so cargo has to be on PATH. It does not compile the workspace, so no
