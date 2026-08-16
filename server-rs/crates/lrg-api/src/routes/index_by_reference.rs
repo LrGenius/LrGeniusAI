@@ -11,7 +11,7 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
-use crate::routes::index_upload::{process_batch, PhotoOverrides, UploadedImage};
+use crate::routes::index_upload::{process_batch, ImageSource, PhotoOverrides};
 use crate::state::AppState;
 
 /// Pulls the per-photo context out of one `images[]` entry.
@@ -125,81 +125,38 @@ async fn index_by_reference(
             .into_response();
     }
 
-    // Raw bytes only — `process_batch` runs the same `normalize_image_bytes`
-    // step on these that `/index` runs on its multipart uploads; doing it
-    // again here would double-convert.
-    let mut images: Vec<UploadedImage> = Vec::new();
+    // Paths, not bytes: `process_batch` reads each file only when it is about
+    // to normalise it, so a group of raw originals is never all resident at
+    // once. It also runs the same `normalize_image_bytes` step on these that
+    // `/index` runs on its multipart uploads — converting here too would
+    // double-convert.
+    //
+    // Files that cannot be read are reported by `process_batch` against their
+    // photo_id, which is what the plugin needs in order to retry that one photo
+    // through its export fallback. This loop used to read them here and lose
+    // the association.
+    let mut file_paths: Vec<String> = Vec::new();
     let mut photo_ids: Vec<String> = Vec::new();
-    let mut read_errors: Vec<String> = Vec::new();
-
     let mut overrides: Vec<PhotoOverrides> = Vec::new();
-    // Every file in the group is held at once, because `process_batch` takes
-    // the whole batch. That is bounded by the plugin's grouped batch size,
-    // which is 1 for every provider except llama.cpp and configurable there —
-    // so a user who raises it is trading memory for throughput knowingly. What
-    // was missing was any way to see it: this repository's indexing blow-ups
-    // have consistently been diagnosed after the fact with no number to point
-    // at. Turning this into a bounded stream means restructuring
-    // `process_batch` around a lazy source, which is a redesign, not a fix.
-    let mut bytes_read: usize = 0;
     for ((path, photo_id), photo_overrides) in paths
         .into_iter()
         .flatten()
         .zip(ids.into_iter().flatten())
         .zip(per_image)
     {
-        let raw = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                log::warn!("File not found at path: {path}. Skipping.");
-                read_errors.push(format!("File not found: {path}"));
-                continue;
-            }
-            Err(e) => {
-                log::error!("Error reading file at path {path}: {e}");
-                read_errors.push(format!("Error reading {path}: {e}"));
-                continue;
-            }
-        };
-        let filename = std::path::Path::new(&path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.clone());
-        bytes_read += raw.len();
-        images.push(UploadedImage {
-            bytes: raw,
-            filename,
-        });
+        file_paths.push(path);
         photo_ids.push(photo_id);
-        // Pushed here rather than above the `continue`s so a skipped file
-        // cannot shift every later photo's context by one.
         overrides.push(photo_overrides);
-    }
-
-    const LARGE_GROUP_BYTES: usize = 512 * 1024 * 1024;
-    if bytes_read >= LARGE_GROUP_BYTES {
-        log::warn!(
-            "index_by_reference: read {} files totalling {:.1} GiB into memory before processing. \
-             Lower the grouped batch size if the process runs out of memory.",
-            images.len(),
-            bytes_read as f64 / (1024.0 * 1024.0 * 1024.0)
-        );
-    } else {
-        log::debug!(
-            "index_by_reference: read {} files totalling {:.1} MiB",
-            images.len(),
-            bytes_read as f64 / (1024.0 * 1024.0)
-        );
     }
 
     let fields = json_fields_to_string_map(obj);
     process_batch(
         state,
         fields,
-        images,
+        ImageSource::Paths(file_paths),
         photo_ids,
         overrides,
-        read_errors,
+        Vec::new(),
         false,
     )
     .await

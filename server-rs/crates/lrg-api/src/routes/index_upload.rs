@@ -346,6 +346,64 @@ pub(crate) struct UploadedImage {
     pub(crate) filename: String,
 }
 
+/// Where [`process_batch`] gets each photo's bytes.
+///
+/// The distinction is about peak memory, not convenience. `/index_by_reference`
+/// points at the user's originals — 25–50 MB raw files — and reading the whole
+/// group before normalising any of it kept every one of them resident at once.
+/// The normalised JPEG is a few hundred KB and the raw bytes are dead the
+/// moment it exists, so reading one file at a time bounds the raw side of the
+/// batch to a single photo. The normalised results still all live until the
+/// batch finishes, because the LLM call needs them together.
+pub(crate) enum ImageSource {
+    /// Already in memory: the multipart path, where axum buffered the request
+    /// body before the handler ran. Nothing to gain by being lazy here.
+    Loaded(Vec<UploadedImage>),
+    /// Paths on disk, read on demand.
+    Paths(Vec<String>),
+}
+
+impl ImageSource {
+    fn len(&self) -> usize {
+        match self {
+            ImageSource::Loaded(v) => v.len(),
+            ImageSource::Paths(v) => v.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Takes photo `index` out of the source, reading it from disk if needed.
+    ///
+    /// Consuming: the in-memory variant leaves an empty `Vec` behind so the
+    /// bytes are freed as the loop advances rather than at the end of it.
+    async fn take(&mut self, index: usize) -> Result<UploadedImage, String> {
+        match self {
+            ImageSource::Loaded(images) => Ok(UploadedImage {
+                bytes: std::mem::take(&mut images[index].bytes),
+                filename: std::mem::take(&mut images[index].filename),
+            }),
+            ImageSource::Paths(paths) => {
+                let path = std::mem::take(&mut paths[index]);
+                let bytes = tokio::fs::read(&path).await.map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        format!("File not found: {path}")
+                    } else {
+                        format!("Error reading {path}: {e}")
+                    }
+                })?;
+                let filename = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or(path);
+                Ok(UploadedImage { bytes, filename })
+            }
+        }
+    }
+}
+
 async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     log::info!("Index request received");
 
@@ -406,7 +464,7 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
     process_batch(
         state,
         fields,
-        images,
+        ImageSource::Loaded(images),
         photo_ids,
         Vec::new(),
         Vec::new(),
@@ -434,7 +492,7 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
 pub(crate) async fn process_batch(
     state: Arc<AppState>,
     fields: HashMap<String, String>,
-    images: Vec<UploadedImage>,
+    mut images: ImageSource,
     photo_ids: Vec<String>,
     overrides: Vec<PhotoOverrides>,
     pre_failures: Vec<String>,
@@ -507,9 +565,26 @@ pub(crate) async fn process_batch(
     // a full copy, so a 200-photo batch held the batch three times over.
     let mut triplets: Vec<(Arc<[u8]>, String, String, PhotoOverrides)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
-    for ((img, photo_id), photo_overrides) in images.into_iter().zip(photo_ids).zip(overrides) {
+    // One photo in flight at a time: read, normalise, drop the original. With
+    // `ImageSource::Paths` that is what keeps a group of raw files from all
+    // being resident at once. A read failure is recorded against its photo_id
+    // rather than as an anonymous string, which is what the caller needs in
+    // order to retry that photo alone.
+    for (index, (photo_id, photo_overrides)) in photo_ids.into_iter().zip(overrides).enumerate() {
+        let img = match images.take(index).await {
+            Ok(img) => img,
+            Err(msg) => {
+                log::warn!("Skipping {photo_id}: {msg}");
+                results.push(json!({
+                    "photo_id": photo_id, "success": false, "error": msg.clone(),
+                }));
+                conversion_errors.push(msg);
+                continue;
+            }
+        };
         let t0 = Instant::now();
         let result = normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality);
+        drop(img.bytes);
         log::debug!(
             "Photo {photo_id} ({}): decode+resize+encode took {:?}",
             img.filename,
@@ -1938,5 +2013,66 @@ mod sharp_s_tests {
         let mut m = meta(&[("title", "Bridge at night")]);
         replace_sharp_s(&mut m);
         assert_eq!(m["title"], json!("Bridge at night"));
+    }
+}
+
+#[cfg(test)]
+mod image_source_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn loaded_images_are_freed_as_the_batch_advances() {
+        // The point of taking rather than borrowing: a 200-photo multipart
+        // batch should not hold all 200 buffers until the loop ends.
+        let mut source = ImageSource::Loaded(vec![
+            UploadedImage {
+                bytes: vec![1, 2, 3],
+                filename: "a.jpg".into(),
+            },
+            UploadedImage {
+                bytes: vec![4, 5],
+                filename: "b.jpg".into(),
+            },
+        ]);
+        assert_eq!(source.len(), 2);
+
+        let first = source.take(0).await.expect("in-memory take cannot fail");
+        assert_eq!(first.bytes, vec![1, 2, 3]);
+        assert_eq!(first.filename, "a.jpg");
+
+        let ImageSource::Loaded(remaining) = &source else {
+            unreachable!()
+        };
+        assert!(
+            remaining[0].bytes.is_empty(),
+            "the taken photo's buffer must be released, not cloned"
+        );
+        assert_eq!(remaining[1].bytes, vec![4, 5], "later photos untouched");
+    }
+
+    #[tokio::test]
+    async fn paths_are_read_one_at_a_time() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("Straße.jpg");
+        std::fs::write(&path, b"jpegbytes").expect("write");
+
+        let mut source = ImageSource::Paths(vec![path.to_string_lossy().to_string()]);
+        let img = source.take(0).await.expect("existing file reads");
+        assert_eq!(img.bytes, b"jpegbytes");
+        assert_eq!(img.filename, "Straße.jpg", "filename, not the whole path");
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_is_an_error_for_that_photo_only() {
+        // It used to be an anonymous string in `pre_failures` with no photo_id,
+        // so the plugin could not tell which photo to retry.
+        let mut source = ImageSource::Paths(vec!["/nonexistent/nope.cr3".to_string()]);
+        let Err(err) = source.take(0).await else {
+            panic!("a missing file must not read successfully")
+        };
+        assert!(
+            err.contains("File not found") && err.contains("nope.cr3"),
+            "the message has to name the file, got {err:?}"
+        );
     }
 }

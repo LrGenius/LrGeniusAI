@@ -123,6 +123,11 @@ pub struct TrainingCandidate {
     pub scene_tags: Vec<String>,
     pub exposure: ExposureFeatures,
     pub time_of_day_bucket: String,
+    /// Whether the photo this example was saved from is a raw file.
+    ///
+    /// `None` for examples saved before the flag was recorded. See
+    /// [`restrict_temperature_to_matching_raw_status`] for why it matters.
+    pub is_raw: Option<bool>,
 }
 
 /// The new photo's own query-side features.
@@ -131,6 +136,8 @@ pub struct StyleQuery {
     pub exposure: ExposureFeatures,
     pub scene_tags: Vec<String>,
     pub time_of_day_bucket: String,
+    /// Whether the photo being edited is a raw file. `None` means unknown.
+    pub is_raw: Option<bool>,
 }
 
 /// Port of `calculate_composite_score`.
@@ -168,6 +175,78 @@ pub fn interpolate_recipes(winners: &[(TrainingCandidate, f64)]) -> Map<String, 
         .into_iter()
         .map(|(k, v)| (k, json!(round_to(v, 1))))
         .collect()
+}
+
+/// Recompute `temperature` from only the winners whose raw status matches the
+/// photo being edited, or drop it.
+///
+/// Every other canonical field means the same thing on a raw file and on a
+/// JPEG. `temperature` does not: Lightroom exposes it as Kelvin for raw and as
+/// a relative -100..100 for everything else. Averaging 5600 and +12 produces a
+/// number that is meaningless on either scale, and the result is applied to a
+/// real photo — so the blend is restricted rather than corrected afterwards.
+///
+/// `tint` is deliberately left alone. Its *range* differs (-150..150 raw,
+/// -100..100 otherwise) but its meaning does not, so a mixed blend is a scale
+/// distortion the clamp already handles, not a category error.
+///
+/// Examples with an unknown raw status (saved before the flag was recorded)
+/// count as matching, since excluding them would quietly shrink every
+/// long-standing user's pool to nothing.
+///
+/// Returns a warning when the field had to be dropped entirely.
+pub fn restrict_temperature_to_matching_raw_status(
+    blended: &mut Map<String, Value>,
+    winners: &[(TrainingCandidate, f64)],
+    query_is_raw: Option<bool>,
+) -> Option<String> {
+    if !blended.contains_key("temperature") {
+        return None;
+    }
+    let compatible = |candidate: &TrainingCandidate| match (query_is_raw, candidate.is_raw) {
+        (Some(q), Some(c)) => q == c,
+        _ => true,
+    };
+    if winners.iter().all(|(c, _)| compatible(c)) {
+        return None;
+    }
+
+    let matching: Vec<&(TrainingCandidate, f64)> =
+        winners.iter().filter(|(c, _)| compatible(c)).collect();
+    let total_weight: f64 = matching.iter().map(|(_, s)| s).sum();
+    let recomputed: Option<f64> = if total_weight > 0.0 {
+        let sum: f64 = matching
+            .iter()
+            .filter_map(|(c, s)| {
+                c.canonical_settings
+                    .get("temperature")
+                    .and_then(Value::as_f64)
+                    .map(|v| v * (s / total_weight))
+            })
+            .sum();
+        Some(round_to(sum, 1))
+    } else {
+        None
+    };
+
+    match recomputed {
+        Some(v) => {
+            blended.insert("temperature".into(), json!(v));
+            Some(format!(
+                "White balance was blended from {} of {} matched examples — the others were saved from {} files, where Lightroom's temperature is on a different scale.",
+                matching.len(),
+                winners.len(),
+                if query_is_raw == Some(true) { "non-raw" } else { "raw" }
+            ))
+        }
+        None => {
+            blended.remove("temperature");
+            Some(
+                "White balance was left unchanged: every matched training example was saved from a file whose temperature is on a different scale than this photo's."
+                    .to_string(),
+            )
+        }
+    }
 }
 
 /// Port of `adaptive_compensation`.
@@ -350,6 +429,8 @@ pub fn generate_style_edit(
         .collect();
 
     let mut blended = interpolate_recipes(&winners);
+    let temperature_warning =
+        restrict_temperature_to_matching_raw_status(&mut blended, &winners, query.is_raw);
     adaptive_compensation(&mut blended, &query.exposure, &winners);
 
     // Python builds this from a `set(...)`, whose iteration order is not
@@ -399,6 +480,12 @@ pub fn generate_style_edit(
         ))
     } else {
         None
+    };
+    // Both can be true at once, and the user needs both: one is about how well
+    // the style matched, the other about a field that was left out of it.
+    let warning = match (warning, temperature_warning) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
     };
 
     StyleEngineResult {
@@ -501,6 +588,7 @@ mod tests {
             },
             scene_tags: vec!["scene_portrait".to_string()],
             time_of_day_bucket: "afternoon".to_string(),
+            is_raw: None,
         };
         let mut c = candidate(&[("exposure", 1.0), ("contrast", 10.0)], 0.1);
         c.exposure = ExposureFeatures {
@@ -518,5 +606,91 @@ mod tests {
         assert!(result.confidence > 0.9); // near-identical query/candidate
         assert_eq!(result.recipe["global"]["exposure"], json!(1.0));
         assert_eq!(result.matched_filenames, vec!["photo1.jpg".to_string()]);
+    }
+
+    fn raw_candidate(temperature: f64, is_raw: Option<bool>) -> TrainingCandidate {
+        let mut c = candidate(&[("temperature", temperature), ("contrast", 10.0)], 0.0);
+        c.is_raw = is_raw;
+        c
+    }
+
+    #[test]
+    fn a_uniform_pool_blends_temperature_as_before() {
+        let mut blended = interpolate_recipes(&[
+            (raw_candidate(5600.0, Some(true)), 1.0),
+            (raw_candidate(5000.0, Some(true)), 1.0),
+        ]);
+        let winners = vec![
+            (raw_candidate(5600.0, Some(true)), 1.0),
+            (raw_candidate(5000.0, Some(true)), 1.0),
+        ];
+        let warning =
+            restrict_temperature_to_matching_raw_status(&mut blended, &winners, Some(true));
+
+        assert!(warning.is_none(), "nothing to report when nothing changed");
+        assert_eq!(blended["temperature"], json!(5300.0));
+    }
+
+    #[test]
+    fn a_mixed_pool_blends_only_the_matching_examples() {
+        // Averaging 5600 K with a relative +10 produces a number that is
+        // meaningless on either scale, and it lands on a real photo.
+        let winners = vec![
+            (raw_candidate(5600.0, Some(true)), 1.0),
+            (raw_candidate(10.0, Some(false)), 1.0),
+        ];
+        let mut blended = interpolate_recipes(&winners);
+        assert_eq!(blended["temperature"], json!(2805.0), "the bad average");
+
+        let warning =
+            restrict_temperature_to_matching_raw_status(&mut blended, &winners, Some(true));
+        assert_eq!(blended["temperature"], json!(5600.0));
+        let warning = warning.expect("the user has to be told the pool was narrowed");
+        assert!(warning.contains("1 of 2"), "got {warning:?}");
+    }
+
+    #[test]
+    fn temperature_is_dropped_when_no_example_matches() {
+        let winners = vec![(raw_candidate(5600.0, Some(true)), 1.0)];
+        let mut blended = interpolate_recipes(&winners);
+        let warning =
+            restrict_temperature_to_matching_raw_status(&mut blended, &winners, Some(false));
+
+        assert!(
+            blended.get("temperature").is_none(),
+            "no white balance beats a wrong-scale one"
+        );
+        assert_eq!(blended["contrast"], json!(10.0), "other fields survive");
+        assert!(warning.unwrap().contains("left unchanged"));
+    }
+
+    #[test]
+    fn examples_saved_before_the_flag_existed_still_count() {
+        // Excluding them would shrink every long-standing user's pool to
+        // nothing on the first edit after upgrading.
+        let winners = vec![
+            (raw_candidate(5600.0, None), 1.0),
+            (raw_candidate(5000.0, Some(true)), 1.0),
+        ];
+        let mut blended = interpolate_recipes(&winners);
+        let warning =
+            restrict_temperature_to_matching_raw_status(&mut blended, &winners, Some(true));
+
+        assert!(warning.is_none());
+        assert_eq!(blended["temperature"], json!(5300.0));
+    }
+
+    #[test]
+    fn an_unknown_target_accepts_every_example() {
+        let winners = vec![
+            (raw_candidate(5600.0, Some(true)), 1.0),
+            (raw_candidate(5000.0, Some(false)), 1.0),
+        ];
+        let mut blended = interpolate_recipes(&winners);
+        let warning = restrict_temperature_to_matching_raw_status(&mut blended, &winners, None);
+        assert!(
+            warning.is_none(),
+            "nothing is known, so nothing is excluded"
+        );
     }
 }

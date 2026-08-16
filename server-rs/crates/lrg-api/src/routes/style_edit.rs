@@ -75,6 +75,9 @@ fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> Tr
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string(),
+        // Absent on examples saved before the flag was recorded, which the
+        // style engine treats as compatible with anything.
+        is_raw: meta.get("is_raw").and_then(Value::as_bool),
     }
 }
 
@@ -230,6 +233,11 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     )
     .await;
 
+    // Parsed before the style engine runs, not after: the engine needs to know
+    // whether this photo is raw in order to decide which examples may
+    // contribute a temperature.
+    let options = parse_edit_options_form(&fields);
+
     let query = StyleQuery {
         exposure: ExposureFeatures {
             luminance_mean: Some(query_exposure.exp_luminance_mean),
@@ -238,10 +246,12 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         },
         scene_tags: query_scene_tags,
         time_of_day_bucket: query_tod,
+        // Decides which examples may contribute a temperature: Lightroom's is
+        // Kelvin for raw and relative for everything else, and the two cannot
+        // be averaged together.
+        is_raw: options.is_raw,
     };
     let result: StyleEngineResult = generate_style_edit(training_count, &candidates, &query);
-
-    let options = parse_edit_options_form(&fields);
 
     if (result.engine == "none" || result.confidence < CONFIDENCE_LOW) && use_llm_fallback {
         log::info!(

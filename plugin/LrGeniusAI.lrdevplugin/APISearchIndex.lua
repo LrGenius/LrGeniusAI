@@ -4179,6 +4179,13 @@ function SearchIndexAPI.addTrainingExample(photoId, filepath, developSettings, o
 	if options.shutter_speed and options.shutter_speed ~= "" then
 		table.insert(mimeChunks, { name = "shutter_speed", value = tostring(options.shutter_speed) })
 	end
+	-- Recorded with the example so the style engine can keep raw and rendered
+	-- sources apart when it blends a white balance: Lightroom's Temp is Kelvin
+	-- for one and a relative -100..100 for the other, and averaging the two
+	-- produces a number that means nothing on either scale.
+	if type(options.is_raw) == "boolean" then
+		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
+	end
 
 	if filepath and LrFileUtils.exists(filepath) then
 		local filename = LrPathUtils.leafName(filepath)

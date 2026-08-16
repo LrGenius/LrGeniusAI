@@ -347,10 +347,48 @@ impl NoTrainingExamples {
     }
 }
 
+/// Lightroom's own key for white balance in a saved develop-settings blob, and
+/// the recipe schema's spelling of the same thing, since examples can come from
+/// either shape.
+const TEMPERATURE_KEYS: [&str; 2] = ["Temp", "temperature"];
+
+/// Strip the white balance from an example saved from a file whose temperature
+/// scale differs from the photo being edited.
+///
+/// The few-shot block exists to give the model the user's own numbers to anchor
+/// on. A Kelvin `Temp` offered as a reference for a JPEG — or the reverse —
+/// anchors it on a number that is meaningless for the target, while the schema
+/// it must answer in declares the other range entirely. Every other develop
+/// setting means the same thing on both kinds of file, so only this one goes.
+///
+/// An unknown raw status on either side means no conflict can be established,
+/// so nothing is removed.
+fn drop_incompatible_temperature(
+    settings: &mut Value,
+    example_is_raw: Option<bool>,
+    target_is_raw: Option<bool>,
+) -> bool {
+    let (Some(example), Some(target)) = (example_is_raw, target_is_raw) else {
+        return false;
+    };
+    if example == target {
+        return false;
+    }
+    let Some(map) = settings.as_object_mut() else {
+        return false;
+    };
+    let mut removed = false;
+    for key in TEMPERATURE_KEYS {
+        removed |= map.remove(key).is_some();
+    }
+    removed
+}
+
 pub(crate) async fn fetch_training_examples(
     store: &Store,
     photo_id: &str,
     n_results: usize,
+    target_is_raw: Option<bool>,
 ) -> Result<Vec<Value>, NoTrainingExamples> {
     let Ok(mut existing) = store.get(IMAGE_TABLE, &[photo_id.to_string()]).await else {
         return Err(NoTrainingExamples::PhotoNotIndexed);
@@ -375,15 +413,20 @@ pub(crate) async fn fetch_training_examples(
         return Err(NoTrainingExamples::NoneStored);
     }
 
-    Ok(scored
+    let mut dropped_temperature = 0usize;
+    let examples: Vec<Value> = scored
         .into_iter()
         .map(|(_, r)| {
-            let develop_settings = r
+            let mut develop_settings = r
                 .metadata
                 .get("develop_settings")
                 .and_then(Value::as_str)
                 .and_then(|s| serde_json::from_str::<Value>(s).ok())
                 .unwrap_or_else(|| json!({}));
+            let example_is_raw = r.metadata.get("is_raw").and_then(Value::as_bool);
+            if drop_incompatible_temperature(&mut develop_settings, example_is_raw, target_is_raw) {
+                dropped_temperature += 1;
+            }
             json!({
                 "label": r.metadata.get("label").cloned().unwrap_or(json!("")),
                 "filename": r.metadata.get("filename").cloned().unwrap_or(json!("")),
@@ -391,7 +434,13 @@ pub(crate) async fn fetch_training_examples(
                 "develop_settings": develop_settings,
             })
         })
-        .collect())
+        .collect();
+    if dropped_temperature > 0 {
+        log::debug!(
+            "Photo {photo_id}: dropped the white balance from {dropped_temperature} few-shot example(s) saved from files on the other temperature scale."
+        );
+    }
+    Ok(examples)
 }
 
 pub(crate) async fn generate_edit_recipe_for_photo(
@@ -453,7 +502,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     let mut training_warning: Option<&'static str> = None;
     if options.use_training_style {
         if let Some(store) = store {
-            match fetch_training_examples(store, photo_id, 3).await {
+            match fetch_training_examples(store, photo_id, 3, options.is_raw).await {
                 Ok(examples) => request.training_examples = examples,
                 Err(reason) => training_warning = Some(reason.message()),
             }
@@ -940,5 +989,49 @@ mod tests {
 
         assert_eq!(opts.style_strength, 1.0);
         assert_eq!(opts.composition_mode, "subtle", "unknown mode falls back");
+    }
+
+    #[test]
+    fn a_wrong_scale_white_balance_is_kept_out_of_the_few_shot_block() {
+        // A Kelvin number offered to the model as a reference for a JPEG
+        // anchors it on a value the target's schema cannot even express.
+        let mut settings = json!({"Temp": 5600, "Exposure2012": 0.3});
+        assert!(drop_incompatible_temperature(
+            &mut settings,
+            Some(true),
+            Some(false)
+        ));
+        assert!(settings.get("Temp").is_none());
+        assert_eq!(
+            settings["Exposure2012"],
+            json!(0.3),
+            "everything else means the same on both kinds of file"
+        );
+    }
+
+    #[test]
+    fn a_matching_example_keeps_its_white_balance() {
+        let mut settings = json!({"Temp": 5600});
+        assert!(!drop_incompatible_temperature(
+            &mut settings,
+            Some(true),
+            Some(true)
+        ));
+        assert_eq!(settings["Temp"], json!(5600));
+    }
+
+    #[test]
+    fn an_unknown_raw_status_removes_nothing() {
+        // Examples saved before the flag existed would otherwise lose their
+        // white balance on every edit after upgrading.
+        for (example, target) in [(None, Some(true)), (Some(true), None), (None, None)] {
+            let mut settings = json!({"Temp": 5600});
+            assert!(!drop_incompatible_temperature(
+                &mut settings,
+                example,
+                target
+            ));
+            assert_eq!(settings["Temp"], json!(5600), "{example:?} vs {target:?}");
+        }
     }
 }
