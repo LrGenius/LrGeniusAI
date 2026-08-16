@@ -3328,6 +3328,25 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 	return true, photosToProcess
 end
 
+-- Polling cadence for the async clustering job. The first polls come quickly so
+-- short runs feel responsive; longer runs settle into a slower cadence.
+local CLUSTER_POLL_FAST_INTERVAL = 1
+local CLUSTER_POLL_FAST_COUNT = 5
+local CLUSTER_POLL_INTERVAL = 3
+
+-- How long the backend may go without reporting a new stage before we give up.
+-- This is deliberately not a total run limit: LLM validation of a large keyword
+-- branch on a local model legitimately runs for many minutes, and the previous
+-- flat 120 s cap aborted those runs mid-flight. What is not legitimate is the
+-- backend going quiet, so that — not elapsed time — is what times out.
+-- Only applied once the backend has reported progress at least once: a backend
+-- older than the progress field reports nothing at all, and a run against one
+-- of those must not be read as a stall.
+local CLUSTER_STALL_TIMEOUT = 600
+-- Backstop for a job that keeps reporting progress but never finishes, and the
+-- only limit that applies to a backend with no progress reporting.
+local CLUSTER_MAX_TOTAL = 3600
+
 ---
 ---
 -- Send a list of keyword names to the backend and receive clusters of semantically
@@ -3337,8 +3356,11 @@ end
 -- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
 -- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
 -- @param cancelScope table|nil LrProgressScope; polling stops early when isCanceled() returns true
+-- @param onProgress function|nil Called on every poll with
+--        { elapsed = seconds, stage = str|nil, done = n|nil, total = n|nil }
+--        so callers can keep a progress UI alive while the job runs
 -- @return table|nil { results = {{name,...},...}, warning = str|nil } or nil, err
-function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancelScope)
+function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancelScope, onProgress)
 	if type(keywordNames) ~= "table" or #keywordNames < 2 then
 		return { results = {}, warning = nil }
 	end
@@ -3372,20 +3394,44 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 		return nil, startErr or "no job_id returned"
 	end
 
-	-- Poll until done (max 120 s; check cancellation each cycle)
+	-- Poll until done. Every poll reports back to the caller so the UI keeps
+	-- moving even while a single LLM round-trip runs for minutes.
 	local jobId = startResp.job_id
 	local statusUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_STATUS .. "/" .. jobId
-	local deadline = LrDate.currentTime() + 120
+	local startedAt = LrDate.currentTime()
+	local lastStageAt = startedAt
+	local lastStageKey = nil
+	local sawProgress = false
+	local pollCount = 0
+
+	local function notify(stage, done, total)
+		if not onProgress then
+			return
+		end
+		local okCb, cbErr = LrTasks.pcall(function()
+			onProgress({
+				elapsed = LrDate.currentTime() - startedAt,
+				stage = stage,
+				done = done,
+				total = total,
+			})
+		end)
+		if not okCb then
+			log:warn("clusterKeywords: progress callback failed: " .. tostring(cbErr))
+		end
+	end
+
+	notify(nil, nil, nil)
+
 	while true do
-		LrTasks.sleep(3)
+		pollCount = pollCount + 1
+		local interval = (pollCount <= CLUSTER_POLL_FAST_COUNT) and CLUSTER_POLL_FAST_INTERVAL or CLUSTER_POLL_INTERVAL
+		LrTasks.sleep(interval)
 		LrTasks.yield()
 		if cancelScope and cancelScope:isCanceled() then
 			return nil, "canceled"
 		end
-		if LrDate.currentTime() > deadline then
-			log:error("clusterKeywords: timed out waiting for backend job")
-			return nil, "clustering timed out"
-		end
+
 		local poll, pollErr = _request("GET", statusUrl, nil, 15)
 		if pollErr or not poll then
 			log:error("clusterKeywords: status poll failed: " .. tostring(pollErr))
@@ -3398,7 +3444,34 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 			log:error("clusterKeywords: job failed: " .. tostring(poll.error))
 			return nil, poll.error or "cluster job failed"
 		end
-		-- "running" → keep polling
+
+		-- "running" → surface the backend's stage and keep polling
+		local progress = (type(poll.progress) == "table") and poll.progress or {}
+		local stageKey = tostring(progress.stage) .. "/" .. tostring(progress.done) .. "/" .. tostring(progress.total)
+		local now = LrDate.currentTime()
+		if progress.stage ~= nil then
+			sawProgress = true
+		end
+		if stageKey ~= lastStageKey then
+			lastStageKey = stageKey
+			lastStageAt = now
+		end
+		notify(progress.stage, progress.done, progress.total)
+
+		if sawProgress and now - lastStageAt > CLUSTER_STALL_TIMEOUT then
+			log:error(
+				"clusterKeywords: backend stopped reporting progress after "
+					.. string.format("%.0f", now - startedAt)
+					.. "s (last stage: "
+					.. tostring(lastStageKey)
+					.. ")"
+			)
+			return nil, "clustering stalled"
+		end
+		if now - startedAt > CLUSTER_MAX_TOTAL then
+			log:error("clusterKeywords: job exceeded the maximum run time of " .. CLUSTER_MAX_TOTAL .. "s")
+			return nil, "clustering timed out"
+		end
 	end
 end
 

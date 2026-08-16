@@ -122,17 +122,27 @@ fn parse_validation_response(raw: &str, expected_len: usize) -> Option<Vec<Vec<S
 /// the LLM to confirm/split each group, and fall back to the raw CLIP
 /// candidates (any group with >=2 members) for any chunk whose LLM call
 /// fails or returns something unparseable.
+///
+/// Each chunk is one LLM round-trip, which on a local model can take
+/// minutes; `on_chunk` is called with `(chunks_finished, chunks_total)`
+/// before the first call and again after every chunk, so a caller can keep
+/// a client informed instead of leaving it staring at a silent job. Pass
+/// `|_, _| {}` when nobody is watching.
 pub async fn validate_clusters_with_llm(
     candidate_clusters: &[Vec<String>],
     config: &TextLlmConfig,
+    on_chunk: impl Fn(usize, usize),
 ) -> Vec<Vec<String>> {
     const CHUNK_SIZE: usize = 15;
     if candidate_clusters.is_empty() {
         return Vec::new();
     }
 
+    let total_chunks = candidate_clusters.len().div_ceil(CHUNK_SIZE);
+    on_chunk(0, total_chunks);
+
     let mut validated = Vec::new();
-    for chunk in candidate_clusters.chunks(CHUNK_SIZE) {
+    for (chunk_index, chunk) in candidate_clusters.chunks(CHUNK_SIZE).enumerate() {
         let user_prompt = build_validation_prompt(chunk);
         let raw = call_llm_text(config, VALIDATION_SYSTEM, &user_prompt).await;
 
@@ -150,6 +160,7 @@ pub async fn validate_clusters_with_llm(
                 None => validated.extend(fallback()),
             },
         }
+        on_chunk(chunk_index + 1, total_chunks);
     }
     validated
 }
@@ -186,6 +197,48 @@ mod tests {
     #[test]
     fn parse_validation_response_none_when_no_bracket() {
         assert!(parse_validation_response("not json at all", 1).is_none());
+    }
+
+    /// An unconfigured provider makes every LLM call fail, which is exactly
+    /// what we want here: it exercises the chunking/progress bookkeeping
+    /// without a network round-trip.
+    fn offline_config() -> TextLlmConfig {
+        TextLlmConfig {
+            provider: String::new(),
+            model: None,
+            api_key: None,
+            ollama_base_url: None,
+            lmstudio_base_url: None,
+            local_engine: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn validation_reports_progress_before_and_after_every_chunk() {
+        // 16 clusters at CHUNK_SIZE 15 => two chunks.
+        let clusters: Vec<Vec<String>> = (0..16)
+            .map(|i| vec![format!("a{i}"), format!("b{i}")])
+            .collect();
+        let seen = std::sync::Mutex::new(Vec::new());
+
+        validate_clusters_with_llm(&clusters, &offline_config(), |done, total| {
+            seen.lock().unwrap().push((done, total));
+        })
+        .await;
+
+        assert_eq!(seen.into_inner().unwrap(), vec![(0, 2), (1, 2), (2, 2)]);
+    }
+
+    #[tokio::test]
+    async fn validation_reports_nothing_when_there_is_nothing_to_validate() {
+        let seen = std::sync::Mutex::new(Vec::new());
+        let result = validate_clusters_with_llm(&[], &offline_config(), |done, total| {
+            seen.lock().unwrap().push((done, total));
+        })
+        .await;
+
+        assert!(result.is_empty());
+        assert!(seen.into_inner().unwrap().is_empty());
     }
 
     #[test]

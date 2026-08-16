@@ -68,7 +68,7 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 - **Asynchronicity**: Long-running operations **must** run in `LrTasks.startAsyncTask`.
 - **Yielding**: Use `LrTasks.pcall` instead of native `pcall` to allow for yielding during asynchronous operations.
 - **Naming Conventions**: Top-level plugin actions should follow the `Task*.lua` naming convention.
-- **Localization**: All GUI strings **must** be localized using the `LOC` function. Keep `TranslatedStrings_de.txt` (German) and `TranslatedStrings_fr.txt` (French) synchronized with English.
+- **Localization**: All GUI strings **must** go through the `LOC` function. The plugin ships no translation files, so the default string inside the `LOC()` call is what users read — write it as finished English.
 - **Utilities**: Use `Util.lua` for common logic.
 - **Photo Identity**: Use `Util.getGlobalPhotoIdForPhoto` (metadata-based) for cross-catalog consistency.
 
@@ -101,16 +101,6 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 3. Push to your fork and open a Pull Request against the `main` branch.
 4. Provide a clear description of the changes and how you verified them.
 5. Say in one sentence what changes for someone *using* the plugin (or "no user-visible change"). The release notes are generated from PR titles and descriptions — see [Release notes](#-release-notes) below.
-
----
-
-## 🌍 Translations
-When adding or modifying user-facing strings, you **must** update all three translation files in the plugin directory:
-- `TranslatedStrings_en.txt` (English)
-- `TranslatedStrings_de.txt` (German)
-- `TranslatedStrings_fr.txt` (French)
-
-You can use the `sync_translations.py` script to help maintain consistency.
 
 ---
 
