@@ -17,8 +17,9 @@ the two on Apple silicon. The two engines use **different model files**, so a
 model downloaded for one is not usable by the other — worth knowing if you move
 a catalog between a Mac and a PC, since each machine needs its own download.
 
-If you are on an Intel Mac, there is no built-in engine; use **Ollama** or **LM
-Studio**, or a cloud provider.
+LrGeniusAI is released for Apple silicon Macs and 64-bit Windows. There is no
+Intel Mac or Linux build, so the question of which engine those would use does
+not arise.
 
 ---
 
@@ -127,8 +128,9 @@ photo at a time.
 ## 5. Troubleshooting
 
 **"MLX runs only on Apple silicon Macs"**
-Expected on an Intel Mac. There is no built-in engine there — use Ollama, LM
-Studio, or a cloud provider.
+The released macOS build is Apple silicon only, so seeing this means the backend
+is running under Rosetta or was built for the wrong architecture. Reinstall with
+the official `.pkg`.
 
 **MLX says the helper is missing**
 The MLX engine needs the `lrgenius-mlx` helper next to the server binary. Ship

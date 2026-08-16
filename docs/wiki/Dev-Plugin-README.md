@@ -91,7 +91,9 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ## Requirements
 
 - Adobe Lightroom Classic (supported by plugin SDK settings)
-- LrGeniusAI backend server reachable from Lightroom
+- LrGeniusAI backend server reachable from Lightroom. Released for **Apple
+  silicon macOS** and **64-bit Windows** — there is no Intel Mac or Linux
+  build.
 - Optional API keys depending on provider:
   - Gemini
   - OpenAI / ChatGPT
@@ -108,25 +110,20 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 
 ---
 
-## Breaking Change: ID Migration Required
+## Breaking Change: ID Migration
 
-The plugin/backend now use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
+The plugin/backend use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
 The stable ID algorithm was updated again to avoid ID changes when metadata is written into files (for example DNG metadata updates).
 
-> **⚠️ The migration does not currently work.** The plugin still offers
-> **Migrate existing DB IDs to photo_id** (in `Plug-in Manager -> LrGeniusAI ->
-> Backend Server`, and as a dialog on upgrade), but the backing endpoint
-> `POST /db/migrate-photo-ids` was not carried over from the retired Python
-> backend, so the request fails. If you are coming from a UUID-era database,
-> re-index rather than migrate.
+**There is no migration.** The one the plugin used to offer posted to
+`POST /db/migrate-photo-ids`, an endpoint the Rust backend does not serve and
+never has, so it could only ever fail. It has been removed rather than left in
+place as a button that does nothing.
 
-How it was meant to work, for reference:
-
-- Migration is incremental and skips photos that are not indexed in backend.
-- Existing migrated entries are skipped automatically.
-- Main embeddings, vertex embeddings, and face references are migrated. (Vertex embeddings
-  are legacy — they are still migrated if present, but no new ones are created since Vertex AI
-  was removed.)
+If you have an indexed backend database from a UUID-era version, run
+**Analyze & Index Photos** over the catalog again. Photos that are already
+indexed under the current IDs are skipped, so this costs nothing beyond the
+photos that genuinely need re-indexing.
 
 ---
 
@@ -175,9 +172,9 @@ In the plugin settings dialog you can configure:
 - **Local AI Model (no external app)** — browse, download and select vision
   models the backend runs itself, plus the advanced knobs (context size, photos
   in parallel, layers on the GPU). Which engine backs this section is decided
-  per platform: **MLX** on macOS (Apple silicon), **llama.cpp** with GGUF
-  models on Windows. The section reports why it is unavailable on hosts that
-  cannot use it — an Intel Mac, for instance, has no built-in local engine.
+  per platform: **MLX** on macOS, **llama.cpp** with GGUF models on Windows.
+  The section reports why it is unavailable when the host cannot use it — a
+  source build without the `llamacpp` feature, or a missing MLX helper.
 - Export size and quality used for AI processing
 - Prompt presets
 - Optional CLIP model download for advanced search

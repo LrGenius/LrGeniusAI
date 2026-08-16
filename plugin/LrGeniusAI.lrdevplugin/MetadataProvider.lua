@@ -306,102 +306,12 @@ return {
 			end
 		end
 
-		if previousSchemaVersion ~= nil and previousSchemaVersion < 24 then
-			local migrationChoice = LrDialogs.confirm(
-				LOC("$$$/LrGeniusAI/MetadataProvider/MigrationRequiredTitle=Backend ID migration required"),
-				LOC(
-					"$$$/LrGeniusAI/MetadataProvider/MigrationRequiredMsg=This update introduces file-based photo_id values (breaking change).\n\nIf you already have an indexed backend database from older versions, run the one-time migration now."
-				),
-				LOC("$$$/LrGeniusAI/MetadataProvider/RunMigrationNow=Run migration now"),
-				LOC("$$$/LrGeniusAI/common/Later=Later")
-			)
-
-			if migrationChoice == "ok" then
-				LrTasks.startAsyncTask(function()
-					local status, ok, msg
-					if type(LrTasks) == "table" and type(LrTasks.pcall) == "function" then
-						status, ok, msg = LrTasks.pcall(function()
-							return SearchIndexAPI.migratePhotoIdsFromCatalog()
-						end)
-					else
-						ok, msg = SearchIndexAPI.migratePhotoIdsFromCatalog()
-						status = true
-					end
-
-					if not status then
-						log:error("Photo-ID migration crashed during schema upgrade.")
-						LrDialogs.message(
-							LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateFailed=Photo-ID Migration failed"),
-							tostring(ok),
-							"critical"
-						)
-					elseif ok then
-						LrDialogs.message(
-							LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateTitle=Photo-ID Migration"),
-							msg or LOC("$$$/LrGeniusAI/common/MigrationCompleted=Migration completed.")
-						)
-					else
-						LrDialogs.message(
-							LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateFailed=Photo-ID Migration failed"),
-							msg or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"),
-							"critical"
-						)
-					end
-				end)
-			else
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/MetadataProvider/MigrationReminderTitle=Migration reminder"),
-					LOC(
-						"$$$/LrGeniusAI/MetadataProvider/MigrationReminderMsg=Please run 'Migrate existing DB IDs to photo_id' later from:\nPlug-in Manager -> LrGeniusAI -> Backend Server."
-					),
-					"info"
-				)
-			end
-		end
-
-		if previousSchemaVersion ~= nil and previousSchemaVersion < 25 then
-			local migrationChoice = LrDialogs.confirm(
-				LOC("$$$/LrGeniusAI/MetadataProvider/MigrationRecommendedTitle=Backend ID migration recommended"),
-				LOC(
-					"$$$/LrGeniusAI/MetadataProvider/MigrationRecommendedMsg=The photo_id algorithm was updated to remain stable when metadata is written to files (for example DNG updates).\n\nPlease run the backend ID migration once so existing indexed data matches the new stable IDs."
-				),
-				LOC("$$$/LrGeniusAI/MetadataProvider/RunMigrationNow=Run migration now"),
-				LOC("$$$/LrGeniusAI/common/Later=Later")
-			)
-
-			if migrationChoice == "ok" then
-				LrTasks.startAsyncTask(function()
-					local status, ok, msg
-					if type(LrTasks) == "table" and type(LrTasks.pcall) == "function" then
-						status, ok, msg = LrTasks.pcall(function()
-							return SearchIndexAPI.migratePhotoIdsFromCatalog()
-						end)
-					else
-						ok, msg = SearchIndexAPI.migratePhotoIdsFromCatalog()
-						status = true
-					end
-
-					if not status then
-						log:error("Photo-ID migration crashed during schema upgrade to 25.")
-						LrDialogs.message(
-							LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateFailed=Photo-ID Migration failed"),
-							tostring(ok),
-							"critical"
-						)
-					elseif ok then
-						LrDialogs.message(
-							LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateTitle=Photo-ID Migration"),
-							msg or LOC("$$$/LrGeniusAI/common/MigrationCompleted=Migration completed.")
-						)
-					else
-						LrDialogs.message(
-							LOC("$$$/LrGeniusAI/PluginInfo/PhotoIdMigrateFailed=Photo-ID Migration failed"),
-							msg or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"),
-							"critical"
-						)
-					end
-				end)
-			end
-		end
+		-- Schema 24 and 25 used to open a "Backend ID migration required"
+		-- dialog here. The migration it offered posted to
+		-- `/db/migrate-photo-ids`, which the Rust backend does not serve and
+		-- never has, so the dialog could only ever end in a failed request —
+		-- and the "run it later from the Plug-in Manager" it pointed at was a
+		-- button that does not exist either. A database from before file-based
+		-- photo_id values has to be re-indexed; there is nothing to migrate.
 	end,
 }

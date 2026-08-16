@@ -60,8 +60,8 @@ See [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutte
 ### Error Management
 Batch tasks never fail silently. At the end of a run, a **Task Completion Dialog** aggregates successes and per-photo errors so you can see exactly what failed and why. See [Troubleshooting](Troubleshooting).
 
-## Upgrade: one-time ID migration
+## Upgrade: UUID-era databases
 
-If you are upgrading from an older version that stored Lightroom catalog UUIDs as primary IDs, run the one-time migration:
-
-*File → Plug-in Manager → LrGeniusAI → Backend Server → Migrate existing DB IDs to photo_id*
+If you are upgrading from an older version that stored Lightroom catalog UUIDs as primary IDs,
+re-run **Analyze & Index Photos** over the catalog. There is no migration path — the one the
+plugin used to offer posted to an endpoint the backend does not serve, and has been removed.

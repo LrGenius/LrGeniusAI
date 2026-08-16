@@ -74,7 +74,9 @@ The model list is loaded from the backend at runtime. If it's empty:
 
 ### Why is the MLX section greyed out?
 
-MLX only runs on Apple silicon Macs. On Windows, Linux, or an Intel Mac use the llama.cpp section instead — the status line names the exact reason.
+MLX needs the `lrgenius-mlx` helper next to the server binary. It ships in the official macOS
+installer, so a greyed-out section usually means a source build without the `xcodebuild` step —
+the status line names the exact reason. On Windows the section is llama.cpp rather than MLX.
 
 ### Where do I enter my API key?
 
@@ -202,7 +204,9 @@ For more detailed solutions see [Troubleshooting](Troubleshooting).
 
 ### I upgraded from an old version and search / metadata is missing
 
-You may need to run the one-time **Migrate existing DB IDs to photo_id** migration:  
-*File → Plug-in Manager → LrGeniusAI → Backend Server → Migrate existing DB IDs to photo_id*
+Versions before file-based `photo_id` values stored Lightroom catalog UUIDs as primary IDs,
+and the backend cannot match those against your photos any more.
 
-This is only needed once after upgrading from a version that used Lightroom catalog UUIDs as primary IDs.
+There is no migration — the one the plugin used to offer never worked, and has been removed.
+Run **Analyze & Index Photos** over the catalog again instead. Photos already indexed under
+the current IDs are skipped, so only the ones that genuinely need it are re-processed.

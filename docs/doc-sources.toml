@@ -17,18 +17,12 @@
 # implementation.
 
 
-# Endpoints the plugin calls that the backend does not serve. Each one is a
-# broken feature, not a false positive — the entry exists so the check stays
-# usable while the gap is open, and so the gap has a written owner instead of
-# living in someone's head. Deleting an entry must mean the gap is closed.
-[[contract.known_gap]]
-endpoint = "/db/migrate-photo-ids"
-reason = """
-Legacy UUID -> photo_id migration. Deliberately not ported to the Rust backend
-(routes/db.rs), but MetadataProvider.lua still offers it on upgrades from
-schema < 24 and < 25, so those users get a failed request. Decide whether to
-port the endpoint or drop the dialogs.
-"""
+# Endpoints the plugin calls that the backend does not serve go here, under
+# `[[contract.known_gap]]` with `endpoint` and a `reason`. Each one is a broken
+# feature, not a false positive — the entry exists so the check stays usable
+# while the gap is open, and so the gap has a written owner instead of living in
+# someone's head. Deleting an entry must mean the gap is closed. There are none
+# at the moment.
 
 
 [page."Dev-Backend-API.md"]

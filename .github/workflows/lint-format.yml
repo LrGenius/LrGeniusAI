@@ -10,7 +10,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
-          args: --check plugin/LrGeniusAI.lrdevplugin
+          args: --check plugin/LrGeniusAI.lrdevplugin plugin/spec
       - name: Linting (Lua)
         uses: lunarmodules/luacheck@cc089e3f65acdd1ef8716cc73a3eca24a6b845e4 # v1.2.0
         with:

@@ -368,9 +368,8 @@ Creates and streams a ZIP backup of the full persistent LanceDB data directory.
 
 > **Not available:** `POST /db/migrate-photo-ids` existed on the retired Python backend and
 > converted legacy Lightroom UUID-based IDs to `photo_id` values. It was deliberately not
-> carried over to the Rust backend (see the module comment in `routes/db.rs`). The plugin
-> still calls it from `SearchIndexAPI.migratePhotoIdsFromCatalog`, which therefore fails —
-> see the note in [Troubleshooting](Troubleshooting).
+> carried over (see the module comment in `routes/db.rs`), and the plugin no longer offers
+> it: a database from before file-based `photo_id` values has to be re-indexed.
 >
 > The unrelated one-time ChromaDB → LanceDB migration is a CLI subcommand, not an
 > endpoint: `geniusai-server migrate --db-path <path>`.
