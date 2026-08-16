@@ -510,7 +510,7 @@ jobs:
       - name: Upload unsigned backend binaries for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-exe
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-backend-exe-${{ matrix.arch }}
           path: build/lrgenius-server/
@@ -579,7 +579,7 @@ jobs:
       - name: Upload unsigned installer for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-installer
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-installer-${{ matrix.arch }}
           path: ${{ steps.locate-installer.outputs.path }}
@@ -670,7 +670,7 @@ jobs:
           tar -C build -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
           path: |
@@ -736,7 +736,7 @@ jobs:
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload plugin-only artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lrgenius-ai-plugin-docker-backend
           path: artifact-payload/lrgenius-ai-plugin-docker-backend.tar
