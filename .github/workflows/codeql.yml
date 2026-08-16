@@ -1,0 +1,86 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan (Mondays 04:17 UTC) so new queries reach old code.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# A newer commit on the same PR makes the in-flight scan obsolete; on main every
+# commit is scanned so the alert history stays complete.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      # Required to upload the SARIF results to the code-scanning dashboard.
+      security-events: write
+      # Required by github/codeql-action to read the workflow run status.
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+            runner: ubuntu-latest
+          - language: python
+            build-mode: none
+            runner: ubuntu-latest
+          - language: rust
+            build-mode: none
+            runner: ubuntu-latest
+          # Swift (native/mlx-sidecar) is deliberately not analyzed: CodeQL's
+          # Swift extractor needs a real build, and the sidecar only builds with
+          # xcodebuild plus the Metal toolchain on an Apple-silicon runner
+          # (`swift build` cannot compile MLX's Metal shaders). Adding it would
+          # mean a permanently red job rather than extra coverage.
+          #
+          # Lua (plugin/) has no CodeQL extractor; it is covered by luacheck in
+          # .github/workflows/lint-format.yml.
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The Rust extractor resolves the dependency graph with `cargo metadata`,
+      # so cargo has to be on PATH. It does not compile the workspace, so no
+      # build scripts run and protoc is not needed here.
+      - name: Install Rust toolchain
+        if: matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        if: matrix.language == 'rust'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-rs
+          # Nothing is compiled under build-mode: none, so only the registry
+          # is worth restoring.
+          cache-targets: "false"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: .github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
