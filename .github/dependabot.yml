@@ -1,0 +1,43 @@
+version: 2
+
+updates:
+  # Workflow actions are pinned to commit SHAs (see .github/workflows/*.yml), so
+  # they cannot pick up upstream fixes on their own the way a floating tag does.
+  # Dependabot is what makes that tradeoff sustainable: it opens a PR when a
+  # pinned action publishes a new release, rewriting the SHA and the trailing
+  # version comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      # One PR for the routine bumps instead of a dozen; anything that needs a
+      # closer look tends to be a major, which is excluded here.
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    labels:
+      - "dependencies"
+
+  # The Rust workspace. Grouped the same way: patch/minor churn from a tree this
+  # size (axum, lancedb, ort, tokenizers, …) is not worth one PR per crate.
+  - package-ecosystem: "cargo"
+    directory: "/server-rs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    labels:
+      - "dependencies"
