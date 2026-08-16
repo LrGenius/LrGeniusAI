@@ -344,7 +344,7 @@ impl GeminiProvider {
         let user_prompt = prepare_edit_user_prompt(request);
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
         let generation_config = effective.generation_config(
-            gemini_edit_recipe_schema().clone(),
+            gemini_edit_recipe_schema(request.is_raw).clone(),
             request.temperature,
             max_tokens,
             &request.model,
@@ -393,11 +393,12 @@ impl GeminiProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens,
             output_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 

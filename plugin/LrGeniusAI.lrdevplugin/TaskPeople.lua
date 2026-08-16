@@ -310,6 +310,13 @@ local function showPeopleDialog(ctx, persons, loadError)
 		peopleListBlock,
 	})
 
+	-- `/faces/persons` now returns each person's representative thumbnail
+	-- inline, so this only has to decode and write files. It used to make one
+	-- `/faces/persons/<id>/thumbnail` request per person, and each of those
+	-- scanned the entire face table on the server to return a single image —
+	-- the exact per-item full-scan pattern behind the earlier indexing
+	-- blow-ups. The loop still runs asynchronously and still yields, so a large
+	-- catalog does not block the dialog while the files are written.
 	local thumbLoaderDone = false
 	if #persons > 0 then
 		LrTasks.startAsyncTask(function()
@@ -318,13 +325,17 @@ local function showPeopleDialog(ctx, persons, loadError)
 					return
 				end
 				local p = persons[idx]
-				if p and p.person_id and p.person_id ~= "" then
+				local thumbnail = p and p.thumbnail
+				-- Older backends do not send it; ask for it individually then,
+				-- rather than showing an empty grid.
+				if p and (type(thumbnail) ~= "string" or thumbnail == "") and p.person_id and p.person_id ~= "" then
 					local resp = SearchIndexAPI.getPersonThumbnail(p.person_id)
-					if not thumbLoaderDone and resp and type(resp.thumbnail) == "string" and resp.thumbnail ~= "" then
-						local path = writePersonThumbnailFile(resp.thumbnail, p.person_id, idx)
-						if path and not thumbLoaderDone then
-							props["personThumb_" .. idx] = path
-						end
+					thumbnail = resp and resp.thumbnail
+				end
+				if not thumbLoaderDone and type(thumbnail) == "string" and thumbnail ~= "" then
+					local path = writePersonThumbnailFile(thumbnail, p.person_id or tostring(idx), idx)
+					if path and not thumbLoaderDone then
+						props["personThumb_" .. idx] = path
 					end
 				end
 				LrTasks.yield()

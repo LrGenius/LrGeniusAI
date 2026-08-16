@@ -3,6 +3,7 @@
 //! RAW decoding (`raw`, via `rawler`), JPEG/PNG conversion (`convert`).
 //! HEIC (libheif) decoding is still not wired in.
 
+pub mod capture;
 pub mod convert;
 pub mod cull_config;
 pub mod location;

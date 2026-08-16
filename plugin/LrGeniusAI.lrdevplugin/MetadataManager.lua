@@ -65,6 +65,36 @@ local function findKeywordOnPhotoForParent(photo, parent, targetName)
 end
 
 ---
+-- Appends generated text below what the field already holds, unless it is
+-- already there.
+--
+-- Without the containment check, a delta run stacks duplicates: when a photo is
+-- not regenerated, the backend returns the *stored* description — the same text
+-- that was written to the catalog last time — and appending that to itself
+-- doubles the field on every run.
+--
+-- Exposed for the headless tests in `plugin/spec`; not part of the module's
+-- contract for callers running inside Lightroom.
+--
+-- @param existing string|nil The value currently in the catalog field.
+-- @param incoming string|nil The newly resolved value.
+-- @return string|nil The value to write, or `incoming` unchanged when there is
+--         nothing to append to.
+--
+function MetadataManager.appendText(existing, incoming)
+	existing = existing or ""
+	if existing == "" or incoming == nil or incoming == "" then
+		return incoming
+	end
+	local existingTrimmed = LrStringUtils.trimWhitespace(existing)
+	local incomingTrimmed = LrStringUtils.trimWhitespace(incoming)
+	if incomingTrimmed == "" or existingTrimmed:find(incomingTrimmed, 1, true) then
+		return existing
+	end
+	return existing .. "\n\n" .. incoming
+end
+
+---
 -- Applies the AI-generated metadata to the photo.
 -- @param photo The LrPhoto object.
 -- @param aiResponse The parsed JSON response from the AI.
@@ -83,10 +113,15 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 	local altText = response.metadata.alt_text
 	local keywords = response.metadata.keywords
 
-	local saveTitle = true
-	local saveCaption = true
-	local saveAltText = true
-	local saveKeywords = true
+	-- The apply flags used to be consulted only inside the `validatedData`
+	-- branch below, so without the review dialog — the normal case, see
+	-- `TaskRetrieveMetadata.lua` — every field was written regardless of what
+	-- the user had unchecked. They belong in the initial value; the review
+	-- dialog then narrows further, it never widens.
+	local saveTitle = options.applyTitle ~= false
+	local saveCaption = options.applyCaption ~= false
+	local saveAltText = options.applyAltText ~= false
+	local saveKeywords = options.applyKeywords ~= false
 
 	-- If review was done, use the validated data
 	if validatedData then
@@ -102,18 +137,9 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 
 	-- When appending, merge resolved values with existing catalog metadata
 	if options.appendMetadata then
-		local existingTitle = photo:getFormattedMetadata("title") or ""
-		local existingCaption = photo:getFormattedMetadata("caption") or ""
-		local existingAltText = photo:getFormattedMetadata("altTextAccessibility") or ""
-		if existingTitle ~= "" and title and title ~= "" then
-			title = existingTitle .. "\n\n" .. title
-		end
-		if existingCaption ~= "" and caption and caption ~= "" then
-			caption = existingCaption .. "\n\n" .. caption
-		end
-		if existingAltText ~= "" and altText and altText ~= "" then
-			altText = existingAltText .. "\n\n" .. altText
-		end
+		title = MetadataManager.appendText(photo:getFormattedMetadata("title"), title)
+		caption = MetadataManager.appendText(photo:getFormattedMetadata("caption"), caption)
+		altText = MetadataManager.appendText(photo:getFormattedMetadata("altTextAccessibility"), altText)
 	end
 
 	log:trace("Response: " .. Util.dumpTable(response))
@@ -138,7 +164,12 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 
 	-- Save keywords (sessionCache avoids LrKeyword:getChildren() when the SDK errors there)
 	log:trace("Saving keywords to catalog")
-	if saveKeywords and keywords ~= nil and type(keywords) == "table" and prefs.generateKeywords then
+	-- Gated on `options.applyKeywords` (folded into `saveKeywords` above), not
+	-- on `prefs.generateKeywords`. That preference is written by the Analyze &
+	-- Index dialog alone, so unchecking keywords there used to silently
+	-- suppress them in "Retrieve Metadata from Backend" as well, whatever that
+	-- dialog's own checkbox said.
+	if saveKeywords and keywords ~= nil and type(keywords) == "table" then
 		-- Callers processing a batch should pass `options.keywordSessionCache` so the
 		-- keyword lookup cache and the alias index are built once for the whole run
 		-- instead of once per photo (both are O(catalog keywords) to construct).

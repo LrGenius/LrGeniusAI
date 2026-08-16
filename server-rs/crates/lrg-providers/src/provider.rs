@@ -69,32 +69,59 @@ pub trait LlmProvider: Send + Sync {
 
     /// Generate metadata for a group of photos.
     ///
-    /// The default is a sequential loop, which is exactly what every caller
-    /// did before this seam existed. In-process backends override it to share
-    /// one pinned prompt prefix across parallel decode sequences — which is
-    /// the entire point of batching photos in the first place.
+    /// The default issues the requests with bounded concurrency. It used to be
+    /// a strictly sequential loop, which — together with a preferred batch size
+    /// of 1 and the plugin's single worker — meant a cloud run of 10,000 photos
+    /// was 10,000 round trips end to end, each waiting out the last one's
+    /// latency with the machine idle.
+    ///
+    /// Concurrency is capped at [`MAX_CONCURRENT_REQUESTS`] and never exceeds
+    /// the batch the caller asked for. In-process backends override this
+    /// wholesale to share one pinned prompt prefix across parallel decode
+    /// sequences, which is a different mechanism entirely.
+    ///
+    /// Responses come back in request order regardless of completion order —
+    /// callers pair them positionally with their photos.
     async fn generate_metadata_batch(
         &self,
         requests: &[MetadataGenerationRequest],
     ) -> Vec<MetadataGenerationResponse> {
-        let mut responses = Vec::with_capacity(requests.len());
-        for request in requests {
-            responses.push(self.generate_metadata(request).await);
-        }
-        responses
+        use futures::stream::{self, StreamExt};
+
+        let concurrency = requests.len().clamp(1, MAX_CONCURRENT_REQUESTS);
+        // Collected before streaming: building the futures inside the stream's
+        // closure makes it higher-ranked over the request lifetime, which the
+        // boxed future `async_trait` produces cannot satisfy.
+        let calls: Vec<_> = requests
+            .iter()
+            .map(|request| self.generate_metadata(request))
+            .collect();
+        stream::iter(calls).buffered(concurrency).collect().await
     }
 }
+
+/// Ceiling on in-flight requests for the default batch implementation.
+///
+/// Deliberately small. The providers behind it are rate limited per account
+/// and per minute, and a tripped limit costs far more than the latency saved:
+/// the run fails photos the user then has to find and redo. Four is enough to
+/// hide most of the round-trip latency without looking like a burst.
+pub const MAX_CONCURRENT_REQUESTS: usize = 4;
 
 /// The four REST providers implement the trait by delegating to their own
 /// inherent methods. Keeping the boilerplate here rather than in each provider
 /// module leaves those files as pure REST clients, and makes it obvious at a
 /// glance that no provider quietly diverges from the contract.
 macro_rules! impl_llm_provider {
-    ($ty:ty, $name:literal $(, $is_available:ident)?) => {
+    ($ty:ty, $name:literal, batch = $batch:expr $(, $is_available:ident)?) => {
         #[async_trait]
         impl LlmProvider for $ty {
             fn name(&self) -> &'static str {
                 $name
+            }
+
+            fn preferred_batch_size(&self) -> usize {
+                $batch
             }
 
             async fn generate_metadata(
@@ -133,10 +160,16 @@ macro_rules! impl_llm_provider {
     };
 }
 
-impl_llm_provider!(OpenAiProvider, "chatgpt");
-impl_llm_provider!(GeminiProvider, "gemini");
-impl_llm_provider!(OllamaProvider, "ollama", is_available);
-impl_llm_provider!(LmStudioProvider, "lmstudio", is_available);
+// The two cloud providers overlap requests: their latency is network round
+// trips, and four in flight hides most of it.
+impl_llm_provider!(OpenAiProvider, "chatgpt", batch = MAX_CONCURRENT_REQUESTS);
+impl_llm_provider!(GeminiProvider, "gemini", batch = MAX_CONCURRENT_REQUESTS);
+// Ollama and LM Studio stay at one. They are REST clients, but the server on
+// the other end is a single local model: it serialises the work anyway (Ollama
+// needs OLLAMA_NUM_PARALLEL raised to do otherwise), so overlapping requests
+// buys nothing and risks thrashing a machine that is also running Lightroom.
+impl_llm_provider!(OllamaProvider, "ollama", batch = 1, is_available);
+impl_llm_provider!(LmStudioProvider, "lmstudio", batch = 1, is_available);
 
 /// Everything needed to pick and construct a provider. Credentials and base
 /// URLs live here rather than on the individual requests because they are
@@ -246,22 +279,53 @@ pub fn is_known_provider(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The HTTP providers must keep issuing one request per photo. A width of
-    /// 1 makes the default `generate_metadata_batch` loop exactly once, which
-    /// is what makes server-side batching a no-op for them.
+    fn provider_named(name: &str) -> std::sync::Arc<dyn LlmProvider> {
+        let selection = ProviderSelection {
+            name: name.to_string(),
+            api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
+        build_provider(&selection).expect("should build")
+    }
+
+    /// The cloud providers overlap requests; their cost is network latency,
+    /// and waiting out each round trip in turn is what made a 10,000-photo run
+    /// 10,000 sequential round trips.
     #[test]
-    fn remote_providers_do_not_batch() {
-        for name in ["chatgpt", "gemini", "ollama", "lmstudio"] {
-            let selection = ProviderSelection {
-                name: name.to_string(),
-                api_key: Some("sk-test".to_string()),
-                ..Default::default()
-            };
-            let provider = build_provider(&selection).expect("should build");
+    fn cloud_providers_overlap_requests() {
+        for name in ["chatgpt", "gemini"] {
             assert_eq!(
-                provider.preferred_batch_size(),
+                provider_named(name).preferred_batch_size(),
+                MAX_CONCURRENT_REQUESTS,
+                "{name} should overlap requests"
+            );
+        }
+    }
+
+    /// The local REST providers must keep issuing one request at a time. The
+    /// server on the other end is a single local model that serialises the
+    /// work anyway, so concurrency buys nothing and competes with Lightroom
+    /// for the same machine.
+    #[test]
+    fn local_rest_providers_do_not_batch() {
+        for name in ["ollama", "lmstudio"] {
+            assert_eq!(
+                provider_named(name).preferred_batch_size(),
                 1,
                 "{name} must not batch photos"
+            );
+        }
+    }
+
+    /// Bounded, and never wider than what was asked for: a batch of two must
+    /// not put four requests in flight.
+    #[test]
+    fn concurrency_never_exceeds_the_batch_or_the_cap() {
+        for (batch, expected) in [(0usize, 1usize), (1, 1), (2, 2), (4, 4), (50, 4)] {
+            assert_eq!(
+                batch.clamp(1, MAX_CONCURRENT_REQUESTS),
+                expected,
+                "batch of {batch}"
             );
         }
     }

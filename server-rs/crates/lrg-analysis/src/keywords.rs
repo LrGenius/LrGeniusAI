@@ -223,7 +223,20 @@ fn collect_nested_keywords(
     seen: &mut HashSet<String>,
     out: &mut Vec<String>,
 ) {
-    for value in map.values() {
+    for (category, value) in map {
+        // The category name is a keyword too. It gets written to the catalog
+        // as the parent of everything under it, so Lightroom's own search
+        // finds it — while this string, which is what `/search`'s metadata
+        // half matches against, used to contain only the leaves. Searching
+        // "People" or "Family" therefore found nothing the plugin had just
+        // put in the catalog under exactly those names.
+        //
+        // `flattened_keywords` is a search index, never shown to anyone, so
+        // there is no display cost to carrying them.
+        out.extend(normalize_keyword_text(
+            &Value::String(category.clone()),
+            seen,
+        ));
         match value {
             Value::Array(items) => {
                 for kw in items {
@@ -418,6 +431,10 @@ mod tests {
 
     #[test]
     fn flatten_keywords_nested_category_dict_recurses() {
+        // Category names are included alongside the leaves. They are written
+        // to the catalog as parent keywords, so leaving them out of this
+        // string meant `/search`'s metadata half could not find a keyword the
+        // plugin had just created.
         let value = json!({
             "People": {"Family": ["Mom", "Dad"]},
             "Places": ["Beach"],
@@ -425,14 +442,25 @@ mod tests {
         let result = flatten_keywords_to_string(&value);
         let mut parts: Vec<&str> = result.split(", ").collect();
         parts.sort_unstable();
-        assert_eq!(parts, vec!["Beach", "Dad", "Mom"]);
+        assert_eq!(
+            parts,
+            vec!["Beach", "Dad", "Family", "Mom", "People", "Places"]
+        );
     }
 
     #[test]
     fn flatten_keywords_dict_leaf_with_name_is_not_recursed_into() {
         // A dict value that itself looks like a {name, synonyms} keyword
-        // object (not a further category) must be treated as a leaf.
+        // object (not a further category) must be treated as a leaf — its key
+        // is still the category it sits under.
         let value = json!({"Category": {"name": "Sunset", "synonyms": ["Dusk"]}});
-        assert_eq!(flatten_keywords_to_string(&value), "Sunset, Dusk");
+        assert_eq!(flatten_keywords_to_string(&value), "Category, Sunset, Dusk");
+    }
+
+    #[test]
+    fn a_category_name_is_deduped_like_any_other_keyword() {
+        // A leaf that repeats its category must not appear twice.
+        let value = json!({"Beach": ["beach", "Sand"]});
+        assert_eq!(flatten_keywords_to_string(&value), "Beach, Sand");
     }
 }

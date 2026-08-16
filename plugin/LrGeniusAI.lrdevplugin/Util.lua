@@ -179,6 +179,45 @@ local function safeGetFormattedMetadata(photo, key)
 end
 
 ---
+-- Whether a photo is a raw capture, as Lightroom sees it.
+--
+-- The backend cannot work this out for itself: everything it receives has been
+-- normalised to JPEG first, so the original encoding is no longer in the bytes.
+-- Lightroom's `fileFormat` is the authoritative answer, and this is the single
+-- place that reads it, so the rest of the plug-in and the backend agree on one
+-- definition rather than each guessing from a file extension.
+--
+-- Why it matters: raw holds a stop or more above what its default rendering
+-- shows, so blown highlights are recoverable there and gone on a rendered file.
+-- The edit guardrails use it to decide how far the white point may be pushed.
+--
+-- It also decides which scale Lightroom's `Temp` is on: Kelvin for raw, a
+-- relative -100..100 for JPEG/TIFF/PNG. Applying the wrong one ruins the photo,
+-- so the three answers are kept apart: a readable non-raw format is `false`, but
+-- a format we could not read at all is `nil` rather than `false`. Callers treat
+-- `nil` as "assume raw", which is what the plug-in did before this existed and
+-- what leaves an unreadable raw's white balance alone.
+--
+-- DNG counts as raw — that is how Lightroom treats it, and a DNG carries the
+-- same headroom.
+--
+-- @param photo LrPhoto The photo object.
+-- @return boolean|nil True for RAW and DNG, false for a known other format,
+--         nil when the format could not be determined.
+--
+function Util.isRawPhoto(photo)
+	if photo == nil then
+		return nil
+	end
+	local format = safeGetRawMetadata(photo, "fileFormat")
+	if type(format) ~= "string" or format == "" then
+		return nil
+	end
+	format = format:upper()
+	return format == "RAW" or format == "DNG"
+end
+
+---
 -- Extracts standardized EXIF metadata from a photo for use by the backend.
 -- Handles robustness for newer RAW formats (like .CR3) where raw metadata might be elusive.
 -- @param photo LrPhoto The photo object.

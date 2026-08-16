@@ -67,6 +67,15 @@ pub(crate) struct EditOptions {
     engine: crate::llm_engine::EngineOverrides,
     catalog_id: Option<String>,
     use_training_style: bool,
+    /// Whether the photo this edit is for is a raw file.
+    ///
+    /// Two consumers: the edit guardrails, to decide whether blown highlights
+    /// have anything behind them, and the `temperature` scale — Lightroom
+    /// exposes Kelvin for raw and a relative -100..100 for everything else.
+    /// It cannot be recovered from the bytes the backend receives — those have
+    /// already been normalised to JPEG — so the plugin sends it, and the
+    /// filename is the fallback.
+    pub(crate) is_raw: Option<bool>,
 }
 
 impl Default for EditOptions {
@@ -104,6 +113,7 @@ impl Default for EditOptions {
             lmstudio_base_url: None,
             catalog_id: None,
             use_training_style: true,
+            is_raw: None,
             engine: crate::llm_engine::EngineOverrides::default(),
         }
     }
@@ -177,6 +187,10 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         use_training_style: bool_field(fields, "use_training_style", true),
+        // Absent means "unknown", which is not the same as false: the plugin
+        // may predate this field, and guessing raw for it would hand a JPEG
+        // highlight headroom it does not have.
+        is_raw: fields.get("is_raw").map(|v| v.to_lowercase() == "true"),
     }
 }
 
@@ -252,6 +266,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         use_training_style: get_bool("use_training_style", true),
+        is_raw: data.get("is_raw").and_then(Value::as_bool),
     }
 }
 
@@ -303,20 +318,49 @@ pub(crate) fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
 /// re-embedding here, same as Python's best-effort try/except), brute-force
 /// cosine-rank the (typically small) `edit_training` table, and shape the
 /// top matches as the few-shot JSON `prompts::format_training_example` expects.
+/// Why a training-style request came back with nothing, for the user.
+///
+/// "Learn from my edits" silently doing nothing is worse than it not being
+/// offered: the edit still arrives, just without the style the user asked for,
+/// and there was no way to tell the two apart.
+pub(crate) enum NoTrainingExamples {
+    /// The photo has never been indexed, so there is no embedding to match
+    /// training examples against.
+    PhotoNotIndexed,
+    /// The photo is fine; the user has not saved any usable examples yet.
+    NoneStored,
+}
+
+impl NoTrainingExamples {
+    pub(crate) fn message(&self) -> &'static str {
+        match self {
+            NoTrainingExamples::PhotoNotIndexed => {
+                "Style matching was skipped: this photo is not indexed yet, so there is no \
+                 embedding to compare your saved edits against. Run Analyze & Index with \
+                 \"Enable smart photo search\" on it first."
+            }
+            NoTrainingExamples::NoneStored => {
+                "Style matching was skipped: no usable training examples are stored yet. \
+                 Use \"Save Edits as AI Training Examples\" on photos you have edited yourself."
+            }
+        }
+    }
+}
+
 pub(crate) async fn fetch_training_examples(
     store: &Store,
     photo_id: &str,
     n_results: usize,
-) -> Vec<Value> {
+) -> Result<Vec<Value>, NoTrainingExamples> {
     let Ok(mut existing) = store.get(IMAGE_TABLE, &[photo_id.to_string()]).await else {
-        return Vec::new();
+        return Err(NoTrainingExamples::PhotoNotIndexed);
     };
     let Some(query_embedding) = existing.pop().and_then(|r| r.vector) else {
-        return Vec::new();
+        return Err(NoTrainingExamples::PhotoNotIndexed);
     };
 
     let Ok(records) = store.scan_all(TRAINING_TABLE).await else {
-        return Vec::new();
+        return Err(NoTrainingExamples::NoneStored);
     };
     let mut scored: Vec<(f64, StoreRecord)> = records
         .into_iter()
@@ -327,8 +371,11 @@ pub(crate) async fn fetch_training_examples(
         .collect();
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     scored.truncate(n_results);
+    if scored.is_empty() {
+        return Err(NoTrainingExamples::NoneStored);
+    }
 
-    scored
+    Ok(scored
         .into_iter()
         .map(|(_, r)| {
             let develop_settings = r
@@ -344,7 +391,7 @@ pub(crate) async fn fetch_training_examples(
                 "develop_settings": develop_settings,
             })
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) async fn generate_edit_recipe_for_photo(
@@ -353,6 +400,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     options: &EditOptions,
     image_bytes: &[u8],
     photo_id: &str,
+    filename: Option<&str>,
 ) -> EditGenerationResponse {
     let provider = options
         .provider
@@ -395,10 +443,20 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     request.composition_mode = options.composition_mode.clone();
     request.ollama_base_url = options.ollama_base_url.clone();
     request.lmstudio_base_url = options.lmstudio_base_url.clone();
+    // Decides which `temperature` scale the schema declares and the
+    // normalizer clamps to: Kelvin for raw, -100..100 for everything else.
+    request.is_raw = options.is_raw;
 
+    // Surfaced rather than swallowed: the plugin already renders `warning`,
+    // and "learn from my edits" quietly falling back to the generic prompt is
+    // exactly the kind of silent no-op this endpoint should not have.
+    let mut training_warning: Option<&'static str> = None;
     if options.use_training_style {
         if let Some(store) = store {
-            request.training_examples = fetch_training_examples(store, photo_id, 3).await;
+            match fetch_training_examples(store, photo_id, 3).await {
+                Ok(examples) => request.training_examples = examples,
+                Err(reason) => training_warning = Some(reason.message()),
+            }
         }
     }
 
@@ -425,14 +483,58 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     };
 
     if response.success {
-        if let Some(recipe) = response.recipe.take() {
+        if let Some(mut recipe) = response.recipe.take() {
+            // Guardrails before the control filter, not after: a move the user
+            // switched off must not first be scaled and then discarded, which
+            // would spend budget on a field that never reaches the photo and
+            // shrink the ones that do.
+            response.guardrail_reasons = crate::edit_budget::measure_and_apply(
+                &mut recipe,
+                image_bytes,
+                &capture_conditions(options, filename, image_bytes),
+            );
+            if !response.guardrail_reasons.is_empty() {
+                log::info!(
+                    "Photo {photo_id}: edit constrained by the frame ({}).",
+                    response.guardrail_reasons.join(", ")
+                );
+            }
             let controls = controls_map(options);
             response.recipe = Some(lrg_providers::edit_recipe::filter_edit_recipe_by_controls(
                 &recipe, &controls,
             ));
         }
     }
+    // Appended rather than assigned: a provider-level warning says something
+    // about the edit that was produced, and losing it to say the style was
+    // skipped would trade one silent failure for another.
+    if let Some(msg) = training_warning {
+        response.warning = Some(match response.warning.take() {
+            Some(existing) => format!("{existing}\n{msg}"),
+            None => msg.to_string(),
+        });
+    }
     response
+}
+
+/// What the camera was doing, as far as the guardrails care.
+///
+/// `is_raw` prefers what the plugin said, because it reads Lightroom's own
+/// `fileFormat` and is therefore authoritative. The filename is the fallback
+/// for older plugins and for `/edit_base64` callers that send neither — it is a
+/// heuristic, and one whose unknown case reads as *not* raw, so a frame that
+/// cannot be placed gets the conservative budget.
+pub(crate) fn capture_conditions(
+    options: &EditOptions,
+    filename: Option<&str>,
+    image_bytes: &[u8],
+) -> lrg_analysis::edit_guardrails::CaptureConditions {
+    lrg_analysis::edit_guardrails::CaptureConditions {
+        iso: lrg_imaging::capture::read_iso(image_bytes),
+        is_raw: options
+            .is_raw
+            .unwrap_or_else(|| filename.is_some_and(lrg_imaging::capture::is_raw_filename)),
+    }
 }
 
 fn edit_fail(uuid: &str, error: String) -> EditGenerationResponse {
@@ -508,10 +610,18 @@ pub(crate) async fn persist_edit_recipe(
         "edit_run_date".into(),
         json!(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
     );
-    metadata
-        .entry("provider")
-        .or_insert(json!(options.provider));
-    metadata.entry("model").or_insert(json!(options.model));
+    // `json!(None::<String>)` is JSON `null`, not an absent field, so the
+    // unconditional insert stored `"provider": null` on every edit made
+    // without an explicit provider — a value every reader then has to special
+    // case. Leave the field out instead.
+    if let Some(provider) = &options.provider {
+        metadata
+            .entry("provider")
+            .or_insert_with(|| json!(provider));
+    }
+    if let Some(model) = &options.model {
+        metadata.entry("model").or_insert_with(|| json!(model));
+    }
     let has_embedding_existing = metadata
         .get("has_embedding")
         .and_then(Value::as_bool)
@@ -547,6 +657,7 @@ pub(crate) fn success_payload(
     recipe: &Value,
     options: &EditOptions,
     warning: Option<&str>,
+    guardrail_reasons: &[String],
 ) -> Value {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut payload = json!({
@@ -558,11 +669,43 @@ pub(crate) fn success_payload(
         "edit_warnings": recipe.get("warnings").cloned().unwrap_or(json!([])),
         "edit_model": options.model,
         "edit_rundate": now,
+        // Separate from `edit_warnings`, which are the model's own remarks
+        // about what it could not do. These are the backend's, about what the
+        // photograph would not take.
+        "guardrail_reasons": guardrail_reasons,
+        "guardrail_explanations": guardrail_explanations(guardrail_reasons),
     });
     if let Some(w) = warning {
         payload["warning"] = json!(w);
     }
     payload
+}
+
+/// The user-facing sentence for each reason code.
+///
+/// Resolved here rather than in the plugin so the wording lives next to the
+/// rule that produces it — `GuardrailReason::explanation` is written for a
+/// photographer, and a second copy in Lua would drift from the thresholds it
+/// describes. Unknown codes are dropped rather than echoed: a plugin talking to
+/// a newer backend should show nothing rather than a bare identifier.
+fn guardrail_explanations(codes: &[String]) -> Vec<String> {
+    use lrg_analysis::edit_guardrails::GuardrailReason::*;
+    const ALL: [lrg_analysis::edit_guardrails::GuardrailReason; 6] = [
+        HardLightNoAddedContrast,
+        NoTonalHeadroom,
+        FlatLightContrastAllowed,
+        HighlightsUnrecoverable,
+        HighIsoShadowsLimited,
+        ShadowsAlreadyClipped,
+    ];
+    codes
+        .iter()
+        .filter_map(|code| {
+            ALL.iter()
+                .find(|reason| reason.code() == code)
+                .map(|reason| reason.explanation().to_string())
+        })
+        .collect()
 }
 
 async fn edit_multipart(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
@@ -667,9 +810,15 @@ async fn finish_edit(
     filename: Option<&str>,
 ) -> Response {
     let store = state.store();
-    let response =
-        generate_edit_recipe_for_photo(state, store.as_deref(), options, image_bytes, photo_id)
-            .await;
+    let response = generate_edit_recipe_for_photo(
+        state,
+        store.as_deref(),
+        options,
+        image_bytes,
+        photo_id,
+        filename,
+    )
+    .await;
 
     let Some(recipe) = response.recipe.filter(|_| response.success) else {
         return (
@@ -685,7 +834,13 @@ async fn finish_edit(
         }
     }
 
-    let mut payload = success_payload(photo_id, &recipe, options, response.warning.as_deref());
+    let mut payload = success_payload(
+        photo_id,
+        &recipe,
+        options,
+        response.warning.as_deref(),
+        &response.guardrail_reasons,
+    );
     payload["input_tokens"] = json!(response.input_tokens);
     payload["output_tokens"] = json!(response.output_tokens);
     Json(payload).into_response()
@@ -715,6 +870,7 @@ mod tests {
             ("adjust_lens_corrections", "false"),
             ("allow_auto_crop", "false"),
             ("include_masks", "false"),
+            ("is_raw", "true"),
             ("api_key", "sk-test"),
         ]
         .into_iter()
@@ -743,6 +899,10 @@ mod tests {
         assert!(!opts.include_masks);
         assert_eq!(opts.style_strength, 0.8);
         assert_eq!(opts.composition_mode, "aggressive");
+        // Not a creative control, but it travels on the same form: the
+        // guardrails need to know whether clipped highlights are recoverable,
+        // and the exported JPEG no longer carries that.
+        assert_eq!(opts.is_raw, Some(true));
     }
 
     #[test]
@@ -766,6 +926,9 @@ mod tests {
         assert!(opts.include_masks);
         assert_eq!(opts.style_strength, 0.5);
         assert_eq!(opts.composition_mode, "subtle");
+        // `is_raw` is the exception: absent means "unknown", not "yes". A
+        // guessed raw flag would license highlight recovery the file cannot do.
+        assert_eq!(opts.is_raw, None);
     }
 
     #[test]

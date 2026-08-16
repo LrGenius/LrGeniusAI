@@ -102,6 +102,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- Context options
 	props.submitKeywords = prefs.submitKeywords or false
 	props.submitFolderName = prefs.submitFolderName or false
+	-- Defaults on: the backend has always read the photo's GPS and put the
+	-- place name in the prompt, so switching it off by default would silently
+	-- take context away from existing users. The checkbox is what makes it a
+	-- choice rather than something that just happens.
+	props.submitGps = prefs.submitGps ~= false
 	props.showPhotoContextDialog = prefs.showPhotoContextDialog or false
 
 	-- SaveDataToCatalog
@@ -456,6 +461,15 @@ local function showAnalyzeAndIndexDialog(ctx)
 							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/folderNames=Folder Names"),
 						}),
 					}),
+					f:row({
+						f:spacer({ width = share("ctxLabelWidth") }),
+						f:checkbox({
+							value = bind("submitGps"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SubmitGps=Location (looked up from the photo's GPS coordinates)"
+							),
+						}),
+					}),
 					f:separator({ fill_horizontal = 1 }),
 					f:row({
 						f:static_text({
@@ -594,6 +608,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.maxTokens = props.maxTokens
 		prefs.submitKeywords = props.submitKeywords
 		prefs.submitFolderName = props.submitFolderName
+		prefs.submitGps = props.submitGps
 		prefs.showPhotoContextDialog = props.showPhotoContextDialog
 		prefs.enableValidation = props.enableValidation
 		prefs.saveDataToCatalog = props.saveDataToCatalog
@@ -780,6 +795,7 @@ LrTasks.startAsyncTask(function()
 			generate_alt_text = props.generateAltText,
 			submit_keywords = props.submitKeywords,
 			submit_folder_names = props.submitFolderName,
+			submit_gps = props.submitGps,
 			submit_user_context = props.showPhotoContextDialog,
 			enableMetadata = props.enableMetadata,
 			enableFaces = props.enableFaces,

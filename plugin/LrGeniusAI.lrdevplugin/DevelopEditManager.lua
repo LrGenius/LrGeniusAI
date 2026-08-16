@@ -100,6 +100,9 @@ local DEVELOP_VALUE_BOUNDS = {
 	Shadows2012 = { min = -100, max = 100 },
 	Whites2012 = { min = -100, max = 100 },
 	Blacks2012 = { min = -100, max = 100 },
+	-- Raw only. Lightroom's Temp is Kelvin for raw files and a relative
+	-- -100..100 for JPEG/TIFF/PNG; see TEMP_BOUNDS_RELATIVE below and
+	-- `temperature_range` in `edit_recipe.rs`, which has to agree.
 	Temp = { min = 2000, max = 50000 },
 	Tint = { min = -150, max = 150 },
 	Texture = { min = -100, max = 100 },
@@ -143,6 +146,17 @@ local DEVELOP_VALUE_BOUNDS = {
 	CropBottom = { min = 0, max = 1 },
 	CropAngle = { min = -45, max = 45 },
 }
+
+-- Non-raw originals use a relative white balance. Clamping such a photo's Temp
+-- with the Kelvin bounds above turned a sensible `+10` into 2000 — maximum
+-- cool — because the clamp raised it to the Kelvin minimum.
+local TEMP_BOUNDS_RELATIVE = { min = -100, max = 100 }
+
+-- A value this large on the relative scale can only be Kelvin that reached us
+-- anyway: an older backend, or a model that ignored the schema. Clamping it
+-- would apply maximum warmth to every affected photo, so it is dropped
+-- instead. Mirrors `KELVIN_LOOKING` in `edit_recipe.rs`.
+local TEMP_KELVIN_LOOKING = 500
 
 for _, label in pairs(HSL_LABELS) do
 	DEVELOP_VALUE_BOUNDS["HueAdjustment" .. label] = { min = -100, max = 100 }
@@ -447,11 +461,16 @@ local function mergeSettings(target, source)
 	end
 end
 
-local function normalizeDevelopValue(key, value)
+-- `isRaw` is only consulted for `Temp`; every other key means the same thing on
+-- both kinds of file. `nil` keeps the historical Kelvin behaviour.
+local function normalizeDevelopValue(key, value, isRaw)
 	if type(value) ~= "number" then
 		return value
 	end
 	local bounds = DEVELOP_VALUE_BOUNDS[key]
+	if key == "Temp" and isRaw == false then
+		bounds = TEMP_BOUNDS_RELATIVE
+	end
 	if not bounds then
 		return value
 	end
@@ -473,7 +492,7 @@ local function normalizeDevelopValue(key, value)
 	return value
 end
 
-local function mergeGlobalDevelopSettings(currentSettings, aiSettings)
+local function mergeGlobalDevelopSettings(currentSettings, aiSettings, isRaw)
 	local merged = {}
 	-- Start with existing settings to preserve all state, including linked keys
 	-- like crop coordinates and tone curves that aren't being touched by the AI.
@@ -487,7 +506,7 @@ local function mergeGlobalDevelopSettings(currentSettings, aiSettings)
 	-- key the recipe carries replaces the current value rather than adding to it.
 	-- Keys the recipe does not mention keep whatever the photo already had.
 	for key, value in pairs(aiSettings or {}) do
-		merged[key] = normalizeDevelopValue(key, value)
+		merged[key] = normalizeDevelopValue(key, value, isRaw)
 	end
 	return merged
 end
@@ -551,6 +570,23 @@ function DevelopEditManager.formatRecipeDetails(response)
 	table.insert(lines, "Summary")
 	table.insert(lines, recipe.summary or "AI-generated Lightroom edit recipe")
 	table.insert(lines, "")
+
+	-- What the photograph itself would not take, as opposed to what the model
+	-- decided. Present only when a limit actually changed the recipe, so an
+	-- edit that came back as generated shows nothing here. The sentences are
+	-- written by the backend next to the thresholds that produce them
+	-- (`GuardrailReason::explanation`); duplicating them in Lua would let the
+	-- two drift apart.
+	if type(response) == "table" and type(response.guardrail_explanations) == "table" then
+		local explanations = response.guardrail_explanations
+		if #explanations > 0 then
+			table.insert(lines, LOC("$$$/LrGeniusAI/DevelopEdit/AdjustedForPhoto=Adjusted for this photo"))
+			for _, explanation in ipairs(explanations) do
+				table.insert(lines, "- " .. tostring(explanation))
+			end
+			table.insert(lines, "")
+		end
+	end
 
 	local globalSettings = recipe.global or {}
 	table.insert(lines, "Global adjustments")
@@ -663,7 +699,7 @@ function DevelopEditManager.persistEditRecipe(photo, response, warnings, status)
 	log:trace("DevelopEditManager.persistEditRecipe: done warningsCount=" .. tostring(#allWarnings))
 end
 
-local function buildDevelopSettings(recipe, warnings)
+local function buildDevelopSettings(recipe, warnings, isRaw)
 	local developSettings = {}
 	local globalSettings = recipe.global or {}
 
@@ -671,6 +707,21 @@ local function buildDevelopSettings(recipe, warnings)
 		local value = globalSettings[key]
 		if value ~= nil then
 			developSettings[lrKey] = value
+		end
+	end
+
+	-- Dropped here rather than clamped in normalizeDevelopValue, because the
+	-- merge starts from the photo's current settings: removing the key later
+	-- would take the photo's own white balance with it, whereas never adding it
+	-- simply leaves the existing value alone.
+	if isRaw == false and type(developSettings.Temp) == "number" then
+		if math.abs(developSettings.Temp) > TEMP_KELVIN_LOOKING then
+			appendWarning(
+				warnings,
+				"Ignored the proposed white balance: it is a Kelvin value, and this photo is not a raw file, "
+					.. "where Lightroom expects a relative -100 to +100 value instead."
+			)
+			developSettings.Temp = nil
 		end
 	end
 
@@ -741,7 +792,11 @@ end
 
 local function applyGlobalDevelopSettings(photo, recipe, warnings)
 	log:trace("DevelopEditManager.applyGlobalDevelopSettings: start")
-	local developSettings = buildDevelopSettings(recipe, warnings)
+	-- Read from the catalog rather than passed in: the backend was told the
+	-- same thing when the recipe was generated, but a recipe can also be
+	-- re-applied later, and the file is the authority either way.
+	local isRaw = Util.isRawPhoto(photo)
+	local developSettings = buildDevelopSettings(recipe, warnings, isRaw)
 	local cropInRecipe = recipe and recipe.global and recipe.global.crop
 	if type(cropInRecipe) == "table" then
 		log:trace(
@@ -779,7 +834,7 @@ local function applyGlobalDevelopSettings(photo, recipe, warnings)
 		return photo:getDevelopSettings()
 	end)
 	if okCurrent and type(currentOrErr) == "table" then
-		mergedSettings = mergeGlobalDevelopSettings(currentOrErr, developSettings)
+		mergedSettings = mergeGlobalDevelopSettings(currentOrErr, developSettings, isRaw)
 	else
 		appendWarning(
 			warnings,

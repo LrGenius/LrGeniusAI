@@ -52,3 +52,13 @@ for _, name in ipairs({
 }) do
 	_G[name] = stub_namespace()
 end
+
+-- A real implementation, not a no-op: code under test compares trimmed strings,
+-- and a stub returning nil would make such a comparison pass for the wrong
+-- reason. Matches the SDK's documented behaviour (leading/trailing whitespace).
+_G.LrStringUtils.trimWhitespace = function(s)
+	if type(s) ~= "string" then
+		return s
+	end
+	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end

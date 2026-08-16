@@ -354,7 +354,9 @@ describe("Util.buildHierarchyFromPaths", function()
 		assert.is_not_nil(result.Animals.Birds)
 		local found = false
 		for _, v in ipairs(result.Animals.Birds) do
-			if v == "Owl" then found = true end
+			if v == "Owl" then
+				found = true
+			end
 		end
 		assert.is_true(found)
 	end)
@@ -490,8 +492,12 @@ describe("Util.keywordTableToHierarchyStringList", function()
 		local parts = splitSemicolon(result)
 		local hasCat, hasDog = false, false
 		for _, p in ipairs(parts) do
-			if p:find("Cat", 1, true) then hasCat = true end
-			if p:find("Dog", 1, true) then hasDog = true end
+			if p:find("Cat", 1, true) then
+				hasCat = true
+			end
+			if p:find("Dog", 1, true) then
+				hasDog = true
+			end
 		end
 		assert.is_true(hasCat)
 		assert.is_true(hasDog)
@@ -511,7 +517,9 @@ describe("Util.keywordTableToHierarchyStringList", function()
 		local parts = splitSemicolon(result)
 		assert.are.equal(2, #parts)
 		local paths = {}
-		for _, p in ipairs(parts) do paths[p] = true end
+		for _, p in ipairs(parts) do
+			paths[p] = true
+		end
 		assert.is_true(paths["Fruit>Apple"])
 		assert.is_true(paths["Vegetable>Carrot"])
 	end)
@@ -539,7 +547,9 @@ describe("Util.keywordTableToStringList", function()
 		local parts = splitSemicolon(result)
 		assert.are.equal(2, #parts)
 		local have = {}
-		for _, p in ipairs(parts) do have[p] = true end
+		for _, p in ipairs(parts) do
+			have[p] = true
+		end
 		assert.is_true(have["Cat"])
 		assert.is_true(have["Dog"])
 	end)
@@ -557,7 +567,9 @@ describe("Util.keywordTableToStringList", function()
 		local parts = splitSemicolon(result)
 		assert.are.equal(2, #parts)
 		local have = {}
-		for _, p in ipairs(parts) do have[p] = true end
+		for _, p in ipairs(parts) do
+			have[p] = true
+		end
 		assert.is_true(have["Mango"])
 		assert.is_true(have["Pea"])
 	end)
@@ -578,7 +590,9 @@ describe("Util.keywordTableToStringList", function()
 		local parts = splitSemicolon(result)
 		assert.are.equal(3, #parts)
 		local have = {}
-		for _, p in ipairs(parts) do have[p] = true end
+		for _, p in ipairs(parts) do
+			have[p] = true
+		end
 		assert.is_true(have["Apple"])
 		assert.is_true(have["Banana"])
 		assert.is_true(have["Cherry"])
