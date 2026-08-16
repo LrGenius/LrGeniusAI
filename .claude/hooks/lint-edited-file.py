@@ -8,7 +8,6 @@ runs — but only on that one file, so it is fast:
 
   * plugin/**/*.lua        -> luacheck (uses the repo .luacheckrc) + stylua --check
   * server-rs/**/*.rs      -> cargo fmt --check (whole workspace; cheap) + clippy on the touched package
-  * TranslatedStrings_*.txt -> scripts/check_translations.py (key-set parity)
 
 Exit codes (per the Claude Code hook protocol):
   0  -> silent success, nothing to report
@@ -74,12 +73,9 @@ def lint(path: str, repo: str):
         if ran and rc != 0:
             problems.append(f"cargo clippy:\n{out.strip()}")
 
-    elif os.path.basename(path).startswith("TranslatedStrings_") and path.endswith(".txt"):
-        checker = os.path.join(repo, "scripts", "check_translations.py")
-        if os.path.exists(checker):
-            ran, rc, out = _run([sys.executable, checker], cwd=repo)
-            if ran and rc != 0:
-                problems.append(out.strip())
+    # The TranslatedStrings_*.txt parity check that used to live here was
+    # dropped along with the translation files themselves: the plugin now
+    # ships LOC() defaults only, so there is nothing left to keep in parity.
 
     return problems
 

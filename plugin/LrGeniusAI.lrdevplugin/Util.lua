@@ -552,6 +552,29 @@ function Util.formatTimestampSafe(timestamp)
 	return w3c:gsub("T", "_"):gsub(":", "-"):sub(1, 19)
 end
 
+---
+-- Formats a duration as "m:ss" (or "h:mm:ss" past an hour) for progress
+-- captions. A ticking clock is what distinguishes a slow operation from a
+-- frozen one, so this is used wherever a task can run for minutes.
+-- @param seconds number Duration in seconds; nil/negative/NaN are treated as 0.
+-- @return string Formatted duration.
+--
+function Util.formatElapsedTime(seconds)
+	local total = tonumber(seconds) or 0
+	-- NaN compares false against itself; catch it before math.floor.
+	if total ~= total or total < 0 then
+		total = 0
+	end
+	total = math.floor(total)
+	local hours = math.floor(total / 3600)
+	local minutes = math.floor((total % 3600) / 60)
+	local secs = total % 60
+	if hours > 0 then
+		return string.format("%d:%02d:%02d", hours, minutes, secs)
+	end
+	return string.format("%d:%02d", minutes, secs)
+end
+
 function Util.copyLogfilesToDesktop(extraInfo)
 	local progressScope = LrProgressScope({
 		title = LOC("$$$/LrGeniusAI/PluginInfo/CopyingLogs=Copying log files to Desktop..."),
