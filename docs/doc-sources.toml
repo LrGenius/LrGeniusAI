@@ -66,11 +66,13 @@ sources = [
 # --- User-facing help pages, keyed to the task that implements the feature ---
 
 [page."Help-AI-Edit.md"]
+# `routes/edit.rs` is deliberately absent: the plugin no longer reaches the
+# LLM edit path, so the page documents the style engine only.
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskAiEditPhotos.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopEditManager.lua",
-  "server-rs/crates/lrg-api/src/routes/edit.rs",
   "server-rs/crates/lrg-api/src/routes/style_edit.rs",
+  "server-rs/crates/lrg-analysis/src/style_engine.rs",
   "server-rs/crates/lrg-api/src/edit_budget.rs",
 ]
 

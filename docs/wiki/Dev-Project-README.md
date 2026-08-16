@@ -56,13 +56,13 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 4. **Pick an AI model.** Either enter a cloud API key in the **Plug-in Manager**, or stay fully local: the **Local AI Model** section offers a curated list of vision models (Gemma 4, Ministral 3, Qwen3-VL, Qwen2.5-VL) — choose one and click *Download*. The section shows the engine your platform ships: **MLX** on macOS, **llama.cpp** on Windows. See [Local AI Models](https://github.com/LrGenius/LrGeniusAI/wiki/Help-Local-AI-Models).
 5. Select photos in the library and choose one of the AI actions from **Library -> Plug-in Extras**:
    - **Analyze & Index Photos...** — AI tagging, descriptions, and search index
-   - **AI Edit Photos...** *(beta)* — generate and apply Lightroom develop edits
+   - **AI Edit Photos...** *(beta)* — generate and apply Lightroom develop edits learned from your own edits
    - **Advanced Search...** — semantic free-text search
    - **Cull Similar Photos...** *(beta)* — burst grouping and auto-ranking
    - **People...** — face clusters and named person collections
    - **Find Similar Images...** — find near-duplicates or visually similar photos
    - **Deduplicate Keyword Synonyms...** — clean up synonym sprawl in your catalog
-6. For AI Edit, start with defaults, keep **Review each proposed edit before applying it** enabled, and tune style via **Overall look** + **Style strength**.
+6. For AI Edit, first teach it your style: edit a few photos by hand and run **Save Edits as AI Training Examples...**. AI Edit builds every recipe from those examples and needs at least five of them — it calls no LLM. Keep **Review each proposed edit before applying it** enabled while you validate the results.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
 

@@ -896,6 +896,11 @@ end
 --   - folder_names string: Folder path
 --   - user_context string: Additional context for the photo
 -- @return boolean success, table|string response - Returns success status and response data or error message
+--
+-- No task calls this any more: AI Edit runs on the style engine
+-- (`SearchIndexAPI.styleEdit`) alone. `/edit` and `/edit_base64` are still
+-- served by the backend, so this wrapper stays as the way back to the
+-- prompt-driven LLM edit rather than being deleted with it.
 ---
 
 function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
@@ -4340,15 +4345,15 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addStr("aperture")
 	addStr("shutter_speed")
 
-	-- Standard edit options forwarded for LLM fallback compatibility.
+	-- Standard edit options, kept for the backend's LLM-fallback contract.
 	--
-	-- The fallback fires exactly when the style engine cannot answer — which for a
-	-- new user with no training examples is the *first* run, since
-	-- `aiEditUseTrainingStyle` defaults on. It used to omit `api_key` entirely, and
-	-- there is no environment-variable fallback in `provider.rs`/`openai.rs`, so
-	-- that first run reached the provider with an empty bearer token and 401'd.
-	-- Everything `generateEditRecipePhoto` sends has to travel here too, or the
-	-- fallback silently produces a different edit than the direct path would.
+	-- `TaskAiEditPhotos` no longer asks for that fallback — it never sends
+	-- `use_llm_fallback`, so the backend's default (off) applies and a photo the
+	-- style engine cannot answer for comes back as an error rather than as an
+	-- LLM edit. The fields stay because `/style_edit` still accepts them and a
+	-- caller that does want the fallback has to be able to send everything
+	-- `generateEditRecipePhoto` sends; `addEditOpt` skips whatever is absent,
+	-- so the style-engine-only path pays nothing for them.
 	local function addEditOpt(key, value)
 		if value ~= nil then
 			table.insert(mimeChunks, { name = key, value = tostring(value) })

@@ -30,7 +30,7 @@ All actions are available under `Library → Plug-in Extras`:
 Passes photos to the AI backend to generate keywords, title, caption, and alt text. Simultaneously creates SigLIP2 semantic embeddings so photos can be found via Advanced Search. Configurable scope (selected, current view, entire catalog), metadata toggles, and extra context options (folder name, date, GPS). See [Help: Analyze and Index](Help-Analyze-and-Index).
 
 ### AI Edit Photos
-For each photo, the backend generates a structured Lightroom develop recipe (global adjustments + optional masks) which the plugin applies via the Lightroom SDK. Supports style presets, style strength, composition/crop modes, per-photo review, and per-photo instruction overrides. See [Help: AI Edit Photos](Help-AI-Edit).
+For each photo, the backend builds a structured Lightroom develop recipe out of your own saved edits — no language model involved — which the plugin applies via the Lightroom SDK. Needs at least five training examples from *Save Edits as AI Training Examples*. Offers per-photo review and can put the edit on a virtual copy instead of the original. See [Help: AI Edit Photos](Help-AI-Edit).
 
 ### Advanced Search
 Translates a natural language query into vector embeddings and compares them against your indexed photos. Results are placed into a new Lightroom Collection sorted by relevance. See [Help: Advanced Search](Help-Advanced-Search).
