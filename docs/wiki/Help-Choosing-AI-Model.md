@@ -162,3 +162,15 @@ two candidates and compare:
 - description quality and language correctness
 - runtime per image and end-to-end batch time
 - system load (local) or token cost (cloud)
+
+---
+
+## Throughput on cloud providers
+
+Cloud runs are dominated by network round trips, not by the model. The backend
+overlaps up to four requests at a time for OpenAI and Gemini, which hides most
+of that latency without looking like a burst to their rate limiters.
+
+Ollama and LM Studio deliberately stay at one request at a time: the server on
+the other end is a single local model that serialises the work anyway, and
+piling requests on it only competes with Lightroom for the same machine.

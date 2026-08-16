@@ -256,9 +256,17 @@ impl FaceModel {
                 continue;
             }
 
+            // Computed once and used twice: the recognition pass below and the
+            // occlusion measure further down both need the *aligned* crop —
+            // mirror asymmetry is only meaningful once the face has been
+            // rotated and scaled onto the canonical template — and both used to
+            // warp it independently with identical arguments. It runs on both
+            // passes; a 112x112 bilinear sample is three orders of magnitude
+            // cheaper than the ArcFace inference `QualityOnly` exists to skip.
+            let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
+
             let embedding = match pass {
                 FacePass::Full => {
-                    let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
                     let blob = arcface::to_blob(&aligned);
                     let rec_input = Tensor::from_array(([1, 3, 112, 112], blob))?;
                     let rec_out = loaded
@@ -293,13 +301,6 @@ impl FaceModel {
             let center_proximity = (1.0 - (offset_x + offset_y) / 2.0).clamp(0.0, 1.0);
 
             let det_score = det.score as f64;
-            // The occlusion measure needs the *aligned* crop, not the raw box:
-            // mirror asymmetry is only meaningful once the face has been
-            // rotated and scaled onto the canonical template. That warp is the
-            // same one the recognition pass does, and it runs on both passes —
-            // it is a 112x112 bilinear sample, three orders of magnitude
-            // cheaper than the ArcFace inference `QualityOnly` exists to skip.
-            let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
             let occlusion = face_quality::occlusion_from_crop(&aligned, 112, &kps_f64, cfg);
             let thumbnail_base64 = match pass {
                 FacePass::Full => thumbnail_112_jpeg(&crop, cw, ch),

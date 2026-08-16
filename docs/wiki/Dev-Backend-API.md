@@ -73,10 +73,13 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
 | `detect_faces` | bool | Run InsightFace detection on the photo |
 | `regenerate` | bool | Re-process even if data already exists |
+| `replace_ss` | bool | Rewrite `ß` as `ss` in the generated title, caption, alt text and keywords. Applied after the model answers, and only to those fields — never to the filename |
+| `exposure_bias` | float | Exposure compensation in EV. Stored, and the decisive signal for culling's bracket detection. Omit when the camera did not record it; never default it to 0 |
+| `is_raw` | bool | Whether the original is raw. Stored on the photo so later work (style training above all) can keep raw and rendered originals apart. Omit when unknown |
 | `extra_context` | object | Optional context hints (folder, date, GPS, keywords) |
 
-### `POST /index_base64`
-Same as `/index` but accepts image data as base64 strings rather than file uploads.
+`/index_by_reference` carries `exposure_bias` and `is_raw` per image inside the
+`images` array instead, since both are properties of the individual photo.
 
 ### `POST /index_by_reference`
 Indexes photos using server-side file paths instead of uploading image data (for local-backend setups where the server has filesystem access).
@@ -113,15 +116,22 @@ Runs a semantic search query against indexed photos.
 
 | Field | Type | Description |
 |---|---|---|
-| `query` | string | Natural language search query |
+| `term` | string | Natural language search query. Also accepted as a query-string parameter |
 | `catalog_id` | string | Restrict to a specific catalog |
-| `scope_ids` | array | Restrict search to specific `photo_id` values |
-| `max_results` | int | Maximum number of results to return |
-| `strictness` | float | Minimum similarity score threshold |
-| `use_clip` | bool | Include visual embedding similarity |
-| `use_metadata` | bool | Include keyword/caption/title text search |
+| `photo_ids` | array | Restrict search to specific `photo_id` values (`uuids` is accepted as an alias) |
+| `max_results` | int | Upper bound on results, across **both** halves of the search |
+| `relevance_strictness` | int | 0–100. `0` disables the knee filter |
+| `search_sources.semantic_siglip` | bool | Include SigLIP embedding similarity |
+| `search_sources.metadata` | bool | Include substring search over the AI metadata |
+| `search_sources.metadata_fields` | array | Which fields to match; defaults to `flattened_keywords`, `alt_text`, `caption`, `title` |
 
-**Response:** `results` array with `photo_id` and `score` fields, sorted by relevance descending.
+`catalog_id` and `photo_ids` are independent filters: passing both narrows to
+their intersection. (Until August 2026 the metadata half skipped the catalog
+check whenever `photo_ids` was present, leaking results from other catalogs.)
+
+**Response:** `results` array of `{photo_id, uuid, distance}`. Semantic matches
+come first, ordered by ascending distance; metadata matches follow with
+`distance: null` and fill whatever is left of `max_results`.
 
 ### `POST /find_similar`
 Finds photos similar to a reference photo using perceptual hash (phash) or CLIP embeddings.
@@ -160,14 +170,50 @@ Generates a Lightroom develop recipe for a photo sent as a file upload.
 | `style_strength` | float | 0.0–1.0, how aggressively to apply the style |
 | `composition_mode` | string | `none`, `subtle`, or `aggressive` |
 | `instruction_override` | string | Optional per-photo free-text instruction |
+| `is_raw` | bool | Whether the *original* is a raw file. Optional; absent means unknown |
+| `adjust_*`, `use_*`, `allow_auto_crop`, `include_masks` | bool | Creative controls. **Absent means enabled** — an unchecked box must travel as an explicit `"false"` |
 
-**Response:** A develop recipe object with global adjustments and optional mask list.
+`is_raw` cannot be recovered on the server: the plugin exports to JPEG before
+uploading, so the original encoding is gone by the time the bytes arrive. It
+decides two things:
+
+- **How far the guardrails let a recipe push.** Raw files still hold detail
+  behind clipped highlights; a rendered file does not.
+- **The unit of `temperature`.** Lightroom's `Temp` is Kelvin for raw and a
+  relative −100..100 for JPEG/TIFF/PNG. The declared JSON schema follows the
+  flag so the model answers in the right unit, and normalization clamps to the
+  matching range. A Kelvin-looking value returned for a non-raw photo is
+  **dropped, not clamped** — clamping 6200 into −100..100 yields +100, a hard
+  orange cast — and the reason lands in `warnings`.
+
+Absent means unknown, which is treated as raw: that is what every catalog
+indexed before the flag existed assumed.
+
+**Response:** A develop recipe object with global adjustments and an optional
+mask list, plus:
+
+| Field | Type | Description |
+|---|---|---|
+| `guardrail_reasons` | string[] | Machine-readable codes for what the frame allowed or refused, e.g. `hard_light_no_added_contrast`, `flat_light_contrast_allowed`. Empty when the budget changed nothing |
+| `guardrail_explanations` | string[] | The same, as sentences for the UI |
+| `edit_warnings` | string[] | Unrelated problems worth surfacing (e.g. no training examples found) |
+
+Before the recipe is returned, the backend decodes the image, measures the
+scene (light hardness, dynamic range, specular fraction, shadow clipping),
+derives a budget from it, and caps contrast-raising fields — `contrast`,
+`clarity`, `dehaze`, the S-strength of the tone curve — plus `shadows` and
+`whites` against it. The cap runs *before* the creative-control filter, so a
+disabled field is never capped and then discarded.
 
 ### `POST /edit_base64`
 Same as `/edit` but accepts image data as base64.
 
 ### `POST /style_edit`
-Internal: applies style training context when building the edit prompt.
+Produces a recipe from the user's own saved edits with no LLM involved: it
+retrieves training examples similar to the photo, re-scores them on exposure,
+scene and time of day, and interpolates their develop settings. Needs at least
+five stored examples. The result passes through the same guardrail budget as
+`/edit` and carries the same `guardrail_reasons`.
 
 ---
 
@@ -180,13 +226,27 @@ Detects faces in an uploaded image and stores their embeddings.
 Finds photos containing faces similar to those in a reference image.
 
 ### `POST /faces/cluster`
-Re-clusters all stored face embeddings into person groups.
+Re-clusters all stored face embeddings into person groups. Faces whose row carries no
+usable embedding are reported as unassigned rather than clustered — an empty
+vector compares as distance 0 to everything and would merge unrelated clusters.
+Above `AGGLOMERATIVE_MAX_POINTS` faces the agglomerative algorithm is skipped
+(its n×n distance matrix would be gigabytes) and DBSCAN is used instead.
 
 ### `GET /faces/persons`
-Returns all detected persons with name, photo count, and optional thumbnails.
+Returns all detected persons with `person_id`, `name`, `face_count`,
+`photo_count` and a representative `thumbnail` (base64 JPEG, empty when the
+person has none).
+
+Every face without a person — an empty `person_id` from a row that was never
+clustered, or `person_unassigned` written by the clusterer — is reported as a
+single entry with an empty `person_id`. The thumbnail is included here on
+purpose: fetching it per person from `/faces/persons/<id>/thumbnail` meant one
+full table scan per person.
 
 ### `GET /faces/persons/<person_id>/thumbnail`
-Returns the representative face thumbnail for a person as JPEG.
+Returns the representative face thumbnail for a person as base64 JPEG. Kept for
+older plugin builds; `GET /faces/persons` already includes it, and this scans
+the whole face table for one image, so it must not be called in a loop.
 
 ### `PUT /faces/persons/<person_id>`
 Updates the name assigned to a person cluster.
@@ -306,10 +366,14 @@ Returns aggregate database statistics:
 ### `GET /db/backup`
 Creates and streams a ZIP backup of the full persistent LanceDB data directory.
 
-### `POST /db/migrate-photo-ids`
-One-time migration endpoint: converts legacy Lightroom UUID-based IDs to `photo_id` values.
-
-**Request body:** `{ "mappings": [{ "old_id": "...", "new_id": "..." }] }`
+> **Not available:** `POST /db/migrate-photo-ids` existed on the retired Python backend and
+> converted legacy Lightroom UUID-based IDs to `photo_id` values. It was deliberately not
+> carried over to the Rust backend (see the module comment in `routes/db.rs`). The plugin
+> still calls it from `SearchIndexAPI.migratePhotoIdsFromCatalog`, which therefore fails —
+> see the note in [Troubleshooting](Troubleshooting).
+>
+> The unrelated one-time ChromaDB → LanceDB migration is a CLI subcommand, not an
+> endpoint: `geniusai-server migrate --db-path <path>`.
 
 ---
 

@@ -18,6 +18,13 @@ and both are served by the same `LocalEngine` trait in
 `lrg-providers/src/local_provider.rs`. Their build requirements differ, so they
 are covered separately below.
 
+**Which one ships is a per-platform decision.** Release builds enable
+`llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not
+compile the feature at all (see `cargo_features` in the release matrix,
+`.github/workflows/release.yml`). Enabling `llamacpp` locally on macOS to
+compare the two engines still works — just don't re-add it to the macOS
+release job.
+
 ## Build & run locally
 
 ```bash
@@ -49,7 +56,8 @@ cargo clippy --workspace --all-targets --features llamacpp
 
 Then point it at a model — see [Local LLM](#local-llm-in-process-llamacpp) below
 for the env vars — or download one from the plugin's settings. The release
-workflow builds with this feature enabled, so shipped binaries have it.
+workflow builds with this feature on Windows only, so the shipped macOS binary
+does **not** have it.
 
 Tests that exercise a real model are `#[ignore]`d, since they need a multi-GB
 GGUF on disk:

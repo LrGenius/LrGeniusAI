@@ -261,8 +261,8 @@ impl OpenAiProvider {
         }
     }
 
-    fn edit_response_format(&self) -> Value {
-        let schema = make_schema_strict(openai_edit_recipe_schema());
+    fn edit_response_format(&self, is_raw: Option<bool>) -> Value {
+        let schema = make_schema_strict(openai_edit_recipe_schema(is_raw));
         json!({"type": "json_schema", "json_schema": {"name": "lightroom_edit_recipe", "schema": schema, "strict": true}})
     }
 
@@ -281,7 +281,7 @@ impl OpenAiProvider {
         let data_uri = format!("data:image/jpeg;base64,{image_b64}");
         let system_prompt = prepare_edit_system_prompt(request);
         let user_prompt = prepare_edit_user_prompt(request);
-        let response_format = self.edit_response_format();
+        let response_format = self.edit_response_format(request.is_raw);
         let is_gpt5 = request.model.starts_with("gpt-5");
         let temperature = if is_gpt5 { 1.0 } else { request.temperature };
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -373,11 +373,12 @@ impl OpenAiProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens,
             output_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 

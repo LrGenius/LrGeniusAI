@@ -161,3 +161,68 @@ describe("DevelopEditManager.formatRecipeDetails", function()
 		assert.is_truthy(DevelopEditManager.formatRecipeDetails({}):find("No edit recipe available", 1, true))
 	end)
 end)
+
+-- Lightroom's Temp is Kelvin for raw and a relative -100..100 for rendered
+-- files. Every clamp below used the Kelvin bounds regardless of the file, which
+-- turned a sensible relative `+10` into 2000 — maximum cool — and a Kelvin
+-- value on a JPEG into +100, maximum warm.
+describe("DevelopEditManager white balance scale", function()
+	it("clamps a raw photo's Temp on the Kelvin scale", function()
+		assert.are.equal(2000, normalizeDevelopValue("Temp", 1500, true))
+		assert.are.equal(50000, normalizeDevelopValue("Temp", 90000, true))
+		assert.are.equal(6200, normalizeDevelopValue("Temp", 6200, true))
+	end)
+
+	it("clamps a non-raw photo's Temp on the relative scale", function()
+		assert.are.equal(10, normalizeDevelopValue("Temp", 10, false))
+		assert.are.equal(-100, normalizeDevelopValue("Temp", -180, false))
+	end)
+
+	it("treats an unknown raw status as raw, as it always did", function()
+		assert.are.equal(6200, normalizeDevelopValue("Temp", 6200, nil))
+	end)
+
+	it("leaves every other key alone whatever the file is", function()
+		assert.are.equal(50, normalizeDevelopValue("Contrast2012", 50, false))
+		assert.are.equal(100, normalizeDevelopValue("Contrast2012", 400, false))
+	end)
+
+	it("drops a Kelvin value for a non-raw photo instead of clamping it", function()
+		-- Clamping 6200 into -100..100 gives +100: a hard orange cast. Leaving
+		-- the photo's own white balance untouched is the lesser harm.
+		local warnings = {}
+		local settings = buildDevelopSettings({ global = { temperature = 6200, contrast = 10 } }, warnings, false)
+
+		assert.is_nil(settings.Temp)
+		assert.are.equal(10, settings.Contrast2012)
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("Kelvin", 1, true))
+	end)
+
+	it("keeps a relative value for a non-raw photo", function()
+		local warnings = {}
+		local settings = buildDevelopSettings({ global = { temperature = 12 } }, warnings, false)
+
+		assert.are.equal(12, settings.Temp)
+		assert.are.equal(0, #warnings)
+	end)
+
+	it("keeps Kelvin for a raw photo", function()
+		local warnings = {}
+		local settings = buildDevelopSettings({ global = { temperature = 6200 } }, warnings, true)
+
+		assert.are.equal(6200, settings.Temp)
+		assert.are.equal(0, #warnings)
+	end)
+
+	it("does not strip the photo's own Temp when it drops the recipe's", function()
+		-- The merge starts from the current settings, so a dropped key has to be
+		-- absent from the recipe rather than nil'd during the merge.
+		local warnings = {}
+		local settings = buildDevelopSettings({ global = { temperature = 6200 } }, warnings, false)
+		local merged = mergeGlobalDevelopSettings({ Temp = 25, Tint = 3 }, settings, false)
+
+		assert.are.equal(25, merged.Temp)
+		assert.are.equal(3, merged.Tint)
+	end)
+end)

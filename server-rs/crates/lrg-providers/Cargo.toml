@@ -17,4 +17,5 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 thiserror = "2"
 gcp_auth = "0.12"
 async-trait = "0.1.91"
+futures = "0.3.34"
 

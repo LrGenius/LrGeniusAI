@@ -4,29 +4,30 @@ The backend can run vision models **itself** — no Ollama, no LM Studio, no
 other app to install or keep running. You pick a model in the Plug-in Manager,
 click *Download*, and analysis happens entirely on your machine.
 
-There are two built-in engines. They do the same job through different
-runtimes, and they use **different model files**, which is why the Plug-in
-Manager shows them as two separate sections:
+**There is nothing to choose.** Each platform ships one built-in engine, and the
+Plug-in Manager shows that one:
 
-| Engine | Provider name | Runs on | GPU acceleration |
+| Platform | Engine | Provider name | GPU acceleration |
 |---|---|---|---|
-| llama.cpp (in-process) | `llamacpp` | macOS, Windows, Linux | Metal (macOS), Vulkan (Windows), CPU (Linux) |
-| MLX (helper process) | `mlx` | Apple silicon Macs only | Metal |
+| macOS (Apple silicon) | MLX (helper process) | `mlx` | Metal |
+| Windows | llama.cpp (in-process) | `llamacpp` | Vulkan, CPU fallback |
 
-**Which one should I use?** On Windows, Linux, or an Intel Mac the question does
-not arise — **llama.cpp** is the only built-in option. On an Apple silicon Mac
-both work, and it is worth running the same 10–20 photos through each: MLX is
-Apple's native inference stack, while llama.cpp reuses the shared prompt prefix
-across the photos in a batch (MLX re-processes it for every photo), which counts
-for more the larger the batch.
+macOS ships MLX because it is Apple's native inference stack and the faster of
+the two on Apple silicon. The two engines use **different model files**, so a
+model downloaded for one is not usable by the other — worth knowing if you move
+a catalog between a Mac and a PC, since each machine needs its own download.
+
+If you are on an Intel Mac, there is no built-in engine; use **Ollama** or **LM
+Studio**, or a cloud provider.
 
 ---
 
 ## 1. Download a model
 
 1. Open `File → Plug-in Manager → LrGeniusAI`.
-2. Scroll to **Local AI Model — MLX (Apple silicon)** or **Local AI Model (no
-   external app)**.
+2. Scroll to **AI model (on this computer)**. It carries one box: **Local AI
+   Model — MLX (Apple silicon)** on macOS, **Local AI Model — llama.cpp** on
+   Windows.
 3. Pick an entry from the dropdown and click **Download**. The list shows the
    approximate download size; the models are several gigabytes, so this takes a
    while on a slow connection.
@@ -83,7 +84,7 @@ Anything found there shows up in the **Installed** list and the model dropdown.
 
 ---
 
-## 3. Advanced settings (llama.cpp only)
+## 3. Advanced settings (Windows / llama.cpp only)
 
 Under the llama.cpp section:
 
@@ -125,18 +126,23 @@ photo at a time.
 
 ## 5. Troubleshooting
 
-**"This backend does not support MLX" / "MLX runs only on Apple silicon Macs"**
-Expected on Windows, Linux, and Intel Macs — use the llama.cpp section instead.
+**"MLX runs only on Apple silicon Macs"**
+Expected on an Intel Mac. There is no built-in engine there — use Ollama, LM
+Studio, or a cloud provider.
 
 **MLX says the helper is missing**
 The MLX engine needs the `lrgenius-mlx` helper next to the server binary. Ship
 it by reinstalling the backend with the official macOS `.pkg`; if you build
 from source, see [Server README](Dev-Server-README) for the `xcodebuild` step.
+Since MLX is the only built-in engine on macOS, this is worth fixing rather
+than working around.
 
-**"This backend build has no local-model support"**
-The backend was compiled without the `llamacpp` feature. Official release
-builds have it; a self-built binary needs
-`cargo build --release -p lrg-server --features llamacpp`.
+**"This backend build has no local-model support"** (Windows)
+The backend was compiled without the `llamacpp` feature. Official Windows
+release builds have it; a self-built binary needs
+`cargo build --release -p lrg-server --features llamacpp`. On macOS this
+message means the backend is a Windows-style build — the macOS release ships
+MLX instead and never reports llama.cpp support.
 
 **The model dropdown shows no local models**
 Nothing is installed yet, or the download did not finish. Check the

@@ -14,7 +14,11 @@ There are three layers, each opt-in on top of the last:
 2. **`llamacpp` feature** — adds in-process local inference via llama.cpp.
    Compiles llama.cpp from source, so it needs `cmake` + `libclang` (for
    `bindgen`), and on Windows a GPU backend (Vulkan, not CUDA — see
-   `server-rs/crates/lrg-llama/Cargo.toml`).
+   `server-rs/crates/lrg-llama/Cargo.toml`). **This is the shipped local engine
+   on Windows only.** Release builds for macOS leave the feature off and ship
+   MLX instead (see `cargo_features` in `.github/workflows/release.yml`); the
+   feature still compiles on macOS, so enabling it locally to compare engines
+   works, it just is not what users get.
 3. **MLX sidecar** — macOS/Apple silicon only. A separate Swift executable,
    not a cargo feature, so it costs nothing to compile on other platforms.
 
@@ -128,7 +132,9 @@ cargo clippy --workspace --all-targets --features llamacpp
 ```
 
 No GPU-SDK step here — llama.cpp uses Metal on macOS, which is already
-available.
+available. Note this is a development convenience only: the macOS release does
+not ship llama.cpp, so a change that only works with this feature on will not
+reach macOS users. MLX (below) is the engine to test against there.
 
 ### 3. MLX sidecar (Apple silicon only)
 

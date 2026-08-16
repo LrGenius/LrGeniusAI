@@ -203,7 +203,7 @@ impl OllamaProvider {
         };
         let system_prompt = prepare_edit_system_prompt(request);
         let user_prompt = prepare_edit_user_prompt(request);
-        let response_schema = openai_edit_recipe_schema();
+        let response_schema = openai_edit_recipe_schema(request.is_raw);
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
 
         let body = json!({
@@ -268,11 +268,12 @@ impl OllamaProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens: 0,
             output_tokens: 0,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 }

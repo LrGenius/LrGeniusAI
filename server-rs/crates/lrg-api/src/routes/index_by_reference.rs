@@ -42,6 +42,7 @@ fn image_overrides(item: &Value) -> PhotoOverrides {
             .and_then(Value::as_str)
             .map(str::to_string),
         exposure_bias: item.get("exposure_bias").and_then(Value::as_f64),
+        is_raw: item.get("is_raw").and_then(Value::as_bool),
     }
 }
 
@@ -132,6 +133,15 @@ async fn index_by_reference(
     let mut read_errors: Vec<String> = Vec::new();
 
     let mut overrides: Vec<PhotoOverrides> = Vec::new();
+    // Every file in the group is held at once, because `process_batch` takes
+    // the whole batch. That is bounded by the plugin's grouped batch size,
+    // which is 1 for every provider except llama.cpp and configurable there —
+    // so a user who raises it is trading memory for throughput knowingly. What
+    // was missing was any way to see it: this repository's indexing blow-ups
+    // have consistently been diagnosed after the fact with no number to point
+    // at. Turning this into a bounded stream means restructuring
+    // `process_batch` around a lazy source, which is a redesign, not a fix.
+    let mut bytes_read: usize = 0;
     for ((path, photo_id), photo_overrides) in paths
         .into_iter()
         .flatten()
@@ -155,6 +165,7 @@ async fn index_by_reference(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.clone());
+        bytes_read += raw.len();
         images.push(UploadedImage {
             bytes: raw,
             filename,
@@ -163,6 +174,22 @@ async fn index_by_reference(
         // Pushed here rather than above the `continue`s so a skipped file
         // cannot shift every later photo's context by one.
         overrides.push(photo_overrides);
+    }
+
+    const LARGE_GROUP_BYTES: usize = 512 * 1024 * 1024;
+    if bytes_read >= LARGE_GROUP_BYTES {
+        log::warn!(
+            "index_by_reference: read {} files totalling {:.1} GiB into memory before processing. \
+             Lower the grouped batch size if the process runs out of memory.",
+            images.len(),
+            bytes_read as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
+    } else {
+        log::debug!(
+            "index_by_reference: read {} files totalling {:.1} MiB",
+            images.len(),
+            bytes_read as f64 / (1024.0 * 1024.0)
+        );
     }
 
     let fields = json_fields_to_string_map(obj);

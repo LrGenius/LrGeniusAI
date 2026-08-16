@@ -736,6 +736,13 @@ local function enrichPhotoOptions(photo, baseOptions, userContext)
 	for k, v in pairs(exif) do
 		photoOptions[k] = v
 	end
+
+	-- The backend receives a normalised JPEG, so the original encoding is no
+	-- longer visible in the bytes it gets. Lightroom knows, and the edit
+	-- guardrails need it: blown highlights are recoverable on a raw file and
+	-- gone on a rendered one, which changes how far the white point may go.
+	photoOptions.is_raw = Util.isRawPhoto(photo)
+
 	photoOptions.user_context = userContext or photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
 	return photoOptions
 end

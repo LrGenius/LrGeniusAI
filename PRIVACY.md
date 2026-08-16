@@ -1,6 +1,6 @@
 # 🔒 Privacy Policy
 
-**Last Updated:** April 11, 2026
+**Last Updated:** August 16, 2026
 
 > [!IMPORTANT]
 > **LrGeniusAI is local-first by design.**
@@ -25,6 +25,8 @@ When using local models like **Ollama** or **LM Studio**, all analysis, tagging,
 If you choose to enable cloud providers (OpenAI, Google Gemini; Vertex AI was removed in August 2026 and is no longer contacted), only the necessary data is sent to these services:
 - **Image Content**: Temporary transmission of image pixels or descriptive prompts for analysis.
 - **Contextual Hints**: Any manual photo context you provide.
+- **Location**: When *Location* is ticked under **AI Context** in Analyze & Index, the place recorded in the photo's own EXIF is described in words in the prompt ("Photo taken in ..."). Raw coordinates are never transmitted. Untick it and nothing about where the photo was taken leaves your machine.
+- **Existing Keywords / Folder Names**: Only when the matching **AI Context** boxes are ticked.
 - **API Keys**: Stored locally and sent only to the respective provider.
 
 ---
@@ -34,8 +36,8 @@ If you choose to enable cloud providers (OpenAI, Google Gemini; Vertex AI was re
 | Data Type | Storage Location | Retention | Why we need it |
 | :--- | :--- | :--- | :--- |
 | **Photos & Previews** | 🏠 Local Drive | Persistent | To generate AI tags and edits. |
-| **Photo Metadata** (EXIF/IPTC) | 🏠 Local SQLite | Persistent | To identify photos and camera profiles. |
-| **Search Embeddings** | 🏠 Local ChromaDB | Persistent | To enable semantic "natural language" search. |
+| **Photo Metadata** (EXIF/IPTC) | 🏠 Local LanceDB | Persistent | To identify photos and camera profiles. |
+| **Search Embeddings** | 🏠 Local LanceDB | Persistent | To enable semantic "natural language" search. |
 | **Face Templates** | 🏠 Local Database | Persistent | To group photos by recognized people. |
 | **Style Profile** (DNA) | 🏠 Local Database | Persistent | To learn your editing preferences. |
 | **Diagnostic Logs** | 🏠 Local / ☁️ Remote* | Per Issue | To troubleshoot plugin errors. |

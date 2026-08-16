@@ -69,16 +69,20 @@ pub fn smart_filter_by_relevance(
     let k = strictness_to_k(s);
     let stat_cutoff = noise_median - k * noise_spread;
 
+    // The *first* gap over the threshold, not the largest one in the scan
+    // window. Results are sorted by distance, so once the scores fall off a
+    // cliff everything after it is already irrelevant; a bigger cliff further
+    // down is a gap between two kinds of irrelevant, and picking it moved the
+    // cut backwards and let the first band through.
     let scan_limit = RELEVANCE_KNEE_SCAN_LIMIT.min(n - 1);
     let mut knee_index: Option<usize> = None;
-    let mut best_ratio = 0.0f64;
     for i in 0..scan_limit {
         let d_here = distances[i];
         let d_next = distances[i + 1];
         let ratio = (d_next - d_here) / d_here.max(1e-6);
-        if ratio > best_ratio && ratio >= RELEVANCE_KNEE_GAP_RATIO {
-            best_ratio = ratio;
+        if ratio >= RELEVANCE_KNEE_GAP_RATIO {
             knee_index = Some(i + 1);
+            break;
         }
     }
 
@@ -142,6 +146,27 @@ mod tests {
             kept.len(),
             10,
             "knee should cut right after the ten close matches"
+        );
+    }
+
+    #[test]
+    fn a_later_bigger_gap_does_not_move_the_cut_backwards() {
+        // Ten good matches, a clear gap, ten mediocre ones, then a much larger
+        // gap to pure noise. Picking the *largest* gap in the scan window put
+        // the cut after the mediocre band, so twenty results came back where
+        // ten were relevant.
+        let mut distances: Vec<f64> = (0..10).map(|i| 0.05 + i as f64 * 0.001).collect();
+        for i in 0..10 {
+            distances.push(0.2 + i as f64 * 0.001);
+        }
+        for i in 0..10 {
+            distances.push(1.2 + i as f64 * 0.001);
+        }
+        let kept = smart_filter_by_relevance(results(&distances), Some(50));
+        assert_eq!(
+            kept.len(),
+            10,
+            "the first significant gap decides, not the biggest one"
         );
     }
 

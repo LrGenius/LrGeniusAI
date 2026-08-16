@@ -9,7 +9,7 @@ LrGeniusAI provides two face-related workflows:
 
 ## Prerequisites
 
-Face data is generated during **Analyze & Index Photos**. Make sure face detection is enabled when you run indexing. Without indexed face data neither workflow will find anything.
+Face data is generated during **Analyze & Index Photos** — tick *Enable face detection* on the *General* tab. Without indexed face data neither workflow finds anything, and the People dialog stays empty until you have also pressed **Cluster faces** at least once.
 
 ---
 
@@ -19,21 +19,40 @@ Face data is generated during **Analyze & Index Photos**. Make sure face detecti
 
 ### What it shows
 
-The People dialog lists all detected persons from your indexed photos. Each entry shows:
+The dialog shows a grid of persons from your indexed photos. Each cell has:
 
-- A thumbnail of the representative face cluster.
-- The person's name (if assigned) or *Unknown* if not yet named.
-- The number of photos in which this person appears.
+- A thumbnail of the representative face.
+- An editable name field, or *Unnamed* for faces not yet grouped into a person.
+- The number of photos this person appears in.
+- A **Library** checkbox.
 
-Named persons are shown first, sorted by photo count. Unnamed clusters follow in the same order.
+Named persons come first, then unnamed ones; within each group the person with
+the most photos is first. Every face that belongs to no person — never
+clustered, or left over by the last run — shares a single *Unnamed* entry.
+
+### Clustering
+
+Detection during indexing finds faces; grouping them into persons is a separate
+step. Press **Cluster faces** to (re-)group everything the backend has. The run
+reports how many persons and faces it produced — reopen *People...* afterwards
+to see the new list, the open dialog does not refresh itself.
 
 ### Assigning names
 
-Click a person entry to assign or edit the name. Names are stored on the backend and used for future face clustering and search context.
+Type directly into a person's name field. **OK** writes all edited names to the
+backend, **Reset** reverts your edits, **Cancel** closes without saving. Names
+survive re-clustering and are used as context elsewhere.
 
 ### Jumping to a Lightroom collection
 
-Each person can be opened as a Lightroom collection — the collection contains all photos in which that person was detected. This lets you browse a person's photos directly in the Library grid without creating a manual filter.
+Tick **Library** on one or more people and press **Show in Library**. With
+several people selected, the dropdown decides what you get:
+
+- **Photos with any selected person** — the union
+- **Photos with all selected people** — only photos where everyone appears
+  together (the default)
+
+The result opens as a Lightroom collection.
 
 ---
 
@@ -43,16 +62,16 @@ Each person can be opened as a Lightroom collection — the collection contains 
 
 ### How to use it
 
-1. Select a **single photo** in the Library grid that contains a face you want to search for.
+1. Select a **single photo** in the Library grid that contains the face you want to search for.
 2. Open *Find Similar Faces* from the menu.
-3. Adjust search options if needed (scope, result limit).
-4. The plugin queries the backend for photos with matching face embeddings.
+3. The dialog lists every face detected in that photo, with a thumbnail and the
+   person's name where one is known. Pick the one to search for.
+4. The plugin queries the backend for photos with matching face embeddings
+   across all indexed photos.
 5. Results are placed into a new Lightroom collection, sorted by similarity.
 
-### Search scope
-
-- **All indexed photos** — searches the entire backend.
-- **Current view** — restricts search to the currently visible folder or collection.
+There are no scope or result-limit options here — the search always runs over
+the whole indexed catalog.
 
 ---
 
@@ -60,5 +79,5 @@ Each person can be opened as a Lightroom collection — the collection contains 
 
 - **Better names = better workflow.** Naming persons early makes it easy to find all photos of a specific subject across your entire catalog.
 - Run indexing with face detection on all portrait-heavy shoots before using the People workflow.
-- Face clustering works by visual similarity — identical twins or people who look very similar may end up in the same cluster. Review and correct clusters manually via the People dialog.
+- Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. The People dialog lets you rename a cluster, not split or merge one — if a cluster is wrong, index more photos of that person and cluster again.
 - For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eye openness, blink detection, face sharpness). See [Help: Cull Photos](Help-Cull-Photos).

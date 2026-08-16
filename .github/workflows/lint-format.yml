@@ -16,6 +16,34 @@ jobs:
         with:
           args: plugin/LrGeniusAI.lrdevplugin
 
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The staleness heuristic compares commit dates of pages against
+          # their sources, so it needs the history, not just the tip.
+          fetch-depth: 0
+      - name: Docs match the code
+        run: |
+          set -o pipefail
+          python3 scripts/check-docs.py 2>&1 | tee /tmp/check-docs.txt
+        continue-on-error: false
+      - name: Report possibly-stale pages
+        if: always()
+        run: |
+          {
+            echo "### Docs check"
+            echo
+            if grep -q . /tmp/check-docs.txt 2>/dev/null; then
+              echo '```'
+              cat /tmp/check-docs.txt
+              echo '```'
+            else
+              echo "No findings."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   format-lint-rust:
     runs-on: ubuntu-latest
     steps:

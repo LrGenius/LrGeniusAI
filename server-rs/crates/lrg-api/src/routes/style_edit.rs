@@ -248,9 +248,15 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             "Style engine confidence {:.3} below threshold for photo_id={photo_id}, falling back to LLM",
             result.confidence
         );
-        let llm_response =
-            generate_edit_recipe_for_photo(&state, Some(&store), &options, &image_bytes, &photo_id)
-                .await;
+        let llm_response = generate_edit_recipe_for_photo(
+            &state,
+            Some(&store),
+            &options,
+            &image_bytes,
+            &photo_id,
+            filename.as_deref(),
+        )
+        .await;
         let Some(recipe) = llm_response.recipe.filter(|_| llm_response.success) else {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -268,6 +274,7 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             &recipe,
             &options,
             llm_response.warning.as_deref(),
+            &llm_response.guardrail_reasons,
         );
         payload["engine"] = json!("llm");
         payload["confidence"] = json!(round3(result.confidence));
@@ -311,11 +318,40 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             .into_response();
     }
 
+    // The style engine needs the guardrails more than the LLM path does, not
+    // less: its recipe *is* the photographer's own average edit, and that
+    // average was formed across frames this one may have nothing in common
+    // with. A habitual +25 contrast learnt on softly lit material is exactly
+    // what `derive_budget` exists to keep off a harshly lit frame.
+    let mut styled_recipe = result.recipe;
+    // The interpolated settings come straight from the user's own edits, so
+    // `temperature` carries whatever scale *those* photos used. Applying a
+    // Kelvin average to a JPEG is the maximum-warmth accident this guards
+    // against; the LLM paths get the same treatment inside
+    // `normalize_edit_recipe`, which the style engine never goes through.
+    if lrg_providers::edit_recipe::sanitize_recipe_temperature(&mut styled_recipe, options.is_raw) {
+        log::info!(
+            "Photo {photo_id}: dropped the style engine's temperature — \
+             it is on the raw Kelvin scale and this photo is not raw."
+        );
+    }
+    let guardrail_reasons = crate::edit_budget::measure_and_apply(
+        &mut styled_recipe,
+        &image_bytes,
+        &crate::routes::edit::capture_conditions(&options, filename.as_deref(), &image_bytes),
+    );
+    if !guardrail_reasons.is_empty() {
+        log::info!(
+            "Photo {photo_id}: style-engine edit constrained by the frame ({}).",
+            guardrail_reasons.join(", ")
+        );
+    }
+
     if let Err(e) = persist_edit_recipe(
         &store,
         &photo_id,
         filename.as_deref(),
-        &result.recipe,
+        &styled_recipe,
         &options,
     )
     .await
@@ -324,9 +360,10 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     }
     let mut payload = success_payload(
         &photo_id,
-        &result.recipe,
+        &styled_recipe,
         &options,
         result.warning.as_deref(),
+        &guardrail_reasons,
     );
     payload["engine"] = json!("style");
     payload["confidence"] = json!(round3(result.confidence));

@@ -262,15 +262,37 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
         if records.is_empty() {
             return Ok(empty_summary.clone());
         }
-        let ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
-        let embeddings: Vec<Vec<f32>> = records
+        let total = records.len();
+
+        // A row with no vector — or one of the wrong width — used to become an
+        // empty `Vec` here, and `euclidean` zips vectors of unequal length, so
+        // its distance to everything came out as 0 and it merged whole clusters
+        // together. Such rows are set aside and reported as unassigned instead.
+        let expected_dim = records
             .iter()
-            .map(|r| r.vector.clone().unwrap_or_default())
-            .collect();
+            .filter_map(|r| r.vector.as_ref().map(Vec::len))
+            .find(|&len| len > 0);
+        let (records, unclusterable): (Vec<StoreRecord>, Vec<StoreRecord>) =
+            records.into_iter().partition(|r| {
+                r.vector
+                    .as_ref()
+                    .is_some_and(|v| Some(v.len()) == expected_dim)
+            });
+        if !unclusterable.is_empty() {
+            log::warn!(
+                "Face clustering: {} of {total} rows have no usable embedding and are left unassigned.",
+                unclusterable.len()
+            );
+        }
+
+        let ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
+        let embeddings: Vec<Vec<f32>> = records.iter().filter_map(|r| r.vector.clone()).collect();
         let n = records.len();
 
         let l2_threshold = clustering::cosine_to_l2(threshold);
-        let labels: Vec<i64> = if let Some(min_faces) = min_faces.filter(|&m| m >= 2) {
+        let labels: Vec<i64> = if n == 0 {
+            Vec::new()
+        } else if let Some(min_faces) = min_faces.filter(|&m| m >= 2) {
             if n == 1 {
                 vec![-1]
             } else {
@@ -279,13 +301,29 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
         } else if n == 1 {
             vec![0]
         } else {
-            clustering::agglomerative(&embeddings, l2_threshold, linkage)
+            match clustering::agglomerative(&embeddings, l2_threshold, linkage) {
+                Some(labels) => labels,
+                // Agglomerative needs an n×n distance matrix, which at this
+                // size would allocate gigabytes before doing any work. DBSCAN
+                // answers the same question with linear memory, so fall back
+                // rather than fail — with `min_samples = 2`, its smallest
+                // meaningful setting, which comes closest to agglomerative's
+                // "every point belongs somewhere".
+                None => {
+                    log::warn!(
+                        "Face clustering: {n} faces exceeds the agglomerative limit of {}; \
+                         using DBSCAN instead.",
+                        clustering::AGGLOMERATIVE_MAX_POINTS
+                    );
+                    clustering::dbscan(&embeddings, l2_threshold, 2)
+                }
+            }
         };
 
         let mut old_person_faces: HashMap<String, HashSet<String>> = HashMap::new();
         for r in &records {
             if let Some(pid) = r.metadata.get("person_id").and_then(Value::as_str) {
-                if !pid.is_empty() && pid != "person_unassigned" {
+                if !is_unassigned(pid) {
                     old_person_faces
                         .entry(pid.to_string())
                         .or_default()
@@ -305,7 +343,20 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
         let label_to_person = persons::match_labels_to_persons(&old_person_faces, &new_label_faces);
 
         let mut unassigned_count = 0usize;
-        let mut updated: Vec<StoreRecord> = Vec::with_capacity(n);
+        let mut updated: Vec<StoreRecord> = Vec::with_capacity(total);
+        for record in unclusterable {
+            unassigned_count += 1;
+            let mut metadata = record.metadata;
+            metadata.insert(
+                "person_id".into(),
+                Value::String("person_unassigned".to_string()),
+            );
+            updated.push(StoreRecord {
+                id: record.id,
+                vector: record.vector,
+                metadata,
+            });
+        }
         for (i, record) in records.into_iter().enumerate() {
             let lb = labels[i];
             let person_id = if lb < 0 {
@@ -334,8 +385,8 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
         Ok(json!({
             "status": "ok",
             "person_count": person_count,
-            "face_count": n,
-            "updated": n,
+            "face_count": total,
+            "updated": total,
             "unassigned": unassigned_count,
         }))
     }
@@ -370,6 +421,12 @@ async fn list_persons(State(state): State<Arc<AppState>>) -> Response {
     struct Info {
         face_count: usize,
         photo_ids: HashSet<String>,
+        /// One representative face thumbnail, picked here because this scan
+        /// already has every row in hand. The plugin used to fetch these one
+        /// person at a time from `/faces/persons/{id}/thumbnail`, and each of
+        /// those calls scanned the whole FACE_TABLE — base64-decoding every
+        /// thumbnail in the catalog to return exactly one.
+        thumbnail: Option<String>,
     }
     let mut by_person: HashMap<String, Info> = HashMap::new();
     for (_, meta) in &rows {
@@ -378,8 +435,12 @@ async fn list_persons(State(state): State<Arc<AppState>>) -> Response {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let key = if pid.is_empty() {
-            "_unassigned".to_string()
+        // One key for "no person", not two. The clusterer writes
+        // `person_unassigned` while rows that were never clustered carry an
+        // empty string, and bucketing those separately listed the same
+        // non-person twice in the People dialog.
+        let key = if is_unassigned(&pid) {
+            UNASSIGNED_KEY.to_string()
         } else {
             pid
         };
@@ -392,15 +453,23 @@ async fn list_persons(State(state): State<Arc<AppState>>) -> Response {
         let entry = by_person.entry(key).or_insert_with(|| Info {
             face_count: 0,
             photo_ids: HashSet::new(),
+            thumbnail: None,
         });
         entry.face_count += 1;
         entry.photo_ids.insert(photo_id);
+        if entry.thumbnail.is_none() {
+            entry.thumbnail = meta
+                .get("thumbnail")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
     }
 
     let mut entries: Vec<(String, Info)> = by_person.into_iter().collect();
     entries.sort_by(|(a_pid, a), (b_pid, b)| {
-        let a_unassigned = a_pid == "_unassigned" || a_pid == "person_unassigned";
-        let b_unassigned = b_pid == "_unassigned" || b_pid == "person_unassigned";
+        let a_unassigned = is_unassigned(a_pid);
+        let b_unassigned = is_unassigned(b_pid);
         a_unassigned
             .cmp(&b_unassigned)
             .then(b.photo_ids.len().cmp(&a.photo_ids.len()))
@@ -410,12 +479,13 @@ async fn list_persons(State(state): State<Arc<AppState>>) -> Response {
     let persons: Vec<Value> = entries
         .into_iter()
         .map(|(pid, info)| {
-            let person_id = if pid == "_unassigned" { String::new() } else { pid };
+            let person_id = if pid == UNASSIGNED_KEY { String::new() } else { pid };
             json!({
                 "person_id": person_id,
                 "name": if person_id_is_empty(&person_id) { String::new() } else { names.get(&person_id).cloned().unwrap_or_default() },
                 "face_count": info.face_count,
                 "photo_count": info.photo_ids.len(),
+                "thumbnail": info.thumbnail.unwrap_or_default(),
             })
         })
         .collect();
@@ -426,6 +496,19 @@ fn person_id_is_empty(s: &str) -> bool {
     s.is_empty()
 }
 
+/// The bucket every face without a person lands in, whatever spelling it
+/// arrived with. Reported to the plugin as an empty `person_id`.
+const UNASSIGNED_KEY: &str = "_unassigned";
+
+/// The two spellings of "no person this belongs to": the clusterer writes
+/// `person_unassigned`, and a row that has never been clustered has an empty
+/// `person_id`.
+fn is_unassigned(person_id: &str) -> bool {
+    person_id.is_empty() || person_id == UNASSIGNED_KEY || person_id == "person_unassigned"
+}
+
+/// Kept for compatibility with older plugin builds; `list_persons` now returns
+/// the representative thumbnail inline, so nothing should call this in a loop.
 async fn person_thumbnail(
     State(state): State<Arc<AppState>>,
     UrlPath(person_id): UrlPath<String>,

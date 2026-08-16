@@ -188,6 +188,22 @@ fn sql_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// The `LIKE` predicate matching every id that starts with `prefix`, with the
+/// prefix's own wildcards escaped so a literal `_` (which every FACE_TABLE id
+/// contains) cannot match an arbitrary character.
+///
+/// Shared by the prefix read/delete pair so the two can never disagree about
+/// what a prefix covers — a `get` that matched more rows than the following
+/// `delete` would silently carry another photo's faces forward.
+fn id_prefix_predicate(prefix: &str) -> String {
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+        .replace('\'', "''");
+    format!("id LIKE '{escaped}%' ESCAPE '\\'")
+}
+
 fn records_to_batch(table: &str, records: &[StoreRecord]) -> Result<RecordBatch> {
     let dim = table_dim(table)?;
     let mut ids = StringBuilder::new();
@@ -485,14 +501,32 @@ impl Store {
     /// RSS growth on large face-indexing runs.
     pub async fn delete_by_id_prefix(&self, table: &str, prefix: &str) -> Result<()> {
         let tbl = self.table(table).await?;
-        let escaped = prefix
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-            .replace('\'', "''");
-        tbl.delete(&format!("id LIKE '{escaped}%' ESCAPE '\\'"))
-            .await?;
+        tbl.delete(&id_prefix_predicate(prefix)).await?;
         Ok(())
+    }
+
+    /// Every row whose `id` starts with `prefix`, vectors included — the read
+    /// counterpart of [`Store::delete_by_id_prefix`].
+    ///
+    /// Exists for the same reason that one does: reaching a single photo's
+    /// FACE_TABLE rows must not cost a scan of the whole table, whose metadata
+    /// carries a base64 thumbnail per face. Used before re-detecting a photo's
+    /// faces, so the person assignments on the rows about to be replaced can be
+    /// carried over instead of thrown away.
+    pub async fn get_by_id_prefix(&self, table: &str, prefix: &str) -> Result<Vec<StoreRecord>> {
+        let tbl = self.table(table).await?;
+        let batches: Vec<RecordBatch> = tbl
+            .query()
+            .only_if(id_prefix_predicate(prefix))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
+        let mut out = Vec::new();
+        for batch in &batches {
+            out.extend(batch_to_records(batch));
+        }
+        Ok(out)
     }
 
     /// Like `get`, but returns only id + metadata (no vector deserialization).
@@ -870,5 +904,45 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(remaining.contains(&"photo_10_0".to_string()));
         assert!(remaining.contains(&"other_0".to_string()));
+    }
+
+    /// The read side has to cover exactly the rows the delete side clears —
+    /// a `get` that reached further would carry another photo's person
+    /// assignments onto this photo's faces.
+    #[tokio::test]
+    async fn get_by_id_prefix_matches_the_same_rows_as_the_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        store
+            .append(
+                FACE_TABLE,
+                &[
+                    record(
+                        "photo_1_0",
+                        Some(vec![1.0; 512]),
+                        json!({"person_id": "person_3"}),
+                    ),
+                    record(
+                        "photo_10_0",
+                        Some(vec![0.0; 512]),
+                        json!({"person_id": "person_9"}),
+                    ),
+                    record("other_0", Some(vec![0.0; 512]), json!({})),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let got = store
+            .get_by_id_prefix(FACE_TABLE, "photo_1_")
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "photo_1_0");
+        assert_eq!(
+            got[0].metadata.get("person_id").and_then(Value::as_str),
+            Some("person_3")
+        );
+        assert!(got[0].vector.is_some(), "the embedding has to come along");
     }
 }

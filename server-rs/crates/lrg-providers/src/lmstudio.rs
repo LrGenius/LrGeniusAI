@@ -296,7 +296,7 @@ impl LmStudioProvider {
             ],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "lightroom_edit_recipe", "schema": openai_edit_recipe_schema()},
+                "json_schema": {"name": "lightroom_edit_recipe", "schema": openai_edit_recipe_schema(request.is_raw)},
             },
             "temperature": request.temperature,
             "max_tokens": max_tokens,
@@ -368,11 +368,12 @@ impl LmStudioProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens,
             output_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 }

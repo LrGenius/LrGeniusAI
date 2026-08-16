@@ -50,6 +50,12 @@ pub(crate) struct ParsedOptions {
     /// path. `/index_by_reference` carries it per photo instead — see
     /// [`PhotoOverrides::exposure_bias`].
     exposure_bias: Option<f64>,
+    /// Whether the original is a raw file, from the multipart path. Stored
+    /// with the photo rather than used during indexing: style training has to
+    /// keep raw and rendered originals apart, because Lightroom's `Temp` is
+    /// Kelvin for one and a relative -100..100 for the other. Absent when the
+    /// plugin could not read the format.
+    is_raw: Option<bool>,
     vertex_project_id: Option<String>,
     vertex_location: Option<String>,
     /// How many photos to hand the provider per LLM call. `None` means "ask
@@ -84,6 +90,9 @@ pub(crate) struct PhotoOverrides {
     /// sequence from a burst, and there is no batch-level fallback because a
     /// per-photo EV shared across a group would be actively misleading.
     pub exposure_bias: Option<f64>,
+    /// Per-photo raw flag, for `/index_by_reference`. Falls back to the
+    /// batch-level [`ParsedOptions::is_raw`] when absent.
+    pub is_raw: Option<bool>,
 }
 
 /// The metadata-generation-specific subset of `_extract_options`, kept
@@ -98,6 +107,14 @@ struct MetadataOptions {
     generate_alt_text: bool,
     submit_keywords: bool,
     submit_folder_names: bool,
+    /// Whether the photo's own GPS may be turned into place names and sent to
+    /// the model along with the image.
+    ///
+    /// The plugin has always sent this field and the backend has always
+    /// ignored it, reading location from the EXIF regardless — so the switch
+    /// existed on the wire but not in behaviour. Defaults to true so existing
+    /// installs keep the context they have been getting.
+    submit_gps: bool,
     existing_keywords: Option<Vec<String>>,
     folder_names: Option<String>,
     user_context: Option<String>,
@@ -265,6 +282,9 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         exposure_bias: fields
             .get("exposure_bias")
             .and_then(|s| s.trim().parse::<f64>().ok()),
+        is_raw: fields
+            .get("is_raw")
+            .map(|s| s.trim().eq_ignore_ascii_case("true")),
         llm_batch_size,
         engine: crate::routes::llm::engine_overrides_from_fields(fields),
         vertex_project_id: fields
@@ -291,6 +311,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             generate_alt_text: bool_field(fields, "generate_alt_text", true),
             submit_keywords: bool_field(fields, "submit_keywords", false),
             submit_folder_names: bool_field(fields, "submit_folder_names", false),
+            submit_gps: bool_field(fields, "submit_gps", true),
             existing_keywords,
             folder_names: fields.get("folder_names").cloned(),
             user_context: fields.get("user_context").cloned(),
@@ -480,7 +501,11 @@ pub(crate) async fn process_batch(
     // reason is in `error_messages`.
     let mut results: Vec<Value> = Vec::new();
 
-    let mut triplets: Vec<(Vec<u8>, String, String, PhotoOverrides)> = Vec::new();
+    // `Arc<[u8]>` rather than `Vec<u8>`: the normalised JPEG for every photo in
+    // the batch is handed to the parallel cull pass, kept in `PreparedPhoto`
+    // for phase 2, and read again by face detection. Each of those used to be
+    // a full copy, so a 200-photo batch held the batch three times over.
+    let mut triplets: Vec<(Arc<[u8]>, String, String, PhotoOverrides)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
     for ((img, photo_id), photo_overrides) in images.into_iter().zip(photo_ids).zip(overrides) {
         let t0 = Instant::now();
@@ -491,7 +516,9 @@ pub(crate) async fn process_batch(
             t0.elapsed()
         );
         match result {
-            Ok((bytes, filename)) => triplets.push((bytes, photo_id, filename, photo_overrides)),
+            Ok((bytes, filename)) => {
+                triplets.push((Arc::from(bytes), photo_id, filename, photo_overrides))
+            }
             Err(UnsupportedImageError(msg)) => {
                 log::warn!("Skipping {}: {msg}", img.filename);
                 results.push(json!({
@@ -520,8 +547,6 @@ pub(crate) async fn process_batch(
             .into_response();
     }
 
-    let total = triplets.len();
-
     // Matches process_image_task's early, whole-batch failure: metadata
     // generation with no model configured can't succeed for any photo.
     if options.compute_metadata && options.model.as_deref().unwrap_or("").is_empty() {
@@ -545,7 +570,7 @@ pub(crate) async fn process_batch(
     // parallel. Pure CPU work with no model behind it, so unlike phase 1 there
     // is nothing here that wants the whole machine to itself.
     let t_cull = Instant::now();
-    let image_blobs: Vec<Vec<u8>> = triplets.iter().map(|(b, _, _, _)| b.clone()).collect();
+    let image_blobs: Vec<Arc<[u8]>> = triplets.iter().map(|(b, _, _, _)| Arc::clone(b)).collect();
     let mut cull_signals =
         tokio::task::spawn_blocking(move || precompute_cull_signals(&image_blobs))
             .await
@@ -770,7 +795,6 @@ pub(crate) async fn process_batch(
             .into_response();
     }
 
-    let _ = total;
     Json(json!({
         "status": "processed",
         "success_count": success_count,
@@ -791,7 +815,7 @@ pub(crate) async fn process_batch(
 struct PreparedPhoto {
     photo_id: String,
     filename: String,
-    image_bytes: Vec<u8>,
+    image_bytes: Arc<[u8]>,
     // Deliberately no decoded pixels. Phase 1 needs full RGB for the culling
     // metrics, pHash and the SigLIP2 embedding, but it is done with them by the
     // time it returns, and carrying them would scale the largest allocation in
@@ -845,13 +869,13 @@ pub(crate) struct CullSignals {
 /// belong. The threshold-shaped fields (denominators, exposure target, clip
 /// thresholds) genuinely need pixels, so changing those still requires a
 /// re-index.
-fn precompute_cull_signals(images: &[Vec<u8>]) -> Vec<Result<CullSignals, String>> {
+fn precompute_cull_signals(images: &[Arc<[u8]>]) -> Vec<Result<CullSignals, String>> {
     use rayon::prelude::*;
     let cfg = ImageMetricsConfig::default();
     images
         .par_iter()
         .map(|bytes| {
-            let decoded = image::load_from_memory(bytes)
+            let decoded = image::load_from_memory(bytes.as_ref())
                 .map_err(|e| format!("could not decode image: {e}"))?
                 .to_rgb8();
             let (width, height) = (decoded.width() as usize, decoded.height() as usize);
@@ -878,7 +902,7 @@ async fn prepare_one(
     store: &Arc<lrg_store::Store>,
     options: &ParsedOptions,
     overrides: &PhotoOverrides,
-    image_bytes: &[u8],
+    image_bytes: &Arc<[u8]>,
     photo_id: &str,
     filename: &str,
     cull: CullSignals,
@@ -941,6 +965,13 @@ async fn prepare_one(
     // which is exactly the shape a focus stack is matched on.
     if let Some(ev) = overrides.exposure_bias.or(options.exposure_bias) {
         main_metadata.insert("exposure_bias".into(), json!(ev));
+    }
+    // Only written when the plugin knew the answer. Never defaulted: a
+    // fabricated `false` would tell the training side a raw file's Kelvin
+    // white balance is a relative value, which is the mistake the flag exists
+    // to prevent.
+    if let Some(is_raw) = overrides.is_raw.or(options.is_raw) {
+        main_metadata.insert("is_raw".into(), json!(is_raw));
     }
 
     // Culling metrics + pHash are cheap enough to compute on every pass.
@@ -1025,16 +1056,6 @@ async fn prepare_one(
         new_embedding = Some(emb);
     }
 
-    if options.replace_ss {
-        for v in main_metadata.values_mut() {
-            if let Value::String(s) = v {
-                if s.contains('\u{df}') {
-                    *v = json!(s.replace('\u{df}', "ss"));
-                }
-            }
-        }
-    }
-
     let llm_request = if options.compute_metadata {
         let has_any_metadata = ["title", "caption", "alt_text", "keywords"]
             .iter()
@@ -1055,13 +1076,38 @@ async fn prepare_one(
     Ok(PreparedPhoto {
         photo_id: photo_id.to_string(),
         filename: filename.to_string(),
-        image_bytes: image_bytes.to_vec(),
+        image_bytes: Arc::clone(image_bytes),
         main_metadata,
         existing_vector: existing.as_ref().and_then(|r| r.vector.clone()),
         existing_has_embedding,
         new_embedding,
         llm_request,
     })
+}
+
+/// Fields the "Replace ß with ss" option applies to: the generated text, and
+/// nothing else.
+///
+/// `keywords` holds a serialized JSON tree rather than a plain string; a
+/// literal ß→ss substitution is safe there because neither character needs
+/// escaping, so the document stays valid and only the leaf words change.
+const SHARP_S_FIELDS: [&str; 5] = [
+    "title",
+    "caption",
+    "alt_text",
+    "keywords",
+    "flattened_keywords",
+];
+
+fn replace_sharp_s(metadata: &mut Map<String, Value>) {
+    for field in SHARP_S_FIELDS {
+        if let Some(Value::String(s)) = metadata.get(field) {
+            if s.contains('\u{df}') {
+                let replaced = s.replace('\u{df}', "ss");
+                metadata.insert(field.into(), json!(replaced));
+            }
+        }
+    }
 }
 
 /// Phase 2: fold in the LLM result, detect faces, and write the photo.
@@ -1130,6 +1176,17 @@ async fn finish_one(
         "run_date".into(),
         json!(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
     );
+
+    // "Replace ß with ss" used to run in `prepare_one`, i.e. *before* the LLM
+    // answered — so it only ever saw metadata imported from the catalog and
+    // never touched a single generated word, which is the entire point of the
+    // option. It also ran over every value in the map, including `filename`,
+    // quietly rewriting the stored name of a file called `Straße.jpg`. Hence
+    // both changes: after the merge, and only over the fields the option is
+    // about.
+    if options.replace_ss {
+        replace_sharp_s(&mut main_metadata);
+    }
 
     let final_vector = match &new_embedding {
         Some(v) => Some(v.clone()),
@@ -1230,6 +1287,24 @@ async fn finish_one(
                     );
                 }
                 Ok(faces) => {
+                    let prefix = format!("{photo_id}_");
+                    // Read before deleting: detection replaces this photo's rows
+                    // wholesale, and a fresh row starts with an empty
+                    // `person_id`, so without this every re-index wipes the
+                    // identities the user established.
+                    let previous = store
+                        .get_by_id_prefix(FACE_TABLE, &prefix)
+                        .await
+                        .unwrap_or_else(|e| {
+                            // Losing the carry-over degrades the result; failing
+                            // the photo over it would be worse.
+                            log::warn!(
+                                "Photo {photo_id}: could not read previous faces ({e}); \
+                                 person assignments will not be carried over."
+                            );
+                            Vec::new()
+                        });
+
                     let t_scan = Instant::now();
                     // Face ids are `{photo_id}_{n}`; a prefix delete clears
                     // this photo's stale rows in one shot without pulling
@@ -1237,7 +1312,7 @@ async fn finish_one(
                     // base64 thumbnail) into memory — see
                     // `Store::delete_by_id_prefix` for why that mattered.
                     store
-                        .delete_by_id_prefix(FACE_TABLE, &format!("{photo_id}_"))
+                        .delete_by_id_prefix(FACE_TABLE, &prefix)
                         .await
                         .map_err(|e| e.to_string())?;
                     log::debug!(
@@ -1246,6 +1321,17 @@ async fn finish_one(
                     );
 
                     if !faces.is_empty() {
+                        let embeddings: Vec<&[f32]> =
+                            faces.iter().map(|f| f.embedding.as_slice()).collect();
+                        let carried = carry_over_person_ids(&previous, &embeddings);
+                        let carried_count = carried.iter().filter(|p| !p.is_empty()).count();
+                        if carried_count > 0 {
+                            log::debug!(
+                                "Photo {photo_id}: carried {carried_count} person assignment(s) \
+                                 across re-detection."
+                            );
+                        }
+
                         let face_records: Vec<StoreRecord> = faces
                             .iter()
                             .enumerate()
@@ -1254,7 +1340,10 @@ async fn finish_one(
                                 m.insert("photo_id".into(), json!(photo_id));
                                 m.insert("photo_uuid".into(), json!(photo_id));
                                 m.insert("thumbnail".into(), json!(f.thumbnail_base64));
-                                m.insert("person_id".into(), json!(""));
+                                m.insert(
+                                    "person_id".into(),
+                                    json!(carried.get(i).cloned().unwrap_or_default()),
+                                );
                                 m.insert(
                                     "bbox".into(),
                                     json!(serde_json::to_string(&f.bbox).unwrap()),
@@ -1294,8 +1383,13 @@ async fn finish_one(
                         log::info!("Photo {photo_id}: indexed {} face(s).", faces.len());
                     } else {
                         apply_face_aggregate(&mut main_metadata, &[]);
-                        main_metadata.insert("faces_checked".into(), json!(true));
                     }
+                    // Set for *both* outcomes. Flagging only the faceless branch
+                    // meant a photo that has faces never counted as checked, so
+                    // every later pass re-ran detection on it — and that path
+                    // replaces the photo's rows, which is how person assignments
+                    // used to disappear on a plain re-index.
+                    main_metadata.insert("faces_checked".into(), json!(true));
                 }
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");
@@ -1355,6 +1449,73 @@ async fn finish_one(
     }
 
     Ok(warning)
+}
+
+/// Cosine distance below which a re-detected face counts as the same face as
+/// one of the photo's previous rows.
+///
+/// Deliberately far tighter than the clustering threshold (0.5). That one asks
+/// "are these the same person"; this one asks "is this the same detection",
+/// re-run on the same pixels through the same model, so a genuine match lands
+/// near zero. Anything looser would hand one person's identity to a different
+/// face in the same frame, which is worse than carrying nothing over.
+const FACE_CARRY_OVER_MAX_DISTANCE: f64 = 0.2;
+
+/// Re-attach the `person_id`s from a photo's previous FACE_TABLE rows to its
+/// freshly detected faces, matched by nearest embedding.
+///
+/// Pairs are assigned globally best-first rather than in detection order, so
+/// the result does not depend on which face the detector happened to report
+/// first. Each old row is claimed at most once, so two faces in one frame
+/// cannot both inherit the same identity. Faces with no match keep an empty
+/// `person_id` and are picked up by the next clustering run.
+fn carry_over_person_ids(previous: &[StoreRecord], embeddings: &[&[f32]]) -> Vec<String> {
+    let mut out = vec![String::new(); embeddings.len()];
+    if previous.is_empty() || embeddings.is_empty() {
+        return out;
+    }
+
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, emb) in embeddings.iter().enumerate() {
+        for (j, old) in previous.iter().enumerate() {
+            let Some(old_vec) = old.vector.as_ref() else {
+                continue;
+            };
+            // An empty assignment is what a fresh row already carries, so
+            // matching against one buys nothing and would only consume a slot.
+            if old
+                .metadata
+                .get("person_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                continue;
+            }
+            let distance = crate::routes::edit::cosine_distance(emb, old_vec);
+            if distance <= FACE_CARRY_OVER_MAX_DISTANCE {
+                pairs.push((distance, i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut new_taken = vec![false; embeddings.len()];
+    let mut old_taken = vec![false; previous.len()];
+    for (_, i, j) in pairs {
+        if new_taken[i] || old_taken[j] {
+            continue;
+        }
+        if let Some(person) = previous[j]
+            .metadata
+            .get("person_id")
+            .and_then(Value::as_str)
+        {
+            out[i] = person.to_string();
+        }
+        new_taken[i] = true;
+        old_taken[j] = true;
+    }
+    out
 }
 
 fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsInput]) {
@@ -1425,7 +1586,14 @@ fn build_metadata_request(
     let model = options.model.clone().unwrap_or_default();
     let mo = &options.metadata_request;
 
-    let location_data = lrg_imaging::location::extract_location_tags(image_bytes);
+    // Reading the EXIF location is what turns "this photo was taken at these
+    // coordinates" into a place name in the prompt, so it is gated on the
+    // user's choice rather than done unconditionally.
+    let location_data = if mo.submit_gps {
+        lrg_imaging::location::extract_location_tags(image_bytes)
+    } else {
+        None
+    };
     lrg_providers::types::MetadataGenerationRequest {
         image_data: image_bytes.to_vec(),
         uuid: photo_id.to_string(),
@@ -1465,6 +1633,90 @@ fn build_metadata_request(
 }
 
 #[cfg(test)]
+mod face_carry_over_tests {
+    use super::*;
+
+    fn face_row(id: &str, person: &str, vector: Vec<f32>) -> StoreRecord {
+        let mut m = Map::new();
+        m.insert("person_id".into(), json!(person));
+        StoreRecord {
+            id: id.to_string(),
+            vector: Some(vector),
+            metadata: m,
+        }
+    }
+
+    /// The regression this exists for: re-indexing a photo replaces its face
+    /// rows, and a fresh row starts with an empty `person_id`, so every named
+    /// person in the catalog used to be lost on a plain re-index.
+    #[test]
+    fn a_redetected_face_keeps_its_person() {
+        let previous = vec![face_row("p_0", "person_7", vec![1.0, 0.0, 0.0])];
+        // Detection is not bit-identical across runs; a slightly shifted box
+        // still has to match.
+        let embedding = [0.999_f32, 0.044, 0.0];
+        let carried = carry_over_person_ids(&previous, &[&embedding]);
+        assert_eq!(carried, vec!["person_7".to_string()]);
+    }
+
+    #[test]
+    fn a_different_face_inherits_nothing() {
+        let previous = vec![face_row("p_0", "person_7", vec![1.0, 0.0, 0.0])];
+        let embedding = [0.0_f32, 1.0, 0.0];
+        assert_eq!(
+            carry_over_person_ids(&previous, &[&embedding]),
+            vec![String::new()]
+        );
+    }
+
+    /// Two people in one frame must not both end up as the same person just
+    /// because one old row happened to be the nearest match for both.
+    #[test]
+    fn one_old_row_can_only_be_claimed_once() {
+        let previous = vec![face_row("p_0", "person_7", vec![1.0, 0.0, 0.0])];
+        let a = [1.0_f32, 0.0, 0.0];
+        let b = [0.995_f32, 0.1, 0.0];
+        let carried = carry_over_person_ids(&previous, &[&a, &b]);
+        assert_eq!(carried[0], "person_7", "the closer face wins the identity");
+        assert_eq!(carried[1], "", "the other one starts unassigned");
+    }
+
+    /// Assignment is global-best-first, not detection order, so the result must
+    /// not depend on which face the detector reported first.
+    #[test]
+    fn assignment_does_not_depend_on_detection_order() {
+        let previous = vec![face_row("p_0", "person_7", vec![1.0, 0.0, 0.0])];
+        let near = [1.0_f32, 0.0, 0.0];
+        let far = [0.995_f32, 0.1, 0.0];
+
+        let forward = carry_over_person_ids(&previous, &[&near, &far]);
+        let reversed = carry_over_person_ids(&previous, &[&far, &near]);
+        assert_eq!(forward[0], "person_7");
+        assert_eq!(reversed[1], "person_7");
+        assert_eq!(reversed[0], "");
+    }
+
+    #[test]
+    fn unassigned_previous_rows_are_ignored() {
+        let previous = vec![face_row("p_0", "", vec![1.0, 0.0, 0.0])];
+        let embedding = [1.0_f32, 0.0, 0.0];
+        assert_eq!(
+            carry_over_person_ids(&previous, &[&embedding]),
+            vec![String::new()]
+        );
+    }
+
+    #[test]
+    fn no_previous_rows_yields_empty_assignments() {
+        let embedding = [1.0_f32, 0.0, 0.0];
+        assert_eq!(
+            carry_over_person_ids(&[], &[&embedding]),
+            vec![String::new()]
+        );
+    }
+}
+
+#[cfg(test)]
 mod keyword_option_tests {
     use super::*;
 
@@ -1490,6 +1742,7 @@ mod keyword_option_tests {
             existing_keywords: Some(vec!["mine".to_string()]),
             folder_names: Some("MyFolder".to_string()),
             exposure_bias: None,
+            is_raw: None,
         };
         let req = build_metadata_request(&opts, &overrides, &[], "p1");
         assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));
@@ -1624,5 +1877,66 @@ mod keyword_option_tests {
             mo.catalog_keywords,
             Some(vec!["cat".to_string(), "dog".to_string()])
         );
+    }
+}
+
+#[cfg(test)]
+mod sharp_s_tests {
+    use super::*;
+
+    fn meta(pairs: &[(&str, &str)]) -> Map<String, Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), json!(v)))
+            .collect()
+    }
+
+    #[test]
+    fn generated_text_is_converted() {
+        // The whole point of the option, and the case the old placement in
+        // `prepare_one` could never reach: these fields do not exist yet
+        // before the LLM answers.
+        let mut m = meta(&[
+            ("title", "Straße bei Nacht"),
+            ("caption", "Ein Fußgänger auf der Straße"),
+            ("alt_text", "Große Straße"),
+            ("flattened_keywords", "Straße, Fußweg"),
+        ]);
+        replace_sharp_s(&mut m);
+
+        assert_eq!(m["title"], json!("Strasse bei Nacht"));
+        assert_eq!(m["caption"], json!("Ein Fussgänger auf der Strasse"));
+        assert_eq!(m["alt_text"], json!("Grosse Strasse"));
+        assert_eq!(m["flattened_keywords"], json!("Strasse, Fussweg"));
+    }
+
+    #[test]
+    fn the_keyword_tree_stays_valid_json() {
+        let tree = json!({"Orte": ["Straße", "Fußweg"]}).to_string();
+        let mut m = meta(&[("keywords", tree.as_str())]);
+        replace_sharp_s(&mut m);
+
+        let parsed: Value = serde_json::from_str(m["keywords"].as_str().unwrap())
+            .expect("substitution must not break the serialized tree");
+        assert_eq!(parsed, json!({"Orte": ["Strasse", "Fussweg"]}));
+    }
+
+    #[test]
+    fn the_filename_is_left_alone() {
+        // The old blanket loop over `main_metadata.values_mut()` rewrote the
+        // stored filename too, so a photo called `Straße.jpg` was recorded
+        // under a name no file on disk has.
+        let mut m = meta(&[("filename", "Straße.jpg"), ("title", "Straße")]);
+        replace_sharp_s(&mut m);
+
+        assert_eq!(m["filename"], json!("Straße.jpg"));
+        assert_eq!(m["title"], json!("Strasse"));
+    }
+
+    #[test]
+    fn text_without_the_character_is_untouched() {
+        let mut m = meta(&[("title", "Bridge at night")]);
+        replace_sharp_s(&mut m);
+        assert_eq!(m["title"], json!("Bridge at night"));
     }
 }

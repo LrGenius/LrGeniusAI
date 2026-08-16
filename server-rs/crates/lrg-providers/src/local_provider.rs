@@ -245,7 +245,7 @@ impl LlmProvider for LocalProvider {
             stable_prompt: split.stable,
             per_photo_prompt: split.per_photo,
             image,
-            schema: Some(openai_edit_recipe_schema().clone()),
+            schema: Some(openai_edit_recipe_schema(request.is_raw).clone()),
             max_tokens: request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             temperature: request.temperature as f32,
         };
@@ -279,11 +279,12 @@ impl LlmProvider for LocalProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens: output.prompt_tokens,
             output_tokens: output.completion_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 

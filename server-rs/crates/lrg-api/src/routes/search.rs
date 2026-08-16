@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use lrg_analysis::relevance_filter::{
     clamp_max_results, clamp_strictness, smart_filter_by_relevance, ScoredResult,
@@ -139,9 +139,31 @@ async fn search(
         return Json(json!({"results": Value::Array(vec![])})).into_response();
     };
 
+    // Both filters, always both. The metadata pass used to apply the catalog
+    // filter only when no `photo_ids` list was given, so a request carrying
+    // both leaked photos from other catalogs.
+    let in_scope = |photo_id: &str, m: &Map<String, Value>| -> bool {
+        if let Some(ids) = &photo_ids_to_search {
+            if !ids.contains(photo_id) {
+                return false;
+            }
+        }
+        if let Some(cid) = &catalog_id {
+            if !meta::parse_catalog_ids(m).contains(cid.as_str()) {
+                return false;
+            }
+        }
+        true
+    };
+
     // 1. Semantic search (SigLIP2).
     let mut semantic_results: Vec<ScoredResult> = Vec::new();
     let mut semantic_ids: HashSet<String> = HashSet::new();
+    // Kept so the metadata pass below can reuse these rows. `scan_all` pulls
+    // every 1152-dim vector along with the metadata — around 230 MB at 50k
+    // photos — and the metadata pass used to scan the same table a second
+    // time for data it already had in hand.
+    let mut scanned_rows: Option<Vec<lrg_store::StoreRecord>> = None;
     if semantic_siglip {
         match state.siglip.embed_text(std::slice::from_ref(&term)) {
             Ok(mut batch) => {
@@ -161,16 +183,7 @@ async fn search(
                 let mut scored: Vec<ScoredResult> = records
                     .iter()
                     .filter(|r| meta::has_embedding(&r.metadata))
-                    .filter(|r| {
-                        photo_ids_to_search
-                            .as_ref()
-                            .is_none_or(|ids| ids.contains(&r.id))
-                    })
-                    .filter(|r| {
-                        catalog_id.as_ref().is_none_or(|cid| {
-                            meta::parse_catalog_ids(&r.metadata).contains(cid.as_str())
-                        })
-                    })
+                    .filter(|r| in_scope(&r.id, &r.metadata))
                     .filter_map(|r| {
                         let v = r.vector.as_ref()?;
                         Some(ScoredResult {
@@ -187,6 +200,7 @@ async fn search(
                     .iter()
                     .map(|r| r.photo_id.clone())
                     .collect();
+                scanned_rows = Some(records);
             }
             Err(e) => {
                 let msg = format!("SigLIP model not available: {e}");
@@ -198,29 +212,38 @@ async fn search(
 
     // 2. Metadata substring search (in-memory over metadata only, not vectors).
     let mut metadata_results: Vec<Value> = Vec::new();
-    if metadata_enabled {
+    // The "Max results" slider used to bind the semantic half only, so a
+    // common substring returned the whole catalog however low it was set.
+    let metadata_budget = n_results.saturating_sub(semantic_results.len());
+    if metadata_enabled && metadata_budget > 0 {
         let term_lower = term.to_lowercase();
-        let rows = match store.scan_meta(IMAGE_TABLE).await {
-            Ok(r) => r,
-            Err(e) => {
-                return (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": e.to_string()})),
-                )
-                    .into_response()
+        // Only pay for a scan when the semantic pass did not already do one —
+        // and then take the cheaper vector-free variant.
+        let meta_only;
+        let rows: Vec<(&str, &Map<String, Value>)> = match &scanned_rows {
+            Some(records) => records
+                .iter()
+                .map(|r| (r.id.as_str(), &r.metadata))
+                .collect(),
+            None => {
+                meta_only = match store.scan_meta(IMAGE_TABLE).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({"error": e.to_string()})),
+                        )
+                            .into_response()
+                    }
+                };
+                meta_only.iter().map(|(id, m)| (id.as_str(), m)).collect()
             }
         };
         for (photo_id, m) in rows {
-            if let Some(ids) = &photo_ids_to_search {
-                if !ids.contains(&photo_id) {
-                    continue;
-                }
-            } else if let Some(cid) = &catalog_id {
-                if !meta::parse_catalog_ids(&m).contains(cid.as_str()) {
-                    continue;
-                }
+            if metadata_results.len() >= metadata_budget {
+                break;
             }
-            if semantic_ids.contains(&photo_id) {
+            if !in_scope(photo_id, m) || semantic_ids.contains(photo_id) {
                 continue;
             }
             let matched = metadata_fields.iter().any(|field| {

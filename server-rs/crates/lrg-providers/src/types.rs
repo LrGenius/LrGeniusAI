@@ -132,6 +132,15 @@ pub struct EditGenerationRequest {
     pub ollama_base_url: Option<String>,
     pub lmstudio_base_url: Option<String>,
     pub training_examples: Vec<serde_json::Value>,
+    /// Whether the *original* file is raw. `None` means the caller did not
+    /// say, which is treated as raw — that is what every catalog indexed
+    /// before this field existed assumed.
+    ///
+    /// It decides the unit of `temperature`: Lightroom exposes Kelvin for raw
+    /// files and a relative -100..100 scale for JPEG/TIFF/PNG, and the two
+    /// are not interchangeable. The image bytes cannot answer the question,
+    /// since the plugin exports to JPEG before uploading.
+    pub is_raw: Option<bool>,
 }
 
 impl EditGenerationRequest {
@@ -175,6 +184,7 @@ impl EditGenerationRequest {
             ollama_base_url: None,
             lmstudio_base_url: None,
             training_examples: Vec::new(),
+            is_raw: None,
         }
     }
 }
@@ -189,6 +199,14 @@ pub struct EditGenerationResponse {
     pub output_tokens: u32,
     pub error: Option<String>,
     pub warning: Option<String>,
+    /// Stable codes for the frame-derived limits that actually changed this
+    /// recipe, in the style of culling's `reason_codes` — see
+    /// `lrg_analysis::edit_guardrails::GuardrailReason`. Empty when the edit
+    /// came back exactly as the provider generated it.
+    ///
+    /// Filled by `lrg_api::edit_budget` rather than by any provider: what a
+    /// photograph can absorb is measured from its pixels, not asked of a model.
+    pub guardrail_reasons: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

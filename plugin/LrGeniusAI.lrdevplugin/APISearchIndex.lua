@@ -620,10 +620,12 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 	})
 
 	local photoPaths = {}
-	local photoIndex = 1
 	for _, rendition in exportSession:renditions() do
 		local success, path = rendition:waitForRender()
-		local photo = photos[photoIndex]
+		-- Same reason as in analyzeAndIndexSelectedPhotos: the rendition knows its
+		-- own photo, and a loop counter would mis-key every later path as soon as
+		-- Lightroom skips one rendition.
+		local photo = rendition.photo
 		if photo ~= nil then
 			local photoName = LrPathUtils.leafName(photo:getFormattedMetadata("fileName"))
 			log:trace(
@@ -643,7 +645,6 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 		else
 			log:error("Photo is nil in exportPhotosForIndexing, probably it got deleted in the meantime.")
 		end
-		photoIndex = photoIndex + 1
 	end
 	return photoPaths
 end
@@ -672,7 +673,14 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 	local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
 
 	local body = {
-		images = { { path = filePath, photo_id = photoId, exposure_bias = options.exposure_bias } },
+		images = {
+			{
+				path = filePath,
+				photo_id = photoId,
+				exposure_bias = options.exposure_bias,
+				is_raw = options.is_raw,
+			},
+		},
 		catalog_id = getCatalogId(),
 		tasks = options.tasks or {},
 		provider = options.provider,
@@ -686,11 +694,13 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		generate_caption = tostring(options.generate_caption or false),
 		generate_title = tostring(options.generate_title or false),
 		generate_alt_text = tostring(options.generate_alt_text or false),
-		submit_gps = tostring(options.submit_gps or false),
+		-- Absent means enabled, matching the backend default: this switch was
+		-- inert for a long time and the location context reached the model
+		-- regardless, so a caller that does not mention it must not now lose it.
+		submit_gps = tostring(options.submit_gps ~= false),
 		submit_keywords = tostring(options.submit_keywords or false),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = options.user_context,
-		gps_coordinates = options.gps_coordinates and JSON:encode(options.gps_coordinates) or nil,
 		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
 		folder_names = options.folder_names,
 		prompt = options.prompt,
@@ -787,6 +797,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			existing_keywords = po.existing_keywords,
 			folder_names = po.folder_names,
 			exposure_bias = po.exposure_bias,
+			is_raw = po.is_raw,
 		})
 	end
 
@@ -808,7 +819,10 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		generate_caption = tostring(options.generate_caption or false),
 		generate_title = tostring(options.generate_title or false),
 		generate_alt_text = tostring(options.generate_alt_text or false),
-		submit_gps = tostring(options.submit_gps or false),
+		-- Absent means enabled, matching the backend default: this switch was
+		-- inert for a long time and the location context reached the model
+		-- regardless, so a caller that does not mention it must not now lose it.
+		submit_gps = tostring(options.submit_gps ~= false),
 		submit_keywords = tostring(options.submit_keywords or false),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = base.user_context or options.user_context,
@@ -876,8 +890,7 @@ end
 --   - generate_caption boolean: Generate caption (default: true)
 --   - generate_title boolean: Generate title (default: true)
 --   - generate_alt_text boolean: Generate alt text (default: false)
---   - submit_gps boolean: Submit GPS coordinates (default: false)
---   - gps_coordinates table: GPS coordinates {latitude, longitude}
+--   - submit_gps boolean: Include the photo's location in the AI context (default: true)
 --   - submit_keywords boolean: Submit existing keywords (default: false)
 --   - existing_keywords table: Array of existing keywords
 --   - submit_folder_names boolean: Submit folder names (default: false)
@@ -922,6 +935,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
 	)
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
+	-- Unlike the indexing path, the edit endpoint never builds location context
+	-- at all (see the module comment in `routes/edit.rs`), so this stays off.
 	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
@@ -946,6 +961,14 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	addBoolOpt("adjust_effects", options.adjust_effects)
 	addBoolOpt("adjust_lens_corrections", options.adjust_lens_corrections)
 	addBoolOpt("allow_auto_crop", options.allow_auto_crop)
+	-- Not a creative control: the backend cannot see the original encoding once
+	-- the photo has been exported to JPEG, and the edit guardrails need it to
+	-- know whether blown highlights still have anything behind them. Sent
+	-- explicitly rather than via addBoolOpt, whose absent-means-true default is
+	-- wrong here.
+	if options.is_raw ~= nil then
+		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
+	end
 	if options.style_strength ~= nil then
 		table.insert(mimeChunks, { name = "style_strength", value = tostring(options.style_strength) })
 	end
@@ -958,9 +981,6 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	end
 	if options.edit_intent then
 		table.insert(mimeChunks, { name = "edit_intent", value = options.edit_intent })
-	end
-	if options.gps_coordinates then
-		table.insert(mimeChunks, { name = "gps_coordinates", value = JSON:encode(options.gps_coordinates) })
 	end
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
@@ -1065,15 +1085,13 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	table.insert(mimeChunks, { name = "generate_alt_text", value = tostring(options.generate_alt_text or false) })
 
 	-- Context options
-	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
+	-- Absent means enabled; see the note in indexPhotosByReference.
+	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps ~= false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 
 	if options.user_context then
 		table.insert(mimeChunks, { name = "user_context", value = options.user_context })
-	end
-	if options.gps_coordinates then
-		table.insert(mimeChunks, { name = "gps_coordinates", value = JSON:encode(options.gps_coordinates) })
 	end
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
@@ -1104,6 +1122,12 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	-- when the camera recorded it; see the note in buildPhotoOptions.
 	if type(options.exposure_bias) == "number" then
 		table.insert(mimeChunks, { name = "exposure_bias", value = tostring(options.exposure_bias) })
+	end
+	-- Whether the original is raw. Stored with the photo so later work — style
+	-- training above all, where raw and rendered Temp values are on different
+	-- scales — does not have to re-derive it. Absent when unknown.
+	if type(options.is_raw) == "boolean" then
+		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end
 	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
 		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
@@ -1191,10 +1215,12 @@ local function buildUrlWithParams(baseUrl, params)
 	end
 end
 
-function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, searchOptions)
+-- `quality_sort` used to be the second parameter. `/search` never read it —
+-- it was the wire half of a "prettiest / ugliest" feature that had no UI
+-- either — so it is gone rather than left as a field the backend ignores.
+function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 	local params = {
 		term = searchTerm,
-		quality_sort = qualitySort,
 	}
 	local cid = getCatalogId()
 	if cid then
@@ -1796,12 +1822,11 @@ local function buildPhotoOptions(photo, photoId, options)
 	for k, v in pairs(options) do
 		photoOptions[k] = v
 	end
-	if options.submit_gps then
-		local gps = photo:getRawMetadata("gps")
-		if gps then
-			photoOptions.gps_coordinates = gps
-		end
-	end
+	-- No `gps_coordinates` here on purpose. The plug-in used to attach the raw
+	-- coordinates to every request and the backend never read the field: it
+	-- derives place names from the photo's own EXIF instead, which is why
+	-- `submit_gps` is the switch that matters. Sending coordinates nothing
+	-- consumes is noise, and privacy-sensitive noise at that.
 	if options.submit_keywords then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
@@ -1829,6 +1854,15 @@ local function buildPhotoOptions(photo, photoId, options)
 	local exposureBias = photo:getRawMetadata("exposureBias")
 	if type(exposureBias) == "number" then
 		photoOptions.exposure_bias = exposureBias
+	end
+	-- Stored with the photo so later work does not have to ask the catalog
+	-- again: the same file can be edited from a different session, and the
+	-- style training in particular needs to keep raw and rendered originals
+	-- apart because their Temp values are on different scales. Absent when the
+	-- format could not be read; see Util.isRawPhoto.
+	local isRaw = Util.isRawPhoto(photo)
+	if isRaw ~= nil then
+		photoOptions.is_raw = isRaw
 	end
 	photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
 	photoOptions.photo_id = photoId
@@ -1921,8 +1955,14 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 					end)
 				else
 					local success, path = rendition:waitForRender()
-					local photo = selectedPhotos[idx]
-					if success and path and photo then
+					-- The rendition carries its own photo. Pairing by loop counter
+					-- instead would silently shift every later photo's analysis onto
+					-- the wrong file as soon as Lightroom skips one rendition.
+					local photo = rendition.photo
+					if photo == nil then
+						log:error("Rendition #" .. tostring(idx) .. " carried no photo; skipping it.")
+						table.insert(queue, { exportFailed = true, error = "rendition carried no photo" })
+					elseif success and path then
 						table.insert(queue, { photo = photo, path = path })
 					else
 						table.insert(queue, { photo = photo, exportFailed = true, error = path })
@@ -2001,7 +2041,9 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 					end
 
 					stats.processed = stats.processed + 1
-					table.insert(processedPhotos, photo)
+					if photo ~= nil then
+						table.insert(processedPhotos, photo)
+					end
 					progressScope:setPortionComplete(stats.processed, numPhotos)
 					progressScope:setCaption(
 						LOC(
@@ -4252,7 +4294,31 @@ function SearchIndexAPI.getDetailedHealth()
 		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
 		ollama = false,
 		lmstudio = false,
+		-- The engine built into the backend — MLX on macOS, llama.cpp on
+		-- Windows. Counted as a configured provider like any other: it is the
+		-- default way to run this plug-in, and leaving it out told every user
+		-- who had only downloaded a local model that they had no provider at
+		-- all.
+		localEngine = false,
 	}
+
+	-- `/models` already reports both built-in engines, and reports them empty
+	-- when the platform does not ship one or no model has been downloaded yet,
+	-- which is exactly the distinction this needs. No API keys are passed: a
+	-- health check must not depend on a cloud round-trip.
+	if health.backend then
+		local modelsResp = SearchIndexAPI.getModels()
+		local models = modelsResp and modelsResp.models
+		if type(models) == "table" then
+			for _, engine in ipairs({ "mlx", "llamacpp" }) do
+				local list = models[engine]
+				if type(list) == "table" and #list > 0 then
+					health.localEngine = true
+					break
+				end
+			end
+		end
+	end
 
 	-- Try to ping local LLMs if they are not default localhost but maybe they are
 	if not Util.nilOrEmpty(prefs.ollamaBaseUrl) then
@@ -4528,6 +4594,10 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("adjust_effects", options.adjust_effects)
 	addEditOpt("adjust_lens_corrections", options.adjust_lens_corrections)
 	addEditOpt("allow_auto_crop", options.allow_auto_crop)
+	-- Not a creative control: the backend cannot see the original encoding once
+	-- the photo has been exported to JPEG, and the edit guardrails need it to
+	-- know whether blown highlights still have anything behind them.
+	addEditOpt("is_raw", options.is_raw)
 	addEditOpt("ollama_base_url", options.ollama_base_url or (prefs and prefs.ollamaBaseUrl))
 	addEditOpt("lmstudio_base_url", options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl))
 

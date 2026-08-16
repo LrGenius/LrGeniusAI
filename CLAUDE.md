@@ -28,6 +28,8 @@ cargo build --release -p lrg-server
 
 **The in-process local LLM is behind the `llamacpp` cargo feature, off by default.** Without it the `llamacpp` provider reports "this backend build has no local-model support" and `/llm/catalog` returns `supported: false` — which is the answer to "why doesn't the Local AI Model section do anything". It is off by default because it compiles llama.cpp from source, so it needs `cmake` and `libclang` (bindgen) and adds minutes to a cold build; anyone touching an unrelated crate should not pay that.
 
+**Which local engine ships is a per-platform decision.** Release builds enable `llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not compile the feature at all (see `cargo_features` in the release matrix, `.github/workflows/release.yml`). The plugin mirrors that: `sectionsForTopOfDialog` and the onboarding wizard build the MLX group box on macOS and the llama.cpp one elsewhere, and the provider dropdown needs no special-casing because `/models` reports `llamacpp: []` when the feature is absent. The feature still *builds* on macOS, so enabling it locally to compare the two engines is fine — just don't re-add it to the macOS release job.
+
 ```bash
 # Needs cmake + libclang. macOS: libclang ships with the Xcode CLT, `brew install cmake`.
 # Linux: `apt install cmake libclang-dev`. Windows also builds Vulkan (not CUDA — see
@@ -161,9 +163,16 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 ### Docs
 
 - Backend port is 19819 by default
+- **Docs are part of the change, not a follow-up.** `docs/doc-sources.toml` maps each wiki page to the source files it describes; when you touch one of those files, update the page in the same change. If the page is still accurate, say so — either in the PR or with a `Docs-Reviewed: <Page-Name>.md` commit trailer, which is what clears the staleness warning.
+- `scripts/check-docs.py` enforces the parts that can be checked mechanically, and runs in pre-commit and CI (`lint-format.yml`):
+  - every axum route has a heading in `docs/wiki/Dev-Backend-API.md`, and every heading names a real route (method and path both) — **hard failure**
+  - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
+  - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
+- `scripts/check-docs.py --for <path>` prints the pages that document a file.
 
 ### Editor automation (Claude Code)
 
 - A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
+- The same hook names the wiki pages documenting the edited file (once per page per session). Treat that as part of the task: update the page now, or state that it is still correct.
 
 @.claude/skills/lrc-plugin-dev.md
