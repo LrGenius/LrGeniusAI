@@ -96,15 +96,6 @@ busted                       # runs plugin/spec/*_spec.lua (config in /.busted)
 
 Add tests when you touch pure helpers in `Util.lua` (or any logic that doesn't require live LR objects). CI runs this via `.github/workflows/lua-tests.yml`.
 
-### Translations sync & check
-
-```bash
-python sync_translations.py            # regenerate all three TranslatedStrings_*.txt from LOC() keys
-python3 scripts/check_translations.py  # read-only parity check (used by CI and the edit hook)
-```
-
-The `.txt` files are UTF-16 — never hand-edit one in isolation; go through the scripts. See the `sync-translations` skill.
-
 ---
 
 ## Architecture
@@ -153,7 +144,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 ### Lua / Plugin
 
 - Use `LrTasks.pcall` — never native `pcall`.
-- All GUI strings must use `LOC(...)`. Update **all three** translation files when adding/changing strings: `TranslatedStrings_en.txt`, `TranslatedStrings_de.txt`, `TranslatedStrings_fr.txt`.
+- All GUI strings must use `LOC(...)`. The plugin ships no `TranslatedStrings_*.txt` files — the default string written inline in the `LOC()` call is what the UI shows, so write it as finished user-facing English.
 - Surface all errors to the user via `ErrorHandler.handleError`; no silent failures.
 - Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
 - New top-level actions must follow the `Task*.lua` naming convention.
@@ -173,6 +164,6 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 
 ### Editor automation (Claude Code)
 
-- A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, `cargo fmt`/`cargo clippy` for `server-rs/` Rust, and the translation parity check for `TranslatedStrings_*.txt`. Fix anything it reports before moving on — don't disable it to get past a warning.
+- A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
 
 @.claude/skills/lrc-plugin-dev.md

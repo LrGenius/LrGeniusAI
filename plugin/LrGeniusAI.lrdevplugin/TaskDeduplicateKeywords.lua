@@ -597,9 +597,7 @@ LrTasks.startAsyncTask(function()
 				end
 			elseif clusterErr then
 				local errText = tostring(clusterErr)
-				log:warn(
-					"DeduplicateKeywords: cluster call failed for '" .. group.parentName .. "': " .. errText
-				)
+				log:warn("DeduplicateKeywords: cluster call failed for '" .. group.parentName .. "': " .. errText)
 				if errText == "canceled" then
 					scanAborted = true
 					break
@@ -608,7 +606,7 @@ LrTasks.startAsyncTask(function()
 					-- the next one too. Stop and say so, rather than making the
 					-- user sit through one long timeout per remaining branch.
 					semanticWarning = LOC(
-						"$$$/LrGeniusAI/DeduplicateKeywords/SemanticTimedOut=The AI backend stopped responding while analyzing \"^1\", so the scan was stopped after ^2 of ^3 branch(es). A local AI model can need a very long time for a large keyword branch — try scanning fewer branches at once, or pick a faster model.",
+						'$$$/LrGeniusAI/DeduplicateKeywords/SemanticTimedOut=The AI backend stopped responding while analyzing "^1", so the scan was stopped after ^2 of ^3 branch(es). A local AI model can need a very long time for a large keyword branch — try scanning fewer branches at once, or pick a faster model.',
 						group.parentName,
 						gi,
 						#leafGroups
@@ -617,7 +615,7 @@ LrTasks.startAsyncTask(function()
 					break
 				else
 					semanticWarning = LOC(
-						"$$$/LrGeniusAI/DeduplicateKeywords/SemanticFailed=AI clustering failed for \"^1\": ^2",
+						'$$$/LrGeniusAI/DeduplicateKeywords/SemanticFailed=AI clustering failed for "^1": ^2',
 						group.parentName,
 						errText
 					)

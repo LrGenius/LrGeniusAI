@@ -3425,8 +3425,7 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 
 	while true do
 		pollCount = pollCount + 1
-		local interval = (pollCount <= CLUSTER_POLL_FAST_COUNT) and CLUSTER_POLL_FAST_INTERVAL
-			or CLUSTER_POLL_INTERVAL
+		local interval = (pollCount <= CLUSTER_POLL_FAST_COUNT) and CLUSTER_POLL_FAST_INTERVAL or CLUSTER_POLL_INTERVAL
 		LrTasks.sleep(interval)
 		LrTasks.yield()
 		if cancelScope and cancelScope:isCanceled() then
@@ -3448,11 +3447,7 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 
 		-- "running" → surface the backend's stage and keep polling
 		local progress = (type(poll.progress) == "table") and poll.progress or {}
-		local stageKey = tostring(progress.stage)
-			.. "/"
-			.. tostring(progress.done)
-			.. "/"
-			.. tostring(progress.total)
+		local stageKey = tostring(progress.stage) .. "/" .. tostring(progress.done) .. "/" .. tostring(progress.total)
 		local now = LrDate.currentTime()
 		if progress.stage ~= nil then
 			sawProgress = true
