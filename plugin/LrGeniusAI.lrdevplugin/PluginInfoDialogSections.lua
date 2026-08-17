@@ -3,27 +3,39 @@ PluginInfoDialogSections = {}
 function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.useClip = prefs.useClip
 
+	-- One poller for every model, not one per model: /assets/status answers for
+	-- all of them in a single request, and two loops on separate 5s timers used
+	-- to make the two indicators update at visibly different moments.
+	--
+	-- Note none of this is gated on `useClip`. That preference turns the search
+	-- *feature* on; it has never had anything to do with whether the files are
+	-- on disk, and gating the poll on it meant the indicator stayed stuck at
+	-- "not ready" for anyone who had unticked it.
 	propertyTable.clipReady = false
+	propertyTable.bioclipReady = false
+	propertyTable.assetsReady = false
 	propertyTable.keepChecksRunning = true
-	if prefs.useClip then
-		LrTasks.startAsyncTask(function(context)
-			propertyTable.clipReady = SearchIndexAPI.isClipReady()
-			while propertyTable.keepChecksRunning do
-				LrTasks.sleep(5)
-				propertyTable.clipReady = SearchIndexAPI.isClipReady()
+
+	local function refreshAssetStatus()
+		local assets = SearchIndexAPI.getAssetStatus()
+		if not assets or type(assets.families) ~= "table" then
+			return
+		end
+		propertyTable.assetsReady = assets.ready == true
+		for _, family in ipairs(assets.families) do
+			if family.id == "clip" then
+				propertyTable.clipReady = family.ready == true
+			elseif family.id == "bioclip" then
+				propertyTable.bioclipReady = family.ready == true
 			end
-		end)
+		end
 	end
 
-	-- No `useBioclip` preference to gate on: for species recognition, having
-	-- the model downloaded *is* the opt-in, so the only state worth tracking is
-	-- whether the files are there.
-	propertyTable.bioclipReady = false
 	LrTasks.startAsyncTask(function(context)
-		propertyTable.bioclipReady = SearchIndexAPI.isBioclipReady()
+		refreshAssetStatus()
 		while propertyTable.keepChecksRunning do
 			LrTasks.sleep(5)
-			propertyTable.bioclipReady = SearchIndexAPI.isBioclipReady()
+			refreshAssetStatus()
 		end
 	end)
 	propertyTable.logging = prefs.logging
@@ -570,61 +582,62 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 			}),
 			localEngineBox,
 		},
+		-- One section and one button for both models. They used to be two, which
+		-- asked the reader to know that "smart photo search" and "species
+		-- recognition" are different neural networks with separate downloads --
+		-- a distinction that matters to this codebase and to nobody using it.
+		-- The per-model indicators stay, so it is still obvious which half is
+		-- missing when only one is.
 		{
 			bind_to_object = propertyTable,
-			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionSearch=Smart photo search"),
+			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionModels=On-device AI models"),
+			f:static_text({
+				title = LOC(
+					"$$$/LrGeniusAI/PluginInfo/ModelsHint=Search your catalog by what is in the picture, and identify\nanimals, plants and fungi down to the species. Both run entirely\non this computer and are a one-time download."
+				),
+			}),
 			f:checkbox({
 				value = bind("useClip"),
 				title = LOC("$$$/LrGeniusAI/PluginInfo/UseOpenClip=Use AI model for smart photo search"),
 			}),
 			f:group_box({
 				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/PluginInfo/AdvancedSearchTitle=Advanced search"),
+				title = LOC("$$$/LrGeniusAI/PluginInfo/ModelsTitle=Models"),
 				f:row({
 					fill_horizontal = 1,
+					Util.statusIndicator(
+						f,
+						"assetsReady",
+						LOC("$$$/LrGeniusAI/PluginInfo/AssetsReady=All AI models are ready")
+					),
+					f:push_button({
+						title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadModels=Download AI models"),
+						action = function(button)
+							LrTasks.startAsyncTask(function()
+								SearchIndexAPI.startAssetDownload()
+							end)
+						end,
+						enabled = bind({
+							key = "assetsReady",
+							transform = function(v)
+								return not v
+							end,
+						}),
+					}),
+				}),
+				f:row({
 					Util.statusIndicator(
 						f,
 						"clipReady",
-						LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=AI search model is ready")
+						LOC("$$$/LrGeniusAI/PluginInfo/OpenClipReady=Smart photo search")
 					),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
-						action = function(button)
-							LrTasks.startAsyncTask(function()
-								SearchIndexAPI.startClipDownload()
-							end)
-						end,
-						enabled = bind("useClip"),
-					}),
 				}),
-			}),
-		},
-		{
-			bind_to_object = propertyTable,
-			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionSpecies=Species recognition"),
-			f:static_text({
-				title = LOC(
-					"$$$/LrGeniusAI/PluginInfo/SpeciesHint=Identifies animals, plants and fungi down to the species,\nusing BioCLIP 2. Runs entirely on this computer.\nThe model is a one-time download of roughly 750 MB."
-				),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/PluginInfo/SpeciesModelTitle=Species model"),
 				f:row({
-					fill_horizontal = 1,
 					Util.statusIndicator(
 						f,
 						"bioclipReady",
-						LOC("$$$/LrGeniusAI/PluginInfo/BioclipReady=Species model is ready")
+						LOC("$$$/LrGeniusAI/PluginInfo/BioclipReady=Species identification")
 					),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/DownloadNow=Download now"),
-						action = function(button)
-							LrTasks.startAsyncTask(function()
-								SearchIndexAPI.startBioclipDownload()
-							end)
-						end,
-					}),
 				}),
 			}),
 		},

@@ -39,6 +39,7 @@ sources = [
   "server-rs/crates/lrg-ml/src/model_paths.rs",
   "server-rs/crates/lrg-api/src/routes/clip.rs",
   "server-rs/crates/lrg-api/src/routes/bioclip.rs",
+  "server-rs/crates/lrg-api/src/routes/assets.rs",
   "server-rs/crates/lrg-api/src/routes/llm.rs",
   # Asset provenance: which upstream model and dataset each export pulls from.
   "server-rs/scripts/export_siglip2_fp16.py",

@@ -189,17 +189,28 @@ impl FaceModel {
         }
     }
 
-    pub fn unload(&self) {
+    /// Drops the loaded session(s). Safe to call when nothing is loaded.
+    ///
+    /// The reason is a parameter because this is reached two ways — the
+    /// `/unload` route and the idle sweep — and the log line used to say
+    /// "due to inactivity" for both. A real `/unload` from the plugin then
+    /// looked like an idle timeout in the log, which is the kind of small lie
+    /// that costs an hour the next time someone reads it.
+    fn unload_with_reason(&self, reason: &str) {
         let mut guard = self.loaded.lock().unwrap();
         if guard.take().is_some() {
-            log::info!("Unloading InsightFace model due to inactivity...");
+            log::info!("Unloading InsightFace model ({reason})");
         }
+    }
+
+    pub fn unload(&self) {
+        self.unload_with_reason("requested");
     }
 
     pub fn unload_if_idle(&self) {
         let last = self.last_used_unix.load(Ordering::Relaxed);
         if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
-            self.unload();
+            self.unload_with_reason("idle");
         }
     }
 

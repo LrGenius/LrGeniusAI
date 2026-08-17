@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod bioclip;
 pub mod clip;
 pub mod db;

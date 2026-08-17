@@ -179,67 +179,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 					}),
 				}),
 
-				-- AI Model Settings
-				f:group_box({
-					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AISettings=AI Model"),
-					fill_horizontal = 1,
-					f:row({
-						f:static_text({
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/aiModel=AI Model:"),
-							width = share("labelWidth"),
-						}),
-						f:popup_menu({
-							value = bind("modelKey"),
-							items = modelItems,
-							width = 300,
-						}),
-					}),
-					f:row({
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Temperature=Temperature:"),
-							width = share("labelWidth"),
-						}),
-						f:slider({
-							value = bind("temperature"),
-							min = 0.0,
-							max = 0.5,
-							integral = false,
-							width = 300,
-						}),
-						f:static_text({
-							title = bind("temperature"),
-							width = 40,
-						}),
-					}),
-					f:row({
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MaxTokens=Max Tokens:"),
-							width = share("labelWidth"),
-						}),
-						f:edit_field({
-							value = bind("maxTokens"),
-							width = 80,
-							min = 256,
-							max = 32768,
-							increment = 256,
-						}),
-					}),
-					f:row({
-						f:static_text({
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/generateLanguage=Language:"),
-							width = share("labelWidth"),
-						}),
-						f:combo_box({
-							value = bind("language"),
-							items = Defaults.generateLanguages,
-						}),
-						f:checkbox({
-							value = bind("replaceSS"),
-							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/replaceSS=Replace ß with ss"),
-						}),
-					}),
-				}),
-
 				-- Core Tasks
 				f:group_box({
 					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Tasks=Primary Tasks"),
@@ -328,6 +267,71 @@ local function showAnalyzeAndIndexDialog(ctx)
 			f:tab_view_item({
 				title = LOC("$$$/LrGeniusAI/UI/TabMetadata=Metadata Options"),
 				identifier = "metadata",
+
+				-- The LLM settings live here rather than on the General tab: they
+				-- only matter when metadata generation is on, and that is what this
+				-- tab is about. Embeddings, faces and species identification all run
+				-- without ever touching a language model.
+				-- AI Model Settings
+				f:group_box({
+					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AISettings=AI Model"),
+					fill_horizontal = 1,
+					f:row({
+						f:static_text({
+							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/aiModel=AI Model:"),
+							width = share("labelWidth"),
+						}),
+						f:popup_menu({
+							value = bind("modelKey"),
+							items = modelItems,
+							width = 300,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Temperature=Temperature:"),
+							width = share("labelWidth"),
+						}),
+						f:slider({
+							value = bind("temperature"),
+							min = 0.0,
+							max = 0.5,
+							integral = false,
+							width = 300,
+						}),
+						f:static_text({
+							title = bind("temperature"),
+							width = 40,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MaxTokens=Max Tokens:"),
+							width = share("labelWidth"),
+						}),
+						f:edit_field({
+							value = bind("maxTokens"),
+							width = 80,
+							min = 256,
+							max = 32768,
+							increment = 256,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/generateLanguage=Language:"),
+							width = share("labelWidth"),
+						}),
+						f:combo_box({
+							value = bind("language"),
+							items = Defaults.generateLanguages,
+						}),
+						f:checkbox({
+							value = bind("replaceSS"),
+							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/replaceSS=Replace ß with ss"),
+						}),
+					}),
+				}),
 
 				f:group_box({
 					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MetadataOptions=Metadata Tasks"),

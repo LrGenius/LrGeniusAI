@@ -163,28 +163,34 @@ fn with_status(state: &Downloads, key: &str, f: impl FnOnce(&mut ModelDownloadSt
     f(state.lock().unwrap().entry(key.to_string()).or_default());
 }
 
+/// One asset to fetch: which release tag holds it, its asset name, and where
+/// it goes on disk.
+pub(crate) type ReleaseAsset<'a> = (&'a str, &'a str, &'a std::path::Path);
+
 /// Streams a set of GitHub release assets to their destinations, reporting
 /// progress under `key` in the shared download map.
 ///
-/// Shared with `routes::bioclip`, which pulls a different asset set from its
-/// own release tag. Everything that differs between the two model families is
-/// a parameter; everything that must not differ — the up-front HEAD pass so
-/// the progress bar has a denominator, `.part` staging so an interrupted
-/// download can never be mistaken for a complete model, treating any non-2xx
-/// as a missing release rather than a corrupt file — lives here once.
+/// Shared by `routes::bioclip` and `routes::assets`. The tag is per *asset*
+/// rather than per call so one progress bar can span several model families,
+/// which live at different release tags — that is what makes the combined
+/// "download everything" flow a single bar instead of three.
+///
+/// Everything that must not differ between callers lives here once: the
+/// up-front HEAD pass so the progress bar has a denominator, `.part` staging
+/// so an interrupted download can never be mistaken for a complete model, and
+/// treating any non-2xx as a missing release rather than a corrupt file.
 pub(crate) async fn download_release_assets(
     state: &Downloads,
     key: &str,
     label: &str,
-    tag: &str,
-    assets: &[(&str, &std::path::Path)],
+    assets: &[ReleaseAsset<'_>],
 ) {
     let client = reqwest::Client::new();
 
     // Resolve sizes up front (HEAD per asset) so total progress is known
     // from the start, matching Python's up-front HfApi files_metadata call.
     let mut total: u64 = 0;
-    for (name, _) in assets {
+    for (tag, name, _) in assets {
         let url = asset_url(tag, name);
         let resp = match client.head(&url).send().await {
             Ok(r) => r,
@@ -208,7 +214,7 @@ pub(crate) async fn download_release_assets(
     with_status(state, key, |s| s.total = total);
 
     let mut downloaded: u64 = 0;
-    for (name, dest) in assets {
+    for (tag, name, dest) in assets {
         with_status(state, key, |s| s.current_file = Some(name.to_string()));
 
         let url = asset_url(tag, name);
@@ -298,26 +304,36 @@ pub(crate) async fn download_release_assets(
         log::info!("{label} asset ready: {}", dest.display());
     }
 
-    log::info!("{label} download complete ({tag}).");
+    log::info!("{label} download complete ({} asset(s)).", assets.len());
     with_status(state, key, |s| {
         s.current_file = None;
         s.set_done();
     });
 }
 
+/// The SigLIP2 assets and where they go, for this route and for the combined
+/// download in `routes::assets`.
+pub(crate) fn clip_assets(paths: &lrg_ml::siglip::ModelPaths) -> Vec<ReleaseAsset<'_>> {
+    vec![
+        (
+            MODEL_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[0],
+            paths.image_onnx.as_path(),
+        ),
+        (
+            MODEL_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[1],
+            paths.text_onnx.as_path(),
+        ),
+        (
+            MODEL_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[2],
+            paths.tokenizer_json.as_path(),
+        ),
+    ]
+}
+
 async fn run_download(state: Arc<Downloads>) {
     let paths = lrg_ml::model_paths::resolve();
-    let assets = [
-        (ASSET_NAMES[0], paths.image_onnx.as_path()),
-        (ASSET_NAMES[1], paths.text_onnx.as_path()),
-        (ASSET_NAMES[2], paths.tokenizer_json.as_path()),
-    ];
-    download_release_assets(
-        &state,
-        DOWNLOAD_KEY,
-        "CLIP model",
-        MODEL_ASSETS_RELEASE_TAG,
-        &assets,
-    )
-    .await;
+    download_release_assets(&state, DOWNLOAD_KEY, "CLIP model", &clip_assets(&paths)).await;
 }

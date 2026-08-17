@@ -20,7 +20,6 @@ function OnboardingWizard.show(manualTrigger)
 
 			-- Initial states with robust defaults
 			propertyTable.backendRunning = SearchIndexAPI.pingServer() or false
-			propertyTable.clipReady = SearchIndexAPI.isClipReady() or false
 			propertyTable.useClip = prefs.useClip or false
 			propertyTable.geminiApiKey = prefs.geminiApiKey or ""
 			propertyTable.chatgptApiKey = prefs.chatgptApiKey or ""
@@ -35,7 +34,6 @@ function OnboardingWizard.show(manualTrigger)
 			end
 
 			local function refreshModelStatus()
-				propertyTable.clipReady = SearchIndexAPI.isClipReady()
 				LocalModelCatalog.refresh(propertyTable)
 			end
 
@@ -239,12 +237,16 @@ function OnboardingWizard.show(manualTrigger)
 						-- not something that writes metadata, and it is needed
 						-- whichever AI provider the user ends up with.
 						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/SemanticTitle=Semantic Search"),
+							title = LOC("$$$/LrGeniusAI/Onboarding/OnDeviceTitle=On-Device Models"),
 							fill_horizontal = 1,
 							f:static_text({
 								title = LOC(
-									"$$$/LrGeniusAI/Onboarding/SemanticDesc=Search your catalog by what is in the picture instead of by\nkeyword. This needs the SigLIP2 AI model — a one-time download\nof about 2.3 GB."
+									"$$$/LrGeniusAI/Onboarding/OnDeviceDesc=Search your catalog by what is in the picture, and identify\nanimals and plants down to the species. Both run entirely on\nthis computer."
 								),
+								width_in_chars = 60,
+							}),
+							f:static_text({
+								title = bind("assetsSizeText"),
 								width_in_chars = 60,
 							}),
 							f:spacer({ height = 5 }),
@@ -257,27 +259,23 @@ function OnboardingWizard.show(manualTrigger)
 							f:row({
 								Util.statusIndicator(
 									f,
-									"clipReady",
-									LOC(
-										"$$$/LrGeniusAI/Onboarding/ClipAlreadyDownloaded=Search model is already available."
-									)
+									"assetsReady",
+									LOC("$$$/LrGeniusAI/Onboarding/AssetsReady=The AI models are ready.")
 								),
 								f:push_button({
-									title = LOC("$$$/LrGeniusAI/Onboarding/DownloadClip=Download AI Search Model"),
+									title = LOC("$$$/LrGeniusAI/Onboarding/DownloadModels=Download AI Models"),
 									action = function()
 										LrTasks.startAsyncTask(function()
-											-- startClipDownload is a no-op unless the
-											-- feature is on, and clicking Download is
-											-- an unambiguous request for it, so turn
-											-- it on rather than silently doing nothing.
+											-- Clicking Download is an unambiguous request for the
+											-- feature, so turn it on rather than silently doing nothing.
 											propertyTable.useClip = true
 											prefs.useClip = true
-											SearchIndexAPI.startClipDownload()
-											propertyTable.clipReady = SearchIndexAPI.isClipReady()
+											SearchIndexAPI.startAssetDownload()
+											refreshModelStatus()
 										end)
 									end,
 									enabled = bind({
-										key = "clipReady",
+										key = "assetsReady",
 										transform = function(v)
 											return not v
 										end,

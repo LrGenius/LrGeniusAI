@@ -41,9 +41,10 @@ appear depends on what is configured in the Plug-in Manager — see
 - **Enable face detection** — detects and embeds faces for
   [People](Help-People-Faces).
 - **Identify animal and plant species** — runs BioCLIP 2 and writes a
-  taxonomic identification. Greyed out until the species model has been
-  downloaded in the Plug-in Manager (a one-time ~750 MB download, under
-  *Species recognition*). Two sub-options:
+  taxonomic identification. Greyed out until the models have been downloaded
+  in the Plug-in Manager, under *On-device AI models* — one **Download AI
+  models** button fetches everything that is missing, so there is nothing to
+  pick per feature. Two sub-options:
   - *Only where an animal or plant is detected* (on by default) — checks the
     already-computed search embedding first and skips photos with no organism
     in them. BioCLIP is a large model and most of a general photo library is

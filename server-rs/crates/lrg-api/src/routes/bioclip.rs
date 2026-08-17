@@ -98,19 +98,37 @@ async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!(status))
 }
 
+/// The BioCLIP assets and where they go, for this route and for the combined
+/// download in `routes::assets`.
+pub(crate) fn bioclip_assets(
+    paths: &lrg_ml::bioclip::BioclipModelPaths,
+) -> Vec<crate::routes::clip::ReleaseAsset<'_>> {
+    vec![
+        (
+            BIOCLIP_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[0],
+            paths.image_onnx.as_path(),
+        ),
+        (
+            BIOCLIP_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[1],
+            paths.taxa_bin.as_path(),
+        ),
+        (
+            BIOCLIP_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[2],
+            paths.taxa_json.as_path(),
+        ),
+    ]
+}
+
 async fn run_download(state: Arc<Downloads>) {
     let paths = lrg_ml::model_paths::resolve_bioclip();
-    let assets = [
-        (ASSET_NAMES[0], paths.image_onnx.as_path()),
-        (ASSET_NAMES[1], paths.taxa_bin.as_path()),
-        (ASSET_NAMES[2], paths.taxa_json.as_path()),
-    ];
     download_release_assets(
         &state,
         DOWNLOAD_KEY,
         "BioCLIP model",
-        BIOCLIP_ASSETS_RELEASE_TAG,
-        &assets,
+        &bioclip_assets(&paths),
     )
     .await;
 }

@@ -345,6 +345,32 @@ Returns the current progress of an ongoing CLIP model download.
 
 ---
 
+## All Model Assets (combined)
+
+The per-family routes below still exist and are what the detail view uses, but
+the plugin's setup flows drive these instead: three downloads, three progress
+bars and three ready indicators ask a photographer to care about which neural
+network does which job.
+
+### `GET /assets/status`
+Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
+for the "this will download about N GB" line. `downloadable: false` marks a
+family this endpoint cannot fetch — currently face detection, whose `buffalo_l`
+weights come from `INSIGHTFACE_ROOT` and are not published with this project.
+Such families are excluded from `ready`, so the button does not stay red
+forever over something the download cannot fix.
+
+### `POST /assets/download/start`
+Downloads every downloadable family that is **missing**, under one progress
+entry keyed `assets`. Families already on disk are skipped, so this doubles as
+"finish setting up" after an upgrade. With nothing missing it reports
+`completed` rather than idling.
+
+### `GET /assets/download/status`
+Same shape as the other download-status routes.
+
+---
+
 ## Species Model Management (BioCLIP 2)
 
 BioCLIP 2 identifies animals, plants and fungi down to species. It ships as
