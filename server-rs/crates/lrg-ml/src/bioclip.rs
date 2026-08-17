@@ -139,15 +139,18 @@ struct TaxaLabelsFile {
 struct TaxaHead {
     n_rows: usize,
     logit_scale_exp: f32,
-    /// Row-major `[n_rows, EMBED_DIM]`, L2-normalized.
+    /// Row-major `[n_rows, EMBED_DIM]`, L2-normalized, kept as raw fp16 bits.
     ///
-    /// Dequantized from the fp16 file to f32 at load: 3 KB per row resident
-    /// versus 1.5 KB on disk. That is a deliberate trade — it keeps the
-    /// scoring loop a contiguous f32 dot product the compiler vectorizes,
-    /// next to a ~600 MB ONNX session that dominates the footprint anyway.
-    /// If this ever needs halving, keep the fp16 bits and dequantize through
-    /// a 64K-entry lookup table rather than per-element conversion.
-    matrix: Vec<f32>,
+    /// Held at the file's own precision rather than dequantized to f32 at
+    /// load, which halves it: 1.5 KB per row instead of 3 KB, so ~258 MB
+    /// rather than ~517 MB for the shipped 168k-row head. Scoring goes
+    /// through [`f16_lut`], a 256 KB table that stays L2-resident.
+    ///
+    /// Measured on the shipped head (arm64, release): `classify` 44 ms
+    /// against `embed_image` 110 ms, so the head is ~28% of a species pass.
+    /// Bounded memory is worth that here — this project's repeated indexing
+    /// failures have all been memory, never throughput.
+    matrix: Vec<u16>,
     vocab: Vec<Vec<String>>,
     rows: Vec<Vec<u32>>,
     common: Vec<String>,
@@ -198,10 +201,10 @@ impl TaxaHead {
             )));
         }
 
-        let mut matrix = Vec::with_capacity(n_rows * dim);
-        for chunk in raw[TAXA_HEADER_BYTES..].chunks_exact(2) {
-            matrix.push(f16_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])));
-        }
+        let matrix: Vec<u16> = raw[TAXA_HEADER_BYTES..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
 
         let text = std::fs::read_to_string(json)
             .map_err(|e| BioclipError::Head(format!("{}: {e}", json.display())))?;
@@ -253,7 +256,7 @@ impl TaxaHead {
             "Loaded BioCLIP taxonomy head '{}': {n_rows} taxa, {} genera, {:.1} MB resident",
             labels.taxa_version,
             node_repr[GENUS].len(),
-            (matrix.len() * 4) as f64 / 1e6
+            (matrix.len() * 2) as f64 / 1e6
         );
 
         Ok(TaxaHead {
@@ -328,6 +331,23 @@ fn build_prefix_nodes(rows: &[Vec<u32>]) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
         }
     }
     (node_of, node_repr)
+}
+
+/// Dequantization table for every one of the 65,536 fp16 bit patterns.
+///
+/// Built once per process, shared by every head. 256 KB, small enough to stay
+/// in L2 across a scoring pass, which is what makes storing the head at fp16
+/// affordable — the alternative is converting ~130M values per photo with
+/// branchy arithmetic in the inner loop.
+fn f16_lut() -> &'static [f32; 65536] {
+    static LUT: std::sync::OnceLock<Box<[f32; 65536]>> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut table = Box::new([0.0f32; 65536]);
+        for (bits, slot) in table.iter_mut().enumerate() {
+            *slot = f16_to_f32(bits as u16);
+        }
+        table
+    })
 }
 
 /// IEEE 754 binary16 -> binary32.
@@ -525,15 +545,26 @@ impl BioclipModel {
         }
 
         // Cosine (both sides unit-norm) -> logits -> softmax.
+        let lut = f16_lut();
         let mut probs = Vec::with_capacity(head.n_rows);
         let mut max_logit = f32::NEG_INFINITY;
         for row in 0..head.n_rows {
             let base = row * EMBED_DIM;
-            let dot: f32 = head.matrix[base..base + EMBED_DIM]
-                .iter()
-                .zip(embedding)
-                .map(|(a, b)| a * b)
-                .sum();
+            // Four independent accumulators rather than one. A single `sum()`
+            // serializes on the accumulator's latency, and with a table lookup
+            // in the loop body that dependency chain — not the memory traffic —
+            // is what bounds this. Four lanes let the multiply-adds pipeline.
+            // The reassociation this implies is worth ~1e-7 on a 768-element
+            // sum of unit-vector components, well under fp16's own precision.
+            let row = &head.matrix[base..base + EMBED_DIM];
+            let mut acc = [0.0f32; 4];
+            for (q, e) in row.chunks_exact(4).zip(embedding.chunks_exact(4)) {
+                acc[0] += lut[q[0] as usize] * e[0];
+                acc[1] += lut[q[1] as usize] * e[1];
+                acc[2] += lut[q[2] as usize] * e[2];
+                acc[3] += lut[q[3] as usize] * e[3];
+            }
+            let dot = acc[0] + acc[1] + acc[2] + acc[3];
             let logit = dot * head.logit_scale_exp;
             max_logit = max_logit.max(logit);
             probs.push(logit);

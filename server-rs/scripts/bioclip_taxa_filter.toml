@@ -19,17 +19,30 @@
 # protists, the long tail of marine invertebrates, most fungi) is dropped
 # wholesale: it is not photographable with a camera in the field, or not
 # identifiable from a photo even by a specialist.
+#
+# These names are the ones this dataset actually uses, which is not always the
+# name a textbook would give. Verified against the real label file, because
+# guessing here fails silently: an entry that matches nothing costs no error,
+# it just quietly drops a whole branch of life. `Reptilia` (0 taxa — they are
+# filed under the orders), `Actinopterygii` (24) and `Chondrichthyes` (2) all
+# looked reasonable and all matched essentially nothing.
 class_whitelist = [
-  # Vertebrates
+  # Tetrapods
   "Aves",
   "Mammalia",
   "Amphibia",
-  "Reptilia",
   "Squamata",
   "Testudines",
   "Crocodylia",
-  "Actinopterygii",
-  "Chondrichthyes",
+  "Sphenodontia",
+  # Cartilaginous fish and the odd early-branching lineages. Bony fish are
+  # NOT here — see keep_chordata_without_class.
+  "Elasmobranchii",
+  "Holocephali",
+  "Petromyzonti",
+  "Myxini",
+  "Dipneusti",
+  "Coelacanthi",
   # Arthropods
   "Insecta",
   "Arachnida",
@@ -50,6 +63,18 @@ class_whitelist = [
   "Lecanoromycetes",
   "Pezizomycetes",
 ]
+
+# Keep Chordata taxa whose `class` field is empty.
+#
+# This is where every ray-finned fish lives in TreeOfLife-200M: 23,700 taxa
+# filed directly under `order` within Chordata, with no class at all. Salmon,
+# perch, tuna, cod, seahorses, clownfish — all of them. A class whitelist alone
+# silently drops the entire group, which is to say every aquarium photo and
+# every underwater shot in a catalog.
+#
+# Scoped to Chordata on purpose: the empty-class rows also cover ~8,400
+# foraminifera, flatworms and similar, which are not photographable subjects.
+keep_chordata_without_class = true
 
 # Within the whitelist, keep rows that have a non-empty common name.
 #
@@ -72,10 +97,15 @@ keep_one_per_genus = true
 
 # Hard ceiling; the export fails rather than silently shipping something huge.
 #
-# Two different costs scale with this number, and the RAM one is the binding
-# constraint: the head ships as fp16 (N x 768 x 2 bytes) but `lrg-ml::bioclip`
-# dequantizes it to f32 at load time, so resident memory is N x 3 KB while the
-# model is loaded. At 100k rows that is 154 MB on disk and 307 MB resident,
-# sitting next to a ~600 MB ViT-L/14 session. 150k is the point where the head
-# starts to dominate the model.
-max_rows = 150000
+# Two costs scale with this number, and they are now the same one: the head is
+# N x 768 x 2 bytes (fp16) on disk and `lrg-ml::bioclip` keeps it at that
+# precision in memory too, scoring through a lookup table. So it is ~1.5 KB per
+# row resident, alongside a ~600 MB ViT-L/14 session.
+#
+# The rules above currently keep ~170k rows: 261 MB on disk and resident,
+# for a ~880 MB total download. That is a deliberate choice over a ~766 MB
+# build without `keep_one_per_genus` — the 70k rows that rule adds are what
+# keeps unnamed beetle and wildflower genera reachable instead of being
+# absorbed by the nearest named species. The ceiling sits just above that, so
+# a rule change that doubles the head still fails loudly.
+max_rows = 175000

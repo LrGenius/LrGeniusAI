@@ -81,12 +81,17 @@ fn image_tower_matches_open_clip() {
             .collect();
         assert_eq!(got.len(), want.len(), "{name}: embedding dimension");
         let cos = cosine(&got, &want);
-        // Looser than the 0.99999 SigLIP2 golden allows, on purpose: this
-        // compares an fp16 graph *and* a resampler that approximates
-        // torchvision's antialiased bilinear rather than reproducing it
-        // bit-for-bit. Anything below this is a real preprocessing bug, not
-        // accumulated rounding.
-        assert!(cos > 0.999, "{name}: cosine {cos} against open_clip");
+        // Printed, not just asserted: the margin is the interesting number
+        // when the resampler or the fp16 export changes, and a bare pass/fail
+        // hides a drift from 0.99999 to 0.9991 that is still "green".
+        eprintln!("  {name}: cosine {cos:.6}");
+        // Measured 0.999998-0.999999 on the shipped export, so `pil_resample`'s
+        // bilinear reproduces torchvision's antialiased resize far more closely
+        // than "approximately". The threshold sits just under that rather than
+        // at a comfortable 0.999: the whole point of this test is catching a
+        // preprocessing change, and 0.999 would wave through a resampler that
+        // had quietly gone wrong.
+        assert!(cos > 0.9999, "{name}: cosine {cos} against open_clip");
     }
 }
 
@@ -99,7 +104,11 @@ fn classification_is_a_consistent_lineage() {
     }
     let model = BioclipModel::new(paths);
     let (pixels, width, height) = golden_image("lcg_noise_800x600");
+    // Warm the session so the timings below measure inference, not model load.
+    let _ = model.embed_image(&pixels, width, height).unwrap();
+    let t_embed = std::time::Instant::now();
     let mut embedding = model.embed_image(&pixels, width, height).unwrap();
+    eprintln!("  embed_image (ViT-L/14) took {:?}", t_embed.elapsed());
     lrg_ml::siglip::l2_normalize(&mut embedding);
 
     // A confidence floor of 0 forces a call at the deepest rank, so the
@@ -109,7 +118,13 @@ fn classification_is_a_consistent_lineage() {
         min_confidence: 0.0,
         top_k: 3,
     };
+    // Timed because the head is stored at fp16 and dequantized through a
+    // lookup table rather than up-front: this is the number that says whether
+    // that trade is still the right one against the ViT forward it sits next
+    // to (a few hundred ms).
+    let t0 = std::time::Instant::now();
     let pred = model.classify(&embedding, &cfg).unwrap();
+    eprintln!("  classify over the full head took {:?}", t0.elapsed());
     let rank = pred.rank.expect("a zero floor must always produce a rank");
     let best = pred.best.expect("a rank implies a best candidate");
 

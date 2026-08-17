@@ -139,16 +139,49 @@ def download_head() -> tuple[Path, Path]:
     return Path(npy), Path(labels)
 
 
-def select_rows(names: list, rules: dict) -> list[int]:
+def live_mask(npy_path: Path) -> np.ndarray:
+    """Which upstream taxa actually have an embedding.
+
+    1.79% of TreeOfLife-200M's taxa (15,487 of 867,455) are listed in the label
+    file with an all-zero column in the matrix — an upstream data defect, not
+    something this export causes. They cannot be excluded by any taxonomic
+    rule, so they get their own pass.
+
+    Dropping them matters more than 1.79% suggests, because they are not evenly
+    spread: they take out nearly every fern and conifer. Keeping them would
+    ship rows that can never be predicted while their *nodes* still count in
+    the per-rank aggregation, so a fern photo would have its probability
+    pushed onto a neighbouring clade instead of onto Polypodiopsida.
+
+    Computed in column blocks — the memmap is 2.66 GB and materializing it
+    whole to take a norm costs several GB of peak RSS for no reason.
+    """
+    mat = np.load(npy_path, mmap_mode="r")
+    n = mat.shape[1]
+    live = np.empty(n, dtype=bool)
+    block = 50_000
+    for start in range(0, n, block):
+        chunk = np.asarray(mat[:, start : start + block], dtype=np.float32)
+        live[start : start + block] = np.einsum("ij,ij->j", chunk, chunk) > 1e-12
+    dead = int((~live).sum())
+    print(f"  embeddings: {dead} of {n} upstream taxa have no embedding, dropped")
+    return live
+
+
+def select_rows(names: list, rules: dict, live: np.ndarray) -> list[int]:
     """Apply bioclip_taxa_filter.toml to the upstream label list.
 
     `names` is the upstream shape: one entry per taxon, each
-    `[[kingdom, ..., species_epithet], common_name]`.
+    `[[kingdom, ..., species_epithet], common_name]`. `live` masks out taxa
+    with no embedding (see `live_mask`) *before* any rule runs, so
+    `keep_one_per_genus` picks a representative that can actually be matched.
     """
     whitelist = set(rules["class_whitelist"])
     require_common = rules.get("require_common_name", True)
     keep_genus = rules.get("keep_one_per_genus", True)
+    keep_fish = rules.get("keep_chordata_without_class", False)
 
+    phylum_idx = RANKS.index("phylum")
     class_idx = RANKS.index("class")
     genus_idx = RANKS.index("genus")
 
@@ -160,7 +193,12 @@ def select_rows(names: list, rules: dict) -> list[int]:
 
     for i, entry in enumerate(names):
         path, common = entry[0], entry[1]
-        if len(path) <= class_idx or path[class_idx] not in whitelist:
+        if len(path) <= class_idx or not live[i]:
+            continue
+        selected = path[class_idx] in whitelist or (
+            keep_fish and not path[class_idx] and path[phylum_idx] == "Chordata"
+        )
+        if not selected:
             continue
         in_whitelist.append(i)
         if require_common and not common:
@@ -179,6 +217,19 @@ def select_rows(names: list, rules: dict) -> list[int]:
             covered_genera.add(genus_key)
         kept.sort()
 
+    # Printed before the ceiling check on purpose: when the export fails here,
+    # the breakdown is exactly what you need to decide which rule to change.
+    with_common = sum(1 for i in kept if names[i][1])
+    print(
+        f"  taxa: {len(names)} upstream -> {len(in_whitelist)} in whitelisted "
+        f"classes -> {len(kept)} kept "
+        f"({with_common} with a common name, {len(kept) - with_common} genus "
+        f"representatives, {len(covered_genera)} genera)"
+    )
+    # Resident cost equals the on-disk cost: `lrg-ml::bioclip` keeps the head
+    # at fp16 and scores through a lookup table rather than dequantizing.
+    print(f"  head: {len(kept) * EMBED_DIM * 2 / 1e6:.0f} MB on disk and resident")
+
     max_rows = rules.get("max_rows")
     if max_rows and len(kept) > max_rows:
         raise SystemExit(
@@ -186,11 +237,6 @@ def select_rows(names: list, rules: dict) -> list[int]:
             f"ceiling in bioclip_taxa_filter.toml. Tighten the rules or raise "
             f"the ceiling deliberately."
         )
-
-    print(
-        f"  taxa: {len(names)} upstream -> {len(in_whitelist)} in whitelisted "
-        f"classes -> {len(kept)} kept ({len(covered_genera)} genera)"
-    )
     return kept
 
 
@@ -217,7 +263,9 @@ def write_taxa_matrix(
     norms = np.linalg.norm(rows, axis=1, keepdims=True)
     max_drift = float(np.abs(norms - 1.0).max())
     if max_drift > 1e-3:
-        print(f"  note: upstream rows were not unit-norm (max drift {max_drift:.2e})")
+        # `live_mask` already removed the all-zero columns, so anything left
+        # off the unit sphere is unexpected and worth looking at.
+        print(f"  WARNING: rows off the unit sphere after filtering (max drift {max_drift:.2e})")
     rows /= np.maximum(norms, 1e-12)
 
     header = struct.pack(
@@ -278,7 +326,7 @@ def write_taxa_labels(names: list, keep: list[int], dest: Path) -> None:
 def export_head(model, output_dir: Path, rules: dict) -> None:
     npy_path, labels_path = download_head()
     names = json.loads(labels_path.read_text(encoding="utf-8"))
-    keep = select_rows(names, rules)
+    keep = select_rows(names, rules, live_mask(npy_path))
 
     logit_scale_exp = float(model.logit_scale.exp().detach().float())
     print(f"  logit_scale.exp() = {logit_scale_exp:.4f}")
