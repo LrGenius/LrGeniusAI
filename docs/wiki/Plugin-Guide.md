@@ -12,7 +12,7 @@ All actions are available under `Library → Plug-in Extras`:
 
 | Menu item | What it does |
 |---|---|
-| Analyze & Index Photos... | AI metadata generation + search embeddings |
+| Analyze & Index Photos... | AI metadata generation + search embeddings, faces, optional species ID |
 | AI Edit Photos... | Generate and apply Lightroom develop recipes |
 | Advanced Search... | Semantic free-text photo search |
 | Cull Similar Photos... | Burst grouping, ranking, Picks/Alternates/Rejects |
@@ -55,7 +55,7 @@ See [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutte
 - **Retrieve Metadata from Backend** — pulls AI-generated metadata back into Lightroom if it was not written during indexing.
 
 ### Style Training
-**Save Edits as AI Training Examples** reads your current develop settings and stores them on the backend as labeled few-shot examples. On the next AI Edit run, these examples are injected as style context. See [Help: Train from Edits](Help-Train-From-Edits).
+**Save Edits as AI Training Examples** reads your current develop settings and stores them on the backend as labeled examples. They are the sole input to AI Edit: the backend matches a photo against them and interpolates their settings into a recipe. Below five examples AI Edit refuses to run. See [Help: Train from Edits](Help-Train-From-Edits).
 
 ### Error Management
 Batch tasks never fail silently. At the end of a run, a **Task Completion Dialog** aggregates successes and per-photo errors so you can see exactly what failed and why. See [Troubleshooting](Troubleshooting).
