@@ -1915,8 +1915,8 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	-- announcing "Processing 400 photos with gemini-2.5-flash" for such a run
 	-- is simply wrong — it also sends people looking for an API-key problem
 	-- when something unrelated stalls.
-	local llmName = options.enableMetadata and options.model
-	if llmName == nil or llmName == "" then
+	local llmActive = options.enableMetadata and options.model
+	if llmActive == nil or not llmActive then
 		progressScope:setCaption(
 			LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotosPlain=Processing ^1 photos...", #selectedPhotos)
 		)
@@ -1925,7 +1925,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			LOC(
 				"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...",
 				#selectedPhotos,
-				llmName
+				options.model
 			)
 		)
 	end
