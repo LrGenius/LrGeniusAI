@@ -32,6 +32,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Generate embeddings for semantic retrieval
 - Generate metadata
 - Optional face detection and clustering
+- Optional species identification (BioCLIP 2, on-device)
 
 ### Advanced Search
 

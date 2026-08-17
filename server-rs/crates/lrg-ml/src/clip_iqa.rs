@@ -147,6 +147,50 @@ pub const CANDID_PROMPT_PAIRS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Prompt pairs asking whether there is an *organism* in the frame at all.
+///
+/// Unlike every other set here this is not a grading axis — nothing weights it
+/// into a cull score. It is a gate: BioCLIP 2 is a ViT-L/14 and costs a few
+/// hundred milliseconds per photo on CPU, which is not something to spend on a
+/// wedding portrait or a street scene. Scoring the SigLIP2 embedding the
+/// database already holds costs nothing extra and answers "is this worth
+/// asking BioCLIP about" well enough to skip most of a mixed catalog.
+///
+/// Written to separate *subject*, not *setting*. "A photo taken outdoors" would
+/// pass every landscape; "an organism fills the frame" is the actual
+/// precondition for a useful species call. The negatives name the things a
+/// general photo library is mostly made of, so a portrait scores low even when
+/// it was shot in a forest.
+///
+/// **Every pair names both animals and plants**, and that is not redundancy —
+/// it is the fix for a measured bug. An earlier version had one animal pair,
+/// one plant pair and one animal-leaning pair. Because [`IqaPrompts::score`]
+/// *averages* over pairs, a frame-filling flower scored high on the one plant
+/// pair and low on the other two, landing under the threshold: a live run over
+/// 38 photos rejected a macro of an Allium and a bed of roses while correctly
+/// rejecting a bronze sculpture. A pair that only half the organisms can
+/// answer drags down the mean for the other half, so each one has to be a
+/// complete "is there an organism here" question.
+///
+/// Deliberately generous rather than precise: a false positive costs one
+/// wasted BioCLIP pass and a low-confidence result the rank floor discards, a
+/// false negative silently loses a species the user wanted. The default
+/// threshold in the indexing route is set with that asymmetry in mind.
+pub const ORGANISM_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "a photo of a living animal or plant.",
+        "a photo of people, buildings, or objects.",
+    ),
+    (
+        "an animal, bird, insect, flower, or fungus is the subject of this photo.",
+        "the subject of this photo is a person or something man-made.",
+    ),
+    (
+        "a close-up photo of a living thing in nature.",
+        "there is no animal or plant in this photo.",
+    ),
+];
+
 /// Which question a [`IqaPrompts`] set is asking.
 ///
 /// Kept as separate sets rather than one long list because they are scored and
@@ -177,6 +221,11 @@ pub enum PromptSet {
     Expression,
     /// Is this a real moment or a pose? [`CANDID_PROMPT_PAIRS`].
     Candid,
+    /// Is there an organism in the frame? [`ORGANISM_PROMPT_PAIRS`].
+    ///
+    /// A gate for the species task, not a grading axis — deliberately absent
+    /// from [`PromptSet::SEMANTIC`].
+    Organism,
 }
 
 impl PromptSet {
@@ -186,6 +235,7 @@ impl PromptSet {
             PromptSet::Action => ACTION_PROMPT_PAIRS,
             PromptSet::Expression => EXPRESSION_PROMPT_PAIRS,
             PromptSet::Candid => CANDID_PROMPT_PAIRS,
+            PromptSet::Organism => ORGANISM_PROMPT_PAIRS,
         }
     }
 
@@ -199,6 +249,7 @@ impl PromptSet {
             PromptSet::Action => "action",
             PromptSet::Expression => "expression",
             PromptSet::Candid => "candid",
+            PromptSet::Organism => "organism",
         }
     }
 
@@ -210,13 +261,26 @@ impl PromptSet {
             "action" => Some(PromptSet::Action),
             "expression" => Some(PromptSet::Expression),
             "candid" => Some(PromptSet::Candid),
+            "organism" => Some(PromptSet::Organism),
             _ => None,
         }
     }
 
-    /// Every set except [`PromptSet::Quality`], which is not genre-selectable.
+    /// The genre-selectable grading axes: every set except
+    /// [`PromptSet::Quality`], which always applies, and
+    /// [`PromptSet::Organism`], which gates the species task rather than
+    /// grading anything.
     pub const SEMANTIC: [PromptSet; 3] =
         [PromptSet::Action, PromptSet::Expression, PromptSet::Candid];
+
+    /// Every set, so the invariant tests cannot silently skip a new one.
+    pub const ALL: [PromptSet; 5] = [
+        PromptSet::Quality,
+        PromptSet::Action,
+        PromptSet::Expression,
+        PromptSet::Candid,
+        PromptSet::Organism,
+    ];
 }
 
 /// The logit scale CLIP-style contrastive models are trained with. The softmax
@@ -371,7 +435,7 @@ mod tests {
 
     #[test]
     fn every_pair_in_every_set_is_distinct_and_non_empty() {
-        for set in [PromptSet::Quality, PromptSet::Action] {
+        for set in PromptSet::ALL {
             let pairs = set.pairs();
             assert!(!pairs.is_empty(), "{set:?} has no pairs");
             for (pos, neg) in pairs {
@@ -381,18 +445,26 @@ mod tests {
         }
     }
 
-    /// The two sets must ask different questions. Sharing a prompt would mean
-    /// the same evidence is counted twice under two weights, which is exactly
-    /// the double-counting the split exists to avoid.
+    #[test]
+    fn every_set_name_round_trips() {
+        for set in PromptSet::ALL {
+            assert_eq!(PromptSet::from_name(set.as_str()), Some(set));
+        }
+    }
+
+    /// The sets must ask different questions. Sharing a prompt would mean the
+    /// same evidence is counted twice under two weights, which is exactly the
+    /// double-counting the split exists to avoid.
     #[test]
     fn the_prompt_sets_do_not_overlap() {
-        let quality: Vec<&str> = DEFAULT_PROMPT_PAIRS
-            .iter()
-            .flat_map(|(a, b)| [*a, *b])
-            .collect();
-        for (a, b) in ACTION_PROMPT_PAIRS {
-            assert!(!quality.contains(a), "{a:?} appears in both sets");
-            assert!(!quality.contains(b), "{b:?} appears in both sets");
+        for (i, set) in PromptSet::ALL.iter().enumerate() {
+            let own: Vec<&str> = set.pairs().iter().flat_map(|(a, b)| [*a, *b]).collect();
+            for other in &PromptSet::ALL[i + 1..] {
+                for (a, b) in other.pairs() {
+                    assert!(!own.contains(a), "{a:?} appears in {set:?} and {other:?}");
+                    assert!(!own.contains(b), "{b:?} appears in {set:?} and {other:?}");
+                }
+            }
         }
     }
 }

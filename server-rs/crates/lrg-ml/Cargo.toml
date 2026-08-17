@@ -13,6 +13,8 @@ thiserror = "2"
 log.workspace = true
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 # CoreML is macOS-only, and ort ships no prebuilt binary satisfying the
 # `coreml` feature for any other target — requesting it unconditionally
@@ -20,9 +22,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # feature set". Keep it scoped to the one platform that can use it.
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "2.0.0-rc.13", features = ["coreml"] }
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [[example]]
 name = "bench_image"

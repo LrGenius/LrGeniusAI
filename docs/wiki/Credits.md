@@ -4,11 +4,18 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 
 ## Core Backend Dependencies
 - **InsightFace**: State-of-the-art face analysis and recognition; the `buffalo_l` models power face detection and recognition. [GitHub](https://github.com/deepinsight/insightface)
-- **SigLIP2 / OpenCLIP**: The vision-language models behind semantic search. [GitHub](https://github.com/mlfoundations/open_clip)
-- **ONNX Runtime**: Cross-platform, high performance ML inferencing, used via the `ort` crate for SigLIP2 and InsightFace. [Website](https://onnxruntime.ai/)
+- **SigLIP2 / OpenCLIP**: The vision-language models behind semantic search, and the framework both SigLIP2 and BioCLIP 2 are loaded and exported with. [GitHub](https://github.com/mlfoundations/open_clip)
+- **ONNX Runtime**: Cross-platform, high performance ML inferencing, used via the `ort` crate for SigLIP2, BioCLIP 2 and InsightFace. [Website](https://onnxruntime.ai/)
 - **LanceDB**: Embedded vector database storing embeddings and metadata. [Website](https://lancedb.com/)
 - **axum / tokio**: Async HTTP server and runtime for `geniusai-server`. [GitHub](https://github.com/tokio-rs/axum)
 - **Hugging Face Tokenizers**: Fast tokenizers used for the SigLIP2 text tower. [GitHub](https://github.com/huggingface/tokenizers)
+
+## Species Identification
+
+- **BioCLIP 2** (MIT): The vision model behind on-device species identification, trained on the tree of life. [Project](https://imageomics.github.io/bioclip-2/) · [Model](https://huggingface.co/imageomics/bioclip-2) · [Paper](https://arxiv.org/abs/2505.23883)
+- **TreeOfLife-200M** (CC0-1.0): The 200-million-image dataset BioCLIP 2 was trained on. Its precomputed text embeddings *are* the taxonomy the plugin classifies against — LrGeniusAI ships a pruned subset of them. [Dataset](https://huggingface.co/datasets/imageomics/TreeOfLife-200M)
+- **GBIF Backbone Taxonomy**: The source of the common names shown alongside each scientific name, via TreeOfLife-200M's label files. [DOI 10.15468/39omei](https://doi.org/10.15468/39omei)
+- **pybioclip**: The reference implementation whose preprocessing and rank-aggregation semantics `lrg-ml::bioclip` reproduces in Rust. [GitHub](https://github.com/Imageomics/pybioclip)
 
 ## Local Inference Engines
 - **llama.cpp**: Runs GGUF vision models in-process on Windows (Vulkan), via the `llama-cpp-2` bindings. [GitHub](https://github.com/ggml-org/llama.cpp)

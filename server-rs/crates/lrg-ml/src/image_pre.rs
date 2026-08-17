@@ -24,10 +24,12 @@ use lrg_imaging::pil_resample::{resize_plane, Filter};
 pub const IMAGE_SIZE: usize = 384;
 // Exact OPENAI_DATASET_MEAN/STD constants from open_clip — kept at full
 // precision to match torchvision's f32 cast bit-for-bit.
+// Shared with `bioclip_pre`: BioCLIP 2 normalizes with the same OpenAI-CLIP
+// constants even though every other part of its transform differs.
 #[allow(clippy::excessive_precision)]
-const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
+pub(crate) const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
 #[allow(clippy::excessive_precision)]
-const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
+pub(crate) const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
 /// `torchvision.transforms.functional._compute_resized_output_size` for a
 /// single-int target (shortest edge -> target, aspect preserved, `int()`

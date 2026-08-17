@@ -1,0 +1,83 @@
+name: Export BioCLIP Model Assets
+
+# BioCLIP 2 export (~750 MB) for the backend's species identification
+# (server-rs/crates/lrg-api/src/routes/bioclip.rs). Same reasoning as
+# model-assets.yml: the upstream model doesn't change per app release, so this
+# publishes to a stable tag that only moves when the export actually changes.
+#
+# It publishes to its **own** tag rather than joining `model-assets-v1`. The
+# two model families have independent lifecycles — re-exporting SigLIP2
+# incompatibly should not force BioCLIP's 750 MB to be re-uploaded, and
+# widening the taxa whitelist should not touch SigLIP2.
+#
+# If the export changes in a way older binaries cannot read, bump both this
+# workflow's `tag_name` and `BIOCLIP_ASSETS_RELEASE_TAG` in bioclip.rs
+# together (e.g. `bioclip-assets-v2`). Note that is a *different* question
+# from `TAXA_VERSION` in the export script, which marks the taxa set changing
+# in a way that invalidates already-stored per-photo predictions — a head that
+# is still binary-compatible but no longer gives the same answers.
+#
+# macos-latest for the same reason as the SigLIP2 job: ubuntu-latest
+# intermittently segfaulted during ONNX Runtime verification.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'server-rs/scripts/export_bioclip2_fp16.py'
+      - 'server-rs/scripts/bioclip_taxa_filter.toml'
+      - 'server-rs/scripts/pyproject.toml'
+      - 'server-rs/scripts/uv.lock'
+      - 'server-rs/testdata/bioclip_goldens.json'
+      - '.github/workflows/model-assets-bioclip.yml'
+
+jobs:
+  export-bioclip-assets:
+    runs-on: macos-latest
+    name: Export BioCLIP 2 fp16 ONNX + pruned taxonomy head
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+
+      # Downloads the 2.7 GB upstream text-embedding matrix, prunes it, and
+      # exports the image tower. The script fails rather than publishing if the
+      # kept taxa exceed the ceiling in bioclip_taxa_filter.toml.
+      - name: Export BioCLIP 2 (image tower + pruned taxonomy head)
+        run: |
+          set -euo pipefail
+          uv run --project server-rs/scripts --with onnxscript \
+            python server-rs/scripts/export_bioclip2_fp16.py --output-dir bioclip-assets
+          echo "=== Exported BioCLIP assets ==="
+          ls -lh bioclip-assets/
+
+      - name: Verify exported fp16 tower against torch goldens
+        run: |
+          uv run --project server-rs/scripts \
+            python server-rs/scripts/export_bioclip2_fp16.py --verify-only --output-dir bioclip-assets
+
+      - name: Publish to the stable bioclip-assets release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: bioclip-assets-v1
+          name: "BioCLIP 2 model assets (fp16 ONNX + taxonomy head)"
+          body: |
+            Pinned BioCLIP 2 export (`imageomics/bioclip-2`, MIT) plus a pruned
+            TreeOfLife-200M zero-shot head, downloaded at runtime by the backend's
+            `/bioclip/download/start` — **not an app release**, see the tagged `v*`
+            releases for those. Regenerated only when
+            `server-rs/scripts/export_bioclip2_fp16.py`, the taxa filter, or their
+            pinned deps change.
+          files: bioclip-assets/*
+          draft: false
+          prerelease: false
+          make_latest: false
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

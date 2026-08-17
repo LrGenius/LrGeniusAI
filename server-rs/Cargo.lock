@@ -4468,6 +4468,7 @@ dependencies = [
  "lrg-imaging",
  "ndarray 0.16.1",
  "ort",
+ "serde",
  "serde_json",
  "thiserror",
  "tokenizers",

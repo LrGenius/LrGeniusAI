@@ -40,6 +40,94 @@ appear depends on what is configured in the Plug-in Manager — see
   been downloaded in the Plug-in Manager.
 - **Enable face detection** — detects and embeds faces for
   [People](Help-People-Faces).
+- **Identify animal and plant species** — runs BioCLIP 2 and writes a
+  taxonomic identification. Greyed out until the models have been downloaded
+  in the Plug-in Manager, under *On-device AI models* — one **Download AI
+  models** button fetches everything that is missing, so there is nothing to
+  pick per feature. Two sub-options:
+  - *Only where an animal or plant is detected* (on by default) — checks the
+    already-computed search embedding first and skips photos with no organism
+    in them. BioCLIP is a large model and most of a general photo library is
+    portraits, architecture and landscapes, so leaving this on is typically the
+    difference between minutes and hours. Turn it off if you know the selection
+    is all wildlife.
+  - *Also write the taxonomy as keywords* (off by default) — see below.
+
+---
+
+## Species identification
+
+Everything runs on your machine; nothing is uploaded.
+
+### What gets written
+
+Five fields in the *LrGeniusAI* metadata panel, on every photo that was
+checked:
+
+| Field | Example |
+|---|---|
+| Species (common name) | `Great Tit` |
+| Species (scientific name) | `Parus major` |
+| Species rank | `species`, `genus`, … or `none` |
+| Species confidence | `0.91` |
+| Species taxonomy | `Animalia>Chordata>Aves>Passeriformes>Paridae>Parus>Parus major` |
+
+All five are searchable, so you can build a Smart Collection on e.g.
+`Species rank` is `species`, or on a family name in `Species taxonomy`.
+
+### Why the answer is sometimes just "Aves"
+
+The model reports the **deepest rank it is actually confident about**. A clear
+frame of a garden bird gets a species; a distant silhouette gets an order or a
+class. That is deliberate — a coarse answer that is right is more useful than a
+binomial that is wrong, and the two are easy to tell apart because the rank is
+written alongside the name.
+
+Photos where nothing cleared the confidence floor (including everything the
+pre-filter skipped) get `Species rank = none` and empty name fields. They still
+count as checked and are not re-examined on the next run.
+
+### Common names are not always in English
+
+The common name comes from GBIF's vernacular-name data, which has no reliable
+per-language coverage. Where no English name exists, whatever language GBIF
+lists first is used — so a run over European wildlife will produce Swedish and
+Danish names among the English ones (`honungslök` for *Allium siculum*,
+`Almindelig kuglebærerflue` for a fly). This is upstream data, not a setting.
+
+**The scientific name is always correct and always present**, so use *Species
+(scientific name)* when you need something dependable, and treat *Species
+(common name)* as a convenience. The keyword branch below has the same
+property: the leaf uses the common name when there is one, with the scientific
+name attached as a synonym, so a search for the binomial always finds the photo.
+
+### Keywords
+
+With *Also write the taxonomy as keywords* on, the identification is
+additionally written as a keyword hierarchy under a **`Species`** root,
+separate from the `LrGeniusAI` root the AI keywords use:
+
+```
+Species > Animalia > Chordata > Aves > Passeriformes > Paridae > Parus > Great Tit
+```
+
+Only the leaf is marked for export, so a JPEG exported from Lightroom carries
+`Great Tit` in its IPTC keywords and not the six ranks above it. The scientific
+name is stored as a keyword synonym, so searching for `Parus major` finds the
+photo too.
+
+This is off by default because it changes your catalog's keyword tree and
+travels with exported files, while the metadata fields stay inside the catalog.
+The fields are written either way.
+
+### Coverage
+
+The bundled model covers the taxa a photographer is realistically pointing a
+camera at — birds, mammals, insects, reptiles, amphibians, fish, flowering
+plants, conifers, ferns, mushrooms — rather than all 867,000 taxa BioCLIP knows,
+which would be a multi-gigabyte download. Outside that set the model does not
+say "unknown"; it picks the closest thing it does know. The confidence floor is
+what keeps those cases at a coarse rank instead of a confidently wrong species.
 
 ---
 

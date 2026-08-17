@@ -15,6 +15,35 @@ Defaults.defaultTopLevelKeywords = {
 
 Defaults.topLevelKeywordSynonym = "LrGeniusAI Top-Level Keyword"
 
+-- Root of the taxonomy keyword branch BioCLIP writes under.
+--
+-- Deliberately *not* the LrGeniusAI root the LLM keywords live under. Two
+-- reasons: `MetadataManager.buildAliasIndex` scopes itself to that subtree, and
+-- letting a Linnean hierarchy into it would give the LLM's de-clutter pass
+-- thousands of scientific names to try to merge things onto; and a taxonomy
+-- branch is something a user may well want to keep, export or delete
+-- independently of AI-generated descriptive keywords.
+Defaults.defaultSpeciesKeyword = "Species"
+
+-- Aggregated probability a taxonomic rank must reach before it is written.
+--
+-- Lower than it looks like it should be: rank aggregation splits probability
+-- across near-identical congeners, so a *correct* genus call often peaks
+-- around 0.4-0.6. Raising this does not buy accuracy, it just pushes answers
+-- up to coarser ranks.
+Defaults.speciesMinConfidence = 0.35
+
+-- Only run BioCLIP on photos where the organism gate fires. See the
+-- `species_prefilter` option in the backend's `index_upload.rs` for why this
+-- defaults on.
+Defaults.speciesPrefilter = true
+
+-- Write the taxonomy as a keyword hierarchy in addition to the plugin
+-- metadata fields. Off by default: the fields are always written and are
+-- enough to filter on, while keywords change the catalog's keyword tree,
+-- which is a bigger commitment and exports with the file.
+Defaults.speciesKeywords = false
+
 Defaults.defaultGenerateLanguage = "English"
 
 Defaults.generateLanguages = { "English", "German", "French", "Spanish", "Italian", "Norwegian" }

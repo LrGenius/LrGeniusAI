@@ -46,6 +46,12 @@ local ENDPOINTS = {
 	START_CLIP_DOWNLOAD = "/clip/download/start",
 	STATUS_CLIP_DOWNLOAD = "/clip/download/status",
 	CLIP_STATUS = "/clip/status",
+	START_BIOCLIP_DOWNLOAD = "/bioclip/download/start",
+	STATUS_BIOCLIP_DOWNLOAD = "/bioclip/download/status",
+	BIOCLIP_STATUS = "/bioclip/status",
+	ASSETS_STATUS = "/assets/status",
+	START_ASSETS_DOWNLOAD = "/assets/download/start",
+	STATUS_ASSETS_DOWNLOAD = "/assets/download/status",
 	LLM_CATALOG = "/llm/catalog",
 	LLM_STATUS = "/llm/status",
 	START_LLM_DOWNLOAD = "/llm/download/start",
@@ -1904,13 +1910,25 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	options = options or {}
 	local shouldCloseScope = (closeProgressScope ~= false)
 
-	progressScope:setCaption(
-		LOC(
-			"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...",
-			#selectedPhotos,
-			options.model or "AI"
+	-- Only name the LLM when it is actually going to run. A pass that just
+	-- computes embeddings or identifies species never talks to it, and
+	-- announcing "Processing 400 photos with gemini-2.5-flash" for such a run
+	-- is simply wrong — it also sends people looking for an API-key problem
+	-- when something unrelated stalls.
+	local llmActive = options.enableMetadata and options.model
+	if llmActive == nil or not llmActive then
+		progressScope:setCaption(
+			LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotosPlain=Processing ^1 photos...", #selectedPhotos)
 		)
-	)
+	else
+		progressScope:setCaption(
+			LOC(
+				"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...",
+				#selectedPhotos,
+				options.model
+			)
+		)
+	end
 	progressScope:setPortionComplete(0, numPhotos)
 
 	local photoToProcessStack = {}
@@ -3818,6 +3836,226 @@ function SearchIndexAPI.startClipDownload()
 				else
 					log:warn(
 						"startClipDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping poll"
+					)
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+end
+
+---
+-- Readiness of every local AI model in one call.
+--
+-- Exists so the setup UI can say "the AI models are ready" instead of making a
+-- photographer track which of three neural networks does which job. The
+-- per-model calls are still there for the detail view.
+--
+-- @return table|nil { ready, missing_approx_bytes, families = { {id, name, ready, downloadable, approx_bytes} } }
+-- @return string|nil error
+--
+function SearchIndexAPI.getAssetStatus()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.ASSETS_STATUS)
+	if err then
+		log:error("getAssetStatus failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Downloads every model that is missing, under one progress bar.
+--
+-- Families already on disk are skipped by the backend, so this doubles as
+-- "finish setting up" for someone upgrading from a version that only had the
+-- search model.
+--
+function SearchIndexAPI.startAssetDownload()
+	local status = SearchIndexAPI.getAssetStatus()
+	if status and status.ready then
+		log:trace("All AI models are already downloaded")
+		return
+	end
+
+	local running, runErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_ASSETS_DOWNLOAD)
+	if not runErr and running ~= nil and running.status == "downloading" then
+		log:trace("Combined model download is already in progress")
+		return
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/AssetDownload/ProgressTitle=Downloading AI models"),
+		functionContext = nil,
+	})
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_ASSETS_DOWNLOAD, {})
+	if postErr then
+		log:error("startAssetDownload failed: " .. postErr)
+		progressScope:done()
+		return nil, postErr
+	end
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_ASSETS_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError("Error downloading AI models", loopErr)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				if loopStatus.status == "downloading" then
+					-- The current file is the only cue that this is several
+					-- models rather than one stalled one, so surface it.
+					if loopStatus.current_file and loopStatus.current_file ~= "" then
+						progressScope:setCaption(
+							LOC("$$$/LrGeniusAI/AssetDownload/File=Downloading ^1...", loopStatus.current_file)
+						)
+					else
+						progressScope:setCaption(
+							LOC("$$$/LrGeniusAI/AssetDownload/Downloading=Downloading AI models...")
+						)
+					end
+					progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+				elseif loopStatus.status == "completed" then
+					log:trace("Combined model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/AssetDownload/SuccessTitle=AI Model Download"),
+						LOC("$$$/LrGeniusAI/AssetDownload/SuccessMessage=The AI models are downloaded and ready.")
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/AssetDownload/ErrorTitle=Error downloading AI models"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn("startAssetDownload: unexpected status '" .. tostring(loopStatus.status) .. "'")
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+end
+
+local lastBioclipReadyStatus = nil
+
+---
+-- Whether the BioCLIP species model's files are on disk.
+--
+-- Deliberately the "files present" question, not "loaded in memory" — that one
+-- is `/health`'s `species_model`. The Analyze & Index dialog gates its
+-- "Identify species" checkbox on this, and a model that has idle-unloaded is
+-- still perfectly usable.
+--
+-- @return boolean ready
+-- @return string|nil message
+--
+function SearchIndexAPI.isBioclipReady()
+	local url = getBaseUrl() .. ENDPOINTS.BIOCLIP_STATUS
+	local res, err = _request("GET", url)
+	if err then
+		local errStr = (type(err) == "string") and err or "unknown"
+		log:error("isBioclipReady failed: " .. errStr)
+		return false, errStr
+	end
+	if res ~= nil then
+		local currentStatus = res.bioclip
+		if currentStatus ~= lastBioclipReadyStatus then
+			log:trace("BioCLIP species model status: " .. tostring(currentStatus))
+			lastBioclipReadyStatus = currentStatus
+		end
+		return currentStatus == "ready", res.message
+	end
+	log:error("isBioclipReady: Unknown error")
+	return false, "Unknown error"
+end
+
+---
+-- Starts the BioCLIP asset download and polls it to completion.
+--
+-- Mirrors SearchIndexAPI.startClipDownload(). Kept as its own function rather
+-- than parameterising that one: the two are triggered from different places at
+-- different times, and merging them would mean one shared progress scope for
+-- two downloads that can legitimately run at once.
+--
+function SearchIndexAPI.startBioclipDownload()
+	if SearchIndexAPI.isBioclipReady() then
+		log:trace("BioCLIP model is already cached")
+		return
+	end
+
+	local status, err = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_BIOCLIP_DOWNLOAD)
+	if not err and status ~= nil and status.status == "downloading" then
+		log:trace("BioCLIP model download is already in progress")
+		return
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/BioclipDownload/ProgressTitle=Downloading AI model for species identification"),
+		functionContext = nil,
+	})
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_BIOCLIP_DOWNLOAD, {})
+	if postErr then
+		log:error("startBioclipDownload failed: " .. postErr)
+		progressScope:done()
+		return nil, postErr
+	end
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_BIOCLIP_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError("Error downloading BioCLIP model", loopErr)
+				progressScope:setCaption(
+					LOC("$$$/LrGeniusAI/BioclipDownload/Error=Error downloading species model: ^1"),
+					loopErr
+				)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				progressScope:setCaption(LOC("$$$/LrGeniusAI/BioclipDownload/Downloading=Downloading species model..."))
+				if loopStatus.status == "downloading" then
+					progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+				elseif loopStatus.status == "completed" then
+					log:trace("BioCLIP model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/BioclipDownload/SuccessTitle=Species Model Download"),
+						LOC(
+							"$$$/LrGeniusAI/BioclipDownload/SuccessMessage=Species identification model downloaded successfully."
+						)
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/BioclipDownload/ErrorTitle=Error downloading species model"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn(
+						"startBioclipDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping poll"
 					)
 					progressScope:done()
 					break

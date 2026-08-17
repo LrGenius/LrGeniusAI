@@ -23,7 +23,7 @@ use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree};
-use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
+use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE, VERTEX_TABLE};
 
 use crate::state::AppState;
 
@@ -39,6 +39,21 @@ pub(crate) struct ParsedOptions {
     face_pass: FacePass,
     compute_metadata: bool,
     compute_vertexai: bool,
+    /// Run BioCLIP 2 and write a taxonomic identification.
+    compute_species: bool,
+    /// Only run BioCLIP on photos the organism prompt gate lets through.
+    ///
+    /// On by default because BioCLIP is a ViT-L/14 — a few hundred ms per
+    /// photo on CPU — and most of a general photo library has no organism in
+    /// it. The gate itself is free: it scores the SigLIP2 embedding indexing
+    /// already computed. Users who know their selection is all wildlife can
+    /// turn it off and skip the (small) chance of a false negative.
+    species_prefilter: bool,
+    /// Gate threshold in `0..1`. Deliberately low: a false positive costs one
+    /// wasted BioCLIP pass whose result the rank floor then discards, a false
+    /// negative silently loses a species the user wanted.
+    species_prefilter_threshold: f64,
+    species_classify: lrg_ml::bioclip::ClassifyConfig,
     regenerate_metadata: bool,
     replace_ss: bool,
     catalog_id: Option<String>,
@@ -220,6 +235,8 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     // backfills embeddings without redoing any of this.
     let cull_pass = has_task("cull");
 
+    let default_classify = lrg_ml::bioclip::ClassifyConfig::default();
+
     let reg_val = fields
         .get("regenerate_metadata")
         .or_else(|| fields.get("regenerateMetadata"));
@@ -272,6 +289,25 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
         },
         compute_metadata: has_task("metadata"),
         compute_vertexai: has_task("vertexai"),
+        compute_species: has_task("species"),
+        species_prefilter: bool_field(fields, "species_prefilter", true),
+        species_prefilter_threshold: fields
+            .get("species_prefilter_threshold")
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .filter(|v| (0.0..=1.0).contains(v))
+            .unwrap_or(0.35),
+        species_classify: lrg_ml::bioclip::ClassifyConfig {
+            min_confidence: fields
+                .get("species_min_confidence")
+                .and_then(|s| s.trim().parse::<f32>().ok())
+                .filter(|v| (0.0..=1.0).contains(v))
+                .unwrap_or(default_classify.min_confidence),
+            top_k: fields
+                .get("species_top_k")
+                .and_then(|s| s.trim().parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(default_classify.top_k),
+        },
         regenerate_metadata,
         replace_ss: bool_field(fields, "replace_ss", false),
         catalog_id,
@@ -1474,6 +1510,40 @@ async fn finish_one(
         }
     }
 
+    // Species identification. Runs before the coalesced write below so its
+    // results land in the same upsert as everything else — see the comment
+    // above the face block for why nothing here gets its own `merge_insert`.
+    // The 768-d BioCLIP vector is the one thing that cannot go in that write,
+    // and it goes to SPECIES_TABLE after it, like the Vertex embedding.
+    let mut species_vector: Option<Vec<f32>> = None;
+    if options.compute_species {
+        let already_checked = main_metadata
+            .get("species_checked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if options.regenerate_metadata || !already_checked {
+            match run_species(
+                state,
+                options,
+                photo_id,
+                &image_bytes,
+                final_vector.as_deref(),
+            ) {
+                Ok((prediction, vector)) => {
+                    apply_species_metadata(&mut main_metadata, &prediction, &state.bioclip);
+                    species_vector = vector;
+                }
+                Err(e) => {
+                    // Same contract as faces: an optional signal must never
+                    // sink the photo, and `species_checked` stays unset so a
+                    // later run retries rather than treating this as done.
+                    log::warn!("Species identification failed for {photo_id}: {e}");
+                    warning = Some(format!("{filename} species: {e}"));
+                }
+            }
+        }
+    }
+
     let record = StoreRecord {
         id: photo_id.to_string(),
         vector: final_vector,
@@ -1483,6 +1553,26 @@ async fn finish_one(
         .upsert(IMAGE_TABLE, std::slice::from_ref(&record))
         .await
         .map_err(|e| format!("Database update failed: {e}"))?;
+
+    if let Some(vector) = species_vector {
+        let mut species_meta = Map::new();
+        species_meta.insert("photo_id".into(), json!(photo_id));
+        species_meta.insert("uuid".into(), json!(photo_id));
+        let species_record = StoreRecord {
+            id: photo_id.to_string(),
+            vector: Some(vector),
+            metadata: species_meta,
+        };
+        if let Err(e) = store
+            .upsert(SPECIES_TABLE, std::slice::from_ref(&species_record))
+            .await
+        {
+            // Logged, not fatal: the identification itself is already stored
+            // in IMAGE_TABLE. Losing the vector only costs a re-inference if
+            // the taxonomy head is ever swapped.
+            log::error!("Species embedding upsert failed for {photo_id}: {e}");
+        }
+    }
 
     // Vertex AI embeddings: optional, separate table. Silently skipped
     // (no warning) when no project is configured, matching Python's
@@ -1524,6 +1614,138 @@ async fn finish_one(
     }
 
     Ok(warning)
+}
+
+/// Run the organism gate and, if it passes, BioCLIP 2.
+///
+/// Returns the prediction plus the L2-normalized BioCLIP embedding, or `None`
+/// for the vector when the gate rejected the photo — a rejected photo is still
+/// *checked*, it just has nothing to store.
+fn run_species(
+    state: &AppState,
+    options: &ParsedOptions,
+    photo_id: &str,
+    image_bytes: &[u8],
+    siglip_embedding: Option<&[f32]>,
+) -> Result<(lrg_ml::bioclip::TaxonomyPrediction, Option<Vec<f32>>), String> {
+    // Checked before decoding, like the face path: without the model files the
+    // classifier fails anyway and the decode would be pure waste.
+    if !state.bioclip.is_cached() {
+        return Err("model not downloaded".to_string());
+    }
+
+    if options.species_prefilter {
+        match siglip_embedding {
+            Some(embedding) => {
+                let score = crate::routes::route_util::score_prompt_set(
+                    state,
+                    lrg_ml::clip_iqa::PromptSet::Organism,
+                    embedding,
+                );
+                // A missing score means the text tower would not load. Fall
+                // through rather than skip: the gate is an optimization, and
+                // failing it closed would silently lose species.
+                if let Some(score) = score {
+                    if score < options.species_prefilter_threshold {
+                        log::debug!(
+                            "Photo {photo_id}: organism gate {score:.2} < {:.2}, skipping BioCLIP",
+                            options.species_prefilter_threshold
+                        );
+                        return Ok((
+                            lrg_ml::bioclip::TaxonomyPrediction {
+                                rank: None,
+                                best: None,
+                                alternatives: Vec::new(),
+                            },
+                            None,
+                        ));
+                    }
+                }
+            }
+            // The fast `tasks=cull` ingest stores no embedding, so there is
+            // nothing to gate on. Running BioCLIP is the safe direction.
+            None => log::debug!(
+                "Photo {photo_id}: no SigLIP embedding to gate on, running BioCLIP anyway"
+            ),
+        }
+    }
+
+    let t_decode = Instant::now();
+    let decoded = image::load_from_memory(image_bytes)
+        .map(|img| img.to_rgb8())
+        .map_err(|e| format!("could not decode image: {e}"))?;
+    let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+    let pixels = decoded.into_raw();
+    log::debug!(
+        "Photo {photo_id}: re-decode for species took {:?}",
+        t_decode.elapsed()
+    );
+
+    let t0 = Instant::now();
+    let mut vector = state
+        .bioclip
+        .embed_image(&pixels, width, height)
+        .map_err(|e| e.to_string())?;
+    lrg_ml::siglip::l2_normalize(&mut vector);
+    let prediction = state
+        .bioclip
+        .classify(&vector, &options.species_classify)
+        .map_err(|e| e.to_string())?;
+    log::debug!("Photo {photo_id}: BioCLIP took {:?}", t0.elapsed());
+
+    Ok((prediction, Some(vector)))
+}
+
+/// Fold a prediction into the photo's metadata blob.
+///
+/// Every key is written on every run, including the empty ones. Leaving stale
+/// values behind when a re-run downgrades a confident species to "none" would
+/// be worse than writing nothing at all — the plugin would keep showing an
+/// identification the backend no longer stands behind.
+fn apply_species_metadata(
+    metadata: &mut Map<String, Value>,
+    prediction: &lrg_ml::bioclip::TaxonomyPrediction,
+    model: &lrg_ml::bioclip::BioclipModel,
+) {
+    let best = prediction.best.as_ref();
+    metadata.insert("species_rank".into(), json!(prediction.rank_label()));
+    metadata.insert(
+        "species_taxonomy".into(),
+        json!(best.map(|c| c.taxonomy.as_str()).unwrap_or("")),
+    );
+    metadata.insert(
+        "species_scientific_name".into(),
+        json!(best.map(|c| c.scientific_name.as_str()).unwrap_or("")),
+    );
+    metadata.insert(
+        "species_common_name".into(),
+        json!(best.map(|c| c.common_name.as_str()).unwrap_or("")),
+    );
+    metadata.insert(
+        "species_confidence".into(),
+        json!(best.map(|c| c.confidence).unwrap_or(0.0)),
+    );
+    metadata.insert(
+        "species_alternatives".into(),
+        json!(prediction
+            .alternatives
+            .iter()
+            .map(|c| json!({
+                "name": c.scientific_name,
+                "common_name": c.common_name,
+                "taxonomy": c.taxonomy,
+                "confidence": c.confidence,
+            }))
+            .collect::<Vec<_>>()),
+    );
+    metadata.insert("species_checked".into(), json!(true));
+    // `None` only before the head has ever loaded, which cannot happen on a
+    // path that just classified something — but a gate-rejected photo takes
+    // this branch without loading, and stamping nothing is correct there:
+    // `check_unprocessed` then re-runs it once a head version is known.
+    if let Some(id) = model.model_id() {
+        metadata.insert("species_model".into(), json!(id));
+    }
 }
 
 /// Cosine distance below which a re-detected face counts as the same face as

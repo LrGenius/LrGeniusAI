@@ -15,6 +15,7 @@ which, and what you can tune to make the slow ones faster.
 | **AI Edit Photos** | No — matches your saved edits locally | Export size, review dialog |
 | **Deduplicate Keyword Synonyms** | Optional, once per cluster (not per photo) | Number of keyword clusters, not catalog size |
 | Analyze & Index — **search embeddings** (SigLIP2) | No — local ONNX model, always | Photo count only; same speed regardless of LLM choice |
+| Analyze & Index — **species identification** (BioCLIP 2) | No — local ONNX model, always | Photo count, and how many photos clear the organism pre-filter |
 | **Cull Photos** | No | Runs on metrics already computed during indexing |
 | **People / Find Similar Faces** | No | Vector lookup against already-indexed face embeddings |
 | **Find Similar Images** | No | Vector lookup (CLIP) or perceptual hash (phash) |
@@ -22,10 +23,36 @@ which, and what you can tune to make the slow ones faster.
 
 The practical upshot: **Analyze & Index is the only per-photo feature
 where your LLM choice matters for speed.** Everything else is bounded by
-local compute on the backend machine and is fast regardless of whether you
+local compute on the backend machine and is unaffected by whether you
 picked a cheap cloud model or a big local one — but those features all
 *depend on* having run Analyze & Index first (embeddings for search/cull/find
 similar, face detection for people/faces).
+
+### The local pass that is not free: species identification
+
+"No LLM" does not mean "no cost". BioCLIP 2 is a ViT-L/14, several times the
+work of the SigLIP2 embedding, and on CPU it takes a few hundred milliseconds
+per photo on top of everything else in the run. Over a five-figure catalog that
+is the difference between an overnight job and a much longer one.
+
+Which is why **Only where an animal or plant is detected** is on by default.
+The gate costs nothing — it scores the SigLIP2 embedding the same run already
+computed — and in a general library of portraits, architecture and landscapes
+it rejects the large majority of photos before the expensive model ever runs.
+Leave it on unless you know the selection is all wildlife, in which case
+turning it off removes a small chance of a false negative.
+
+Two consequences worth knowing:
+
+- **The gate needs an embedding to score.** A stored one from an earlier run
+  counts, so running species on its own over an already-indexed selection gates
+  normally. But a photo that has no embedding at all is passed through and
+  classified anyway — the safe direction, and the expensive one. If you are
+  starting from scratch, tick **Enable smart photo search** in the same run
+  rather than running species first.
+- **Photos the gate rejects still count as done.** They get
+  `Species rank = none` and are not re-examined on the next run, so a second
+  pass over the same selection is cheap.
 
 ---
 
@@ -183,7 +210,13 @@ These are secondary compared to §2–4, but worth knowing:
 5. **Run search/cull/people/find-similar freely** — none of them touch an
    LLM at request time, so they're cheap to re-run as often as you like once
    indexing is done.
-6. **For AI Edit**, keep **Review each proposed edit** on until you've
+6. **Leave species identification off for a first bulk pass**, or leave its
+   pre-filter on if you want it. It adds a second local model to every photo
+   that clears the gate, and unlike the embedding it is not needed by any other
+   feature — you can always come back and run it over just the wildlife folders,
+   because photos already indexed for search keep their embedding for the gate
+   to use.
+7. **For AI Edit**, keep **Review each proposed edit** on until you've
    validated the results against your shooting style, then turn it off for
    large batches — it doesn't change compute cost, but it does gate throughput
    on how fast you click through the review dialog. The generation itself is

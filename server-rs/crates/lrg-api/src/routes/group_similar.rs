@@ -355,26 +355,10 @@ fn apply_prompt_scores(
         return 0;
     }
 
-    // Cache key is the set, not the metadata key: two callers asking the same
-    // question must share one text-tower pass.
-    let cache_key = set.as_str();
+    // Locked once for the whole batch rather than per record, which is why
+    // this takes the guard instead of calling `score_prompt_set`.
     let mut cache = state.clip_iqa.lock().unwrap();
-    if !cache.contains_key(cache_key) {
-        match lrg_ml::clip_iqa::IqaPrompts::compute_set(&state.siglip, set) {
-            Ok(p) => {
-                log::info!(
-                    "CLIP-IQA: embedded {} {cache_key} prompt pairs",
-                    p.pair_count()
-                );
-                cache.insert(cache_key, p);
-            }
-            Err(e) => {
-                log::warn!("CLIP-IQA {cache_key} prompts unavailable, skipping that signal: {e}");
-                return 0;
-            }
-        }
-    }
-    let Some(prompts) = cache.get(cache_key) else {
+    let Some(prompts) = crate::routes::route_util::ensure_prompt_set(state, &mut cache, set) else {
         return 0;
     };
 

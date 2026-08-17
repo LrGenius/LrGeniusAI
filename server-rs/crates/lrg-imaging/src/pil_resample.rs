@@ -215,6 +215,94 @@ pub fn resize_plane(
     data
 }
 
+fn resample_horizontal_f32(
+    input: &[f32],
+    in_w: usize,
+    height: usize,
+    out_w: usize,
+    ksize: usize,
+    bounds: &[i32],
+    kk: &[f64],
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; out_w * height];
+    for yy in 0..height {
+        let row = &input[yy * in_w..(yy + 1) * in_w];
+        for xx in 0..out_w {
+            let xmin = bounds[xx * 2] as usize;
+            let xmax = bounds[xx * 2 + 1] as usize;
+            let k = &kk[xx * ksize..];
+            let mut ss = 0.0f64;
+            for x in 0..xmax {
+                ss += (row[xmin + x] as f64) * k[x];
+            }
+            out[yy * out_w + xx] = ss as f32;
+        }
+    }
+    out
+}
+
+fn resample_vertical_f32(
+    input: &[f32],
+    width: usize,
+    out_h: usize,
+    ksize: usize,
+    bounds: &[i32],
+    kk: &[f64],
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; width * out_h];
+    for yy in 0..out_h {
+        let ymin = bounds[yy * 2] as usize;
+        let ymax = bounds[yy * 2 + 1] as usize;
+        let k = &kk[yy * ksize..];
+        for xx in 0..width {
+            let mut ss = 0.0f64;
+            for y in 0..ymax {
+                ss += (input[(ymin + y) * width + xx] as f64) * k[y];
+            }
+            out[yy * width + xx] = ss as f32;
+        }
+    }
+    out
+}
+
+/// Same resampling as [`resize_plane`], but in the float domain.
+///
+/// [`resize_plane`] is a bit-exact port of Pillow's *8-bit* path, which
+/// rounds every intermediate to `u8` (`normalize_coeffs_8bpc` + `clip8`).
+/// That is correct for anything comparing against Pillow — pHash, the SigLIP2
+/// preprocessing — but wrong for a transform that resizes *after*
+/// `ToTensor()`, i.e. on floats already scaled to `[0, 1]`. BioCLIP's
+/// transform is exactly that case (`bioclip_pre`), so it uses this instead
+/// and skips the round-trip through `u8`.
+///
+/// The filter kernels and coefficient windows are shared with the 8-bit path,
+/// which is what makes this match torchvision's `antialias=True` resize:
+/// torchvision widens the kernel support by the downscale factor the same way
+/// Pillow does. It is close, not bit-exact — `lrg-ml`'s BioCLIP goldens are
+/// what actually pin the residual down.
+pub fn resize_plane_f32(
+    input: &[f32],
+    in_w: usize,
+    in_h: usize,
+    out_w: usize,
+    out_h: usize,
+    filter: Filter,
+) -> Vec<f32> {
+    assert_eq!(input.len(), in_w * in_h);
+    let mut data = input.to_vec();
+    let mut w = in_w;
+    if out_w != in_w {
+        let (ksize, bounds, kk) = precompute_coeffs(in_w, out_w, filter);
+        data = resample_horizontal_f32(&data, in_w, in_h, out_w, ksize, &bounds, &kk);
+        w = out_w;
+    }
+    if out_h != in_h {
+        let (ksize, bounds, kk) = precompute_coeffs(in_h, out_h, filter);
+        data = resample_vertical_f32(&data, w, out_h, ksize, &bounds, &kk);
+    }
+    data
+}
+
 /// Pillow RGB -> L: `L = (R*19595 + G*38470 + B*7471 + 0x8000) >> 16`.
 pub fn rgb_to_luma(rgb: &[u8], pixels: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixels);

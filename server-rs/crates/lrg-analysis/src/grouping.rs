@@ -1471,8 +1471,11 @@ mod tests {
     /// knob dead before the config unification.
     #[test]
     fn every_preset_axis_is_a_known_name_with_a_weight() {
-        // Mirrors `lrg_ml::clip_iqa::PromptSet::from_name`, which this crate
-        // cannot reach. If a set is added there, add it here.
+        // Mirrors `lrg_ml::clip_iqa::PromptSet::SEMANTIC`, which this crate
+        // cannot reach. Note this is *not* every set `from_name` resolves:
+        // `quality` always applies and is not selectable, and `organism` gates
+        // the species task rather than grading anything, so a preset naming
+        // either would be a bug and this test is what catches it.
         const KNOWN: [&str; 3] = ["action", "expression", "candid"];
         let mut with_axis = 0;
         for preset in crate::culling_config::available_presets() {

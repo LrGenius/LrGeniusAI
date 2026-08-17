@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::bioclip::BioclipModelPaths;
 use crate::faces::FaceModelPaths;
 use crate::siglip::ModelPaths;
 
@@ -17,8 +18,17 @@ fn default_models_dir() -> PathBuf {
         .join("models")
 }
 
+/// The home directory the model cache hangs off.
+///
+/// `USERPROFILE` is not optional politeness: a native Windows process has no
+/// `HOME` (only Git Bash and friends set one), so without that fallback every
+/// model on Windows resolved under `std::env::temp_dir()` — a location the OS
+/// is entitled to empty, for a 3 GB download the user is asked to make once.
+/// `lrg-api`'s `llm_models`/`mlx_models` already resolve their roots this way;
+/// this brings the ONNX families in line with them.
 fn dirs_next_home() -> PathBuf {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
 }
@@ -81,6 +91,22 @@ pub fn resolve_mlx() -> MlxModelPaths {
     MlxModelPaths {
         dir: env_or_default("LRG_MLX_MODEL_ROOT", default_models_dir().join("mlx")),
         model_dir: std::env::var_os("LRG_MLX_MODEL_DIR").map(PathBuf::from),
+    }
+}
+
+/// Where BioCLIP 2's image tower and its pruned Tree-of-Life head live.
+///
+/// Same per-artifact env-var convention as SigLIP2. Three files rather than
+/// two because the zero-shot head is split: the embedding matrix is binary
+/// (`bioclip2_taxa.bin`) and its labels are JSON (`bioclip2_taxa.json`) — see
+/// `lrg-ml::bioclip` for the format and `scripts/bioclip_taxa_filter.toml`
+/// for which taxa are in it.
+pub fn resolve_bioclip() -> BioclipModelPaths {
+    let dir = default_models_dir();
+    BioclipModelPaths {
+        image_onnx: env_or_default("LRG_BIOCLIP_IMAGE_ONNX", dir.join("bioclip2_image.onnx")),
+        taxa_bin: env_or_default("LRG_BIOCLIP_TAXA_BIN", dir.join("bioclip2_taxa.bin")),
+        taxa_json: env_or_default("LRG_BIOCLIP_TAXA_JSON", dir.join("bioclip2_taxa.json")),
     }
 }
 
