@@ -18,8 +18,17 @@ fn default_models_dir() -> PathBuf {
         .join("models")
 }
 
+/// The home directory the model cache hangs off.
+///
+/// `USERPROFILE` is not optional politeness: a native Windows process has no
+/// `HOME` (only Git Bash and friends set one), so without that fallback every
+/// model on Windows resolved under `std::env::temp_dir()` — a location the OS
+/// is entitled to empty, for a 3 GB download the user is asked to make once.
+/// `lrg-api`'s `llm_models`/`mlx_models` already resolve their roots this way;
+/// this brings the ONNX families in line with them.
 fn dirs_next_home() -> PathBuf {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
 }

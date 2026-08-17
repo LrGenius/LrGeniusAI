@@ -20,6 +20,8 @@ function OnboardingWizard.show(manualTrigger)
 
 			-- Initial states with robust defaults
 			propertyTable.backendRunning = SearchIndexAPI.pingServer() or false
+			propertyTable.assetsReady = false
+			propertyTable.assetsSizeText = ""
 			propertyTable.useClip = prefs.useClip or false
 			propertyTable.geminiApiKey = prefs.geminiApiKey or ""
 			propertyTable.chatgptApiKey = prefs.chatgptApiKey or ""
@@ -33,7 +35,28 @@ function OnboardingWizard.show(manualTrigger)
 				propertyTable.backendRunning = SearchIndexAPI.pingServer()
 			end
 
+			-- The on-device models answer through /assets/status, which covers
+			-- every family in one request. Same source as the Plug-in Manager's
+			-- indicator, so the two cannot disagree about what is on disk.
+			local function refreshAssetStatus()
+				local assets = SearchIndexAPI.getAssetStatus()
+				if not assets then
+					return
+				end
+				propertyTable.assetsReady = assets.ready == true
+				local missing = tonumber(assets.missing_approx_bytes) or 0
+				if assets.ready == true or missing <= 0 then
+					propertyTable.assetsSizeText = ""
+				else
+					propertyTable.assetsSizeText = LOC(
+						"$$$/LrGeniusAI/Onboarding/AssetsSize=A one-time download of about ^1 GB.",
+						string.format("%.1f", missing / 1e9)
+					)
+				end
+			end
+
 			local function refreshModelStatus()
+				refreshAssetStatus()
 				LocalModelCatalog.refresh(propertyTable)
 			end
 
