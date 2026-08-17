@@ -58,7 +58,7 @@ Before semantic search or AI-assisted culling can work, the backend needs to pro
 2. Navigate to `Library -> Plug-in Extras -> Analyze & Index Photos`.
 3. The plugin will pass the photos to the backend, generate descriptions, tags, and AI embeddings, and store them.
 
-Once indexing finishes, try out **Advanced Search**, the **People** workflows, use **Retrieve Metadata** to inject the generated tags straight back into your catalog, or run **AI Edit Photos** *(beta)* to get AI-suggested develop settings for each photo.
+Once indexing finishes, try out **Advanced Search**, the **People** workflows, or use **Retrieve Metadata** to inject the generated tags straight back into your catalog. For **AI Edit Photos** *(beta)*, first save a handful of your own edits with **Save Edits as AI Training Examples** — that is what AI Edit builds develop settings from.
 
 ## 4. Upgrading From a UUID-Era Database
 

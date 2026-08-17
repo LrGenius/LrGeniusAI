@@ -163,7 +163,14 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 ## AI Develop Edits
 
 ### `POST /edit`
-Generates a Lightroom develop recipe for a photo sent as a file upload.
+Generates a Lightroom develop recipe for a photo sent as a file upload, using an
+LLM.
+
+> No plugin workflow calls this any more. *AI Edit Photos* runs on
+> `POST /style_edit` alone and never asks for the LLM fallback, so this endpoint
+> and `/edit_base64` are currently reachable only by direct HTTP callers. Both
+> are fully supported; `SearchIndexAPI.generateEditRecipePhoto` in the plugin
+> still speaks to `/edit` and is simply not called.
 
 **Key request fields:**
 

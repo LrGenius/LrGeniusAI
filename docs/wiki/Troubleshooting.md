@@ -163,14 +163,33 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 13. AI Edit Produces 500 Internal Server Error
+### 13. AI Edit Fails Per Photo
 
-- **Symptom:** AI Edit fails with "HTTP status: 500" from the backend.
-- **Resolution:**
-  1. Check the backend terminal log for the full error message.
-  2. Common cause: the selected model returned a response that doesn't match the expected edit schema. Try a different (more capable) model — `gemini-2.5-flash` or `gpt-5-mini` are reliable choices.
-  3. If you are using a local model, the 4B models sometimes produce malformed JSON. Try the 8B variant or switch to a cloud model.
-  4. If the error mentions "schema validation", it usually means the model returned prose instead of structured JSON. Custom system prompts that break the format can cause this — reset to the default system prompt and try again.
+AI Edit builds every recipe from your saved training examples and never calls a
+language model, so its failures are about the style profile, not about models
+or prompts.
+
+- **Symptom:** "Style engine inactive: only N training example(s) available".
+- **Resolution:** Save more edits via *Save Edits as AI Training Examples*. Five
+  is the minimum; ten or more gives a usable match. The plugin normally stops
+  before the run and tells you this — seeing it per photo means examples were
+  removed while the run was in progress.
+
+- **Symptom:** "Style engine could not produce a result" or "Style engine returned an empty recipe".
+- **Resolution:** Your training examples carry no usable develop settings for
+  this photo — most often because they were all saved from photos on the other
+  side of the raw/JPEG divide, which keeps their white balance (and little else)
+  from being carried over. Save examples edited from the same kind of file you
+  are trying to edit.
+
+- **Symptom:** Low confidence in the review dialog, edits that don't feel like yours.
+- **Resolution:** The photo did not resemble anything you trained on. Make sure
+  the photos are indexed (**Enable smart photo search**) so the visual match has
+  an embedding to work with, and train on the kind of material you want edited.
+
+- **Symptom:** "HTTP status: 500" with "database not initialized".
+- **Resolution:** The backend has no catalog database bound yet. Open the
+  Plug-in Manager and let it initialize, then retry.
 
 ---
 

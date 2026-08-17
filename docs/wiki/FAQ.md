@@ -130,23 +130,23 @@ Results are ranked by combining visual semantic embeddings with a text search ov
 
 ### What does AI Edit generate?
 
-A structured Lightroom develop recipe: global adjustments (exposure, white balance, tone curve, HSL, etc.) and optional local masks (subject, sky, background). The recipe is applied via the Lightroom SDK — no raw pixel editing happens outside Lightroom.
+A structured Lightroom develop recipe of global adjustments (exposure, white balance, tone curve, contrast, presence, sharpening, and so on), built by matching the photo against your own saved edits. The recipe is applied via the Lightroom SDK — no raw pixel editing happens outside Lightroom.
+
+### Which model does AI Edit use?
+
+None. AI Edit does not call a language model at all — it interpolates the develop settings of the training examples closest to the photo. Model choice only affects *Analyze & Index*.
+
+### AI Edit says my style profile is not ready
+
+It needs at least five saved training examples before it can produce anything. Edit some photos the way you like them and run **Save Edits as AI Training Examples** (*Library → Plug-in Extras*). See [Help: Train from Edits](Help-Train-From-Edits).
 
 ### I want to review edits before they are applied
 
-Enable **Review each proposed edit before applying it** in the AI Edit dialog. You will see a before/after preview for each photo and can approve, skip, or adjust the edit.
+Enable **Review each proposed edit before applying it** in the AI Edit dialog. You will see the proposed develop values, the confidence of the style match, and any guardrail explanations, and can apply or skip each photo. (There is no rendered before/after preview yet — use Lightroom's History panel to judge the result.)
 
-### What are "Overall look" presets?
+### Can I keep my original untouched?
 
-Presets define the editing style — for example *Natural Professional*, *Moody Dramatic*, *Portrait - Skin Safe*, *Wedding - Soft Airy*. They inject a style description into the AI prompt. Choose *Custom* to write your own style instruction.
-
-### What does "Style strength" do?
-
-Controls how aggressively the AI applies the style. At 0% the AI makes only technical corrections; at 100% it applies the full stylized look. Default is 50%.
-
-### Can I train the AI on my own editing style?
-
-Yes — use **Save Edits as AI Training Examples** (*Library → Plug-in Extras*). See [Help: Train from Edits](Help-Train-From-Edits) for details.
+Enable **Apply the edit to a new virtual copy** in the AI Edit dialog. Each edited photo gets a virtual copy named *AI Edit* and the recipe lands there.
 
 ---
 

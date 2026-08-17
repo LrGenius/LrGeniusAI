@@ -33,8 +33,8 @@ not arise.
    approximate download size; the models are several gigabytes, so this takes a
    while on a slow connection.
 4. When the download finishes, the **Installed** line lists the model.
-5. In *Analyze & Index Photos* (or *AI Edit*), choose the model from the **AI
-   Model** dropdown — it appears as `mlx: <model>` or `llamacpp: <model>`.
+5. In *Analyze & Index Photos*, choose the model from the **AI Model**
+   dropdown — it appears as `mlx: <model>` or `llamacpp: <model>`.
 
 The curated lists are short on purpose: every entry is an ungated repository
 (no Hugging Face token needed) and a **vision** model, since a text-only model

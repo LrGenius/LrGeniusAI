@@ -1,5 +1,20 @@
 require("DevelopEditManager")
 
+-- AI Edit runs on the Style Engine only. The LLM edit path (`/edit`, provider
+-- and model choice, prompts, intent presets, creative controls, per-photo
+-- instructions) is gone from this task: none of it reached the style engine,
+-- which builds a recipe purely by matching the photo against the training
+-- examples the user saved from their own edits. The backend still serves
+-- `/edit`, and `SearchIndexAPI.generateEditRecipePhoto` still speaks to it —
+-- nothing here calls either.
+
+-- Mirrors `MIN_TRAINING_EXAMPLES` in
+-- `server-rs/crates/lrg-analysis/src/style_engine.rs`. Below it the style
+-- engine declines to answer, and with the LLM fallback no longer requested
+-- there is nothing behind it — so the run is stopped here rather than
+-- exporting and uploading every photo for a guaranteed 422.
+local MIN_TRAINING_EXAMPLES = 5
+
 local function copyOptions(source)
 	local copied = {}
 	for key, value in pairs(source or {}) do
@@ -8,135 +23,96 @@ local function copyOptions(source)
 	return copied
 end
 
-local function safePromptTable(rawPrompts)
-	if type(rawPrompts) ~= "table" then
-		log:warn(
-			"AI Edit prompt table invalid type: " .. tostring(type(rawPrompts)) .. ". Falling back to default prompt."
-		)
-		return { Default = Defaults.defaultEditSystemInstruction }
+-- Same wording and thresholds as the Style Profile block in the plug-in
+-- manager (`PluginInfoDialogSections.lua`), reusing its `LOC` keys so the two
+-- places cannot drift apart.
+local function styleReadinessDisplay(stats)
+	if not stats then
+		return LOC(
+			"$$$/LrGeniusAI/TaskAiEditPhotos/StyleStatusUnknown=Unavailable — the backend did not report the style profile"
+		),
+			LrColor(0.7, 0.7, 0.7),
+			nil
 	end
-	return rawPrompts
+
+	local count = tonumber(stats.count) or 0
+	local readiness = stats.readiness or "cold_start"
+
+	if readiness == "active" then
+		return LOC("$$$/LrGeniusAI/Training/Status/Active=Active — matching your style precisely"),
+			LrColor(0.2, 0.8, 0.2),
+			count
+	elseif readiness == "limited" then
+		return LOC("$$$/LrGeniusAI/Training/Status/Limited=Learning — getting better with more examples"),
+			LrColor(0.8, 0.8, 0.2),
+			count
+	elseif readiness == "warming_up" then
+		return LOC("$$$/LrGeniusAI/Training/Status/WarmingUp=Building up — ^1 of 10 examples saved", tostring(count)),
+			LrColor(0.8, 0.4, 0.1),
+			count
+	end
+	return LOC("$$$/LrGeniusAI/Training/Status/ColdStart=Not started — save some edited photos to begin"),
+		LrColor(0.7, 0.7, 0.7),
+		count
 end
 
-local function buildModelItems()
-	local items = {}
-	local openaiKey = (prefs and not Util.nilOrEmpty(prefs.chatgptApiKey)) and prefs.chatgptApiKey or nil
-	local geminiKey = (prefs and not Util.nilOrEmpty(prefs.geminiApiKey)) and prefs.geminiApiKey or nil
-	local modelsResp = SearchIndexAPI.getModels(openaiKey, geminiKey)
-	if modelsResp and modelsResp.models then
-		for provider, modelList in pairs(modelsResp.models) do
-			for _, model in ipairs(modelList) do
-				table.insert(items, {
-					title = provider .. ": " .. model,
-					value = provider .. "::" .. model,
-				})
-			end
-		end
-	end
-	table.sort(items, function(a, b)
-		return a.title < b.title
+-- `catalog:createVirtualCopies` copies whatever is *selected* — it takes no
+-- photo argument — so the photo has to be selected first, and the selection has
+-- to be verified before anything is created. A photo that is not in the current
+-- source cannot be selected, and copying whatever was selected instead would be
+-- much worse than not copying at all.
+--
+-- Selecting works without a write gate (`focusPhotoInDevelop` in
+-- `DevelopEditManager` does the same); only creating the copy needs one. The
+-- switch to All Photographs is the same fallback that function uses, for the
+-- same reason: the scope may reach outside the folder or collection on screen.
+local function selectOnly(catalog, photo)
+	local ok = LrTasks.pcall(function()
+		catalog:setSelectedPhotos(photo, { photo })
 	end)
-	return items
+	if not ok then
+		return false
+	end
+	local selected = catalog:getTargetPhotos()
+	return type(selected) == "table" and #selected == 1 and selected[1] == photo
 end
 
-local function getEditIntentPresetInstruction(presetValue)
-	for _, preset in ipairs(Defaults.editIntentPresets or {}) do
-		if preset.value == presetValue then
-			return preset.instruction
+local function createVirtualCopyFor(photo)
+	local catalog = LrApplication.activeCatalog()
+
+	if not selectOnly(catalog, photo) then
+		local switched = LrTasks.pcall(function()
+			catalog:setActiveSources({ catalog.kAllPhotos })
+			LrTasks.sleep(0.2)
+		end)
+		if not switched or not selectOnly(catalog, photo) then
+			return nil, "the photo could not be selected in Lightroom"
 		end
 	end
-	return nil
-end
 
-local function hasEditIntentPresetValue(presetValue)
-	for _, preset in ipairs(Defaults.editIntentPresets or {}) do
-		if preset.value == presetValue then
-			return true
-		end
+	local copies
+	local ok, err = LrTasks.pcall(function()
+		catalog:withWriteAccessDo(
+			LOC("$$$/LrGeniusAI/TaskAiEditPhotos/VirtualCopyUndo=Create virtual copy for AI edit"),
+			function()
+				copies = catalog:createVirtualCopies(LOC("$$$/LrGeniusAI/TaskAiEditPhotos/VirtualCopyName=AI Edit"))
+			end,
+			Defaults.catalogWriteAccessOptions
+		)
+	end)
+	if not ok then
+		return nil, tostring(err)
 	end
-	return false
-end
-
-local function buildEditIntentPresetItems()
-	local items = {}
-	for _, preset in ipairs(Defaults.editIntentPresets or {}) do
-		table.insert(items, { title = preset.title, value = preset.value })
+	if type(copies) ~= "table" or #copies ~= 1 then
+		return nil, "Lightroom did not return exactly one virtual copy"
 	end
-	if #items == 0 then
-		table.insert(items, {
-			title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/Custom=Custom"),
-			value = Defaults.editIntentCustomValue or "custom",
-		})
+	if copies[1]:getRawMetadata("masterPhoto") ~= photo then
+		return nil, "Lightroom copied a different photo"
 	end
-	return items
+	return copies[1], nil
 end
 
-local function hasCompositionModeValue(value)
-	for _, item in ipairs(Defaults.compositionModes or {}) do
-		if item.value == value then
-			return true
-		end
-	end
-	return false
-end
-
-local function showPhotoInstructionDialog(ctx, photo)
-	local f = LrView.osFactory()
-	local bind = LrView.bind
-
-	local props = LrBinding.makePropertyTable(ctx)
-	props.photoContextData = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-	props.skipFromHere = false
-
-	local dialogView = f:column({
-		bind_to_object = props,
-		spacing = f:control_spacing(),
-		f:row({
-			f:static_text({
-				title = photo:getFormattedMetadata("fileName") or "Photo",
-			}),
-		}),
-		f:row({
-			alignment = "center",
-			f:catalog_photo({
-				photo = photo,
-				width = 300,
-			}),
-		}),
-		f:row({
-			f:static_text({
-				title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/PerPhotoInstructions=Per-photo edit instructions"),
-			}),
-		}),
-		f:row({
-			f:edit_field({
-				value = bind("photoContextData"),
-				width_in_chars = 50,
-				height_in_lines = 10,
-			}),
-		}),
-		f:row({
-			f:checkbox({
-				value = bind("skipFromHere"),
-			}),
-			f:static_text({
-				title = LOC(
-					"$$$/LrGeniusAI/TaskAiEditPhotos/UseForFollowing=Use these instructions for all following photos."
-				),
-			}),
-		}),
-	})
-
-	local result = LrDialogs.presentModalDialog({
-		title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/PhotoSpecificInstructions=Photo-specific edit instructions"),
-		contents = dialogView,
-		actionVerb = LOC("$$$/LrGeniusAI/common/Continue=Continue"),
-	})
-
-	return result, props.photoContextData, props.skipFromHere
-end
-
-local function showAiEditDialog(ctx)
+local function showAiEditDialog(ctx, stats)
 	log:trace("showAiEditDialog: start")
 	local f = LrView.osFactory()
 	local bind = LrView.bind
@@ -144,115 +120,10 @@ local function showAiEditDialog(ctx)
 	local props = LrBinding.makePropertyTable(ctx)
 
 	props.scope = prefs.aiEditScope or "selected"
-	props.modelKey = prefs.aiEditModelKey or prefs.modelKey
-	props.temperature = prefs.aiEditTemperature or prefs.temperature or 0.1
-	props.language = prefs.aiEditLanguage or prefs.generateLanguage or "English"
-	props.styleStrength = prefs.aiEditStyleStrength or Defaults.defaultEditStyleStrength or 0.5
-	props.editIntentPresetItems = buildEditIntentPresetItems()
-	props.customEditIntentText = prefs.aiEditIntentCustomText or prefs.aiEditIntent or Defaults.defaultEditIntent
-	if type(props.customEditIntentText) ~= "string" or props.customEditIntentText == "" then
-		props.customEditIntentText = Defaults.defaultEditIntent
-	end
-	props.editIntentPreset = prefs.aiEditIntentPreset
-		or Defaults.defaultEditIntentPresetValue
-		or (Defaults.editIntentCustomValue or "custom")
-	if not hasEditIntentPresetValue(props.editIntentPreset) then
-		props.editIntentPreset = Defaults.editIntentCustomValue or "custom"
-	end
-	props.isCustomEditIntent = props.editIntentPreset == (Defaults.editIntentCustomValue or "custom")
-	if props.isCustomEditIntent then
-		props.editIntent = props.customEditIntentText
-	else
-		props.editIntent = getEditIntentPresetInstruction(props.editIntentPreset) or Defaults.defaultEditIntent
-	end
 	props.reviewBeforeApply = prefs.aiEditReviewBeforeApply ~= false
-	props.applyMasks = prefs.aiEditApplyMasks ~= false
-	props.adjustWhiteBalance = prefs.aiEditAdjustWhiteBalance ~= false
-	props.adjustBasicTone = prefs.aiEditAdjustBasicTone ~= false
-	props.adjustPresence = prefs.aiEditAdjustPresence ~= false
-	props.adjustColorMix = prefs.aiEditAdjustColorMix ~= false
-	props.doColorGrading = prefs.aiEditDoColorGrading ~= false
-	props.useToneCurve = prefs.aiEditUseToneCurve ~= false
-	props.usePointCurve = prefs.aiEditUsePointCurve ~= false
-	props.adjustDetail = prefs.aiEditAdjustDetail ~= false
-	props.adjustEffects = prefs.aiEditAdjustEffects ~= false
-	props.adjustLensCorrections = prefs.aiEditAdjustLensCorrections ~= false
-	props.allowAutoCrop = prefs.aiEditAllowAutoCrop ~= false
-	props.compositionModes = Defaults.compositionModes or {}
-	props.compositionMode = prefs.aiEditCompositionMode or Defaults.defaultCompositionMode or "subtle"
-	if not hasCompositionModeValue(props.compositionMode) then
-		props.compositionMode = Defaults.defaultCompositionMode or "subtle"
-	end
-	props.submitKeywords = prefs.aiEditSubmitKeywords ~= false
-	props.submitFolderName = prefs.aiEditSubmitFolderName or false
-	props.showPhotoContextDialog = prefs.aiEditShowPhotoContextDialog ~= false
-	props.useTrainingStyle = prefs.aiEditUseTrainingStyle ~= false
-	props.promptTitles = {}
-	props.prompts = safePromptTable(prefs.editPrompts or { Default = Defaults.defaultEditSystemInstruction })
-	log:trace("showAiEditDialog: prompt source type=" .. tostring(type(props.prompts)))
-	props.prompt = prefs.editPrompt or Defaults.defaultEditPromptName
-	if type(props.prompt) ~= "string" or props.prompt == "" then
-		props.prompt = Defaults.defaultEditPromptName
-	end
-	props.selectedPrompt = props.prompts[props.prompt]
-	if type(props.selectedPrompt) ~= "string" or props.selectedPrompt == "" then
-		props.prompt = Defaults.defaultEditPromptName
-		props.selectedPrompt = props.prompts[props.prompt] or Defaults.defaultEditSystemInstruction
-	end
+	props.createVirtualCopy = prefs.aiEditCreateVirtualCopy == true
 
-	for title, prompt in pairs(props.prompts) do
-		if type(title) == "string" and title ~= "" and type(prompt) == "string" then
-			table.insert(props.promptTitles, { title = title, value = title })
-		end
-	end
-	log:trace("showAiEditDialog: promptTitles count=" .. tostring(#props.promptTitles))
-	if #props.promptTitles == 0 then
-		props.prompts = { Default = Defaults.defaultEditSystemInstruction }
-		props.prompt = Defaults.defaultEditPromptName
-		props.selectedPrompt = Defaults.defaultEditSystemInstruction
-		table.insert(
-			props.promptTitles,
-			{ title = Defaults.defaultEditPromptName, value = Defaults.defaultEditPromptName }
-		)
-	end
-	table.sort(props.promptTitles, function(a, b)
-		return a.title < b.title
-	end)
-
-	props:addObserver("prompt", function(properties, key, newValue)
-		properties.selectedPrompt = properties.prompts[newValue]
-	end)
-	props:addObserver("selectedPrompt", function(properties, key, newValue)
-		properties.prompts[properties.prompt] = newValue
-	end)
-	props:addObserver("editIntentPreset", function(properties, key, newValue)
-		local customValue = Defaults.editIntentCustomValue or "custom"
-		properties.isCustomEditIntent = newValue == customValue
-		if properties.isCustomEditIntent then
-			properties.editIntent = properties.customEditIntentText or Defaults.defaultEditIntent
-		else
-			properties.editIntent = getEditIntentPresetInstruction(newValue) or Defaults.defaultEditIntent
-		end
-	end)
-	props:addObserver("editIntent", function(properties, key, newValue)
-		if properties.isCustomEditIntent then
-			properties.customEditIntentText = newValue
-		end
-	end)
-
-	local modelItems = buildModelItems()
-	log:trace("showAiEditDialog: modelItems count=" .. tostring(#modelItems))
-	if #modelItems == 0 then
-		table.insert(modelItems, { title = "chatgpt: gpt-4.1", value = "chatgpt::gpt-4.1" })
-	end
-	if not props.modelKey or props.modelKey == "" then
-		props.modelKey = modelItems[1].value
-	end
-
-	props.promptTitleMenu = f:popup_menu({
-		items = bind("promptTitles"),
-		value = bind("prompt"),
-	})
+	local readinessText, readinessColor, trainingCount = styleReadinessDisplay(stats)
 
 	local contents = f:column({
 		bind_to_object = props,
@@ -277,137 +148,38 @@ local function showAiEditDialog(ctx)
 			}),
 		}),
 		f:group_box({
-			title = LOC("$$$/LrGeniusAI/common/AiSettings=AI Settings"),
+			title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/StyleProfile=Style profile"),
 			fill_horizontal = 1,
 			f:row({
 				f:static_text({
-					title = LOC("$$$/LrGeniusAI/common/AiModel=AI model:"),
+					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/TrainingExamples=Training examples:"),
 					width = share("labelWidth"),
 				}),
-				f:popup_menu({
-					value = bind("modelKey"),
-					items = modelItems,
-					width = 300,
+				f:static_text({
+					title = trainingCount and tostring(trainingCount) or "—",
 				}),
 			}),
 			f:row({
 				f:static_text({
-					title = LOC("$$$/LrGeniusAI/common/Temperature=Temperature:"),
+					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/StyleStatus=Status:"),
 					width = share("labelWidth"),
 				}),
-				f:slider({
-					value = bind("temperature"),
-					min = 0.0,
-					max = 0.5,
-					integral = false,
-					width = 300,
-				}),
 				f:static_text({
-					title = bind("temperature"),
-					width = 40,
+					title = readinessText,
+					text_color = readinessColor,
 				}),
 			}),
 			f:row({
 				f:static_text({
-					width = share("labelWidth"),
-					title = LOC("$$$/LrGeniusAI/common/Prompt=Prompt:"),
-				}),
-				props.promptTitleMenu,
-				f:push_button({
-					title = LOC("$$$/LrGeniusAI/common/Add=Add"),
-					action = function()
-						local ok, err = LrTasks.pcall(function()
-							PromptConfigProvider.addPrompt(props)
-						end)
-						if not ok then
-							log:error("AI Edit prompt add failed: " .. tostring(err))
-							LrDialogs.showError(
-								LOC("$$$/LrGeniusAI/PromptConfig/AddFailed=Adding prompt failed: ^1"),
-								tostring(err)
-							)
-						end
-					end,
-				}),
-				f:push_button({
-					title = LOC("$$$/LrGeniusAI/common/Delete=Delete"),
-					action = function()
-						local ok, err = LrTasks.pcall(function()
-							PromptConfigProvider.deletePrompt(props)
-						end)
-						if not ok then
-							log:error("AI Edit prompt delete failed: " .. tostring(err))
-							LrDialogs.showError(
-								LOC("$$$/LrGeniusAI/PromptConfig/DeleteFailed=Deleting prompt failed: ^1"),
-								tostring(err)
-							)
-						end
-					end,
-				}),
-			}),
-			f:row({
-				f:static_text({
-					width = share("labelWidth"),
-					title = LOC("$$$/LrGeniusAI/common/SystemInstruction=System instruction:"),
-				}),
-				f:edit_field({
-					value = bind("selectedPrompt"),
-					width_in_chars = 50,
-					height_in_lines = 4,
-				}),
-			}),
-			f:row({
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/common/SummaryLanguage=Summary language:"),
-					width = share("labelWidth"),
-				}),
-				f:combo_box({
-					value = bind("language"),
-					items = Defaults.generateLanguages,
+					title = LOC(
+						"$$$/LrGeniusAI/TaskAiEditPhotos/StyleProfileHint=Edits are built from your own saved edits — the more examples, the closer the match."
+					),
 				}),
 			}),
 		}),
 		f:group_box({
-			title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/EditInstructions=Edit Instructions"),
+			title = LOC("$$$/LrGeniusAI/common/Options=Options"),
 			fill_horizontal = 1,
-			f:row({
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/OverallLook=Overall look:"),
-					width = share("labelWidth"),
-				}),
-				f:popup_menu({
-					value = bind("editIntentPreset"),
-					items = bind("editIntentPresetItems"),
-					width = 300,
-				}),
-			}),
-			f:row({
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CustomIntent=Custom intent:"),
-					width = share("labelWidth"),
-				}),
-				f:edit_field({
-					value = bind("editIntent"),
-					width_in_chars = 50,
-					enabled = bind("isCustomEditIntent"),
-				}),
-			}),
-			f:row({
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/StyleStrength=Style strength:"),
-					width = share("labelWidth"),
-				}),
-				f:slider({
-					value = bind("styleStrength"),
-					min = 0.0,
-					max = 1.0,
-					integral = false,
-					width = 300,
-				}),
-				f:static_text({
-					title = bind("styleStrength"),
-					width = 40,
-				}),
-			}),
 			f:row({
 				f:checkbox({
 					value = bind("reviewBeforeApply"),
@@ -420,182 +192,12 @@ local function showAiEditDialog(ctx)
 			}),
 			f:row({
 				f:checkbox({
-					value = bind("applyMasks"),
-				}),
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AskMasks=Ask the AI for subject/sky/background masks"),
-				}),
-			}),
-			f:row({
-				f:checkbox({
-					value = bind("showPhotoContextDialog"),
+					value = bind("createVirtualCopy"),
 				}),
 				f:static_text({
 					title = LOC(
-						"$$$/LrGeniusAI/TaskAiEditPhotos/AllowPerPhoto=Allow per-photo edit instructions before generation"
+						"$$$/LrGeniusAI/TaskAiEditPhotos/CreateVirtualCopy=Apply the edit to a new virtual copy (leaves the original untouched)"
 					),
-				}),
-			}),
-		}),
-		f:group_box({
-			title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CreativeControls=Creative Controls"),
-			fill_horizontal = 1,
-			f:row({
-				f:column({
-					spacing = f:control_spacing(),
-					f:row({
-						f:checkbox({
-							value = bind("adjustWhiteBalance"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustWB=Adjust white balance"),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("adjustBasicTone"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustBasicTone=Adjust basic tone (exposure/contrast/highlights/shadows/whites/blacks)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("adjustPresence"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustPresence=Adjust presence (texture/clarity/dehaze)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("adjustColorMix"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustColorMix=Adjust color mix (vibrance/saturation/HSL)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("doColorGrading"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/DoColorGrading=Do color grading"),
-						}),
-					}),
-				}),
-				f:column({
-					spacing = f:control_spacing(),
-					f:row({
-						f:checkbox({
-							value = bind("useToneCurve"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/UseToneCurve=Use tone curve"),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("usePointCurve"),
-							enabled = bind("useToneCurve"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/UsePointCurve=Use point curve"),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("adjustDetail"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustDetail=Adjust detail (sharpening/noise reduction)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("adjustEffects"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/TaskAiEditPhotos/AdjustEffects=Adjust effects (vignette/grain)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("adjustLensCorrections"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AdjustLens=Adjust lens corrections"),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("allowAutoCrop"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/AllowAutoCrop=Allow AI auto crop"),
-						}),
-					}),
-				}),
-			}),
-			f:row({
-				f:static_text({
-					title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompositionMode=Composition mode:"),
-					width = share("labelWidth"),
-				}),
-				f:popup_menu({
-					value = bind("compositionMode"),
-					items = bind("compositionModes"),
-					width = 300,
-				}),
-			}),
-		}),
-		f:group_box({
-			title = LOC("$$$/LrGeniusAI/common/Context=Context"),
-			fill_horizontal = 1,
-			f:row({
-				f:column({
-					spacing = f:control_spacing(),
-					f:row({
-						f:checkbox({
-							value = bind("submitKeywords"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/TaskAiEditPhotos/SendKeywords=Send existing Lightroom keywords"
-							),
-						}),
-					}),
-				}),
-				f:column({
-					spacing = f:control_spacing(),
-					f:row({
-						f:checkbox({
-							value = bind("submitFolderName"),
-						}),
-						f:static_text({
-							title = LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SendFolders=Send folder names"),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("useTrainingStyle"),
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/Training/UseTrainingCheckbox=Apply my saved edit style (training examples)"
-							),
-						}),
-					}),
 				}),
 			}),
 		}),
@@ -613,125 +215,27 @@ local function showAiEditDialog(ctx)
 	end
 
 	prefs.aiEditScope = props.scope
-	prefs.aiEditModelKey = props.modelKey
-	prefs.aiEditTemperature = props.temperature
-	prefs.aiEditLanguage = props.language
-	prefs.aiEditStyleStrength = props.styleStrength
-	prefs.aiEditIntent = props.editIntent
-	prefs.aiEditIntentPreset = props.editIntentPreset
-	prefs.aiEditIntentCustomText = props.customEditIntentText
 	prefs.aiEditReviewBeforeApply = props.reviewBeforeApply
-	prefs.aiEditApplyMasks = props.applyMasks
-	prefs.aiEditAdjustWhiteBalance = props.adjustWhiteBalance
-	prefs.aiEditAdjustBasicTone = props.adjustBasicTone
-	prefs.aiEditAdjustPresence = props.adjustPresence
-	prefs.aiEditAdjustColorMix = props.adjustColorMix
-	prefs.aiEditDoColorGrading = props.doColorGrading
-	prefs.aiEditUseToneCurve = props.useToneCurve
-	prefs.aiEditUsePointCurve = props.usePointCurve
-	prefs.aiEditAdjustDetail = props.adjustDetail
-	prefs.aiEditAdjustEffects = props.adjustEffects
-	prefs.aiEditAdjustLensCorrections = props.adjustLensCorrections
-	prefs.aiEditAllowAutoCrop = props.allowAutoCrop
-	prefs.aiEditCompositionMode = props.compositionMode
-	prefs.aiEditSubmitKeywords = props.submitKeywords
-	prefs.aiEditSubmitFolderName = props.submitFolderName
-	prefs.aiEditShowPhotoContextDialog = props.showPhotoContextDialog
-	prefs.aiEditUseTrainingStyle = props.useTrainingStyle
-	prefs.editPrompts = props.prompts
-	prefs.editPrompt = props.prompt
+	prefs.aiEditCreateVirtualCopy = props.createVirtualCopy
 
-	local providerFromKey, modelFromKey
-	local sep = props.modelKey and string.find(props.modelKey, "::", 1, true) or nil
-	if sep then
-		providerFromKey = string.sub(props.modelKey, 1, sep - 1)
-		modelFromKey = string.sub(props.modelKey, sep + 2)
-	else
-		providerFromKey = props.modelKey
-	end
-
-	local options = {
+	return {
 		scope = props.scope,
-		provider = providerFromKey,
-		model = modelFromKey,
-		language = props.language,
-		temperature = props.temperature,
-		prompt = props.selectedPrompt,
-		edit_intent = props.editIntent,
-		style_strength = props.styleStrength,
-		include_masks = props.applyMasks,
-		adjust_white_balance = props.adjustWhiteBalance,
-		adjust_basic_tone = props.adjustBasicTone,
-		adjust_presence = props.adjustPresence,
-		adjust_color_mix = props.adjustColorMix,
-		do_color_grading = props.doColorGrading,
-		use_tone_curve = props.useToneCurve,
-		use_point_curve = props.usePointCurve,
-		adjust_detail = props.adjustDetail,
-		adjust_effects = props.adjustEffects,
-		adjust_lens_corrections = props.adjustLensCorrections,
-		allow_auto_crop = props.allowAutoCrop,
-		composition_mode = props.compositionMode,
-		applyMasks = props.applyMasks,
 		reviewBeforeApply = props.reviewBeforeApply,
-		submit_keywords = props.submitKeywords,
-		submit_folder_names = props.submitFolderName,
-		showPhotoContextDialog = props.showPhotoContextDialog,
-		use_training_style = props.useTrainingStyle ~= false,
+		createVirtualCopy = props.createVirtualCopy,
 	}
-
-	if providerFromKey == "chatgpt" then
-		if prefs and not Util.nilOrEmpty(prefs.chatgptApiKey) then
-			options.api_key = prefs.chatgptApiKey
-		else
-			LrDialogs.showError(
-				LOC(
-					"$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences."
-				)
-			)
-			return nil
-		end
-	elseif providerFromKey == "gemini" then
-		if prefs and not Util.nilOrEmpty(prefs.geminiApiKey) then
-			options.api_key = prefs.geminiApiKey
-		else
-			LrDialogs.showError(
-				LOC(
-					"$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences."
-				)
-			)
-			return nil
-		end
-	end
-	return options
 end
 
-local function enrichPhotoOptions(photo, baseOptions, userContext)
+local function enrichPhotoOptions(photo, baseOptions)
 	log:trace("enrichPhotoOptions: start for " .. tostring(photo and photo:getFormattedMetadata("fileName") or "nil"))
 	local photoOptions = copyOptions(baseOptions)
-	if photoOptions.submit_keywords then
-		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-		if keywords then
-			if type(keywords) == "string" then
-				photoOptions.existing_keywords = Util.string_split(keywords, ",")
-			else
-				photoOptions.existing_keywords = keywords
-			end
-		end
-	end
-	if photoOptions.submit_folder_names then
-		local originalFilePath = photo:getRawMetadata("path")
-		if originalFilePath then
-			photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
-		end
-	end
+
 	local datetime = photo:getRawMetadata("dateTime")
 	if datetime ~= nil and type(datetime) == "number" then
 		photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-		photoOptions.capture_time = datetime -- Unix timestamp for style engine
+		photoOptions.capture_time = datetime -- feeds the style engine's time-of-day bucket
 	end
 
-	-- Add EXIF fields for style engine matching using standardized utility.
+	-- EXIF context for style matching (focal length, capture time, camera, ISO).
 	local exif = Util.getPhotoExif(photo)
 	for k, v in pairs(exif) do
 		photoOptions[k] = v
@@ -740,10 +244,11 @@ local function enrichPhotoOptions(photo, baseOptions, userContext)
 	-- The backend receives a normalised JPEG, so the original encoding is no
 	-- longer visible in the bytes it gets. Lightroom knows, and the edit
 	-- guardrails need it: blown highlights are recoverable on a raw file and
-	-- gone on a rendered one, which changes how far the white point may go.
+	-- gone on a rendered one, which changes how far the white point may go. It
+	-- also decides whether a training example's Kelvin temperature may be
+	-- carried over at all.
 	photoOptions.is_raw = Util.isRawPhoto(photo)
 
-	photoOptions.user_context = userContext or photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
 	return photoOptions
 end
 
@@ -752,13 +257,37 @@ LrTasks.startAsyncTask(function()
 		LrDialogs.attachErrorDialogToFunctionContext(ctx)
 		log:info("AI Edit task started")
 
-		-- Check server connection and health (ensure AI providers are configured)
-		if not Util.waitForServerDialog({ requireProviders = true }) then
+		-- No `requireProviders` any more: the style engine needs no LLM
+		-- provider, so a missing API key must not block this task.
+		if not Util.waitForServerDialog() then
 			log:warn("AI Edit task aborted: backend server unavailable")
 			return
 		end
 
-		local options = showAiEditDialog(ctx)
+		-- A backend that could not answer is not a backend reporting zero: fall
+		-- through and let the per-photo errors say what actually went wrong,
+		-- rather than telling the user their style profile is empty when it may
+		-- be full.
+		local stats, statsErr = SearchIndexAPI.getTrainingStats()
+		if not stats then
+			log:warn("AI Edit could not read the style profile stats: " .. tostring(statsErr))
+		end
+		local trainingCount = (stats and tonumber(stats.count)) or 0
+		if stats and trainingCount < MIN_TRAINING_EXAMPLES then
+			log:warn("AI Edit task aborted: only " .. tostring(trainingCount) .. " training example(s) available")
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/NoStyleProfileTitle=Style profile not ready"),
+				LOC(
+					"$$$/LrGeniusAI/TaskAiEditPhotos/NoStyleProfile=AI Edit builds every recipe from your own saved edits, and it needs at least ^1 training examples to do that. You currently have ^2.\n\nEdit a handful of photos the way you like them, then run Library → Plug-in Extras → Save Edits as AI Training Examples and start AI Edit again.",
+					tostring(MIN_TRAINING_EXAMPLES),
+					tostring(trainingCount)
+				),
+				"info"
+			)
+			return
+		end
+
+		local options = showAiEditDialog(ctx, stats)
 		if not options then
 			log:info("AI Edit task canceled by user in options dialog")
 			return
@@ -766,40 +295,10 @@ LrTasks.startAsyncTask(function()
 		log:trace(
 			"AI Edit options selected: scope="
 				.. tostring(options.scope)
-				.. " provider="
-				.. tostring(options.provider)
-				.. " model="
-				.. tostring(options.model)
 				.. " review="
 				.. tostring(options.reviewBeforeApply)
-				.. " styleStrength="
-				.. tostring(options.style_strength)
-				.. " masks="
-				.. tostring(options.applyMasks)
-				.. " wb="
-				.. tostring(options.adjust_white_balance)
-				.. " basicTone="
-				.. tostring(options.adjust_basic_tone)
-				.. " presence="
-				.. tostring(options.adjust_presence)
-				.. " colorMix="
-				.. tostring(options.adjust_color_mix)
-				.. " grading="
-				.. tostring(options.do_color_grading)
-				.. " toneCurve="
-				.. tostring(options.use_tone_curve)
-				.. " pointCurve="
-				.. tostring(options.use_point_curve)
-				.. " detail="
-				.. tostring(options.adjust_detail)
-				.. " effects="
-				.. tostring(options.adjust_effects)
-				.. " lens="
-				.. tostring(options.adjust_lens_corrections)
-				.. " crop="
-				.. tostring(options.allow_auto_crop)
-				.. " composition="
-				.. tostring(options.composition_mode)
+				.. " virtualCopy="
+				.. tostring(options.createVirtualCopy)
 		)
 
 		local photos = PhotoSelector.getPhotosInScope(options.scope)
@@ -824,8 +323,6 @@ LrTasks.startAsyncTask(function()
 		local errorCount = 0
 		local errorMessages = {}
 		local backendWarnings = {}
-		local reuseContext = false
-		local sharedContext = ""
 
 		for index, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
@@ -839,29 +336,7 @@ LrTasks.startAsyncTask(function()
 			progressScope:setPortionComplete(index - 1, #photos)
 			local continueProcessing = true
 
-			local userContext = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-			log:trace(
-				"AI Edit photo loop start: index="
-					.. tostring(index)
-					.. " photo="
-					.. tostring(fileName)
-					.. " initialContextLen="
-					.. tostring(type(userContext) == "string" and #userContext or 0)
-			)
-			if options.showPhotoContextDialog then
-				if not reuseContext then
-					local result
-					result, sharedContext, reuseContext = showPhotoInstructionDialog(ctx, photo)
-					if result == "cancel" then
-						progressScope:done()
-						return
-					end
-				end
-				userContext = sharedContext or ""
-				LrApplication.activeCatalog():withPrivateWriteAccessDo(function()
-					photo:setPropertyForPlugin(_PLUGIN, "photoContext", userContext)
-				end, Defaults.catalogWriteAccessOptions)
-			end
+			log:trace("AI Edit photo loop start: index=" .. tostring(index) .. " photo=" .. tostring(fileName))
 
 			local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 			if not photoId then
@@ -875,7 +350,7 @@ LrTasks.startAsyncTask(function()
 
 			local response = nil
 			if continueProcessing then
-				local photoOptions = enrichPhotoOptions(photo, options, userContext)
+				local photoOptions = enrichPhotoOptions(photo, options)
 				local exportedPath = SearchIndexAPI.exportPhotoForIndexing(photo)
 				if not exportedPath then
 					log:error("Failed to export photo for AI edit generation: " .. fileName)
@@ -887,15 +362,7 @@ LrTasks.startAsyncTask(function()
 				if continueProcessing then
 					log:trace("AI Edit calling API for " .. fileName .. " exportedPath=" .. tostring(exportedPath))
 					local ok, apiOk, apiResponse = LrTasks.pcall(function()
-						if options.use_training_style then
-							-- Route to the new Style Engine (LLM-free matching)
-							-- Fallback to LLM is handled server-side if use_llm_fallback is true
-							photoOptions.use_llm_fallback = true
-							return SearchIndexAPI.styleEdit(photoId, exportedPath, photoOptions)
-						else
-							-- Regular LLM edit (prompt-driven)
-							return SearchIndexAPI.generateEditRecipePhoto(photoId, exportedPath, photoOptions)
-						end
+						return SearchIndexAPI.styleEdit(photoId, exportedPath, photoOptions)
 					end)
 					LrTasks.pcall(function()
 						if exportedPath and LrFileUtils.exists(exportedPath) then
@@ -950,20 +417,9 @@ LrTasks.startAsyncTask(function()
 			end
 
 			if continueProcessing and response then
-				log:trace("Persisting generated recipe for " .. fileName)
-				local okPersist, persistErr = LrTasks.pcall(function()
-					DevelopEditManager.persistEditRecipe(photo, response, nil, "generated")
-				end)
-				if not okPersist then
-					log:error("Persist generated recipe threw for " .. fileName .. ": " .. tostring(persistErr))
-					table.insert(errorMessages, fileName .. ": could not persist recipe: " .. tostring(persistErr))
-					errorCount = errorCount + 1
-					continueProcessing = false
-				end
-
 				local applyOptions = {
 					applyGlobal = true,
-					applyMasks = options.applyMasks,
+					applyMasks = true,
 				}
 
 				if options.reviewBeforeApply then
@@ -983,6 +439,41 @@ LrTasks.startAsyncTask(function()
 					continueProcessing = false
 				end
 
+				-- Only now, once the edit is actually going to be applied: a
+				-- photo the user skipped in the review dialog must not leave a
+				-- virtual copy behind.
+				local target = photo
+				if continueProcessing and options.createVirtualCopy then
+					local copy, copyErr = createVirtualCopyFor(photo)
+					if copy then
+						target = copy
+						log:trace("Created virtual copy for " .. fileName)
+					else
+						-- Deliberately not falling back to the original: the
+						-- user asked for it to stay untouched.
+						log:error("Failed to create virtual copy for " .. fileName .. ": " .. tostring(copyErr))
+						table.insert(
+							errorMessages,
+							fileName .. ": could not create virtual copy: " .. tostring(copyErr)
+						)
+						errorCount = errorCount + 1
+						continueProcessing = false
+					end
+				end
+
+				if continueProcessing then
+					log:trace("Persisting generated recipe for " .. fileName)
+					local okPersist, persistErr = LrTasks.pcall(function()
+						DevelopEditManager.persistEditRecipe(target, response, nil, "generated")
+					end)
+					if not okPersist then
+						log:error("Persist generated recipe threw for " .. fileName .. ": " .. tostring(persistErr))
+						table.insert(errorMessages, fileName .. ": could not persist recipe: " .. tostring(persistErr))
+						errorCount = errorCount + 1
+						continueProcessing = false
+					end
+				end
+
 				if continueProcessing then
 					log:trace(
 						"Applying recipe for "
@@ -992,7 +483,7 @@ LrTasks.startAsyncTask(function()
 							.. " applyMasks="
 							.. tostring(applyOptions.applyMasks)
 					)
-					local applied, warnings = DevelopEditManager.applyRecipe(photo, response, applyOptions)
+					local applied, warnings = DevelopEditManager.applyRecipe(target, response, applyOptions)
 					log:trace(
 						"Apply result for "
 							.. fileName
