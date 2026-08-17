@@ -28,28 +28,39 @@ Using a newer plugin with an older backend (or vice versa) causes API errors.
 
 ---
 
-### 3. Missing or Not Downloading OpenCLIP Model
+### 3. On-Device AI Models Missing or Not Downloading
 
-The backend downloads the SigLIP2 embedding model on first use (several GB). If this fails, semantic search won't work.
+Two features run their own model on the backend machine: smart photo search
+(SigLIP2) and species identification (BioCLIP 2). Neither model ships with the
+installer — you fetch them once from *Plug-in Manager → LrGeniusAI →
+**On-device AI models*** → **Download AI models**, which is also where their
+readiness is reported. Roughly 3 GB in total.
 
-- **Symptom:** "OpenCLIP model is missing" warning in Lightroom, or indexing fails immediately even though the backend is running.
+- **Symptom:** *Enable smart photo search* or *Identify animal and plant species* is greyed out in the Analyze & Index dialog, an indicator under *On-device AI models* stays red, or indexing reports `species: model not downloaded`.
 - **Resolution:**
-  1. Check your internet connection on the machine running the backend.
-  2. Make sure the backend process has write permission to its cache directory (typically `~/.cache/huggingface` or the configured data path).
-  3. Wait for the download to complete — the `/status` endpoint shows `is_model_cached`. Progress is visible in the backend terminal.
-  4. If the warning persists after a successful download, restart the backend and try again.
-  5. If the backend server and Lightroom are on different machines, the model must be downloaded on the server machine, not your Lightroom machine.
+  1. Click **Download AI models** and leave the progress bar running. It fetches only what is missing, so it is safe to press again after a failed attempt — an existing installation that already has the search model will only download the species one.
+  2. Check your internet connection **on the machine running the backend**, not the one running Lightroom. If they are different machines, the models must be downloaded on the server.
+  3. Make sure the backend has write permission to its model cache: `~/.cache/lrgenius/models/`, or `%USERPROFILE%\.cache\lrgenius\models\` on Windows. It is the home directory of the account the *backend* runs as, which is not necessarily yours if you installed it as a service.
+  4. If a download fails part-way, the error is reported verbatim in the Lightroom dialog and in the backend log — worth reading before retrying, since a 404 means the release assets could not be reached rather than anything wrong with your setup.
+  5. If an indicator stays red after a download that reported success, restart the backend so it re-checks the files on disk.
+
+Face detection is listed in the same section but has no download button. Its
+`buffalo_l` weights are resolved from `INSIGHTFACE_ROOT` and are not published
+with this project, so the combined download cannot fetch them — that is why they
+are excluded from the overall "all models are ready" state.
 
 ---
 
-### 4. OpenCLIP "Missing" Even After Installation
+### 4. Model "Missing" Even After Installation
 
-- **Symptom:** The plugin reports the CLIP model is missing, but it was previously working or you can see the model files on disk.
-- **Resolution:** This can happen if the backend was updated and the model cache path changed, or if the model files were partially downloaded. Delete the model cache folder and let the backend re-download:
-  - macOS/Linux: `~/.cache/huggingface/hub/`
-  - Windows: `%USERPROFILE%\.cache\huggingface\hub\`
-  
-  After deleting, restart the backend. It will re-download the model on next use.
+- **Symptom:** The plugin reports a model is missing, but it was previously working or you can see the files on disk.
+- **Resolution:** This can happen if the backend was updated and the model cache path changed, or if the files were only partially downloaded. Delete the affected model's files and download again:
+  - macOS/Linux: `~/.cache/lrgenius/models/`
+  - Windows: `%USERPROFILE%\.cache\lrgenius\models\`
+
+  The search model is `siglip2_*` plus `tokenizer.json`; the species model is
+  `bioclip2_*`. Delete only the family that is failing, restart the backend, and
+  press **Download AI models** — the healthy family is skipped.
 
 ---
 

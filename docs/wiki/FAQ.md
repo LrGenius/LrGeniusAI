@@ -88,11 +88,21 @@ the status line names the exact reason. On Windows the section is llama.cpp rath
 
 ### What does "Analyze & Index" actually do?
 
-It does two things in one pass:
+Up to four things in one pass:
 1. Sends each photo to the configured AI model to generate keywords, title, caption, and alt text.
 2. Creates a semantic embedding (using SigLIP2 locally) so the photo can be found by [Advanced Search](Help-Advanced-Search).
+3. Detects and embeds faces for the [People](Help-People-Faces) workflows.
+4. Identifies animal, plant and fungus species (using BioCLIP 2 locally) and writes the taxonomy to the plugin's metadata fields.
 
-Both steps are optional — you can run only embeddings, only metadata, or both.
+Every step is optional and each has its own checkbox — only step 1 involves a language model or a cloud account at all.
+
+### Does species identification send my photos anywhere?
+
+No. It runs BioCLIP 2 on the machine running the backend, the same way search embeddings and face detection do. Nothing is uploaded, and it works with no API key and no internet connection once the model is downloaded. See [Help: Analyze and Index](Help-Analyze-and-Index#species-identification).
+
+### Why did I get "Aves" instead of a species name?
+
+Because that is the deepest rank the model was confident about. A clear frame of a garden bird gets a binomial; a distant silhouette gets an order or a class. The rank is written into its own metadata field so you can always tell which you got. Full explanation, including why some common names come back in Swedish, is in [Help: Analyze and Index](Help-Analyze-and-Index#why-the-answer-is-sometimes-just-aves).
 
 ### Do I have to index all photos before I can search?
 

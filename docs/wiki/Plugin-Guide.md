@@ -27,7 +27,7 @@ All actions are available under `Library → Plug-in Extras`:
 ## Core workflows
 
 ### Analyze and Index
-Passes photos to the AI backend to generate keywords, title, caption, and alt text. Simultaneously creates SigLIP2 semantic embeddings so photos can be found via Advanced Search. Configurable scope (selected, current view, entire catalog), metadata toggles, and extra context options (folder name, date, GPS). See [Help: Analyze and Index](Help-Analyze-and-Index).
+Passes photos to the AI backend to generate keywords, title, caption, and alt text. Simultaneously creates SigLIP2 semantic embeddings so photos can be found via Advanced Search. Optionally detects faces and identifies animal, plant and fungus species on-device (BioCLIP 2), writing the taxonomy to the plugin's metadata fields and, if you ask for it, to a `Species` keyword hierarchy. Configurable scope (selected, current view, entire catalog), metadata toggles, and extra context options (folder name, date, GPS). See [Help: Analyze and Index](Help-Analyze-and-Index).
 
 ### AI Edit Photos
 For each photo, the backend builds a structured Lightroom develop recipe out of your own saved edits — no language model involved — which the plugin applies via the Lightroom SDK. Needs at least five training examples from *Save Edits as AI Training Examples*. Offers per-photo review and can put the edit on a virtual copy instead of the original. See [Help: AI Edit Photos](Help-AI-Edit).

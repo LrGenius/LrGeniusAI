@@ -8,7 +8,7 @@
 //!
 //! **Assets live at their own release tag** (`BIOCLIP_ASSETS_RELEASE_TAG`),
 //! not the SigLIP2 one. The two model families have independent lifecycles:
-//! re-exporting SigLIP2 incompatibly should not force BioCLIP's ~750 MB to be
+//! re-exporting SigLIP2 incompatibly should not force BioCLIP's ~876 MB to be
 //! re-uploaded, and widening the taxa whitelist should not touch SigLIP2. If
 //! the BioCLIP export changes in a way older binaries cannot read, bump both
 //! `.github/workflows/model-assets-bioclip.yml`'s `tag_name` and the constant
@@ -51,8 +51,9 @@ async fn bioclip_status(State(state): State<Arc<AppState>>) -> Json<Value> {
         Json(json!({
             "bioclip": "ready",
             "message": "BioCLIP species model is downloaded and ready.",
-            // None until the head has been loaded once — the plugin shows the
-            // ready state either way, this is only for diagnostics.
+            // Read from the labels file when the head is not resident, so this
+            // does not pull the head into memory just to answer. Diagnostics
+            // only — the plugin shows the ready state either way.
             "model": state.bioclip.model_id(),
         }))
     } else {

@@ -175,8 +175,8 @@ uv run --project scripts --with onnxscript \
     python scripts/export_bioclip2_fp16.py --output-dir /path/to/models/bioclip2
 ```
 
-The script prints the kept taxon count and every asset's size; the target for
-the whole set is <= 800 MB. Verify without re-exporting, and optionally compare
+The script prints the kept taxon count and every asset's size; the whole set
+lands at roughly 880 MB. Verify without re-exporting, and optionally compare
 the pruned head's top-1 against the *full* upstream head on real photos — the
 measurement that justifies the pruning rules:
 
@@ -184,6 +184,19 @@ measurement that justifies the pruning rules:
 uv run --project scripts python scripts/export_bioclip2_fp16.py \
     --verify-only --output-dir /path/to/models/bioclip2 \
     --fixtures /path/to/some/wildlife/photos
+```
+
+Both the export and `--verify-only` score the goldens through one
+`bioclip_preprocess()`, which is what `lrg-ml::bioclip_pre` reproduces — the two
+sides used to preprocess differently and reported cosines around 0.97 that read
+like fp16 damage but were pure measurement error.
+
+Changing the taxa rules does not require re-exporting the tower, which takes
+minutes and only changes when the checkpoint does:
+
+```bash
+uv run --project scripts python scripts/export_bioclip2_fp16.py \
+    --skip-tower --output-dir /path/to/models/bioclip2
 ```
 
 Then point the server at the files:
@@ -196,7 +209,15 @@ export LRG_BIOCLIP_TAXA_JSON=/path/to/models/bioclip2/bioclip2_taxa.json
 
 Without these, `lrg-ml` falls back to
 `~/.cache/lrgenius/models/bioclip2_{image.onnx,taxa.bin,taxa.json}`, which is
-where `POST /bioclip/download/start` puts them.
+where `POST /bioclip/download/start` — and `POST /assets/download/start`, which
+the plugin actually calls — put them. Note the fallback name for the tower is
+`bioclip2_image.onnx`, without the export script's `_fp16` suffix.
+
+Assets are published by `.github/workflows/model-assets-bioclip.yml` to the
+fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v1`.
+**That release does not exist yet**, so the download route reports a 404 until
+the workflow has run once; an export placed in the cache directory by hand works
+in the meantime.
 
 ### InsightFace (face detection/recognition)
 

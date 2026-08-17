@@ -378,7 +378,7 @@ three assets — the ViT-L/14 image tower as fp16 ONNX, a pruned Tree-of-Life
 zero-shot head (`bioclip2_taxa.bin`) and its interned labels
 (`bioclip2_taxa.json`) — from their **own** release tag
 (`bioclip-assets-v1`), independent of the SigLIP2 `model-assets-v1` tag.
-Roughly 750 MB in total.
+Roughly 876 MB in total.
 
 The head is pruned from upstream's 867,455 taxa; see
 `server-rs/scripts/bioclip_taxa_filter.toml` for the rules and for what
@@ -386,9 +386,10 @@ pruning costs at the species rank.
 
 ### `GET /bioclip/status`
 Returns whether the BioCLIP assets are on disk (`bioclip: "ready" | "not_ready"`),
-plus `model` — the head identifier, e.g. `bioclip-2/taxa-v1`, once the model
-has been loaded at least once. Deliberately distinct from `/health`'s
-`species_model`, which reports whether it is currently resident in memory.
+plus `model` — the head identifier, e.g. `bioclip-2/taxa-v2`, read from the
+labels file when the head is not loaded, so it answers without pulling 866 MB
+into memory. Deliberately distinct from `/health`'s `species_model`, which
+reports whether it is currently resident in memory.
 
 ### `POST /bioclip/download/start`
 Triggers a background download of the BioCLIP assets.

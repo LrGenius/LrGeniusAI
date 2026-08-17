@@ -54,6 +54,9 @@ sources = [
 sources = [
   "server-rs/crates/lrg-api/src/routes/*.rs",
   "plugin/LrGeniusAI.lrdevplugin/APISearchIndex.lua",
+  # The page names the release tags the download routes pull assets from, so a
+  # change to how a tag is published belongs in the same review.
+  ".github/workflows/model-assets-bioclip.yml",
 ]
 
 [page."Dev-Server-README.md"]
@@ -64,6 +67,10 @@ sources = [
   "server-rs/crates/lrg-common/src/config.rs",
   "server-rs/crates/lrg-ml/src/model_paths.rs",
   "server-rs/Cargo.toml",
+  # The README documents the export scripts and their --verify-only parity
+  # check, which is exactly what this module has to stay in step with.
+  "server-rs/crates/lrg-ml/src/bioclip_pre.rs",
+  "server-rs/scripts/export_bioclip2_fp16.py",
 ]
 
 [page."Dev-Build-Environment-Setup.md"]
@@ -89,6 +96,24 @@ sources = [
 ]
 
 # --- User-facing help pages, keyed to the task that implements the feature ---
+
+# Getting-Started and Troubleshooting used to be pure point-in-time prose, and
+# were left untracked for that reason. They now walk the reader through the
+# *On-device AI models* download and name the cache directory the models land
+# in, which are moving parts — a page that tells a stuck user to look in the
+# wrong directory is worse than one that says nothing.
+[page."Getting-Started.md"]
+sources = [
+  "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",
+  "plugin/LrGeniusAI.lrdevplugin/OnboardingWizard.lua",
+  "server-rs/crates/lrg-api/src/routes/assets.rs",
+]
+
+[page."Troubleshooting.md"]
+sources = [
+  "server-rs/crates/lrg-api/src/routes/assets.rs",
+  "server-rs/crates/lrg-ml/src/model_paths.rs",
+]
 
 [page."Help-AI-Edit.md"]
 # `routes/edit.rs` is deliberately absent: the plugin no longer reaches the
