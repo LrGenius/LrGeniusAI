@@ -273,14 +273,29 @@ impl TaxaHead {
     }
 
     /// `[kingdom, ..., rank]` names for the node a row belongs to.
+    ///
+    /// Ranks are not always populated: 15.6% of the shipped head has at least
+    /// one blank, most of it the bony fish, which carry no `class` at all in
+    /// TreeOfLife-200M. Callers that render the path must skip the blanks;
+    /// this returns them so [`Self::name_at`] can still ask whether the
+    /// *reported* rank has a name of its own.
     fn path_of(&self, row: usize, rank: usize) -> Vec<&str> {
         (0..=rank)
             .map(|r| self.vocab[r][self.rows[row][r] as usize].as_str())
             .collect()
     }
 
+    /// The row's own name at `rank`, empty when that rank is unpopulated.
+    fn name_at(&self, row: usize, rank: usize) -> &str {
+        self.vocab[rank][self.rows[row][rank] as usize].as_str()
+    }
+
     fn candidate(&self, row: usize, rank: usize, confidence: f32) -> TaxonCandidate {
         let path = self.path_of(row, rank);
+        // Blank ranks are dropped rather than rendered, so a fish reads
+        // `Animalia>Chordata>Perciformes>...` instead of carrying an empty
+        // segment between two separators.
+        let rendered: Vec<&str> = path.iter().copied().filter(|p| !p.is_empty()).collect();
         // Upstream stores the species *epithet* only; the binomial is genus +
         // epithet, exactly as pybioclip's `create_classification_dict` builds
         // it.
@@ -290,7 +305,7 @@ impl TaxaHead {
             path[rank].to_string()
         };
         TaxonCandidate {
-            taxonomy: path.join(">"),
+            taxonomy: rendered.join(">"),
             scientific_name,
             // A common name identifies a species, not a family — reporting
             // "Great Tit" for a genus-rank call would overstate the answer.
@@ -484,17 +499,32 @@ impl BioclipModel {
         }
     }
 
-    /// Identifier for the head currently on disk, e.g. `bioclip-2/taxa-v1`.
+    /// Identifier for the head currently on disk, e.g. `bioclip-2/taxa-v2`.
     ///
     /// Stamped into each photo's `species_model` so a head swap can re-queue
-    /// exactly the photos it invalidates. `None` until the model has loaded
-    /// once — callers treat that as "don't stamp", not as an error.
+    /// exactly the photos it invalidates. `None` only when the labels file is
+    /// missing or unreadable.
+    ///
+    /// Deliberately reads the file rather than reporting the loaded model's
+    /// version: this is called by `/index/check-unprocessed`, which runs
+    /// *before* any indexing and must not be the thing that pulls a 608 MB
+    /// session and a 258 MB head into memory. An earlier version returned
+    /// `None` until the model had loaded once and treated that as "no version
+    /// constraint" — so on a freshly restarted server every stored prediction
+    /// looked current no matter which head produced it, and swapping the head
+    /// re-queued nothing at all.
     pub fn model_id(&self) -> Option<String> {
-        self.taxa_version
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|v| format!("bioclip-2/{v}"))
+        if let Some(v) = self.taxa_version.lock().unwrap().clone() {
+            return Some(format!("bioclip-2/{v}"));
+        }
+        #[derive(serde::Deserialize)]
+        struct VersionOnly {
+            taxa_version: String,
+        }
+        let text = std::fs::read_to_string(&self.paths.taxa_json).ok()?;
+        let parsed: VersionOnly = serde_json::from_str(&text).ok()?;
+        *self.taxa_version.lock().unwrap() = Some(parsed.taxa_version.clone());
+        Some(format!("bioclip-2/{}", parsed.taxa_version))
     }
 
     /// Embed one RGB8 image; NOT L2-normalized (callers normalize, matching
@@ -596,6 +626,19 @@ impl BioclipModel {
                 continue;
             };
             if agg[best_node] < cfg.min_confidence {
+                continue;
+            }
+            // A node can win its rank while having no name — the bony fish all
+            // share one "Chordata, no class assigned" node. Reporting it would
+            // mean an empty `species_scientific_name`, so fall through to the
+            // next coarser rank, which is always populated further up. The
+            // probability mass genuinely sits on that unnamed group, so
+            // substituting some other node at this rank would be a lie; going
+            // coarser is the honest answer.
+            if head
+                .name_at(head.node_repr[rank][best_node] as usize, rank)
+                .is_empty()
+            {
                 continue;
             }
 

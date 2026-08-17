@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import json
+import re
 import struct
 import sys
 import tomllib
@@ -66,7 +67,12 @@ OPSET = 18
 # Bumped whenever the *contents* of the head change in a way that invalidates
 # already-stored per-photo predictions. The backend stamps this into each
 # photo's `species_model` metadata so `check_unprocessed` can re-queue them.
-TAXA_VERSION = "taxa-v1"
+#
+# v2: dropped rows with an unusable genus or species epithet and repaired the
+# 1.73% whose `species` field was a whole binomial or carried a taxonomic
+# authority. Any photo that had been classified onto one of those rows holds a
+# wrong answer, and there is no way to tell which from the stored result alone.
+TAXA_VERSION = "taxa-v2"
 
 RANKS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
 
@@ -77,14 +83,43 @@ TAXA_FORMAT_VERSION = 1
 TAXA_HEADER_STRUCT = "<8sIIIfI"  # magic, version, n_rows, dim, logit_scale_exp, pad
 
 
+def bioclip_preprocess():
+    """The transform BioCLIP 2 is actually used with.
+
+    **Not** `open_clip`'s own transform for this checkpoint. pybioclip
+    deliberately overrides it for TreeOfLife models
+    (`BaseClassifier.load_pretrained_model`: `self.preprocess = preprocess_img
+    if self.model_str in TOL_MODELS else preprocess`), and it is the override
+    the weights are used with in practice — squash to 224x224 rather than
+    resize-and-crop.
+
+    Getting this wrong is not loud. An earlier version of this script verified
+    against `open_clip`'s transform while `testdata/make_bioclip_goldens.py`
+    generated the goldens through pybioclip's, and the mismatch showed up as
+    cosines of 0.97-0.99 that read like fp16 damage to the exported graph. The
+    graph was fine: `lrg-ml`'s own golden test scored 0.999998 against the same
+    file. Both sides now come from this one function.
+    """
+    from torchvision import transforms
+
+    return transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Resize((IMAGE_SIZE, IMAGE_SIZE), antialias=True),
+            transforms.Normalize(
+                mean=(0.48145466, 0.4578275, 0.40821073),
+                std=(0.26862954, 0.26130258, 0.27577711),
+            ),
+        ]
+    )
+
+
 def load_model():
     import open_clip
 
-    model, preprocess = open_clip.create_model_from_pretrained(
-        MODEL_STR, return_transform=True
-    )
+    model = open_clip.create_model(MODEL_STR)
     model.eval()
-    return model, preprocess
+    return model
 
 
 def export_image_tower(model, output_dir: Path) -> Path:
@@ -137,6 +172,76 @@ def download_head() -> tuple[Path, Path]:
         repo_id=TOL_DATAFILE_REPO, filename=TXT_EMB_JSON, repo_type="dataset"
     )
     return Path(npy), Path(labels)
+
+
+# A valid genus is one capitalised word; a valid species epithet is one
+# lowercase word, hyphens allowed (`x-notata` is a real epithet).
+GENUS_RE = re.compile(r"^[A-Z][a-z-]+$")
+EPITHET_RE = re.compile(r"^[a-z][a-z-]*$")
+# Open nomenclature: these mark "not identified to species", so a row carrying
+# one is not an identification and has no business in a classifier's head.
+OPEN_NOMENCLATURE = {"sp", "spp", "cf", "aff", "indet", "nr", "var", "subsp"}
+
+
+def clean_epithet(species: str) -> str | None:
+    """Reduce a raw `species` field to a bare epithet, or `None` to drop it.
+
+    1.73% of the head's rows have a `species` field that is not a bare epithet,
+    and they are wrong in two opposite directions:
+
+        'alpinum Hudson ex Withering, 1801'   epithet first, then the authority
+        'Trigonotarbus schucherti'            a whole binomial, the *original*
+                                              combination, while `genus` holds
+                                              the currently accepted name
+
+    Taking the first token would break the second case and taking the last
+    would break the first. What both have in common is that the epithet is the
+    first token that looks like one: a bare lowercase word. Authorities are
+    capitalised or carry digits and commas, original genera are capitalised,
+    and `sp.`/`cf.` carry a dot — so none of them can be mistaken for it.
+
+    Without this the backend emits 'Lissomartus Trigonotarbus schucherti' as a
+    binomial, and writes it into a keyword.
+    """
+    for token in species.split():
+        if token.rstrip(".").lower() in OPEN_NOMENCLATURE:
+            # An open-nomenclature marker means everything after it is a
+            # specimen code, not a name. Nothing usable is left.
+            return None
+        if EPITHET_RE.match(token):
+            return token
+    return None
+
+
+def clean_rows(names: list, keep: list[int]) -> tuple[list[int], dict[int, str]]:
+    """Drop unusable rows and repair salvageable epithets.
+
+    Returns the surviving row indices plus the epithets to substitute, rather
+    than mutating `names`: the caller also uses those indices to slice the
+    embedding matrix, so the two must not drift apart.
+    """
+    survivors: list[int] = []
+    repaired: dict[int, str] = {}
+    dropped_genus = dropped_species = 0
+    for i in keep:
+        path = names[i][0]
+        if not GENUS_RE.match(path[5]):
+            # 'unclassified Cecidomyiinae', 'Sogdini unplaced', 'Calvittacus ue'
+            dropped_genus += 1
+            continue
+        epithet = clean_epithet(path[6])
+        if epithet is None:
+            dropped_species += 1
+            continue
+        if epithet != path[6]:
+            repaired[i] = epithet
+        survivors.append(i)
+    print(
+        f"  names: dropped {dropped_genus} rows on an unusable genus and "
+        f"{dropped_species} on an unusable species epithet, "
+        f"repaired {len(repaired)} epithets"
+    )
+    return survivors, repaired
 
 
 def live_mask(npy_path: Path) -> np.ndarray:
@@ -283,7 +388,9 @@ def write_taxa_matrix(
     print(f"Wrote taxa matrix -> {dest} ({dest.stat().st_size / 1e6:.1f} MB)")
 
 
-def write_taxa_labels(names: list, keep: list[int], dest: Path) -> None:
+def write_taxa_labels(
+    names: list, keep: list[int], repaired: dict[int, str], dest: Path
+) -> None:
     """Write the kept labels with per-rank string interning.
 
     The upstream JSON repeats every ancestor name on every row — "Animalia"
@@ -301,6 +408,8 @@ def write_taxa_labels(names: list, keep: list[int], dest: Path) -> None:
         ids = []
         for rank_i in range(len(RANKS)):
             value = path[rank_i] if rank_i < len(path) else ""
+            if rank_i == 6 and i in repaired:
+                value = repaired[i]
             vocab = vocabs[rank_i]
             if value not in vocab:
                 vocab[value] = len(vocab)
@@ -327,6 +436,7 @@ def export_head(model, output_dir: Path, rules: dict) -> None:
     npy_path, labels_path = download_head()
     names = json.loads(labels_path.read_text(encoding="utf-8"))
     keep = select_rows(names, rules, live_mask(npy_path))
+    keep, repaired = clean_rows(names, keep)
 
     logit_scale_exp = float(model.logit_scale.exp().detach().float())
     print(f"  logit_scale.exp() = {logit_scale_exp:.4f}")
@@ -334,7 +444,7 @@ def export_head(model, output_dir: Path, rules: dict) -> None:
     write_taxa_matrix(
         npy_path, keep, logit_scale_exp, output_dir / "bioclip2_taxa.bin"
     )
-    write_taxa_labels(names, keep, output_dir / "bioclip2_taxa.json")
+    write_taxa_labels(names, keep, repaired, output_dir / "bioclip2_taxa.json")
 
 
 # --- verification -----------------------------------------------------------
@@ -401,13 +511,6 @@ def verify_embeddings(output_dir: Path, goldens_path: Path, preprocess) -> bool:
         sess_options=session_options,
         providers=["CPUExecutionProvider"],
     )
-
-    if preprocess is None:
-        print(
-            "  (image goldens skipped in --verify-only mode — they need "
-            "open_clip's preprocess transform, not just the ONNX graph)"
-        )
-        return True
 
     from PIL import Image
 
@@ -521,6 +624,13 @@ def main():
         help="Skip export, only verify existing output-dir contents",
     )
     parser.add_argument(
+        "--skip-tower",
+        action="store_true",
+        help="Re-export only the taxonomy head, reusing the existing ONNX tower. "
+        "The tower takes minutes and only changes when the checkpoint does, "
+        "while the head changes whenever the taxa rules do.",
+    )
+    parser.add_argument(
         "--fixtures",
         type=Path,
         default=None,
@@ -540,13 +650,16 @@ def main():
     )
     args = parser.parse_args()
 
-    preprocess = None
+    preprocess = bioclip_preprocess()
     if not args.verify_only:
         rules = tomllib.loads(args.rules.read_text())["filter"]
-        model, preprocess = load_model()
+        model = load_model()
         args.output_dir.mkdir(parents=True, exist_ok=True)
         export_head(model, args.output_dir, rules)
-        export_image_tower(model, args.output_dir)
+        if args.skip_tower:
+            print("Skipping the image tower export (--skip-tower); reusing the existing one")
+        else:
+            export_image_tower(model, args.output_dir)
 
     total = sum(
         (args.output_dir / n).stat().st_size

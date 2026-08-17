@@ -128,22 +128,33 @@ fn classification_is_a_consistent_lineage() {
     let rank = pred.rank.expect("a zero floor must always produce a rank");
     let best = pred.best.expect("a rank implies a best candidate");
 
-    // The chain has exactly one element per rank down to the reported one:
-    // that is what makes a "genus" answer mean the genus *and its ancestry*,
-    // not a bare name.
+    // The chain carries the reported taxon *and its ancestry*, never a bare
+    // name. It is `rank + 1` elements minus however many ancestor ranks the
+    // dataset leaves blank — 15.6% of the head has at least one, and the bony
+    // fish have no `class` at all — so this is an upper bound, not equality.
     let depth = best.taxonomy.split('>').count();
-    assert_eq!(
-        depth,
-        rank + 1,
-        "taxonomy {:?} at rank {}",
+    assert!(
+        depth >= 1 && depth <= rank + 1,
+        "taxonomy {:?} has {depth} elements at rank {}",
         best.taxonomy,
         RANKS[rank]
     );
+    // The blanks must be *dropped*, not rendered: an empty segment would mean
+    // a `>>` in the metadata field and an empty keyword in the catalog.
+    assert!(
+        best.taxonomy.split('>').all(|p| !p.is_empty()),
+        "taxonomy {:?} carries an empty segment",
+        best.taxonomy
+    );
+    // ...and the reported rank itself always has a name, which is the whole
+    // point of skipping a rank whose winning node is unnamed.
+    assert!(!best.scientific_name.is_empty());
     assert!(best.confidence > 0.0 && best.confidence <= 1.0);
 
     // Alternatives sit at the same rank and never outrank the winner.
     for alt in &pred.alternatives {
-        assert_eq!(alt.taxonomy.split('>').count(), depth);
+        assert!(alt.taxonomy.split('>').all(|p| !p.is_empty()));
+        assert!(!alt.scientific_name.is_empty());
         assert!(alt.confidence <= best.confidence);
         assert_ne!(alt.taxonomy, best.taxonomy);
     }
