@@ -248,6 +248,11 @@ return {
 			searchable = true,
 			browsable = true,
 		},
+		-- Not necessarily English: GBIF's vernacular data has no reliable
+		-- per-language coverage, so where no English name exists the backend
+		-- passes through whatever language GBIF listed first (Swedish and
+		-- Danish names both show up on European wildlife). `speciesScientificName`
+		-- is the dependable field; this one is a convenience.
 		{
 			id = "speciesCommonName",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesCommonName=Species (common name)"),

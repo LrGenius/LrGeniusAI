@@ -157,10 +157,20 @@ pub const CANDID_PROMPT_PAIRS: &[(&str, &str)] = &[
 /// asking BioCLIP about" well enough to skip most of a mixed catalog.
 ///
 /// Written to separate *subject*, not *setting*. "A photo taken outdoors" would
-/// pass every landscape; "an animal fills the frame" is the actual
+/// pass every landscape; "an organism fills the frame" is the actual
 /// precondition for a useful species call. The negatives name the things a
 /// general photo library is mostly made of, so a portrait scores low even when
 /// it was shot in a forest.
+///
+/// **Every pair names both animals and plants**, and that is not redundancy —
+/// it is the fix for a measured bug. An earlier version had one animal pair,
+/// one plant pair and one animal-leaning pair. Because [`IqaPrompts::score`]
+/// *averages* over pairs, a frame-filling flower scored high on the one plant
+/// pair and low on the other two, landing under the threshold: a live run over
+/// 38 photos rejected a macro of an Allium and a bed of roses while correctly
+/// rejecting a bronze sculpture. A pair that only half the organisms can
+/// answer drags down the mean for the other half, so each one has to be a
+/// complete "is there an organism here" question.
 ///
 /// Deliberately generous rather than precise: a false positive costs one
 /// wasted BioCLIP pass and a low-confidence result the rank floor discards, a
@@ -168,15 +178,15 @@ pub const CANDID_PROMPT_PAIRS: &[(&str, &str)] = &[
 /// threshold in the indexing route is set with that asymmetry in mind.
 pub const ORGANISM_PROMPT_PAIRS: &[(&str, &str)] = &[
     (
-        "a photo of a wild animal.",
-        "a photo of people or a man-made scene.",
+        "a photo of a living animal or plant.",
+        "a photo of people, buildings, or objects.",
     ),
     (
-        "a close-up photo of a plant, flower, or fungus.",
-        "a photo of a building, vehicle, or interior.",
+        "an animal, bird, insect, flower, or fungus is the subject of this photo.",
+        "the subject of this photo is a person or something man-made.",
     ),
     (
-        "a bird, insect, or other creature is the subject of this photo.",
+        "a close-up photo of a living thing in nature.",
         "there is no animal or plant in this photo.",
     ),
 ];

@@ -86,6 +86,20 @@ Photos where nothing cleared the confidence floor (including everything the
 pre-filter skipped) get `Species rank = none` and empty name fields. They still
 count as checked and are not re-examined on the next run.
 
+### Common names are not always in English
+
+The common name comes from GBIF's vernacular-name data, which has no reliable
+per-language coverage. Where no English name exists, whatever language GBIF
+lists first is used — so a run over European wildlife will produce Swedish and
+Danish names among the English ones (`honungslök` for *Allium siculum*,
+`Almindelig kuglebærerflue` for a fly). This is upstream data, not a setting.
+
+**The scientific name is always correct and always present**, so use *Species
+(scientific name)* when you need something dependable, and treat *Species
+(common name)* as a convenience. The keyword branch below has the same
+property: the leaf uses the common name when there is one, with the scientific
+name attached as a synonym, so a search for the binomial always finds the photo.
+
 ### Keywords
 
 With *Also write the taxonomy as keywords* on, the identification is
