@@ -1,6 +1,6 @@
 # Help: Save Edits as AI Training Examples
 
-The **Save Edits as AI Training Examples** workflow lets you teach LrGeniusAI your personal editing style. Your current Lightroom develop settings for selected photos are saved to the backend as few-shot examples. The next time you run **AI Edit Photos**, these examples are injected into the AI prompt as context, so the AI produces results closer to your style.
+The **Save Edits as AI Training Examples** workflow lets you teach LrGeniusAI your personal editing style. Your current Lightroom develop settings for selected photos are saved to the backend as labeled examples. They are what **AI Edit Photos** builds its recipes from — without them AI Edit has nothing to work with and refuses to run, so this workflow is the prerequisite for that one, not an optional refinement of it.
 
 ## How to use it
 
@@ -38,28 +38,31 @@ A free-text summary of what this edit style represents. Helps the AI understand 
 
 ## How it affects AI Edit
 
-Training examples feed two different mechanisms:
+Training examples are the entire input to **AI Edit Photos**. The backend finds
+the closest examples by image similarity, re-scores them on exposure, scene type
+and time of day, and interpolates their develop settings into a recipe for the
+photo in front of it. No language model is involved.
 
-**As few-shot context for the LLM.** When you run **AI Edit Photos** with a
-cloud or local model, the backend retrieves the stored examples most similar to
-the photo being edited and puts their actual develop values into the prompt, so
-the model has your numbers to anchor on rather than only the style preset.
+That has two consequences worth knowing:
 
-**As the Style Engine.** The backend can also produce an edit with no LLM at
-all: it finds the closest training examples by image similarity, re-scores them
-on exposure, scene type and time of day, and interpolates their develop
-settings. This needs at least **five** training examples before it will return
-anything, and it gets noticeably better with more.
+- **Below five examples, AI Edit will not run.** It stops in the plugin with a
+  pointer back to this workflow. Five is the floor; the style profile is
+  reported as *Building up* below ten and *Active* from fifty, and the match
+  quality follows that curve.
+- **Variety matters as much as volume.** Matching is per photo, so a profile
+  built only from bright studio work has little to offer a night shot. Train on
+  the kinds of photos you actually want edited.
 
-Both paths match examples by image similarity, so a training photo has to have
-been indexed with **Enable smart photo search** for it to be findable. Saving an
-example for a photo without an embedding still works, but that example will
-never be retrieved — the plugin shows a warning when this happens.
+Matching runs on image similarity, so a training photo has to have been indexed
+with **Enable smart photo search** for it to be findable. Saving an example for
+a photo without an embedding still works, but that example will never be
+retrieved — the plugin shows a warning when this happens.
 
 The same applies to the photo being edited: if it is not indexed, there is no
-embedding to compare your saved edits against. AI Edit then falls back to the
-plain style preset and says so in the result, rather than silently producing a
-generic edit.
+embedding to compare your saved edits against. The backend then falls back to
+scoring recent examples on exposure, scene and time of day alone, which is a
+weaker match — the review dialog reports the lower confidence rather than
+hiding it.
 
 ## Raw and non-raw examples are kept apart
 

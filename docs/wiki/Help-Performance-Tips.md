@@ -12,7 +12,7 @@ which, and what you can tune to make the slow ones faster.
 | Feature | Calls an LLM? | What drives the time |
 |---|---|---|
 | **Analyze & Index — AI metadata** (keywords/title/caption/alt text) | **Yes, once per photo** | Model choice, export size, prompt options |
-| **AI Edit Photos** | **Yes, once per photo** | Model choice, export size, review dialog |
+| **AI Edit Photos** | No — matches your saved edits locally | Export size, review dialog |
 | **Deduplicate Keyword Synonyms** | Optional, once per cluster (not per photo) | Number of keyword clusters, not catalog size |
 | Analyze & Index — **search embeddings** (SigLIP2) | No — local ONNX model, always | Photo count only; same speed regardless of LLM choice |
 | **Cull Photos** | No | Runs on metrics already computed during indexing |
@@ -20,7 +20,7 @@ which, and what you can tune to make the slow ones faster.
 | **Find Similar Images** | No | Vector lookup (CLIP) or perceptual hash (phash) |
 | **Advanced Search** | No | Vector lookup against existing embeddings |
 
-The practical upshot: **Analyze & Index and AI Edit are the only features
+The practical upshot: **Analyze & Index is the only per-photo feature
 where your LLM choice matters for speed.** Everything else is bounded by
 local compute on the backend machine and is fast regardless of whether you
 picked a cheap cloud model or a big local one — but those features all
@@ -184,9 +184,10 @@ These are secondary compared to §2–4, but worth knowing:
    LLM at request time, so they're cheap to re-run as often as you like once
    indexing is done.
 6. **For AI Edit**, keep **Review each proposed edit** on until you've
-   validated a model+preset combination on your shooting style, then turn it
-   off for large batches — it doesn't change compute cost, but it does gate
-   throughput on how fast you click through the review dialog.
+   validated the results against your shooting style, then turn it off for
+   large batches — it doesn't change compute cost, but it does gate throughput
+   on how fast you click through the review dialog. The generation itself is
+   local and needs no LLM at all.
 
 ---
 
