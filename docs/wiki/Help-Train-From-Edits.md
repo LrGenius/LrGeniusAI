@@ -89,4 +89,4 @@ have stops working.
 - Save at least 5 well-edited photos per style — that is the Style Engine's minimum — and 10–20 for good results. More diverse examples generalize better.
 - Use consistent labels per shooting genre: one label for weddings, one for portraits, one for landscapes — rather than mixing everything.
 - Re-run the workflow after editing sessions to keep examples fresh and representative.
-- Training examples do not replace the **Overall look** preset — they augment it. Combining a matching preset with few-shot examples gives the best results.
+- Training examples are not one input among several — they are the only one. AI Edit has no look presets, no style-strength slider and no prompt to fall back on, so whatever the examples say is what the recipe does.
