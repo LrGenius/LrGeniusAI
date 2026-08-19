@@ -108,9 +108,11 @@ These help explain why a specific frame was chosen as a pick or flagged as a rej
 ## "Some culling signals are missing"
 
 When the selected photos have no culling data yet, the plugin offers to prepare
-them — a fast pass that computes only what culling reads. If a signal could not
-be computed, the plugin says so before the culling run starts instead of quietly
-grading photos without it. The usual cause is that the on-device models are not
+them — a fast pass that computes only what culling reads. It never runs a
+language model, so when the backend is on this machine it hands over a group of
+photos at a time and they are read and measured across several CPU cores rather
+than one after another. If a signal could not be computed, the plugin says so
+before the culling run starts instead of quietly grading photos without it. The usual cause is that the on-device models are not
 downloaded yet: open **File → Plug-in Manager → LrGeniusAI** and press
 **Download AI models**, then run culling again. Culling still works in the
 meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive.

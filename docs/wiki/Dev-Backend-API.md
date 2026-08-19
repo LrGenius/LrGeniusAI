@@ -94,10 +94,18 @@ own photo's `results` element as `warnings`, so a grouped caller can attribute i
 Indexes photos using server-side file paths instead of uploading image data (for local-backend
 setups where the server has filesystem access).
 
-Files are read one at a time, immediately before each is normalised, so a group of raw
-originals is never all resident at once — the normalised JPEG is a few hundred KB and the raw
-bytes are released the moment it exists. A file that cannot be read is reported as a failure
-against its own `photo_id` in `results`, not as an anonymous error for the batch.
+A bounded number of files is read and normalised at a time, so a group of raw originals is
+never all resident at once — the normalised JPEG is a few hundred KB and the raw bytes are
+released the moment it exists. Decode is pure CPU and parallel across the group, which for a
+run without `metadata` is the largest cost in the request; `GENIUSAI_INDEX_DECODE_CONCURRENCY`
+sets how many run at once (default `min(3, cores)`, `1` restores the strictly sequential
+behaviour). Results come back in submission order regardless, so a file that cannot be read is
+reported as a failure against its own `photo_id` in `results`, not as an anonymous error for
+the batch.
+
+`llm_batch_size` is only meaningful when the run generates metadata. The plugin sends it as
+the group size for a `llamacpp` run, and omits it otherwise — a group formed for decode
+throughput must not override a provider's own preferred batch size.
 
 ### `POST /get`
 Returns stored metadata and embedding status for one or more `photo_id` values.

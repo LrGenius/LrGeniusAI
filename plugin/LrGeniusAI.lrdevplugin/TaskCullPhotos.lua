@@ -160,57 +160,164 @@ local function cullPrepare(missingIds, photoById, progressScope)
 	local warningsList = {}
 	local warningsTotal = 0
 
-	for i, photoId in ipairs(missingIds) do
+	-- `warningsTotal` counts occurrences so the dialog can say "and N more",
+	-- while `warningsList` holds each distinct message once.
+	--
+	-- The backend's request-level `warnings` is the union of the per-photo
+	-- lists, so counting an occurrence from both would report roughly twice as
+	-- many as happened. Per-photo entries are counted each time; a request-level
+	-- one is only counted if nothing else has already reported it, which keeps
+	-- a genuinely request-scoped warning from being dropped.
+	local function noteWarnings(list, countEach)
+		if type(list) ~= "table" then
+			return
+		end
+		for _, w in ipairs(list) do
+			local seen = warningsSeen[w]
+			if not seen then
+				warningsSeen[w] = true
+				table.insert(warningsList, w)
+			end
+			if countEach or not seen then
+				warningsTotal = warningsTotal + 1
+			end
+		end
+	end
+
+	-- Rebuilt per photo rather than hoisted: exposure_bias is the one per-photo
+	-- field this fast path carries, and it is what lets the backend recognise
+	-- an exposure bracket instead of nominating most of it for deletion.
+	-- Sharing one table across the loop would give every photo the first one's
+	-- compensation.
+	local function indexOptionsFor(photo)
+		local indexOptions = { tasks = { "cull" }, regenerate_metadata = false }
+		local exposureBias = photo:getRawMetadata("exposureBias")
+		if type(exposureBias) == "number" then
+			indexOptions.exposure_bias = exposureBias
+		end
+		return indexOptions
+	end
+
+	-- One photo on its own. Also the fallback for anything a group did not
+	-- come back with, so a grouped request that fails outright costs nothing
+	-- beyond the retry.
+	local function prepareOne(photoId, photo)
+		-- `result` is the decoded response on success and an error string on
+		-- failure; both matter here, so it is read either way.
+		local ok, result
+		if byReference then
+			local path = photo:getRawMetadata("path")
+			ok, result = SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, path, indexOptionsFor(photo))
+		else
+			local exported = SearchIndexAPI.exportPhotoForIndexing(photo)
+			if exported then
+				ok, result = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exported, indexOptionsFor(photo))
+				LrFileUtils.delete(exported)
+			else
+				ok, result = false, "could not export photo for upload"
+			end
+		end
+		if ok then
+			if type(result) == "table" then
+				-- A single-photo request: its request-level list is that
+				-- photo's own warnings.
+				noteWarnings(result.warnings, true)
+			end
+			return true
+		end
+		log:warn("Cull prepare failed for " .. tostring(photoId) .. ": " .. tostring(result))
+		return false
+	end
+
+	-- `tasks = {"cull"}` never reaches an LLM, so the group is sized for the
+	-- server's decode throughput rather than a context window. Grouping only
+	-- pays off when the backend reads the originals itself; the upload path
+	-- still sends one exported JPEG at a time.
+	local groupSize = Util.groupedBatchSize(nil, byReference, byReference, prefs and prefs.indexBatchSize, false)
+
+	local index = 1
+	while index <= total do
 		if progressScope and progressScope:isCanceled() then
 			return processed, nil
 		end
-		local photo = photoById[photoId]
-		if photo then
-			-- Rebuilt per photo rather than hoisted: exposure_bias is the one
-			-- per-photo field this fast path carries, and it is what lets the
-			-- backend recognise an exposure bracket instead of nominating most
-			-- of it for deletion. Sharing one table across the loop would give
-			-- every photo the first one's compensation.
-			local indexOptions = { tasks = { "cull" }, regenerate_metadata = false }
-			local exposureBias = photo:getRawMetadata("exposureBias")
-			if type(exposureBias) == "number" then
-				indexOptions.exposure_bias = exposureBias
+
+		-- Photos the catalog no longer has still advance the counter, so the
+		-- progress bar stays tied to position in `missingIds`.
+		local chunk = {}
+		while #chunk < groupSize and index <= total do
+			local photoId = missingIds[index]
+			local photo = photoById[photoId]
+			if photo then
+				table.insert(chunk, { photoId = photoId, photo = photo })
 			end
-			-- `result` is the decoded response on success and an error string
-			-- on failure; both matter here, so it is read either way.
-			local ok, result
-			if byReference then
-				local path = photo:getRawMetadata("path")
-				ok, result = SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, path, indexOptions)
-			else
-				local exported = SearchIndexAPI.exportPhotoForIndexing(photo)
-				if exported then
-					ok, result = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exported, indexOptions)
-					LrFileUtils.delete(exported)
+			index = index + 1
+		end
+
+		local outcomes = {}
+		if byReference and #chunk > 1 then
+			local entries = {}
+			for _, item in ipairs(chunk) do
+				local path = item.photo:getRawMetadata("path")
+				if path then
+					table.insert(entries, {
+						photoId = item.photoId,
+						filePath = path,
+						options = indexOptionsFor(item.photo),
+					})
+				end
+			end
+			if #entries > 0 then
+				if progressScope then
+					progressScope:setCaption(
+						LOC(
+							"$$$/LrGeniusAI/CullTask/PrepProgress=Preparing ^1/^2...",
+							tostring(index - 1),
+							tostring(total)
+						)
+					)
+				end
+				local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, {
+					tasks = { "cull" },
+					regenerate_metadata = false,
+				})
+				-- A transport-level failure has no per-photo detail, so every
+				-- photo in the chunk falls through to its own request rather
+				-- than being written off on the group's behalf.
+				if type(response) == "table" then
+					noteWarnings(response.warnings, false)
+					outcomes = Util.resultsByPhotoId(response.results)
 				else
-					ok, result = false, "could not export photo for upload"
+					log:warn(
+						"Grouped cull prepare failed (" .. tostring(response) .. "); falling back to single photos"
+					)
 				end
-			end
-			if ok then
-				processed = processed + 1
-				if type(result) == "table" and type(result.warnings) == "table" then
-					for _, w in ipairs(result.warnings) do
-						warningsTotal = warningsTotal + 1
-						if not warningsSeen[w] then
-							warningsSeen[w] = true
-							table.insert(warningsList, w)
-						end
-					end
+				if not ok then
+					log:warn("Grouped cull prepare reported failures; affected photos fall back to single sends")
 				end
-			else
-				failures = failures + 1
-				log:warn("Cull prepare failed for " .. tostring(photoId) .. ": " .. tostring(result))
 			end
 		end
+
+		for _, item in ipairs(chunk) do
+			local outcome = outcomes[item.photoId]
+			if outcome == nil then
+				if prepareOne(item.photoId, item.photo) then
+					processed = processed + 1
+				else
+					failures = failures + 1
+				end
+			elseif outcome.success then
+				processed = processed + 1
+				noteWarnings(outcome.warnings, true)
+			else
+				failures = failures + 1
+				log:warn("Cull prepare failed for " .. tostring(item.photoId) .. ": " .. tostring(outcome.error))
+			end
+		end
+
 		if progressScope then
-			progressScope:setPortionComplete(i, total)
+			progressScope:setPortionComplete(index - 1, total)
 			progressScope:setCaption(
-				LOC("$$$/LrGeniusAI/CullTask/PrepProgress=Preparing ^1/^2...", tostring(i), tostring(total))
+				LOC("$$$/LrGeniusAI/CullTask/PrepProgress=Preparing ^1/^2...", tostring(index - 1), tostring(total))
 			)
 		end
 		LrTasks.yield()

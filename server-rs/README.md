@@ -376,6 +376,18 @@ in MiB:
 | `GENIUSAI_LANCE_INDEX_CACHE_MB` | 128 |
 | `GENIUSAI_LANCE_METADATA_CACHE_MB` | 128 |
 
+Indexing reads and normalises several photos at once, which is the other
+place a batch can grow its peak: that many originals — 25-50 MB apiece for
+raw — are resident before any of them has been shrunk to a normalised JPEG.
+
+| Env var | Default |
+|---|---|
+| `GENIUSAI_INDEX_DECODE_CONCURRENCY` | `min(3, cores)` |
+
+Decode is pure CPU and by far the largest sequential cost of a batch without
+an LLM in it, so this trades wall time against peak memory directly. `1`
+restores the one-at-a-time behaviour.
+
 The other half of memory behaviour during a long indexing run is
 compaction — see `Store::optimize_all` and the constants above it. To
 reproduce and measure the write-path memory profile without Lightroom in
