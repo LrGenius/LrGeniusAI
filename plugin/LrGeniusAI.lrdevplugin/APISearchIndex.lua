@@ -49,6 +49,7 @@ local ENDPOINTS = {
 	START_BIOCLIP_DOWNLOAD = "/bioclip/download/start",
 	STATUS_BIOCLIP_DOWNLOAD = "/bioclip/download/status",
 	BIOCLIP_STATUS = "/bioclip/status",
+	SPECIES_LINKS = "/species/links",
 	ASSETS_STATUS = "/assets/status",
 	START_ASSETS_DOWNLOAD = "/assets/download/start",
 	STATUS_ASSETS_DOWNLOAD = "/assets/download/status",
@@ -3982,6 +3983,47 @@ function SearchIndexAPI.isBioclipReady()
 	end
 	log:error("isBioclipReady: Unknown error")
 	return false, "Unknown error"
+end
+
+---
+-- Resolves a taxon name to species-database links.
+--
+-- The backend does the resolving (GBIF usage key, iNaturalist taxon id) and
+-- caches the result on disk, so this is one localhost round trip per distinct
+-- taxon per machine — the network calls behind it happen once, ever.
+--
+-- Short timeout on purpose: this runs inside the metadata write for every
+-- identified photo, and a slow or absent link is never worth stalling an
+-- indexing run for. On timeout the caller falls back to search URLs.
+--
+-- @param name string scientific name
+-- @param rank string|nil `species`, `genus`, ... — narrows both lookups
+-- @param lang string|nil two-letter language for Wikipedia and common names
+-- @return table|nil `{ urls = {...}, gbif_key = n, inat_id = n, resolved = bool }`
+-- @return string|nil error
+--
+function SearchIndexAPI.getSpeciesLinks(name, rank, lang)
+	if type(name) ~= "string" or name == "" then
+		return nil, "no name"
+	end
+	local params = { name = _urlEncode(name) }
+	if type(rank) == "string" and rank ~= "" and rank ~= "none" then
+		params.rank = _urlEncode(rank)
+	end
+	if type(lang) == "string" and lang ~= "" then
+		params.lang = _urlEncode(lang)
+	end
+	local url = buildUrlWithParams(getBaseUrl() .. ENDPOINTS.SPECIES_LINKS, params)
+	local res, err = _request("GET", url, nil, 20)
+	if err then
+		local errStr = (type(err) == "string") and err or "unknown"
+		log:trace("getSpeciesLinks failed for " .. name .. ": " .. errStr)
+		return nil, errStr
+	end
+	if type(res) == "table" and type(res.links) == "table" then
+		return res.links
+	end
+	return nil, "unexpected response"
 end
 
 ---

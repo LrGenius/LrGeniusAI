@@ -75,6 +75,31 @@ checked:
 All five are searchable, so you can build a Smart Collection on e.g.
 `Species rank` is `species`, or on a family name in `Species taxonomy`.
 
+### Looking the species up on the web
+
+Two more fields — **Species on iNaturalist** and **Species on Wikipedia** —
+hold a link, and Lightroom draws them with a button that opens the page in your
+browser. iNaturalist is the one to click when you want to check the
+identification against photos, range maps and similar-looking species;
+Wikipedia is the one for what the organism actually is.
+
+The links point at the taxon's own page, not at a search: the backend resolves
+the scientific name against [GBIF](https://www.gbif.org) and
+[iNaturalist](https://www.inaturalist.org) — both free, and no account is
+needed — and remembers the answer, so each taxon is looked up once per machine
+and never again. If the lookup cannot be made (no internet at the time, or a
+name neither database carries), the fields hold a search link on the same site
+instead, which lands you one click away.
+
+*Look-up links in* picks the Wikipedia edition and the language iNaturalist
+reports common names in. **Automatic** follows Lightroom's own interface
+language. The identification itself is language-independent — this only changes
+which article opens.
+
+Both fields are filled in as photos are analyzed, so photos identified before
+this feature existed have them empty; re-running *Analyze & Index* over them,
+or *Retrieve Metadata from Backend*, fills them in.
+
 ### Why the answer is sometimes just "Aves"
 
 The model reports the **deepest rank it is actually confident about**. A clear

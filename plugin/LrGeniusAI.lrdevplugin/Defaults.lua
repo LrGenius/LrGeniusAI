@@ -44,6 +44,31 @@ Defaults.speciesPrefilter = true
 -- which is a bigger commitment and exports with the file.
 Defaults.speciesKeywords = false
 
+-- Language for the iNaturalist and Wikipedia links written into the Metadata
+-- panel. "auto" follows Lightroom's own interface language; anything else is a
+-- Wikipedia subdomain. Only affects which article a link opens — the
+-- identification itself is language-independent.
+Defaults.speciesLinkLang = "auto"
+
+-- Offered in the Analyze & Index dialog. Not the same list as
+-- `Defaults.generateLanguages`: that one names languages for an LLM to write
+-- in, these are Wikipedia subdomains, and the value has to be the subdomain.
+Defaults.speciesLinkLanguages = {
+	{ title = "Automatic (interface language)", value = "auto" },
+	{ title = "English", value = "en" },
+	{ title = "Deutsch", value = "de" },
+	{ title = "Français", value = "fr" },
+	{ title = "Español", value = "es" },
+	{ title = "Italiano", value = "it" },
+	{ title = "Nederlands", value = "nl" },
+	{ title = "Português", value = "pt" },
+	{ title = "Svenska", value = "sv" },
+	{ title = "Polski", value = "pl" },
+	{ title = "Русский", value = "ru" },
+	{ title = "日本語", value = "ja" },
+	{ title = "中文", value = "zh" },
+}
+
 Defaults.defaultGenerateLanguage = "English"
 
 Defaults.generateLanguages = { "English", "German", "French", "Spanish", "Italian", "Norwegian" }

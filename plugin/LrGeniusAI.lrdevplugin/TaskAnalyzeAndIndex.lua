@@ -30,6 +30,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.enableSpecies = (prefs.enableSpecies or false) and props.bioclipReady
 	props.speciesPrefilter = prefs.speciesPrefilter ~= false -- default true
 	props.speciesKeywords = prefs.speciesKeywords or Defaults.speciesKeywords
+	props.speciesLinkLang = prefs.speciesLinkLang or Defaults.speciesLinkLang
 	props.speciesMinConfidence = prefs.speciesMinConfidence or Defaults.speciesMinConfidence
 	-- Vertex AI is disabled in the GUI; the backend code is untouched.
 	props.enableVertexAI = false
@@ -246,6 +247,21 @@ local function showAnalyzeAndIndexDialog(ctx)
 							title = LOC(
 								"$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesKeywords=Also write the taxonomy as keywords"
 							),
+							enabled = bind("enableSpecies"),
+						}),
+					}),
+					-- The identification is language-independent; this only picks
+					-- which Wikipedia edition the Metadata panel's link opens,
+					-- and which language iNaturalist reports the common name in.
+					f:row({
+						f:spacer({ width = 20 }),
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesLinkLang=Look-up links in:"),
+							enabled = bind("enableSpecies"),
+						}),
+						f:popup_menu({
+							value = bind("speciesLinkLang"),
+							items = Defaults.speciesLinkLanguages,
 							enabled = bind("enableSpecies"),
 						}),
 					}),
@@ -636,6 +652,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.enableSpecies = props.enableSpecies
 		prefs.speciesPrefilter = props.speciesPrefilter
 		prefs.speciesKeywords = props.speciesKeywords
+		prefs.speciesLinkLang = props.speciesLinkLang
 		-- Vertex AI is disabled in the GUI; the backend code is untouched.
 		-- prefs.enableVertexAI = props.enableVertexAI
 		prefs.enableImportBeforeIndex = props.enableImportBeforeIndex

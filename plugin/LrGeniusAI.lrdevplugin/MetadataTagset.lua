@@ -28,6 +28,8 @@ return {
 		_PLUGIN.id .. ".speciesScientificName",
 		_PLUGIN.id .. ".speciesRank",
 		_PLUGIN.id .. ".speciesConfidence",
+		_PLUGIN.id .. ".speciesInatUrl",
+		_PLUGIN.id .. ".speciesWikipediaUrl",
 		"com.adobe.separator",
 		{ _PLUGIN.id .. ".photoContext", height_in_lines = 5 },
 	},

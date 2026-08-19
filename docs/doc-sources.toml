@@ -132,6 +132,12 @@ sources = [
   "server-rs/crates/lrg-api/src/routes/index_upload.rs",
   "server-rs/crates/lrg-ml/src/bioclip.rs",
   "server-rs/scripts/bioclip_taxa_filter.toml",
+  # The species half of the page documents the fields written into the
+  # Metadata panel, including the two clickable look-up links and where their
+  # URLs come from.
+  "plugin/LrGeniusAI.lrdevplugin/SpeciesLinks.lua",
+  "plugin/LrGeniusAI.lrdevplugin/MetadataProvider.lua",
+  "server-rs/crates/lrg-api/src/species_links.rs",
 ]
 
 [page."Help-Cull-Photos.md"]

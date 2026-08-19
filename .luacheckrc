@@ -25,6 +25,7 @@ globals = {
     "PromptConfigProvider",
     "SearchIndexAPI",
     "SkipPhotoContextDialog",
+    "SpeciesLinks",
     "DevelopEditManager",
     "TaskUpdate"
 }
@@ -42,6 +43,7 @@ read_globals = {
     "LrFileUtils",
     "LrFunctionContext",
     "LrHttp",
+    "LrLocalization",
     "LrMD5",
     "LrPathUtils",
     "LrProgressScope",

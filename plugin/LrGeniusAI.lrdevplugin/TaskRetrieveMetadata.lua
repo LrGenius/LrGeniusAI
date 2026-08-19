@@ -269,6 +269,13 @@ LrTasks.startAsyncTask(function()
 					-- Apply metadata
 					if shouldApply then
 						MetadataManager.applyMetadata(photo, retrievedData, validatedData, options)
+						-- Species rides along, but only into the metadata
+						-- fields: this is the path that backfills photos
+						-- identified before a field existed (the iNaturalist
+						-- and Wikipedia links, most recently). Keywords stay
+						-- off — retrieving stored metadata should not reshape
+						-- the catalog's keyword tree behind the user's back.
+						MetadataManager.applySpecies(photo, retrievedData.species, { applySpeciesKeywords = false })
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 
