@@ -9,7 +9,6 @@ globals = {
     "_PLUGIN",
     "prefs",
     "log",
-    "recipe",
     "JSON",
     "Util",
     "ErrorHandler",
@@ -17,6 +16,7 @@ globals = {
     "UpdateCheck",
     "Defaults",
     "KeywordConfigProvider",
+    "LocalModelCatalog",
     "MetadataManager",
     "OnboardingWizard",
     "PhotoContextData",
@@ -25,6 +25,7 @@ globals = {
     "PromptConfigProvider",
     "SearchIndexAPI",
     "SkipPhotoContextDialog",
+    "SpeciesLinks",
     "DevelopEditManager",
     "TaskUpdate"
 }
@@ -42,6 +43,7 @@ read_globals = {
     "LrFileUtils",
     "LrFunctionContext",
     "LrHttp",
+    "LrLocalization",
     "LrMD5",
     "LrPathUtils",
     "LrProgressScope",

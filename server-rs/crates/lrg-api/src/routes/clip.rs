@@ -19,6 +19,7 @@
 //! backward compatible with older binaries, bump both the workflow's
 //! tag and `MODEL_ASSETS_RELEASE_TAG` together (e.g. `model-assets-v2`).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
@@ -28,6 +29,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::state::AppState;
+
+/// Key for this download group in `AppState::model_download`.
+const DOWNLOAD_KEY: &str = "clip";
 
 const RELEASE_REPO: &str = "LrGenius/LrGeniusAI";
 const MODEL_ASSETS_RELEASE_TAG: &str = "model-assets-v1";
@@ -52,13 +56,44 @@ async fn clip_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
+/// Progress for one download group. Shared with `routes::llm`, which tracks
+/// GGUF downloads under its own key in the same map.
 #[derive(Clone, Serialize)]
 pub struct ModelDownloadStatus {
-    status: &'static str,
-    progress: u64,
-    total: u64,
-    current_file: Option<String>,
-    error: Option<String>,
+    pub(crate) status: &'static str,
+    pub(crate) progress: u64,
+    pub(crate) total: u64,
+    pub(crate) current_file: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
+impl ModelDownloadStatus {
+    pub(crate) fn downloading() -> Self {
+        Self {
+            status: "downloading",
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn set_error(&mut self, msg: String) {
+        self.status = "error";
+        self.error = Some(msg);
+    }
+
+    /// Marks success.
+    ///
+    /// The plugin polls for `"completed"`; the server used to report `"done"`,
+    /// so a successful download fell through the plugin's status match, logged
+    /// "unexpected status" and never showed the success dialog. Both spellings
+    /// are emitted now: `status` stays `"done"` for anything already parsing
+    /// it, and `completed` is the boolean the plugin should key off.
+    pub(crate) fn set_done(&mut self) {
+        self.status = "completed";
+        self.error = None;
+        if self.total == 0 {
+            self.total = self.progress;
+        }
+    }
 }
 
 impl Default for ModelDownloadStatus {
@@ -77,14 +112,12 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Download CLIP model request received");
 
     let already_running = {
-        let mut status = state.model_download.lock().unwrap();
+        let mut downloads = state.model_download.lock().unwrap();
+        let status = downloads.entry(DOWNLOAD_KEY.to_string()).or_default();
         if status.status == "downloading" {
             true
         } else {
-            *status = ModelDownloadStatus {
-                status: "downloading",
-                ..Default::default()
-            };
+            *status = ModelDownloadStatus::downloading();
             false
         }
     };
@@ -100,7 +133,13 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let status = state.model_download.lock().unwrap().clone();
+    let status = state
+        .model_download
+        .lock()
+        .unwrap()
+        .get(DOWNLOAD_KEY)
+        .cloned()
+        .unwrap_or_default();
     Json(json!(status))
 }
 
@@ -108,32 +147,62 @@ fn asset_url(tag: &str, name: &str) -> String {
     format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}/{name}")
 }
 
-fn set_error(state: &Mutex<ModelDownloadStatus>, msg: String) {
-    log::error!("CLIP model download failed: {msg}");
-    let mut s = state.lock().unwrap();
-    s.status = "error";
-    s.error = Some(msg);
+pub(crate) type Downloads = Mutex<HashMap<String, ModelDownloadStatus>>;
+
+fn set_error(state: &Downloads, key: &str, label: &str, msg: String) {
+    log::error!("{label} download failed: {msg}");
+    state
+        .lock()
+        .unwrap()
+        .entry(key.to_string())
+        .or_default()
+        .set_error(msg);
 }
 
-async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
-    let tag = MODEL_ASSETS_RELEASE_TAG;
-    let paths = lrg_ml::model_paths::resolve();
-    let dests = [&paths.image_onnx, &paths.text_onnx, &paths.tokenizer_json];
+fn with_status(state: &Downloads, key: &str, f: impl FnOnce(&mut ModelDownloadStatus)) {
+    f(state.lock().unwrap().entry(key.to_string()).or_default());
+}
 
+/// One asset to fetch: which release tag holds it, its asset name, and where
+/// it goes on disk.
+pub(crate) type ReleaseAsset<'a> = (&'a str, &'a str, &'a std::path::Path);
+
+/// Streams a set of GitHub release assets to their destinations, reporting
+/// progress under `key` in the shared download map.
+///
+/// Shared by `routes::bioclip` and `routes::assets`. The tag is per *asset*
+/// rather than per call so one progress bar can span several model families,
+/// which live at different release tags — that is what makes the combined
+/// "download everything" flow a single bar instead of three.
+///
+/// Everything that must not differ between callers lives here once: the
+/// up-front HEAD pass so the progress bar has a denominator, `.part` staging
+/// so an interrupted download can never be mistaken for a complete model, and
+/// treating any non-2xx as a missing release rather than a corrupt file.
+pub(crate) async fn download_release_assets(
+    state: &Downloads,
+    key: &str,
+    label: &str,
+    assets: &[ReleaseAsset<'_>],
+) {
     let client = reqwest::Client::new();
 
     // Resolve sizes up front (HEAD per asset) so total progress is known
     // from the start, matching Python's up-front HfApi files_metadata call.
     let mut total: u64 = 0;
-    for name in ASSET_NAMES {
+    for (tag, name, _) in assets {
         let url = asset_url(tag, name);
         let resp = match client.head(&url).send().await {
             Ok(r) => r,
-            Err(e) => return set_error(&state, format!("failed to resolve {name}: {e}")),
+            Err(e) => {
+                return set_error(state, key, label, format!("failed to resolve {name}: {e}"))
+            }
         };
         if !resp.status().is_success() {
             return set_error(
-                &state,
+                state,
+                key,
+                label,
                 format!(
                     "release asset {name} not found for {tag} (HTTP {}) — the model-assets release may not exist yet",
                     resp.status()
@@ -142,29 +211,40 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
         }
         total += resp.content_length().unwrap_or(0);
     }
-    state.lock().unwrap().total = total;
+    with_status(state, key, |s| s.total = total);
 
     let mut downloaded: u64 = 0;
-    for (name, dest) in ASSET_NAMES.iter().zip(dests.iter()) {
-        state.lock().unwrap().current_file = Some(name.to_string());
+    for (tag, name, dest) in assets {
+        with_status(state, key, |s| s.current_file = Some(name.to_string()));
 
         let url = asset_url(tag, name);
-        log::info!("Starting CLIP model asset download: {name} from {url}");
+        log::info!("Starting {label} asset download: {name} from {url}");
         let resp = match client.get(&url).send().await {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
                 return set_error(
-                    &state,
+                    state,
+                    key,
+                    label,
                     format!("download failed for {name}: HTTP {}", r.status()),
                 )
             }
-            Err(e) => return set_error(&state, format!("download failed for {name}: {e}")),
+            Err(e) => {
+                return set_error(
+                    state,
+                    key,
+                    label,
+                    format!("download failed for {name}: {e}"),
+                )
+            }
         };
 
         if let Some(parent) = dest.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 return set_error(
-                    &state,
+                    state,
+                    key,
+                    label,
                     format!("failed to create model directory {}: {e}", parent.display()),
                 );
             }
@@ -178,7 +258,9 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
             Ok(f) => f,
             Err(e) => {
                 return set_error(
-                    &state,
+                    state,
+                    key,
+                    label,
                     format!("failed to create {}: {e}", tmp_dest.display()),
                 )
             }
@@ -191,32 +273,67 @@ async fn run_download(state: Arc<Mutex<ModelDownloadStatus>>) {
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     if let Err(e) = writer.write_all(&chunk).await {
-                        return set_error(&state, format!("failed writing {name}: {e}"));
+                        return set_error(state, key, label, format!("failed writing {name}: {e}"));
                     }
                     downloaded += chunk.len() as u64;
-                    state.lock().unwrap().progress = downloaded;
+                    with_status(state, key, |s| s.progress = downloaded);
                 }
                 Some(Err(e)) => {
-                    return set_error(&state, format!("download interrupted for {name}: {e}"))
+                    return set_error(
+                        state,
+                        key,
+                        label,
+                        format!("download interrupted for {name}: {e}"),
+                    )
                 }
                 None => break,
             }
         }
         if let Err(e) = writer.flush().await {
-            return set_error(&state, format!("failed writing {name}: {e}"));
+            return set_error(state, key, label, format!("failed writing {name}: {e}"));
         }
         drop(writer);
         if let Err(e) = tokio::fs::rename(&tmp_dest, dest).await {
             return set_error(
-                &state,
+                state,
+                key,
+                label,
                 format!("failed to place {name} at {}: {e}", dest.display()),
             );
         }
-        log::info!("CLIP model asset ready: {}", dest.display());
+        log::info!("{label} asset ready: {}", dest.display());
     }
 
-    log::info!("CLIP model download complete ({tag}).");
-    let mut s = state.lock().unwrap();
-    s.status = "done";
-    s.current_file = None;
+    log::info!("{label} download complete ({} asset(s)).", assets.len());
+    with_status(state, key, |s| {
+        s.current_file = None;
+        s.set_done();
+    });
+}
+
+/// The SigLIP2 assets and where they go, for this route and for the combined
+/// download in `routes::assets`.
+pub(crate) fn clip_assets(paths: &lrg_ml::siglip::ModelPaths) -> Vec<ReleaseAsset<'_>> {
+    vec![
+        (
+            MODEL_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[0],
+            paths.image_onnx.as_path(),
+        ),
+        (
+            MODEL_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[1],
+            paths.text_onnx.as_path(),
+        ),
+        (
+            MODEL_ASSETS_RELEASE_TAG,
+            ASSET_NAMES[2],
+            paths.tokenizer_json.as_path(),
+        ),
+    ]
+}
+
+async fn run_download(state: Arc<Downloads>) {
+    let paths = lrg_ml::model_paths::resolve();
+    download_release_assets(&state, DOWNLOAD_KEY, "CLIP model", &clip_assets(&paths)).await;
 }

@@ -4,10 +4,13 @@
 
 pub mod clustering;
 pub mod culling_config;
+pub mod edit_guardrails;
+pub mod eval;
 pub mod face_aggregate;
 pub mod grouping;
 pub mod keywords;
 pub mod persons;
 pub mod relevance_filter;
+pub mod sets;
 pub mod style_engine;
 pub mod training;

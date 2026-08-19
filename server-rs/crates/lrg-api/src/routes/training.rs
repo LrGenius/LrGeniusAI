@@ -123,6 +123,13 @@ async fn add_training_example(
     let shutter_speed = opt_str(&fields, "shutter_speed");
     let iso = opt_f64(&fields, "iso");
     let aperture = opt_f64(&fields, "aperture");
+    // Recorded so the style engine can keep raw and rendered examples apart
+    // when it blends a temperature. Absent means unknown, which it treats as
+    // compatible with anything — the only workable answer for examples saved
+    // before this field existed.
+    let is_raw = fields
+        .get("is_raw")
+        .map(|s| s.trim().eq_ignore_ascii_case("true"));
 
     let mut warning: Option<&'static str> = None;
     let mut embedding: Option<Vec<f32>> = None;
@@ -173,6 +180,9 @@ async fn add_training_example(
     }
     if let Some(s) = &summary {
         metadata.insert("summary".into(), json!(s));
+    }
+    if let Some(raw) = is_raw {
+        metadata.insert("is_raw".into(), json!(raw));
     }
     metadata.insert(
         "focal_length_bucket".into(),

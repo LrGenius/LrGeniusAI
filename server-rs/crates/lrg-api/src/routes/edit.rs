@@ -20,6 +20,7 @@ use base64::Engine;
 use chrono::Utc;
 use serde_json::{json, Map, Value};
 
+use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse};
 use lrg_store::{meta, Store, StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
@@ -62,8 +63,19 @@ pub(crate) struct EditOptions {
     composition_mode: String,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+    /// Engine tuning from the plugin's advanced fields; see `ParsedOptions`.
+    engine: crate::llm_engine::EngineOverrides,
     catalog_id: Option<String>,
     use_training_style: bool,
+    /// Whether the photo this edit is for is a raw file.
+    ///
+    /// Two consumers: the edit guardrails, to decide whether blown highlights
+    /// have anything behind them, and the `temperature` scale — Lightroom
+    /// exposes Kelvin for raw and a relative -100..100 for everything else.
+    /// It cannot be recovered from the bytes the backend receives — those have
+    /// already been normalised to JPEG — so the plugin sends it, and the
+    /// filename is the fallback.
+    pub(crate) is_raw: Option<bool>,
 }
 
 impl Default for EditOptions {
@@ -101,6 +113,8 @@ impl Default for EditOptions {
             lmstudio_base_url: None,
             catalog_id: None,
             use_training_style: true,
+            is_raw: None,
+            engine: crate::llm_engine::EngineOverrides::default(),
         }
     }
 }
@@ -167,11 +181,16 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         composition_mode,
         ollama_base_url: fields.get("ollama_base_url").cloned(),
         lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+        engine: crate::routes::llm::engine_overrides_from_fields(fields),
         catalog_id: fields
             .get("catalog_id")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         use_training_style: bool_field(fields, "use_training_style", true),
+        // Absent means "unknown", which is not the same as false: the plugin
+        // may predate this field, and guessing raw for it would hand a JPEG
+        // highlight headroom it does not have.
+        is_raw: fields.get("is_raw").map(|v| v.to_lowercase() == "true"),
     }
 }
 
@@ -206,6 +225,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         .clamp(0.0, 1.0);
 
     EditOptions {
+        engine: crate::routes::llm::engine_overrides_from_json(data),
         provider: get_str("provider"),
         model: get_str("model"),
         api_key: get_str("api_key"),
@@ -246,6 +266,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         use_training_style: get_bool("use_training_style", true),
+        is_raw: data.get("is_raw").and_then(Value::as_bool),
     }
 }
 
@@ -297,20 +318,87 @@ pub(crate) fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
 /// re-embedding here, same as Python's best-effort try/except), brute-force
 /// cosine-rank the (typically small) `edit_training` table, and shape the
 /// top matches as the few-shot JSON `prompts::format_training_example` expects.
+/// Why a training-style request came back with nothing, for the user.
+///
+/// "Learn from my edits" silently doing nothing is worse than it not being
+/// offered: the edit still arrives, just without the style the user asked for,
+/// and there was no way to tell the two apart.
+pub(crate) enum NoTrainingExamples {
+    /// The photo has never been indexed, so there is no embedding to match
+    /// training examples against.
+    PhotoNotIndexed,
+    /// The photo is fine; the user has not saved any usable examples yet.
+    NoneStored,
+}
+
+impl NoTrainingExamples {
+    pub(crate) fn message(&self) -> &'static str {
+        match self {
+            NoTrainingExamples::PhotoNotIndexed => {
+                "Style matching was skipped: this photo is not indexed yet, so there is no \
+                 embedding to compare your saved edits against. Run Analyze & Index with \
+                 \"Enable smart photo search\" on it first."
+            }
+            NoTrainingExamples::NoneStored => {
+                "Style matching was skipped: no usable training examples are stored yet. \
+                 Use \"Save Edits as AI Training Examples\" on photos you have edited yourself."
+            }
+        }
+    }
+}
+
+/// Lightroom's own key for white balance in a saved develop-settings blob, and
+/// the recipe schema's spelling of the same thing, since examples can come from
+/// either shape.
+const TEMPERATURE_KEYS: [&str; 2] = ["Temp", "temperature"];
+
+/// Strip the white balance from an example saved from a file whose temperature
+/// scale differs from the photo being edited.
+///
+/// The few-shot block exists to give the model the user's own numbers to anchor
+/// on. A Kelvin `Temp` offered as a reference for a JPEG — or the reverse —
+/// anchors it on a number that is meaningless for the target, while the schema
+/// it must answer in declares the other range entirely. Every other develop
+/// setting means the same thing on both kinds of file, so only this one goes.
+///
+/// An unknown raw status on either side means no conflict can be established,
+/// so nothing is removed.
+fn drop_incompatible_temperature(
+    settings: &mut Value,
+    example_is_raw: Option<bool>,
+    target_is_raw: Option<bool>,
+) -> bool {
+    let (Some(example), Some(target)) = (example_is_raw, target_is_raw) else {
+        return false;
+    };
+    if example == target {
+        return false;
+    }
+    let Some(map) = settings.as_object_mut() else {
+        return false;
+    };
+    let mut removed = false;
+    for key in TEMPERATURE_KEYS {
+        removed |= map.remove(key).is_some();
+    }
+    removed
+}
+
 pub(crate) async fn fetch_training_examples(
     store: &Store,
     photo_id: &str,
     n_results: usize,
-) -> Vec<Value> {
+    target_is_raw: Option<bool>,
+) -> Result<Vec<Value>, NoTrainingExamples> {
     let Ok(mut existing) = store.get(IMAGE_TABLE, &[photo_id.to_string()]).await else {
-        return Vec::new();
+        return Err(NoTrainingExamples::PhotoNotIndexed);
     };
     let Some(query_embedding) = existing.pop().and_then(|r| r.vector) else {
-        return Vec::new();
+        return Err(NoTrainingExamples::PhotoNotIndexed);
     };
 
     let Ok(records) = store.scan_all(TRAINING_TABLE).await else {
-        return Vec::new();
+        return Err(NoTrainingExamples::NoneStored);
     };
     let mut scored: Vec<(f64, StoreRecord)> = records
         .into_iter()
@@ -321,16 +409,24 @@ pub(crate) async fn fetch_training_examples(
         .collect();
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     scored.truncate(n_results);
+    if scored.is_empty() {
+        return Err(NoTrainingExamples::NoneStored);
+    }
 
-    scored
+    let mut dropped_temperature = 0usize;
+    let examples: Vec<Value> = scored
         .into_iter()
         .map(|(_, r)| {
-            let develop_settings = r
+            let mut develop_settings = r
                 .metadata
                 .get("develop_settings")
                 .and_then(Value::as_str)
                 .and_then(|s| serde_json::from_str::<Value>(s).ok())
                 .unwrap_or_else(|| json!({}));
+            let example_is_raw = r.metadata.get("is_raw").and_then(Value::as_bool);
+            if drop_incompatible_temperature(&mut develop_settings, example_is_raw, target_is_raw) {
+                dropped_temperature += 1;
+            }
             json!({
                 "label": r.metadata.get("label").cloned().unwrap_or(json!("")),
                 "filename": r.metadata.get("filename").cloned().unwrap_or(json!("")),
@@ -338,14 +434,22 @@ pub(crate) async fn fetch_training_examples(
                 "develop_settings": develop_settings,
             })
         })
-        .collect()
+        .collect();
+    if dropped_temperature > 0 {
+        log::debug!(
+            "Photo {photo_id}: dropped the white balance from {dropped_temperature} few-shot example(s) saved from files on the other temperature scale."
+        );
+    }
+    Ok(examples)
 }
 
 pub(crate) async fn generate_edit_recipe_for_photo(
+    state: &AppState,
     store: Option<&Store>,
     options: &EditOptions,
     image_bytes: &[u8],
     photo_id: &str,
+    filename: Option<&str>,
 ) -> EditGenerationResponse {
     let provider = options
         .provider
@@ -388,52 +492,98 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     request.composition_mode = options.composition_mode.clone();
     request.ollama_base_url = options.ollama_base_url.clone();
     request.lmstudio_base_url = options.lmstudio_base_url.clone();
+    // Decides which `temperature` scale the schema declares and the
+    // normalizer clamps to: Kelvin for raw, -100..100 for everything else.
+    request.is_raw = options.is_raw;
 
+    // Surfaced rather than swallowed: the plugin already renders `warning`,
+    // and "learn from my edits" quietly falling back to the generic prompt is
+    // exactly the kind of silent no-op this endpoint should not have.
+    let mut training_warning: Option<&'static str> = None;
     if options.use_training_style {
         if let Some(store) = store {
-            request.training_examples = fetch_training_examples(store, photo_id, 3).await;
+            match fetch_training_examples(store, photo_id, 3, options.is_raw).await {
+                Ok(examples) => request.training_examples = examples,
+                Err(reason) => training_warning = Some(reason.message()),
+            }
         }
     }
 
-    let mut response = match provider.as_str() {
-        "ollama" => {
-            let client =
-                lrg_providers::ollama::OllamaProvider::new(options.ollama_base_url.clone());
-            client.generate_edit_recipe(&request).await
-        }
-        "chatgpt" | "openai" => match &request.api_key {
-            Some(key) => {
-                lrg_providers::openai::OpenAiProvider::new(key.clone())
-                    .generate_edit_recipe(&request)
-                    .await
-            }
-            None => edit_fail(photo_id, "OpenAI API not configured".to_string()),
-        },
-        "gemini" => match &request.api_key {
-            Some(key) => {
-                lrg_providers::gemini::GeminiProvider::new(key.clone())
-                    .generate_edit_recipe(&request)
-                    .await
-            }
-            None => edit_fail(photo_id, "Gemini API not configured".to_string()),
-        },
-        "lmstudio" => {
-            let client =
-                lrg_providers::lmstudio::LmStudioProvider::new(options.lmstudio_base_url.clone());
-            client.generate_edit_recipe(&request).await
-        }
-        other => edit_fail(photo_id, format!("Unknown provider '{other}'.")),
+    let local_engine = match crate::routes::llm::engine_for_request(
+        state,
+        &provider,
+        &request.model,
+        options.engine,
+    )
+    .await
+    {
+        Ok(engine) => engine,
+        Err(e) => return edit_fail(photo_id, e),
+    };
+    let mut response = match build_provider(&ProviderSelection {
+        local_engine,
+        name: provider,
+        api_key: options.api_key.clone(),
+        ollama_base_url: options.ollama_base_url.clone(),
+        lmstudio_base_url: options.lmstudio_base_url.clone(),
+    }) {
+        Ok(client) => client.generate_edit_recipe(&request).await,
+        Err(e) => edit_fail(photo_id, e),
     };
 
     if response.success {
-        if let Some(recipe) = response.recipe.take() {
+        if let Some(mut recipe) = response.recipe.take() {
+            // Guardrails before the control filter, not after: a move the user
+            // switched off must not first be scaled and then discarded, which
+            // would spend budget on a field that never reaches the photo and
+            // shrink the ones that do.
+            response.guardrail_reasons = crate::edit_budget::measure_and_apply(
+                &mut recipe,
+                image_bytes,
+                &capture_conditions(options, filename, image_bytes),
+            );
+            if !response.guardrail_reasons.is_empty() {
+                log::info!(
+                    "Photo {photo_id}: edit constrained by the frame ({}).",
+                    response.guardrail_reasons.join(", ")
+                );
+            }
             let controls = controls_map(options);
             response.recipe = Some(lrg_providers::edit_recipe::filter_edit_recipe_by_controls(
                 &recipe, &controls,
             ));
         }
     }
+    // Appended rather than assigned: a provider-level warning says something
+    // about the edit that was produced, and losing it to say the style was
+    // skipped would trade one silent failure for another.
+    if let Some(msg) = training_warning {
+        response.warning = Some(match response.warning.take() {
+            Some(existing) => format!("{existing}\n{msg}"),
+            None => msg.to_string(),
+        });
+    }
     response
+}
+
+/// What the camera was doing, as far as the guardrails care.
+///
+/// `is_raw` prefers what the plugin said, because it reads Lightroom's own
+/// `fileFormat` and is therefore authoritative. The filename is the fallback
+/// for older plugins and for `/edit_base64` callers that send neither — it is a
+/// heuristic, and one whose unknown case reads as *not* raw, so a frame that
+/// cannot be placed gets the conservative budget.
+pub(crate) fn capture_conditions(
+    options: &EditOptions,
+    filename: Option<&str>,
+    image_bytes: &[u8],
+) -> lrg_analysis::edit_guardrails::CaptureConditions {
+    lrg_analysis::edit_guardrails::CaptureConditions {
+        iso: lrg_imaging::capture::read_iso(image_bytes),
+        is_raw: options
+            .is_raw
+            .unwrap_or_else(|| filename.is_some_and(lrg_imaging::capture::is_raw_filename)),
+    }
 }
 
 fn edit_fail(uuid: &str, error: String) -> EditGenerationResponse {
@@ -509,10 +659,18 @@ pub(crate) async fn persist_edit_recipe(
         "edit_run_date".into(),
         json!(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
     );
-    metadata
-        .entry("provider")
-        .or_insert(json!(options.provider));
-    metadata.entry("model").or_insert(json!(options.model));
+    // `json!(None::<String>)` is JSON `null`, not an absent field, so the
+    // unconditional insert stored `"provider": null` on every edit made
+    // without an explicit provider — a value every reader then has to special
+    // case. Leave the field out instead.
+    if let Some(provider) = &options.provider {
+        metadata
+            .entry("provider")
+            .or_insert_with(|| json!(provider));
+    }
+    if let Some(model) = &options.model {
+        metadata.entry("model").or_insert_with(|| json!(model));
+    }
     let has_embedding_existing = metadata
         .get("has_embedding")
         .and_then(Value::as_bool)
@@ -548,6 +706,7 @@ pub(crate) fn success_payload(
     recipe: &Value,
     options: &EditOptions,
     warning: Option<&str>,
+    guardrail_reasons: &[String],
 ) -> Value {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut payload = json!({
@@ -559,11 +718,43 @@ pub(crate) fn success_payload(
         "edit_warnings": recipe.get("warnings").cloned().unwrap_or(json!([])),
         "edit_model": options.model,
         "edit_rundate": now,
+        // Separate from `edit_warnings`, which are the model's own remarks
+        // about what it could not do. These are the backend's, about what the
+        // photograph would not take.
+        "guardrail_reasons": guardrail_reasons,
+        "guardrail_explanations": guardrail_explanations(guardrail_reasons),
     });
     if let Some(w) = warning {
         payload["warning"] = json!(w);
     }
     payload
+}
+
+/// The user-facing sentence for each reason code.
+///
+/// Resolved here rather than in the plugin so the wording lives next to the
+/// rule that produces it — `GuardrailReason::explanation` is written for a
+/// photographer, and a second copy in Lua would drift from the thresholds it
+/// describes. Unknown codes are dropped rather than echoed: a plugin talking to
+/// a newer backend should show nothing rather than a bare identifier.
+fn guardrail_explanations(codes: &[String]) -> Vec<String> {
+    use lrg_analysis::edit_guardrails::GuardrailReason::*;
+    const ALL: [lrg_analysis::edit_guardrails::GuardrailReason; 6] = [
+        HardLightNoAddedContrast,
+        NoTonalHeadroom,
+        FlatLightContrastAllowed,
+        HighlightsUnrecoverable,
+        HighIsoShadowsLimited,
+        ShadowsAlreadyClipped,
+    ];
+    codes
+        .iter()
+        .filter_map(|code| {
+            ALL.iter()
+                .find(|reason| reason.code() == code)
+                .map(|reason| reason.explanation().to_string())
+        })
+        .collect()
 }
 
 async fn edit_multipart(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
@@ -668,8 +859,15 @@ async fn finish_edit(
     filename: Option<&str>,
 ) -> Response {
     let store = state.store();
-    let response =
-        generate_edit_recipe_for_photo(store.as_deref(), options, image_bytes, photo_id).await;
+    let response = generate_edit_recipe_for_photo(
+        state,
+        store.as_deref(),
+        options,
+        image_bytes,
+        photo_id,
+        filename,
+    )
+    .await;
 
     let Some(recipe) = response.recipe.filter(|_| response.success) else {
         return (
@@ -685,8 +883,155 @@ async fn finish_edit(
         }
     }
 
-    let mut payload = success_payload(photo_id, &recipe, options, response.warning.as_deref());
+    let mut payload = success_payload(
+        photo_id,
+        &recipe,
+        options,
+        response.warning.as_deref(),
+        &response.guardrail_reasons,
+    );
     payload["input_tokens"] = json!(response.input_tokens);
     payload["output_tokens"] = json!(response.output_tokens);
     Json(payload).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exactly the multipart field names `SearchIndexAPI.generateEditRecipePhoto`
+    /// and `SearchIndexAPI.styleEdit` put on the wire. Both plugin functions feed
+    /// this same parser (`style_edit.rs` calls it too), so this is the one place
+    /// the plugin/backend field-name contract can be pinned.
+    fn plugin_fields() -> HashMap<String, String> {
+        [
+            ("style_strength", "0.8"),
+            ("composition_mode", "aggressive"),
+            ("adjust_white_balance", "false"),
+            ("adjust_basic_tone", "false"),
+            ("adjust_presence", "false"),
+            ("adjust_color_mix", "false"),
+            ("do_color_grading", "false"),
+            ("use_tone_curve", "false"),
+            ("use_point_curve", "false"),
+            ("adjust_detail", "false"),
+            ("adjust_effects", "false"),
+            ("adjust_lens_corrections", "false"),
+            ("allow_auto_crop", "false"),
+            ("include_masks", "false"),
+            ("is_raw", "true"),
+            ("api_key", "sk-test"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn creative_controls_from_the_plugin_reach_the_options() {
+        // Regression: the plugin assembled all of these and sent only
+        // `include_masks`, so every checkbox in the Creative Controls group and the
+        // style-strength slider silently did nothing.
+        let opts = parse_edit_options_form(&plugin_fields());
+
+        assert!(!opts.adjust_white_balance);
+        assert!(!opts.adjust_basic_tone);
+        assert!(!opts.adjust_presence);
+        assert!(!opts.adjust_color_mix);
+        assert!(!opts.do_color_grading);
+        assert!(!opts.use_tone_curve);
+        assert!(!opts.use_point_curve);
+        assert!(!opts.adjust_detail);
+        assert!(!opts.adjust_effects);
+        assert!(!opts.adjust_lens_corrections);
+        assert!(!opts.allow_auto_crop);
+        assert!(!opts.include_masks);
+        assert_eq!(opts.style_strength, 0.8);
+        assert_eq!(opts.composition_mode, "aggressive");
+        // Not a creative control, but it travels on the same form: the
+        // guardrails need to know whether clipped highlights are recoverable,
+        // and the exported JPEG no longer carries that.
+        assert_eq!(opts.is_raw, Some(true));
+    }
+
+    #[test]
+    fn api_key_survives_the_style_edit_fallback_path() {
+        // The style-engine fallback used to omit `api_key`, and there is no
+        // environment-variable fallback further down, so the first run of a new
+        // user reached the provider with an empty bearer token.
+        let opts = parse_edit_options_form(&plugin_fields());
+        assert_eq!(opts.api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn omitted_toggles_default_to_on() {
+        // Why the plugin must send an explicit "false" rather than omitting the
+        // field: absent booleans are read as enabled.
+        let opts = parse_edit_options_form(&HashMap::new());
+
+        assert!(opts.adjust_white_balance);
+        assert!(opts.do_color_grading);
+        assert!(opts.allow_auto_crop);
+        assert!(opts.include_masks);
+        assert_eq!(opts.style_strength, 0.5);
+        assert_eq!(opts.composition_mode, "subtle");
+        // `is_raw` is the exception: absent means "unknown", not "yes". A
+        // guessed raw flag would license highlight recovery the file cannot do.
+        assert_eq!(opts.is_raw, None);
+    }
+
+    #[test]
+    fn style_strength_is_clamped_and_composition_mode_validated() {
+        let mut fields = HashMap::new();
+        fields.insert("style_strength".to_string(), "9.5".to_string());
+        fields.insert("composition_mode".to_string(), "wild".to_string());
+        let opts = parse_edit_options_form(&fields);
+
+        assert_eq!(opts.style_strength, 1.0);
+        assert_eq!(opts.composition_mode, "subtle", "unknown mode falls back");
+    }
+
+    #[test]
+    fn a_wrong_scale_white_balance_is_kept_out_of_the_few_shot_block() {
+        // A Kelvin number offered to the model as a reference for a JPEG
+        // anchors it on a value the target's schema cannot even express.
+        let mut settings = json!({"Temp": 5600, "Exposure2012": 0.3});
+        assert!(drop_incompatible_temperature(
+            &mut settings,
+            Some(true),
+            Some(false)
+        ));
+        assert!(settings.get("Temp").is_none());
+        assert_eq!(
+            settings["Exposure2012"],
+            json!(0.3),
+            "everything else means the same on both kinds of file"
+        );
+    }
+
+    #[test]
+    fn a_matching_example_keeps_its_white_balance() {
+        let mut settings = json!({"Temp": 5600});
+        assert!(!drop_incompatible_temperature(
+            &mut settings,
+            Some(true),
+            Some(true)
+        ));
+        assert_eq!(settings["Temp"], json!(5600));
+    }
+
+    #[test]
+    fn an_unknown_raw_status_removes_nothing() {
+        // Examples saved before the flag existed would otherwise lose their
+        // white balance on every edit after upgrading.
+        for (example, target) in [(None, Some(true)), (Some(true), None), (None, None)] {
+            let mut settings = json!({"Temp": 5600});
+            assert!(!drop_incompatible_temperature(
+                &mut settings,
+                example,
+                target
+            ));
+            assert_eq!(settings["Temp"], json!(5600), "{example:?} vs {target:?}");
+        }
+    }
 }

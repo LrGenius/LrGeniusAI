@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
-use crate::normalize::normalize_keywords_structure;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
@@ -87,6 +88,38 @@ impl OpenAiProvider {
     fn response_format(&self, request: &MetadataGenerationRequest) -> Value {
         let schema = make_schema_strict(&prepare_response_structure(request));
         json!({"type": "json_schema", "json_schema": {"name": "metadata_response", "schema": schema, "strict": true}})
+    }
+
+    /// Schema-free chat completion — see [`crate::provider::LlmProvider::generate_text`].
+    pub async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        let model = model.unwrap_or("gpt-4.1");
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        });
+        let resp = self
+            .client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .ok()?;
+        let result: Value = resp.json().await.ok()?;
+        result["choices"][0]["message"]["content"]
+            .as_str()
+            .map(str::to_string)
     }
 
     pub async fn generate_metadata(
@@ -193,20 +226,25 @@ impl OpenAiProvider {
             Err(e) => return fail(&request.uuid, format!("JSON parsing error: {e}")),
         };
 
-        let keywords =
-            normalize_keywords_structure(&parsed.get("keywords").cloned().unwrap_or(json!([])));
+        let keywords = normalize_keywords(
+            &parsed.get("keywords").cloned().unwrap_or(json!([])),
+            request.keyword_categories.as_ref(),
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
+        );
+        let caption = if request.generate_caption {
+            parsed
+                .get("caption")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        };
+        let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
-            caption: if request.generate_caption {
-                parsed
-                    .get("caption")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            caption,
             title: if request.generate_title {
                 parsed
                     .get("title")
@@ -215,14 +253,7 @@ impl OpenAiProvider {
             } else {
                 None
             },
-            alt_text: if request.generate_alt_text {
-                parsed
-                    .get("alt_text")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            alt_text,
             input_tokens,
             output_tokens,
             error: None,
@@ -230,8 +261,8 @@ impl OpenAiProvider {
         }
     }
 
-    fn edit_response_format(&self) -> Value {
-        let schema = make_schema_strict(openai_edit_recipe_schema());
+    fn edit_response_format(&self, is_raw: Option<bool>) -> Value {
+        let schema = make_schema_strict(openai_edit_recipe_schema(is_raw));
         json!({"type": "json_schema", "json_schema": {"name": "lightroom_edit_recipe", "schema": schema, "strict": true}})
     }
 
@@ -250,7 +281,7 @@ impl OpenAiProvider {
         let data_uri = format!("data:image/jpeg;base64,{image_b64}");
         let system_prompt = prepare_edit_system_prompt(request);
         let user_prompt = prepare_edit_user_prompt(request);
-        let response_format = self.edit_response_format();
+        let response_format = self.edit_response_format(request.is_raw);
         let is_gpt5 = request.model.starts_with("gpt-5");
         let temperature = if is_gpt5 { 1.0 } else { request.temperature };
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -342,11 +373,12 @@ impl OpenAiProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens,
             output_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 

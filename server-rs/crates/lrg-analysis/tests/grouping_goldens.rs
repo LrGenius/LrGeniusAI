@@ -5,7 +5,8 @@
 //! sharp winner, one weaker/rejected alternate), an isolated single
 //! photo far away in time, and an edge case with no capture_time/phash.
 
-use lrg_analysis::grouping::{group_and_sort_images, GroupingInput};
+use lrg_analysis::culling_config::CullingConfig;
+use lrg_analysis::grouping::{group_and_sort_images_with_config, GroupingInput};
 use serde_json::Value;
 
 fn load(path: &str) -> Value {
@@ -52,8 +53,24 @@ fn matches_real_python_output() {
         .collect();
 
     // Same call as the golden generator: phash_threshold="auto",
-    // clip_threshold="auto" (both None here), time_delta=1, "default" preset.
-    let groups = group_and_sort_images(records, None, None, 1, "default");
+    // clip_threshold="auto" (both None here), time_delta=1.
+    //
+    // The config is `python_parity`, not the `default` preset, and that
+    // distinction is the point of this test. These expectations were captured
+    // from the real Python implementation, which has since been deleted, so
+    // they cannot be regenerated — which makes them a permanent pin on *the
+    // port*, not on current ranking behaviour. Ranking has deliberately moved
+    // since (peak sharpness, group-relative exposure and noise, CLIP-IQA
+    // aesthetics, intentional-set protection); `python_parity` names exactly
+    // which knobs were turned to get there. If this test fails, the port broke.
+    // If ranking should change, change `BASE` and leave this alone.
+    let groups = group_and_sort_images_with_config(
+        records,
+        None,
+        None,
+        Some(1),
+        &CullingConfig::python_parity(),
+    );
 
     let expected_groups = expected.as_array().unwrap();
     assert_eq!(groups.len(), expected_groups.len(), "group count mismatch");

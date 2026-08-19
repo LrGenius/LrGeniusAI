@@ -2,16 +2,20 @@
 //! (port of `services/chroma.ensure_db_path`): binding opens the LanceDB
 //! store and auto-runs the one-time Chroma migration when needed.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 
 use lrg_common::{config, jobs::JobRegistry, logging};
+use lrg_ml::bioclip::BioclipModel;
 use lrg_ml::faces::FaceModel;
 use lrg_ml::siglip::SiglipModel;
 use lrg_store::{migrate, Store};
 
+use crate::llm_engine::LlmEngineSlot;
+use crate::mlx_engine::MlxEngineSlot;
 use crate::routes::clip::ModelDownloadStatus;
 
 pub struct AppState {
@@ -27,11 +31,36 @@ pub struct AppState {
     pub siglip: Arc<SiglipModel>,
     /// Global — lazily loaded, matching `services/face.py`'s `_get_face_app`.
     pub face: Arc<FaceModel>,
+    /// Global — BioCLIP 2 plus its pruned Tree-of-Life head, same lazy-load
+    /// and idle-unload contract as `siglip`/`face`. Its head alone is a few
+    /// hundred MB resident, so leaving it out of `run_maintenance` would keep
+    /// that memory pinned for the life of the process.
+    pub bioclip: Arc<BioclipModel>,
     /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
     pub jobs: Arc<JobRegistry>,
-    /// Global — port of `services/clip.py`'s download-thread status, backs
-    /// `/clip/download/start` + `/clip/download/status`.
-    pub model_download: Arc<StdMutex<ModelDownloadStatus>>,
+    /// CLIP-IQA prompt embeddings, computed on first use and kept for the
+    /// process lifetime.
+    ///
+    /// These are a pure function of the model weights and a compile-time list
+    /// of strings, so recomputing them would be waste — but the first call
+    /// costs a text-tower pass and, if SigLIP2 has idle-unloaded, a model load.
+    /// Deliberately *not* cleared alongside `siglip.unload()`: the embeddings
+    /// stay valid across an unload/reload cycle, and dropping them would make
+    /// every cull run after an idle period pay the load again.
+    /// Keyed by prompt set, since quality and action are embedded separately
+    /// and a catalog may only ever need one of them.
+    pub clip_iqa: Arc<StdMutex<HashMap<&'static str, lrg_ml::clip_iqa::IqaPrompts>>>,
+    /// Download progress, keyed by asset group (`"clip"`, `"llm"`,
+    /// `"bioclip"`). Keyed
+    /// rather than a single slot because a GGUF download and a SigLIP2
+    /// download can legitimately be in flight at the same time.
+    pub model_download: Arc<StdMutex<HashMap<String, ModelDownloadStatus>>>,
+    /// Global — the in-process LLM, lazily loaded and idle-unloaded exactly
+    /// like `siglip`/`face`.
+    pub llm: Arc<LlmEngineSlot>,
+    /// The MLX engine, held separately from `llm` so that switching provider
+    /// back and forth does not evict the other backend's resident model.
+    pub mlx: Arc<MlxEngineSlot>,
     /// Set by `/update/apply` once the binary swap is done, just before
     /// triggering graceful shutdown. `main.rs` checks this after
     /// `axum::serve`'s graceful shutdown returns (listener fully
@@ -39,6 +68,10 @@ pub struct AppState {
     /// inside the request handler itself, so there's no bind-race
     /// between the exiting old process and the freshly spawned new one.
     pub relaunch_after_shutdown: StdMutex<Option<PathBuf>>,
+    /// Taxon name → species-database links, cached on disk. Global rather
+    /// than per-catalog: which GBIF page `Panthera leo` lives on does not
+    /// depend on whose catalog asked.
+    pub species_links: Arc<crate::species_links::LinkResolver>,
 }
 
 impl AppState {
@@ -51,9 +84,14 @@ impl AppState {
             debug,
             siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
+            bioclip: Arc::new(BioclipModel::new(lrg_ml::model_paths::resolve_bioclip())),
             jobs: Arc::new(JobRegistry::new()),
-            model_download: Arc::new(StdMutex::new(ModelDownloadStatus::default())),
+            clip_iqa: Arc::new(StdMutex::new(HashMap::new())),
+            model_download: Arc::new(StdMutex::new(HashMap::new())),
+            llm: Arc::default(),
+            mlx: Arc::default(),
             relaunch_after_shutdown: StdMutex::new(None),
+            species_links: Arc::new(crate::species_links::LinkResolver::new()),
         }
     }
 
@@ -82,6 +120,9 @@ impl AppState {
     pub async fn run_maintenance(&self) {
         self.siglip.unload_if_idle();
         self.face.unload_if_idle();
+        self.bioclip.unload_if_idle();
+        self.llm.unload_if_idle();
+        self.mlx.unload_if_idle();
         if let Some(store) = self.store() {
             if store.pending_write_ops() >= lrg_store::COMPACT_WRITE_THRESHOLD {
                 match store.optimize_all().await {

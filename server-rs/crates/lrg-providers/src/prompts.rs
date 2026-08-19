@@ -1,9 +1,19 @@
 //! Port of `providers/base.py`'s `_prepare_system_prompt` /
 //! `_prepare_user_prompt` — deterministic prompt string construction for
 //! metadata generation.
+//!
+//! **Ordering contract:** context is emitted run-constant-first, per-photo-last
+//! (see [`SplitPrompt`]), and every provider sends the image *after* the text.
+//! Together those two facts make `[system][stable]` a contiguous token prefix
+//! that is byte-identical across all photos of an indexing run, which is the
+//! only thing prefix-KV reuse (LM Studio, Ollama, `lrg-llama`) and cloud prompt
+//! caching (OpenAI, Gemini) can act on. Moving a per-photo fact up into the
+//! stable half silently truncates that prefix to nothing — add new context via
+//! the right bucket, not wherever it reads best.
 
 use lrg_imaging::location::format_location_for_prompt;
 
+use crate::keyword_taxonomy::{CategoryLabels, KeywordLeafEncoding};
 use crate::types::{EditGenerationRequest, KeywordCategories, MetadataGenerationRequest};
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a professional photography analyst with expertise in object recognition and computer-generated image description. \nYou also try to identify famous buildings and landmarks as well as the location where the photo was taken. \nFurthermore, you aim to specify animal and plant species as accurately as possible. \nYou also describe objects—such as vehicle types and manufacturers—as specifically as you can.";
@@ -13,6 +23,48 @@ pub fn prepare_system_prompt(request: &MetadataGenerationRequest) -> String {
         .system_prompt
         .clone()
         .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string())
+}
+
+/// A user prompt split into the half that stays byte-identical for a whole
+/// indexing run and the half that changes per photo.
+///
+/// Every llama.cpp-based backend (LM Studio, Ollama, and our own in-process
+/// engine) can reuse a cached KV prefix, but only up to the first token that
+/// differs from the previous request. Emitting run-constant context (catalog
+/// vocabulary, keyword taxonomy, bilingual/alias rules) *before* per-photo
+/// facts (location, capture time, …) is what makes that prefix long enough to
+/// be worth anything — the reverse order caps reuse at a few dozen tokens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SplitPrompt {
+    /// Constant for the whole run; safe to pin in a KV cache.
+    pub stable: String,
+    /// Varies per photo; must be re-evaluated every time.
+    pub per_photo: String,
+}
+
+impl SplitPrompt {
+    /// The two halves as a single string, for providers that send one text
+    /// block. The separator belongs to `per_photo` so that `stable` is always
+    /// an exact prefix of the result.
+    pub fn joined(&self) -> String {
+        if self.per_photo.is_empty() {
+            self.stable.clone()
+        } else {
+            format!("{}\n\n{}", self.stable, self.per_photo)
+        }
+    }
+}
+
+fn split_from_parts(base: String, stable: Vec<String>, per_photo: Vec<String>) -> SplitPrompt {
+    let mut stable_text = base;
+    if !stable.is_empty() {
+        stable_text.push_str("\n\n");
+        stable_text.push_str(&stable.join("\n"));
+    }
+    SplitPrompt {
+        stable: stable_text,
+        per_photo: per_photo.join("\n"),
+    }
 }
 
 /// Flatten nested keyword categories to a simple list (pre-order:
@@ -37,6 +89,10 @@ pub fn flatten_keyword_categories(categories: &KeywordCategories) -> Vec<String>
 }
 
 pub fn prepare_user_prompt(request: &MetadataGenerationRequest) -> String {
+    prepare_user_prompt_split(request).joined()
+}
+
+pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPrompt {
     let mut base_prompt = match &request.user_prompt {
         Some(p) => p.clone(),
         None => {
@@ -62,29 +118,9 @@ pub fn prepare_user_prompt(request: &MetadataGenerationRequest) -> String {
         request.language
     ));
 
+    // Run-constant context first, per-photo context second — see `SplitPrompt`.
     let mut context_additions: Vec<String> = Vec::new();
-
-    if let Some(location) = &request.location_data {
-        if !location.is_empty() {
-            if let Some(location_str) = format_location_for_prompt(location) {
-                context_additions.push(format!("This photo was taken at: {location_str}"));
-            }
-        }
-    }
-
-    if request.submit_keywords {
-        if let Some(kw) = &request.existing_keywords {
-            let joined = kw
-                .iter()
-                .map(|k| k.trim())
-                .filter(|k| !k.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ");
-            if !joined.is_empty() {
-                context_additions.push(format!("Some keywords are: {joined}"));
-            }
-        }
-    }
+    let mut per_photo_additions: Vec<String> = Vec::new();
 
     if request.generate_keywords {
         if let Some(vocab) = &request.catalog_keywords {
@@ -108,41 +144,28 @@ pub fn prepare_user_prompt(request: &MetadataGenerationRequest) -> String {
         }
     }
 
-    if request.submit_folder_names {
-        if let Some(folders) = &request.folder_names {
-            if folders.chars().any(|c| c.is_alphabetic()) {
-                context_additions.push(format!("Folders: {folders}"));
-            }
-        }
-    }
-
-    if let Some(dt) = &request.date_time {
-        if !dt.trim().is_empty() {
-            context_additions.push(format!("Capture Time: {dt}"));
-        }
-    }
-
     if request.generate_keywords {
         if let Some(categories) = &request.keyword_categories {
-            match categories {
-                KeywordCategories::Nested(_) => {
-                    let flat = flatten_keyword_categories(categories);
-                    context_additions.push(format!(
-                        "Please organize keywords into these categories: {}. Use the hierarchical structure to organize keywords logically.",
-                        flat.join(", ")
-                    ));
-                }
-                KeywordCategories::Flat(list) => {
-                    context_additions.push(format!(
-                        "Please organize keywords into these categories: {}",
-                        list.join(", ")
-                    ));
-                }
+            let labels = CategoryLabels::from_categories(categories);
+            if !labels.is_empty() {
+                // These are exactly the strings the schema's `category` enum
+                // permits, so the prompt and the grammar cannot drift apart.
+                let joined = labels.labels().collect::<Vec<_>>().join(", ");
+                context_additions.push(format!(
+                    "Return keywords as a list of groups, each with a `category` and its \
+                     `items`. Use exactly these category names: {joined}. Include a group \
+                     ONLY for categories that genuinely apply to this photo — omit every \
+                     other category entirely rather than returning it with an empty list."
+                ));
             }
         }
     }
 
-    if request.generate_keywords && request.bilingual_keywords {
+    // The layout of one keyword. Positional rather than named, because field
+    // names are decoded one token at a time on every keyword of every photo
+    // while this explanation is prefilled once per run — see
+    // `keyword_taxonomy::KeywordLeafEncoding` for the measurement.
+    if request.generate_keywords {
         let secondary = request
             .keyword_secondary_language
             .as_deref()
@@ -153,33 +176,106 @@ pub fn prepare_user_prompt(request: &MetadataGenerationRequest) -> String {
         } else {
             secondary
         };
-        if secondary.to_lowercase() != request.language.to_lowercase() {
-            context_additions.push(format!(
-                "For keywords only, return each keyword as an object with fields `name` (in {}) and `synonyms` (array in {}). Include only true language equivalents; avoid duplicates and inflected-only variants.",
-                request.language, secondary
-            ));
-        } else {
-            context_additions.push(
-                "For keywords, return each keyword as an object with fields `name` and `synonyms`. Use `synonyms` only for meaningful alternate terms and avoid duplicates."
+        let primary = request.language.as_str();
+        // When both languages are the same, the second slot is not a
+        // translation but a second way of saying it. Saying "translate to
+        // German" to a German-language request produces echoes.
+        let same_language = secondary.to_lowercase() == primary.to_lowercase();
+
+        match KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases)
+        {
+            KeywordLeafEncoding::Plain => {}
+            KeywordLeafEncoding::Aliased => context_additions.push(
+                "Return each keyword as an array of strings: the keyword itself first, then any \
+                 further terms for it. Example: [\"Auto\", \"Pkw\"]. Return a single-element \
+                 array like [\"Auto\"] when there is no further term."
                     .to_string(),
-            );
+            ),
+            KeywordLeafEncoding::Translated => context_additions.push(if same_language {
+                "Return each keyword as a two-element array: the keyword first, then one \
+                 meaningful alternate term for it. Example: [\"Auto\", \"Wagen\"]. Avoid \
+                 duplicates."
+                    .to_string()
+            } else {
+                format!(
+                    "Return each keyword as a two-element array: the keyword in {primary} first, \
+                     then its {secondary} equivalent. Example: [\"Berg\", \"mountain\"]. Include \
+                     only true language equivalents; avoid duplicates and inflected-only variants."
+                )
+            }),
+            KeywordLeafEncoding::TranslatedAliased => context_additions.push(if same_language {
+                "Return each keyword as two arrays: the first holds the keyword followed by any \
+                 further terms for it, the second holds one meaningful alternate term followed by \
+                 any further terms for that. Example: [[\"Auto\", \"Pkw\"], [\"Wagen\", \
+                 \"Kraftfahrzeug\"]]. Use [[\"Auto\"], [\"Wagen\"]] when there are no further \
+                 terms."
+                    .to_string()
+            } else {
+                format!(
+                    "Return each keyword as two arrays: the first holds the {primary} keyword \
+                     followed by any further {primary} terms for it, the second holds its \
+                     {secondary} equivalent followed by any further {secondary} terms. Example: \
+                     [[\"Auto\", \"Pkw\"], [\"car\", \"automobile\"]]. Use [[\"Auto\"], \
+                     [\"car\"]] when there are no further terms. Include only true language \
+                     equivalents; avoid duplicates and inflected-only variants."
+                )
+            }),
         }
     }
 
     if request.generate_keywords && request.generate_aliases {
-        let mut alias_instruction = "For each keyword, you may return an `aliases` array of at most 3 same-language linguistic synonyms of `name` — words that share the exact same core meaning and are interchangeable in any context, not just this photo (e.g. 'Kraftfahrzeug' / 'Pkw' for 'Auto'). Aliases serve as search deduplication: a user searching for either term must expect identical results. Do NOT include: related concepts, scene attributes, co-occurring elements, hypernyms, or hyponyms. Counter-example: 'Abendhimmel' is NOT a valid alias for 'Wolkenlos' — they may co-occur in this photo but describe different concepts. Omit the field entirely if no genuine linguistic synonym exists.".to_string();
-        if request.bilingual_keywords {
-            alias_instruction.push_str(" When `synonyms` is present, also return `synonym_aliases` with the same rules applied to each entry of `synonyms` (same secondary language as the translation).");
+        context_additions.push(
+            "At most 3 further terms per keyword, and only true linguistic synonyms — words that \
+             share the exact same core meaning and are interchangeable in any context, not just \
+             this photo (e.g. 'Kraftfahrzeug' / 'Pkw' for 'Auto'). They serve as search \
+             deduplication: a user searching for either term must expect identical results. Do \
+             NOT include: related concepts, scene attributes, co-occurring elements, hypernyms, \
+             or hyponyms. Counter-example: 'Abendhimmel' is NOT a valid further term for \
+             'Wolkenlos' — they may co-occur in this photo but describe different concepts. Never \
+             pad by repeating a term you have already given; leave the list short instead."
+                .to_string(),
+        );
+    }
+
+    // --- per-photo context: everything below changes from photo to photo ---
+
+    if let Some(location) = &request.location_data {
+        if !location.is_empty() {
+            if let Some(location_str) = format_location_for_prompt(location) {
+                per_photo_additions.push(format!("This photo was taken at: {location_str}"));
+            }
         }
-        context_additions.push(alias_instruction);
     }
 
-    if !context_additions.is_empty() {
-        base_prompt.push_str("\n\n");
-        base_prompt.push_str(&context_additions.join("\n"));
+    if request.submit_keywords {
+        if let Some(kw) = &request.existing_keywords {
+            let joined = kw
+                .iter()
+                .map(|k| k.trim())
+                .filter(|k| !k.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !joined.is_empty() {
+                per_photo_additions.push(format!("Some keywords are: {joined}"));
+            }
+        }
     }
 
-    base_prompt
+    if request.submit_folder_names {
+        if let Some(folders) = &request.folder_names {
+            if folders.chars().any(|c| c.is_alphabetic()) {
+                per_photo_additions.push(format!("Folders: {folders}"));
+            }
+        }
+    }
+
+    if let Some(dt) = &request.date_time {
+        if !dt.trim().is_empty() {
+            per_photo_additions.push(format!("Capture Time: {dt}"));
+        }
+    }
+
+    split_from_parts(base_prompt, context_additions, per_photo_additions)
 }
 
 pub const DEFAULT_EDIT_SYSTEM_PROMPT: &str = "You are a senior Lightroom Classic retoucher producing high-end, client-ready edits. \
@@ -277,6 +373,10 @@ pub fn format_training_example(idx: usize, example: &serde_json::Value) -> Strin
 
 /// Port of `_prepare_edit_user_prompt`.
 pub fn prepare_edit_user_prompt(request: &EditGenerationRequest) -> String {
+    prepare_edit_user_prompt_split(request).joined()
+}
+
+pub fn prepare_edit_user_prompt_split(request: &EditGenerationRequest) -> SplitPrompt {
     let mut base_prompt = match &request.user_prompt {
         Some(p) => p.clone(),
         None => "Analyze the uploaded photo and return a Lightroom edit recipe.\n\
@@ -350,7 +450,9 @@ pub fn prepare_edit_user_prompt(request: &EditGenerationRequest) -> String {
         }
     }
 
+    // Run-constant context first, per-photo context second — see `SplitPrompt`.
     let mut context_additions: Vec<String> = Vec::new();
+    let mut per_photo_additions: Vec<String> = Vec::new();
     if let Some(intent) = &request.edit_intent {
         if !intent.is_empty() {
             context_additions.push(format!("Requested editing intent: {intent}"));
@@ -385,6 +487,15 @@ pub fn prepare_edit_user_prompt(request: &EditGenerationRequest) -> String {
             context_additions.push(format!("Per-photo instructions: {ctx}"));
         }
     }
+    if !request.language.is_empty() {
+        context_additions.push(format!(
+            "Write `summary` and `warnings` in {}, but keep field names exactly as specified by the schema.",
+            request.language
+        ));
+    }
+
+    // --- per-photo context: everything below changes from photo to photo ---
+
     if request.submit_keywords {
         if let Some(kw) = &request.existing_keywords {
             let joined = kw
@@ -394,55 +505,48 @@ pub fn prepare_edit_user_prompt(request: &EditGenerationRequest) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             if !joined.is_empty() {
-                context_additions.push(format!("Existing keywords: {joined}"));
+                per_photo_additions.push(format!("Existing keywords: {joined}"));
             }
         }
     }
     if request.submit_folder_names {
         if let Some(folders) = &request.folder_names {
             if !folders.is_empty() {
-                context_additions.push(format!("Folder context: {folders}"));
+                per_photo_additions.push(format!("Folder context: {folders}"));
             }
         }
     }
     if let Some(location) = &request.location_data {
         if !location.is_empty() {
             if let Some(location_str) = format_location_for_prompt(location) {
-                context_additions.push(format!("Photo taken in: {location_str}"));
+                per_photo_additions.push(format!("Photo taken in: {location_str}"));
             }
         }
     }
     if let Some(dt) = &request.date_time {
         if !dt.is_empty() {
-            context_additions.push(format!("Capture time: {dt}"));
+            per_photo_additions.push(format!("Capture time: {dt}"));
         }
     }
-    if !request.language.is_empty() {
-        context_additions.push(format!(
-            "Write `summary` and `warnings` in {}, but keep field names exactly as specified by the schema.",
-            request.language
-        ));
-    }
 
-    if !context_additions.is_empty() {
-        base_prompt.push_str("\n\n");
-        base_prompt.push_str(&context_additions.join("\n"));
-    }
-
+    // Few-shot examples are retrieved per photo (nearest training neighbours),
+    // so they belong to the volatile half even though they are the largest
+    // block in the prompt.
     if !request.training_examples.is_empty() {
-        base_prompt.push_str("\n\n--- YOUR PERSONAL EDIT STYLE (few-shot examples) ---\n");
-        base_prompt.push_str(
+        let mut block = "\n--- YOUR PERSONAL EDIT STYLE (few-shot examples) ---\n".to_string();
+        block.push_str(
             "The following examples are from your own Lightroom edits on visually similar photos. \
 Study the slider values and replicate this editing style for the current photo.\n",
         );
         for (i, example) in request.training_examples.iter().enumerate() {
-            base_prompt.push_str(&format_training_example(i + 1, example));
-            base_prompt.push('\n');
+            block.push_str(&format_training_example(i + 1, example));
+            block.push('\n');
         }
-        base_prompt.push_str("--- END OF STYLE EXAMPLES ---\n");
+        block.push_str("--- END OF STYLE EXAMPLES ---\n");
+        per_photo_additions.push(block);
     }
 
-    base_prompt
+    split_from_parts(base_prompt, context_additions, per_photo_additions)
 }
 
 #[cfg(test)]
@@ -527,13 +631,148 @@ mod tests {
         req.generate_keywords = true;
         req.bilingual_keywords = true;
         req.keyword_secondary_language = Some("English".to_string());
-        // language == secondary -> the "same synonyms" instruction
+        // language == secondary: asking for a translation into the language
+        // already in use just produces echoes, so the second slot is described
+        // as an alternate term instead.
         let prompt = prepare_user_prompt(&req);
-        assert!(prompt.contains("Use `synonyms` only for meaningful alternate terms"));
+        assert!(prompt.contains("then one meaningful alternate term"));
+        assert!(!prompt.contains("equivalent"));
 
         req.keyword_secondary_language = Some("German".to_string());
         let prompt2 = prepare_user_prompt(&req);
-        assert!(prompt2.contains("in German"));
+        assert!(prompt2.contains("then its German equivalent"));
+    }
+
+    #[test]
+    fn every_keyword_layout_is_explained_with_an_example() {
+        // The positional layout is only readable if the prompt says what each
+        // slot means — the schema alone conveys none of it.
+        for (bilingual, aliases) in [(false, true), (true, false), (true, true)] {
+            let mut req = base_request();
+            req.generate_keywords = true;
+            req.bilingual_keywords = bilingual;
+            req.generate_aliases = aliases;
+            let prompt = prepare_user_prompt(&req);
+            assert!(
+                prompt.contains("Example: ["),
+                "bilingual={bilingual} aliases={aliases} needs a worked example"
+            );
+        }
+    }
+
+    #[test]
+    fn the_keyword_layout_stays_in_the_run_constant_half() {
+        // It is identical for every photo of a run; in `per_photo` it would
+        // cut the reusable prefix at the first keyword instruction.
+        let mut req = base_request();
+        req.generate_keywords = true;
+        req.bilingual_keywords = true;
+        req.generate_aliases = true;
+        let split = prepare_user_prompt_split(&req);
+        assert!(split.stable.contains("Return each keyword as two arrays"));
+        assert!(!split.per_photo.contains("Return each keyword"));
+    }
+
+    /// The whole point of the split: run-constant context must sit in
+    /// `stable`, per-photo facts in `per_photo`, so `stable` is a reusable
+    /// KV-cache prefix across every photo of an indexing run.
+    #[test]
+    fn split_puts_run_constant_context_before_per_photo_context() {
+        let mut req = base_request();
+        req.generate_keywords = true;
+        req.catalog_keywords = Some(vec!["Landschaft".to_string(), "Portrait".to_string()]);
+        req.keyword_categories = Some(KeywordCategories::Flat(vec!["People".to_string()]));
+        req.user_context = Some("client shoot".to_string());
+        req.submit_keywords = true;
+        req.existing_keywords = Some(vec!["cat".to_string()]);
+        req.submit_folder_names = true;
+        req.folder_names = Some("Iceland Trip".to_string());
+        req.date_time = Some("2026-08-07 10:00".to_string());
+        req.location_data = Some(lrg_imaging::location::LocationTags {
+            city: Some("Reykjavik".to_string()),
+            ..Default::default()
+        });
+
+        let split = prepare_user_prompt_split(&req);
+
+        for run_constant in [
+            "Existing catalog vocabulary",
+            "Landschaft, Portrait",
+            "Use exactly these category names",
+            "Context: client shoot",
+        ] {
+            assert!(
+                split.stable.contains(run_constant),
+                "expected {run_constant:?} in the stable half"
+            );
+            assert!(!split.per_photo.contains(run_constant));
+        }
+
+        for per_photo in [
+            "This photo was taken at: Reykjavik",
+            "Some keywords are: cat",
+            "Folders: Iceland Trip",
+            "Capture Time: 2026-08-07 10:00",
+        ] {
+            assert!(
+                split.per_photo.contains(per_photo),
+                "expected {per_photo:?} in the per-photo half"
+            );
+            assert!(!split.stable.contains(per_photo));
+        }
+    }
+
+    #[test]
+    fn stable_half_is_a_prefix_of_the_joined_prompt() {
+        let mut req = base_request();
+        req.generate_keywords = true;
+        req.catalog_keywords = Some(vec!["Landschaft".to_string()]);
+        req.date_time = Some("2026-08-07".to_string());
+
+        let split = prepare_user_prompt_split(&req);
+        let joined = prepare_user_prompt(&req);
+        assert!(joined.starts_with(&split.stable));
+        assert!(joined.ends_with(&split.per_photo));
+        assert!(!split.per_photo.is_empty());
+    }
+
+    #[test]
+    fn joined_equals_stable_when_no_per_photo_context() {
+        let req = base_request();
+        let split = prepare_user_prompt_split(&req);
+        assert!(split.per_photo.is_empty());
+        assert_eq!(split.joined(), split.stable);
+    }
+
+    /// The schema lets a model omit categories that do not apply; without
+    /// this instruction it will keep emitting every one of them with an empty
+    /// list, which is exactly the output-token waste the flat group shape
+    /// exists to remove.
+    #[test]
+    fn category_prompt_permits_omitting_categories_and_lists_the_enum_labels() {
+        use crate::types::KeywordTree;
+        let mut req = base_request();
+        req.generate_keywords = true;
+        // "Landschaft" is ambiguous, so the prompt must offer the full paths —
+        // the same strings the schema's `category` enum permits.
+        req.keyword_categories = Some(KeywordCategories::Nested(KeywordTree(vec![
+            (
+                "Natur".to_string(),
+                KeywordTree(vec![("Landschaft".to_string(), KeywordTree(vec![]))]),
+            ),
+            (
+                "Reise".to_string(),
+                KeywordTree(vec![("Landschaft".to_string(), KeywordTree(vec![]))]),
+            ),
+        ])));
+
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("Natur/Landschaft"));
+        assert!(prompt.contains("Reise/Landschaft"));
+        assert!(
+            prompt.contains("omit every other category entirely"),
+            "the prompt must tell the model that omission is expected"
+        );
     }
 
     #[test]
@@ -623,6 +862,29 @@ mod tests {
         assert!(prompt.contains("Summary: Warm golden-hour look"));
         assert!(prompt.contains("Contrast2012=12"));
         assert!(prompt.contains("END OF STYLE EXAMPLES"));
+    }
+
+    #[test]
+    fn edit_split_keeps_training_examples_in_the_per_photo_half() {
+        let mut req = base_edit_request();
+        req.edit_intent = Some("moody".to_string());
+        req.language = "German".to_string();
+        req.submit_folder_names = true;
+        req.folder_names = Some("Wedding".to_string());
+        req.training_examples = vec![json!({
+            "label": "Sunset portrait",
+            "develop_settings": {"Exposure2012": 0.33},
+        })];
+
+        let split = prepare_edit_user_prompt_split(&req);
+        assert!(split.stable.contains("Requested editing intent: moody"));
+        assert!(split
+            .stable
+            .contains("Write `summary` and `warnings` in German"));
+        assert!(split.per_photo.contains("Folder context: Wedding"));
+        assert!(split.per_photo.contains("YOUR PERSONAL EDIT STYLE"));
+        assert!(!split.stable.contains("YOUR PERSONAL EDIT STYLE"));
+        assert!(prepare_edit_user_prompt(&req).starts_with(&split.stable));
     }
 
     #[test]

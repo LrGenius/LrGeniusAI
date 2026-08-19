@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WIKI_DIR="${ROOT_DIR}/docs/wiki"
+# Overridable so `scripts/check-docs.py` can regenerate into a scratch
+# directory and diff, instead of reimplementing the page format.
+WIKI_DIR="${WIKI_DIR:-${ROOT_DIR}/docs/wiki}"
 
 mkdir -p "${WIKI_DIR}"
 

@@ -7,6 +7,7 @@
 //! tolerate one last-digit rounding flip (numpy accumulates in f32
 //! pairwise order; we accumulate in f64).
 
+use lrg_imaging::cull_config::ImageMetricsConfig;
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 
 fn lcg_bytes(n: usize, seed: u64) -> Vec<u8> {
@@ -97,7 +98,10 @@ fn goldens_match_python_backend() {
             );
         }
 
-        let metrics = culling_metrics(&image);
+        // Defaults must reproduce the Python backend bit-for-bit; that is the
+        // whole point of this file, and it is what pins `ImageMetricsConfig`'s
+        // `Default` impl to `BASE_CULLING_CONFIG`.
+        let metrics = culling_metrics(&image, &ImageMetricsConfig::default());
         let got = [
             ("cull_sharpness", metrics.cull_sharpness),
             ("cull_exposure", metrics.cull_exposure),

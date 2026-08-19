@@ -24,7 +24,7 @@ jobs:
       WEBSITE_REBUILD_TOKEN: ${{ secrets.WEBSITE_REBUILD_TOKEN }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Ensure scripts are executable
         run: chmod +x scripts/publish-wiki.sh scripts/build-wiki-pages.sh

@@ -11,8 +11,40 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
-use crate::routes::index_upload::{process_batch, UploadedImage};
+use crate::routes::index_upload::{process_batch, ImageSource, PhotoOverrides};
 use crate::state::AppState;
+
+/// Pulls the per-photo context out of one `images[]` entry.
+///
+/// A grouped request carries several photos whose capture time, keywords and
+/// folders all differ, but the option fields arrive flat; without these the
+/// whole group would inherit the first photo's context. Absent keys stay
+/// `None` and fall back to the batch-level options, which is exactly what a
+/// single-photo request does today.
+fn image_overrides(item: &Value) -> PhotoOverrides {
+    PhotoOverrides {
+        capture_time: item.get("date_time_unix").and_then(Value::as_f64),
+        date_time: item
+            .get("date_time")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        existing_keywords: item
+            .get("existing_keywords")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            }),
+        folder_names: item
+            .get("folder_names")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        exposure_bias: item.get("exposure_bias").and_then(Value::as_f64),
+        is_raw: item.get("is_raw").and_then(Value::as_bool),
+    }
+}
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route(
@@ -69,6 +101,7 @@ async fn index_by_reference(
 
     let mut paths: Vec<Option<String>> = Vec::with_capacity(images_data.len());
     let mut ids: Vec<Option<String>> = Vec::with_capacity(images_data.len());
+    let mut per_image: Vec<PhotoOverrides> = Vec::with_capacity(images_data.len());
     for item in &images_data {
         let path = item.get("path").and_then(Value::as_str).map(str::to_string);
         let photo_id = item
@@ -78,6 +111,7 @@ async fn index_by_reference(
             .map(str::to_string);
         paths.push(path);
         ids.push(photo_id);
+        per_image.push(image_overrides(item));
     }
 
     let mismatched = paths.len() != ids.len()
@@ -91,38 +125,39 @@ async fn index_by_reference(
             .into_response();
     }
 
-    // Raw bytes only — `process_batch` runs the same `normalize_image_bytes`
-    // step on these that `/index` runs on its multipart uploads; doing it
-    // again here would double-convert.
-    let mut images: Vec<UploadedImage> = Vec::new();
+    // Paths, not bytes: `process_batch` reads each file only when it is about
+    // to normalise it, so a group of raw originals is never all resident at
+    // once. It also runs the same `normalize_image_bytes` step on these that
+    // `/index` runs on its multipart uploads — converting here too would
+    // double-convert.
+    //
+    // Files that cannot be read are reported by `process_batch` against their
+    // photo_id, which is what the plugin needs in order to retry that one photo
+    // through its export fallback. This loop used to read them here and lose
+    // the association.
+    let mut file_paths: Vec<String> = Vec::new();
     let mut photo_ids: Vec<String> = Vec::new();
-    let mut read_errors: Vec<String> = Vec::new();
-
-    for (path, photo_id) in paths.into_iter().flatten().zip(ids.into_iter().flatten()) {
-        let raw = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                log::warn!("File not found at path: {path}. Skipping.");
-                read_errors.push(format!("File not found: {path}"));
-                continue;
-            }
-            Err(e) => {
-                log::error!("Error reading file at path {path}: {e}");
-                read_errors.push(format!("Error reading {path}: {e}"));
-                continue;
-            }
-        };
-        let filename = std::path::Path::new(&path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.clone());
-        images.push(UploadedImage {
-            bytes: raw,
-            filename,
-        });
+    let mut overrides: Vec<PhotoOverrides> = Vec::new();
+    for ((path, photo_id), photo_overrides) in paths
+        .into_iter()
+        .flatten()
+        .zip(ids.into_iter().flatten())
+        .zip(per_image)
+    {
+        file_paths.push(path);
         photo_ids.push(photo_id);
+        overrides.push(photo_overrides);
     }
 
     let fields = json_fields_to_string_map(obj);
-    process_batch(state, fields, images, photo_ids, read_errors, false).await
+    process_batch(
+        state,
+        fields,
+        ImageSource::Paths(file_paths),
+        photo_ids,
+        overrides,
+        Vec::new(),
+        false,
+    )
+    .await
 }

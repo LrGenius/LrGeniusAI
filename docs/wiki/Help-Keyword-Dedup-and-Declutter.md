@@ -3,7 +3,7 @@
 LrGeniusAI offers two complementary keyword management features to keep your Lightroom catalog clean:
 
 - **Deduplicate Keyword Synonyms** — an interactive workflow to find and merge near-duplicate or synonym keywords that already exist in your catalog.
-- **Auto De-Clutter during Indexing** — an automatic step inside Analyze & Index Photos that prevents newly AI-generated keywords from creating near-duplicates of what's already in your catalog.
+- **Auto De-Clutter during Indexing** — an automatic step inside Analyze & Index Photos that reuses existing catalog keywords instead of creating duplicates of them.
 
 ---
 
@@ -23,7 +23,7 @@ The workflow has five steps:
 
 #### Step 1 — Configuration
 
-- **AI Model** — choose which LLM validates the similarity clusters. Options: ChatGPT, Gemini, Ollama, LM Studio. If no key/server is configured, the task falls back to CLIP-only (no LLM validation).
+- **AI Model** — choose which LLM validates the similarity clusters. Options: ChatGPT, Gemini, Ollama, LM Studio, and the built-in local engines (`llamacpp`, `mlx` — see [Local AI Models](Help-Local-AI-Models)). If no key/server/local model is configured, the task falls back to CLIP-only (no LLM validation).
 - **Matching Strictness** — slider from 0.70 to 0.98.
   - Lower values (0.70) produce more suggestions and may include false positives.
   - Higher values (0.98) are conservative; fewer but more certain matches.
@@ -61,7 +61,7 @@ A list of all proposed merge pairs is shown:
 
 Deselect any pair you want to keep separate. When satisfied, click Merge.
 
-There is also a **Sync backend** checkbox (recommended on). When checked, the backend's ChromaDB metadata is updated so that semantic search and future AI operations reflect the merged keywords.
+There is also a **Sync backend** checkbox (recommended on). When checked, the backend's stored metadata is updated so that semantic search and future AI operations reflect the merged keywords.
 
 #### Step 5 — Execution
 
@@ -79,34 +79,40 @@ A summary is shown at the end: how many keywords were merged, how many pairs wer
 
 ### What it does
 
-When **Analyze & Index Photos** generates new keywords, the de-clutter step compares those new keywords against what's already in your catalog. If a new keyword is semantically near-identical to an existing one, it is replaced by the existing one before anything is written to Lightroom.
+Enable **Keyword aliases** ("Reduce catalog clutter by reusing existing keywords") in the Analyze & Index dialog. The AI then returns, for each keyword, a short list of same-language aliases — words that mean exactly the same thing. Before a keyword is written to Lightroom, it is looked up against your existing keywords by its own name *and* by each of those aliases. On a hit, the existing keyword is reused instead of a new one being created.
 
-This means: if your catalog already has `Car` and the AI generates `Automobile`, the photo receives `Car`, not a second keyword entry.
+This means: if your catalog already has `Car` and the AI generates `Automobile` (with `Car` among its aliases), the photo receives `Car`, not a second keyword entry.
+
+Matching is exact (case-insensitive) on names and aliases — there is no similarity threshold and no embedding step, so it adds no latency to indexing.
 
 ### When it runs
 
-Automatically, as part of the **Apply Metadata** phase inside Analyze & Index Photos — no separate action needed. It only runs when new keywords are being written.
+Automatically, as part of the **Apply Metadata** phase inside Analyze & Index Photos — no separate action needed. It only runs when new keywords are being written and the option is enabled.
+
+### How the winning keyword is chosen
+
+Existing catalog keywords always win over newly generated ones, and an existing keyword **name** always wins over a synonym claim:
+
+1. The candidate name, then each of its aliases, is matched against existing keyword *names*.
+2. Only if all of those miss are the same terms matched against existing keyword *synonyms*.
+3. Otherwise the keyword is created.
+
+A synonym listed by two different keywords is ambiguous and never matches — the keyword is created instead of guessing. Keywords resolved earlier in the same run join the index, so later photos in the run dedupe against them too.
+
+### Interaction with Bilingual Keywords
+
+De-clutter decides *which* keyword lands on the photo; bilingual keywords make sure no term becomes unfindable. Everything that names the same concept is merged into the winning keyword's Lightroom **synonym** field:
+
+- the translations, and their aliases, when **Bilingual Keywords** is on
+- the generated name itself whenever de-clutter routed it to a differently-named keyword — `Automobile` resolving to `Car` writes `Automobile` as a synonym of `Car`
+
+So a de-cluttered catalog stays searchable under every generated variant, and those synonyms feed step 2 above on later runs.
+
+Same-language aliases are deliberately *not* written to the synonym field. LLMs distinguish true synonyms from hypernyms and merely co-occurring concepts unreliably, and a polluted synonym field would degrade both this feature and the interactive deduplication task. Aliases exist only to drive matching during the run.
 
 ### What the validation dialog shows
 
-If any replacements were made, the **keyword validation dialog** shows a two-column view:
-
-| Generated (AI) | | De-cluttered (final) |
-|---|---|---|
-| Automobile | → | Car |
-| Vehicle | → | Car |
-| Tree | | Tree |
-
-- Left column: what the AI originally produced.
-- Right column: what will actually be written to Lightroom (editable).
-- An arrow is shown only when the name was changed.
-- A label below the list shows the total number of merges applied.
-
-You can edit any entry in the right column before confirming.
-
-### How the canonical name is chosen
-
-Existing catalog keywords always win over newly generated ones. If the AI generates a keyword that already exists in the catalog (case-insensitively), the existing form is used as-is. If multiple new keywords cluster together and none already exists in the catalog, the first member of the cluster is used as the canonical name.
+The keyword validation dialog lists the generated keywords, which you can edit before confirming. De-clutter is applied afterwards, when the keywords are written to Lightroom, so the dialog does not preview the merges. To see and approve merges explicitly, use **Deduplicate Keyword Synonyms** above.
 
 ---
 
@@ -114,7 +120,7 @@ Existing catalog keywords always win over newly generated ones. If the AI genera
 
 - **Run Deduplicate Keyword Synonyms after a large initial indexing run.** A freshly indexed catalog often has synonym sprawl that is easiest to clean up in one batch before you build more keyword structure on top of it.
 - **Use a higher strictness (0.90+) with LLM validation** for precise taxonomies (wildlife, botany, places). Use lower strictness (0.75–0.85) with CLIP-only if you want a fast first pass and are happy to review more suggestions manually.
-- **De-clutter is CLIP-only** (no LLM call) to keep indexing latency low. For finer control, run the interactive Deduplicate task afterwards.
+- **Auto de-clutter matches exact names and aliases only** — no similarity threshold, so it adds no latency to indexing but also won't catch variants the AI didn't list as aliases. Run the interactive Deduplicate task afterwards to catch those semantically.
 - **Back up your catalog** before running the interactive deduplication. The merge step modifies keyword assignments across potentially thousands of photos and cannot be undone automatically.
 - After a merge run, use `Metadata → Purge Unused Keywords` in Lightroom to remove the now-empty duplicate entries from the keyword list.
 

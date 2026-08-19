@@ -16,10 +16,26 @@ use lrg_analysis::keywords::{
     replace_in_flattened_keywords, replace_in_keyword_structure,
 };
 use lrg_ml::siglip::l2_normalize;
+// Provider-name resolution lives in `lrg_providers::provider` so every route
+// agrees on which names are valid; this module used to keep its own list, which
+// is why `"openai"` worked for indexing but silently disabled LLM validation
+// here.
+use lrg_providers::provider::is_known_provider;
 use lrg_providers::text_llm::{validate_clusters_with_llm, TextLlmConfig};
 use lrg_store::IMAGE_TABLE;
 
 use crate::state::AppState;
+
+/// Sink for `run_clustering`'s stage updates. Async-job callers point this
+/// at the job registry; the synchronous `/keywords/cluster` route passes
+/// `None` because nobody can observe a job that hasn't been created.
+type ProgressSink<'a> = Option<&'a (dyn Fn(Value) + Send + Sync)>;
+
+fn report(sink: ProgressSink<'_>, progress: Value) {
+    if let Some(sink) = sink {
+        sink(progress);
+    }
+}
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
@@ -38,15 +54,16 @@ pub fn router() -> axum::Router<Arc<AppState>> {
         )
 }
 
-const KNOWN_PROVIDERS: &[&str] = &["chatgpt", "gemini", "ollama", "lmstudio"];
-
 struct ClusterRequest {
     unique: Vec<String>,
     threshold: f64,
     config: TextLlmConfig,
 }
 
-fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
+fn parse_cluster_request(
+    data: &Value,
+    local_engine: Option<lrg_providers::local::SharedLocalEngine>,
+) -> Result<ClusterRequest, &'static str> {
     let Some(keyword_names) = data.get("keywords").and_then(Value::as_array) else {
         return Err("keywords must be a list");
     };
@@ -61,7 +78,7 @@ fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let use_llm = KNOWN_PROVIDERS.contains(&provider.as_str());
+    let use_llm = is_known_provider(&provider);
     let default_threshold = if use_llm { 0.85 } else { 0.88 };
     let threshold = clamp_threshold(
         data.get("threshold")
@@ -90,6 +107,7 @@ fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
                 .get("lmstudio_base_url")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            local_engine,
         },
     })
 }
@@ -100,11 +118,19 @@ fn parse_cluster_request(data: &Value) -> Result<ClusterRequest, &'static str> {
 /// but the caller wires up via `server_lifecycle.get_model()` in
 /// practice), cluster by cosine similarity, then optionally hand the
 /// candidates to an LLM for validation.
-async fn run_clustering(state: &AppState, req: &ClusterRequest) -> Value {
+async fn run_clustering(
+    state: &AppState,
+    req: &ClusterRequest,
+    progress: ProgressSink<'_>,
+) -> Value {
     if req.unique.len() < 2 {
         return json!({"results": [], "warning": Value::Null});
     }
 
+    report(
+        progress,
+        json!({"stage": "embedding", "done": 0, "total": req.unique.len()}),
+    );
     let mut embeddings = match state.siglip.embed_text(&req.unique) {
         Ok(e) => e,
         Err(e) => {
@@ -115,6 +141,10 @@ async fn run_clustering(state: &AppState, req: &ClusterRequest) -> Value {
         l2_normalize(emb);
     }
 
+    report(
+        progress,
+        json!({"stage": "clustering", "done": 0, "total": req.unique.len()}),
+    );
     let n = embeddings.len();
     let mut sim = vec![0.0f64; n * n];
     for i in 0..n {
@@ -132,7 +162,7 @@ async fn run_clustering(state: &AppState, req: &ClusterRequest) -> Value {
         .map(|idxs| idxs.into_iter().map(|i| req.unique[i].clone()).collect())
         .collect();
 
-    let use_llm = KNOWN_PROVIDERS.contains(&req.config.provider.as_str());
+    let use_llm = is_known_provider(&req.config.provider);
     log::info!(
         "cluster_keywords: {} keywords -> {} CLIP candidate(s) (threshold={}, llm={})",
         req.unique.len(),
@@ -146,8 +176,13 @@ async fn run_clustering(state: &AppState, req: &ClusterRequest) -> Value {
     );
 
     if use_llm && !candidates.is_empty() {
-        let client = reqwest::Client::new();
-        let clusters = validate_clusters_with_llm(&client, &candidates, &req.config).await;
+        let clusters = validate_clusters_with_llm(&candidates, &req.config, |done, total| {
+            report(
+                progress,
+                json!({"stage": "llm", "done": done, "total": total}),
+            );
+        })
+        .await;
         json!({"results": clusters, "warning": Value::Null})
     } else {
         json!({"results": candidates, "warning": Value::Null})
@@ -159,7 +194,7 @@ async fn cluster_keywords(
     body: Option<Json<Value>>,
 ) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let req = match parse_cluster_request(&data) {
+    let req = match parse_cluster_request(&data, state.llm.current()) {
         Ok(r) => r,
         Err(e) => {
             return (
@@ -169,7 +204,7 @@ async fn cluster_keywords(
                 .into_response()
         }
     };
-    let result = run_clustering(&state, &req).await;
+    let result = run_clustering(&state, &req, None).await;
     Json(json!({"results": result["results"], "error": null, "warning": result["warning"]}))
         .into_response()
 }
@@ -179,7 +214,7 @@ async fn cluster_keywords_start(
     body: Option<Json<Value>>,
 ) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let req = match parse_cluster_request(&data) {
+    let req = match parse_cluster_request(&data, state.llm.current()) {
         Ok(r) => r,
         Err(e) => {
             return (
@@ -195,7 +230,13 @@ async fn cluster_keywords_start(
     let unique_len = req.unique.len();
     let state_for_task = state.clone();
     tokio::spawn(async move {
-        let result = run_clustering(&state_for_task, &req).await;
+        // Publish each stage on the job so a polling client can show what
+        // is happening; LLM validation of a large branch can run for many
+        // minutes and used to look indistinguishable from a hung job.
+        let jobs = state_for_task.jobs.clone();
+        let progress_job_id = job_id.clone();
+        let sink = move |progress: Value| jobs.set_progress(&progress_job_id, progress);
+        let result = run_clustering(&state_for_task, &req, Some(&sink)).await;
         state_for_task.jobs.complete_job(&job_id, result);
     });
     log::info!("cluster_keywords: started async job {job_id_for_log} for {unique_len} keywords");

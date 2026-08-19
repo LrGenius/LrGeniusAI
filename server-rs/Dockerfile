@@ -8,17 +8,21 @@
 # exists — see server-rs/README.md), or the server starts fine but
 # /index and /faces/detect fail until the files are in place.
 
-FROM rust:1-bookworm AS builder
+FROM rust:1-trixie AS builder
 
 WORKDIR /app
 
 # pkg-config + libssl-dev: openssl-sys (reqwest's native-tls, ureq in ort-sys)
 # links against the system OpenSSL rather than vendoring it.
 # protobuf-compiler: prost-build (pulled in transitively by lancedb/lance).
+# libprotobuf-dev: ships the well-known-types .proto files (google/protobuf/empty.proto
+# etc.) under /usr/include — protobuf-compiler only provides the protoc binary itself,
+# and lance-encoding's build script imports empty.proto.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     protobuf-compiler \
+    libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Baked in via option_env!() at compile time (lrg-common::version) — same
@@ -42,7 +46,7 @@ RUN mkdir -p /out && \
     cp -L target/release/geniusai-server /out/ && \
     find target/release -maxdepth 1 \( -name '*.so*' -o -name '*.dylib' \) -exec cp -L {} /out/ \;
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

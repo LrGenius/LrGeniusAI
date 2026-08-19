@@ -1,0 +1,117 @@
+{
+  "name": "portrait-shallow-dof",
+  "notes": "Synthetic. 85mm f/1.4 headshot burst. The keeper is eye-sharp on smooth bokeh (low frame-wide variance, high peak); the decoy is soft everywhere over a detailed background. Frame-wide sharpness alone picks the decoy.",
+  "culling_preset": "portrait",
+  "time_delta_seconds": 2,
+  "groups_are_authoritative": true,
+  "groups": [
+    {
+      "group_id": "p1",
+      "photos": [
+        {
+          "photo_id": "p1_keeper",
+          "filename": "p1_keeper.jpg",
+          "capture_time": 1000.0,
+          "phash": "a5a5a5a5a5a5a5a5",
+          "metadata": {
+            "cull_sharpness": 0.28,
+            "cull_sharpness_peak": 0.95,
+            "cull_exposure": 0.66,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.55,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 1
+        },
+        {
+          "photo_id": "p1_busy",
+          "filename": "p1_busy.jpg",
+          "capture_time": 1000.4,
+          "phash": "a5a5a5a5a5a5a5a5",
+          "metadata": {
+            "cull_sharpness": 0.52,
+            "cull_sharpness_peak": 0.55,
+            "cull_exposure": 0.64,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.6,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 2
+        },
+        {
+          "photo_id": "p1_soft",
+          "filename": "p1_soft.jpg",
+          "capture_time": 1000.8,
+          "phash": "a5a5a5a5a5a5a5a5",
+          "metadata": {
+            "cull_sharpness": 0.1,
+            "cull_sharpness_peak": 0.14,
+            "cull_exposure": 0.62,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.45,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0
+          },
+          "rank": 3,
+          "reject": true
+        }
+      ]
+    },
+    {
+      "group_id": "p2",
+      "photos": [
+        {
+          "photo_id": "p2_keeper",
+          "filename": "p2_keeper.jpg",
+          "capture_time": 1200.0,
+          "phash": "5a5a5a5a5a5a5a5a",
+          "metadata": {
+            "cull_sharpness": 0.31,
+            "cull_sharpness_peak": 0.92,
+            "cull_exposure": 0.7,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.58,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0,
+            "cull_face_count": 1,
+            "cull_face_score": 0.85,
+            "cull_eye_openness": 0.85,
+            "cull_blink_penalty": 0.15,
+            "cull_face_sharpness": 0.85,
+            "cull_face_prominence": 0.6,
+            "cull_face_visibility": 0.85,
+            "cull_occlusion": 0.1
+          },
+          "rank": 1
+        },
+        {
+          "photo_id": "p2_blink",
+          "filename": "p2_blink.jpg",
+          "capture_time": 1200.5,
+          "phash": "5a5a5a5a5a5a5a5a",
+          "metadata": {
+            "cull_sharpness": 0.3,
+            "cull_sharpness_peak": 0.9,
+            "cull_exposure": 0.69,
+            "cull_noise": 0.12,
+            "cull_aesthetic": 0.57,
+            "cull_highlight_clip": 0.0,
+            "cull_shadow_clip": 0.0,
+            "cull_face_count": 1,
+            "cull_face_score": 0.3,
+            "cull_eye_openness": 0.1,
+            "cull_blink_penalty": 0.9,
+            "cull_face_sharpness": 0.8,
+            "cull_face_prominence": 0.6,
+            "cull_face_visibility": 0.8,
+            "cull_occlusion": 0.1
+          },
+          "rank": 2,
+          "reject": true
+        }
+      ]
+    }
+  ]
+}

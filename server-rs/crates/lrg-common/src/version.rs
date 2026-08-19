@@ -43,7 +43,20 @@ pub fn check_plugin_backend_version(
     plugin_build: Option<i64>,
     plugin_release_tag: Option<&str>,
 ) -> Value {
-    let backend = get_backend_version_info();
+    check_plugin_backend_version_against(
+        &get_backend_version_info(),
+        plugin_version,
+        plugin_build,
+        plugin_release_tag,
+    )
+}
+
+fn check_plugin_backend_version_against(
+    backend: &BackendVersionInfo,
+    plugin_version: Option<&str>,
+    plugin_build: Option<i64>,
+    plugin_release_tag: Option<&str>,
+) -> Value {
     let normalized_backend = normalize_version(Some(backend.backend_version));
     let normalized_plugin = normalize_version(plugin_version);
 
@@ -121,25 +134,52 @@ mod tests {
         assert_eq!(r["compatible"], json!(false));
     }
 
+    // These tests exercise the pure comparison logic against an injected
+    // `BackendVersionInfo` rather than the real `check_plugin_backend_version`,
+    // whose backend values are baked in at compile time via `LRG_BACKEND_*`
+    // env vars. Release builds set those to the real tagged version (not
+    // "dev"), so asserting against the compiled-in defaults would pass only
+    // on dev builds and fail on every tagged release.
+    fn dev_backend() -> BackendVersionInfo {
+        BackendVersionInfo {
+            backend_version: "0.0.0-dev",
+            backend_release_tag: "v0.0.0-dev",
+            backend_build: 0,
+        }
+    }
+
     #[test]
     fn dev_fallback_accepts_placeholder_plugin() {
-        // Default build has backend_version "0.0.0-dev" -> dev backend.
-        let r = check_plugin_backend_version(Some("9.9.9"), Some(0), Some("v9.9.9"));
+        let r = check_plugin_backend_version_against(
+            &dev_backend(),
+            Some("9.9.9"),
+            Some(0),
+            Some("v9.9.9"),
+        );
         assert_eq!(r["compatible"], json!(true));
         assert!(r["reason"].as_str().unwrap().contains("dev fallback"));
     }
 
     #[test]
     fn exact_match_against_backend_version() {
-        // Backend default is 0.0.0-dev which normalizes to 0.0.0.
-        let r = check_plugin_backend_version(Some("v0.0.0"), None, None);
+        let backend = BackendVersionInfo {
+            backend_version: "1.4.2",
+            backend_release_tag: "v1.4.2",
+            backend_build: 20260726,
+        };
+        let r = check_plugin_backend_version_against(&backend, Some("v1.4.2"), None, None);
         assert_eq!(r["compatible"], json!(true));
         assert_eq!(r["reason"], json!("exact version match"));
     }
 
     #[test]
     fn mismatched_versions_are_incompatible() {
-        let r = check_plugin_backend_version(Some("1.2.3"), None, None);
+        let backend = BackendVersionInfo {
+            backend_version: "1.4.2",
+            backend_release_tag: "v1.4.2",
+            backend_build: 20260726,
+        };
+        let r = check_plugin_backend_version_against(&backend, Some("1.2.3"), None, None);
         assert_eq!(r["compatible"], json!(false));
         assert_eq!(r["reason"], json!("plugin and backend version differ"));
     }

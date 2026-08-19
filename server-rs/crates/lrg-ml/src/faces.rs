@@ -11,6 +11,7 @@ use base64::Engine;
 use ort::session::Session;
 use ort::value::Tensor;
 
+use lrg_imaging::cull_config::FaceMetricsConfig;
 use lrg_imaging::pil_resample::{resize_plane, Filter};
 
 use crate::{arcface, face_quality, scrfd, umeyama};
@@ -55,9 +56,27 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// How much of the face pipeline to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FacePass {
+    /// Detection, ArcFace identity embedding, and a 112x112 JPEG thumbnail.
+    /// Required for person clustering and the people UI.
+    Full,
+    /// Detection and the quality proxies only.
+    ///
+    /// Culling reads `sharpness`, `eye_openness`, `occlusion`, `det_score`,
+    /// `area_ratio` and `center_proximity` — never the identity embedding or
+    /// the thumbnail. Skipping those avoids one ArcFace session run *per
+    /// detected face* plus three Lanczos plane resizes and a JPEG encode, which
+    /// on a group shot is most of the per-photo face cost.
+    QualityOnly,
+}
+
 #[derive(Debug, Clone)]
 pub struct FaceResult {
-    pub embedding: Vec<f32>, // L2-normalized, 512-d
+    /// L2-normalized, 512-d. Empty under [`FacePass::QualityOnly`].
+    pub embedding: Vec<f32>,
+    /// Empty under [`FacePass::QualityOnly`].
     pub thumbnail_base64: String,
     pub bbox: [i64; 4],
     pub area_ratio: f64,
@@ -118,10 +137,16 @@ fn thumbnail_112_jpeg(crop: &[u8], cw: usize, ch: usize) -> String {
 /// `detect_faces` call that never comes back down. Falling back to plain
 /// malloc/free per allocation is slower per call but keeps steady-state
 /// memory bounded, which matters far more for a long indexing run.
+///
+/// SCRFD is convolution-heavy, so it used to be the single largest source
+/// of memory growth during indexing via onnxruntime's leaking KleidiAI
+/// kernels. That leak is gone as of onnxruntime 1.28 and these sessions run
+/// with KleidiAI enabled again — see [`crate::DISABLE_KLEIDIAI`] for the
+/// measurements and the `LRG_DISABLE_KLEIDIAI` escape hatch.
 fn build_session(path: &Path) -> ort::Result<Session> {
-    Session::builder()?
-        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?
-        .commit_from_file(path)
+    let builder = Session::builder()?
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
+    crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
 }
 
 impl FaceModel {
@@ -164,17 +189,28 @@ impl FaceModel {
         }
     }
 
-    pub fn unload(&self) {
+    /// Drops the loaded session(s). Safe to call when nothing is loaded.
+    ///
+    /// The reason is a parameter because this is reached two ways — the
+    /// `/unload` route and the idle sweep — and the log line used to say
+    /// "due to inactivity" for both. A real `/unload` from the plugin then
+    /// looked like an idle timeout in the log, which is the kind of small lie
+    /// that costs an hour the next time someone reads it.
+    fn unload_with_reason(&self, reason: &str) {
         let mut guard = self.loaded.lock().unwrap();
         if guard.take().is_some() {
-            log::info!("Unloading InsightFace model due to inactivity...");
+            log::info!("Unloading InsightFace model ({reason})");
         }
+    }
+
+    pub fn unload(&self) {
+        self.unload_with_reason("requested");
     }
 
     pub fn unload_if_idle(&self) {
         let last = self.last_used_unix.load(Ordering::Relaxed);
         if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
-            self.unload();
+            self.unload_with_reason("idle");
         }
     }
 
@@ -195,6 +231,8 @@ impl FaceModel {
         pixels: &[u8],
         width: usize,
         height: usize,
+        cfg: &FaceMetricsConfig,
+        pass: FacePass,
     ) -> Result<Vec<FaceResult>, FaceError> {
         self.ensure_loaded()?;
         let mut guard = self.loaded.lock().unwrap();
@@ -218,23 +256,40 @@ impl FaceModel {
 
         for det in &detections {
             let kps_f64: [[f64; 2]; 5] = det.kps.map(|p| [p[0] as f64, p[1] as f64]);
-            let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
-            let blob = arcface::to_blob(&aligned);
-            let rec_input = Tensor::from_array(([1, 3, 112, 112], blob))?;
-            let rec_out = loaded
-                .rec_session
-                .run(ort::inputs!["input.1" => rec_input])?;
-            let (_, raw_emb) = rec_out[0].try_extract_tensor::<f32>()?;
-            let mut embedding = raw_emb.to_vec();
-            crate::siglip::l2_normalize(&mut embedding);
 
             let x1 = (det.bbox[0].round() as i64).max(0).min(width as i64);
             let y1 = (det.bbox[1].round() as i64).max(0).min(height as i64);
             let x2 = (det.bbox[2].round() as i64).max(0).min(width as i64);
             let y2 = (det.bbox[3].round() as i64).max(0).min(height as i64);
+            // Checked before the recognition pass rather than after it, so a
+            // degenerate box no longer costs an ArcFace run it then discards.
             if x2 <= x1 || y2 <= y1 {
                 continue;
             }
+
+            // Computed once and used twice: the recognition pass below and the
+            // occlusion measure further down both need the *aligned* crop —
+            // mirror asymmetry is only meaningful once the face has been
+            // rotated and scaled onto the canonical template — and both used to
+            // warp it independently with identical arguments. It runs on both
+            // passes; a 112x112 bilinear sample is three orders of magnitude
+            // cheaper than the ArcFace inference `QualityOnly` exists to skip.
+            let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
+
+            let embedding = match pass {
+                FacePass::Full => {
+                    let blob = arcface::to_blob(&aligned);
+                    let rec_input = Tensor::from_array(([1, 3, 112, 112], blob))?;
+                    let rec_out = loaded
+                        .rec_session
+                        .run(ort::inputs!["input.1" => rec_input])?;
+                    let (_, raw_emb) = rec_out[0].try_extract_tensor::<f32>()?;
+                    let mut embedding = raw_emb.to_vec();
+                    crate::siglip::l2_normalize(&mut embedding);
+                    embedding
+                }
+                FacePass::QualityOnly => Vec::new(),
+            };
             let (cw, ch) = ((x2 - x1) as usize, (y2 - y1) as usize);
             let (crop, _, _) = crop_rgb(
                 pixels,
@@ -246,9 +301,9 @@ impl FaceModel {
             );
 
             let area_ratio = (((x2 - x1) * (y2 - y1)) as f64 / image_area).clamp(0.0, 1.0);
-            let sharpness = face_quality::face_sharpness(&crop, cw, ch);
+            let sharpness = face_quality::face_sharpness(&crop, cw, ch, cfg);
             let eye_openness =
-                face_quality::eye_openness_proxy(&crop, cw, ch, [x1, y1, x2, y2], &kps_f64);
+                face_quality::eye_openness_proxy(&crop, cw, ch, [x1, y1, x2, y2], &kps_f64, cfg);
 
             let center_x = (x1 + x2) as f64 / 2.0;
             let center_y = (y1 + y2) as f64 / 2.0;
@@ -257,9 +312,11 @@ impl FaceModel {
             let center_proximity = (1.0 - (offset_x + offset_y) / 2.0).clamp(0.0, 1.0);
 
             let det_score = det.score as f64;
-            let occlusion =
-                face_quality::occlusion_proxy(det_score, center_proximity, eye_openness);
-            let thumbnail_base64 = thumbnail_112_jpeg(&crop, cw, ch);
+            let occlusion = face_quality::occlusion_from_crop(&aligned, 112, &kps_f64, cfg);
+            let thumbnail_base64 = match pass {
+                FacePass::Full => thumbnail_112_jpeg(&crop, cw, ch),
+                FacePass::QualityOnly => String::new(),
+            };
 
             results.push(FaceResult {
                 embedding,

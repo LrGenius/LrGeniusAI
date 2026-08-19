@@ -8,9 +8,24 @@ This repository uses a docs-as-code workflow for GitHub Wiki publishing.
 - Any file ending with `.md` in that folder is published to the GitHub Wiki
 - `docs/wiki/Home.md` becomes the wiki home page
 - Additional generated pages are created from repository READMEs:
-  - `Project-README.md` from `/README.md`
-  - `Plugin-README.md` from `/plugin/README.md`
-  - `Server-README.md` from `/server-rs/README.md`
+  - `Dev-Project-README.md` from `/README.md`
+  - `Dev-Plugin-README.md` from `/plugin/README.md`
+  - `Dev-Server-README.md` from `/server-rs/README.md`
+
+## What lands on lrgenius.com
+
+The website ([LrGenius/lrgenius.github.io](https://github.com/LrGenius/lrgenius.github.io))
+pulls `docs/wiki/` at build time and publishes **every page except**:
+
+- `Dev-*` — developer documentation, wiki-only
+- `Home` — the site has its own `/help` index
+- `_*` — wiki special pages (`_Sidebar`, `_Footer`)
+
+So a new user-facing page goes live at `lrgenius.com/help/docs/<lowercase-name>`
+by itself, and a page that should *not* be public needs a `Dev-` prefix. Give
+each page an `# H1` — the site uses it as the page title. Pages not placed in a
+curated group in the site's `src/pages/help/index.astro` are listed under "More
+Guides"; moving one into a proper group is a change in that repo.
 
 ## Automated publishing
 

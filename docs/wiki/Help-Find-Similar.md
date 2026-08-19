@@ -19,32 +19,36 @@ The **Find Similar Images** workflow lets you select one photo and find other vi
 
 | Mode | What it finds |
 |---|---|
-| **Near duplicates (phash)** | Visually nearly identical images — same scene, slightly different exposure, crop, or retouch. Useful for finding exact or near-exact duplicates. |
-| **Similar content (CLIP)** | Semantically similar images — same subject, style, or scene even if taken at a different time or place. Useful for finding shots "like this one". |
+| **Near duplicates (visual match)** | Visually nearly identical images — same scene, slightly different crop or retouch. Useful for finding exact or near-exact duplicates. Uses a perceptual hash. |
+| **Similar content (AI)** | Semantically similar images — same subject, style, or scene even if taken at a different time or place. Useful for finding shots "like this one". Uses the SigLIP embedding. |
 
-### Search scope
+> A perceptual hash compares how the picture *looks*, so it does not survive a
+> large exposure change: the same frame at +2 EV reads as a different image.
+> Use **Similar content (AI)** to find other frames of the same scene across a
+> bracket.
+
+### Search in
 
 - **All indexed photos** — searches the entire backend database.
 - **Current view** — restricts the search to the currently open folder or collection.
-- **Selected photos** — searches within the current selection.
 
 ### Max results
 
 How many similar photos to return. Default: 100.
 
-### Similarity strictness (near-duplicate mode)
+### Similarity (near-duplicate mode only)
 
 Controls how closely two images must match to be included:
 
-- **Strict** — only very close matches (nearly identical images).
+- **Strict (near duplicates)** — only very close matches.
 - **Normal** — balanced default.
-- **Loose** — broader matches, useful for finding related variations.
+- **Loose (more variety)** — broader matches, useful for finding related variations.
 
 ---
 
 ## Tips
 
-- Use **Near duplicates (phash)** to find forgotten duplicates before deleting or archiving a shoot.
-- Use **Similar content (CLIP)** to build collections of photos sharing a visual theme — useful for portfolio editing or creating consistent series.
-- Photos must be indexed with **Create search embeddings** enabled for CLIP mode to work. Near-duplicate (phash) mode also benefits from indexing but uses perceptual hash comparison.
+- Use **Near duplicates** to find forgotten duplicates before deleting or archiving a shoot.
+- Use **Similar content (AI)** to build collections of photos sharing a visual theme — useful for portfolio editing or creating consistent series.
+- Photos must be indexed with **Enable smart photo search** for the AI mode to work. Near-duplicate mode needs indexing too, but compares perceptual hashes rather than embeddings.
 - Set the Lightroom collection sort order to **Custom Order** after the results collection is created to see the best matches at the top.

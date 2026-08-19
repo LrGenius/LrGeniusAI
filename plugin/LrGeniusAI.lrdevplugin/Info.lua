@@ -35,6 +35,10 @@ return {
 			file = "TaskSemanticSearch.lua",
 		},
 		{
+			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images..."),
+			file = "TaskFindSimilarImages.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/CullPhotos=Cull Similar Photos..."),
 			file = "TaskCullPhotos.lua",
 		},
@@ -43,20 +47,12 @@ return {
 			file = "TaskRetrieveMetadata.lua",
 		},
 		{
-			title = LOC("$$$/LrGeniusAI/Menu/ImportMetadata=Import Metadata from Catalog..."),
-			file = "TaskImportMetadata.lua",
-		},
-		{
 			title = LOC("$$$/LrGeniusAI/Menu/People=People..."),
 			file = "TaskPeople.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces..."),
 			file = "TaskFindSimilarFaces.lua",
-		},
-		{
-			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images..."),
-			file = "TaskFindSimilarImages.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
@@ -82,6 +78,10 @@ return {
 			file = "TaskSemanticSearch.lua",
 		},
 		{
+			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images..."),
+			file = "TaskFindSimilarImages.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/CullPhotos=Cull Similar Photos..."),
 			file = "TaskCullPhotos.lua",
 		},
@@ -90,20 +90,12 @@ return {
 			file = "TaskRetrieveMetadata.lua",
 		},
 		{
-			title = LOC("$$$/LrGeniusAI/Menu/ImportMetadata=Import Metadata from Catalog..."),
-			file = "TaskImportMetadata.lua",
-		},
-		{
 			title = LOC("$$$/LrGeniusAI/Menu/People=People..."),
 			file = "TaskPeople.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces..."),
 			file = "TaskFindSimilarFaces.lua",
-		},
-		{
-			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images..."),
-			file = "TaskFindSimilarImages.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
@@ -119,6 +111,14 @@ return {
 		{
 			title = "Developer: Run Automated Tests...",
 			file = "TaskAutomatedTests.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/Menu/ImportMetadata=Import Metadata from Catalog..."),
+			file = "TaskImportMetadata.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/Menu/ExportCullFixture=Export Culling Fixture..."),
+			file = "TaskExportCullFixture.lua",
 		},
 	},
 

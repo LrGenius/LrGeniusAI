@@ -1,5 +1,5 @@
 -- lrgenius-server API Wrapper
--- Provides functions to interact with the Python-based search index server.
+-- Provides functions to interact with the lrgenius-server backend (Rust).
 
 SearchIndexAPI = {}
 
@@ -46,13 +46,23 @@ local ENDPOINTS = {
 	START_CLIP_DOWNLOAD = "/clip/download/start",
 	STATUS_CLIP_DOWNLOAD = "/clip/download/status",
 	CLIP_STATUS = "/clip/status",
+	START_BIOCLIP_DOWNLOAD = "/bioclip/download/start",
+	STATUS_BIOCLIP_DOWNLOAD = "/bioclip/download/status",
+	BIOCLIP_STATUS = "/bioclip/status",
+	SPECIES_LINKS = "/species/links",
+	ASSETS_STATUS = "/assets/status",
+	START_ASSETS_DOWNLOAD = "/assets/download/start",
+	STATUS_ASSETS_DOWNLOAD = "/assets/download/status",
+	LLM_CATALOG = "/llm/catalog",
+	LLM_STATUS = "/llm/status",
+	START_LLM_DOWNLOAD = "/llm/download/start",
+	STATUS_LLM_DOWNLOAD = "/llm/download/status",
 	CHECK_UNPROCESSED = "/index/check-unprocessed",
 	FACES_CLUSTER = "/faces/cluster",
 	FACES_PERSONS = "/faces/persons",
 	FACES_PERSON_PHOTOS = "/faces/persons", -- suffix /<id>/photos
 	FACES_DETECT = "/faces/detect",
 	FACES_QUERY = "/faces/query",
-	MIGRATE_PHOTO_IDS = "/db/migrate-photo-ids",
 	DB_BACKUP = "/db/backup",
 	SYNC_CLEANUP = "/sync/cleanup",
 	SYNC_CLAIM = "/sync/claim",
@@ -616,10 +626,12 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 	})
 
 	local photoPaths = {}
-	local photoIndex = 1
 	for _, rendition in exportSession:renditions() do
 		local success, path = rendition:waitForRender()
-		local photo = photos[photoIndex]
+		-- Same reason as in analyzeAndIndexSelectedPhotos: the rendition knows its
+		-- own photo, and a loop counter would mis-key every later path as soon as
+		-- Lightroom skips one rendition.
+		local photo = rendition.photo
 		if photo ~= nil then
 			local photoName = LrPathUtils.leafName(photo:getFormattedMetadata("fileName"))
 			log:trace(
@@ -639,7 +651,6 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 		else
 			log:error("Photo is nil in exportPhotosForIndexing, probably it got deleted in the meantime.")
 		end
-		photoIndex = photoIndex + 1
 	end
 	return photoPaths
 end
@@ -668,7 +679,14 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 	local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
 
 	local body = {
-		images = { { path = filePath, photo_id = photoId } },
+		images = {
+			{
+				path = filePath,
+				photo_id = photoId,
+				exposure_bias = options.exposure_bias,
+				is_raw = options.is_raw,
+			},
+		},
 		catalog_id = getCatalogId(),
 		tasks = options.tasks or {},
 		provider = options.provider,
@@ -682,11 +700,13 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		generate_caption = tostring(options.generate_caption or false),
 		generate_title = tostring(options.generate_title or false),
 		generate_alt_text = tostring(options.generate_alt_text or false),
-		submit_gps = tostring(options.submit_gps or false),
+		-- Absent means enabled, matching the backend default: this switch was
+		-- inert for a long time and the location context reached the model
+		-- regardless, so a caller that does not mention it must not now lose it.
+		submit_gps = tostring(options.submit_gps ~= false),
 		submit_keywords = tostring(options.submit_keywords or false),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = options.user_context,
-		gps_coordinates = options.gps_coordinates and JSON:encode(options.gps_coordinates) or nil,
 		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
 		folder_names = options.folder_names,
 		prompt = options.prompt,
@@ -704,6 +724,12 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+		-- Local-engine tuning. Ignored by every remote provider; changing one
+		-- makes the server reload the local model, so these are settings the
+		-- user adjusts in Plug-in Manager, not per photo.
+		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
 	}
 
 	log:trace("Analyzing and indexing photo (by reference): " .. tostring(filePath) .. " id " .. photoId)
@@ -736,6 +762,126 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 end
 
 ---
+-- Analyzes and indexes several photos in one /index_by_reference request.
+--
+-- Only worthwhile for the in-process llama.cpp backend, which evaluates the
+-- run-constant prompt prefix once for the whole group and decodes the photos
+-- in parallel sequences. Remote providers gain nothing and are kept at one
+-- photo per request by Util.groupedBatchSize.
+--
+-- The volatile per-photo context (capture time, existing keywords, folder
+-- names) travels inside each `images` entry rather than as a top-level field,
+-- because the top-level fields apply to the whole request and would otherwise
+-- give every photo in the group the first photo's context.
+--
+-- @param entries table Array of { photoId, filePath, options } — `options`
+--   being that photo's own buildPhotoOptions result.
+-- @param options table Run-wide options; supplies everything not per-photo.
+-- @return boolean overallSuccess True when at least one photo was indexed.
+-- @return table|string response The decoded response, or an error string.
+--
+function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
+	if type(entries) ~= "table" or #entries == 0 then
+		return false, "No photos provided"
+	end
+	options = options or {}
+
+	local images = {}
+	for _, entry in ipairs(entries) do
+		if not entry.filePath or entry.filePath == "" then
+			return false, "No file path provided for " .. tostring(entry.photoId)
+		end
+		if not entry.photoId or entry.photoId == "" then
+			return false, "No photo ID provided"
+		end
+		local po = entry.options or {}
+		table.insert(images, {
+			path = entry.filePath,
+			photo_id = entry.photoId,
+			date_time = po.date_time,
+			date_time_unix = po.date_time_unix,
+			existing_keywords = po.existing_keywords,
+			folder_names = po.folder_names,
+			exposure_bias = po.exposure_bias,
+			is_raw = po.is_raw,
+		})
+	end
+
+	-- Everything not per-photo comes from the first entry: those fields are
+	-- run-constant, which is exactly why the server can pin them in its cache.
+	local base = entries[1].options or options
+	local body = {
+		images = images,
+		catalog_id = getCatalogId(),
+		tasks = options.tasks or {},
+		provider = options.provider,
+		model = options.model,
+		api_key = options.api_key,
+		language = options.language or (prefs and prefs.generateLanguage) or "English",
+		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
+		replace_ss = tostring(options.replace_ss or false),
+		generate_keywords = tostring(options.generate_keywords or false),
+		generate_caption = tostring(options.generate_caption or false),
+		generate_title = tostring(options.generate_title or false),
+		generate_alt_text = tostring(options.generate_alt_text or false),
+		-- Absent means enabled, matching the backend default: this switch was
+		-- inert for a long time and the location context reached the model
+		-- regardless, so a caller that does not mention it must not now lose it.
+		submit_gps = tostring(options.submit_gps ~= false),
+		submit_keywords = tostring(options.submit_keywords or false),
+		submit_folder_names = tostring(options.submit_folder_names or false),
+		user_context = base.user_context or options.user_context,
+		prompt = options.prompt,
+		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
+		bilingual_keywords = tostring(options.bilingual_keywords or false),
+		keyword_secondary_language = options.keyword_secondary_language
+			or (prefs and prefs.keywordSecondaryLanguage)
+			or "English",
+		generate_aliases = tostring(options.generate_aliases or false),
+		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
+		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
+		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		vertex_project_id = options.vertex_project_id,
+		vertex_location = options.vertex_location,
+		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
+		llm_batch_size = tostring(#images),
+		-- Local-engine tuning. Ignored by every remote provider; changing one
+		-- makes the server reload the local model, so these are settings the
+		-- user adjusts in Plug-in Manager, not per photo.
+		llm_n_ctx = prefs and prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+		llm_n_parallel = prefs and prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+		llm_gpu_layers = prefs and prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+	}
+
+	log:trace("Analyzing and indexing " .. tostring(#images) .. " photos (grouped by reference)")
+
+	-- Scale the timeout with the group: the single-photo call allows 720s and
+	-- a group of N is roughly N photos' work in one request.
+	local timeout = 720 * #images
+	local response, err = _request("POST", getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE, body, timeout)
+
+	if not response then
+		log:error("Failed to analyze/index photo group (by reference): " .. tostring(err))
+		return false, err or "Unknown error"
+	end
+	if response.status == "processed" then
+		return (response.success_count or 0) > 0, response
+	end
+	if response.error then
+		log:error("Backend error (grouped by reference): " .. tostring(response.error))
+		-- Carry the response through when it names per-photo results, so the
+		-- caller can still tell which photos to retry individually.
+		if response.results then
+			return false, response
+		end
+		return false, response.error
+	end
+	log:error("Unexpected response status (grouped by reference): " .. tostring(response.status))
+	return false, "Unexpected response status"
+end
+
+---
 -- Unified function to analyze and index photos with metadata and embeddings.
 -- Replaces the old separate analyze and index workflows.
 -- @param photoId string The ID of the photo.
@@ -750,14 +896,18 @@ end
 --   - generate_caption boolean: Generate caption (default: true)
 --   - generate_title boolean: Generate title (default: true)
 --   - generate_alt_text boolean: Generate alt text (default: false)
---   - submit_gps boolean: Submit GPS coordinates (default: false)
---   - gps_coordinates table: GPS coordinates {latitude, longitude}
+--   - submit_gps boolean: Include the photo's location in the AI context (default: true)
 --   - submit_keywords boolean: Submit existing keywords (default: false)
 --   - existing_keywords table: Array of existing keywords
 --   - submit_folder_names boolean: Submit folder names (default: false)
 --   - folder_names string: Folder path
 --   - user_context string: Additional context for the photo
 -- @return boolean success, table|string response - Returns success status and response data or error message
+--
+-- No task calls this any more: AI Edit runs on the style engine
+-- (`SearchIndexAPI.styleEdit`) alone. `/edit` and `/edit_base64` are still
+-- served by the backend, so this wrapper stays as the way back to the
+-- prompt-driven LLM edit rather than being deleted with it.
 ---
 
 function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
@@ -796,18 +946,52 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
 	)
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
+	-- Unlike the indexing path, the edit endpoint never builds location context
+	-- at all (see the module comment in `routes/edit.rs`), so this stays off.
 	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 	table.insert(mimeChunks, { name = "include_masks", value = tostring(options.include_masks ~= false) })
+
+	-- The Creative Controls group and the style-strength slider. These were
+	-- assembled by the dialog and then never sent, so the backend applied its own
+	-- defaults (every control on, style strength 0.5) and the whole group box was a
+	-- no-op. The backend reads absent booleans as `true`, so an unchecked box has to
+	-- travel as an explicit "false" rather than simply being omitted.
+	local function addBoolOpt(name, value)
+		table.insert(mimeChunks, { name = name, value = tostring(value ~= false) })
+	end
+	addBoolOpt("adjust_white_balance", options.adjust_white_balance)
+	addBoolOpt("adjust_basic_tone", options.adjust_basic_tone)
+	addBoolOpt("adjust_presence", options.adjust_presence)
+	addBoolOpt("adjust_color_mix", options.adjust_color_mix)
+	addBoolOpt("do_color_grading", options.do_color_grading)
+	addBoolOpt("use_tone_curve", options.use_tone_curve)
+	addBoolOpt("use_point_curve", options.use_point_curve)
+	addBoolOpt("adjust_detail", options.adjust_detail)
+	addBoolOpt("adjust_effects", options.adjust_effects)
+	addBoolOpt("adjust_lens_corrections", options.adjust_lens_corrections)
+	addBoolOpt("allow_auto_crop", options.allow_auto_crop)
+	-- Not a creative control: the backend cannot see the original encoding once
+	-- the photo has been exported to JPEG, and the edit guardrails need it to
+	-- know whether blown highlights still have anything behind them. Sent
+	-- explicitly rather than via addBoolOpt, whose absent-means-true default is
+	-- wrong here.
+	if options.is_raw ~= nil then
+		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
+	end
+	if options.style_strength ~= nil then
+		table.insert(mimeChunks, { name = "style_strength", value = tostring(options.style_strength) })
+	end
+	if options.composition_mode then
+		table.insert(mimeChunks, { name = "composition_mode", value = tostring(options.composition_mode) })
+	end
+
 	if options.user_context then
 		table.insert(mimeChunks, { name = "user_context", value = options.user_context })
 	end
 	if options.edit_intent then
 		table.insert(mimeChunks, { name = "edit_intent", value = options.edit_intent })
-	end
-	if options.gps_coordinates then
-		table.insert(mimeChunks, { name = "gps_coordinates", value = JSON:encode(options.gps_coordinates) })
 	end
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
@@ -912,15 +1096,13 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	table.insert(mimeChunks, { name = "generate_alt_text", value = tostring(options.generate_alt_text or false) })
 
 	-- Context options
-	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
+	-- Absent means enabled; see the note in indexPhotosByReference.
+	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps ~= false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 
 	if options.user_context then
 		table.insert(mimeChunks, { name = "user_context", value = options.user_context })
-	end
-	if options.gps_coordinates then
-		table.insert(mimeChunks, { name = "gps_coordinates", value = JSON:encode(options.gps_coordinates) })
 	end
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
@@ -946,6 +1128,17 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
+	end
+	-- Exposure compensation, needed by culling's bracket detection. Only sent
+	-- when the camera recorded it; see the note in buildPhotoOptions.
+	if type(options.exposure_bias) == "number" then
+		table.insert(mimeChunks, { name = "exposure_bias", value = tostring(options.exposure_bias) })
+	end
+	-- Whether the original is raw. Stored with the photo so later work — style
+	-- training above all, where raw and rendered Temp values are on different
+	-- scales — does not have to re-derive it. Absent when unknown.
+	if type(options.is_raw) == "boolean" then
+		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end
 	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
 		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
@@ -1033,10 +1226,12 @@ local function buildUrlWithParams(baseUrl, params)
 	end
 end
 
-function SearchIndexAPI.searchIndex(searchTerm, qualitySort, photosToSearch, searchOptions)
+-- `quality_sort` used to be the second parameter. `/search` never read it —
+-- it was the wire half of a "prettiest / ugliest" feature that had no UI
+-- either — so it is gone rather than left as a field the backend ignores.
+function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 	local params = {
 		term = searchTerm,
-		quality_sort = qualitySort,
 	}
 	local cid = getCatalogId()
 	if cid then
@@ -1179,7 +1374,8 @@ function SearchIndexAPI.formatStats(stats)
 		"Photos with title: " .. tostring(photos.with_title or 0),
 		"Photos with caption: " .. tostring(photos.with_caption or 0),
 		"Photos with keywords: " .. tostring(photos.with_keywords or 0),
-		"Photos with Vertex AI: " .. tostring(photos.with_vertexai or 0),
+		-- Vertex AI is disabled in the GUI; the backend code is untouched.
+		-- "Photos with Vertex AI: " .. tostring(photos.with_vertexai or 0),
 		"Faces total: " .. tostring(faces.total or 0),
 		"Persons total: " .. tostring(persons.total or 0),
 	}, "\n")
@@ -1272,6 +1468,35 @@ function SearchIndexAPI.groupSimilarPhotos(photoIds, options)
 	return result
 end
 
+---
+-- Groups and ranks photos for culling.
+--
+-- Each returned group carries `keep_all` (boolean) and `intentional_set`
+-- ("bracket" | "focus_stack" | "panorama" | null). A keep-all group is an
+-- exposure bracket, focus stack or panorama — one picture spread across several
+-- frames — and the backend guarantees its `reject_candidate_photo_ids` is
+-- empty. Branch on `keep_all`, not on `group_type`: the type field gained new
+-- values and an older client would treat an unfamiliar one as an ordinary
+-- group.
+--
+-- `summary` additionally reports `intentional_set_group_count` and
+-- `intentional_set_photo_count`.
+--
+-- Each photo's `metrics` may carry `semantic` plus `semantic_axis`
+-- ("action" | "expression" | "candid") — a zero-shot score for what the genre
+-- is actually judged on, which the technical signals cannot express. Absent
+-- when the photo has no embedding (the fast cull ingest skips it) or the preset
+-- names no axis.
+--
+-- @param photoIds table Array of stable photo IDs.
+-- @param options table phash_threshold, clip_threshold, time_delta_seconds,
+--   culling_preset, use_iqa (defaults true; scores the aesthetic term with
+--   CLIP-IQA over stored embeddings), semantic_weight (overrides the preset's
+--   weight for the genre axis; 0 disables it), and include_stored_metadata
+--   (echoes each photo's stored cull_* inputs under photos[].stored_metadata,
+--   for building evaluation fixtures).
+-- @return table|nil result, string|nil error
+---
 function SearchIndexAPI.cullPhotos(photoIds, options)
 	options = options or {}
 	if type(photoIds) ~= "table" or #photoIds == 0 then
@@ -1285,6 +1510,15 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		time_delta_seconds = options.time_delta_seconds or 2,
 		culling_preset = options.culling_preset or "default",
 	}
+	if options.include_stored_metadata then
+		body.include_stored_metadata = true
+	end
+	-- Overrides the preset's own weight for the genre semantic axis (peak
+	-- action, expression, candid moment). Exposed so the signal can be swept
+	-- from outside without a backend rebuild; nil leaves the preset in charge.
+	if type(options.semantic_weight) == "number" then
+		body.semantic_weight = options.semantic_weight
+	end
 
 	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CULL, body, 300)
 	if err then
@@ -1292,6 +1526,34 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		return nil, err
 	end
 	return result
+end
+
+---
+-- Ask the backend which of the given photo IDs still lack data for `tasks`.
+--
+-- `SearchIndexAPI.getMissingPhotosFromIndex` answers the same question but
+-- always walks the entire catalog first, which is far too heavy for a
+-- pre-flight over a selection. This checks exactly the IDs it is handed.
+-- @param photoIds table Array of photo IDs to test.
+-- @param tasks table Array of task names, e.g. { "cull" }.
+-- @return table|nil Array of photo IDs needing work, or nil plus an error.
+function SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, tasks)
+	if type(photoIds) ~= "table" or #photoIds == 0 then
+		return {}, nil
+	end
+
+	local body = {
+		photo_ids = photoIds,
+		tasks = tasks or { "cull" },
+		regenerate_metadata = false,
+	}
+
+	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body, 120)
+	if err then
+		log:error("checkUnprocessedPhotoIds failed: " .. tostring(err))
+		return nil, err
+	end
+	return (result and result.photo_ids) or {}, nil
 end
 
 ---
@@ -1571,12 +1833,11 @@ local function buildPhotoOptions(photo, photoId, options)
 	for k, v in pairs(options) do
 		photoOptions[k] = v
 	end
-	if options.submit_gps then
-		local gps = photo:getRawMetadata("gps")
-		if gps then
-			photoOptions.gps_coordinates = gps
-		end
-	end
+	-- No `gps_coordinates` here on purpose. The plug-in used to attach the raw
+	-- coordinates to every request and the backend never read the field: it
+	-- derives place names from the photo's own EXIF instead, which is why
+	-- `submit_gps` is the switch that matters. Sending coordinates nothing
+	-- consumes is noise, and privacy-sensitive noise at that.
 	if options.submit_keywords then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
@@ -1597,6 +1858,22 @@ local function buildPhotoOptions(photo, photoId, options)
 	if datetime ~= nil and type(datetime) == "number" then
 		photoOptions.date_time = LrDate.timeToW3CDate(datetime)
 		photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
+	end
+	-- Exposure compensation, stored so culling can recognise an exposure
+	-- bracket instead of nominating four of its five frames for deletion. Left
+	-- absent when the camera did not record it — see Util.getPhotoExif.
+	local exposureBias = photo:getRawMetadata("exposureBias")
+	if type(exposureBias) == "number" then
+		photoOptions.exposure_bias = exposureBias
+	end
+	-- Stored with the photo so later work does not have to ask the catalog
+	-- again: the same file can be edited from a different session, and the
+	-- style training in particular needs to keep raw and rendered originals
+	-- apart because their Temp values are on different scales. Absent when the
+	-- format could not be read; see Util.isRawPhoto.
+	local isRaw = Util.isRawPhoto(photo)
+	if isRaw ~= nil then
+		photoOptions.is_raw = isRaw
 	end
 	photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
 	photoOptions.photo_id = photoId
@@ -1634,13 +1911,25 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	options = options or {}
 	local shouldCloseScope = (closeProgressScope ~= false)
 
-	progressScope:setCaption(
-		LOC(
-			"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...",
-			#selectedPhotos,
-			options.model or "AI"
+	-- Only name the LLM when it is actually going to run. A pass that just
+	-- computes embeddings or identifies species never talks to it, and
+	-- announcing "Processing 400 photos with gemini-2.5-flash" for such a run
+	-- is simply wrong — it also sends people looking for an API-key problem
+	-- when something unrelated stalls.
+	local llmActive = options.enableMetadata and options.model
+	if llmActive == nil or not llmActive then
+		progressScope:setCaption(
+			LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotosPlain=Processing ^1 photos...", #selectedPhotos)
 		)
-	)
+	else
+		progressScope:setCaption(
+			LOC(
+				"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingPhotos=Processing ^1 photos with ^2...",
+				#selectedPhotos,
+				options.model
+			)
+		)
+	end
 	progressScope:setPortionComplete(0, numPhotos)
 
 	local photoToProcessStack = {}
@@ -1689,8 +1978,14 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 					end)
 				else
 					local success, path = rendition:waitForRender()
-					local photo = selectedPhotos[idx]
-					if success and path and photo then
+					-- The rendition carries its own photo. Pairing by loop counter
+					-- instead would silently shift every later photo's analysis onto
+					-- the wrong file as soon as Lightroom skips one rendition.
+					local photo = rendition.photo
+					if photo == nil then
+						log:error("Rendition #" .. tostring(idx) .. " carried no photo; skipping it.")
+						table.insert(queue, { exportFailed = true, error = "rendition carried no photo" })
+					elseif success and path then
 						table.insert(queue, { photo = photo, path = path })
 					else
 						table.insert(queue, { photo = photo, exportFailed = true, error = path })
@@ -1769,7 +2064,9 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 					end
 
 					stats.processed = stats.processed + 1
-					table.insert(processedPhotos, photo)
+					if photo ~= nil then
+						table.insert(processedPhotos, photo)
+					end
 					progressScope:setPortionComplete(stats.processed, numPhotos)
 					progressScope:setCaption(
 						LOC(
@@ -1801,6 +2098,81 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			LrTasks.yield()
 		end
 	else
+		-- Grouped indexing. Only the in-process llama.cpp backend benefits, so
+		-- for every other provider groupSize is 1 and the loop below behaves
+		-- exactly as it always has. maxWorkers stays 1 either way: the
+		-- batching is server-side, not new plugin concurrency.
+		local groupSize = Util.groupedBatchSize(
+			options.provider,
+			useOriginals,
+			SearchIndexAPI.isLocalBackend(),
+			options.llm_batch_size or (prefs and prefs.llmBatchSize)
+		)
+		-- photo -> { success, error, response }. Filled a group at a time and
+		-- consumed one photo at a time, so the per-photo bookkeeping below
+		-- (export fallback, callbacks, progress) is untouched.
+		local groupMemo = {}
+
+		---
+		-- Sends `photo` plus the next photos still on the stack as one request
+		-- and memoises an outcome for each. Photos that cannot go by reference
+		-- (videos, offline, no path, no id) are left out and fall through to
+		-- the single-photo path on their own turn.
+		--
+		local function prefillGroup(photo, photoId)
+			local entries = {
+				{ photoId = photoId, filePath = photo:getRawMetadata("path"), photo = photo },
+			}
+			for i = 1, math.min(groupSize - 1, #photoToProcessStack) do
+				local nextPhoto = photoToProcessStack[i]
+				if nextPhoto ~= nil and not nextPhoto:getRawMetadata("isVideo") then
+					local nextPath = nextPhoto:getRawMetadata("path")
+					if nextPath and nextPhoto:checkPhotoAvailability() then
+						local nextId = getPhotoIdForPhoto(nextPhoto)
+						if nextId then
+							table.insert(entries, { photoId = nextId, filePath = nextPath, photo = nextPhoto })
+						end
+					end
+				end
+			end
+			for _, entry in ipairs(entries) do
+				entry.options = buildPhotoOptions(entry.photo, entry.photoId, options)
+			end
+
+			local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
+			-- A transport-level failure has no per-photo detail; leave the
+			-- memo empty so every photo retries on its own and can still reach
+			-- the export fallback.
+			if type(response) ~= "table" then
+				log:warn("Grouped indexing failed (" .. tostring(response) .. "); falling back to single photos")
+				return
+			end
+
+			local byId = Util.resultsByPhotoId(response.results)
+			local warningsAttached = false
+			for _, entry in ipairs(entries) do
+				local outcome = byId[entry.photoId]
+				if outcome ~= nil then
+					-- Warnings belong to the request, not to a photo, so they
+					-- ride on the first photo that succeeded — attaching them
+					-- to a failed one would put a table where the caller logs
+					-- an error string.
+					local carriesWarnings = outcome.success and not warningsAttached
+					if carriesWarnings then
+						warningsAttached = true
+					end
+					groupMemo[entry.photo] = {
+						success = outcome.success,
+						error = outcome.error,
+						response = carriesWarnings and response or nil,
+					}
+				end
+			end
+			if not ok then
+				log:warn("Grouped indexing reported failures; affected photos fall back to single sends")
+			end
+		end
+
 		local analyzeWorker = function()
 			while #photoToProcessStack > 0 do
 				if progressScope:isCanceled() then
@@ -1824,45 +2196,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								.. ")"
 						)
 
-						-- Prepare analysis options with photo-specific context
-						local photoOptions = {}
-						for k, v in pairs(options) do
-							photoOptions[k] = v
-						end
-						if options.submit_gps then
-							local gps = photo:getRawMetadata("gps")
-							if gps then
-								photoOptions.gps_coordinates = gps
-							end
-						end
-						if options.submit_keywords then
-							local keywords = photo:getFormattedMetadata("keywordTagsForExport")
-							if keywords then
-								-- Lightroom may return a comma-separated string; send as array so server
-								-- does not treat it as iterable of characters (issue #45).
-								if type(keywords) == "string" then
-									photoOptions.existing_keywords = Util.string_split(keywords, ",")
-								else
-									photoOptions.existing_keywords = keywords
-								end
-							end
-						end
-						if options.submit_folder_names then
-							local originalFilePath = photo:getRawMetadata("path")
-							if originalFilePath then
-								photoOptions.folder_names = Util.getStringsFromRelativePath(originalFilePath)
-							end
-						end
-						-- Always submit catalog capture time.
-						local datetime = photo:getRawMetadata("dateTime")
-						if datetime ~= nil and type(datetime) == "number" then
-							-- Keep backwards-compatible ISO string for older backends
-							photoOptions.date_time = LrDate.timeToW3CDate(datetime)
-							-- Also send Unix timestamp (seconds since 1970-01-01 UTC)
-							photoOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
-						end
-						photoOptions.user_context = photo:getPropertyForPlugin(_PLUGIN, "photoContext") or ""
-						photoOptions.photo_id = photoId
+						local photoOptions = buildPhotoOptions(photo, photoId, options)
 
 						local success, indexResponse
 
@@ -1873,12 +2207,27 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 								log:trace("Original submission skipped for video " .. filename)
 							elseif originalPath and photo:checkPhotoAvailability() then
 								if SearchIndexAPI.isLocalBackend() then
-									log:trace("Submitting original by reference for " .. filename)
-									success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
-										photoId,
-										originalPath,
-										photoOptions
-									)
+									-- Grouped path: fill a group's worth of outcomes on the
+									-- first photo that needs one, then consume them one at a
+									-- time. A photo the group did not cover (or a group that
+									-- failed outright) has no memo and is sent on its own.
+									if groupSize > 1 and groupMemo[photo] == nil then
+										prefillGroup(photo, photoId)
+									end
+									local memo = groupMemo[photo]
+									if memo ~= nil then
+										groupMemo[photo] = nil
+										log:trace("Using grouped result for " .. filename)
+										success = memo.success
+										indexResponse = memo.response or memo.error
+									else
+										log:trace("Submitting original by reference for " .. filename)
+										success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(
+											photoId,
+											originalPath,
+											photoOptions
+										)
+									end
 								else
 									log:trace("Uploading original file for " .. filename)
 									success, indexResponse =
@@ -2632,7 +2981,8 @@ function SearchIndexAPI.startServer(opts)
 		local startServerCmd
 		local serverDir = LrPathUtils.parent(serverBinary)
 		if WIN_ENV then
-			-- The .cmd launcher handles environment variables and uses pythonw.exe for invisible execution.
+			-- `start /b` detaches the backend so it keeps running without a
+			-- console window of its own.
 			startServerCmd = 'start /b /d "'
 				.. serverDir
 				.. '" "" "'
@@ -2840,7 +3190,7 @@ _request = function(method, url, body, timeout, options)
 			return result, hdrs
 		end
 		if result and #result > 0 then
-			log:trace("_request: decoding JSON result of length " .. #result)
+			-- log:trace("_request: decoding JSON result of length " .. #result)
 			local ok2, decoded = LrTasks.pcall(JSON.decode, JSON, result)
 			if ok2 then
 				return decoded
@@ -3043,6 +3393,25 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 	return true, photosToProcess
 end
 
+-- Polling cadence for the async clustering job. The first polls come quickly so
+-- short runs feel responsive; longer runs settle into a slower cadence.
+local CLUSTER_POLL_FAST_INTERVAL = 1
+local CLUSTER_POLL_FAST_COUNT = 5
+local CLUSTER_POLL_INTERVAL = 3
+
+-- How long the backend may go without reporting a new stage before we give up.
+-- This is deliberately not a total run limit: LLM validation of a large keyword
+-- branch on a local model legitimately runs for many minutes, and the previous
+-- flat 120 s cap aborted those runs mid-flight. What is not legitimate is the
+-- backend going quiet, so that — not elapsed time — is what times out.
+-- Only applied once the backend has reported progress at least once: a backend
+-- older than the progress field reports nothing at all, and a run against one
+-- of those must not be read as a stall.
+local CLUSTER_STALL_TIMEOUT = 600
+-- Backstop for a job that keeps reporting progress but never finishes, and the
+-- only limit that applies to a backend with no progress reporting.
+local CLUSTER_MAX_TOTAL = 3600
+
 ---
 ---
 -- Send a list of keyword names to the backend and receive clusters of semantically
@@ -3052,8 +3421,11 @@ end
 -- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
 -- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
 -- @param cancelScope table|nil LrProgressScope; polling stops early when isCanceled() returns true
+-- @param onProgress function|nil Called on every poll with
+--        { elapsed = seconds, stage = str|nil, done = n|nil, total = n|nil }
+--        so callers can keep a progress UI alive while the job runs
 -- @return table|nil { results = {{name,...},...}, warning = str|nil } or nil, err
-function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancelScope)
+function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancelScope, onProgress)
 	if type(keywordNames) ~= "table" or #keywordNames < 2 then
 		return { results = {}, warning = nil }
 	end
@@ -3087,20 +3459,44 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 		return nil, startErr or "no job_id returned"
 	end
 
-	-- Poll until done (max 120 s; check cancellation each cycle)
+	-- Poll until done. Every poll reports back to the caller so the UI keeps
+	-- moving even while a single LLM round-trip runs for minutes.
 	local jobId = startResp.job_id
 	local statusUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_STATUS .. "/" .. jobId
-	local deadline = LrDate.currentTime() + 120
+	local startedAt = LrDate.currentTime()
+	local lastStageAt = startedAt
+	local lastStageKey = nil
+	local sawProgress = false
+	local pollCount = 0
+
+	local function notify(stage, done, total)
+		if not onProgress then
+			return
+		end
+		local okCb, cbErr = LrTasks.pcall(function()
+			onProgress({
+				elapsed = LrDate.currentTime() - startedAt,
+				stage = stage,
+				done = done,
+				total = total,
+			})
+		end)
+		if not okCb then
+			log:warn("clusterKeywords: progress callback failed: " .. tostring(cbErr))
+		end
+	end
+
+	notify(nil, nil, nil)
+
 	while true do
-		LrTasks.sleep(3)
+		pollCount = pollCount + 1
+		local interval = (pollCount <= CLUSTER_POLL_FAST_COUNT) and CLUSTER_POLL_FAST_INTERVAL or CLUSTER_POLL_INTERVAL
+		LrTasks.sleep(interval)
 		LrTasks.yield()
 		if cancelScope and cancelScope:isCanceled() then
 			return nil, "canceled"
 		end
-		if LrDate.currentTime() > deadline then
-			log:error("clusterKeywords: timed out waiting for backend job")
-			return nil, "clustering timed out"
-		end
+
 		local poll, pollErr = _request("GET", statusUrl, nil, 15)
 		if pollErr or not poll then
 			log:error("clusterKeywords: status poll failed: " .. tostring(pollErr))
@@ -3113,7 +3509,34 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 			log:error("clusterKeywords: job failed: " .. tostring(poll.error))
 			return nil, poll.error or "cluster job failed"
 		end
-		-- "running" → keep polling
+
+		-- "running" → surface the backend's stage and keep polling
+		local progress = (type(poll.progress) == "table") and poll.progress or {}
+		local stageKey = tostring(progress.stage) .. "/" .. tostring(progress.done) .. "/" .. tostring(progress.total)
+		local now = LrDate.currentTime()
+		if progress.stage ~= nil then
+			sawProgress = true
+		end
+		if stageKey ~= lastStageKey then
+			lastStageKey = stageKey
+			lastStageAt = now
+		end
+		notify(progress.stage, progress.done, progress.total)
+
+		if sawProgress and now - lastStageAt > CLUSTER_STALL_TIMEOUT then
+			log:error(
+				"clusterKeywords: backend stopped reporting progress after "
+					.. string.format("%.0f", now - startedAt)
+					.. "s (last stage: "
+					.. tostring(lastStageKey)
+					.. ")"
+			)
+			return nil, "clustering stalled"
+		end
+		if now - startedAt > CLUSTER_MAX_TOTAL then
+			log:error("clusterKeywords: job exceeded the maximum run time of " .. CLUSTER_MAX_TOTAL .. "s")
+			return nil, "clustering timed out"
+		end
 	end
 end
 
@@ -3338,317 +3761,6 @@ function SearchIndexAPI.downloadRawLog(logType, targetPath)
 	return false
 end
 
----
--- Migrates existing server-side photo UUID entries to the new photo_id values.
--- Builds mappings from current catalog photos: old_id=Lightroom UUID, new_id=global photo_id.
--- @return boolean success, string message
-function SearchIndexAPI.migratePhotoIdsFromCatalog()
-	local migrationStartedAt = LrDate.currentTime()
-	log:info("migratePhotoIdsFromCatalog: started")
-
-	if not SearchIndexAPI.pingServer() then
-		log:error("migratePhotoIdsFromCatalog: backend server not reachable")
-		return false, "Backend server is not reachable."
-	end
-
-	local indexedIds = SearchIndexAPI.getAllIndexedPhotoIds()
-	if type(indexedIds) ~= "table" then
-		log:error("migratePhotoIdsFromCatalog: could not retrieve indexed IDs")
-		return false, "Could not retrieve indexed IDs from backend."
-	end
-	log:info("migratePhotoIdsFromCatalog: indexed IDs fetched: " .. tostring(#indexedIds))
-
-	local indexedIdSet = {}
-	for _, id in ipairs(indexedIds) do
-		indexedIdSet[id] = true
-	end
-
-	local catalog = LrApplication.activeCatalog()
-	local photos = catalog:getAllPhotos() or {}
-	local totalPhotos = #photos
-	if totalPhotos == 0 then
-		log:info("migratePhotoIdsFromCatalog: no photos in catalog")
-		return true, "No photos found in catalog."
-	end
-	log:info("migratePhotoIdsFromCatalog: catalog photos to inspect: " .. tostring(totalPhotos))
-
-	local progressScope = LrProgressScope({
-		title = "Migrating photo IDs...",
-		functionContext = nil,
-	})
-
-	local mappings = {}
-	local skipped = 0
-	local skippedNotIndexed = 0
-	local skippedAlreadyMigrated = 0
-
-	for i, photo in ipairs(photos) do
-		if progressScope:isCanceled() then
-			progressScope:done()
-			return false, "Migration canceled."
-		end
-
-		local legacyUuid = photo:getRawMetadata("uuid")
-		if not legacyUuid or legacyUuid == "" or not indexedIdSet[legacyUuid] then
-			skipped = skipped + 1
-			skippedNotIndexed = skippedNotIndexed + 1
-		else
-			local photoId, photoIdErr = getPhotoIdForPhoto(photo)
-			if photoId and photoId ~= "" and legacyUuid ~= photoId then
-				if indexedIdSet[photoId] then
-					skipped = skipped + 1
-					skippedAlreadyMigrated = skippedAlreadyMigrated + 1
-				else
-					table.insert(mappings, {
-						old_id = legacyUuid,
-						new_id = photoId,
-					})
-				end
-			else
-				skipped = skipped + 1
-				if photoIdErr then
-					log:warn("Could not compute photo_id during migration prep: " .. tostring(photoIdErr))
-				end
-			end
-		end
-
-		progressScope:setPortionComplete(i, totalPhotos)
-		progressScope:setCaption("Preparing migration mappings " .. tostring(i) .. "/" .. tostring(totalPhotos))
-		if i % 250 == 0 then
-			log:trace(
-				"migratePhotoIdsFromCatalog: prep progress "
-					.. tostring(i)
-					.. "/"
-					.. tostring(totalPhotos)
-					.. " mappings="
-					.. tostring(#mappings)
-					.. " skippedNotIndexed="
-					.. tostring(skippedNotIndexed)
-					.. " skippedAlreadyMigrated="
-					.. tostring(skippedAlreadyMigrated)
-			)
-		end
-	end
-
-	if #mappings == 0 then
-		progressScope:done()
-		log:info(
-			"migratePhotoIdsFromCatalog: no mappings prepared. skippedNotIndexed="
-				.. tostring(skippedNotIndexed)
-				.. " skippedAlreadyMigrated="
-				.. tostring(skippedAlreadyMigrated)
-				.. " skippedTotal="
-				.. tostring(skipped)
-		)
-		return true, "No migration needed. All photos are already using photo_id."
-	end
-	log:info("migratePhotoIdsFromCatalog: mappings prepared: " .. tostring(#mappings))
-
-	local batchSize = 250
-	local migratedTotal = 0
-	local missingOldTotal = 0
-	local conflictTotal = 0
-	local errorTotal = 0
-
-	for startIdx = 1, #mappings, batchSize do
-		if progressScope:isCanceled() then
-			progressScope:done()
-			return false, "Migration canceled."
-		end
-
-		local stopIdx = math.min(startIdx + batchSize - 1, #mappings)
-		local batch = {}
-		for i = startIdx, stopIdx do
-			table.insert(batch, mappings[i])
-		end
-
-		local response, err = _request("POST", getBaseUrl() .. ENDPOINTS.MIGRATE_PHOTO_IDS, {
-			mappings = batch,
-			overwrite = false,
-			dry_run = false,
-			update_faces = true,
-			update_vertex = true,
-		}, 300)
-
-		if err then
-			progressScope:done()
-			log:error(
-				"migratePhotoIdsFromCatalog: batch failed at "
-					.. tostring(startIdx)
-					.. "-"
-					.. tostring(stopIdx)
-					.. " err="
-					.. tostring(err)
-			)
-			return false, "Migration request failed: " .. tostring(err)
-		end
-
-		local summary = (response and response.summary) or {}
-		migratedTotal = migratedTotal + (summary.migrated or 0)
-		missingOldTotal = missingOldTotal + (summary.missing_old or 0)
-		conflictTotal = conflictTotal + (summary.conflicts or 0)
-		errorTotal = errorTotal + (summary.errors or 0)
-
-		log:trace(
-			"migratePhotoIdsFromCatalog: batch "
-				.. tostring(startIdx)
-				.. "-"
-				.. tostring(stopIdx)
-				.. " migrated="
-				.. tostring(summary.migrated or 0)
-				.. " missing_old="
-				.. tostring(summary.missing_old or 0)
-				.. " conflicts="
-				.. tostring(summary.conflicts or 0)
-				.. " errors="
-				.. tostring(summary.errors or 0)
-		)
-
-		progressScope:setPortionComplete(stopIdx, #mappings)
-		progressScope:setCaption("Migrating photo IDs " .. tostring(stopIdx) .. "/" .. tostring(#mappings))
-	end
-
-	progressScope:done()
-	local migrationElapsedMs = math.floor((LrDate.currentTime() - migrationStartedAt) * 1000)
-
-	local msg = "Migration finished.\n"
-		.. "Indexed IDs in backend: "
-		.. tostring(#indexedIds)
-		.. "\n"
-		.. "Mappings prepared: "
-		.. tostring(#mappings)
-		.. "\n"
-		.. "Migrated: "
-		.. tostring(migratedTotal)
-		.. "\n"
-		.. "Missing old IDs: "
-		.. tostring(missingOldTotal)
-		.. "\n"
-		.. "Conflicts: "
-		.. tostring(conflictTotal)
-		.. "\n"
-		.. "Errors: "
-		.. tostring(errorTotal)
-		.. "\n"
-		.. "Skipped (not indexed in backend): "
-		.. tostring(skippedNotIndexed)
-		.. "\n"
-		.. "Skipped (already migrated): "
-		.. tostring(skippedAlreadyMigrated)
-		.. "\n"
-		.. "Skipped in catalog prep: "
-		.. tostring(skipped)
-	log:info(
-		"migratePhotoIdsFromCatalog: finished elapsedMs="
-			.. tostring(migrationElapsedMs)
-			.. " prepared="
-			.. tostring(#mappings)
-			.. " migrated="
-			.. tostring(migratedTotal)
-			.. " missing_old="
-			.. tostring(missingOldTotal)
-			.. " conflicts="
-			.. tostring(conflictTotal)
-			.. " errors="
-			.. tostring(errorTotal)
-			.. " skippedTotal="
-			.. tostring(skipped)
-	)
-	return errorTotal == 0, msg
-end
-
----
--- Generates hash-based global photo IDs for all photos in the current catalog
--- and writes them to the catalog-only plugin fields, without touching the backend.
--- Uses Util.getGlobalPhotoIdForPhoto() which will reuse cached IDs when present.
--- @return boolean success, string message
---
-function SearchIndexAPI.generateGlobalPhotoIdsForCatalog()
-	local startedAt = LrDate.currentTime()
-	log:info("generateGlobalPhotoIdsForCatalog: started")
-
-	local catalog = LrApplication.activeCatalog()
-	local photos = catalog:getAllPhotos() or {}
-	local totalPhotos = #photos
-
-	if totalPhotos == 0 then
-		log:info("generateGlobalPhotoIdsForCatalog: no photos in catalog")
-		return true, "No photos found in catalog."
-	end
-
-	log:info("generateGlobalPhotoIdsForCatalog: catalog photos to inspect: " .. tostring(totalPhotos))
-
-	local progressScope = LrProgressScope({
-		title = "Generating hash-based photo IDs in catalog...",
-		functionContext = nil,
-	})
-
-	local generated = 0
-	local reused = 0
-	local errors = 0
-
-	for i, photo in ipairs(photos) do
-		if progressScope:isCanceled() then
-			progressScope:done()
-			log:info(
-				"generateGlobalPhotoIdsForCatalog: canceled by user at " .. tostring(i) .. "/" .. tostring(totalPhotos)
-			)
-			return false, "Photo-ID generation canceled."
-		end
-
-		local hadExistingId = not Util.nilOrEmpty(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId"))
-
-		local photoId, err = Util.getGlobalPhotoIdForPhoto(photo, {
-			windowBytes = Util.getDefaultPartialHashWindowBytes(),
-		})
-
-		if photoId and photoId ~= "" then
-			if hadExistingId then
-				reused = reused + 1
-			else
-				generated = generated + 1
-			end
-		else
-			errors = errors + 1
-			log:warn("generateGlobalPhotoIdsForCatalog: failed to compute ID for photo: " .. tostring(err))
-		end
-
-		progressScope:setPortionComplete(i, totalPhotos)
-		if i % 250 == 0 or i == totalPhotos then
-			progressScope:setCaption("Generating hash-based photo IDs " .. tostring(i) .. "/" .. tostring(totalPhotos))
-		end
-	end
-
-	progressScope:done()
-
-	local elapsedMs = math.floor((LrDate.currentTime() - startedAt) * 1000)
-	local msg = "Photo-ID generation finished.\n"
-		.. "Catalog photos: "
-		.. tostring(totalPhotos)
-		.. "\n"
-		.. "New IDs generated: "
-		.. tostring(generated)
-		.. "\n"
-		.. "Existing IDs reused: "
-		.. tostring(reused)
-		.. "\n"
-		.. "Errors: "
-		.. tostring(errors)
-
-	log:info(
-		"generateGlobalPhotoIdsForCatalog: finished elapsedMs="
-			.. tostring(elapsedMs)
-			.. " generated="
-			.. tostring(generated)
-			.. " reused="
-			.. tostring(reused)
-			.. " errors="
-			.. tostring(errors)
-	)
-
-	return errors == 0, msg
-end
-
 function SearchIndexAPI.startClipDownload()
 	if not (prefs and prefs.useClip) then
 		return
@@ -3736,6 +3848,384 @@ function SearchIndexAPI.startClipDownload()
 	end)
 end
 
+---
+-- Readiness of every local AI model in one call.
+--
+-- Exists so the setup UI can say "the AI models are ready" instead of making a
+-- photographer track which of three neural networks does which job. The
+-- per-model calls are still there for the detail view.
+--
+-- @return table|nil { ready, missing_approx_bytes, families = { {id, name, ready, downloadable, approx_bytes} } }
+-- @return string|nil error
+--
+function SearchIndexAPI.getAssetStatus()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.ASSETS_STATUS)
+	if err then
+		log:error("getAssetStatus failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Downloads every model that is missing, under one progress bar.
+--
+-- Families already on disk are skipped by the backend, so this doubles as
+-- "finish setting up" for someone upgrading from a version that only had the
+-- search model.
+--
+function SearchIndexAPI.startAssetDownload()
+	local status = SearchIndexAPI.getAssetStatus()
+	if status and status.ready then
+		log:trace("All AI models are already downloaded")
+		return
+	end
+
+	local running, runErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_ASSETS_DOWNLOAD)
+	if not runErr and running ~= nil and running.status == "downloading" then
+		log:trace("Combined model download is already in progress")
+		return
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/AssetDownload/ProgressTitle=Downloading AI models"),
+		functionContext = nil,
+	})
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_ASSETS_DOWNLOAD, {})
+	if postErr then
+		log:error("startAssetDownload failed: " .. postErr)
+		progressScope:done()
+		return nil, postErr
+	end
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_ASSETS_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError("Error downloading AI models", loopErr)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				if loopStatus.status == "downloading" then
+					-- The current file is the only cue that this is several
+					-- models rather than one stalled one, so surface it.
+					if loopStatus.current_file and loopStatus.current_file ~= "" then
+						progressScope:setCaption(
+							LOC("$$$/LrGeniusAI/AssetDownload/File=Downloading ^1...", loopStatus.current_file)
+						)
+					else
+						progressScope:setCaption(
+							LOC("$$$/LrGeniusAI/AssetDownload/Downloading=Downloading AI models...")
+						)
+					end
+					progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+				elseif loopStatus.status == "completed" then
+					log:trace("Combined model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/AssetDownload/SuccessTitle=AI Model Download"),
+						LOC("$$$/LrGeniusAI/AssetDownload/SuccessMessage=The AI models are downloaded and ready.")
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/AssetDownload/ErrorTitle=Error downloading AI models"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn("startAssetDownload: unexpected status '" .. tostring(loopStatus.status) .. "'")
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+end
+
+local lastBioclipReadyStatus = nil
+
+---
+-- Whether the BioCLIP species model's files are on disk.
+--
+-- Deliberately the "files present" question, not "loaded in memory" — that one
+-- is `/health`'s `species_model`. The Analyze & Index dialog gates its
+-- "Identify species" checkbox on this, and a model that has idle-unloaded is
+-- still perfectly usable.
+--
+-- @return boolean ready
+-- @return string|nil message
+--
+function SearchIndexAPI.isBioclipReady()
+	local url = getBaseUrl() .. ENDPOINTS.BIOCLIP_STATUS
+	local res, err = _request("GET", url)
+	if err then
+		local errStr = (type(err) == "string") and err or "unknown"
+		log:error("isBioclipReady failed: " .. errStr)
+		return false, errStr
+	end
+	if res ~= nil then
+		local currentStatus = res.bioclip
+		if currentStatus ~= lastBioclipReadyStatus then
+			log:trace("BioCLIP species model status: " .. tostring(currentStatus))
+			lastBioclipReadyStatus = currentStatus
+		end
+		return currentStatus == "ready", res.message
+	end
+	log:error("isBioclipReady: Unknown error")
+	return false, "Unknown error"
+end
+
+---
+-- Resolves a taxon name to species-database links.
+--
+-- The backend does the resolving (GBIF usage key, iNaturalist taxon id) and
+-- caches the result on disk, so this is one localhost round trip per distinct
+-- taxon per machine — the network calls behind it happen once, ever.
+--
+-- Short timeout on purpose: this runs inside the metadata write for every
+-- identified photo, and a slow or absent link is never worth stalling an
+-- indexing run for. On timeout the caller falls back to search URLs.
+--
+-- @param name string scientific name
+-- @param rank string|nil `species`, `genus`, ... — narrows both lookups
+-- @param lang string|nil two-letter language for Wikipedia and common names
+-- @return table|nil `{ urls = {...}, gbif_key = n, inat_id = n, resolved = bool }`
+-- @return string|nil error
+--
+function SearchIndexAPI.getSpeciesLinks(name, rank, lang)
+	if type(name) ~= "string" or name == "" then
+		return nil, "no name"
+	end
+	local params = { name = _urlEncode(name) }
+	if type(rank) == "string" and rank ~= "" and rank ~= "none" then
+		params.rank = _urlEncode(rank)
+	end
+	if type(lang) == "string" and lang ~= "" then
+		params.lang = _urlEncode(lang)
+	end
+	local url = buildUrlWithParams(getBaseUrl() .. ENDPOINTS.SPECIES_LINKS, params)
+	local res, err = _request("GET", url, nil, 20)
+	if err then
+		local errStr = (type(err) == "string") and err or "unknown"
+		log:trace("getSpeciesLinks failed for " .. name .. ": " .. errStr)
+		return nil, errStr
+	end
+	if type(res) == "table" and type(res.links) == "table" then
+		return res.links
+	end
+	return nil, "unexpected response"
+end
+
+---
+-- Starts the BioCLIP asset download and polls it to completion.
+--
+-- Mirrors SearchIndexAPI.startClipDownload(). Kept as its own function rather
+-- than parameterising that one: the two are triggered from different places at
+-- different times, and merging them would mean one shared progress scope for
+-- two downloads that can legitimately run at once.
+--
+function SearchIndexAPI.startBioclipDownload()
+	if SearchIndexAPI.isBioclipReady() then
+		log:trace("BioCLIP model is already cached")
+		return
+	end
+
+	local status, err = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_BIOCLIP_DOWNLOAD)
+	if not err and status ~= nil and status.status == "downloading" then
+		log:trace("BioCLIP model download is already in progress")
+		return
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/BioclipDownload/ProgressTitle=Downloading AI model for species identification"),
+		functionContext = nil,
+	})
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_BIOCLIP_DOWNLOAD, {})
+	if postErr then
+		log:error("startBioclipDownload failed: " .. postErr)
+		progressScope:done()
+		return nil, postErr
+	end
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_BIOCLIP_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError("Error downloading BioCLIP model", loopErr)
+				progressScope:setCaption(
+					LOC("$$$/LrGeniusAI/BioclipDownload/Error=Error downloading species model: ^1"),
+					loopErr
+				)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				progressScope:setCaption(LOC("$$$/LrGeniusAI/BioclipDownload/Downloading=Downloading species model..."))
+				if loopStatus.status == "downloading" then
+					progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+				elseif loopStatus.status == "completed" then
+					log:trace("BioCLIP model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/BioclipDownload/SuccessTitle=Species Model Download"),
+						LOC(
+							"$$$/LrGeniusAI/BioclipDownload/SuccessMessage=Species identification model downloaded successfully."
+						)
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/BioclipDownload/ErrorTitle=Error downloading species model"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn(
+						"startBioclipDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping poll"
+					)
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+end
+
+---
+-- Lists local GGUF models: those already on disk and those offered for download.
+--
+-- @return table|nil catalog { installed, downloadable, supported, model_dir }
+-- @return string|nil error
+--
+function SearchIndexAPI.getLlmCatalog()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_CATALOG)
+	if err then
+		log:error("getLlmCatalog failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Reports whether a local model is loaded, and with which settings.
+--
+-- @return table|nil status { status, model_path, supports_vision, n_ctx, n_parallel }
+-- @return string|nil error
+--
+function SearchIndexAPI.getLlmStatus()
+	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_STATUS)
+	if err then
+		log:error("getLlmStatus failed: " .. tostring(err))
+		return nil, err
+	end
+	return res
+end
+
+---
+-- Downloads a catalog model, showing progress until it finishes.
+--
+-- Multi-gigabyte download, so it runs in its own async task with a progress
+-- scope and polls the server rather than blocking the dialog. Mirrors
+-- startClipDownload; the difference is that the model is chosen by id.
+--
+-- @param modelId string Catalog entry id from getLlmCatalog().downloadable.
+-- @return boolean started
+-- @return string|nil error
+--
+function SearchIndexAPI.startLlmDownload(modelId)
+	if not modelId or modelId == "" then
+		return false, "No model id provided"
+	end
+
+	local status = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+	if status ~= nil and status.status == "downloading" then
+		log:trace("A local model download is already in progress")
+		return true
+	end
+
+	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_LLM_DOWNLOAD, { id = modelId })
+	if postErr then
+		log:error("startLlmDownload failed: " .. tostring(postErr))
+		return false, postErr
+	end
+
+	local progressScope = LrProgressScope({
+		title = LOC("$$$/LrGeniusAI/LlmDownload/ProgressTitle=Downloading local AI model"),
+		functionContext = nil,
+	})
+
+	LrTasks.startAsyncTask(function()
+		while true do
+			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+			if loopErr then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+					loopErr
+				)
+				progressScope:done()
+				break
+			end
+
+			if loopStatus ~= nil then
+				if loopStatus.status == "downloading" then
+					progressScope:setCaption(
+						LOC("$$$/LrGeniusAI/LlmDownload/Downloading=Downloading local AI model...")
+					)
+					if loopStatus.total and loopStatus.total > 0 then
+						progressScope:setPortionComplete(loopStatus.progress, loopStatus.total)
+					end
+				elseif loopStatus.status == "completed" then
+					log:trace("Local model download completed")
+					progressScope:done()
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
+						LOC(
+							"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+						)
+					)
+					break
+				elseif
+					loopStatus.status == "error"
+					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
+				then
+					ErrorHandler.handleError(
+						LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
+						loopStatus.error or "Unknown download error"
+					)
+					progressScope:done()
+					break
+				else
+					log:warn("startLlmDownload: unexpected status '" .. tostring(loopStatus.status) .. "', stopping")
+					progressScope:done()
+					break
+				end
+			end
+
+			LrTasks.sleep(2)
+		end
+	end)
+
+	return true
+end
+
 local lastClipReadyStatus = nil
 function SearchIndexAPI.isClipReady()
 	local url = getBaseUrl() .. ENDPOINTS.CLIP_STATUS
@@ -3767,8 +4257,15 @@ function SearchIndexAPI.isClipReady()
 end
 
 ---
--- Checks the health of the backend server and its components (models, providers).
--- Surfaces critical loading failures to the user.
+-- Checks the health of the backend server's local models (CLIP, face
+-- detection) and surfaces critical loading failures to the user.
+--
+-- LLM provider availability (Gemini/ChatGPT/Ollama/LM Studio) is not covered
+-- here: the backend has no stored API keys or base URLs to probe on a bare
+-- `/health` GET, so it never reports provider status -- see
+-- SearchIndexAPI.getDetailedHealth() / Util.checkPluginHealth(), which check
+-- providers from the plugin side instead (stored keys + a direct ping) and
+-- back the Plugin Manager's "System Health" panel and the Setup Wizard.
 --
 function SearchIndexAPI.checkServerHealth()
 	local url = getBaseUrl() .. ENDPOINTS.HEALTH
@@ -3793,32 +4290,6 @@ function SearchIndexAPI.checkServerHealth()
 				LOC("$$$/LrGeniusAI/Health/FaceFailed=Face detection model failed to load."),
 				res.face_error or "Unknown error loading face detection model."
 			)
-		end
-
-		-- 3. Check LLM providers
-		local providers = res.llm_providers or {}
-		local hasAvailable = false
-		local failedProviders = {}
-		for provider, status in pairs(providers) do
-			if status == "available" or status == "registered" then
-				hasAvailable = true
-			elseif status == "failed" then
-				table.insert(
-					failedProviders,
-					provider .. ": " .. (res.llm_errors and res.llm_errors[provider] or "unknown error")
-				)
-			end
-		end
-
-		if not hasAvailable and next(providers) ~= nil then
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Health/NoProviders=No AI metadata providers are available."),
-				LOC(
-					"$$$/LrGeniusAI/Health/NoProvidersDetail=Please configure Ollama, LM Studio, ChatGPT, or Gemini in the plugin preferences."
-				)
-			)
-		elseif #failedProviders > 0 then
-			log:warn("Some AI providers failed to initialize: " .. table.concat(failedProviders, ", "))
 		end
 	end
 
@@ -3891,7 +4362,31 @@ function SearchIndexAPI.getDetailedHealth()
 		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
 		ollama = false,
 		lmstudio = false,
+		-- The engine built into the backend — MLX on macOS, llama.cpp on
+		-- Windows. Counted as a configured provider like any other: it is the
+		-- default way to run this plug-in, and leaving it out told every user
+		-- who had only downloaded a local model that they had no provider at
+		-- all.
+		localEngine = false,
 	}
+
+	-- `/models` already reports both built-in engines, and reports them empty
+	-- when the platform does not ship one or no model has been downloaded yet,
+	-- which is exactly the distinction this needs. No API keys are passed: a
+	-- health check must not depend on a cloud round-trip.
+	if health.backend then
+		local modelsResp = SearchIndexAPI.getModels()
+		local models = modelsResp and modelsResp.models
+		if type(models) == "table" then
+			for _, engine in ipairs({ "mlx", "llamacpp" }) do
+				local list = models[engine]
+				if type(list) == "table" and #list > 0 then
+					health.localEngine = true
+					break
+				end
+			end
+		end
+	end
 
 	-- Try to ping local LLMs if they are not default localhost but maybe they are
 	if not Util.nilOrEmpty(prefs.ollamaBaseUrl) then
@@ -3971,6 +4466,13 @@ function SearchIndexAPI.addTrainingExample(photoId, filepath, developSettings, o
 	end
 	if options.shutter_speed and options.shutter_speed ~= "" then
 		table.insert(mimeChunks, { name = "shutter_speed", value = tostring(options.shutter_speed) })
+	end
+	-- Recorded with the example so the style engine can keep raw and rendered
+	-- sources apart when it blends a white balance: Lightroom's Temp is Kelvin
+	-- for one and a relative -100..100 for the other, and averaging the two
+	-- produces a number that means nothing on either scale.
+	if type(options.is_raw) == "boolean" then
+		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end
 
 	if filepath and LrFileUtils.exists(filepath) then
@@ -4126,7 +4628,15 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addStr("aperture")
 	addStr("shutter_speed")
 
-	-- Standard edit options forwarded for LLM fallback compatibility
+	-- Standard edit options, kept for the backend's LLM-fallback contract.
+	--
+	-- `TaskAiEditPhotos` no longer asks for that fallback — it never sends
+	-- `use_llm_fallback`, so the backend's default (off) applies and a photo the
+	-- style engine cannot answer for comes back as an error rather than as an
+	-- LLM edit. The fields stay because `/style_edit` still accepts them and a
+	-- caller that does want the fallback has to be able to send everything
+	-- `generateEditRecipePhoto` sends; `addEditOpt` skips whatever is absent,
+	-- so the style-engine-only path pays nothing for them.
 	local function addEditOpt(key, value)
 		if value ~= nil then
 			table.insert(mimeChunks, { name = key, value = tostring(value) })
@@ -4134,9 +4644,19 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	end
 	addEditOpt("provider", options.provider)
 	addEditOpt("model", options.model)
+	addEditOpt("api_key", options.api_key)
 	addEditOpt("language", options.language)
 	addEditOpt("temperature", options.temperature)
 	addEditOpt("max_tokens", options.max_tokens)
+	addEditOpt("prompt", options.prompt)
+	addEditOpt("edit_intent", options.edit_intent)
+	addEditOpt("user_context", options.user_context)
+	addEditOpt("style_strength", options.style_strength)
+	addEditOpt("composition_mode", options.composition_mode)
+	addEditOpt("date_time", options.date_time)
+	addEditOpt("folder_names", options.folder_names)
+	addEditOpt("submit_keywords", options.submit_keywords)
+	addEditOpt("submit_folder_names", options.submit_folder_names)
 	addEditOpt("include_masks", options.include_masks)
 	addEditOpt("adjust_white_balance", options.adjust_white_balance)
 	addEditOpt("adjust_basic_tone", options.adjust_basic_tone)
@@ -4144,9 +4664,25 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("adjust_color_mix", options.adjust_color_mix)
 	addEditOpt("do_color_grading", options.do_color_grading)
 	addEditOpt("use_tone_curve", options.use_tone_curve)
+	addEditOpt("use_point_curve", options.use_point_curve)
 	addEditOpt("adjust_detail", options.adjust_detail)
 	addEditOpt("adjust_effects", options.adjust_effects)
+	addEditOpt("adjust_lens_corrections", options.adjust_lens_corrections)
 	addEditOpt("allow_auto_crop", options.allow_auto_crop)
+	-- Not a creative control: the backend cannot see the original encoding once
+	-- the photo has been exported to JPEG, and the edit guardrails need it to
+	-- know whether blown highlights still have anything behind them.
+	addEditOpt("is_raw", options.is_raw)
+	addEditOpt("ollama_base_url", options.ollama_base_url or (prefs and prefs.ollamaBaseUrl))
+	addEditOpt("lmstudio_base_url", options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl))
+
+	local styleCatalogId = getCatalogId()
+	if styleCatalogId then
+		table.insert(mimeChunks, { name = "catalog_id", value = styleCatalogId })
+	end
+	if options.existing_keywords then
+		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
+	end
 
 	if filepath and LrFileUtils.exists(filepath) then
 		local filename = LrPathUtils.leafName(filepath)

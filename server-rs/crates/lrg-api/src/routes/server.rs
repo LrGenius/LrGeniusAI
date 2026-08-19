@@ -15,6 +15,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use lrg_common::{lifecycle, logging, version};
+use lrg_providers::provider::{build_provider, ProviderSelection};
 
 use crate::state::AppState;
 
@@ -41,10 +42,16 @@ struct ModelsQuery {
     lmstudio_base_url: Option<String>,
 }
 
-/// Port of `list_models` / `AnalysisService.get_available_models`. Ollama
-/// and LM Studio are probed concurrently with the rest (an offline local
-/// server must not block the others); Qwen is unimplemented upstream too.
+/// Port of `list_models` / `AnalysisService.get_available_models`. Every
+/// provider is probed concurrently — an offline Ollama or LM Studio must not
+/// block the others.
+///
+/// The response keys are what the plugin builds its model dropdown from
+/// (`TaskAnalyzeAndIndex.lua`), so a provider absent here is unreachable from
+/// the UI. The long-dead `"qwen"` key, which was always `[]`, is no longer
+/// emitted: the plugin's inner loop produced no entries for it anyway.
 async fn list_models(
+    State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
     body: Option<Json<Value>>,
 ) -> Json<Value> {
@@ -72,46 +79,69 @@ async fn list_models(
         .map(str::to_string)
         .or(q.lmstudio_base_url);
 
-    let ollama = lrg_providers::ollama::OllamaProvider::new(ollama_base_url);
-    let lmstudio = lrg_providers::lmstudio::LmStudioProvider::new(lmstudio_base_url);
+    // `build_provider` returns Err for a cloud provider whose key is missing,
+    // which is exactly the "offer no models" case — hence `unwrap_or_default`
+    // rather than surfacing the error.
+    let models_for = |selection: ProviderSelection| async move {
+        match build_provider(&selection) {
+            Ok(provider) if provider.is_available().await => provider.list_available_models().await,
+            _ => Vec::new(),
+        }
+    };
 
-    let (ollama_models, lmstudio_models) = tokio::join!(
-        async {
-            if ollama.is_available().await {
-                ollama.list_available_models().await
-            } else {
-                Vec::new()
-            }
-        },
-        async {
-            if lmstudio.is_available().await {
-                lmstudio.list_available_models().await
-            } else {
-                Vec::new()
-            }
-        },
+    // Local providers are probed concurrently: an offline Ollama or LM Studio
+    // must not delay the others.
+    let (ollama_models, lmstudio_models, openai_models, gemini_models) = tokio::join!(
+        models_for(ProviderSelection {
+            name: "ollama".to_string(),
+            ollama_base_url,
+            ..Default::default()
+        }),
+        models_for(ProviderSelection {
+            name: "lmstudio".to_string(),
+            lmstudio_base_url,
+            ..Default::default()
+        }),
+        models_for(ProviderSelection {
+            name: "chatgpt".to_string(),
+            api_key: openai_key,
+            ..Default::default()
+        }),
+        models_for(ProviderSelection {
+            name: "gemini".to_string(),
+            api_key: gemini_key,
+            ..Default::default()
+        }),
     );
 
-    let openai_models = match openai_key {
-        Some(key) if !key.is_empty() => {
-            lrg_providers::openai::OpenAiProvider::new(key)
-                .list_available_models()
-                .await
-        }
-        _ => Vec::new(),
+    // Listing must never trigger a multi-gigabyte load, so this reports what is
+    // on disk rather than what is loaded. A build without the `llamacpp`
+    // feature offers nothing, which keeps the provider out of the plugin's
+    // dropdown entirely rather than letting it fail on first use.
+    let llamacpp_models: Vec<String> = if state.llm.is_supported() {
+        crate::llm_models::discover_local_models()
+            .into_iter()
+            .map(|m| m.name)
+            .collect()
+    } else {
+        Vec::new()
     };
-    let gemini_models = match gemini_key {
-        Some(key) if !key.is_empty() => {
-            lrg_providers::gemini::GeminiProvider::new(key)
-                .list_available_models()
-                .await
-        }
-        _ => Vec::new(),
+
+    // Same rule for MLX, except that "supported" is a runtime question — Apple
+    // silicon plus an installed sidecar — rather than a build-time one.
+    let mlx_models: Vec<String> = if state.mlx.is_supported() {
+        crate::mlx_models::discover_local_models()
+            .into_iter()
+            .map(|m| m.name)
+            .collect()
+    } else {
+        Vec::new()
     };
 
     Json(json!({
         "models": {
-            "qwen": [],
+            "llamacpp": llamacpp_models,
+            "mlx": mlx_models,
             "ollama": ollama_models,
             "lmstudio": lmstudio_models,
             "chatgpt": openai_models,
@@ -149,6 +179,7 @@ async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Unload request received via API");
     state.siglip.unload();
     state.face.unload();
+    state.bioclip.unload();
     // Store handles stay open (LanceDB keeps its own lazy IO, nothing to
     // proactively drop).
     Json(json!({"status": "Resources unloaded successfully."}))
@@ -212,12 +243,19 @@ async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
     let (face_status, face_error) = state.face.status();
-    // M7 adds real LLM provider health.
+    let (species_status, species_error) = state.bioclip.status();
+    // Deliberately no LLM provider status here: this GET carries no API keys
+    // or base URLs to probe (unlike POST /models, which accepts them), so
+    // there is nothing to report. The plugin checks provider availability
+    // itself from stored prefs plus a direct ping (SearchIndexAPI.getDetailedHealth
+    // in APISearchIndex.lua) rather than through this endpoint.
     Json(json!({
         "clip_model": clip_status,
         "clip_error": clip_error,
         "face_model": face_status,
         "face_error": face_error,
+        "species_model": species_status,
+        "species_error": species_error,
     }))
 }
 

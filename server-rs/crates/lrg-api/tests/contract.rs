@@ -323,3 +323,443 @@ async fn check_unprocessed_reports_only_missing_work() {
     assert_eq!(json["photo_ids"], serde_json::json!(["p2", "p3"]));
     assert_eq!(json["uuids"], json["photo_ids"]);
 }
+
+// ---------------------------------------------------------------------------
+// /cull + /group_similar
+//
+// These had no contract coverage at all, which is how several of the fields
+// below drifted: `debug` was always serialized even though the plugin never
+// reads it, and the `warning` string was driven by whether SigLIP happened to
+// be resident in RAM rather than by whether the photos had embeddings.
+// ---------------------------------------------------------------------------
+
+/// Seeds `count` photos one second apart with identical pHashes, i.e. an
+/// obvious burst that grouping must collapse into a single group.
+async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
+    let store = state.store().unwrap();
+    let records: Vec<lrg_store::StoreRecord> = (0..count)
+        .map(|i| {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "filename".into(),
+                serde_json::json!(format!("burst{i}.jpg")),
+            );
+            meta.insert("capture_time".into(), serde_json::json!(1_700_000_000 + i));
+            meta.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+            // Descending sharpness so the winner is deterministic: photo 0.
+            meta.insert(
+                "cull_sharpness".into(),
+                serde_json::json!(0.9 - 0.1 * i as f64),
+            );
+            meta.insert("cull_exposure".into(), serde_json::json!(0.8));
+            meta.insert("cull_noise".into(), serde_json::json!(0.1));
+            lrg_store::StoreRecord {
+                id: format!("burst{i}"),
+                vector: with_embedding.then(|| vec![0.5f32; 1152]),
+                metadata: meta,
+            }
+        })
+        .collect();
+    store
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+async fn cull_request(app: axum::Router, body: serde_json::Value) -> serde_json::Value {
+    let response = app
+        .oneshot(
+            Request::post("/cull")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body_json(response).await
+}
+
+#[tokio::test]
+async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    assert_eq!(json["status"], "success");
+    // TaskCullPhotos.lua reads every one of these summary fields.
+    let summary = &json["summary"];
+    assert_eq!(summary["group_count"], 1);
+    assert_eq!(summary["pick_count"], 1);
+    assert_eq!(summary["culling_preset"], "default");
+    assert_eq!(summary["unindexed_count"], 0);
+
+    let group = &json["groups"][0];
+    assert_eq!(group["group_size"], 3);
+    assert_eq!(group["winner_photo_id"], "burst0", "sharpest must win");
+    assert!(group["photo_ids"].as_array().unwrap().len() == 3);
+
+    // Per-photo fields the plugin writes into catalog metadata.
+    let winner = &group["photos"][0];
+    assert_eq!(winner["winner"], true);
+    assert_eq!(winner["rank"], 1);
+    assert!(winner["cull_score"].is_number());
+    assert!(winner["reason_codes"].is_array());
+    assert!(winner["explanation"].is_string());
+    assert!(winner["metrics"].is_object());
+}
+
+#[tokio::test]
+async fn cull_omits_debug_block_unless_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app.clone(),
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db_path_str}),
+    )
+    .await;
+    assert!(
+        json["groups"][0]["debug"].is_null(),
+        "debug must be off by default: it is O(k^2) floats the plugin never reads"
+    );
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "include_debug": true,
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+    let debug = &json["groups"][0]["debug"];
+    assert!(debug["thresholds"].is_object());
+    assert!(debug["pairwise_distances"].is_array());
+    assert_eq!(debug["culling_preset"], "default");
+}
+
+#[tokio::test]
+async fn cull_warns_about_unindexed_photos_instead_of_dropping_them_silently() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 2, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "never-indexed"],
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    assert_eq!(json["summary"]["unindexed_count"], 1);
+    let warning = json["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("not been analyzed"),
+        "expected an unindexed-photo warning, got {warning:?}"
+    );
+}
+
+#[tokio::test]
+async fn cull_warning_tracks_stored_embeddings_not_model_residency() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    // Embeddings present, SigLIP definitely not resident in this test process.
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db_path_str}),
+    )
+    .await;
+
+    assert!(
+        json["warning"].is_null(),
+        "an idle-unloaded model must not be reported as broken grouping, got {:?}",
+        json["warning"]
+    );
+}
+
+#[tokio::test]
+async fn cull_warns_when_no_embeddings_are_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, false).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db_path_str}),
+    )
+    .await;
+
+    let warning = json["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("perceptual hashes"),
+        "expected a pHash-only fallback warning, got {warning:?}"
+    );
+    // Grouping still works from pHash + capture time.
+    assert_eq!(json["summary"]["group_count"], 1);
+}
+
+#[tokio::test]
+async fn cull_rejects_unknown_preset_with_the_available_list() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/cull")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"photo_ids": ["a"], "culling_preset": "nope"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    let presets = json["available_presets"].as_array().unwrap();
+    assert!(presets.iter().any(|p| p == "portrait"), "got {presets:?}");
+}
+
+#[tokio::test]
+async fn group_similar_requires_photo_ids() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/group_similar")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// The `cull` task is the fast ingest path. Its delta check cannot key off
+/// FACE_TABLE rows (it writes none) and cannot treat `cull_faces_present:
+/// false` as incomplete (that is the correct value for a photo with no faces).
+#[tokio::test]
+async fn check_unprocessed_understands_the_cull_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    let row = |phash: Option<&str>, faces_present: Option<bool>| {
+        let mut m = serde_json::Map::new();
+        if let Some(p) = phash {
+            m.insert("cull_phash".into(), serde_json::json!(p));
+        }
+        if let Some(f) = faces_present {
+            m.insert("cull_faces_present".into(), serde_json::json!(f));
+        }
+        m
+    };
+
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                // Fully culled, and genuinely has no faces.
+                lrg_store::StoreRecord {
+                    id: "done_faceless".into(),
+                    vector: None,
+                    metadata: row(Some("abcd0123abcd0123"), Some(false)),
+                },
+                // Fully culled, has faces.
+                lrg_store::StoreRecord {
+                    id: "done_with_faces".into(),
+                    vector: None,
+                    metadata: row(Some("abcd0123abcd0124"), Some(true)),
+                },
+                // Has a pHash from an older index pass but never a cull face pass.
+                lrg_store::StoreRecord {
+                    id: "needs_face_pass".into(),
+                    vector: None,
+                    metadata: row(Some("abcd0123abcd0125"), None),
+                },
+                // Indexed for embeddings only, no cull data at all.
+                lrg_store::StoreRecord {
+                    id: "needs_everything".into(),
+                    vector: Some(vec![0.1; 1152]),
+                    metadata: row(None, None),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/index/check-unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": [
+                            "done_faceless", "done_with_faces",
+                            "needs_face_pass", "needs_everything", "unknown",
+                        ],
+                        "tasks": "cull",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["photo_ids"],
+        serde_json::json!(["needs_face_pass", "needs_everything", "unknown"]),
+        "a faceless photo that has been culled must not be reported forever"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// /style_edit
+//
+// The plugin's edit workflow routes here whenever "apply my saved edit style" is
+// on, which is the default, so this is the first endpoint a new user's edit run
+// touches. It had no contract coverage, and the plugin branches on the exact
+// shapes below.
+// ---------------------------------------------------------------------------
+
+/// Builds a `multipart/form-data` body. `/style_edit` and `/edit` are the only
+/// multipart endpoints the plugin calls, and both are driven from
+/// `_requestMultipart` in APISearchIndex.lua.
+fn multipart_body(fields: &[(&str, &str)], image: Option<(&str, &[u8])>) -> (String, Vec<u8>) {
+    const BOUNDARY: &str = "----lrgtestboundary";
+    let mut body: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    if let Some((filename, bytes)) = image {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"image\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: image/jpeg\r\n\r\n");
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
+async fn style_edit_request(
+    app: axum::Router,
+    fields: &[(&str, &str)],
+    image: Option<(&str, &[u8])>,
+) -> (StatusCode, serde_json::Value) {
+    let (content_type, body) = multipart_body(fields, image);
+    let response = app
+        .oneshot(
+            Request::post("/style_edit")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn style_edit_rejects_a_request_without_an_image() {
+    let (app, _) = fresh_app();
+    let (_, json) = style_edit_request(app.clone(), &[("photo_id", "photo1")], None).await;
+
+    // The plugin checks `response.status` first; this branch carries only `error`,
+    // so styleEdit reports "Unexpected response" rather than the actual reason.
+    assert!(
+        json.get("error").is_some(),
+        "expected an error field, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn style_edit_reports_an_unbound_database_rather_than_panicking() {
+    let (app, _) = fresh_app();
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[("photo_id", "photo1")],
+        Some(("photo1.jpg", b"not-a-real-jpeg")),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("db_path"),
+        "expected the unbound-database message, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
+    // With no training examples and no LLM fallback the style engine cannot
+    // answer, and this is what a first run hits. Pinned because the edit workflow
+    // is moving to an LLM-free path: this 422 is exactly the response the
+    // deterministic cold-start path has to replace, and a silent change of shape
+    // here would strand the plugin.
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[
+            ("photo_id", "photo1"),
+            ("db_path", db_path_str.as_str()),
+            ("use_llm_fallback", "false"),
+        ],
+        Some(("photo1.jpg", b"not-a-real-jpeg")),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json["status"], "error");
+    assert_eq!(json["engine"], "none");
+    assert_eq!(json["matched_examples"], 0);
+    assert!(json["error"].is_string());
+}

@@ -8,6 +8,8 @@ members = [
     "crates/lrg-ml",
     "crates/lrg-analysis",
     "crates/lrg-providers",
+    "crates/lrg-llama",
+    "crates/lrg-mlx",
     "crates/lrg-api",
     "crates/lrg-server",
 ]
@@ -25,6 +27,8 @@ lrg-imaging = { path = "crates/lrg-imaging" }
 lrg-ml = { path = "crates/lrg-ml" }
 lrg-analysis = { path = "crates/lrg-analysis" }
 lrg-providers = { path = "crates/lrg-providers" }
+lrg-llama = { path = "crates/lrg-llama" }
+lrg-mlx = { path = "crates/lrg-mlx" }
 lrg-api = { path = "crates/lrg-api" }
 
 axum = { version = "0.8", features = ["multipart"] }

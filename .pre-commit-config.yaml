@@ -3,7 +3,10 @@ repos:
     rev: v2.4.1
     hooks:
       - id: stylua-github
-        files: ^plugin/LrGeniusAI.lrdevplugin/
+        # The specs too, not just the plugin: they are Lua written to the same
+        # style, and leaving them out meant they drifted until someone ran
+        # stylua over the directory by hand.
+        files: ^plugin/(LrGeniusAI\.lrdevplugin|spec)/
 
   - repo: local
     hooks:
@@ -18,4 +21,12 @@ repos:
         entry: bash -c 'cd server-rs && cargo clippy --workspace --all-targets -- -D warnings'
         language: system
         files: ^server-rs/.*\.rs$
+        pass_filenames: false
+      - id: check-docs
+        name: docs match the code
+        entry: python3 scripts/check-docs.py
+        language: system
+        # Routes, the plugin's endpoint table, and the doc map itself are the
+        # only inputs the exact checks read; staleness warnings surface in CI.
+        files: ^(server-rs/crates/lrg-api/src/routes/|plugin/LrGeniusAI\.lrdevplugin/APISearchIndex\.lua|docs/)
         pass_filenames: false

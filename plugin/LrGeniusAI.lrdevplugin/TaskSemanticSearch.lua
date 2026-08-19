@@ -6,12 +6,12 @@
 local function showAdvancedSearchDialog(ctx)
 	local props = LrBinding.makePropertyTable(ctx)
 	props.searchTerm = ""
-	props.useQualityFilter = false
-	props.qualitySort = "prettiest"
 	-- Scope and search-in options from prefs (persisted)
 	props.searchScope = prefs.searchScope or "all"
 	props.searchInSemanticSiglip = prefs.searchInSemanticSiglip ~= false
-	props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
+	-- Vertex AI is disabled in the GUI; the backend code is untouched.
+	props.searchInSemanticVertex = false
+	-- props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
 	props.searchInMetadata = prefs.searchInMetadata ~= false
 	props.searchInMetadataKeywords = prefs.searchInMetadataKeywords ~= false
 	props.searchInMetadataCaption = prefs.searchInMetadataCaption ~= false
@@ -118,10 +118,11 @@ local function showAdvancedSearchDialog(ctx)
 							"$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)"
 						),
 					}),
-					f:checkbox({
-						value = bind("searchInSemanticVertex"),
-						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)"),
-					}),
+					-- Vertex AI is disabled in the GUI; the backend code is untouched.
+					-- f:checkbox({
+					-- 	value = bind("searchInSemanticVertex"),
+					-- 	title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)"),
+					-- }),
 					f:checkbox({
 						value = bind("searchInMetadata"),
 						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata"),
@@ -180,7 +181,8 @@ local function showAdvancedSearchDialog(ctx)
 		-- Persist dialog options to prefs for next time
 		prefs.searchScope = props.searchScope
 		prefs.searchInSemanticSiglip = props.searchInSemanticSiglip
-		prefs.searchInSemanticVertex = props.searchInSemanticVertex
+		-- Vertex AI is disabled in the GUI; the backend code is untouched.
+		-- prefs.searchInSemanticVertex = props.searchInSemanticVertex
 		prefs.searchInMetadata = props.searchInMetadata
 		prefs.searchInMetadataKeywords = props.searchInMetadataKeywords
 		prefs.searchInMetadataCaption = props.searchInMetadataCaption
@@ -234,8 +236,6 @@ LrTasks.startAsyncTask(function()
 			end
 		end -- 'all' means photosToSearch is nil, so we search everything
 
-		local qualitySort = props.useQualityFilter and props.qualitySort or nil
-
 		-- Semantic search (with optional quality filter)
 		local searchStartedAt = LrDate.currentTime()
 		if props.searchTerm ~= "" then
@@ -265,7 +265,7 @@ LrTasks.startAsyncTask(function()
 			if #searchOptions.metadataFields == 0 and props.searchInMetadata then
 				searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
 			end
-			results, err = SearchIndexAPI.searchIndex(props.searchTerm, qualitySort, photosToSearch, searchOptions)
+			results, err = SearchIndexAPI.searchIndex(props.searchTerm, photosToSearch, searchOptions)
 			local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
 			local resCount = 0
 			if type(results) == "table" then
@@ -285,46 +285,17 @@ LrTasks.startAsyncTask(function()
 			)
 			collectionName = string.format("'%s' @ %s", props.searchTerm, LrDate.timeToW3CDate(LrDate.currentTime()))
 
-		-- Quality-only search
-		elseif props.useQualityFilter then
-			local apiCall, apiCallInSelection, collectionNamePrefix
-			if props.qualitySort == "prettiest" then
-				apiCall = SearchIndexAPI.getPrettiest
-				apiCallInSelection = SearchIndexAPI.getPrettiestInSelection
-				collectionNamePrefix = LOC("$$$/LrGeniusAI/AdvancedSearchTask/Prettiest=Prettiest")
-			else -- ugliest
-				apiCall = SearchIndexAPI.getUgliest
-				apiCallInSelection = SearchIndexAPI.getUgliestInSelection
-				collectionNamePrefix = LOC("$$$/LrGeniusAI/AdvancedSearchTask/Ugliest=Ugliest")
-			end
-
-			if props.searchScope == "all" then
-				results = apiCall()
-				collectionNamePrefix = collectionNamePrefix
-					.. LOC("$$$/LrGeniusAI/AdvancedSearchTask/inCatalog= in Catalog")
-			else
-				if #photosToSearch == 0 then
-					LrDialogs.message(
-						LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos were found in the selected scope.")
-					)
-					return
-				end
-				results = apiCallInSelection(photosToSearch)
-				collectionNamePrefix = collectionNamePrefix
-					.. (
-						props.searchScope == "selection"
-							and LOC("$$$/LrGeniusAI/AdvancedSearchTask/inSelection= in Selection")
-						or LOC("$$$/LrGeniusAI/AdvancedSearchTask/inView= in View")
-					)
-			end
-			collectionName = string.format("%s @ %s", collectionNamePrefix, LrDate.timeToW3CDate(LrDate.currentTime()))
+		-- There used to be a quality-only branch here ("prettiest" /
+		-- "ugliest"). It had no UI: `useQualityFilter` is initialised to false
+		-- and never bound to a control, so the branch was unreachable — which
+		-- is the only reason it never crashed, because it called
+		-- `SearchIndexAPI.getPrettiest` and three siblings that do not exist.
+		-- Removed rather than revived: reviving it means designing the feature,
+		-- not restoring code.
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteria=No Search Criteria"),
-				LOC(
-					"$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term or select a quality filter."
-				)
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term.")
 			)
 			return
 		end

@@ -40,7 +40,9 @@ require("PromptConfigProvider")
 require("UpdateCheck")
 require("ErrorHandler")
 require("APISearchIndex")
+require("SpeciesLinks")
 require("PhotoSelector")
+require("LocalModelCatalog")
 require("OnboardingWizard")
 
 if _G.prefs.ai == nil then

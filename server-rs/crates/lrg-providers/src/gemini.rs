@@ -15,7 +15,8 @@ use tokio::sync::Mutex;
 use crate::edit_recipe::{gemini_edit_recipe_schema, normalize_edit_recipe};
 use crate::gemini_schema::prepare_gemini_response_schema;
 use crate::image_encode::image_to_base64;
-use crate::normalize::normalize_keywords_structure;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
@@ -175,6 +176,41 @@ impl GeminiProvider {
         Ok(result)
     }
 
+    /// Schema-free chat completion — see [`crate::provider::LlmProvider::generate_text`].
+    pub async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        let model = model.unwrap_or("gemini-2.0-flash");
+        let url = format!(
+            "{API_BASE}/models/{model}:generateContent?key={}",
+            self.api_key
+        );
+        let body = json!({
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .ok()?;
+        let result: Value = resp.json().await.ok()?;
+        let parts = result["candidates"][0]["content"]["parts"].as_array()?;
+        let text: String = parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then_some(text)
+    }
+
     pub async fn generate_metadata(
         &self,
         request: &MetadataGenerationRequest,
@@ -255,20 +291,25 @@ impl GeminiProvider {
             Err(e) => return fail(&request.uuid, format!("JSON parsing error: {e}")),
         };
 
-        let keywords =
-            normalize_keywords_structure(&parsed.get("keywords").cloned().unwrap_or(json!([])));
+        let keywords = normalize_keywords(
+            &parsed.get("keywords").cloned().unwrap_or(json!([])),
+            request.keyword_categories.as_ref(),
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
+        );
+        let caption = if request.generate_caption {
+            parsed
+                .get("caption")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        };
+        let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
-            caption: if request.generate_caption {
-                parsed
-                    .get("caption")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            caption,
             title: if request.generate_title {
                 parsed
                     .get("title")
@@ -277,14 +318,7 @@ impl GeminiProvider {
             } else {
                 None
             },
-            alt_text: if request.generate_alt_text {
-                parsed
-                    .get("alt_text")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            alt_text,
             input_tokens,
             output_tokens,
             error: None,
@@ -310,7 +344,7 @@ impl GeminiProvider {
         let user_prompt = prepare_edit_user_prompt(request);
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
         let generation_config = effective.generation_config(
-            gemini_edit_recipe_schema().clone(),
+            gemini_edit_recipe_schema(request.is_raw).clone(),
             request.temperature,
             max_tokens,
             &request.model,
@@ -359,11 +393,12 @@ impl GeminiProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens,
             output_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 

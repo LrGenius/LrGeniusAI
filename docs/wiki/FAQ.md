@@ -8,7 +8,7 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 ### Does it send my photos to the cloud?
 
-Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Vertex AI). With local providers (Ollama, LM Studio) your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
+Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini; Vertex AI was removed in August 2026). With a local provider — the built-in llama.cpp and MLX engines, or an external Ollama / LM Studio server — your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
 ### Which Lightroom version is supported?
 
@@ -16,7 +16,7 @@ Adobe **Lightroom Classic** only. Lightroom CC (cloud) and other Lightroom versi
 
 ### Is it free?
 
-Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI) incurs costs at the respective provider's standard rates. Local models (Ollama, LM Studio) are completely free to run.
+Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI) incurs costs at the respective provider's standard rates. Local models are completely free to run — including the ones the backend downloads and runs itself, see [Local AI Models](Help-Local-AI-Models).
 
 ### Is there a more minimalist version?
 
@@ -57,8 +57,12 @@ See [Help: Choosing AI Model](Help-Choosing-AI-Model) for a full breakdown. Quic
 | Cheap bulk keywording | `gemini-2.5-flash-lite` or `gpt-5-nano` |
 | Balanced default | `gemini-2.5-flash` |
 | Best quality | `gemini-2.5-pro` or `gpt-5.4-pro` |
-| Privacy / no API cost | Ollama or LM Studio with `qwen3-vl:8b` |
-| Apple Silicon, local | LM Studio MLX build of `qwen3-vl` |
+| Privacy / no API cost | Built-in `llamacpp` with Gemma 4 E4B |
+| Apple Silicon, local | Built-in `mlx` with Gemma 4 E4B |
+
+### Can I run AI analysis without installing Ollama or LM Studio?
+
+Yes. The backend has two built-in engines — **llama.cpp** (GGUF; macOS, Windows, Linux) and **MLX** (Apple silicon). In *Plug-in Manager → LrGeniusAI* find the **Local AI Model** sections, pick a model, and click **Download**. Nothing else to install or keep running. See [Local AI Models](Help-Local-AI-Models).
 
 ### I don't see any models in the dropdown
 
@@ -66,6 +70,13 @@ The model list is loaded from the backend at runtime. If it's empty:
 1. Make sure the backend server is running and reachable (*Plugin Manager → Status*).
 2. Check that the relevant API key or local server URL is configured.
 3. For Ollama/LM Studio: the local server must be started before Lightroom is opened (or before running a task).
+4. For the built-in local engines: a model must be downloaded first — the **Installed** line in the Plug-in Manager tells you whether one is present.
+
+### Why is the MLX section greyed out?
+
+MLX needs the `lrgenius-mlx` helper next to the server binary. It ships in the official macOS
+installer, so a greyed-out section usually means a source build without the `xcodebuild` step —
+the status line names the exact reason. On Windows the section is llama.cpp rather than MLX.
 
 ### Where do I enter my API key?
 
@@ -77,11 +88,21 @@ The model list is loaded from the backend at runtime. If it's empty:
 
 ### What does "Analyze & Index" actually do?
 
-It does two things in one pass:
+Up to four things in one pass:
 1. Sends each photo to the configured AI model to generate keywords, title, caption, and alt text.
 2. Creates a semantic embedding (using SigLIP2 locally) so the photo can be found by [Advanced Search](Help-Advanced-Search).
+3. Detects and embeds faces for the [People](Help-People-Faces) workflows.
+4. Identifies animal, plant and fungus species (using BioCLIP 2 locally) and writes the taxonomy to the plugin's metadata fields.
 
-Both steps are optional — you can run only embeddings, only metadata, or both.
+Every step is optional and each has its own checkbox — only step 1 involves a language model or a cloud account at all.
+
+### Does species identification send my photos anywhere?
+
+No. It runs BioCLIP 2 on the machine running the backend, the same way search embeddings and face detection do. Nothing is uploaded, and it works with no API key and no internet connection once the model is downloaded. See [Help: Analyze and Index](Help-Analyze-and-Index#species-identification).
+
+### Why did I get "Aves" instead of a species name?
+
+Because that is the deepest rank the model was confident about. A clear frame of a garden bird gets a binomial; a distant silhouette gets an order or a class. The rank is written into its own metadata field so you can always tell which you got. Full explanation, including why some common names come back in Swedish, is in [Help: Analyze and Index](Help-Analyze-and-Index#why-the-answer-is-sometimes-just-aves).
 
 ### Do I have to index all photos before I can search?
 
@@ -90,6 +111,7 @@ Yes. Advanced Search only works on photos that have been indexed (embeddings cre
 ### The AI generated wrong or low-quality keywords
 
 - Try a more capable model (e.g. move from a small local model to `gemini-2.5-flash`).
+- With a local model, turn **off** keyword aliases and bilingual keywords — both make the model emit structured keyword objects, which small models handle badly (often returning no keywords at all).
 - Add **Photo Context** (folder names, capture date, GPS coordinates) to give the AI more information.
 - Write a custom **System Prompt** in *Plug-in Manager → Prompts* to guide the output style.
 - Adjust the **Temperature** slider — lower values produce more consistent output.
@@ -118,23 +140,23 @@ Results are ranked by combining visual semantic embeddings with a text search ov
 
 ### What does AI Edit generate?
 
-A structured Lightroom develop recipe: global adjustments (exposure, white balance, tone curve, HSL, etc.) and optional local masks (subject, sky, background). The recipe is applied via the Lightroom SDK — no raw pixel editing happens outside Lightroom.
+A structured Lightroom develop recipe of global adjustments (exposure, white balance, tone curve, contrast, presence, sharpening, and so on), built by matching the photo against your own saved edits. The recipe is applied via the Lightroom SDK — no raw pixel editing happens outside Lightroom.
+
+### Which model does AI Edit use?
+
+None. AI Edit does not call a language model at all — it interpolates the develop settings of the training examples closest to the photo. Model choice only affects *Analyze & Index*.
+
+### AI Edit says my style profile is not ready
+
+It needs at least five saved training examples before it can produce anything. Edit some photos the way you like them and run **Save Edits as AI Training Examples** (*Library → Plug-in Extras*). See [Help: Train from Edits](Help-Train-From-Edits).
 
 ### I want to review edits before they are applied
 
-Enable **Review each proposed edit before applying it** in the AI Edit dialog. You will see a before/after preview for each photo and can approve, skip, or adjust the edit.
+Enable **Review each proposed edit before applying it** in the AI Edit dialog. You will see the proposed develop values, the confidence of the style match, and any guardrail explanations, and can apply or skip each photo. (There is no rendered before/after preview yet — use Lightroom's History panel to judge the result.)
 
-### What are "Overall look" presets?
+### Can I keep my original untouched?
 
-Presets define the editing style — for example *Natural Professional*, *Moody Dramatic*, *Portrait - Skin Safe*, *Wedding - Soft Airy*. They inject a style description into the AI prompt. Choose *Custom* to write your own style instruction.
-
-### What does "Style strength" do?
-
-Controls how aggressively the AI applies the style. At 0% the AI makes only technical corrections; at 100% it applies the full stylized look. Default is 50%.
-
-### Can I train the AI on my own editing style?
-
-Yes — use **Save Edits as AI Training Examples** (*Library → Plug-in Extras*). See [Help: Train from Edits](Help-Train-From-Edits) for details.
+Enable **Apply the edit to a new virtual copy** in the AI Edit dialog. Each edited photo gets a virtual copy named *AI Edit* and the recipe lands there.
 
 ---
 
@@ -192,7 +214,9 @@ For more detailed solutions see [Troubleshooting](Troubleshooting).
 
 ### I upgraded from an old version and search / metadata is missing
 
-You may need to run the one-time **Migrate existing DB IDs to photo_id** migration:  
-*File → Plug-in Manager → LrGeniusAI → Backend Server → Migrate existing DB IDs to photo_id*
+Versions before file-based `photo_id` values stored Lightroom catalog UUIDs as primary IDs,
+and the backend cannot match those against your photos any more.
 
-This is only needed once after upgrading from a version that used Lightroom catalog UUIDs as primary IDs.
+There is no migration — the one the plugin used to offer never worked, and has been removed.
+Run **Analyze & Index Photos** over the catalog again instead. Photos already indexed under
+the current IDs are skipped, so only the ones that genuinely need it are re-processed.

@@ -16,7 +16,8 @@ use serde_json::{json, Value};
 
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
-use crate::normalize::normalize_keywords_structure;
+use crate::keyword_taxonomy::KeywordLeafEncoding;
+use crate::normalize::{alt_text_from, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
@@ -100,6 +101,40 @@ impl LmStudioProvider {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Schema-free chat completion — see [`crate::provider::LlmProvider::generate_text`].
+    pub async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        let model = model.unwrap_or("local-model");
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        });
+        let resp = self
+            .client
+            .post(format!(
+                "{}/v1/chat/completions",
+                normalize_base_url(&self.host)
+            ))
+            .json(&body)
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .ok()?;
+        let result: Value = resp.json().await.ok()?;
+        result["choices"][0]["message"]["content"]
+            .as_str()
+            .map(str::to_string)
     }
 
     pub async fn generate_metadata(
@@ -199,20 +234,25 @@ impl LmStudioProvider {
             }
         };
 
-        let keywords =
-            normalize_keywords_structure(&parsed.get("keywords").cloned().unwrap_or(json!([])));
+        let keywords = normalize_keywords(
+            &parsed.get("keywords").cloned().unwrap_or(json!([])),
+            request.keyword_categories.as_ref(),
+            KeywordLeafEncoding::for_request(request.bilingual_keywords, request.generate_aliases),
+        );
+        let caption = if request.generate_caption {
+            parsed
+                .get("caption")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        };
+        let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
-            caption: if request.generate_caption {
-                parsed
-                    .get("caption")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            caption,
             title: if request.generate_title {
                 parsed
                     .get("title")
@@ -221,14 +261,7 @@ impl LmStudioProvider {
             } else {
                 None
             },
-            alt_text: if request.generate_alt_text {
-                parsed
-                    .get("alt_text")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            alt_text,
             input_tokens,
             output_tokens,
             error: None,
@@ -263,7 +296,7 @@ impl LmStudioProvider {
             ],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "lightroom_edit_recipe", "schema": openai_edit_recipe_schema()},
+                "json_schema": {"name": "lightroom_edit_recipe", "schema": openai_edit_recipe_schema(request.is_raw)},
             },
             "temperature": request.temperature,
             "max_tokens": max_tokens,
@@ -335,11 +368,12 @@ impl LmStudioProvider {
         EditGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
-            recipe: Some(normalize_edit_recipe(&parsed)),
+            recipe: Some(normalize_edit_recipe(&parsed, request.is_raw)),
             input_tokens,
             output_tokens,
             error: None,
             warning: None,
+            guardrail_reasons: Vec::new(),
         }
     }
 }

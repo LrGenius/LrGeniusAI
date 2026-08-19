@@ -72,7 +72,18 @@ async fn check_unprocessed(
     let compute_metadata = has_task("metadata");
     let compute_faces = has_task("faces");
     let compute_vertexai = has_task("vertexai");
-    let any_task = compute_embeddings || compute_metadata || compute_faces || compute_vertexai;
+    let compute_species = has_task("species");
+    // The fast cull ingest. Deliberately does not set `compute_faces`: that
+    // pass writes no FACE_TABLE rows (it has no identity embedding), so keying
+    // off stored faces would report every cull-processed photo as outstanding
+    // forever. It has its own completion flag below.
+    let compute_cull = has_task("cull");
+    let any_task = compute_embeddings
+        || compute_metadata
+        || compute_faces
+        || compute_vertexai
+        || compute_cull
+        || compute_species;
 
     let regenerate_metadata = data
         .get("regenerate_metadata")
@@ -88,6 +99,12 @@ async fn check_unprocessed(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty());
+
+    // Which taxonomy head is on disk right now. `None` until BioCLIP has
+    // loaded once this process, in which case there is nothing to compare
+    // against and stored results are taken at face value — the alternative
+    // would re-queue the whole catalog on every server restart.
+    let current_species_model = state.bioclip.model_id();
 
     let Some(store) = state.store() else {
         // No store bound: everything needs processing (matches empty existing).
@@ -178,11 +195,33 @@ async fn check_unprocessed(
                 let needs_vertexai =
                     compute_vertexai && (regenerate_metadata || !vertex_present.contains(*pid));
                 let needs_cull_phash = any_task && (regenerate_metadata || !has_flag("cull_phash"));
+                // `cull_faces_present` is legitimately `false` for a photo with
+                // no faces, so completion is "the key exists", not "it is
+                // truthy" — otherwise every faceless photo would be reported as
+                // outstanding on every run.
+                let needs_cull_faces =
+                    compute_cull && (regenerate_metadata || !m.contains_key("cull_faces_present"));
+                // A photo is done for `species` only if it was checked *and*
+                // checked by the head currently on disk. Widening the taxa
+                // whitelist changes what BioCLIP can answer, so results from an
+                // older head have to be re-derived rather than trusted.
+                let species_head_current = match current_species_model.as_deref() {
+                    Some(current) => {
+                        m.get("species_model").and_then(Value::as_str) == Some(current)
+                    }
+                    None => true,
+                };
+                let needs_species = compute_species
+                    && (regenerate_metadata
+                        || !has_flag("species_checked")
+                        || !species_head_current);
                 needs_embedding
                     || needs_metadata
                     || needs_faces
                     || needs_vertexai
                     || needs_cull_phash
+                    || needs_cull_faces
+                    || needs_species
             })
             .cloned()
             .collect();
@@ -607,6 +646,37 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         }
     }
 
+    // Species goes in its own top-level block rather than into `metadata`.
+    // That object is LLM output: the plugin runs it through the review dialog
+    // and lets the user edit every field. A taxonomic identification is not
+    // something to hand-edit in that dialog, and it is applied on a different
+    // path (`MetadataManager.applySpecies`).
+    //
+    // `null` rather than an empty object when the photo has never been through
+    // BioCLIP, so the plugin can tell "not identified" from "not checked".
+    let species = if metadata_dict.contains_key("species_checked") {
+        json!({
+            "rank": metadata_dict.get("species_rank").cloned().unwrap_or(Value::Null),
+            "taxonomy": metadata_dict.get("species_taxonomy").cloned().unwrap_or(Value::Null),
+            "scientific_name": metadata_dict
+                .get("species_scientific_name")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "common_name": metadata_dict
+                .get("species_common_name")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "confidence": metadata_dict.get("species_confidence").cloned().unwrap_or(Value::Null),
+            "alternatives": metadata_dict
+                .get("species_alternatives")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new())),
+            "model": metadata_dict.get("species_model").cloned().unwrap_or(Value::Null),
+        })
+    } else {
+        Value::Null
+    };
+
     log::info!(
         "Retrieved data for photo {photo_id}: {} metadata fields",
         metadata_fields.len()
@@ -616,6 +686,7 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         "photo_id": photo_id,
         "uuid": photo_id,
         "metadata": metadata_fields,
+        "species": species,
         "edit": edit_recipe,
         "edit_summary": metadata_dict.get("edit_summary").cloned().unwrap_or(Value::Null),
         "edit_warnings": edit_warnings,

@@ -17,7 +17,7 @@ jobs:
     name: Validate tag is on main
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Ensure tag commit is on main
@@ -41,24 +41,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `cargo_features` is what makes the two platforms differ in which
+          # local engine they ship. Windows builds llama.cpp (with the Vulkan
+          # backend); macOS deliberately builds neither the feature nor its
+          # prerequisites, because MLX is the only local engine there — see the
+          # MLX sidecar steps below. Shipping llama.cpp alongside it would mean
+          # compiling it from source on every release for an engine that is
+          # slower on Apple silicon and that the plug-in no longer offers.
           - os: windows-latest
             os_name: windows
             arch: x64
             bin_ext: .exe
+            cargo_features: --features llamacpp
           - os: macos-latest
             os_name: macos
             arch: arm64
             bin_ext: ''
-          - os: ubuntu-latest
-            os_name: linux
-            arch: x64
-            bin_ext: ''
+            cargo_features: ''
 
     name: Build LrGeniusAI - ${{ matrix.os_name }}-${{ matrix.arch }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -73,9 +78,13 @@ jobs:
             # back to the same dev version the binary itself defaults to.
             VERSION="0.0.0-dev"
           fi
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f2)
-          REVISION=$(echo "$VERSION" | cut -d. -f3)
+          # Info.lua's MAJOR/MINOR/REVISION are plain Lua number literals, so
+          # drop any prerelease suffix (e.g. "3.0.0-pre3" -> "3.0.0") before
+          # splitting — they may only contain numbers.
+          VERSION_NUMERIC="${VERSION%%-*}"
+          MAJOR=$(echo "$VERSION_NUMERIC" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NUMERIC" | cut -d. -f2)
+          REVISION=$(echo "$VERSION_NUMERIC" | cut -d. -f3)
           MAJOR=${MAJOR:-0}
           MINOR=${MINOR:-0}
           REVISION=${REVISION:-0}
@@ -108,15 +117,161 @@ jobs:
           echo "Backend version env: version=${VERSION} tag=v${VERSION} build=${BUILD_DATE}"
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+
+      # The `llamacpp` feature compiles llama.cpp from source: cmake for the
+      # build itself, libclang for bindgen. Installed explicitly rather than
+      # relying on what a runner image happens to ship, because a missing
+      # libclang surfaces as an opaque bindgen failure.
+      #
+      # Windows only. macOS builds without the feature (see `cargo_features` in
+      # the matrix), so it needs none of this.
+      - name: Install llama.cpp build prerequisites (Windows)
+        if: matrix.os_name == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install --no-progress -y llvm cmake ninja || true
+          # Find libclang wherever LLVM landed rather than hard-coding a path
+          # that changes with the runner image.
+          for candidate in "/c/Program Files/LLVM/bin" "/c/ProgramData/chocolatey/lib/llvm/tools/LLVM/bin"; do
+            if [ -f "$candidate/libclang.dll" ]; then
+              echo "LIBCLANG_PATH=$(cygpath -w "$candidate")" >> "$GITHUB_ENV"
+              echo "Found libclang in $candidate"
+              break
+            fi
+          done
+          if ! grep -q LIBCLANG_PATH "$GITHUB_ENV"; then
+            echo "::error::libclang.dll not found; bindgen cannot run" && exit 1
+          fi
+
+          # Build llama.cpp with Ninja instead of cmake's default Visual Studio
+          # generator. Not a preference — the VS generator cannot build the
+          # Vulkan backend here. ggml-vulkan generates its shaders with a host
+          # tool (`vulkan-shaders-gen`) pulled in via ExternalProject_Add, and
+          # that CMakeLists sets CMP0147 NEW, which asks MSBuild to run custom
+          # build steps in parallel. MSBuild then runs the external project's
+          # steps out of order, so the install step fires before the configure
+          # step has written cmake_install.cmake:
+          #
+          #   CMake error : Not a file: .../vulkan-shaders-gen-build/cmake_install.cmake
+          #   The system cannot find the batch label specified - VCEnd
+          #   error MSB8066: Custom build for '...vulkan-shaders-gen-install.rule;
+          #                  ...vulkan-shaders-gen-complete.rule' exited with code 1
+          #
+          # Ninja expresses those steps as ordinary dependency edges, so they
+          # cannot race, and it builds the whole thing faster besides. Only
+          # llama-cpp-sys-2 uses the cmake crate in this workspace, so this
+          # variable cannot affect any other dependency. cmake-rs skips the
+          # -A/-T flags for Ninja and passes cl.exe plus its INCLUDE/LIB/PATH
+          # environment through to cmake, which is also what lets the nested
+          # vulkan-shaders-gen configure step find a compiler.
+          if ! ninja --version; then
+            echo "::error::ninja not on PATH; the Vulkan build needs it" && exit 1
+          fi
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
+          # Build into a short target dir, because the Vulkan backend cannot be
+          # built from the default one on Windows. vulkan-shaders-gen is an
+          # ExternalProject nested inside OUT_DIR, so its build tree carries the
+          # whole prefix chain:
+          #
+          #   <target>/release/build/llama-cpp-sys-2-<hash>/out/build/ggml/src/
+          #   ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/
+          #   CMakeFiles/CMakeScratch/TryCompile-XXXXXX/CMakeFiles/cmTC_XXXXX.dir/
+          #
+          # From D:\a\LrGeniusAI\LrGeniusAI\server-rs\target that is 247 of the
+          # 250 characters CMake allows for an object path, and cl.exe resolves
+          # its relative /Fo against that directory — so the compiler check that
+          # opens the sub-build fails on MAX_PATH before any shader is compiled:
+          #
+          #   testCCompiler.c : fatal error C1083: Cannot open compiler
+          #                     generated file: '': Invalid argument
+          #   -- Check for working C compiler: .../cl.exe - broken
+          #
+          # `D:\t` is on the same volume the workspace already builds in and
+          # drops ~39 characters off every path, which clears the limit. Steps
+          # that read build output go through $TARGET_DIR for this reason — and
+          # it carries the POSIX spelling of the same directory, because the
+          # MSYS `find`/`cp` in those bash steps would read a `D:\...` argument
+          # as a relative path.
+          echo 'CARGO_TARGET_DIR=D:\t' >> "$GITHUB_ENV"
+          echo 'TARGET_DIR=/d/t' >> "$GITHUB_ENV"
+
+      # Windows is the one target that enables llama.cpp's Vulkan backend (see
+      # crates/lrg-llama/Cargo.toml), and that needs the Vulkan SDK: without it
+      # llama-cpp-sys-2's build.rs panics outright ("Please install Vulkan SDK
+      # and ensure that VULKAN_SDK env variable is set"), because it links
+      # vulkan-1.lib from $VULKAN_SDK\Lib and ggml's CMake needs the SDK's
+      # glslc to compile the compute shaders. A pinned version is preferred so
+      # an SDK release cannot silently change a tagged build, with a fallback
+      # to whatever LunarG currently calls latest so the release does not go
+      # down the day that pinned build is retired from their CDN.
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os_name == 'windows'
+        shell: pwsh
+        env:
+          VULKAN_SDK_VERSION: '1.4.357.0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk-installer.exe'
+
+          # LunarG renamed the Windows installer after 1.4.309.0, so try the
+          # current name first and the old one second — that way bumping the
+          # pin in either direction keeps working.
+          function Save-VulkanInstaller($v) {
+            $base = "https://sdk.lunarg.com/sdk/download/$v/windows"
+            foreach ($name in @("vulkansdk-windows-X64-$v.exe", "VulkanSDK-$v-Installer.exe")) {
+              try {
+                Invoke-WebRequest -Uri "$base/$name" -OutFile $installer -UseBasicParsing
+                Write-Host "Downloaded $name"
+                return $true
+              } catch {
+                Write-Host "Not available: $base/$name ($($_.Exception.Message))"
+              }
+            }
+            return $false
+          }
+
+          $version = $env:VULKAN_SDK_VERSION
+          if (-not (Save-VulkanInstaller $version)) {
+            $latest = (Invoke-RestMethod -Uri 'https://vulkan.lunarg.com/sdk/latest.json' -UseBasicParsing).windows
+            Write-Host "::warning::pinned Vulkan SDK $version is unavailable; falling back to latest ($latest). Update VULKAN_SDK_VERSION."
+            if (-not $latest -or -not (Save-VulkanInstaller $latest)) {
+              throw "could not download Vulkan SDK $version, nor the current latest"
+            }
+            $version = $latest
+          }
+
+          $sdkDir = "C:\VulkanSDK\$version"
+          # The installer is a Qt Installer Framework GUI binary, so the shell
+          # does not wait for it on its own — hence Start-Process -Wait.
+          $proc = Start-Process -FilePath $installer -Wait -PassThru -NoNewWindow -ArgumentList @(
+            '--root', $sdkDir, '--accept-licenses', '--default-answer', '--confirm-command', 'install'
+          )
+          if ($proc.ExitCode -ne 0) {
+            throw "Vulkan SDK installer exited with $($proc.ExitCode)"
+          }
+
+          foreach ($required in @("$sdkDir\Lib\vulkan-1.lib", "$sdkDir\Bin\glslc.exe")) {
+            if (-not (Test-Path $required)) {
+              throw "Vulkan SDK install incomplete: $required is missing"
+            }
+          }
+
+          "VULKAN_SDK=$sdkDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$sdkDir\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "Vulkan SDK $version installed at $sdkDir"
 
       - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: server-rs
 
@@ -124,14 +279,69 @@ jobs:
         shell: bash
         run: |
           cd server-rs
-          cargo test --workspace --release
+          cargo test --workspace --release ${{ matrix.cargo_features }}
 
       - name: Build backend binary (release)
         shell: bash
         run: |
           cd server-rs
-          cargo build --release --bin geniusai-server
-          cargo clippy --workspace --tests -- -D warnings
+          cargo build --release --bin geniusai-server ${{ matrix.cargo_features }}
+          cargo clippy --workspace --tests ${{ matrix.cargo_features }} -- -D warnings
+
+      # The MLX sidecar (Apple silicon only). Two things are non-obvious here:
+      #
+      #  * it must be built with `xcodebuild`, not `swift build`. mlx-swift's
+      #    README is explicit that SwiftPM on the command line cannot compile
+      #    the Metal shaders, and a binary built that way dies at runtime with
+      #    "Failed to load the default metallib".
+      #  * Xcode 26 ships the Metal compiler as a separate downloadable
+      #    component, so it has to be fetched before the shaders will build.
+      #
+      # `-skipPackagePluginValidation` is required because mlx-swift carries a
+      # build plugin (CudaBuild) that Xcode otherwise stops to ask about, which
+      # a non-interactive runner can never answer.
+      - name: Build MLX sidecar (macOS)
+        if: matrix.os_name == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          cd native/mlx-sidecar
+          xcodebuild build \
+            -scheme lrgenius-mlx \
+            -destination 'platform=macOS,arch=arm64' \
+            -configuration Release \
+            -derivedDataPath .build/xcode \
+            -skipPackagePluginValidation \
+            -skipMacroValidation
+
+      - name: Stage MLX sidecar (macOS)
+        if: matrix.os_name == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCTS="native/mlx-sidecar/.build/xcode/Build/Products/Release"
+          BUILD_DIR="build/mlx-sidecar"
+          mkdir -p "$BUILD_DIR"
+          cp "$PRODUCTS/lrgenius-mlx" "$BUILD_DIR/"
+          # The Metal kernels live in mlx-swift_Cmlx.bundle and are located
+          # relative to the executable at runtime, so they travel with it.
+          bundles=0
+          for bundle in "$PRODUCTS"/*.bundle; do
+            [ -e "$bundle" ] || continue
+            cp -a "$bundle" "$BUILD_DIR/"
+            bundles=$((bundles + 1))
+          done
+          # Hard failure rather than a warning: MLX is the only local engine on
+          # macOS, and a sidecar shipped without its metallib does not fail at
+          # build time — it starts and then dies on the first inference with
+          # "Failed to load the default metallib". Catching that here is the
+          # difference between a red build and a release that looks fine until a
+          # user tries to analyse a photo.
+          if [ "$bundles" -eq 0 ]; then
+            echo "::error::no .bundle staged next to lrgenius-mlx; the Metal kernels are missing" && exit 1
+          fi
+          ls -la "$BUILD_DIR"
 
       - name: Stage backend binary
         shell: bash
@@ -139,12 +349,60 @@ jobs:
           set -euo pipefail
           BUILD_DIR="build/lrgenius-server"
           mkdir -p "$BUILD_DIR"
-          cp "server-rs/target/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
+          # Windows overrides CARGO_TARGET_DIR to keep llama.cpp's build paths
+          # under MAX_PATH (see the prerequisites step); everywhere else the
+          # workspace default applies.
+          TARGET_DIR="${TARGET_DIR:-server-rs/target}"
+          cp "$TARGET_DIR/release/geniusai-server${{ matrix.bin_ext }}" "$BUILD_DIR/lrgenius-server${{ matrix.bin_ext }}"
           if [ "${{ matrix.os_name }}" != "windows" ]; then
             chmod +x "$BUILD_DIR/lrgenius-server"
           fi
+
+          # Windows builds llama.cpp's Vulkan backend as a loadable ggml module
+          # (`dynamic-backends`), so the ggml-*.dll files have to travel next to
+          # the exe or the server starts with no GPU support at all. macOS has
+          # nothing to stage here at all: it builds without the `llamacpp`
+          # feature, and its local engine is the MLX sidecar staged above.
+          if [ "${{ matrix.os_name }}" = "windows" ]; then
+            found=0
+            # Two locations, because llama-cpp-sys-2 treats them differently:
+            # it hard-links the shared libs it installs into OUT_DIR/bin (ggml,
+            # ggml-base, llama) up into target/release, but the *loadable*
+            # backend modules — ggml-vulkan and the ggml-cpu-* variants, which
+            # are the ones that actually compute — are installed to
+            # OUT_DIR/backends and left there. Collecting only the first set
+            # ships an exe whose ggml_backend_load_all() finds nothing next to
+            # it, i.e. no GPU *and* no CPU inference.
+            while IFS= read -r dll; do
+              cp "$dll" "$BUILD_DIR/"
+              found=$((found + 1))
+            done < <(
+              find "$TARGET_DIR/release" -maxdepth 1 \( -name 'ggml*.dll' -o -name 'llama.dll' \) -print
+              find "$TARGET_DIR/release/build" -path '*/out/backends/*' -name 'ggml*.dll' -print
+            )
+            # llama.dll is not optional the way a backend module is: the exe
+            # imports it directly and will not start without it.
+            if [ ! -f "$BUILD_DIR/llama.dll" ]; then
+              echo "::error::llama.dll missing; the packaged exe would not start" && exit 1
+            fi
+            echo "Staged $found ggml backend DLL(s)"
+            if [ "$found" -eq 0 ]; then
+              echo "::error::no ggml*.dll found; a dynamic-backends build must produce them" && exit 1
+            fi
+
+            # The Vulkan module is the entire point of the Windows build, so a
+            # missing one is a hard failure: shipping a silently GPU-less (and
+            # here, backend-less) binary is worse than failing the release.
+            if ! ls "$BUILD_DIR"/ggml-vulkan*.dll >/dev/null 2>&1; then
+              echo "::error::no ggml-vulkan*.dll staged; the Vulkan backend did not build" && exit 1
+            fi
+          fi
+
           echo "=== Staged binary ==="
           ls -lh "$BUILD_DIR"
+          # The ggml backend modules dominate the download size of the
+          # installer, so make the number easy to find in the log.
+          echo "=== Staged payload size: $(du -sh "$BUILD_DIR" | cut -f1) ==="
 
       - name: Prepare plugin files
         shell: bash
@@ -156,7 +414,6 @@ jobs:
 
           echo "Copying plugin files..."
           cp plugin/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
-          cp plugin/LrGeniusAI.lrdevplugin/TranslatedStrings_*.txt $PLUGIN_DIR/
 
       # macOS Developer ID codesigning + notarization. Skipped (with a
       # warning, not a failure) when the secrets aren't configured, so
@@ -252,20 +509,23 @@ jobs:
           APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      # SignPath Foundation (Windows Authenticode) signing of the single
-      # Rust binary, before it gets packaged into the installer below.
-      - name: Upload unsigned backend exe for signing
+      # SignPath Foundation (Windows Authenticode) signing of the backend
+      # binary and the loadable ggml backend DLLs beside it, before they get
+      # packaged into the installer below. The whole directory is submitted
+      # rather than just the exe: the DLLs are PE files loaded at runtime, so
+      # leaving them unsigned undercuts signing the exe at all.
+      - name: Upload unsigned backend binaries for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-exe
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-backend-exe-${{ matrix.arch }}
-          path: build/lrgenius-server/lrgenius-server.exe
+          path: build/lrgenius-server/
           retention-days: 1
 
       - name: Submit backend exe to SignPath
         if: matrix.os_name == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
@@ -275,12 +535,27 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed-backend-exe
 
-      - name: Replace backend exe with SignPath-signed version
+      - name: Replace backend binaries with SignPath-signed versions
         if: matrix.os_name == 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          cp signed-backend-exe/lrgenius-server.exe build/lrgenius-server/lrgenius-server.exe
+          # Copy back whatever came out signed, tolerating either layout: a
+          # signing policy configured for a single file returns just the exe,
+          # and in that case the DLLs stay as built rather than going missing.
+          copied=0
+          while IFS= read -r f; do
+            cp "$f" "build/lrgenius-server/$(basename "$f")"
+            copied=$((copied + 1))
+          done < <(find signed-backend-exe -type f \( -name '*.exe' -o -name '*.dll' \) -print)
+          echo "Replaced $copied signed file(s)"
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::SignPath returned no signed binaries" && exit 1
+          fi
+          if ! find signed-backend-exe -name 'lrgenius-server.exe' | grep -q .; then
+            echo "::error::signed lrgenius-server.exe missing from SignPath output" && exit 1
+          fi
+          ls -lh build/lrgenius-server/
 
       - name: Build Windows installer
         if: matrix.os_name == 'windows'
@@ -311,7 +586,7 @@ jobs:
       - name: Upload unsigned installer for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-installer
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: unsigned-installer-${{ matrix.arch }}
           path: ${{ steps.locate-installer.outputs.path }}
@@ -319,7 +594,7 @@ jobs:
 
       - name: Submit installer to SignPath
         if: matrix.os_name == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
@@ -402,7 +677,7 @@ jobs:
           tar -C build -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
           path: |
@@ -420,7 +695,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -433,9 +708,13 @@ jobs:
           else
             VERSION="0.0.0-dev"
           fi
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f2)
-          REVISION=$(echo "$VERSION" | cut -d. -f3)
+          # Info.lua's MAJOR/MINOR/REVISION are plain Lua number literals, so
+          # drop any prerelease suffix (e.g. "3.0.0-pre3" -> "3.0.0") before
+          # splitting — they may only contain numbers.
+          VERSION_NUMERIC="${VERSION%%-*}"
+          MAJOR=$(echo "$VERSION_NUMERIC" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NUMERIC" | cut -d. -f2)
+          REVISION=$(echo "$VERSION_NUMERIC" | cut -d. -f3)
           MAJOR=${MAJOR:-0}
           MINOR=${MINOR:-0}
           REVISION=${REVISION:-0}
@@ -464,7 +743,7 @@ jobs:
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload plugin-only artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lrgenius-ai-plugin-docker-backend
           path: artifact-payload/lrgenius-ai-plugin-docker-backend.tar
@@ -482,14 +761,14 @@ jobs:
         include:
           - arch: x64
             docker_platform: linux/amd64
-          - arch: aarch64
-            docker_platform: linux/arm64
+          # - arch: aarch64
+          #   docker_platform: linux/arm64
 
     name: Build Docker Image - ${{ matrix.arch }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Resolve backend version build-args from tag
         id: backend-version
@@ -513,20 +792,20 @@ jobs:
           echo "registry_image=ghcr.io/${OWNER_LC}/lrgeniusai" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./server-rs
           file: ./server-rs/Dockerfile
@@ -559,14 +838,14 @@ jobs:
 
     steps:
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Create and push multi-arch latest
         shell: bash
@@ -577,8 +856,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           docker buildx imagetools create \
             --tag "${IMG}:latest" \
-            "${IMG}:${TAG}-x64" \
-            "${IMG}:${TAG}-aarch64"
+            "${IMG}:${TAG}-x64" 
 
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -590,12 +868,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -687,11 +965,33 @@ jobs:
           echo "Generated update-manifest-${VERSION}.json"
           cat "update-manifest-${VERSION}.json" | python3 -c "import sys,json; m=json.load(sys.stdin); print(f'Manifest: {len(m[\"platforms\"])} platform binaries, {len(m[\"plugin_files\"])} plugin files, breaking={m[\"breaking_changes\"]}')"
 
+      # Rewrites the changelog for the people who actually install this: the
+      # release body becomes New/Improved/Fixed sections sorted from PR labels
+      # and title prefixes, with GitHub's PR-title list kept in a collapsed
+      # section underneath. Reads the manifest generated above to say whether
+      # the in-Lightroom updater can handle this release or the full installer
+      # is required, so this step must run after it. Never fails the release —
+      # if nothing classifies as user-facing it falls back to the
+      # auto-generated changelog and logs a warning.
+      - name: Generate user-facing release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          python3 scripts/generate_release_notes.py \
+            --repo "${{ github.repository }}" \
+            --tag "${VERSION}" \
+            --manifest "update-manifest-${VERSION}.json" \
+            --output release_notes.md
+          echo "=== Release body ==="
+          cat release_notes.md
+
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ steps.release-meta.outputs.release_name }}
+          body_path: release_notes.md
           files: |
             artifacts/LrGeniusAI-plugin-docker-backend-${{ github.ref_name }}.zip
             artifacts/lrgenius-ai-macos-arm64/*.pkg
@@ -700,6 +1000,5 @@ jobs:
             update-manifest-${{ github.ref_name }}.json
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

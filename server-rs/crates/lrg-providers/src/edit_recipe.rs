@@ -42,6 +42,72 @@ const GLOBAL_FIELD_RANGES: &[(&str, (f64, f64))] = &[
     ("grain_roughness", (0.0, 100.0)),
 ];
 
+/// Lightroom's `Temperature` is Kelvin for raw files and a relative -100..100
+/// scale for JPEG/TIFF/PNG. Clamping to the wrong one is not a rounding error:
+/// a Kelvin value forced through the relative scale reads as maximum warmth,
+/// and a sensible relative value like `+10` forced through the Kelvin scale is
+/// clamped *up* to 2000 K. Both wreck the photo.
+///
+/// `None` means the caller did not say. Treated as raw, because that is what
+/// this code did before the flag existed and what raw-first users get.
+pub const TEMPERATURE_RANGE_RAW: (f64, f64) = (2000.0, 50000.0);
+pub const TEMPERATURE_RANGE_RELATIVE: (f64, f64) = (-100.0, 100.0);
+
+/// Above this, a value on the relative scale can only be a Kelvin number the
+/// model produced despite the schema. Clamping it would apply maximum warmth,
+/// so such a value is dropped instead — see [`normalize_temperature`].
+const KELVIN_LOOKING: f64 = 500.0;
+
+pub fn temperature_range(is_raw: Option<bool>) -> (f64, f64) {
+    if is_raw == Some(false) {
+        TEMPERATURE_RANGE_RELATIVE
+    } else {
+        TEMPERATURE_RANGE_RAW
+    }
+}
+
+/// Clamp a temperature into the scale this file actually uses, or drop it.
+///
+/// Dropping matters only in the non-raw case: leaving white balance untouched
+/// is a mild disappointment, whereas clamping 6200 K to +100 is a hard orange
+/// cast on every photo the model happened to answer in Kelvin for.
+fn normalize_temperature(value: Option<&Value>, is_raw: Option<bool>) -> Option<f64> {
+    let (min, max) = temperature_range(is_raw);
+    let clamped = clamp_number(value, min, max)?;
+    if is_raw == Some(false) {
+        let raw_value = clamp_number(value, f64::MIN, f64::MAX)?;
+        if raw_value.abs() > KELVIN_LOOKING {
+            return None;
+        }
+    }
+    Some(clamped)
+}
+
+/// Apply [`normalize_temperature`] to an already-built recipe's `global` block.
+///
+/// For recipes that never went through [`normalize_edit_recipe`] — the style
+/// engine interpolates stored develop settings directly, and those carry
+/// whatever scale the training photos used. Returns true when the value was
+/// dropped, so the caller can say so.
+pub fn sanitize_recipe_temperature(recipe: &mut Value, is_raw: Option<bool>) -> bool {
+    let Some(global) = recipe.get_mut("global").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    if !global.contains_key("temperature") {
+        return false;
+    }
+    match normalize_temperature(global.get("temperature"), is_raw) {
+        Some(t) => {
+            global.insert("temperature".into(), json!(t));
+            false
+        }
+        None => {
+            global.remove("temperature");
+            true
+        }
+    }
+}
+
 const MASK_ADJUSTMENT_RANGES: &[(&str, (f64, f64))] = &[
     ("exposure", (-5.0, 5.0)),
     ("contrast", (-100.0, 100.0)),
@@ -141,10 +207,20 @@ fn build_color_grading_schema() -> Value {
     })
 }
 
-fn build_global_schema() -> Value {
+fn build_global_schema(is_raw: Option<bool>) -> Value {
+    // The schema is how the model learns which temperature scale this photo
+    // uses. Normalization catches a wrong answer afterwards, but it can only
+    // drop it — declaring the range is what gets a usable value in the first
+    // place.
+    let (temp_min, temp_max) = temperature_range(is_raw);
     let mut properties = Map::new();
     let mut required: Vec<String> = Vec::new();
     for &(field_name, (min, max)) in GLOBAL_FIELD_RANGES {
+        let (min, max) = if field_name == "temperature" {
+            (temp_min, temp_max)
+        } else {
+            (min, max)
+        };
         properties.insert(field_name.to_string(), number_schema(min, max));
         required.push(field_name.to_string());
     }
@@ -154,7 +230,7 @@ fn build_global_schema() -> Value {
         json!({
             "type": "object",
             "properties": {
-                "temperature": number_schema(2000.0, 50000.0),
+                "temperature": number_schema(temp_min, temp_max),
                 "tint": number_schema(-150.0, 150.0),
             },
             "required": ["temperature", "tint"],
@@ -263,12 +339,12 @@ fn build_mask_schema() -> Value {
     })
 }
 
-fn build_openai_edit_recipe_schema() -> Value {
+fn build_openai_edit_recipe_schema(is_raw: Option<bool>) -> Value {
     json!({
         "type": "object",
         "properties": {
             "summary": {"type": "string"},
-            "global": build_global_schema(),
+            "global": build_global_schema(is_raw),
             "masks": {"type": "array", "items": build_mask_schema()},
             "warnings": {"type": "array", "items": {"type": "string"}},
         },
@@ -278,10 +354,18 @@ fn build_openai_edit_recipe_schema() -> Value {
 }
 
 /// The OpenAI-flavor structured-output schema for edit-recipe generation.
-/// Built once and cached, matching the Python module's import-time constant.
-pub fn openai_edit_recipe_schema() -> &'static Value {
-    static SCHEMA: OnceLock<Value> = OnceLock::new();
-    SCHEMA.get_or_init(build_openai_edit_recipe_schema)
+///
+/// Two variants, cached separately, because `temperature` has a different
+/// range for raw and non-raw originals. `is_raw = None` shares the raw
+/// schema — see [`temperature_range`].
+pub fn openai_edit_recipe_schema(is_raw: Option<bool>) -> &'static Value {
+    static RAW: OnceLock<Value> = OnceLock::new();
+    static RELATIVE: OnceLock<Value> = OnceLock::new();
+    if is_raw == Some(false) {
+        RELATIVE.get_or_init(|| build_openai_edit_recipe_schema(Some(false)))
+    } else {
+        RAW.get_or_init(|| build_openai_edit_recipe_schema(Some(true)))
+    }
 }
 
 fn convert_openai_schema_to_gemini(schema: &Value) -> Value {
@@ -351,9 +435,15 @@ fn convert_openai_schema_to_gemini(schema: &Value) -> Value {
 
 /// The Gemini-flavor `responseSchema` for edit-recipe generation, derived
 /// from [`openai_edit_recipe_schema`] by the same conversion Python uses.
-pub fn gemini_edit_recipe_schema() -> &'static Value {
-    static SCHEMA: OnceLock<Value> = OnceLock::new();
-    SCHEMA.get_or_init(|| convert_openai_schema_to_gemini(openai_edit_recipe_schema()))
+pub fn gemini_edit_recipe_schema(is_raw: Option<bool>) -> &'static Value {
+    static RAW: OnceLock<Value> = OnceLock::new();
+    static RELATIVE: OnceLock<Value> = OnceLock::new();
+    if is_raw == Some(false) {
+        RELATIVE
+            .get_or_init(|| convert_openai_schema_to_gemini(openai_edit_recipe_schema(Some(false))))
+    } else {
+        RAW.get_or_init(|| convert_openai_schema_to_gemini(openai_edit_recipe_schema(Some(true))))
+    }
 }
 
 fn clamp_number(value: Option<&Value>, minimum: f64, maximum: f64) -> Option<f64> {
@@ -476,6 +566,7 @@ fn normalize_crop_settings(crop: &Value, warnings: &mut Vec<String>) -> Map<Stri
 
 fn normalize_global_settings(
     global_settings: &Value,
+    is_raw: Option<bool>,
     warnings: &mut Vec<String>,
 ) -> Map<String, Value> {
     let Value::Object(gs) = global_settings else {
@@ -487,6 +578,20 @@ fn normalize_global_settings(
         if !gs.contains_key(field_name) {
             continue;
         }
+        // `temperature` is the one field whose scale depends on the file, so
+        // it does not take its range from the table.
+        if field_name == "temperature" {
+            if let Some(c) = normalize_temperature(gs.get(field_name), is_raw) {
+                normalized.insert(field_name.to_string(), json!(c));
+            } else if gs.get(field_name).is_some() {
+                warnings.push(
+                    "Ignored temperature: the model answered in Kelvin for a non-raw photo, \
+                     where Lightroom expects a relative -100..100 value."
+                        .to_string(),
+                );
+            }
+            continue;
+        }
         if let Some(c) = clamp_number(gs.get(field_name), min, max) {
             normalized.insert(field_name.to_string(), json!(c));
         }
@@ -494,7 +599,7 @@ fn normalize_global_settings(
 
     if let Some(Value::Object(wb)) = gs.get("white_balance") {
         if !normalized.contains_key("temperature") {
-            if let Some(t) = clamp_number(wb.get("temperature"), 2000.0, 50000.0) {
+            if let Some(t) = normalize_temperature(wb.get("temperature"), is_raw) {
                 normalized.insert("temperature".into(), json!(t));
             }
         }
@@ -733,7 +838,7 @@ fn normalize_masks(masks: Option<&Value>, warnings: &mut Vec<String>) -> Vec<Val
 /// Port of `normalize_edit_recipe`: validate + clamp an LLM-produced edit
 /// recipe into the canonical shape, collecting human-readable warnings for
 /// anything dropped along the way.
-pub fn normalize_edit_recipe(parsed_data: &Value) -> Value {
+pub fn normalize_edit_recipe(parsed_data: &Value, is_raw: Option<bool>) -> Value {
     let mut warnings: Vec<String> = Vec::new();
     let Value::Object(data) = parsed_data else {
         return json!({
@@ -745,8 +850,11 @@ pub fn normalize_edit_recipe(parsed_data: &Value) -> Value {
     };
 
     warnings.extend(normalize_warning_list(data.get("warnings")));
-    let global =
-        normalize_global_settings(data.get("global").unwrap_or(&Value::Null), &mut warnings);
+    let global = normalize_global_settings(
+        data.get("global").unwrap_or(&Value::Null),
+        is_raw,
+        &mut warnings,
+    );
     let masks = normalize_masks(data.get("masks"), &mut warnings);
     let mut summary = normalize_text(data.get("summary"));
     if summary.is_empty() {
@@ -940,9 +1048,15 @@ pub fn filter_edit_recipe_by_controls(recipe: &Value, controls: &Map<String, Val
 mod tests {
     use super::*;
 
+    /// Every test written before `is_raw` existed assumes raw/Kelvin
+    /// semantics, which is what `None` selects.
+    fn normalize_edit_recipe_raw(parsed: &Value) -> Value {
+        normalize_edit_recipe(parsed, None)
+    }
+
     #[test]
     fn clamps_global_values_and_discards_invalid_mask() {
-        let recipe = normalize_edit_recipe(&json!({
+        let recipe = normalize_edit_recipe_raw(&json!({
             "summary": "  Brighten portrait  ",
             "global": {
                 "exposure": 9,
@@ -1037,7 +1151,7 @@ mod tests {
 
     #[test]
     fn handles_invalid_payload() {
-        let recipe = normalize_edit_recipe(&json!("invalid"));
+        let recipe = normalize_edit_recipe_raw(&json!("invalid"));
         assert_eq!(recipe["global"], json!({}));
         assert_eq!(recipe["masks"], json!([]));
         assert!(!recipe["warnings"].as_array().unwrap().is_empty());
@@ -1045,7 +1159,7 @@ mod tests {
 
     #[test]
     fn white_balance_object_maps_to_temperature_and_tint() {
-        let recipe = normalize_edit_recipe(&json!({
+        let recipe = normalize_edit_recipe_raw(&json!({
             "summary": "WB tweak",
             "global": {"white_balance": {"temperature": 70000, "tint": -200}},
             "masks": [],
@@ -1057,7 +1171,7 @@ mod tests {
 
     #[test]
     fn filter_recipe_by_category_controls() {
-        let recipe = normalize_edit_recipe(&json!({
+        let recipe = normalize_edit_recipe_raw(&json!({
             "summary": "Category control test",
             "global": {
                 "exposure": 0.5,
@@ -1124,7 +1238,7 @@ mod tests {
 
     #[test]
     fn crop_xywh_shape_is_normalized() {
-        let recipe = normalize_edit_recipe(&json!({
+        let recipe = normalize_edit_recipe_raw(&json!({
             "summary": "xywh crop",
             "global": {"crop": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6, "rotation": 12}},
             "masks": [],
@@ -1141,7 +1255,7 @@ mod tests {
 
     #[test]
     fn invalid_crop_shape_adds_warning() {
-        let recipe = normalize_edit_recipe(&json!({
+        let recipe = normalize_edit_recipe_raw(&json!({
             "summary": "bad crop",
             "global": {"crop": {"x": 0.3, "width": 0.4}},
             "masks": [],
@@ -1160,7 +1274,7 @@ mod tests {
 
     #[test]
     fn openai_schema_has_expected_top_level_shape() {
-        let schema = openai_edit_recipe_schema();
+        let schema = openai_edit_recipe_schema(None);
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(
@@ -1175,7 +1289,7 @@ mod tests {
 
     #[test]
     fn gemini_schema_uppercases_types_and_drops_additional_properties() {
-        let schema = gemini_edit_recipe_schema();
+        let schema = gemini_edit_recipe_schema(None);
         assert_eq!(schema["type"], "OBJECT");
         assert!(schema.get("additionalProperties").is_none());
         assert_eq!(schema["properties"]["summary"]["type"], "STRING");
@@ -1188,5 +1302,89 @@ mod tests {
             schema["properties"]["global"]["properties"]["exposure"]["type"],
             "NUMBER"
         );
+    }
+
+    #[test]
+    fn a_raw_photo_keeps_kelvin() {
+        let recipe = normalize_edit_recipe(
+            &json!({"global": {"temperature": 6200}, "masks": []}),
+            Some(true),
+        );
+        assert_eq!(recipe["global"]["temperature"], 6200.0);
+    }
+
+    #[test]
+    fn a_non_raw_photo_keeps_a_relative_value() {
+        // The old code clamped this *up* to 2000, i.e. maximum cool, because
+        // it applied the raw Kelvin range to every file.
+        let recipe = normalize_edit_recipe(
+            &json!({"global": {"temperature": 10}, "masks": []}),
+            Some(false),
+        );
+        assert_eq!(recipe["global"]["temperature"], 10.0);
+    }
+
+    #[test]
+    fn a_kelvin_answer_for_a_non_raw_photo_is_dropped_not_clamped() {
+        // Clamping 6200 into -100..100 yields +100: maximum warmth on every
+        // photo. No white-balance change is the lesser harm, and the warning
+        // says why.
+        let recipe = normalize_edit_recipe(
+            &json!({"global": {"temperature": 6200}, "masks": []}),
+            Some(false),
+        );
+        assert!(recipe["global"].get("temperature").is_none());
+        let warnings = recipe["warnings"].as_array().unwrap();
+        assert!(
+            warnings.iter().any(|w| w
+                .as_str()
+                .is_some_and(|s| s.contains("Kelvin") && s.contains("non-raw"))),
+            "expected a warning naming the unit mismatch, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_raw_status_behaves_like_raw() {
+        // What every catalog indexed before the flag existed relies on.
+        let recipe =
+            normalize_edit_recipe(&json!({"global": {"temperature": 6200}, "masks": []}), None);
+        assert_eq!(recipe["global"]["temperature"], 6200.0);
+    }
+
+    #[test]
+    fn the_white_balance_object_follows_the_same_scale() {
+        let recipe = normalize_edit_recipe(
+            &json!({"global": {"white_balance": {"temperature": 6200, "tint": 5}}, "masks": []}),
+            Some(false),
+        );
+        assert!(recipe["global"].get("temperature").is_none());
+        assert_eq!(recipe["global"]["tint"], 5.0);
+    }
+
+    #[test]
+    fn the_schema_declares_the_range_the_photo_actually_uses() {
+        // Normalization can only drop a wrong answer; the schema is what gets
+        // a usable one out of the model in the first place.
+        let raw = &openai_edit_recipe_schema(Some(true))["properties"]["global"]["properties"]
+            ["temperature"];
+        assert_eq!(raw["minimum"], 2000.0);
+        assert_eq!(raw["maximum"], 50000.0);
+
+        let relative = &openai_edit_recipe_schema(Some(false))["properties"]["global"]
+            ["properties"]["temperature"];
+        assert_eq!(relative["minimum"], -100.0);
+        assert_eq!(relative["maximum"], 100.0);
+    }
+
+    #[test]
+    fn the_style_engine_recipe_is_sanitized_in_place() {
+        let mut recipe = json!({"global": {"temperature": 5600, "contrast": 20}});
+        assert!(sanitize_recipe_temperature(&mut recipe, Some(false)));
+        assert!(recipe["global"].get("temperature").is_none());
+        assert_eq!(recipe["global"]["contrast"], 20, "other fields untouched");
+
+        let mut raw_recipe = json!({"global": {"temperature": 5600}});
+        assert!(!sanitize_recipe_temperature(&mut raw_recipe, Some(true)));
+        assert_eq!(raw_recipe["global"]["temperature"], 5600.0);
     }
 }

@@ -179,6 +179,45 @@ local function safeGetFormattedMetadata(photo, key)
 end
 
 ---
+-- Whether a photo is a raw capture, as Lightroom sees it.
+--
+-- The backend cannot work this out for itself: everything it receives has been
+-- normalised to JPEG first, so the original encoding is no longer in the bytes.
+-- Lightroom's `fileFormat` is the authoritative answer, and this is the single
+-- place that reads it, so the rest of the plug-in and the backend agree on one
+-- definition rather than each guessing from a file extension.
+--
+-- Why it matters: raw holds a stop or more above what its default rendering
+-- shows, so blown highlights are recoverable there and gone on a rendered file.
+-- The edit guardrails use it to decide how far the white point may be pushed.
+--
+-- It also decides which scale Lightroom's `Temp` is on: Kelvin for raw, a
+-- relative -100..100 for JPEG/TIFF/PNG. Applying the wrong one ruins the photo,
+-- so the three answers are kept apart: a readable non-raw format is `false`, but
+-- a format we could not read at all is `nil` rather than `false`. Callers treat
+-- `nil` as "assume raw", which is what the plug-in did before this existed and
+-- what leaves an unreadable raw's white balance alone.
+--
+-- DNG counts as raw — that is how Lightroom treats it, and a DNG carries the
+-- same headroom.
+--
+-- @param photo LrPhoto The photo object.
+-- @return boolean|nil True for RAW and DNG, false for a known other format,
+--         nil when the format could not be determined.
+--
+function Util.isRawPhoto(photo)
+	if photo == nil then
+		return nil
+	end
+	local format = safeGetRawMetadata(photo, "fileFormat")
+	if type(format) ~= "string" or format == "" then
+		return nil
+	end
+	format = format:upper()
+	return format == "RAW" or format == "DNG"
+end
+
+---
 -- Extracts standardized EXIF metadata from a photo for use by the backend.
 -- Handles robustness for newer RAW formats (like .CR3) where raw metadata might be elusive.
 -- @param photo LrPhoto The photo object.
@@ -228,6 +267,18 @@ function Util.getPhotoExif(photo)
 	local ss = safeGetFormattedMetadata(photo, "shutterSpeed")
 	if type(ss) == "string" and ss ~= "" then
 		exif.shutter_speed = ss
+	end
+
+	-- Exposure compensation in EV. This is the only thing that lets culling
+	-- tell an exposure bracket apart from a burst, and without it a bracketed
+	-- sequence gets one frame nominated as the winner and the rest offered up
+	-- as reject candidates. Deliberately left nil rather than defaulted to 0
+	-- when the camera did not record it: the backend requires every frame in a
+	-- group to carry a value, and a fabricated 0 would read as "all frames shot
+	-- at the same compensation", which is how a focus stack is recognised.
+	local eb = safeGetRawMetadata(photo, "exposureBias")
+	if type(eb) == "number" then
+		exif.exposure_bias = eb
 	end
 
 	return exif
@@ -538,6 +589,29 @@ function Util.formatTimestampSafe(timestamp)
 	local w3c = LrDate.timeToW3CDate(timestamp)
 	-- Convert W3C format (YYYY-MM-DDTHH:MM:SSZ) to filesystem safe (YYYY-MM-DD_HH-MM-SS)
 	return w3c:gsub("T", "_"):gsub(":", "-"):sub(1, 19)
+end
+
+---
+-- Formats a duration as "m:ss" (or "h:mm:ss" past an hour) for progress
+-- captions. A ticking clock is what distinguishes a slow operation from a
+-- frozen one, so this is used wherever a task can run for minutes.
+-- @param seconds number Duration in seconds; nil/negative/NaN are treated as 0.
+-- @return string Formatted duration.
+--
+function Util.formatElapsedTime(seconds)
+	local total = tonumber(seconds) or 0
+	-- NaN compares false against itself; catch it before math.floor.
+	if total ~= total or total < 0 then
+		total = 0
+	end
+	total = math.floor(total)
+	local hours = math.floor(total / 3600)
+	local minutes = math.floor((total % 3600) / 60)
+	local secs = total % 60
+	if hours > 0 then
+		return string.format("%d:%02d:%02d", hours, minutes, secs)
+	end
+	return string.format("%d:%02d", minutes, secs)
 end
 
 function Util.copyLogfilesToDesktop(extraInfo)
@@ -1305,6 +1379,45 @@ function Util.waitForServerDialog(options)
 	return result
 end
 
+--- Bare check/cross icon reflecting a property, for use next to a status text
+-- that says more than the icon can (a tri-state, a reason, a colour).
+-- @param f the LrView factory
+-- @param key name of the property driving the icon
+-- @param isOk optional predicate mapping the property value to a boolean;
+--        defaults to the value's own truthiness
+function Util.statusIcon(f, key, isOk)
+	return f:picture({
+		value = LrView.bind({
+			key = key,
+			transform = function(value)
+				local ok
+				if isOk then
+					ok = isOk(value)
+				else
+					ok = value
+				end
+				return _PLUGIN:resourceId(ok and "ok.png" or "nok.png")
+			end,
+		}),
+		width = 16,
+		height = 16,
+	})
+end
+
+--- Read-only status indicator: a check or cross icon plus a label.
+-- Used instead of a permanently disabled checkbox, which looks like a control
+-- the user could toggle but cannot.
+-- @param f the LrView factory
+-- @param key name of the boolean property driving the icon
+-- @param title the label shown next to the icon
+function Util.statusIndicator(f, key, title)
+	return f:row({
+		spacing = f:label_spacing(),
+		Util.statusIcon(f, key),
+		f:static_text({ title = title }),
+	})
+end
+
 function Util.showDiagnosticFailureDialog(diag)
 	local f = LrView.osFactory()
 
@@ -1499,22 +1612,39 @@ function Util.addPhotoToRejectedDescriptionsCollection(photo, writeOptions)
 	local setName = LOC("$$$/LrGeniusAI/Rejected/CollectionSetName=LrGeniusAI")
 	local collName = LOC("$$$/LrGeniusAI/Rejected/CollectionName=Rejected AI Descriptions")
 
-	local collectionSet, collection
-
-	local function findSetAndCollection()
-		local children = catalog:getChildCollections()
-		if children then
-			for _, child in ipairs(children) do
-				if child:type() == "LrCollectionSet" and child:getName() == setName then
-					collectionSet = child
-					break
+	-- Creating a collection (or collection set) and then immediately reading/using
+	-- it in the same withWriteAccessDo call can fail with a "can't get collection
+	-- info" error because the object isn't fully committed until the write-access
+	-- block exits. Use separate blocks, matching the pattern used elsewhere
+	-- (TaskFindSimilarFaces.lua, TaskFindSimilarImages.lua, TaskPeople.lua, TaskSemanticSearch.lua).
+	local collectionSet
+	catalog:withWriteAccessDo(
+		LOC("$$$/LrGeniusAI/Rejected/CreateCollectionSet=Create LrGeniusAI Collection Set"),
+		function()
+			local children = catalog:getChildCollections()
+			if children then
+				for _, child in ipairs(children) do
+					if child:type() == "LrCollectionSet" and child:getName() == setName then
+						collectionSet = child
+						break
+					end
 				end
 			end
-		end
-		if not collectionSet then
-			collectionSet = catalog:createCollectionSet(setName, nil, true)
-		end
-		if collectionSet then
+			if not collectionSet then
+				collectionSet = catalog:createCollectionSet(setName, nil, true)
+			end
+		end,
+		writeOptions
+	)
+	if not collectionSet then
+		log:error("Util.addPhotoToRejectedDescriptionsCollection: could not create/find collection set")
+		return
+	end
+
+	local collection
+	catalog:withWriteAccessDo(
+		LOC("$$$/LrGeniusAI/Rejected/CreateCollection=Create Rejected AI Descriptions Collection"),
+		function()
 			local collChildren = collectionSet:getChildCollections()
 			if collChildren then
 				for _, c in ipairs(collChildren) do
@@ -1527,15 +1657,224 @@ function Util.addPhotoToRejectedDescriptionsCollection(photo, writeOptions)
 			if not collection then
 				collection = catalog:createCollection(collName, collectionSet, false)
 			end
-		end
+		end,
+		writeOptions
+	)
+	if not collection then
+		log:error("Util.addPhotoToRejectedDescriptionsCollection: could not create/find collection")
+		return
 	end
 
 	catalog:withWriteAccessDo(LOC("$$$/LrGeniusAI/Rejected/AddToCollection=Add to Rejected AI Descriptions"), function()
-		findSetAndCollection()
-		if collection then
-			collection:addPhotos({ photo })
-		end
+		collection:addPhotos({ photo })
 	end, writeOptions)
+end
+
+-- Photos per request when llama.cpp is selected and the user has not said
+-- otherwise. Kept modest because the whole group has to fit the context
+-- window alongside the pinned prefix; the server clamps it further to the
+-- engine's own n_parallel.
+local DEFAULT_GROUPED_BATCH_SIZE = 4
+
+---
+-- How many photos to send per indexing request.
+--
+-- Only the in-process llama.cpp backend benefits: it shares one pinned prompt
+-- prefix across the group and decodes them in parallel sequences. Every remote
+-- provider is billed and rate-limited per request and gains nothing, so they
+-- stay at one photo per request. Grouping also requires sending originals by
+-- reference — the export path hands the server one temp JPEG at a time.
+--
+-- This is deliberately a pure function so it can be tested without Lightroom.
+-- Note it does not touch maxWorkers: batching is server-side, and the plugin
+-- keeps a single worker.
+--
+-- @param provider string|nil Selected provider name.
+-- @param useOriginals boolean Whether originals are submitted by reference.
+-- @param isLocalBackend boolean Whether the backend can read local files.
+-- @param configured number|string|nil Optional user override.
+-- @return number Photos per request; always >= 1.
+--
+function Util.groupedBatchSize(provider, useOriginals, isLocalBackend, configured)
+	if not useOriginals or not isLocalBackend then
+		return 1
+	end
+	-- Only llama.cpp benefits. MLX is a local backend too, but it decodes one
+	-- photo at a time against a fresh KV cache (no pinned prefix, no parallel
+	-- sequences), so grouping there would only delay the first result without
+	-- producing any of them sooner — the server reports a preferred batch size
+	-- of 1 for it, and this matches.
+	if type(provider) ~= "string" or provider:lower() ~= "llamacpp" then
+		return 1
+	end
+	-- An unusable override (absent, unparseable, zero, negative, NaN) means the
+	-- default, matching how the server treats a bad `llm_batch_size`. Zero in
+	-- particular must not become a literal batch of no photos.
+	local n = tonumber(configured)
+	if n == nil or n ~= n or n < 1 then -- n ~= n catches NaN
+		return DEFAULT_GROUPED_BATCH_SIZE
+	end
+	return math.floor(n)
+end
+
+---
+-- Indexes a batch response's `results` array by photo_id.
+--
+-- A grouped request can partly succeed, and the aggregate counts do not say
+-- which photo failed. The caller needs that to retry only the failures and to
+-- fire its per-photo callback only for the ones that landed.
+--
+-- @param results table|nil Array of { photo_id, success, error }.
+-- @return table Map of photo_id -> { success = boolean, error = string|nil }.
+--
+function Util.resultsByPhotoId(results)
+	local byId = {}
+	if type(results) ~= "table" then
+		return byId
+	end
+	for _, entry in ipairs(results) do
+		if type(entry) == "table" and type(entry.photo_id) == "string" then
+			byId[entry.photo_id] = {
+				success = entry.success == true,
+				error = entry.error,
+			}
+		end
+	end
+	return byId
+end
+
+---
+-- Flattens a keyword-category structure into a plain list of names.
+--
+-- Accepts both shapes the plugin sends as `keyword_categories`: the flat array
+-- from KeywordConfigProvider, and the nested tree from
+-- MetadataManager.getCatalogKeywordHierarchy() (parent name -> child table).
+-- Every node name is returned, at every depth, because the backend derives its
+-- category labels from that tree and a name at any level can end up as one.
+--
+-- @param categories table|nil Flat array or nested table of category names.
+-- @return table Array of names, in no particular order, with duplicates kept.
+--
+function Util.flattenKeywordCategoryNames(categories)
+	local names = {}
+	if type(categories) ~= "table" then
+		return names
+	end
+	local seenTables = {}
+	local function recurse(node)
+		if seenTables[node] then -- a malformed/cyclic table must not hang the task
+			return
+		end
+		seenTables[node] = true
+		for key, value in pairs(node) do
+			if type(key) == "string" then
+				table.insert(names, key)
+			end
+			if type(value) == "string" then
+				table.insert(names, value)
+			elseif type(value) == "table" then
+				recurse(value)
+			end
+		end
+	end
+	recurse(categories)
+	return names
+end
+
+---
+-- Picks the catalog keyword vocabulary to send to the LLM.
+--
+-- Selection is by usage: the keywords applied to the most photos are the ones
+-- the model should reuse, and a big catalog has far more keywords than fit in a
+-- prompt. Category names are pinned — they are the labels the model must sort
+-- into, so they survive the cap regardless of how often they are used, and they
+-- are merged into this one list instead of being repeated as separate
+-- vocabulary entries.
+--
+-- The selected names come back sorted alphabetically, not by count. This block
+-- is run-constant context in the backend prompt, so a stable order keeps the
+-- cacheable prefix identical between runs when the selected *set* has not
+-- changed — which is the common case, since ordinary tagging shifts counts
+-- without changing which keywords are the popular ones.
+--
+-- @param entries table Array of { name = string, count = number }.
+-- @param limit number|nil Maximum names to return (default 500).
+-- @param options table|nil { pinned = array of names always included }.
+-- @return table Array of keyword names, alphabetically sorted.
+--
+function Util.rankKeywordsByUsage(entries, limit, options)
+	limit = tonumber(limit) or 500
+	options = options or {}
+
+	local selected = {} -- lowercased name -> display name
+	local selectedCount = 0
+
+	local function claim(name)
+		if type(name) ~= "string" then
+			return false
+		end
+		local trimmed = name:gsub("^%s*(.-)%s*$", "%1")
+		if trimmed == "" then
+			return false
+		end
+		local key = trimmed:lower()
+		if selected[key] then
+			return false
+		end
+		selected[key] = trimmed
+		selectedCount = selectedCount + 1
+		return true
+	end
+
+	-- Pinned names first: they take their slots before the cap applies.
+	for _, name in ipairs(options.pinned or {}) do
+		if selectedCount >= limit then
+			break
+		end
+		claim(name)
+	end
+
+	-- Fold duplicate names (the same word under two parents is one term to the
+	-- model) by summing their photo counts.
+	local totals, order = {}, {}
+	for _, entry in ipairs(entries or {}) do
+		if type(entry) == "table" and type(entry.name) == "string" then
+			local trimmed = entry.name:gsub("^%s*(.-)%s*$", "%1")
+			local key = trimmed:lower()
+			if trimmed ~= "" and not selected[key] then
+				if not totals[key] then
+					totals[key] = { name = trimmed, count = 0 }
+					table.insert(order, key)
+				end
+				totals[key].count = totals[key].count + (tonumber(entry.count) or 0)
+			end
+		end
+	end
+
+	local ranked = {}
+	for _, key in ipairs(order) do
+		table.insert(ranked, totals[key])
+	end
+	table.sort(ranked, function(a, b)
+		if a.count ~= b.count then
+			return a.count > b.count
+		end
+		return a.name < b.name -- ties resolved by name so the result is deterministic
+	end)
+
+	for _, entry in ipairs(ranked) do
+		if selectedCount >= limit then
+			break
+		end
+		claim(entry.name)
+	end
+
+	local result = {}
+	for _, name in pairs(selected) do
+		table.insert(result, name)
+	end
+	table.sort(result)
+	return result
 end
 
 return Util

@@ -1,0 +1,111 @@
+# Which of TreeOfLife-200M's 867,455 taxa ship in the zero-shot head.
+#
+# WHY PRUNE AT ALL: the full BioCLIP 2 text-embedding matrix is 2.66 GB fp32
+# (1.33 GB fp16) — larger than the model itself, and it has to be resident in
+# RAM for every classification. A Lightroom plugin cannot ask for that. The
+# rules below cut it to roughly a tenth while keeping the taxa a photographer
+# actually points a camera at.
+#
+# WHAT PRUNING COSTS: `classify` aggregates probabilities by taxonomic prefix,
+# so every rank's confidence is a sum over *kept* rows only. Dropping a clade
+# does not make the model say "I don't know" about it — it redistributes that
+# clade's probability mass onto whatever similar-looking rows survived. That
+# is why `keep_one_per_genus` exists (see below) and why
+# `export_bioclip2_fp16.py --verify-only` compares top-1 predictions against
+# the *full* torch head rather than just checking the ONNX graph.
+
+[filter]
+# Only these classes are considered at all. Everything outside (bacteria,
+# protists, the long tail of marine invertebrates, most fungi) is dropped
+# wholesale: it is not photographable with a camera in the field, or not
+# identifiable from a photo even by a specialist.
+#
+# These names are the ones this dataset actually uses, which is not always the
+# name a textbook would give. Verified against the real label file, because
+# guessing here fails silently: an entry that matches nothing costs no error,
+# it just quietly drops a whole branch of life. `Reptilia` (0 taxa — they are
+# filed under the orders), `Actinopterygii` (24) and `Chondrichthyes` (2) all
+# looked reasonable and all matched essentially nothing.
+class_whitelist = [
+  # Tetrapods
+  "Aves",
+  "Mammalia",
+  "Amphibia",
+  "Squamata",
+  "Testudines",
+  "Crocodylia",
+  "Sphenodontia",
+  # Cartilaginous fish and the odd early-branching lineages. Bony fish are
+  # NOT here — see keep_chordata_without_class.
+  "Elasmobranchii",
+  "Holocephali",
+  "Petromyzonti",
+  "Myxini",
+  "Dipneusti",
+  "Coelacanthi",
+  # Arthropods
+  "Insecta",
+  "Arachnida",
+  "Malacostraca",
+  # Molluscs
+  "Gastropoda",
+  "Bivalvia",
+  "Cephalopoda",
+  # Plants
+  "Magnoliopsida",
+  "Liliopsida",
+  "Pinopsida",
+  "Polypodiopsida",
+  "Lycopodiopsida",
+  "Bryopsida",
+  # Fungi + lichens
+  "Agaricomycetes",
+  "Lecanoromycetes",
+  "Pezizomycetes",
+]
+
+# Keep Chordata taxa whose `class` field is empty.
+#
+# This is where every ray-finned fish lives in TreeOfLife-200M: 23,700 taxa
+# filed directly under `order` within Chordata, with no class at all. Salmon,
+# perch, tuna, cod, seahorses, clownfish — all of them. A class whitelist alone
+# silently drops the entire group, which is to say every aquarium photo and
+# every underwater shot in a catalog.
+#
+# Scoped to Chordata on purpose: the empty-class rows also cover ~8,400
+# foraminifera, flatworms and similar, which are not photographable subjects.
+keep_chordata_without_class = true
+
+# Within the whitelist, keep rows that have a non-empty common name.
+#
+# The common names in txt_emb_bioclip-2.json come from GBIF's
+# VernacularName.tsv. A taxon having a vernacular name is a strong,
+# already-present-in-the-data proxy for "humans encounter this often enough to
+# have named it" — which is very nearly the definition of what ends up in a
+# photo library. It costs no extra download to use.
+require_common_name = true
+
+# Keep at least one species per genus even when it has no common name.
+#
+# Without this the genus/family/order aggregation is biased: a genus whose
+# species all lack vernacular names would vanish entirely, and its probability
+# mass would land on a neighbouring genus instead of on the correct higher
+# rank. With it, every genus in the whitelist stays representable, so a
+# confident "Bombus (genus)" is still reachable even when the exact species is
+# not in the head.
+keep_one_per_genus = true
+
+# Hard ceiling; the export fails rather than silently shipping something huge.
+#
+# Two costs scale with this number, and they are now the same one: the head is
+# N x 768 x 2 bytes (fp16) on disk and `lrg-ml::bioclip` keeps it at that
+# precision in memory too, scoring through a lookup table. So it is ~1.5 KB per
+# row resident, alongside a ~600 MB ViT-L/14 session.
+#
+# The rules above currently keep ~170k rows: 261 MB on disk and resident,
+# for a ~880 MB total download. That is a deliberate choice over a ~766 MB
+# build without `keep_one_per_genus` — the 70k rows that rule adds are what
+# keeps unnamed beetle and wildflower genera reachable instead of being
+# absorbed by the nearest named species. The ceiling sits just above that, so
+# a rule change that doubles the head still fails loudly.
+max_rows = 175000

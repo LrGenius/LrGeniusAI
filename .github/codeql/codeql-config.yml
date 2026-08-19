@@ -1,0 +1,20 @@
+name: "LrGeniusAI CodeQL config"
+
+# Query suites layered on top of the default one.
+#   security-extended     - more security queries, at a slightly lower precision
+#   security-and-quality  - adds maintainability/reliability queries on top
+queries:
+  - uses: security-extended
+  - uses: security-and-quality
+
+# Paths that never need scanning. These filters apply to the languages that are
+# extracted without a build (actions, python, rust with `build-mode: none`).
+paths-ignore:
+  - docs
+  - "**/*.md"
+  # Golden-data generators: build-time helpers, never shipped or run in prod.
+  - server-rs/testdata
+  # Headless Lua test harness (Lua is not a CodeQL language anyway).
+  - plugin/spec
+  # Editor automation, run locally by Claude Code, not part of the product.
+  - .claude

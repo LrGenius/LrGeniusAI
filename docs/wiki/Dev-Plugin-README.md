@@ -16,6 +16,8 @@ LrGeniusAI adds a backend-powered AI layer to Lightroom Classic. It helps you:
 - Run semantic search on your catalog
 - Detect, cluster, and browse people/faces
 - Run image culling on selections or the current view and create result collections for fast review
+- Generate and apply Develop edits, optionally trained on your own edits
+- Deduplicate and declutter the keywords already in your catalog
 - Re-import generated metadata back into Lightroom
 
 The plugin is designed to work with local and cloud providers, while keeping Lightroom as your main workspace.
@@ -30,6 +32,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Generate embeddings for semantic retrieval
 - Generate metadata
 - Optional face detection and clustering
+- Optional species identification (BioCLIP 2, on-device)
 
 ### Advanced Search
 
@@ -42,6 +45,26 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Cluster faces into persons
 - Rename persons
 - Jump from a person directly to a Lightroom collection
+
+### AI Develop Edits
+
+- Generate a Develop recipe per photo and apply it non-destructively, either to
+  the photo itself or to a virtual copy
+- No LLM involved: the backend matches the photo against the edits you saved
+  yourself and interpolates theirs
+- Recipes are constrained to what the frame can take: the backend measures the
+  image and caps contrast, clarity, shadow lift and whites accordingly, and
+  reports why
+
+### Style Training
+
+- Save your own Develop settings as labeled training examples
+- The sole input to AI Develop Edits, which needs at least five of them
+
+### Keyword Dedup & Declutter
+
+- Cluster near-duplicate keywords in the catalog and merge them under a chosen
+  primary term
 
 ### Metadata Sync
 
@@ -60,6 +83,9 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   - `Alternates`
   - `Reject Candidates`
   - optional `Duplicates / Near Duplicates`
+- Detect exposure brackets, focus stacks and panoramas and route them to a
+  `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
+  off — every frame of such a set is part of one picture
 - Create a dedicated Lightroom collection set for each culling run and switch you directly to the picks collection for review
 
 ---
@@ -67,11 +93,13 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ## Requirements
 
 - Adobe Lightroom Classic (supported by plugin SDK settings)
-- LrGeniusAI backend server reachable from Lightroom
+- LrGeniusAI backend server reachable from Lightroom. Released for **Apple
+  silicon macOS** and **64-bit Windows** — there is no Intel Mac or Linux
+  build.
 - Optional API keys depending on provider:
   - Gemini
   - OpenAI / ChatGPT
-  - Vertex AI (project + location)
+  - ~~Vertex AI (project + location)~~ — **removed**, the plugin no longer offers Vertex AI
 
 ---
 
@@ -84,23 +112,20 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 
 ---
 
-## Breaking Change: ID Migration Required
+## Breaking Change: ID Migration
 
-The plugin/backend now use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
+The plugin/backend use file-based `photo_id` values instead of Lightroom catalog UUIDs as primary IDs.
 The stable ID algorithm was updated again to avoid ID changes when metadata is written into files (for example DNG metadata updates).
 
-If you already have an indexed backend database from older versions, run this one-time migration:
+**There is no migration.** The one the plugin used to offer posted to
+`POST /db/migrate-photo-ids`, an endpoint the Rust backend does not serve and
+never has, so it could only ever fail. It has been removed rather than left in
+place as a button that does nothing.
 
-1. Open `File -> Plug-in Manager`
-2. Select `LrGeniusAI`
-3. In the `Backend Server` section, click **Migrate existing DB IDs to photo_id**
-4. Wait for the `LrProgressScope` migration to finish
-
-Notes:
-
-- Migration is incremental and skips photos that are not indexed in backend.
-- Existing migrated entries are skipped automatically.
-- Main embeddings, vertex embeddings, and face references are migrated.
+If you have an indexed backend database from a UUID-era version, run
+**Analyze & Index Photos** over the catalog again. Photos that are already
+indexed under the current IDs are skipped, so this costs nothing beyond the
+photos that genuinely need re-indexing.
 
 ---
 
@@ -144,15 +169,26 @@ If strict cross-catalog identity is important for your workflow, plan for re-ind
 In the plugin settings dialog you can configure:
 
 - Backend server URL
-- Ollama base URL
-- API keys and Vertex settings
+- Ollama and LM Studio base URLs
+- API keys (the Vertex AI project/location fields were removed)
+- **Local AI Model (no external app)** — browse, download and select vision
+  models the backend runs itself, plus the advanced knobs (context size, photos
+  in parallel, layers on the GPU). Which engine backs this section is decided
+  per platform: **MLX** on macOS, **llama.cpp** with GGUF models on Windows.
+  The section reports why it is unavailable when the host cannot use it — a
+  source build without the `llamacpp` feature, or a missing MLX helper.
 - Export size and quality used for AI processing
 - Prompt presets
 - Optional CLIP model download for advanced search
 
 ---
 
-## Google Vertex AI Login (gcloud)
+## Google Vertex AI Login (gcloud) — REMOVED
+
+> **⚠️ Vertex AI was removed from the plugin in August 2026.** The project ID / location
+> fields, the *Create Vertex AI embeddings* option in Analyze & Index, and the
+> *Semantic (Vertex AI)* search option are gone from the Lightroom UI. The section below is
+> kept for reference only and no longer describes a working setup path.
 
 If you want to use Vertex AI from LrGeniusAI, run the login on the machine where the backend server runs.
 
@@ -217,7 +253,7 @@ If you migrated from legacy UUID-based IDs to `photo_id`:
 
 - The plugin can trigger backend migration from the Plugin Manager UI.
 - Migration uses a progress scope and batch requests.
-- Existing collections (main embeddings, vertex embeddings, faces) are migrated through backend migration endpoints.
+- Existing collections (main embeddings, legacy vertex embeddings, faces) are migrated through backend migration endpoints.
 
 ---
 

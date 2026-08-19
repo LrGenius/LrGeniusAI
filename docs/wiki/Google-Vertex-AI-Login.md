@@ -1,4 +1,16 @@
-# ☁️ Google Vertex AI Login (gcloud)
+# ☁️ Google Vertex AI Login (gcloud) — REMOVED
+
+> **⚠️ Vertex AI support was removed from LrGeniusAI in August 2026.**
+>
+> The plugin no longer offers any Vertex AI option: the *Vertex AI Project ID* / *Vertex AI
+> Location* fields are gone from the Plug-in Manager, *Analyze & Index* no longer creates
+> Vertex embeddings, and *Advanced Search* no longer offers the *Semantic (Vertex AI)*
+> option. Vertex embeddings already stored in your database are kept, but they are neither
+> updated nor searched anymore.
+>
+> This page is kept as historical reference for the previous setup. Nothing below applies to
+> the current version — use [Choosing an AI Model](Help-Choosing-AI-Model) to pick a
+> supported provider instead.
 
 If you want to use Vertex AI with LrGeniusAI, run the login on the machine where `geniusai-server` is running.
 

@@ -75,9 +75,9 @@ fn build_session(path: &Path) -> ort::Result<Session> {
     let mut builder = Session::builder()?;
     #[cfg(target_os = "macos")]
     if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
-        use ort::execution_providers::coreml::{ComputeUnits, ModelFormat};
-        use ort::execution_providers::CoreMLExecutionProvider;
-        builder = builder.with_execution_providers([CoreMLExecutionProvider::default()
+        use ort::ep::coreml::{ComputeUnits, ModelFormat};
+        use ort::ep::CoreML;
+        builder = builder.with_execution_providers([CoreML::default()
             .with_model_format(ModelFormat::MLProgram)
             .with_compute_units(ComputeUnits::All)
             .with_model_cache_dir(std::env::temp_dir().join("lrg-coreml-cache").display())
@@ -90,7 +90,9 @@ fn build_session(path: &Path) -> ort::Result<Session> {
     // CPU-only platforms. See faces::build_session for the full writeup.
     builder = builder
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
-    builder.commit_from_file(path)
+    // KleidiAI is left enabled: it is worth ~4x on this tower and no longer
+    // leaks on onnxruntime 1.28. See `crate::DISABLE_KLEIDIAI`.
+    crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
 }
 
 impl SiglipModel {
@@ -137,18 +139,29 @@ impl SiglipModel {
         }
     }
 
-    pub fn unload(&self) {
+    /// Drops the loaded session(s). Safe to call when nothing is loaded.
+    ///
+    /// The reason is a parameter because this is reached two ways — the
+    /// `/unload` route and the idle sweep — and the log line used to say
+    /// "due to inactivity" for both. A real `/unload` from the plugin then
+    /// looked like an idle timeout in the log, which is the kind of small lie
+    /// that costs an hour the next time someone reads it.
+    fn unload_with_reason(&self, reason: &str) {
         let mut guard = self.loaded.lock().unwrap();
         if guard.take().is_some() {
-            log::info!("Unloading SigLIP2 model due to inactivity...");
+            log::info!("Unloading SigLIP2 model ({reason})");
         }
+    }
+
+    pub fn unload(&self) {
+        self.unload_with_reason("requested");
     }
 
     /// Call periodically (e.g. every 60s) from a background task.
     pub fn unload_if_idle(&self) {
         let last = self.last_used_unix.load(Ordering::Relaxed);
         if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
-            self.unload();
+            self.unload_with_reason("idle");
         }
     }
 

@@ -4,7 +4,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Compiles the in-process llama.cpp engine in. Off by default so that anyone
+# building an unrelated crate does not need cmake + libclang (and, on Windows,
+# a CUDA toolkit); the release workflow turns it on.
+llamacpp = ["dep:lrg-llama"]
+
+# Needs the llama.cpp engine to have something to compare MLX against, so it is
+# not built by a plain `cargo build`/`clippy --all-targets`.
+[[example]]
+name = "bench_local_backends"
+required-features = ["llamacpp"]
+
 [dependencies]
+lrg-llama = { workspace = true, optional = true }
+# Not optional and not feature-gated: unlike lrg-llama this only spawns and
+# talks to a process, so it adds no native toolchain requirement and no
+# meaningful build time. Whether MLX actually works is a runtime question
+# (Apple silicon + the sidecar binary), answered by `mlx_engine::availability`.
+lrg-mlx.workspace = true
 lrg-common.workspace = true
 lrg-store.workspace = true
 lrg-ml.workspace = true
@@ -24,6 +42,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sha2 = "0.10"
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+async-trait = "0.1.91"
+rayon = "1.12.0"
 
 [dev-dependencies]
 lrg-store.workspace = true

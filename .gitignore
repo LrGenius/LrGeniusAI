@@ -39,4 +39,8 @@ docker-compose.yml
 # MemPalace AI Context
 mempalace.yaml
 entities.json
-server-rs/target/debug/
+
+# Swift sidecar build output (native/mlx-sidecar). Both the SwiftPM and the
+# xcodebuild layouts live under .build/; Package.resolved is committed so the
+# pinned mlx-swift-lm revision is reproducible.
+native/mlx-sidecar/.build/

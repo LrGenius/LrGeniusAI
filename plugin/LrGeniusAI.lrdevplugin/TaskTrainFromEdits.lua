@@ -191,6 +191,10 @@ LrTasks.startAsyncTask(function()
 				local exifOptions = Util.getPhotoExif(photo)
 				exifOptions.label = options.label
 				exifOptions.summary = options.summary
+				-- Which Temp scale this example's develop settings are on. Left
+				-- absent when the format is unreadable; the style engine treats
+				-- that as compatible with anything.
+				exifOptions.is_raw = Util.isRawPhoto(photo)
 
 				-- Export a JPEG thumbnail for CLIP embedding + exposure analysis.
 				local exportedPath = SearchIndexAPI.exportPhotoForIndexing(photo)

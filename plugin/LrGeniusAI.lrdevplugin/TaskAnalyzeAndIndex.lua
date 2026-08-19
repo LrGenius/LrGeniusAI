@@ -19,12 +19,22 @@ local function showAnalyzeAndIndexDialog(ctx)
 
 	-- Check if CLIP model is ready on server
 	props.clipReady = SearchIndexAPI.isClipReady() and prefs.useClip
+	-- Same "files on disk" question for BioCLIP. No `useX` preference gate:
+	-- unlike CLIP, having the species model downloaded *is* the opt-in.
+	props.bioclipReady = SearchIndexAPI.isBioclipReady()
 
 	-- Tasks to perform
 	props.enableEmbeddings = (prefs.enableEmbeddings ~= false) and props.clipReady -- default true
 	props.enableMetadata = prefs.enableMetadata ~= false -- default true
 	props.enableFaces = prefs.enableFaces or false
-	props.enableVertexAI = prefs.enableVertexAI or false
+	props.enableSpecies = (prefs.enableSpecies or false) and props.bioclipReady
+	props.speciesPrefilter = prefs.speciesPrefilter ~= false -- default true
+	props.speciesKeywords = prefs.speciesKeywords or Defaults.speciesKeywords
+	props.speciesLinkLang = prefs.speciesLinkLang or Defaults.speciesLinkLang
+	props.speciesMinConfidence = prefs.speciesMinConfidence or Defaults.speciesMinConfidence
+	-- Vertex AI is disabled in the GUI; the backend code is untouched.
+	props.enableVertexAI = false
+	-- props.enableVertexAI = prefs.enableVertexAI or false
 	props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
 	props.regenerateMetadata = prefs.regenerateMetadata or false
 
@@ -100,6 +110,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- Context options
 	props.submitKeywords = prefs.submitKeywords or false
 	props.submitFolderName = prefs.submitFolderName or false
+	-- Defaults on: the backend has always read the photo's GPS and put the
+	-- place name in the prompt, so switching it off by default would silently
+	-- take context away from existing users. The checkbox is what makes it a
+	-- choice rather than something that just happens.
+	props.submitGps = prefs.submitGps ~= false
 	props.showPhotoContextDialog = prefs.showPhotoContextDialog or false
 
 	-- SaveDataToCatalog
@@ -165,6 +180,114 @@ local function showAnalyzeAndIndexDialog(ctx)
 					}),
 				}),
 
+				-- Core Tasks
+				f:group_box({
+					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Tasks=Primary Tasks"),
+					fill_horizontal = 1,
+					f:row({
+						f:checkbox({
+							value = bind("enableMetadata"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableMetadata=Generate AI metadata (Keywords, Title, Caption)"
+							),
+						}),
+					}),
+					f:row({
+						f:checkbox({
+							value = bind("enableEmbeddings"),
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableEmbeddings=Enable smart photo search"),
+							enabled = props.clipReady,
+						}),
+						f:static_text({
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/ClipNotReady=(OpenCLIP model is missing. Please download it in the Plugin Manager)"
+							),
+							text_color = LrColor(1, 0, 0),
+							visible = not props.clipReady,
+							size = "small",
+						}),
+					}),
+					f:row({
+						f:checkbox({
+							value = bind("enableFaces"),
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Enable face detection"),
+						}),
+					}),
+					f:row({
+						f:checkbox({
+							value = bind("enableSpecies"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableSpecies=Identify animal and plant species"
+							),
+							enabled = props.bioclipReady,
+						}),
+						f:static_text({
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/BioclipNotReady=(Species model is missing. Please download it in the Plugin Manager)"
+							),
+							text_color = LrColor(1, 0, 0),
+							visible = not props.bioclipReady,
+							size = "small",
+						}),
+					}),
+					f:row({
+						f:spacer({ width = 20 }),
+						f:checkbox({
+							value = bind("speciesPrefilter"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesPrefilter=Only where an animal or plant is detected (much faster)"
+							),
+							enabled = bind("enableSpecies"),
+						}),
+					}),
+					f:row({
+						f:spacer({ width = 20 }),
+						f:checkbox({
+							value = bind("speciesKeywords"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesKeywords=Also write the taxonomy as keywords"
+							),
+							enabled = bind("enableSpecies"),
+						}),
+					}),
+					-- The identification is language-independent; this only picks
+					-- which Wikipedia edition the Metadata panel's link opens,
+					-- and which language iNaturalist reports the common name in.
+					f:row({
+						f:spacer({ width = 20 }),
+						f:static_text({
+							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SpeciesLinkLang=Look-up links in:"),
+							enabled = bind("enableSpecies"),
+						}),
+						f:popup_menu({
+							value = bind("speciesLinkLang"),
+							items = Defaults.speciesLinkLanguages,
+							enabled = bind("enableSpecies"),
+						}),
+					}),
+					-- Vertex AI is disabled in the GUI; the backend code is untouched.
+					-- f:row({
+					-- 	f:checkbox({
+					-- 		value = bind("enableVertexAI"),
+					-- 		title = LOC(
+					-- 			"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
+					-- 		),
+					-- 	}),
+					-- }),
+				}),
+			}), -- end General tab
+
+			--------------------------------------------------------
+			-- METADATA TAB
+			--------------------------------------------------------
+			f:tab_view_item({
+				title = LOC("$$$/LrGeniusAI/UI/TabMetadata=Metadata Options"),
+				identifier = "metadata",
+
+				-- The LLM settings live here rather than on the General tab: they
+				-- only matter when metadata generation is on, and that is what this
+				-- tab is about. Embeddings, faces and species identification all run
+				-- without ever touching a language model.
 				-- AI Model Settings
 				f:group_box({
 					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AISettings=AI Model"),
@@ -225,59 +348,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 					}),
 				}),
-
-				-- Core Tasks
-				f:group_box({
-					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Tasks=Primary Tasks"),
-					fill_horizontal = 1,
-					f:row({
-						f:checkbox({
-							value = bind("enableEmbeddings"),
-							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/EnableEmbeddings=Enable smart photo search"),
-							enabled = props.clipReady,
-						}),
-						f:static_text({
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/ClipNotReady=(OpenCLIP model is missing. Please download it in the Plugin Manager)"
-							),
-							text_color = LrColor(1, 0, 0),
-							visible = not props.clipReady,
-							size = "small",
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("enableMetadata"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableMetadata=Generate AI metadata (Keywords, Title, Caption)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("enableFaces"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableFaces=Create face embeddings (Find similar people)"
-							),
-						}),
-					}),
-					f:row({
-						f:checkbox({
-							value = bind("enableVertexAI"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
-							),
-						}),
-					}),
-				}),
-			}), -- end General tab
-
-			--------------------------------------------------------
-			-- METADATA TAB
-			--------------------------------------------------------
-			f:tab_view_item({
-				title = LOC("$$$/LrGeniusAI/UI/TabMetadata=Metadata Options"),
-				identifier = "metadata",
 
 				f:group_box({
 					title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/MetadataOptions=Metadata Tasks"),
@@ -455,6 +525,15 @@ local function showAnalyzeAndIndexDialog(ctx)
 							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/folderNames=Folder Names"),
 						}),
 					}),
+					f:row({
+						f:spacer({ width = share("ctxLabelWidth") }),
+						f:checkbox({
+							value = bind("submitGps"),
+							title = LOC(
+								"$$$/LrGeniusAI/AnalyzeAndIndex/SubmitGps=Location (looked up from the photo's GPS coordinates)"
+							),
+						}),
+					}),
 					f:separator({ fill_horizontal = 1 }),
 					f:row({
 						f:static_text({
@@ -570,7 +649,12 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.enableEmbeddings = props.enableEmbeddings
 		prefs.enableMetadata = props.enableMetadata
 		prefs.enableFaces = props.enableFaces
-		prefs.enableVertexAI = props.enableVertexAI
+		prefs.enableSpecies = props.enableSpecies
+		prefs.speciesPrefilter = props.speciesPrefilter
+		prefs.speciesKeywords = props.speciesKeywords
+		prefs.speciesLinkLang = props.speciesLinkLang
+		-- Vertex AI is disabled in the GUI; the backend code is untouched.
+		-- prefs.enableVertexAI = props.enableVertexAI
 		prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
 		prefs.regenerateMetadata = props.regenerateMetadata
 		prefs.appendMetadata = props.appendMetadata
@@ -592,6 +676,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.maxTokens = props.maxTokens
 		prefs.submitKeywords = props.submitKeywords
 		prefs.submitFolderName = props.submitFolderName
+		prefs.submitGps = props.submitGps
 		prefs.showPhotoContextDialog = props.showPhotoContextDialog
 		prefs.enableValidation = props.enableValidation
 		prefs.saveDataToCatalog = props.saveDataToCatalog
@@ -692,49 +777,6 @@ local function showPhotoContextDialog(photo)
 	return result, props.photoContextData, props.skipFromHere
 end
 
--- Apply a keyword name mapping to a keyword structure (flat strings, hierarchical dict,
--- or alias-object arrays).  mapping: { lowercase_name = "CanonicalName" }
-local function applyKeywordNameMapping(keywords, mapping)
-	if type(keywords) ~= "table" or not next(mapping) then
-		return keywords
-	end
-	if keywords[1] ~= nil then
-		local result = {}
-		for _, item in ipairs(keywords) do
-			if type(item) == "string" then
-				table.insert(result, mapping[item:lower()] or item)
-			elseif type(item) == "table" and type(item.name) == "string" then
-				local canonical = mapping[item.name:lower()]
-				if canonical then
-					local copy = {}
-					for k, v in pairs(item) do
-						copy[k] = v
-					end
-					copy.name = canonical
-					table.insert(result, copy)
-				else
-					table.insert(result, item)
-				end
-			else
-				table.insert(result, item)
-			end
-		end
-		return result
-	else
-		-- hierarchical dict: keys are keyword/category names
-		local result = {}
-		for key, value in pairs(keywords) do
-			if type(key) == "string" then
-				local canonical = mapping[key:lower()]
-				result[canonical or key] = applyKeywordNameMapping(value, mapping)
-			else
-				result[key] = value
-			end
-		end
-		return result
-	end
-end
-
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("AnalyzeAndIndexTask", function(context)
 		-- Check server connection
@@ -748,11 +790,17 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- Validate that at least one task is selected
+		-- Validate that at least one task is selected.
+		--
+		-- `enableSpecies` counts: identifying species is a complete run on its
+		-- own, and the save pass below covers exactly that case (species on,
+		-- metadata off). Leaving it out of this list is what made a
+		-- species-only run refuse to start.
 		if
 			not props.enableEmbeddings
 			and not props.enableMetadata
 			and not props.enableFaces
+			and not props.enableSpecies
 			and not props.enableVertexAI
 		then
 			LrDialogs.showError(
@@ -788,6 +836,9 @@ LrTasks.startAsyncTask(function()
 		if props.enableFaces then
 			table.insert(tasks, "faces")
 		end
+		if props.enableSpecies then
+			table.insert(tasks, "species")
+		end
 		if props.enableVertexAI then
 			table.insert(tasks, "vertexai")
 		end
@@ -821,10 +872,13 @@ LrTasks.startAsyncTask(function()
 			generate_alt_text = props.generateAltText,
 			submit_keywords = props.submitKeywords,
 			submit_folder_names = props.submitFolderName,
+			submit_gps = props.submitGps,
 			submit_user_context = props.showPhotoContextDialog,
 			enableMetadata = props.enableMetadata,
 			enableFaces = props.enableFaces,
 			enableVertexAI = props.enableVertexAI,
+			species_prefilter = props.speciesPrefilter,
+			species_min_confidence = props.speciesMinConfidence,
 			replace_ss = props.replaceSS,
 			regenerate_metadata = props.regenerateMetadata,
 			prompt = props.selectedPrompt,
@@ -887,6 +941,18 @@ LrTasks.startAsyncTask(function()
 			title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ProgressTitle=Processing photos..."),
 			functionContext = context,
 		})
+
+		-- Give the model the vocabulary it already has, so it reuses existing
+		-- terms instead of inventing near-synonyms with different casing. Counting
+		-- keyword usage walks the whole keyword tree, so it runs under the progress
+		-- scope rather than silently freezing the UI on a large catalog.
+		if props.generateKeywords then
+			progressScope:setCaption(
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ReadingCatalogKeywords=Reading catalog keywords...")
+			)
+			options.catalog_keywords =
+				MetadataManager.collectCatalogKeywordNames(Defaults.catalogKeywordLimit, options.keyword_categories)
+		end
 
 		-- Get photos to process
 		-- For scope 'missing', pass task options so backend checks which photos need the selected tasks
@@ -963,19 +1029,25 @@ LrTasks.startAsyncTask(function()
 
 		log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
 
+		-- Shared across every applyMetadata call of this run: the keyword lookup cache and
+		-- the alias-dedup index are both O(catalog keywords) to build, so they must not be
+		-- rebuilt per photo. Also lets keywords resolved for earlier photos dedupe later ones.
+		local keywordSessionCache = {}
+
 		-- When validation is disabled, apply metadata inline as each photo's analysis returns
 		-- so keywords/title/caption land on photos progressively instead of all at the end.
 		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
 		local usedInlineApply = false
-		if
-			props.enableMetadata
-			and props.saveDataToCatalog
-			and not props.enableValidation
-			and not props.keywordAliases
-		then
+		if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
 				local response = SearchIndexAPI.getPhotoData(photoId)
+				if response and response.species then
+					MetadataManager.applySpecies(photo, response.species, {
+						applySpeciesKeywords = props.speciesKeywords,
+						keywordSessionCache = keywordSessionCache,
+					})
+				end
 				if response and response.metadata then
 					MetadataManager.applyMetadata(photo, response, nil, {
 						applyKeywords = props.generateKeywords,
@@ -986,6 +1058,7 @@ LrTasks.startAsyncTask(function()
 						topLevelKeyword = props.topLevelKeyword,
 						generateAliases = props.keywordAliases,
 						appendMetadata = props.appendMetadata,
+						keywordSessionCache = keywordSessionCache,
 					})
 					SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
 				end
@@ -996,89 +1069,35 @@ LrTasks.startAsyncTask(function()
 		status, processed, failed, processedPhotos, combinedError, combinedWarnings =
 			SearchIndexAPI.analyzeAndIndexSelectedPhotos(photosToProcess, progressScope, options, false)
 
-		-- De-clutter: cluster the generated keywords and build a name-mapping so that
-		-- near-duplicates (e.g. "Automobile" → "Car") are unified before being written
-		-- to the catalog.  Existing catalog keywords are preferred as canonical.
-		-- No LLM validation here — CLIP threshold alone keeps latency reasonable.
-		local keywordMapping = {}
-		local mergedPairs = {} -- {from="Automobile", to="Car"} for dialog display
+		-- Species results have their own save pass for the one case the metadata
+		-- paths cannot cover: a run with "Identify species" ticked but metadata
+		-- off would index the photos and then write nothing to the catalog,
+		-- because every other save path here is gated on `enableMetadata`. When
+		-- metadata *is* on, species rides along on that path's /get instead
+		-- (inline callback above, or the two-phase loop below).
 		if
-			false
-			and props.keywordAliases
-			and props.generateKeywords
-			and status ~= "allfailed"
-			and #processedPhotos > 0
+			status ~= "allfailed"
+			and props.enableSpecies
+			and props.saveDataToCatalog
+			and not usedInlineApply
+			and not props.enableMetadata
 		then
-			progressScope:setCaption(LOC("$$$/LrGeniusAI/AnalyzeAndIndex/DeClutterProgress=Deduplicating keywords..."))
-			LrTasks.yield()
-
-			local allNewNames = {}
-			local newNameSet = {}
+			log:trace("Saving species identifications for processed photos...")
+			local speciesCount = 0
 			for _, photo in ipairs(processedPhotos) do
 				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local resp = SearchIndexAPI.getPhotoData(photoId)
-					if resp and resp.metadata and resp.metadata.keywords then
-						local kwVal, _, orderedIds = Util.extractAllKeywords(resp.metadata.keywords)
-						for _, id in ipairs(orderedIds) do
-							local name = kwVal[id]
-							if name and not newNameSet[name:lower()] then
-								newNameSet[name:lower()] = true
-								table.insert(allNewNames, name)
-							end
-						end
+					local response = SearchIndexAPI.getPhotoData(photoId)
+					if response and response.species then
+						MetadataManager.applySpecies(photo, response.species, {
+							applySpeciesKeywords = props.speciesKeywords,
+							keywordSessionCache = keywordSessionCache,
+						})
+						speciesCount = speciesCount + 1
 					end
 				end
 			end
-
-			if #allNewNames >= 2 then
-				local catalogNames = MetadataManager.collectCatalogKeywordNames(LrApplication.activeCatalog(), nil)
-				local existingSet = {}
-				for _, name in ipairs(catalogNames) do
-					existingSet[name:lower()] = name
-				end
-
-				local allNames = {}
-				for _, name in ipairs(catalogNames) do
-					table.insert(allNames, name)
-				end
-				for _, name in ipairs(allNewNames) do
-					if not existingSet[name:lower()] then
-						table.insert(allNames, name)
-					end
-				end
-
-				if #allNames >= 2 then
-					local threshold = prefs.deduplicateThreshold or 0.88
-					local clusterResp, clusterErr = SearchIndexAPI.clusterKeywords(allNames, threshold, {})
-					if clusterResp and clusterResp.results then
-						for _, cluster in ipairs(clusterResp.results) do
-							if #cluster >= 2 then
-								local canonical = cluster[1]
-								for _, name in ipairs(cluster) do
-									if existingSet[name:lower()] then
-										canonical = existingSet[name:lower()]
-										break
-									end
-								end
-								for _, name in ipairs(cluster) do
-									if name:lower() ~= canonical:lower() then
-										keywordMapping[name:lower()] = canonical
-										table.insert(mergedPairs, { from = name, to = canonical })
-									end
-								end
-							end
-						end
-						local mappingCount = 0
-						for _ in pairs(keywordMapping) do
-							mappingCount = mappingCount + 1
-						end
-						log:trace("De-clutter: " .. mappingCount .. " keyword merges")
-					elseif clusterErr then
-						log:warn("De-clutter: cluster failed: " .. tostring(clusterErr))
-					end
-				end
-			end
+			log:trace("Saved species data for " .. speciesCount .. " photo(s)")
 		end
 
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
@@ -1094,11 +1113,15 @@ LrTasks.startAsyncTask(function()
 				if photoId then
 					local response = SearchIndexAPI.getPhotoData(photoId)
 
-					-- Pre-compute deduped keywords; the validation dialog shows both
-					-- side-by-side. Non-validation paths apply the mapping automatically.
-					local dedupedKeywords = nil
-					if next(keywordMapping) and response and response.metadata and response.metadata.keywords then
-						dedupedKeywords = applyKeywordNameMapping(response.metadata.keywords, keywordMapping)
+					-- Applied here rather than in the species-only pass below so
+					-- both features share this loop's one /get per photo. Species
+					-- deliberately skips the validation dialog: a taxonomic
+					-- identification is not free text to review and edit.
+					if props.enableSpecies and response and response.species then
+						MetadataManager.applySpecies(photo, response.species, {
+							applySpeciesKeywords = props.speciesKeywords,
+							keywordSessionCache = keywordSessionCache,
+						})
 					end
 
 					log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
@@ -1115,7 +1138,7 @@ LrTasks.startAsyncTask(function()
 								applyCaption = props.generateCaption,
 								applyAltText = props.generateAltText,
 								appendMetadata = props.appendMetadata,
-							}, dedupedKeywords, mergedPairs)
+							})
 
 							if validatedData ~= nil and validatedData.skipFromHere then
 								log:trace("Skipping validation from here for subsequent photos.")
@@ -1133,6 +1156,7 @@ LrTasks.startAsyncTask(function()
 									topLevelKeyword = props.topLevelKeyword,
 									generateAliases = props.keywordAliases,
 									appendMetadata = props.appendMetadata,
+									keywordSessionCache = keywordSessionCache,
 								})
 
 								-- Overwrite with validated data
@@ -1153,9 +1177,6 @@ LrTasks.startAsyncTask(function()
 							end
 						else
 							-- Validation has been skipped from here on; apply metadata without showing dialog
-							if dedupedKeywords then
-								response.metadata.keywords = dedupedKeywords
-							end
 							MetadataManager.applyMetadata(photo, response, nil, {
 								applyKeywords = props.generateKeywords,
 								applyTitle = props.generateTitle,
@@ -1165,6 +1186,7 @@ LrTasks.startAsyncTask(function()
 								topLevelKeyword = props.topLevelKeyword,
 								generateAliases = props.keywordAliases,
 								appendMetadata = props.appendMetadata,
+								keywordSessionCache = keywordSessionCache,
 							})
 
 							log:trace(
@@ -1177,9 +1199,6 @@ LrTasks.startAsyncTask(function()
 						end
 					elseif props.enableMetadata and response and response.metadata then
 						-- Directly save generated metadata without validation
-						if dedupedKeywords then
-							response.metadata.keywords = dedupedKeywords
-						end
 						MetadataManager.applyMetadata(photo, response, nil, {
 							applyKeywords = props.generateKeywords,
 							applyTitle = props.generateTitle,
@@ -1189,6 +1208,7 @@ LrTasks.startAsyncTask(function()
 							topLevelKeyword = props.topLevelKeyword,
 							generateAliases = props.keywordAliases,
 							appendMetadata = props.appendMetadata,
+							keywordSessionCache = keywordSessionCache,
 						})
 						savedCount = savedCount + 1
 					end

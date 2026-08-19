@@ -16,6 +16,14 @@ SourceDir=..\..
 [Files]
 ; Backend: a single native binary, no bundled Python runtime.
 Source: "build\lrgenius-server\lrgenius-server.exe"; DestDir: "{app}\backend"; Flags: ignoreversion
+; llama.cpp ships as shared libraries: llama.dll plus the loadable ggml backend
+; modules (the CPU variants and Vulkan). Both must sit beside the exe — it will
+; not start without llama.dll, and ggml only discovers backends in its own
+; directory, so a missing module silently downgrades to CPU.
+; skipifsourcedoesntexist keeps the installer buildable when the llamacpp
+; feature is off.
+Source: "build\lrgenius-server\llama.dll"; DestDir: "{app}\backend"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "build\lrgenius-server\ggml*.dll"; DestDir: "{app}\backend"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "installers\windows\run_hidden.vbs"; DestDir: "{app}\backend"; Flags: ignoreversion
 Source: "installers\windows\download_face_models.ps1"; DestDir: "{app}\backend"; Flags: ignoreversion
 

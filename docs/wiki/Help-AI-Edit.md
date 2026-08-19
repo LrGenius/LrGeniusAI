@@ -10,14 +10,73 @@ The **AI Edit Photos** workflow generates a structured Lightroom develop recipe 
 
 ---
 
+## It edits like you do — and only like you do
+
+AI Edit does not ask a language model what a good edit looks like. It builds
+every recipe from **your own saved edits**: the photo is matched against the
+training examples you stored with *Save Edits as AI Training Examples*, and the
+closest matches are blended into a recipe.
+
+The match is scored on four things:
+
+| Signal | Weight |
+|---|---|
+| Visual similarity (the photo's CLIP embedding) | 50% |
+| Exposure character — brightness, contrast, warmth | 25% |
+| Scene tags | 15% |
+| Time of day | 10% |
+
+The upshot: **AI Edit needs training examples to work at all.** With fewer than
+five saved examples the task stops before it uploads anything and points you at
+*Save Edits as AI Training Examples*. Five is the floor, not the target — the
+style profile is reported as *Building up* below ten examples and *Active* from
+fifty. See [Help: Train from Edits](Help-Train-From-Edits).
+
+Because the recipe comes from your own edits, there is no prompt, no model
+choice, no style preset and no API key involved. AI Edit works with every cloud
+provider switched off.
+
+---
+
 ## What it generates
 
-For each photo the AI produces a develop recipe that may include:
+A develop recipe of **global adjustments** — exposure, white balance,
+highlights, shadows, whites, blacks, contrast, texture, clarity, dehaze,
+vibrance, saturation, tone curve, sharpening, noise reduction, vignette, grain
+— averaged from the matching examples.
 
-- **Global adjustments** — exposure, white balance, highlights, shadows, whites, blacks, contrast, clarity, vibrance, saturation, HSL color shifts, tone curve, sharpening, noise reduction.
-- **Local masks** — subject, sky, or background masks with separate adjustments. Masks are only added when materially beneficial.
+Local masks are not part of a style-engine edit; every recipe carries an empty
+mask list.
 
-The recipe is applied via the Lightroom SDK. No raw pixel editing happens outside Lightroom; all results are reversible via Lightroom's Edit History.
+The recipe is applied via the Lightroom SDK. No raw pixel editing happens
+outside Lightroom; all results are reversible via Lightroom's Edit History.
+
+---
+
+## What the frame allows
+
+Your habitual +25 contrast was learnt on the frames you shot, and this frame may
+have nothing in common with them. So before a recipe reaches your photo, the
+backend measures the image itself — how hard the light is, how many stops of
+dynamic range there are, how much of the frame is specular highlight, how far
+the shadows are already clipped — and works out how much contrast, clarity,
+shadow lift and whites this particular frame can take. Values above that ceiling
+are pulled back down.
+
+The review dialog shows why, in plain sentences: hard midday light means no
+extra contrast, flat overcast light means there is room for it, an already
+clipped sky means the whites stay where they are. When the recipe stayed inside
+the budget anyway, nothing is shown — there is no point reporting a limit that
+never bit.
+
+The judgement changes with the file type: raw files still hold detail behind
+clipped highlights, JPEGs do not, so the same blown sky earns a stricter budget
+on a JPEG. The same distinction decides whether a training example's white
+balance can be carried over at all — Lightroom's temperature is Kelvin on a raw
+file and a relative −100…100 value on everything else, and the two cannot be
+averaged together. The plugin tells the backend which it is, since the photo is
+exported to JPEG before upload and the original encoding is otherwise invisible
+from the server side.
 
 ---
 
@@ -27,70 +86,59 @@ The recipe is applied via the Lightroom SDK. No raw pixel editing happens outsid
 
 - **Selected photos only** — processes only the photos you have selected in the Library grid.
 - **Current view** — all photos in the currently visible folder or collection.
+- **All photos in catalog** — everything.
 
-### AI Model
+### Style profile
 
-Choose which LLM to use. The list is loaded from the backend at runtime and only shows providers that are configured and reachable. See [Help: Choosing AI Model](Help-Choosing-AI-Model).
-
-### Overall look
-
-Selects the editing style preset injected into the AI prompt:
-
-| Preset | Description |
-|---|---|
-| General - Natural Professional | Balanced contrast, realistic color, clean detail. Default. |
-| General - Moody Dramatic | Deeper shadows, restrained saturation, cinematic tonal separation. |
-| Landscape - Cinematic | Controlled dynamic range, subtle color contrast, tasteful depth. |
-| Landscape - Vibrant Natural | Clear tonal separation, protected highlights, controlled saturation. |
-| Portrait - Skin Safe | Gentle contrast, natural texture, flattering highlights. |
-| Portrait - Editorial | Clean skin tones, polished midtone contrast, soft highlight roll-off. |
-| Wedding - Soft Airy | Bright mids, warm-neutral white balance, gentle contrast. |
-| Wedding - Rich Filmic | Subtle warm skin tones, gentle black-point lift, cinematic color depth. |
-| Real Estate - Bright Neutral | Bright neutral interiors, straight tonal balance, minimal stylization. |
-| Commercial - Clean Product | Neutral white balance, crisp detail, true-to-product colors. |
-| Street - Punchy Documentary | Decisive contrast, neutral color fidelity, clear subject separation. |
-| Custom | Write your own style instruction in the text field. |
-
-### Style strength
-
-Controls how aggressively the preset style is applied, from subtle correction to full stylized look. Range: 0–100%. Default: 50%.
-
-### Composition / crop
-
-Whether the AI may suggest a crop:
-- **No crop** — never adjusts framing.
-- **Subtle crop** — only if clearly beneficial for composition.
-- **Aggressive crop** — freely crops to improve composition.
-
-Default: Subtle crop.
+Read-only. Shows how many training examples the backend holds and what that
+means for the match quality, so you can tell an unconvincing result caused by a
+thin style profile from one caused by an unusual photo.
 
 ### Review each proposed edit before applying it
 
 When enabled, a **review dialog** opens for each photo before the edit is applied. You see:
 
-- A before/after comparison.
-- The proposed develop values.
-- Options to **Apply**, **Skip**, or provide a **Per-photo instruction override** (free text to tell the AI to adjust something specific for this photo).
+- The proposed develop values, plus how confident the style match was and which of your saved edits it drew on.
+- Any guardrail explanations — what the frame allowed, and what got capped.
+- Options to **Apply** or **Skip**.
 
 **Recommended for first use.** Disable only after you've validated the results for your shooting style.
 
-### Per-photo instruction override (in review dialog)
+> **No before/after preview yet.** The review dialog lists values; it does not render a comparison. A rendered before/after is planned. Until then, Lightroom's own History panel is the fastest way to judge a result — every run is a single undo step named *Apply AI Lightroom develop settings*.
 
-A free-text field where you can give the AI a specific instruction for the current photo — for example "Make the sky more dramatic" or "Reduce noise in shadows". This re-runs generation for this single photo with the override applied.
+### Apply the edit to a new virtual copy
 
----
+Off by default. When enabled, each photo that is actually going to be edited
+gets a virtual copy named *AI Edit* first, and the recipe is applied to that
+copy — your original keeps whatever settings it had.
 
-## Training the AI on your style
+The copy is created *after* the review dialog, so a photo you skip leaves
+nothing behind. If Lightroom refuses to create the copy, the photo is reported
+as an error and skipped; the edit is never redirected onto the original.
 
-If you want AI Edit to match your personal editing style, use **Save Edits as AI Training Examples** to feed your existing edits back to the AI as few-shot examples. See [Help: Train from Edits](Help-Train-From-Edits).
+Two side effects come from Lightroom's own API here: copying works on the
+current selection, so your grid selection changes as the run walks through the
+photos, and if a photo is not part of the folder or collection you are looking
+at, the plugin switches the source to *All Photographs* to reach it.
 
 ---
 
 ## Tips for best results
 
 - Start with **Review each proposed edit** enabled — review the first batch before applying to hundreds of photos.
-- Choose a preset that matches your genre (portrait, landscape, wedding, etc.) rather than using *Custom* initially.
-- **Style strength 40–60%** is a good starting range. Higher values push the style harder; lower values stay close to a neutral technical correction.
-- For portraits, enable **face detection** during indexing — the AI uses detected faces to make better masking decisions.
-- If results are inconsistent, try a higher-quality model (e.g. `gemini-2.5-pro` or `gpt-5.4-pro`).
-- Use **Save Edits as AI Training Examples** after a manual editing session to teach the AI your preferences.
+- Train on the kind of photo you are about to edit. The style profile is matched per photo, so a profile built only from bright studio work has little to offer a night shot.
+- Keep feeding it: run **Save Edits as AI Training Examples** after a manual editing session. Match quality improves with the number and variety of examples.
+- A low confidence in the review dialog means the photo did not resemble anything you have trained on. That is the moment to edit it by hand — and then save that edit as a training example.
+
+---
+
+## Where the LLM went
+
+Earlier versions offered a second, prompt-driven path: pick a provider and
+model, write a system instruction, choose a look preset, and let a vision LLM
+propose the develop settings. That path is no longer reachable from the plugin.
+The backend still implements it (`POST /edit`), so it can come back, but the AI
+Edit dialog no longer configures it and no run reaches an LLM.
+
+Model choice now only affects [Analyze & Index](Help-Analyze-and-Index) —
+tagging, descriptions and keywords.

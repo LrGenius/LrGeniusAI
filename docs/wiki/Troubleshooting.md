@@ -28,28 +28,39 @@ Using a newer plugin with an older backend (or vice versa) causes API errors.
 
 ---
 
-### 3. Missing or Not Downloading OpenCLIP Model
+### 3. On-Device AI Models Missing or Not Downloading
 
-The backend downloads the SigLIP2 embedding model on first use (several GB). If this fails, semantic search won't work.
+Two features run their own model on the backend machine: smart photo search
+(SigLIP2) and species identification (BioCLIP 2). Neither model ships with the
+installer — you fetch them once from *Plug-in Manager → LrGeniusAI →
+**On-device AI models*** → **Download AI models**, which is also where their
+readiness is reported. Roughly 3 GB in total.
 
-- **Symptom:** "OpenCLIP model is missing" warning in Lightroom, or indexing fails immediately even though the backend is running.
+- **Symptom:** *Enable smart photo search* or *Identify animal and plant species* is greyed out in the Analyze & Index dialog, an indicator under *On-device AI models* stays red, or indexing reports `species: model not downloaded`.
 - **Resolution:**
-  1. Check your internet connection on the machine running the backend.
-  2. Make sure the backend process has write permission to its cache directory (typically `~/.cache/huggingface` or the configured data path).
-  3. Wait for the download to complete — the `/status` endpoint shows `is_model_cached`. Progress is visible in the backend terminal.
-  4. If the warning persists after a successful download, restart the backend and try again.
-  5. If the backend server and Lightroom are on different machines, the model must be downloaded on the server machine, not your Lightroom machine.
+  1. Click **Download AI models** and leave the progress bar running. It fetches only what is missing, so it is safe to press again after a failed attempt — an existing installation that already has the search model will only download the species one.
+  2. Check your internet connection **on the machine running the backend**, not the one running Lightroom. If they are different machines, the models must be downloaded on the server.
+  3. Make sure the backend has write permission to its model cache: `~/.cache/lrgenius/models/`, or `%USERPROFILE%\.cache\lrgenius\models\` on Windows. It is the home directory of the account the *backend* runs as, which is not necessarily yours if you installed it as a service.
+  4. If a download fails part-way, the error is reported verbatim in the Lightroom dialog and in the backend log — worth reading before retrying, since a 404 means the release assets could not be reached rather than anything wrong with your setup.
+  5. If an indicator stays red after a download that reported success, restart the backend so it re-checks the files on disk.
+
+Face detection is listed in the same section but has no download button. Its
+`buffalo_l` weights are resolved from `INSIGHTFACE_ROOT` and are not published
+with this project, so the combined download cannot fetch them — that is why they
+are excluded from the overall "all models are ready" state.
 
 ---
 
-### 4. OpenCLIP "Missing" Even After Installation
+### 4. Model "Missing" Even After Installation
 
-- **Symptom:** The plugin reports the CLIP model is missing, but it was previously working or you can see the model files on disk.
-- **Resolution:** This can happen if the backend was updated and the model cache path changed, or if the model files were partially downloaded. Delete the model cache folder and let the backend re-download:
-  - macOS/Linux: `~/.cache/huggingface/hub/`
-  - Windows: `%USERPROFILE%\.cache\huggingface\hub\`
-  
-  After deleting, restart the backend. It will re-download the model on next use.
+- **Symptom:** The plugin reports a model is missing, but it was previously working or you can see the files on disk.
+- **Resolution:** This can happen if the backend was updated and the model cache path changed, or if the files were only partially downloaded. Delete the affected model's files and download again:
+  - macOS/Linux: `~/.cache/lrgenius/models/`
+  - Windows: `%USERPROFILE%\.cache\lrgenius\models\`
+
+  The search model is `siglip2_*` plus `tokenizer.json`; the species model is
+  `bioclip2_*`. Delete only the family that is failing, restart the backend, and
+  press **Download AI models** — the healthy family is skipped.
 
 ---
 
@@ -66,7 +77,36 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 
 ---
 
-### 6. Ollama Not Responding / Not Invoked
+### 6. Built-In Local Model (llama.cpp / MLX) Not Available
+
+The backend can run models itself, in two independent engines: `llamacpp`
+(GGUF) and `mlx`. Releases ship exactly one per platform — MLX on macOS,
+llama.cpp on Windows — so you only ever see the section that applies. See
+[Local AI Models](Help-Local-AI-Models) for the full guide.
+
+- **Symptom:** The **Local AI Model** section says *"This backend does not
+  support MLX"*.
+  - **Resolution:** Expected on Windows, where the section is llama.cpp instead
+    and offers the same model families as GGUF. On macOS it means a build
+    without the MLX helper — reinstall with the official `.pkg`.
+- **Symptom:** MLX is unavailable on an Apple silicon Mac, with a reason naming
+  a missing helper.
+  - **Resolution:** The `lrgenius-mlx` helper ships next to the server binary in
+    the macOS `.pkg`. Reinstall the backend with the official installer; if you
+    build from source, the helper needs `xcodebuild` plus the Metal toolchain
+    (see [Server README](Dev-Server-README)).
+- **Symptom:** *"This backend build has no local-model support"*.
+  - **Resolution:** The binary was compiled without the `llamacpp` feature.
+    Official releases include it — reinstall from the release page, or rebuild
+    with `cargo build --release -p lrg-server --features llamacpp`.
+- **Symptom:** A downloaded model does not appear in the model dropdown.
+  - **Resolution:** Check the **Installed** line in the Plug-in Manager. An
+    interrupted download is discarded rather than offered as a broken model, so
+    simply run the download again.
+
+---
+
+### 7. Ollama Not Responding / Not Invoked
 
 - **Symptom:** Analysis runs but Ollama shows no activity (`ollama ps` is empty), or connection errors to `localhost:11434`.
 - **Resolution:**
@@ -78,7 +118,7 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 
 ---
 
-### 7. LM Studio Not Responding
+### 8. LM Studio Not Responding
 
 - **Symptom:** Errors connecting to LM Studio, or model list shows no LM Studio models.
 - **Resolution:**
@@ -89,19 +129,20 @@ If you are using cloud providers (Gemini, ChatGPT), authentication failures bloc
 
 ---
 
-### 8. Local Model Timeout
+### 9. Local Model Timeout
 
 Local AI models can take significantly longer than cloud APIs, especially without a dedicated GPU.
 
 - **Symptom:** Lightroom displays a timeout error during image analysis.
 - **Resolution:**
-  1. Ensure the model is fully loaded into memory before starting the batch (run a test prompt in Ollama/LM Studio first).
+  1. Ensure the model is fully loaded into memory before starting the batch. With Ollama/LM Studio, run a test prompt first; with the built-in engines, the first request of a session loads a multi-gigabyte model and is always the slowest.
   2. Process smaller batches (10–20 photos at a time) to avoid cumulative timeouts.
   3. Switch to a smaller model (4B instead of 12B) if your hardware can't sustain the load.
+  4. For the built-in llama.cpp engine: lower **Photos in parallel** to 1, and check **Layers on the GPU** — a model that does not fit in VRAM partially runs on the CPU and is far slower.
 
 ---
 
-### 9. No Metadata Generated
+### 10. No Metadata Generated
 
 - **Symptom:** Analysis completes without errors but no keywords/title/caption appear in Lightroom.
 - **Resolution:**
@@ -112,7 +153,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 10. Search Returns No Results
+### 11. Search Returns No Results
 
 - **Symptom:** Advanced Search runs but the results collection is empty or sparse.
 - **Resolution:**
@@ -123,7 +164,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 11. macOS Filesystem Permission Warning After Update
+### 12. macOS Filesystem Permission Warning After Update
 
 - **Symptom:** Lightroom shows a filesystem permissions warning on startup after installing or updating LrGeniusAI.
 - **Resolution:** Run Adobe's permission repair script:
@@ -133,18 +174,37 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 12. AI Edit Produces 500 Internal Server Error
+### 13. AI Edit Fails Per Photo
 
-- **Symptom:** AI Edit fails with "HTTP status: 500" from the backend.
-- **Resolution:**
-  1. Check the backend terminal log for the full error message.
-  2. Common cause: the selected model returned a response that doesn't match the expected edit schema. Try a different (more capable) model — `gemini-2.5-flash` or `gpt-5-mini` are reliable choices.
-  3. If you are using a local model, the 4B models sometimes produce malformed JSON. Try the 8B variant or switch to a cloud model.
-  4. If the error mentions "schema validation", it usually means the model returned prose instead of structured JSON. Custom system prompts that break the format can cause this — reset to the default system prompt and try again.
+AI Edit builds every recipe from your saved training examples and never calls a
+language model, so its failures are about the style profile, not about models
+or prompts.
+
+- **Symptom:** "Style engine inactive: only N training example(s) available".
+- **Resolution:** Save more edits via *Save Edits as AI Training Examples*. Five
+  is the minimum; ten or more gives a usable match. The plugin normally stops
+  before the run and tells you this — seeing it per photo means examples were
+  removed while the run was in progress.
+
+- **Symptom:** "Style engine could not produce a result" or "Style engine returned an empty recipe".
+- **Resolution:** Your training examples carry no usable develop settings for
+  this photo — most often because they were all saved from photos on the other
+  side of the raw/JPEG divide, which keeps their white balance (and little else)
+  from being carried over. Save examples edited from the same kind of file you
+  are trying to edit.
+
+- **Symptom:** Low confidence in the review dialog, edits that don't feel like yours.
+- **Resolution:** The photo did not resemble anything you trained on. Make sure
+  the photos are indexed (**Enable smart photo search**) so the visual match has
+  an embedding to work with, and train on the kind of material you want edited.
+
+- **Symptom:** "HTTP status: 500" with "database not initialized".
+- **Resolution:** The backend has no catalog database bound yet. Open the
+  Plug-in Manager and let it initialize, then retry.
 
 ---
 
-### 13. Database Initialization Failed After Update
+### 14. Database Initialization Failed After Update
 
 - **Symptom:** "Failed to initialize database at the selected path" error when starting the backend or when Lightroom connects.
 - **Resolution:**
@@ -155,7 +215,7 @@ Local AI models can take significantly longer than cloud APIs, especially withou
 
 ---
 
-### 14. Windows: Restart/Update Endpoint Not Working
+### 15. Windows: Restart/Update Endpoint Not Working
 
 - **Symptom:** "Check for Updates" or backend restart from within Lightroom fails on Windows.
 - **Resolution:** This is a known issue on Windows with the `/restart` endpoint. Restart the backend manually:
