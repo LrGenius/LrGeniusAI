@@ -1432,9 +1432,13 @@ function SearchIndexAPI.getPhotoData(photoId)
 	log:trace("Retrieving photo data for photo_id: " .. photoId)
 
 	local result, err = _request("POST", url, body)
+	-- The transport failure is returned, not just logged: "the backend is
+	-- unreachable" and "this photo was never indexed" both arrive here as a
+	-- nil record, and a caller that cannot tell them apart reports a dead
+	-- server as several thousand photos quietly having no data.
 	if err then
 		log:error("Failed to retrieve photo data: " .. err)
-		return nil
+		return nil, err
 	end
 
 	if result and result.status == "success" then

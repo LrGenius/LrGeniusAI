@@ -173,9 +173,19 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
+		-- Created before the scope is resolved, not after. Collecting the "all"
+		-- scope walks the whole catalog, and with the scope created afterwards
+		-- Lightroom showed nothing at all while it did — indistinguishable from
+		-- the command having been ignored.
+		local progressScope = LrProgressScope({
+			title = LOC("$$$/LrGeniusAI/RetrieveMetadata/ProgressTitle=Retrieving Metadata from Backend"),
+		})
+		progressScope:setCaption(LOC("$$$/LrGeniusAI/RetrieveMetadata/CollectingPhotos=Collecting photos..."))
+
 		-- Get photos based on scope
 		local photos = PhotoSelector.getPhotosInScope(options.scope)
 		if not photos or #photos == 0 then
+			progressScope:done()
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/RetrieveMetadata/NoPhotos=No Photos"),
 				LOC("$$$/LrGeniusAI/RetrieveMetadata/NoPhotosMessage=No photos found in the selected scope."),
@@ -185,11 +195,6 @@ LrTasks.startAsyncTask(function()
 		end
 
 		log:info(string.format("Starting metadata retrieval for %d photos", #photos))
-
-		-- Progress indicator
-		local progressScope = LrProgressScope({
-			title = LOC("$$$/LrGeniusAI/RetrieveMetadata/ProgressTitle=Retrieving Metadata from Backend"),
-		})
 
 		local successCount = 0
 		local skipCount = 0
@@ -217,7 +222,17 @@ LrTasks.startAsyncTask(function()
 
 			local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 			if photoId then
-				if not SearchIndexAPI.pingServer() then
+				-- Retrieve data from backend
+				log:trace("Retrieving data for photo_id: " .. photoId)
+				local retrievedData, err = SearchIndexAPI.getPhotoData(photoId)
+
+				log:trace("Retrieved data: " .. Util.dumpTable(retrievedData))
+
+				-- Only ping once the real request has already failed at the
+				-- transport level. This used to run before every photo, which
+				-- doubled the round trips for the whole run in order to answer
+				-- a question that only matters when something went wrong.
+				if err and not SearchIndexAPI.pingServer() then
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachable=Server Unreachable"),
 						LOC(
@@ -228,11 +243,6 @@ LrTasks.startAsyncTask(function()
 					log:error("Backend server unreachable during metadata retrieval")
 					break
 				end
-				-- Retrieve data from backend
-				log:trace("Retrieving data for photo_id: " .. photoId)
-				local retrievedData, err = SearchIndexAPI.getPhotoData(photoId)
-
-				log:trace("Retrieved data: " .. Util.dumpTable(retrievedData))
 
 				if err then
 					log:error("Error retrieving metadata for " .. fileName .. ": " .. tostring(err))
