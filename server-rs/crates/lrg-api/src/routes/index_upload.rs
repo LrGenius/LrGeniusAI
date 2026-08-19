@@ -35,7 +35,7 @@ pub(crate) struct ParsedOptions {
     compute_embeddings: bool,
     compute_faces: bool,
     /// How much of the face pipeline to run. The `cull` task only reads the
-    /// quality proxies, so it skips ArcFace and the thumbnail encode.
+    /// quality proxies, so it skips FaceNet and the thumbnail encode.
     face_pass: FacePass,
     compute_metadata: bool,
     compute_vertexai: bool,
@@ -1327,10 +1327,18 @@ async fn finish_one(
     // field once face processing's write landed last.
     let mut warning = None;
     if options.compute_faces {
+        // "Checked" means checked *by the models this build runs*. A photo
+        // whose faces were found by the retired SCRFD/ArcFace pair carries
+        // embeddings from a different space, so trusting the flag would leave
+        // it permanently un-re-detected while its rows quietly poisoned every
+        // clustering run. Rows written before `face_model` existed have no
+        // marker at all, which is correctly treated as "not this model".
         let already_checked = main_metadata
             .get("faces_checked")
             .and_then(Value::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && main_metadata.get("face_model").and_then(Value::as_str)
+                == Some(state.face.model_id());
         if options.regenerate_metadata || !already_checked {
             // Decoded here rather than carried from phase 1: full RGB is by far
             // the largest per-photo allocation, and holding one per photo in
@@ -1434,6 +1442,20 @@ async fn finish_one(
                     if !faces.is_empty() {
                         let embeddings: Vec<&[f32]> =
                             faces.iter().map(|f| f.embedding.as_slice()).collect();
+                        // Only rows from the current models can be matched by
+                        // embedding distance. A cosine distance between an
+                        // ArcFace vector and a FaceNet one is a number, not a
+                        // measurement, and `FACE_CARRY_OVER_MAX_DISTANCE` is
+                        // tight enough that it would mostly refuse to carry
+                        // anything over — but "mostly" is how one person's name
+                        // ends up on another person's face.
+                        let previous: Vec<StoreRecord> = previous
+                            .into_iter()
+                            .filter(|r| {
+                                r.metadata.get("face_model").and_then(Value::as_str)
+                                    == Some(state.face.model_id())
+                            })
+                            .collect();
                         let carried = carry_over_person_ids(&previous, &embeddings);
                         let carried_count = carried.iter().filter(|p| !p.is_empty()).count();
                         if carried_count > 0 {
@@ -1466,6 +1488,7 @@ async fn finish_one(
                                 m.insert("face_eye_openness".into(), json!(f.eye_openness));
                                 m.insert("face_blink_penalty".into(), json!(f.blink_penalty));
                                 m.insert("face_occlusion".into(), json!(f.occlusion));
+                                m.insert("face_model".into(), json!(state.face.model_id()));
                                 StoreRecord {
                                     id: format!("{photo_id}_{i}"),
                                     vector: Some(f.embedding.clone()),
@@ -1501,6 +1524,7 @@ async fn finish_one(
                     // replaces the photo's rows, which is how person assignments
                     // used to disappear on a plain re-index.
                     main_metadata.insert("faces_checked".into(), json!(true));
+                    main_metadata.insert("face_model".into(), json!(state.face.model_id()));
                 }
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");

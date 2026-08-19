@@ -13,6 +13,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	-- "not ready" for anyone who had unticked it.
 	propertyTable.clipReady = false
 	propertyTable.bioclipReady = false
+	propertyTable.faceReady = false
 	propertyTable.assetsReady = false
 	propertyTable.keepChecksRunning = true
 
@@ -27,6 +28,12 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 				propertyTable.clipReady = family.ready == true
 			elseif family.id == "bioclip" then
 				propertyTable.bioclipReady = family.ready == true
+			elseif family.id == "face" then
+				-- Listed since the face models became downloadable like the
+				-- others. Before that they had to be fetched by hand and were
+				-- excluded from `ready`, so there was nothing an indicator
+				-- could usefully tell anyone.
+				propertyTable.faceReady = family.ready == true
 			end
 		end
 	end
@@ -637,6 +644,13 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						f,
 						"bioclipReady",
 						LOC("$$$/LrGeniusAI/PluginInfo/BioclipReady=Species identification")
+					),
+				}),
+				f:row({
+					Util.statusIndicator(
+						f,
+						"faceReady",
+						LOC("$$$/LrGeniusAI/PluginInfo/FaceReady=Face detection and people")
 					),
 				}),
 			}),

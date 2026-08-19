@@ -1,9 +1,10 @@
 //! cv2's `INTER_LINEAR` resize — plain 2-tap bilinear with no
 //! antialiasing filter widening on downscale (unlike Pillow's BILINEAR,
 //! which widens the kernel support proportionally when downsampling).
-//! InsightFace's SCRFD/ArcFace preprocessing goes through
-//! `cv2.resize`/`cv2.warpAffine`, so matching cv2's specific algorithm
-//! (not Pillow's) is required for bit-compatible detections.
+//! The face pipeline's preprocessing goes through `cv2.resize` /
+//! `cv2.warpAffine` — OpenCV's own YuNet reference implementation does, and
+//! the landmark alignment is a port of skimage+cv2 — so matching cv2's
+//! specific algorithm (not Pillow's) is required for compatible detections.
 
 /// `cv2.resize(img, (out_w, out_h))`, INTER_LINEAR, for an interleaved
 /// RGB u8 buffer. Source coordinate per cv2: `(dst + 0.5) * scale - 0.5`,

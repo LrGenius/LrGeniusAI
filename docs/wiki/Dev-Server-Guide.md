@@ -13,7 +13,7 @@ The backend server is responsible for:
 - **Semantic Search:** Executing fast, vector-based similarity searches using LanceDB.
 - **Metadata Persistence:** Storing tags, face matches, and other AI-generated text alongside the vectors in LanceDB tables.
 - **Face & Person APIs:** Processing and matching facial data to build identity maps over time.
-- **Model Caching:** Automatically downloading and verifying local storage of the SigLIP2/InsightFace model files to avoid redundant downloads. The `/status` endpoint exposes an `is_model_cached` flag which allows the Lightroom plugin to display warning messages if required assets are missing prior to initiating a task.
+- **Model Caching:** Automatically downloading and verifying local storage of the SigLIP2 and face model files to avoid redundant downloads. The `/status` endpoint exposes an `is_model_cached` flag which allows the Lightroom plugin to display warning messages if required assets are missing prior to initiating a task.
 
 ## Error Handling & Logic
 

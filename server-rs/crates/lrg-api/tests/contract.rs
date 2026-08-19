@@ -645,6 +645,186 @@ async fn check_unprocessed_understands_the_cull_task() {
     );
 }
 
+/// Swapping the face detector/recognizer pair invalidates stored embeddings:
+/// FaceNet and the retired ArcFace both emit 512-d unit vectors, so nothing
+/// about a row's shape says which model wrote it. `check-unprocessed` must
+/// therefore treat "checked by an older model" as "not checked", or those
+/// photos would never be re-derived.
+#[tokio::test]
+async fn check_unprocessed_requeues_faces_from_a_superseded_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    let image_row = |model: Option<&str>| {
+        let mut m = serde_json::Map::new();
+        m.insert("faces_checked".into(), serde_json::json!(true));
+        // `needs_cull_phash` is checked for *any* task, so without this every
+        // row here would be reported outstanding regardless of its face state
+        // and the assertion below would pass without testing anything.
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        if let Some(model) = model {
+            m.insert("face_model".into(), serde_json::json!(model));
+        }
+        m
+    };
+    let face_row = |id: &str, model: Option<&str>| {
+        let mut m = serde_json::Map::new();
+        m.insert("person_id".into(), serde_json::json!("person_0"));
+        if let Some(model) = model {
+            m.insert("face_model".into(), serde_json::json!(model));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: Some(vec![0.1; 512]),
+            metadata: m,
+        }
+    };
+
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                lrg_store::StoreRecord {
+                    id: "current".into(),
+                    vector: None,
+                    metadata: image_row(Some(lrg_ml::faces::MODEL_ID)),
+                },
+                lrg_store::StoreRecord {
+                    id: "old_model".into(),
+                    vector: None,
+                    metadata: image_row(Some("buffalo_l/arcface-w600k-r50")),
+                },
+                // Written before `face_model` existed at all.
+                lrg_store::StoreRecord {
+                    id: "unmarked".into(),
+                    vector: None,
+                    metadata: image_row(None),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    // Stored faces are the other way `faces_checked` is satisfied, so each
+    // photo gets one — otherwise this would pass for the wrong reason.
+    store
+        .upsert(
+            lrg_store::FACE_TABLE,
+            &[
+                face_row("current_0", Some(lrg_ml::faces::MODEL_ID)),
+                face_row("old_model_0", Some("buffalo_l/arcface-w600k-r50")),
+                face_row("unmarked_0", None),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/index/check-unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["current", "old_model", "unmarked"],
+                        "tasks": "faces",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["photo_ids"],
+        serde_json::json!(["old_model", "unmarked"]),
+        "photos whose faces came from another model must be re-detected, \
+         and one already on the current model must not be"
+    );
+}
+
+/// Clustering must not mix embedding spaces. Rows from a superseded model are
+/// set aside as unassigned rather than clustered against current ones — the
+/// distances between the two spaces are numbers, not measurements.
+#[tokio::test]
+async fn cluster_leaves_faces_from_a_superseded_model_unassigned() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    let face = |id: &str, model: Option<&str>, seed: f32| {
+        let mut m = serde_json::Map::new();
+        if let Some(model) = model {
+            m.insert("face_model".into(), serde_json::json!(model));
+        }
+        let mut v = vec![0.0f32; 512];
+        v[0] = seed;
+        v[1] = 1.0 - seed;
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: Some(v),
+            metadata: m,
+        }
+    };
+
+    store
+        .upsert(
+            lrg_store::FACE_TABLE,
+            &[
+                face("p1_0", Some(lrg_ml::faces::MODEL_ID), 1.0),
+                face("p1_1", Some(lrg_ml::faces::MODEL_ID), 1.0),
+                face("p2_0", Some("buffalo_l/arcface-w600k-r50"), 1.0),
+                face("p3_0", None, 1.0),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/faces/cluster")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "min_faces_per_person": null,
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    // The two stale rows are identical to the current ones, so anything that
+    // clustered them would fold all four into one person.
+    assert_eq!(json["unassigned"], 2, "got {json}");
+    assert_eq!(json["face_count"], 4, "got {json}");
+
+    let rows = store.scan_all(lrg_store::FACE_TABLE).await.unwrap();
+    for row in rows {
+        let person = row.metadata["person_id"].as_str().unwrap();
+        let stale = row.metadata.get("face_model").and_then(|v| v.as_str())
+            != Some(lrg_ml::faces::MODEL_ID);
+        assert_eq!(
+            stale,
+            person == "person_unassigned",
+            "{}: person_id {person} does not match its face_model",
+            row.id
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // /style_edit
 //

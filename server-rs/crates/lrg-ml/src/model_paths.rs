@@ -110,17 +110,20 @@ pub fn resolve_bioclip() -> BioclipModelPaths {
     }
 }
 
-/// buffalo_l's own directory layout is the real InsightFace convention
-/// (`INSIGHTFACE_ROOT`, default `~/.insightface`) — unlike SigLIP2, no
-/// interim convention is needed since these ONNX files are already
-/// exactly what production downloads and uses.
+/// Where the YuNet detector and FaceNet recognizer live.
+///
+/// Same per-artifact env-var convention and same cache directory as SigLIP2
+/// and BioCLIP. These used to resolve out of `INSIGHTFACE_ROOT`
+/// (`~/.insightface/models/buffalo_l/`), because the models *were*
+/// InsightFace's and the only way to get them was to have run its Python
+/// library. YuNet and FaceNet are redistributable, so they are published with
+/// this project and land here like every other model family — which is what
+/// lets `/assets/download/start` fetch them and lets face detection count
+/// toward the overall readiness flag.
 pub fn resolve_face() -> FaceModelPaths {
-    let root = std::env::var_os("INSIGHTFACE_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs_next_home().join(".insightface"));
-    let dir = root.join("models").join("buffalo_l");
+    let dir = default_models_dir();
     FaceModelPaths {
-        det_onnx: dir.join("det_10g.onnx"),
-        rec_onnx: dir.join("w600k_r50.onnx"),
+        det_onnx: env_or_default("LRG_YUNET_ONNX", dir.join("yunet_face_detection.onnx")),
+        rec_onnx: env_or_default("LRG_FACENET_ONNX", dir.join("facenet_vggface2.onnx")),
     }
 }

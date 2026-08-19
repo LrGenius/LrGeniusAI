@@ -52,7 +52,7 @@ If you choose to enable cloud providers (OpenAI, Google Gemini; Vertex AI was re
 > **No Hidden Analytics**: LrGeniusAI does not include background tracking, telemetry, or "usage metrics" that monitor your clicks or workflow without your knowledge.
 
 ### 📸 Images and Face Recognition
-We use **InsightFace** for local face clustering. These biometric templates are stored in your local backend database and are **never** shared with us or any third party.
+We use **YuNet** and **FaceNet** for local face detection and clustering. These biometric templates are stored in your local backend database and are **never** shared with us or any third party.
 
 ### 🔑 API Keys
 Your API keys for services like OpenAI or Google Gemini are stored in the Lightroom plugin configuration (on your disk). They are transmitted only to the service provider via encrypted HTTPS requests.

@@ -88,7 +88,7 @@ This project is built on the belief that AI tooling for creatives should remain 
 - **Frontend / Lightroom Plugin:** Lua (Lightroom SDK)
 - **Backend / Server:** `geniusai-server` — Rust (axum) for deterministic memory behavior
 - **AI & Embedding:** SigLIP2 via ONNX Runtime (`ort` crate)
-- **Identity & Faces:** InsightFace (ONNX)
+- **Identity & Faces:** YuNet + FaceNet (ONNX)
 - **Species:** BioCLIP 2 (ONNX) with a pruned TreeOfLife taxonomy head
 - **Local Inference:** an MLX Swift helper (`lrgenius-mlx`) on macOS; llama.cpp compiled into the backend (Vulkan / CPU) on Windows
 - **Database:** LanceDB
@@ -110,6 +110,6 @@ Developed with a passion for photography and IT by:
 - **Community** – *Special thanks to all contributors and testers for your valuable input and support.*
 - **Various AI agents** - *For the great support in developing this project.*
 
-This project leverages many incredible open-source libraries and models, including **InsightFace**, **BioCLIP 2 / TreeOfLife-200M**, **OpenCLIP**, **ONNX Runtime**, **LanceDB**, **llama.cpp**, and **MLX / mlx-swift-lm**. See the [Credits wiki page](https://github.com/LrGenius/LrGeniusAI/wiki/Credits) for the full list and licences. 
+This project leverages many incredible open-source libraries and models, including **YuNet**, **FaceNet**, **BioCLIP 2 / TreeOfLife-200M**, **OpenCLIP**, **ONNX Runtime**, **LanceDB**, **llama.cpp**, and **MLX / mlx-swift-lm**. See the [Credits wiki page](https://github.com/LrGenius/LrGeniusAI/wiki/Credits) for the full list and licences. 
 
 A huge thank you to the open-source community and the developers of the underlying AI frameworks that make this integration possible!

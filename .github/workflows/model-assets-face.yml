@@ -1,0 +1,82 @@
+name: Export Face Model Assets
+
+# YuNet + FaceNet (~94 MB) for the backend's face detection and people
+# clustering (server-rs/crates/lrg-ml/src/{yunet,facenet}.rs). Same reasoning
+# as model-assets.yml: the upstream models don't change per app release, so
+# this publishes to a stable tag that only moves when the export actually
+# changes.
+#
+# These exist because the face pipeline used to run InsightFace's `buffalo_l`
+# pack, which is licensed for non-commercial research only. It could not be
+# published here, so face detection was the one model family the plugin could
+# not download — users had to install InsightFace's Python library to get the
+# weights. YuNet is Apache-2.0 and facenet-pytorch is MIT.
+#
+# Its **own** tag, like BioCLIP's, so re-exporting one family never forces the
+# others' gigabytes to be re-uploaded. If the export changes in a way older
+# binaries cannot read, bump both this workflow's `tag_name` and
+# `FACE_ASSETS_RELEASE_TAG` in routes/assets.rs together. That is a *different*
+# question from `lrg_ml::faces::MODEL_ID`, which marks stored embeddings as no
+# longer comparable — a change that is binary-compatible but no longer gives
+# the same answers.
+#
+# macos-latest for the same reason as the other two model jobs: ubuntu-latest
+# intermittently segfaulted during ONNX Runtime verification.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'server-rs/scripts/export_face_models.py'
+      - '.github/workflows/model-assets-face.yml'
+
+jobs:
+  export-face-assets:
+    runs-on: macos-latest
+    name: Export YuNet detector + FaceNet recognizer
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      # --no-project: the script carries its own PEP 723 dependencies because
+      # facenet-pytorch pins torch<2.3 / numpy<2.0, which the shared
+      # server-rs/scripts project (torch>=2.11) cannot satisfy. It downloads
+      # YuNet against a pinned commit + SHA-256 and exports FaceNet, then
+      # verifies both — it fails rather than publishing a bad asset.
+      - name: Export face models
+        run: |
+          set -euo pipefail
+          uv run --no-project server-rs/scripts/export_face_models.py \
+            --output-dir face-assets
+          echo "=== Exported face assets ==="
+          ls -lh face-assets/
+
+      - name: Publish to the stable face-assets release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: face-assets-v1
+          name: Face model assets (YuNet + FaceNet)
+          body: |
+            ONNX assets for the backend's face pipeline, fetched by
+            `POST /assets/download/start`.
+
+            - `yunet_face_detection.onnx` — OpenCV Zoo YuNet 2023mar, Apache-2.0
+            - `facenet_vggface2.onnx` — facenet-pytorch Inception-ResNet-v1
+              (VGGFace2 weights), MIT
+
+            Published independently of the app's own release tags; see
+            `.github/workflows/model-assets-face.yml`.
+          files: face-assets/*
+          draft: false
+          prerelease: false
+          make_latest: false
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

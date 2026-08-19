@@ -23,7 +23,9 @@ use axum::{routing::get, routing::post, Json, Router};
 use serde_json::{json, Value};
 
 use crate::routes::bioclip::bioclip_assets;
-use crate::routes::clip::{clip_assets, download_release_assets, Downloads, ModelDownloadStatus};
+use crate::routes::clip::{
+    clip_assets, download_release_assets, Downloads, ModelDownloadStatus, ReleaseAsset,
+};
 use crate::state::AppState;
 
 /// Key for this download group in `AppState::model_download`. Distinct from
@@ -39,6 +41,18 @@ const DOWNLOAD_KEY: &str = "assets";
 /// issuing six HEAD requests every time the Plug-in Manager polls.
 const CLIP_APPROX_BYTES: u64 = 2_310_000_000;
 const BIOCLIP_APPROX_BYTES: u64 = 876_000_000;
+const FACE_APPROX_BYTES: u64 = 94_200_000;
+
+/// Release tag holding the YuNet + FaceNet ONNX files.
+///
+/// Its own tag, for the same reason BioCLIP has one: the model families have
+/// independent lifecycles, and re-exporting one should not force the others'
+/// gigabytes to be re-uploaded. Bump this and
+/// `.github/workflows/model-assets-face.yml`'s `tag_name` together if the
+/// export ever changes in a way older binaries cannot read — which is a
+/// different question from `lrg_ml::faces::MODEL_ID`, the marker that says
+/// already-stored embeddings are no longer comparable.
+const FACE_ASSETS_RELEASE_TAG: &str = "face-assets-v1";
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -49,15 +63,14 @@ pub fn router() -> Router<Arc<AppState>> {
 
 /// Per-family readiness plus one overall flag.
 ///
-/// `downloadable` is not decoration: face detection's `buffalo_l` weights are
-/// resolved from `INSIGHTFACE_ROOT` — wherever the InsightFace Python library
-/// would have put them — and are not published to any release of this project,
-/// so there is nothing for this endpoint to fetch. Reporting it as a family
-/// that is simply "not ready" would make the download button look broken. It
-/// is listed so the UI can show the state and explain it, and it is excluded
-/// from `ready` for the same reason: the combined download cannot fix it, so
-/// letting it hold the overall flag down would leave the user with a button
-/// that never turns green.
+/// All three families are downloadable and all three gate `ready`. Face
+/// detection used to be neither: its weights were InsightFace's `buffalo_l`,
+/// resolved from `INSIGHTFACE_ROOT` — wherever that project's Python library
+/// would have put them — and not redistributable, so there was nothing for
+/// this endpoint to fetch and it had to be excluded from `ready` to avoid a
+/// button that never turned green. YuNet and FaceNet replaced them precisely
+/// so that carve-out could go away; `downloadable` stays in the response
+/// because the plugin reads it.
 async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let clip_ready = state.siglip.is_cached();
     let bioclip_ready = state.bioclip.is_cached();
@@ -68,10 +81,11 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
             0
         } else {
             BIOCLIP_APPROX_BYTES
-        };
+        }
+        + if face_ready { 0 } else { FACE_APPROX_BYTES };
 
     Json(json!({
-        "ready": clip_ready && bioclip_ready,
+        "ready": clip_ready && bioclip_ready && face_ready,
         "missing_approx_bytes": missing_bytes,
         "families": [
             {
@@ -92,9 +106,8 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
                 "id": "face",
                 "name": "Face detection",
                 "ready": face_ready,
-                "downloadable": false,
-                "reason": "buffalo_l is resolved from INSIGHTFACE_ROOT and is not \
-                           published with this project yet",
+                "downloadable": true,
+                "approx_bytes": FACE_APPROX_BYTES,
             },
         ],
     }))
@@ -121,7 +134,13 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
     let download_state = state.model_download.clone();
     let need_clip = !state.siglip.is_cached();
     let need_bioclip = !state.bioclip.is_cached();
-    tokio::spawn(run_download(download_state, need_clip, need_bioclip));
+    let need_face = !state.face.is_cached();
+    tokio::spawn(run_download(
+        download_state,
+        need_clip,
+        need_bioclip,
+        need_face,
+    ));
 
     Json(json!({"download": "started"}))
 }
@@ -137,9 +156,10 @@ async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!(status))
 }
 
-async fn run_download(state: Arc<Downloads>, need_clip: bool, need_bioclip: bool) {
+async fn run_download(state: Arc<Downloads>, need_clip: bool, need_bioclip: bool, need_face: bool) {
     let clip_paths = lrg_ml::model_paths::resolve();
     let bioclip_paths = lrg_ml::model_paths::resolve_bioclip();
+    let face_paths = lrg_ml::model_paths::resolve_face();
 
     let mut assets = Vec::new();
     if need_clip {
@@ -147,6 +167,9 @@ async fn run_download(state: Arc<Downloads>, need_clip: bool, need_bioclip: bool
     }
     if need_bioclip {
         assets.extend(bioclip_assets(&bioclip_paths));
+    }
+    if need_face {
+        assets.extend(face_assets(&face_paths));
     }
 
     if assets.is_empty() {
@@ -164,8 +187,28 @@ async fn run_download(state: Arc<Downloads>, need_clip: bool, need_bioclip: bool
     }
 
     log::info!(
-        "Downloading {} asset(s): clip={need_clip} bioclip={need_bioclip}",
+        "Downloading {} asset(s): clip={need_clip} bioclip={need_bioclip} face={need_face}",
         assets.len()
     );
     download_release_assets(&state, DOWNLOAD_KEY, "AI models", &assets).await;
+}
+
+/// The face-model assets and where they go.
+///
+/// Unlike SigLIP2 and BioCLIP this has no `/face/download/start` route of its
+/// own — the two files together are ~112 MB and there is no UI that wants them
+/// separately, so the combined download is the only caller.
+fn face_assets(paths: &lrg_ml::faces::FaceModelPaths) -> Vec<ReleaseAsset<'_>> {
+    vec![
+        (
+            FACE_ASSETS_RELEASE_TAG,
+            "yunet_face_detection.onnx",
+            paths.det_onnx.as_path(),
+        ),
+        (
+            FACE_ASSETS_RELEASE_TAG,
+            "facenet_vggface2.onnx",
+            paths.rec_onnx.as_path(),
+        ),
+    ]
 }

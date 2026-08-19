@@ -37,14 +37,14 @@ Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager
 ### Download the on-device AI models
 
 Some features do not use a cloud model at all and instead run their own model on
-your machine: smart photo search, and species identification for animals,
-plants and fungi. Those model files are not part of the installer, so fetch them
-once before you index anything.
+your machine: smart photo search, species identification for animals, plants and
+fungi, and face detection. Those model files are not part of the installer, so
+fetch them once before you index anything.
 
 In the same settings dialog, scroll to **On-device AI models** and click
 **Download AI models**. One button fetches everything that is missing — there is
 nothing to choose per feature — and the per-model indicators next to it turn
-green as each family lands. Expect roughly 3 GB in total on a fresh install.
+green as each family lands. Expect roughly 3.3 GB in total on a fresh install.
 
 The same button appears in the first-run setup wizard. It is also how you finish
 setting up after an upgrade: families already on disk are skipped, so an

@@ -180,7 +180,7 @@ It lists all detected face clusters (persons) from your indexed photos, lets you
 
 ### How do I enable face detection?
 
-In the **Analyze & Index Photos** dialog, make sure face detection is enabled. The backend uses InsightFace for detection and clustering.
+In the **Analyze & Index Photos** dialog, make sure face detection is enabled. The backend uses YuNet for detection and FaceNet for the embeddings it clusters.
 
 ---
 
