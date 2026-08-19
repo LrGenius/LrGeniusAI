@@ -954,7 +954,7 @@ LrTasks.startAsyncTask(function()
 		-- terms instead of inventing near-synonyms with different casing. Counting
 		-- keyword usage walks the whole keyword tree, so it runs under the progress
 		-- scope rather than silently freezing the UI on a large catalog.
-		if props.generateKeywords and props.keywordAliases and props.enableMetadata then
+		if props.generateKeywords and props.enableMetadata then
 			progressScope:setCaption(
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/ReadingCatalogKeywords=Reading catalog keywords...")
 			)
