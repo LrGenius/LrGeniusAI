@@ -68,6 +68,10 @@ pub struct AppState {
     /// inside the request handler itself, so there's no bind-race
     /// between the exiting old process and the freshly spawned new one.
     pub relaunch_after_shutdown: StdMutex<Option<PathBuf>>,
+    /// Taxon name → species-database links, cached on disk. Global rather
+    /// than per-catalog: which GBIF page `Panthera leo` lives on does not
+    /// depend on whose catalog asked.
+    pub species_links: Arc<crate::species_links::LinkResolver>,
 }
 
 impl AppState {
@@ -87,6 +91,7 @@ impl AppState {
             llm: Arc::default(),
             mlx: Arc::default(),
             relaunch_after_shutdown: StdMutex::new(None),
+            species_links: Arc::new(crate::species_links::LinkResolver::new()),
         }
     }
 

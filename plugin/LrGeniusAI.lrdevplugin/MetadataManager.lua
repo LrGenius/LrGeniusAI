@@ -1352,13 +1352,22 @@ end
 --
 -- @param photo LrPhoto
 -- @param species table|nil Backend block from `/get`'s metadata.
--- @param options table|nil `applySpeciesKeywords`, `keywordSessionCache`.
+-- @param options table|nil `applySpeciesKeywords`, `keywordSessionCache`,
+--   `skipLinks`.
 function MetadataManager.applySpecies(photo, species, options)
 	if type(species) ~= "table" then
 		return
 	end
 	options = options or {}
 	local catalog = LrApplication.activeCatalog()
+
+	-- Resolved before the write gate, never inside it: this can touch the
+	-- backend, and holding the catalog's private write access across a network
+	-- round trip would block every other write in Lightroom for its duration.
+	local links = nil
+	if not options.skipLinks then
+		links = SpeciesLinks.forSpecies(species)
+	end
 
 	-- Written unconditionally, empty values included: a re-run that downgrades
 	-- a confident species to "none" has to clear the old answer, not leave an
@@ -1372,6 +1381,10 @@ function MetadataManager.applySpecies(photo, species, options)
 		-- fields) because the metadata schema declares them all as strings.
 		local confidence = tonumber(species.confidence)
 		photo:setPropertyForPlugin(_PLUGIN, "speciesConfidence", confidence and string.format("%.2f", confidence) or "")
+		-- Cleared along with everything else when there is no identification,
+		-- so the panel never offers a link to the previous answer's species.
+		photo:setPropertyForPlugin(_PLUGIN, "speciesInatUrl", links and links.inaturalist or "")
+		photo:setPropertyForPlugin(_PLUGIN, "speciesWikipediaUrl", links and links.wikipedia or "")
 	end, Defaults.catalogWriteAccessOptions)
 
 	if not options.applySpeciesKeywords then

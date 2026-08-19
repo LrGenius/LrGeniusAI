@@ -401,6 +401,76 @@ group, so a species download and a GGUF download can be in flight at once.
 
 ---
 
+## Species Links
+
+The pruned Tree-of-Life head carries taxon *names* only, no identifiers, so a
+link from an identification to a species database can either be a name-based
+search or a deep link to the taxon's own page. These routes buy the deep link:
+they resolve a name against GBIF's `/species/match` and iNaturalist's
+`/v1/taxa` — both free and unauthenticated — and cache the answer in
+`~/.cache/lrgenius/species_links.json`, so a given taxon costs one outbound
+call per machine, ever.
+
+Everything degrades to search URLs: an unreachable network, an unknown name,
+or a fuzzy iNaturalist hit that does not match the queried name exactly all
+return the same shape with `resolved: false`. Deliberately kept off the
+indexing path — indexing must not need the network, and a catalog's taxa
+repeat so heavily that resolving on demand costs a handful of calls for a whole
+library. Outbound calls are spaced ~1.1 s apart to stay inside iNaturalist's
+published rate limit.
+
+### `GET /species/links`
+Query: `name` (scientific name, required), `rank` (`species`, `genus`, … —
+narrows both lookups so a genus query cannot match a same-named species),
+`lang` (two-letter; picks the Wikipedia edition and the iNaturalist
+common-name locale, default `en`).
+
+```json
+{
+  "status": "success",
+  "links": {
+    "name": "Panthera leo",
+    "gbif_key": 5219404,
+    "inat_id": 41964,
+    "common_name": "Lion",
+    "resolved": true,
+    "urls": {
+      "gbif":        "https://www.gbif.org/species/5219404",
+      "inaturalist": "https://www.inaturalist.org/taxa/41964",
+      "wikipedia":   "https://en.wikipedia.org/wiki/Lion",
+      "wikispecies": "https://species.wikimedia.org/wiki/Panthera%20leo",
+      "eol":         "https://eol.org/search?q=Panthera+leo",
+      "col":         "https://www.catalogueoflife.org/data/search?q=Panthera+leo"
+    }
+  }
+}
+```
+
+`urls` always holds every provider; `resolved` says whether any of them is a
+deep link rather than a search. `wikispecies` deep-links without a lookup —
+Wikispecies files scientific names as article titles verbatim. `wikipedia`
+comes from iNaturalist and is therefore only a deep link for `lang=en`; other
+languages get a scientific-name search on their own edition, which resolves
+through the redirect each edition keeps.
+
+The plugin calls this from `MetadataManager.applySpecies` and writes
+`urls.inaturalist` / `urls.wikipedia` into the read-only `speciesInatUrl` /
+`speciesWikipediaUrl` catalog fields, which Lightroom renders as clickable
+links in the Metadata panel.
+
+### `POST /species/links/batch`
+Same resolution for several taxa in one request. Resolved sequentially — the
+rate gate would serialize concurrent calls anyway.
+
+```json
+{ "names": [{ "name": "Panthera leo", "rank": "species" }], "lang": "en" }
+```
+
+Returns `{ "status": "success", "links": [ … ] }`, one entry per requested
+name, in request order.
+
+---
+
 ## Local LLM Management (llama.cpp & MLX)
 
 The backend hosts two local inference engines: `llamacpp` (in-process llama.cpp, GGUF models, present only in builds compiled with the `llamacpp` cargo feature) and `mlx` (an `lrgenius-mlx` helper process, Apple silicon only, no cargo feature). Both are exposed through the same routes — the MLX half is nested under an `mlx` key so that older plugins reading the top-level fields still see the llama.cpp engine.

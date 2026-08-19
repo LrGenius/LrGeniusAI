@@ -293,6 +293,32 @@ return {
 			searchable = true,
 			browsable = true,
 		},
+		-- `url` rather than `string` so Lightroom draws the field with its
+		-- open-in-browser button: the Metadata panel takes no custom widgets,
+		-- and this is the only clickable control a plugin can put in it.
+		--
+		-- Not searchable or browsable — a URL is noise in the Library filter,
+		-- and the names it is built from are already both.
+		--
+		-- Two providers rather than one configurable field because they answer
+		-- different questions: iNaturalist for what the organism looks like
+		-- (photos, range maps, similar species), Wikipedia for what it is.
+		{
+			id = "speciesInatUrl",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesInatUrl=Species on iNaturalist"),
+			dataType = "url",
+			readOnly = true,
+			searchable = false,
+			browsable = false,
+		},
+		{
+			id = "speciesWikipediaUrl",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/SpeciesWikipediaUrl=Species on Wikipedia"),
+			dataType = "url",
+			readOnly = true,
+			searchable = false,
+			browsable = false,
+		},
 		{
 			id = "globalPhotoId",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoId=Global Photo ID"),
@@ -330,7 +356,7 @@ return {
 		},
 	},
 
-	schemaVersion = 32,
+	schemaVersion = 33,
 	updateFromEarlierSchemaVersion = function(catalog, previousSchemaVersion, progressScope)
 		catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then
