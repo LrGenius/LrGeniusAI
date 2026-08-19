@@ -1,12 +1,44 @@
 PhotoSelector = {}
 
-local function filterPhotos(photos)
+---
+-- Drops videos from a photo list.
+--
+-- `isVideo` is read for the whole list in one catalog call. Asking each photo
+-- on its own is a separate trip into the catalog per photo, and for the "all"
+-- scope that runs over the entire catalog before the caller has put a progress
+-- scope on screen — so a large catalog looks for minutes like the plugin did
+-- nothing at all.
+--
+-- Falls back to the per-photo read if the batch call is unavailable or throws,
+-- because getting this wrong means videos reach a backend that rejects them.
+--
+local function filterPhotos(catalog, photos)
 	if not photos then
 		return {}
 	end
+
+	local batch
+	if catalog then
+		local ok, result = LrTasks.pcall(function()
+			return catalog:batchGetRawMetadata(photos, { "isVideo" })
+		end)
+		if ok then
+			batch = result
+		else
+			log:warn("batchGetRawMetadata failed; falling back to per-photo reads: " .. tostring(result))
+		end
+	end
+
 	local filteredPhotos = {}
 	for _, photo in ipairs(photos) do
-		if not photo:getRawMetadata("isVideo") then
+		local entry = batch and batch[photo]
+		local isVideo
+		if entry ~= nil then
+			isVideo = entry.isVideo
+		else
+			isVideo = photo:getRawMetadata("isVideo")
+		end
+		if not isVideo then
 			table.insert(filteredPhotos, photo)
 		end
 	end
@@ -27,7 +59,7 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 	local status = "ok"
 
 	if scope == "selected" then
-		photosToProcess = filterPhotos(catalog:getTargetPhotos())
+		photosToProcess = filterPhotos(catalog, catalog:getTargetPhotos())
 	elseif scope == "view" then
 		local sources = catalog:getActiveSources()
 		if not sources or #sources == 0 then
@@ -38,10 +70,10 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 		for _, source in ipairs(sources) do
 			if type(source) == "string" then
 				if source == "kAllPhotos" then
-					photosToProcess = filterPhotos(catalog:getAllPhotos())
+					photosToProcess = filterPhotos(catalog, catalog:getAllPhotos())
 					break -- No need to process other sources
 				elseif source == "kPreviousImport" then
-					local previousImport = filterPhotos(catalog:getPreviousImport())
+					local previousImport = filterPhotos(catalog, catalog:getPreviousImport())
 					if previousImport then
 						for _, photo in ipairs(previousImport) do
 							local photoId = photo:getRawMetadata("uuid")
@@ -62,7 +94,7 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 					or source:type() == "LrPublishedCollection"
 				)
 			then
-				local photos = filterPhotos(source:getPhotos())
+				local photos = filterPhotos(catalog, source:getPhotos())
 				for _, photo in ipairs(photos) do
 					local photoId = photo:getRawMetadata("uuid")
 					if not addedPhotos[photoId] then
@@ -91,7 +123,7 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 			return nil, "Invalid view"
 		end
 	elseif scope == "all" then
-		photosToProcess = filterPhotos(catalog:getAllPhotos())
+		photosToProcess = filterPhotos(catalog, catalog:getAllPhotos())
 	elseif scope == "missing" then
 		local success
 		success, photosToProcess = SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressScope)
