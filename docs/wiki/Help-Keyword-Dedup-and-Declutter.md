@@ -61,7 +61,7 @@ A list of all proposed merge pairs is shown:
 
 Deselect any pair you want to keep separate. When satisfied, click Merge.
 
-There is also a **Sync backend** checkbox (recommended on). When checked, the backend's ChromaDB metadata is updated so that semantic search and future AI operations reflect the merged keywords.
+There is also a **Sync backend** checkbox (recommended on). When checked, the backend's stored metadata is updated so that semantic search and future AI operations reflect the merged keywords.
 
 #### Step 5 — Execution
 

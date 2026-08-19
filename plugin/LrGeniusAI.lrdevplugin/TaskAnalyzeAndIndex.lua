@@ -773,11 +773,17 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- Validate that at least one task is selected
+		-- Validate that at least one task is selected.
+		--
+		-- `enableSpecies` counts: identifying species is a complete run on its
+		-- own, and the save pass below covers exactly that case (species on,
+		-- metadata off). Leaving it out of this list is what made a
+		-- species-only run refuse to start.
 		if
 			not props.enableEmbeddings
 			and not props.enableMetadata
 			and not props.enableFaces
+			and not props.enableSpecies
 			and not props.enableVertexAI
 		then
 			LrDialogs.showError(

@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 lrg-imaging.workspace = true
 ort = "2.0.0-rc.13"
-tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 ndarray = "0.16"
 thiserror = "2"
 log.workspace = true
