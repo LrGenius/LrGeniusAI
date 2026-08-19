@@ -268,6 +268,15 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
         // empty `Vec` here, and `euclidean` zips vectors of unequal length, so
         // its distance to everything came out as 0 and it merged whole clusters
         // together. Such rows are set aside and reported as unassigned instead.
+        //
+        // Rows from a superseded model are set aside the same way, and this is
+        // the case the width check cannot catch: the retired ArcFace
+        // embeddings are 512-d unit vectors exactly like FaceNet's, so mixing
+        // them produces no error at all, just clusters built from distances
+        // between two unrelated spaces. Photos in this state are re-queued for
+        // detection by `/index/check-unprocessed`; until that runs, leaving
+        // their faces unassigned is the honest answer.
+        let current_model = state.face.model_id();
         let expected_dim = records
             .iter()
             .filter_map(|r| r.vector.as_ref().map(Vec::len))
@@ -277,11 +286,21 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
                 r.vector
                     .as_ref()
                     .is_some_and(|v| Some(v.len()) == expected_dim)
+                    && r.metadata.get("face_model").and_then(Value::as_str) == Some(current_model)
             });
         if !unclusterable.is_empty() {
+            let stale = unclusterable
+                .iter()
+                .filter(|r| {
+                    r.metadata.get("face_model").and_then(Value::as_str) != Some(current_model)
+                })
+                .count();
             log::warn!(
-                "Face clustering: {} of {total} rows have no usable embedding and are left unassigned.",
-                unclusterable.len()
+                "Face clustering: {} of {total} rows are left unassigned \
+                 ({stale} from a superseded face model, {} with no usable embedding). \
+                 Re-index those photos to restore them.",
+                unclusterable.len(),
+                unclusterable.len() - stale,
             );
         }
 

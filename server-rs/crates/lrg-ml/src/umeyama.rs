@@ -204,11 +204,60 @@ pub fn warp_affine_rgb(
     out
 }
 
-/// Port of `face_align.norm_crop` for `image_size=112` (the only size
-/// used in production): align 5 landmarks to `ARCFACE_DST` and warp.
+/// Port of `face_align.norm_crop` for `image_size=112`: align 5 landmarks to
+/// `ARCFACE_DST` and warp.
+///
+/// Still the canonical crop even though ArcFace itself is gone: the occlusion
+/// measure in [`crate::face_quality`] is a mirror-symmetry test, which is only
+/// meaningful on a face already rotated and scaled onto this template, and its
+/// tuned thresholds are calibrated against exactly this framing. Keeping it
+/// byte-for-byte is what makes the detector/recognizer swap leave every
+/// culling score untouched.
 pub fn norm_crop_112(pixels: &[u8], width: usize, height: usize, kps: &[[f64; 2]; 5]) -> Vec<u8> {
     let m = estimate_similarity(kps, &ARCFACE_DST);
     warp_affine_rgb(pixels, width, height, m, 112)
+}
+
+/// How much wider than the ArcFace framing FaceNet's crop is.
+///
+/// ArcFace was trained on tight `ARCFACE_DST` crops; FaceNet's VGGFace2
+/// weights were trained on MTCNN boxes grown by a margin (44px on a 182px
+/// crop in the reference `align_dataset_mtcnn.py` pipeline, ~1.25x), which
+/// include forehead, chin and some hair. Feeding it the tight crop would be a
+/// train/test framing mismatch, so the template is scaled down inside the
+/// larger canvas by this factor, which shows the same extra context while
+/// keeping the eye/nose/mouth geometry canonical.
+///
+/// A starting value derived from that reference pipeline, not a tuned one —
+/// `testdata/make_face_goldens.py` reports intra- vs inter-person cosine
+/// separation, which is the measurement to re-run if this is ever changed.
+const FACENET_ZOOM_OUT: f64 = 1.25;
+
+/// `ARCFACE_DST` mapped into a `size`x`size` canvas, scaled about its own
+/// centre by `1 / FACENET_ZOOM_OUT`.
+fn facenet_template(size: usize) -> [[f64; 2]; 5] {
+    // The template's design canvas, whose centre the scaling is about.
+    const SRC_SIZE: f64 = 112.0;
+    let scale = (size as f64 / SRC_SIZE) / FACENET_ZOOM_OUT;
+    let (src_c, dst_c) = (SRC_SIZE / 2.0, size as f64 / 2.0);
+    ARCFACE_DST.map(|p| {
+        [
+            (p[0] - src_c) * scale + dst_c,
+            (p[1] - src_c) * scale + dst_c,
+        ]
+    })
+}
+
+/// Align 5 landmarks onto a `size`x`size` canvas framed for FaceNet and warp.
+pub fn norm_crop_facenet(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    kps: &[[f64; 2]; 5],
+    size: usize,
+) -> Vec<u8> {
+    let m = estimate_similarity(kps, &facenet_template(size));
+    warp_affine_rgb(pixels, width, height, m, size)
 }
 
 #[cfg(test)]
@@ -259,5 +308,30 @@ mod tests {
         assert!(m[1][0].abs() < 1e-9);
         assert!((m[1][1] - 1.0).abs() < 1e-9);
         assert!(m[1][2].abs() < 1e-9);
+    }
+
+    /// The FaceNet template must stay centred and be strictly *smaller*
+    /// relative to its canvas than the ArcFace one — that smaller footprint is
+    /// the extra context FaceNet's training framing expects. Scaling about the
+    /// origin instead of the centre would also shrink it, while sliding the
+    /// face into the top-left corner, so the centring is asserted too.
+    #[test]
+    fn facenet_template_is_centred_and_zoomed_out() {
+        let t = facenet_template(160);
+
+        let cx: f64 = t.iter().map(|p| p[0]).sum::<f64>() / 5.0;
+        let arc_cx: f64 = ARCFACE_DST.iter().map(|p| p[0]).sum::<f64>() / 5.0;
+        // ARCFACE_DST's own centroid is slightly off-centre in its 112 canvas;
+        // the mapping preserves that offset, scaled.
+        let scale = (160.0 / 112.0) / FACENET_ZOOM_OUT;
+        assert!((cx - ((arc_cx - 56.0) * scale + 80.0)).abs() < 1e-9);
+
+        let arc_eye_span = ARCFACE_DST[1][0] - ARCFACE_DST[0][0];
+        let eye_span = t[1][0] - t[0][0];
+        assert!(
+            eye_span / 160.0 < arc_eye_span / 112.0,
+            "FaceNet crop must show more context than the ArcFace one"
+        );
+        assert!((eye_span - arc_eye_span * scale).abs() < 1e-9);
     }
 }

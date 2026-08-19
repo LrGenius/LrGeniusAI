@@ -71,7 +71,7 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
 | `generate_metadata` | bool | Generate keywords/title/caption/alt_text |
 | `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
-| `detect_faces` | bool | Run InsightFace detection on the photo |
+| `detect_faces` | bool | Run face detection on the photo |
 | `regenerate` | bool | Re-process even if data already exists |
 | `replace_ss` | bool | Rewrite `ß` as `ss` in the generated title, caption, alt text and keywords. Applied after the model answers, and only to those fields — never to the filename |
 | `exposure_bias` | float | Exposure compensation in EV. Stored, and the decisive signal for culling's bracket detection. Omit when the camera did not record it; never default it to 0 |
@@ -354,11 +354,13 @@ network does which job.
 
 ### `GET /assets/status`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
-for the "this will download about N GB" line. `downloadable: false` marks a
-family this endpoint cannot fetch — currently face detection, whose `buffalo_l`
-weights come from `INSIGHTFACE_ROOT` and are not published with this project.
-Such families are excluded from `ready`, so the button does not stay red
-forever over something the download cannot fix.
+for the "this will download about N GB" line. All three families — `clip`,
+`bioclip` and `face` — are `downloadable: true` and all three gate `ready`.
+Face detection used to be the exception: its `buffalo_l` weights came from
+`INSIGHTFACE_ROOT`, were not redistributable, and had to be excluded from
+`ready` so the button did not stay red forever over something the download
+could not fix. Replacing them with YuNet + FaceNet removed that carve-out;
+`downloadable` remains in the response because the plugin reads it.
 
 ### `POST /assets/download/start`
 Downloads every downloadable family that is **missing**, under one progress

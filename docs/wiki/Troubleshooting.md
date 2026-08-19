@@ -44,10 +44,16 @@ readiness is reported. Roughly 3 GB in total.
   4. If a download fails part-way, the error is reported verbatim in the Lightroom dialog and in the backend log — worth reading before retrying, since a 404 means the release assets could not be reached rather than anything wrong with your setup.
   5. If an indicator stays red after a download that reported success, restart the backend so it re-checks the files on disk.
 
-Face detection is listed in the same section but has no download button. Its
-`buffalo_l` weights are resolved from `INSIGHTFACE_ROOT` and are not published
-with this project, so the combined download cannot fetch them — that is why they
-are excluded from the overall "all models are ready" state.
+Face detection is fetched by the same button as everything else. It was not
+always: until the pipeline moved to YuNet + FaceNet, it ran InsightFace's
+`buffalo_l` weights, which are licensed for non-commercial research only and so
+could not be published here — they had to be installed by hand and were excluded
+from the overall "all models are ready" state. If you are upgrading from such a
+version, press **Download AI models** once to fetch the new face models, then
+re-run indexing over photos with people in them: the two model families produce
+embeddings that are not comparable, so previously detected faces are set aside
+as unassigned until they are re-detected. Named people are restored as the
+re-detection proceeds.
 
 ---
 

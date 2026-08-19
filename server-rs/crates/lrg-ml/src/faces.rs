@@ -1,6 +1,12 @@
-//! Top-level face pipeline: SCRFD detect + ArcFace embed + quality
-//! metrics + base64 thumbnail. Port of `services/face.py::detect_faces`
-//! (the model-management half mirrors `_get_face_app`/`unload_face_app`).
+//! Top-level face pipeline: YuNet detect + FaceNet embed + quality
+//! metrics + base64 thumbnail.
+//!
+//! Both models replaced InsightFace's `buffalo_l` pack (SCRFD + ArcFace),
+//! which could not be redistributed with this project. The pipeline's shape
+//! is unchanged — detect, align on five landmarks, embed to 512 dims, score
+//! quality — so everything downstream of [`FaceResult`] kept working; what
+//! changed is that the identity embeddings live in a different space, which
+//! [`MODEL_ID`] exists to make visible to the store.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -14,9 +20,24 @@ use ort::value::Tensor;
 use lrg_imaging::cull_config::FaceMetricsConfig;
 use lrg_imaging::pil_resample::{resize_plane, Filter};
 
-use crate::{arcface, face_quality, scrfd, umeyama};
+use crate::{face_quality, facenet, umeyama, yunet};
 
 const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
+
+/// Identifies the detector/recognizer pair that produced a stored face row.
+///
+/// Stamped onto every `FACE_TABLE` row and onto each photo's `faces_checked`
+/// marker, mirroring what `species_model` does for BioCLIP. It is what makes
+/// a model swap recoverable: FaceNet and the ArcFace embeddings before it are
+/// both 512-d unit vectors, so nothing about a row's *shape* reveals which
+/// model wrote it, and clustering a mixture of the two produces confident
+/// nonsense rather than an error. Rows tagged with anything other than this
+/// are ignored by clustering and re-queued for detection.
+///
+/// Bump this whenever a change would make new embeddings incomparable with
+/// stored ones — a different model, different weights, or a change to the
+/// alignment framing in [`crate::umeyama::norm_crop_facenet`].
+pub const MODEL_ID: &str = "yunet-2023mar/facenet-vggface2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum FaceError {
@@ -24,10 +45,14 @@ pub enum FaceError {
     Ort(#[from] ort::Error),
     #[error("model not loaded")]
     NotLoaded,
+    #[error("unexpected model output: {0}")]
+    UnexpectedOutputs(String),
 }
 
 pub struct FaceModelPaths {
+    /// YuNet detector (`face_detection_yunet_2023mar.onnx`).
     pub det_onnx: PathBuf,
+    /// FaceNet recognizer (`facenet_vggface2.onnx`).
     pub rec_onnx: PathBuf,
 }
 
@@ -59,16 +84,17 @@ fn now_unix() -> i64 {
 /// How much of the face pipeline to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FacePass {
-    /// Detection, ArcFace identity embedding, and a 112x112 JPEG thumbnail.
+    /// Detection, FaceNet identity embedding, and a 112x112 JPEG thumbnail.
     /// Required for person clustering and the people UI.
     Full,
     /// Detection and the quality proxies only.
     ///
     /// Culling reads `sharpness`, `eye_openness`, `occlusion`, `det_score`,
     /// `area_ratio` and `center_proximity` — never the identity embedding or
-    /// the thumbnail. Skipping those avoids one ArcFace session run *per
-    /// detected face* plus three Lanczos plane resizes and a JPEG encode, which
-    /// on a group shot is most of the per-photo face cost.
+    /// the thumbnail. Skipping those avoids one FaceNet session run *per
+    /// detected face* — plus the second alignment warp it needs, three Lanczos
+    /// plane resizes and a JPEG encode — which on a group shot is most of the
+    /// per-photo face cost.
     QualityOnly,
 }
 
@@ -138,7 +164,7 @@ fn thumbnail_112_jpeg(crop: &[u8], cw: usize, ch: usize) -> String {
 /// malloc/free per allocation is slower per call but keeps steady-state
 /// memory bounded, which matters far more for a long indexing run.
 ///
-/// SCRFD is convolution-heavy, so it used to be the single largest source
+/// The detector is convolution-heavy, so it used to be the single largest source
 /// of memory growth during indexing via onnxruntime's leaking KleidiAI
 /// kernels. That leak is gone as of onnxruntime 1.28 and these sessions run
 /// with KleidiAI enabled again — see [`crate::DISABLE_KLEIDIAI`] for the
@@ -199,7 +225,7 @@ impl FaceModel {
     fn unload_with_reason(&self, reason: &str) {
         let mut guard = self.loaded.lock().unwrap();
         if guard.take().is_some() {
-            log::info!("Unloading InsightFace model ({reason})");
+            log::info!("Unloading face models ({reason})");
         }
     }
 
@@ -212,6 +238,17 @@ impl FaceModel {
         if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
             self.unload_with_reason("idle");
         }
+    }
+
+    /// Which detector/recognizer pair this build writes, for stamping onto
+    /// stored rows. See [`MODEL_ID`].
+    ///
+    /// Unlike BioCLIP's `model_id`, this is a compile-time constant rather
+    /// than something read off disk: the face models carry no version metadata
+    /// of their own, and the paths are fixed filenames, so the only thing that
+    /// can change which embeddings this build produces is this build.
+    pub fn model_id(&self) -> &'static str {
+        MODEL_ID
     }
 
     pub fn status(&self) -> (&'static str, Option<String>) {
@@ -238,18 +275,24 @@ impl FaceModel {
         let mut guard = self.loaded.lock().unwrap();
         let loaded = guard.as_mut().ok_or(FaceError::NotLoaded)?;
 
-        let pre = scrfd::preprocess(pixels, width, height);
+        let pre = yunet::preprocess(pixels, width, height);
         let input = Tensor::from_array(([1, 3, 640, 640], pre.blob))?;
-        let outputs = loaded.det_session.run(ort::inputs!["input.1" => input])?;
-        // Output order matches det_10g.onnx's declared names (verified
-        // via onnxruntime metadata): scores@8,16,32; bbox@8,16,32; kps@8,16,32.
-        let mut flat = Vec::with_capacity(9);
-        for i in 0..9 {
-            let (_, data) = outputs[i].try_extract_tensor::<f32>()?;
+        let outputs = loaded.det_session.run(ort::inputs!["input" => input])?;
+        // Fetched by name, not by index. The YuNet graph declares its twelve
+        // outputs as cls/obj/bbox/kps per stride, and `decode_outputs` needs
+        // them in exactly that grouping; positional indexing would depend on
+        // the exporter's ordering, and a silently permuted set decodes into
+        // plausible boxes in the wrong places rather than failing.
+        let mut flat = Vec::with_capacity(yunet::NUM_OUTPUTS);
+        for name in yunet::OUTPUT_NAMES {
+            let value = outputs.get(name).ok_or_else(|| {
+                FaceError::UnexpectedOutputs(format!("detector has no output named `{name}`"))
+            })?;
+            let (_, data) = value.try_extract_tensor::<f32>()?;
             flat.push(data);
         }
-        let refs: [&[f32]; 9] = std::array::from_fn(|i| flat[i]);
-        let detections = scrfd::decode_outputs(&refs, pre.det_scale);
+        let refs: [&[f32]; yunet::NUM_OUTPUTS] = std::array::from_fn(|i| flat[i]);
+        let detections = yunet::decode_outputs(&refs, pre.det_scale);
 
         let image_area = (width * height).max(1) as f64;
         let mut results = Vec::with_capacity(detections.len());
@@ -262,29 +305,49 @@ impl FaceModel {
             let x2 = (det.bbox[2].round() as i64).max(0).min(width as i64);
             let y2 = (det.bbox[3].round() as i64).max(0).min(height as i64);
             // Checked before the recognition pass rather than after it, so a
-            // degenerate box no longer costs an ArcFace run it then discards.
+            // degenerate box no longer costs a FaceNet run it then discards.
             if x2 <= x1 || y2 <= y1 {
                 continue;
             }
 
-            // Computed once and used twice: the recognition pass below and the
-            // occlusion measure further down both need the *aligned* crop —
-            // mirror asymmetry is only meaningful once the face has been
-            // rotated and scaled onto the canonical template — and both used to
-            // warp it independently with identical arguments. It runs on both
-            // passes; a 112x112 bilinear sample is three orders of magnitude
-            // cheaper than the ArcFace inference `QualityOnly` exists to skip.
+            // The canonical 112x112 crop, needed on *both* passes: the
+            // occlusion measure further down is a mirror-symmetry test, which
+            // is only meaningful once the face has been rotated and scaled onto
+            // the canonical template. A 112x112 bilinear sample is three orders
+            // of magnitude cheaper than the inference `QualityOnly` skips.
             let aligned = umeyama::norm_crop_112(pixels, width, height, &kps_f64);
 
             let embedding = match pass {
                 FacePass::Full => {
-                    let blob = arcface::to_blob(&aligned);
-                    let rec_input = Tensor::from_array(([1, 3, 112, 112], blob))?;
-                    let rec_out = loaded
-                        .rec_session
-                        .run(ort::inputs!["input.1" => rec_input])?;
+                    // A second warp rather than a resize of `aligned`: FaceNet
+                    // wants a wider framing than ArcFace did (see
+                    // `norm_crop_facenet`), and context outside the 112 crop
+                    // cannot be recovered by upscaling it. `QualityOnly` never
+                    // pays for this, so the cull pass costs exactly what it did.
+                    let wide = umeyama::norm_crop_facenet(
+                        pixels,
+                        width,
+                        height,
+                        &kps_f64,
+                        facenet::INPUT_SIZE,
+                    );
+                    let blob = facenet::to_blob(&wide);
+                    let dim = facenet::INPUT_SIZE;
+                    let rec_input = Tensor::from_array(([1, 3, dim, dim], blob))?;
+                    let rec_out = loaded.rec_session.run(ort::inputs!["input" => rec_input])?;
                     let (_, raw_emb) = rec_out[0].try_extract_tensor::<f32>()?;
+                    if raw_emb.len() != facenet::EMBED_DIM {
+                        return Err(FaceError::UnexpectedOutputs(format!(
+                            "recognizer returned {} dims, expected {}",
+                            raw_emb.len(),
+                            facenet::EMBED_DIM
+                        )));
+                    }
                     let mut embedding = raw_emb.to_vec();
+                    // FaceNet normalizes its own output, so this is a no-op on a
+                    // healthy model; it is kept so a re-export that drops the
+                    // final `F.normalize` cannot quietly change what cosine
+                    // distance means for every stored row.
                     crate::siglip::l2_normalize(&mut embedding);
                     embedding
                 }

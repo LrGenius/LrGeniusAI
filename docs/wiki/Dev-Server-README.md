@@ -219,13 +219,39 @@ fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v1`.
 the workflow has run once; an export placed in the cache directory by hand works
 in the meantime.
 
-### InsightFace (face detection/recognition)
+### Face detection/recognition (YuNet + FaceNet)
 
-No export step needed — `buffalo_l`'s `det_10g.onnx` and `w600k_r50.onnx`
-are already ONNX. Point `INSIGHTFACE_ROOT` at the directory containing
-`models/buffalo_l/{det_10g.onnx,w600k_r50.onnx}` (default `~/.insightface`,
-the same location `insightface`'s own Python library uses, so the files
-are very likely already there if you've used InsightFace before).
+Two files: OpenCV Zoo's YuNet detector (already ONNX, downloaded as-is) and
+facenet-pytorch's Inception-ResNet-v1 with the VGGFace2 weights (exported).
+`scripts/export_face_models.py` produces both and verifies them:
+
+```bash
+uv run --no-project server-rs/scripts/export_face_models.py --output-dir face-assets
+```
+
+It runs with `--no-project` on purpose — `facenet-pytorch` pins `torch<2.3`
+and `numpy<2.0`, which `scripts/pyproject.toml` cannot satisfy, so the script
+carries its own PEP 723 dependency header.
+
+Then point the server at the files:
+
+```bash
+export LRG_YUNET_ONNX=/path/to/face-assets/yunet_face_detection.onnx
+export LRG_FACENET_ONNX=/path/to/face-assets/facenet_vggface2.onnx
+```
+
+Without these, `lrg-ml` falls back to
+`~/.cache/lrgenius/models/{yunet_face_detection.onnx,facenet_vggface2.onnx}`,
+which is where `POST /assets/download/start` puts them. Assets are published
+by `.github/workflows/model-assets-face.yml` to the fixed `face-assets-v1`
+tag, independent of the other two families.
+
+These replaced InsightFace's `buffalo_l` (SCRFD + ArcFace), which was
+resolved from `INSIGHTFACE_ROOT` and could not be redistributed — face
+detection was the one family the plugin could not download for you. Note the
+two produce embeddings in **different spaces at the same 512 dims**, so face
+rows carry `lrg_ml::faces::MODEL_ID` and anything written by the old pair is
+ignored by clustering and re-queued for detection.
 
 ### Local LLM (in-process llama.cpp)
 
@@ -319,7 +345,7 @@ unaffected either way — search rankings and distances are identical.
 `rust:1-bookworm` builder, `debian:bookworm-slim` runtime). Model files
 still need to be supplied via a mounted `/models` volume following the
 env vars above (the Dockerfile pre-sets them to `/models/siglip2/...` and
-`/models/insightface`) — see the Dockerfile's own comments for the
+`/models/face/...`) — see the Dockerfile's own comments for the
 `ort`/ONNX-Runtime dylib packaging details.
 
 ```bash

@@ -9,7 +9,7 @@ LrGeniusAI provides two face-related workflows:
 
 ## Prerequisites
 
-Face data is generated during **Analyze & Index Photos** — tick *Enable face detection* on the *General* tab. Without indexed face data neither workflow finds anything, and the People dialog stays empty until you have also pressed **Cluster faces** at least once.
+Face data is generated during **Analyze & Index Photos** — tick *Enable face detection* on the *General* tab. It needs the face models on disk; they arrive with the **Download AI models** button in the plugin settings, alongside the search and species ones. Without indexed face data neither workflow finds anything, and the People dialog stays empty until you have also pressed **Cluster faces** at least once.
 
 ---
 
@@ -81,3 +81,22 @@ the whole indexed catalog.
 - Run indexing with face detection on all portrait-heavy shoots before using the People workflow.
 - Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. The People dialog lets you rename a cluster, not split or merge one — if a cluster is wrong, index more photos of that person and cluster again.
 - For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eye openness, blink detection, face sharpness). See [Help: Cull Photos](Help-Cull-Photos).
+
+## Upgrading from a version before the face-model change
+
+The face pipeline used to run InsightFace's `buffalo_l` models, which could not
+be shipped with the plugin — you had to install them yourself. It now runs YuNet
+and FaceNet, which arrive with the ordinary **Download AI models** button.
+
+The two produce face embeddings that cannot be compared with each other, so
+faces detected by the old models are not silently reused:
+
+- They are left **unassigned** by **Cluster faces** rather than folded into
+  clusters, which would produce confident nonsense.
+- Photos holding them are reported as needing processing again, so a normal
+  **Analyze & Index Photos** run with *Enable face detection* on re-detects them.
+- Nothing is deleted, and names you have given people are kept. As each photo is
+  re-detected, its faces reclaim the person they were assigned to.
+
+So: download the models, then re-index the photos with people in them. Until you
+do, the People dialog will show those faces as unassigned.

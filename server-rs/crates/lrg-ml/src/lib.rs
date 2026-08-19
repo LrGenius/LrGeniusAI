@@ -1,5 +1,5 @@
-//! ONNX inference: SigLIP2 image/text embedding via `ort`. Face pipeline
-//! (SCRFD + ArcFace) lands in M5.
+//! ONNX inference: SigLIP2 image/text embedding via `ort`, plus the face
+//! pipeline (YuNet detection + FaceNet recognition).
 
 /// Session config key that turns off MLAS's KleidiAI convolution kernels
 /// (onnxruntime >= 1.25). Ignored on non-arm64 builds, where these kernels
@@ -21,7 +21,7 @@
 /// | | KleidiAI on | off | |
 /// |---|---|---|---|
 /// | SigLIP embed | ~480 ms | ~1950 ms | 4.1x |
-/// | SCRFD + ArcFace | ~68 ms | ~140 ms | 2.1x |
+/// | Face detect + embed | ~68 ms | ~140 ms | 2.1x |
 ///
 /// and `footprint` over 200 images is flat either way (<= 0.01 MB/image on
 /// both sessions), versus the 25-31 MB/photo that rc.12 retained.
@@ -56,16 +56,16 @@ pub(crate) fn apply_kleidiai_policy(
     Ok(builder)
 }
 
-pub mod arcface;
 pub mod bioclip;
 pub mod bioclip_pre;
 pub mod clip_iqa;
 pub mod cv2_resize;
 pub mod face_quality;
+pub mod facenet;
 pub mod faces;
 pub mod image_pre;
 pub mod model_paths;
-pub mod scrfd;
 pub mod siglip;
 pub mod text_pre;
 pub mod umeyama;
+pub mod yunet;

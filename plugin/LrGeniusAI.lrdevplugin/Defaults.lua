@@ -303,9 +303,14 @@ Defaults.credits = {
 				url = "https://huggingface.co/timm/ViT-SO400M-16-SigLIP2-384",
 			},
 			{
-				name = "InsightFace buffalo_l (SCRFD + ArcFace)",
-				author = "DeepInsight",
-				url = "https://github.com/deepinsight/insightface",
+				name = "YuNet (face detection)",
+				author = "Shiqi Yu & Wei Wu, via OpenCV Model Zoo",
+				url = "https://github.com/opencv/opencv_zoo",
+			},
+			{
+				name = "FaceNet / Inception-ResNet-v1 (VGGFace2)",
+				author = "Tim Esler (facenet-pytorch)",
+				url = "https://github.com/timesler/facenet-pytorch",
 			},
 			{ name = "Gemma", author = "Google DeepMind", url = "https://ai.google.dev/gemma" },
 			{ name = "Qwen-VL", author = "Alibaba Qwen team", url = "https://github.com/QwenLM" },

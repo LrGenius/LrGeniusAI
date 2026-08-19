@@ -105,6 +105,10 @@ async fn check_unprocessed(
     // against and stored results are taken at face value — the alternative
     // would re-queue the whole catalog on every server restart.
     let current_species_model = state.bioclip.model_id();
+    // Which detector/recognizer pair this build writes. A compile-time
+    // constant rather than something read off disk, unlike the BioCLIP head
+    // above — see `lrg_ml::faces::MODEL_ID`.
+    let current_face_model = state.face.model_id();
 
     let Some(store) = state.store() else {
         // No store bound: everything needs processing (matches empty existing).
@@ -165,6 +169,21 @@ async fn check_unprocessed(
                     faces_checked.insert(id.clone());
                 }
             }
+            // A photo is done for `faces` only if it was checked *by the models
+            // this build runs*. Swapping the detector/recognizer pair — as the
+            // move off InsightFace's buffalo_l did — leaves 512-d embeddings
+            // that are the right shape and the wrong space, and no shape check
+            // downstream can tell. Dropping those photos back out of
+            // `faces_checked` is what re-derives them; the rows themselves stay
+            // put until detection replaces them, per the store's no-delete rule.
+            faces_checked.retain(|id| {
+                existing
+                    .get(id)
+                    .and_then(Value::as_object)
+                    .and_then(|m| m.get("face_model"))
+                    .and_then(Value::as_str)
+                    == Some(current_face_model)
+            });
         }
 
         let needing: Vec<String> = photo_ids
