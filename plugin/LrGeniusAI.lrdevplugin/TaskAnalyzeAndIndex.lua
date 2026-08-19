@@ -843,6 +843,14 @@ LrTasks.startAsyncTask(function()
 			table.insert(tasks, "vertexai")
 		end
 
+		-- Asked here, before a single photo is exported: an on-device model
+		-- that is not downloaded yet does not fail the run, it silently drops
+		-- whatever it was for, and finding that out from the completion dialog
+		-- means the whole indexing time has already been spent.
+		if not SearchIndexAPI.confirmModelsReadyForTasks(tasks) then
+			return
+		end
+
 		-- Parse provider and model from unified modelKey (format: provider::model)
 		local providerFromKey, modelFromKey = nil, nil
 		if props.modelKey then

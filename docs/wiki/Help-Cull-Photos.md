@@ -105,6 +105,16 @@ Typical reason codes include:
 
 These help explain why a specific frame was chosen as a pick or flagged as a reject candidate.
 
+## "Some culling signals are missing"
+
+When the selected photos have no culling data yet, the plugin offers to prepare
+them — a fast pass that computes only what culling reads. If a signal could not
+be computed, the plugin says so before the culling run starts instead of quietly
+grading photos without it. The usual cause is that the on-device models are not
+downloaded yet: open **File → Plug-in Manager → LrGeniusAI** and press
+**Download AI models**, then run culling again. Culling still works in the
+meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive.
+
 ## Tips for best results
 
 - Run culling after you have narrowed down an initial selection for a shoot (for example by folder or date range).

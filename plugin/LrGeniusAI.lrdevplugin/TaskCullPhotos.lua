@@ -146,12 +146,19 @@ end
 -- Originals are sent by path when the backend is on this machine; otherwise
 -- each photo is exported to a temporary JPEG and uploaded, and the temp file
 -- is removed afterwards.
--- @return number|nil processed count, string|nil error
+-- @return number|nil processed count, string|nil error, string|nil warnings
 local function cullPrepare(missingIds, photoById, progressScope)
 	local total = #missingIds
 	local processed = 0
 	local failures = 0
 	local byReference = SearchIndexAPI.isLocalBackend()
+	-- A photo that indexes successfully can still have lost a signal culling
+	-- reads — a face model that is not downloaded yet is the common one, and
+	-- it costs every photo its face-quality score. Dropping these on the floor
+	-- meant the run looked clean and the picks were quietly worse.
+	local warningsSeen = {}
+	local warningsList = {}
+	local warningsTotal = 0
 
 	for i, photoId in ipairs(missingIds) do
 		if progressScope and progressScope:isCanceled() then
@@ -169,24 +176,35 @@ local function cullPrepare(missingIds, photoById, progressScope)
 			if type(exposureBias) == "number" then
 				indexOptions.exposure_bias = exposureBias
 			end
-			local ok, err
+			-- `result` is the decoded response on success and an error string
+			-- on failure; both matter here, so it is read either way.
+			local ok, result
 			if byReference then
 				local path = photo:getRawMetadata("path")
-				ok, err = SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, path, indexOptions)
+				ok, result = SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, path, indexOptions)
 			else
 				local exported = SearchIndexAPI.exportPhotoForIndexing(photo)
 				if exported then
-					ok, err = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exported, indexOptions)
+					ok, result = SearchIndexAPI.analyzeAndIndexPhoto(photoId, exported, indexOptions)
 					LrFileUtils.delete(exported)
 				else
-					ok, err = false, "could not export photo for upload"
+					ok, result = false, "could not export photo for upload"
 				end
 			end
 			if ok then
 				processed = processed + 1
+				if type(result) == "table" and type(result.warnings) == "table" then
+					for _, w in ipairs(result.warnings) do
+						warningsTotal = warningsTotal + 1
+						if not warningsSeen[w] then
+							warningsSeen[w] = true
+							table.insert(warningsList, w)
+						end
+					end
+				end
 			else
 				failures = failures + 1
-				log:warn("Cull prepare failed for " .. tostring(photoId) .. ": " .. tostring(err))
+				log:warn("Cull prepare failed for " .. tostring(photoId) .. ": " .. tostring(result))
 			end
 		end
 		if progressScope then
@@ -203,7 +221,23 @@ local function cullPrepare(missingIds, photoById, progressScope)
 	if processed == 0 and failures > 0 then
 		return nil, LOC("$$$/LrGeniusAI/CullTask/PrepAllFailed=None of the photos could be prepared.")
 	end
-	return processed, nil
+	-- One missing model warns once per photo, so the dialog shows a handful
+	-- and counts the rest: a wall of identical lines is as unreadable as no
+	-- message at all.
+	local combinedWarnings
+	if #warningsList > 0 then
+		local shown = {}
+		for i = 1, math.min(5, #warningsList) do
+			table.insert(shown, warningsList[i])
+		end
+		combinedWarnings = table.concat(shown, "\n")
+		if warningsTotal > #shown then
+			combinedWarnings = combinedWarnings
+				.. "\n"
+				.. LOC("$$$/LrGeniusAI/common/MoreWarnings=... and ^1 more warnings", tostring(warningsTotal - #shown))
+		end
+	end
+	return processed, nil, combinedWarnings
 end
 
 local function joinReasonCodes(reasonCodes)
@@ -291,15 +325,32 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
 			)
 			if answer == "ok" then
+				-- Same gate as Analyze & Index, for the same reason: the prep
+				-- pass scores face quality, and without the face model it
+				-- produces photos culling can only grade on technical metrics.
+				if not SearchIndexAPI.confirmModelsReadyForTasks({ "cull" }) then
+					return
+				end
 				local prepScope = LrProgressScope({
 					title = LOC("$$$/LrGeniusAI/CullTask/PrepProgressTitle=Preparing photos for culling..."),
 					functionContext = context,
 				})
-				local prepared, prepErr = cullPrepare(missing, photoById, prepScope)
+				local prepared, prepErr, prepWarnings = cullPrepare(missing, photoById, prepScope)
 				prepScope:done()
 				if prepErr then
 					ErrorHandler.handleError(LOC("$$$/LrGeniusAI/CullTask/PrepErrorTitle=Preparation failed"), prepErr)
 					return
+				end
+				if prepWarnings then
+					log:warn("Cull prepare warnings: " .. prepWarnings)
+					LrDialogs.message(
+						LOC("$$$/LrGeniusAI/CullTask/PrepWarningTitle=Some culling signals are missing"),
+						LOC(
+							"$$$/LrGeniusAI/CullTask/PrepWarningMessage=The photos were prepared, but not every signal could be computed. Culling will run without them.\n\n^1",
+							prepWarnings
+						),
+						"warning"
+					)
 				end
 				log:info("Cull prepare completed for " .. tostring(prepared) .. " photo(s)")
 			end

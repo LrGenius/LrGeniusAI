@@ -10,6 +10,18 @@ In Lightroom Classic:
 
 - `Library → Plug-in Extras → Advanced Search...`
 
+## What the search can see
+
+A text search only finds photos that carry a SigLIP embedding, so a
+half-indexed catalog answers "no results" for a subject that is sitting right
+there. The dialog says so before you type: if the search model is not
+downloaded, or some of the catalog has no search index yet, an orange note at
+the top gives the count and what to run to fix it.
+
+The check is two cheap lookups (`/db/stats` plus the catalog's photo count) and
+runs every time the dialog opens. It is a note, not a gate — the search still
+runs across whatever *is* indexed.
+
 ## Search term
 
 Free text. Describe what is in the photo, not how it was shot:

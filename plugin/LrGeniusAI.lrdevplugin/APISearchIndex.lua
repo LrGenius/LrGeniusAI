@@ -3952,6 +3952,81 @@ function SearchIndexAPI.startAssetDownload()
 	end)
 end
 
+---
+-- Preflight gate: stop a run that is about to lose a signal it was asked for.
+--
+-- /assets/status already knew the models were missing, but nothing consulted
+-- it when a run started, so the first sign of trouble was a warning after the
+-- indexing time had already been spent. This asks before, while the answer is
+-- still cheap.
+--
+-- Deliberately never blocks on its own failure: if the status call does not
+-- answer, the run proceeds and reports whatever actually goes wrong. A gate
+-- that turns a flaky health check into "you cannot index" would be worse than
+-- the problem it guards.
+--
+-- @param tasks table The run's `tasks` array (see Util.requiredModelFamilies).
+-- @return boolean proceed True to run, false when the user chose to stop.
+--
+function SearchIndexAPI.confirmModelsReadyForTasks(tasks)
+	local required = Util.requiredModelFamilies(tasks)
+	if #required == 0 then
+		return true
+	end
+
+	local status, err = SearchIndexAPI.getAssetStatus()
+	if not status or type(status.families) ~= "table" then
+		log:warn("Model readiness preflight skipped: " .. tostring(err or "no families in /assets/status"))
+		return true
+	end
+
+	local missing = Util.missingModelFamilies(status.families, required)
+	if #missing == 0 then
+		return true
+	end
+
+	local names = {}
+	local bytes = 0
+	for _, family in ipairs(missing) do
+		table.insert(names, family.name)
+		bytes = bytes + (family.approx_bytes or 0)
+	end
+	log:warn("Model readiness preflight: missing " .. table.concat(names, ", "))
+
+	local answer = LrDialogs.confirm(
+		LOC("$$$/LrGeniusAI/ModelPreflight/Title=Some AI models are not downloaded yet"),
+		LOC(
+			"$$$/LrGeniusAI/ModelPreflight/Message=This run needs ^1, which is not on disk yet. The photos would be processed without it, and you would have to run this again afterwards to fill in what was skipped.\n\nThe download is about ^2 and only happens once.",
+			table.concat(names, ", "),
+			Util.formatDownloadSize(bytes)
+		),
+		LOC("$$$/LrGeniusAI/ModelPreflight/Download=Download now"),
+		LOC("$$$/LrGeniusAI/common/Cancel=Cancel"),
+		LOC("$$$/LrGeniusAI/ModelPreflight/Continue=Continue without it")
+	)
+
+	if answer == "other" then
+		log:info("Model readiness preflight: user chose to continue without " .. table.concat(names, ", "))
+		return true
+	end
+
+	if answer == "ok" then
+		-- The download reports through its own progress bar and finishes with
+		-- its own dialog, so this run stands down rather than waiting: the
+		-- photos are still selected and the same menu item picks up where the
+		-- user left off.
+		SearchIndexAPI.startAssetDownload()
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/ModelPreflight/StartedTitle=Downloading AI models"),
+			LOC(
+				"$$$/LrGeniusAI/ModelPreflight/StartedMessage=The download has started. Run this again once it finishes and the photos will be processed with everything you selected."
+			)
+		)
+	end
+
+	return false
+end
+
 local lastBioclipReadyStatus = nil
 
 ---
