@@ -81,6 +81,15 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 `/index_by_reference` carries `exposure_bias` and `is_raw` per image inside the
 `images` array instead, since both are properties of the individual photo.
 
+**Response:** `{status, success_count, failure_count, error_messages, warnings, results}`.
+
+`warnings` is where a *degraded success* is reported: the photo was indexed, but
+an optional signal was lost — most often `"<file> faces: face model is not
+downloaded yet …"` or the same for species. These never fail the photo
+(`success_count` still counts it), so a caller that ignores `warnings` shows the
+user a clean run that silently produced worse data. Each entry also rides on its
+own photo's `results` element as `warnings`, so a grouped caller can attribute it.
+
 ### `POST /index_by_reference`
 Indexes photos using server-side file paths instead of uploading image data (for local-backend
 setups where the server has filesystem access).

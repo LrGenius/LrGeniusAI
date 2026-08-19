@@ -853,12 +853,17 @@ pub(crate) async fn process_batch(
             match finish_one(&state, store_ref, &options, photo, llm_response).await {
                 Ok(warn) => {
                     success_count += 1;
+                    // The photo's own warnings ride on its result too, not just
+                    // in the request-level list: a grouped caller reads
+                    // `results` per photo, and a degradation nobody can pin to
+                    // a photo is one nobody acts on.
                     results.push(json!({
-                        "photo_id": photo_id, "success": true, "error": Value::Null,
+                        "photo_id": photo_id,
+                        "success": true,
+                        "error": Value::Null,
+                        "warnings": &warn,
                     }));
-                    if let Some(w) = warn {
-                        warnings.push(w);
-                    }
+                    warnings.extend(warn);
                 }
                 Err(e) => {
                     failure_count += 1;
@@ -1230,7 +1235,7 @@ async fn finish_one(
     options: &ParsedOptions,
     prepared: PreparedPhoto,
     llm_response: Option<lrg_providers::types::MetadataGenerationResponse>,
-) -> Result<Option<String>, String> {
+) -> Result<Vec<String>, String> {
     let PreparedPhoto {
         photo_id,
         filename,
@@ -1325,7 +1330,11 @@ async fn finish_one(
     // themselves on the stale pre-catalog_id `record`, so indexing with
     // both faces and catalog_id set silently dropped the catalog_ids
     // field once face processing's write landed last.
-    let mut warning = None;
+    // A vec, not one slot: faces and species can each degrade independently,
+    // and a single `Option` meant whichever failed second erased the other's
+    // report — the user was told about the species model while the missing
+    // face model went unmentioned.
+    let mut warnings: Vec<String> = Vec::new();
     if options.compute_faces {
         // "Checked" means checked *by the models this build runs*. A photo
         // whose faces were found by the retired SCRFD/ArcFace pair carries
@@ -1351,7 +1360,16 @@ async fn finish_one(
             let face_result: Result<Vec<_>, String> = if !state.face.is_cached() {
                 // Checked before decoding: without the model files the detector
                 // fails anyway, and the decode would be pure waste.
-                Err("model not loaded".to_string())
+                //
+                // Names the fix, not the state. The overwhelmingly common
+                // cause is a run started before the models finished
+                // downloading, and "model not loaded" left the user with a
+                // symptom and nowhere to go.
+                Err(
+                    "face model is not downloaded yet — run \"Download AI models\" \
+                     in Plug-in Manager and index these photos again"
+                        .to_string(),
+                )
             } else {
                 match image::load_from_memory(&image_bytes).map(|img| img.to_rgb8()) {
                     Ok(decoded) => {
@@ -1528,7 +1546,7 @@ async fn finish_one(
                 }
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");
-                    warning = Some(format!("{filename} faces: {e}"));
+                    warnings.push(format!("{filename} faces: {e}"));
                 }
             }
         }
@@ -1562,7 +1580,7 @@ async fn finish_one(
                     // sink the photo, and `species_checked` stays unset so a
                     // later run retries rather than treating this as done.
                     log::warn!("Species identification failed for {photo_id}: {e}");
-                    warning = Some(format!("{filename} species: {e}"));
+                    warnings.push(format!("{filename} species: {e}"));
                 }
             }
         }
@@ -1637,7 +1655,7 @@ async fn finish_one(
         }
     }
 
-    Ok(warning)
+    Ok(warnings)
 }
 
 /// Run the organism gate and, if it passes, BioCLIP 2.
@@ -1655,7 +1673,12 @@ fn run_species(
     // Checked before decoding, like the face path: without the model files the
     // classifier fails anyway and the decode would be pure waste.
     if !state.bioclip.is_cached() {
-        return Err("model not downloaded".to_string());
+        // Names the fix, like the face path above.
+        return Err(
+            "species model is not downloaded yet — run \"Download AI models\" \
+                    in Plug-in Manager and index these photos again"
+                .to_string(),
+        );
     }
 
     if options.species_prefilter {

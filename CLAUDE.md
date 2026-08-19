@@ -160,6 +160,42 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
 - After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed.
 
+### Errors must surface
+
+**A log line is not a report.** Anything that goes wrong — a failure, or a
+success that quietly lost a signal — has to travel all the way to a dialog in
+Lightroom. `log::warn!`/`log:warn` is for the record; it is never the only
+place a problem lands.
+
+The chain is: backend detects → puts it in the HTTP response (`error` /
+`error_messages` for failures, `warnings` for degradations) → the API wrapper
+in `APISearchIndex.lua` returns it → the `Task*.lua` caller collects it →
+`ErrorHandler.handleError` or `LrDialogs.message(..., "warning")` shows it.
+Every link is load-bearing; a caller that drops the response's `warnings`
+breaks the chain just as thoroughly as a backend that never sends them.
+
+Concretely, when writing or reviewing this path:
+
+- **A degraded success is not a success.** A photo that indexed without face
+  detection, species, or an embedding must say so. `success_count` going up
+  while the run silently produced worse data is the bug this rule exists for.
+- **Never swallow a response you asked for.** If a wrapper returns
+  `(ok, response)`, the caller reads `response.warnings` even when `ok` is
+  true. Grep for existing callers when you add a warning — a new one is
+  useless if nothing consumes it.
+- **Say what to do, not what happened.** "model not loaded" describes an
+  internal state; "face model is not downloaded yet — run "Download AI
+  models" in Plug-in Manager" is something the user can act on.
+- **Deduplicate and cap, don't drop.** A run-wide cause warns once per photo.
+  Show a handful and count the rest; hiding the rest entirely is not an
+  option.
+- **A single slot loses reports.** Accumulate warnings in a list. One
+  `Option<String>`/variable means the second problem erases the first.
+
+Silence is only acceptable for something the user did not ask for and cannot
+act on (e.g. Vertex AI embeddings when no project is configured) — and that
+decision belongs in a comment at the point where it is made.
+
 ### Docs
 
 - Backend port is 19819 by default

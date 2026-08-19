@@ -53,6 +53,25 @@ appear depends on what is configured in the Plug-in Manager — see
     is all wildlife.
   - *Also write the taxonomy as keywords* (off by default) — see below.
 
+### If a model is not downloaded yet
+
+Pressing **Start** checks that the on-device models the selected tasks need are
+actually on disk, and asks before spending the indexing time if one is not:
+
+- **Download now** — starts the download (it reports its own progress) and
+  stops this run. Start it again once the download finishes and the photos are
+  processed with everything you selected.
+- **Continue without it** — indexes anyway. The photos are processed without
+  that model's contribution, and the completion dialog reports it as a warning
+  naming the **Download AI models** button. Running Analyze & Index over the
+  same photos later fills in what was skipped.
+- **Cancel** — nothing runs.
+
+Only the models the run actually needs are checked: a search-only run is not
+stopped by a missing species model, and tasks that run on an LLM or in the
+cloud need nothing downloaded. If the check itself cannot reach the backend the
+run proceeds, and any real failure is reported as usual.
+
 ---
 
 ## Species identification

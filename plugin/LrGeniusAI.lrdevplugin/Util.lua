@@ -1877,4 +1877,145 @@ function Util.rankKeywordsByUsage(entries, limit, options)
 	return result
 end
 
+---
+-- The on-device model families an indexing run needs, given its `tasks` array.
+--
+-- Only the models the backend loads itself are listed. `metadata` runs on an
+-- LLM and `vertexai` in the cloud, so neither has an entry — a run of those
+-- alone needs nothing downloaded.
+--
+-- `cull` maps to the face model because the fast cull ingest still scores face
+-- quality (the backend's `compute_faces = has_task("faces") || cull_pass`);
+-- it deliberately skips the embedding, so it does not need `clip`.
+--
+-- @param tasks table Array of task names as sent to /index.
+-- @return table Array of family ids, in the order /assets/status reports them.
+--
+function Util.requiredModelFamilies(tasks)
+	if type(tasks) ~= "table" then
+		return {}
+	end
+	local needed = {}
+	for _, task in ipairs(tasks) do
+		if task == "embeddings" then
+			needed.clip = true
+		elseif task == "faces" or task == "cull" then
+			needed.face = true
+		elseif task == "species" then
+			needed.bioclip = true
+		end
+	end
+	-- Fixed order rather than pairs(): the result reaches a dialog, and a list
+	-- that reshuffles between runs reads like a different problem each time.
+	local result = {}
+	for _, id in ipairs({ "clip", "face", "bioclip" }) do
+		if needed[id] then
+			table.insert(result, id)
+		end
+	end
+	return result
+end
+
+---
+-- Which of the families a run needs are not downloaded yet.
+--
+-- Takes the `families` array from /assets/status. A family the run does not
+-- need is ignored however unready it is, and a required family the backend
+-- does not report at all is treated as present: an older backend that has
+-- never heard of it must not block a run it can perform perfectly well.
+--
+-- @param families table `families` from /assets/status.
+-- @param requiredIds table Array of family ids from Util.requiredModelFamilies.
+-- @return table Array of { id, name, approx_bytes } per missing family, in required order.
+--
+function Util.missingModelFamilies(families, requiredIds)
+	if type(families) ~= "table" or type(requiredIds) ~= "table" then
+		return {}
+	end
+	local byId = {}
+	for _, family in ipairs(families) do
+		if type(family) == "table" and family.id then
+			byId[family.id] = family
+		end
+	end
+	local missing = {}
+	for _, id in ipairs(requiredIds) do
+		local family = byId[id]
+		if family ~= nil and not family.ready then
+			table.insert(missing, {
+				id = id,
+				name = family.name or id,
+				approx_bytes = tonumber(family.approx_bytes) or 0,
+			})
+		end
+	end
+	return missing
+end
+
+---
+-- How much of the catalog a text search can actually reach.
+--
+-- A semantic search only sees photos that have a SigLIP embedding, so a
+-- half-indexed catalog answers "nothing found" for a subject that is sitting
+-- right there. The search dialog says so up front instead of letting an empty
+-- result read as an empty catalog.
+--
+-- The catalog's own count is the denominator when it is known: the backend's
+-- `total` counts only photos it has already seen, which by definition cannot
+-- reveal the ones that were never indexed at all. Falls back to the backend's
+-- figure when the catalog count is unavailable.
+--
+-- @param stats table|nil The /db/stats response.
+-- @param catalogPhotoCount number|nil Photos in the Lightroom catalog.
+-- @return table|nil { total, searchable, unsearchable }, or nil when unknown.
+--
+function Util.searchCoverage(stats, catalogPhotoCount)
+	local photos = type(stats) == "table" and stats.photos or nil
+	if type(photos) ~= "table" then
+		return nil
+	end
+	local withEmbedding = tonumber(photos.with_embedding)
+	local backendTotal = tonumber(photos.total)
+	if withEmbedding == nil then
+		return nil
+	end
+	local total = tonumber(catalogPhotoCount) or backendTotal
+	if total == nil then
+		return nil
+	end
+	-- Clamped rather than trusted: rows survive the photos they describe (the
+	-- backend never physically deletes), so a catalog that has shrunk can
+	-- report more embeddings than photos, and a negative "missing" count would
+	-- be worse than no warning at all.
+	local searchable = math.min(withEmbedding, total)
+	if searchable < 0 then
+		searchable = 0
+	end
+	return {
+		total = total,
+		searchable = searchable,
+		unsearchable = total - searchable,
+	}
+end
+
+---
+-- A download size a person can judge a "download now?" prompt against.
+--
+-- Picks the unit rather than always reporting GB: the face model is ~0.09 GB,
+-- which reads as "nothing is there" next to a real figure of 94 MB.
+--
+-- @param bytes number Size in bytes.
+-- @return string e.g. "94 MB" or "2.3 GB".
+--
+function Util.formatDownloadSize(bytes)
+	local n = tonumber(bytes) or 0
+	if n < 0 then
+		n = 0
+	end
+	if n >= 1e9 then
+		return string.format("%.1f GB", n / 1e9)
+	end
+	return string.format("%.0f MB", n / 1e6)
+end
+
 return Util
