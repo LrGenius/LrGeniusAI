@@ -53,6 +53,18 @@ appear depends on what is configured in the Plug-in Manager — see
     is all wildlife.
   - *Also write the taxonomy as keywords* (off by default) — see below.
 
+### Turning off AI metadata makes the rest of the run faster
+
+Unchecking **Generate AI metadata** does more than skip the language model.
+With no model in the loop there is nothing that has to see one photo at a time,
+so — when *Submit original files* is on in the Plug-in Manager and the backend
+runs on this machine — the plugin hands over a group of photos per request and
+the backend reads, decodes and measures them across several CPU cores. See
+[Performance Tips](Help-Performance-Tips) §5.
+
+That makes "embeddings and faces now, metadata later" a genuinely cheaper way
+to work through a large import than doing everything in one pass.
+
 ### If a model is not downloaded yet
 
 Pressing **Start** checks that the on-device models the selected tasks need are

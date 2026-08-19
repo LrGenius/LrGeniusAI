@@ -57,6 +57,54 @@ describe("Util.groupedBatchSize", function()
 	end)
 end)
 
+describe("Util.groupedBatchSize without an LLM", function()
+	it("groups regardless of provider when no metadata task runs", function()
+		assert.are.equal(16, Util.groupedBatchSize(nil, true, true, nil, false))
+		assert.are.equal(16, Util.groupedBatchSize("gemini", true, true, nil, false))
+		assert.are.equal(16, Util.groupedBatchSize("llamacpp", true, true, nil, false))
+	end)
+
+	it("honours the override", function()
+		assert.are.equal(32, Util.groupedBatchSize(nil, true, true, 32, false))
+		assert.are.equal(8, Util.groupedBatchSize(nil, true, true, "8", false))
+	end)
+
+	it("falls back to the default for an unusable override", function()
+		for _, bad in ipairs({ 0, -3, "lots" }) do
+			assert.are.equal(16, Util.groupedBatchSize(nil, true, true, bad, false))
+		end
+	end)
+
+	it("still needs originals sent by reference to a local backend", function()
+		assert.are.equal(1, Util.groupedBatchSize(nil, false, true, 32, false))
+		assert.are.equal(1, Util.groupedBatchSize(nil, true, false, 32, false))
+	end)
+
+	it("treats an absent flag as an LLM run, so old callers are unchanged", function()
+		assert.are.equal(1, Util.groupedBatchSize("gemini", true, true, 32))
+		assert.are.equal(1, Util.groupedBatchSize("gemini", true, true, 32, true))
+		assert.are.equal(32, Util.groupedBatchSize("llamacpp", true, true, 32, true))
+	end)
+end)
+
+describe("Util.tasksCallLlm", function()
+	it("is true only when metadata is generated", function()
+		assert.is_true(Util.tasksCallLlm({ "embeddings", "metadata" }))
+		assert.is_true(Util.tasksCallLlm({ "metadata" }))
+	end)
+
+	it("is false for the local-model tasks", function()
+		assert.is_false(Util.tasksCallLlm({ "embeddings", "faces", "species" }))
+		assert.is_false(Util.tasksCallLlm({ "cull" }))
+		assert.is_false(Util.tasksCallLlm({}))
+	end)
+
+	it("assumes an LLM when the list is missing or malformed", function()
+		assert.is_true(Util.tasksCallLlm(nil))
+		assert.is_true(Util.tasksCallLlm("metadata"))
+	end)
+end)
+
 describe("Util.resultsByPhotoId", function()
 	it("indexes successes and failures by photo id", function()
 		local byId = Util.resultsByPhotoId({
@@ -83,6 +131,17 @@ describe("Util.resultsByPhotoId", function()
 	it("skips malformed entries", function()
 		local byId = Util.resultsByPhotoId({ "nope", { no_id = true }, { photo_id = "a", success = true } })
 		assert.is_true(byId.a.success)
+	end)
+
+	it("carries each photo's own warnings", function()
+		local byId = Util.resultsByPhotoId({
+			{ photo_id = "a", success = true, warnings = { "a faces: model missing" } },
+			{ photo_id = "b", success = true },
+			{ photo_id = "c", success = true, warnings = "not a list" },
+		})
+		assert.are.same({ "a faces: model missing" }, byId.a.warnings)
+		assert.is_nil(byId.b.warnings, "no warnings means no key, not an empty table")
+		assert.is_nil(byId.c.warnings, "a non-table warnings field is ignored")
 	end)
 
 	it("returns an empty map for nil or non-table input", function()

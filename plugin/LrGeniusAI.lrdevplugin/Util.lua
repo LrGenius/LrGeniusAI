@@ -1676,14 +1676,45 @@ end
 -- engine's own n_parallel.
 local DEFAULT_GROUPED_BATCH_SIZE = 4
 
+-- Photos per request when the run never calls an LLM (embeddings, faces,
+-- species, cull). Nothing has to fit a context window here, so the ceiling is
+-- memory: the server reads the originals one at a time but keeps every
+-- normalised JPEG until the batch finishes, which is a few hundred KB each.
+local DEFAULT_NON_LLM_BATCH_SIZE = 16
+
+---
+-- An unusable override (absent, unparseable, zero, negative, NaN) means the
+-- default, matching how the server treats a bad `llm_batch_size`. Zero in
+-- particular must not become a literal batch of no photos.
+--
+local function clampBatch(configured, default)
+	local n = tonumber(configured)
+	if n == nil or n ~= n or n < 1 then -- n ~= n catches NaN
+		return default
+	end
+	return math.floor(n)
+end
+
 ---
 -- How many photos to send per indexing request.
 --
--- Only the in-process llama.cpp backend benefits: it shares one pinned prompt
--- prefix across the group and decodes them in parallel sequences. Every remote
--- provider is billed and rate-limited per request and gains nothing, so they
--- stay at one photo per request. Grouping also requires sending originals by
--- reference — the export path hands the server one temp JPEG at a time.
+-- Two different reasons to group, with different limits:
+--
+-- * A run without the `metadata` task never talks to a model that cares how
+--   many photos arrive together, so it groups regardless of provider. The win
+--   is one HTTP round trip instead of N, plus the server's parallel passes
+--   (file read, decode/resize, culling metrics and pHash) finally having a
+--   batch to spread across cores.
+-- * A run that does generate metadata only benefits on the in-process
+--   llama.cpp backend, which shares one pinned prompt prefix across the group
+--   and decodes them in parallel sequences. Every remote provider is billed
+--   and rate-limited per request and gains nothing, so they stay at one photo
+--   per request. MLX is local but decodes one photo at a time against a fresh
+--   KV cache, so grouping there would only delay the first result without
+--   producing any of them sooner.
+--
+-- Either way grouping requires sending originals by reference — the export
+-- path hands the server one temp JPEG at a time.
 --
 -- This is deliberately a pure function so it can be tested without Lightroom.
 -- Note it does not touch maxWorkers: batching is server-side, and the plugin
@@ -1693,28 +1724,23 @@ local DEFAULT_GROUPED_BATCH_SIZE = 4
 -- @param useOriginals boolean Whether originals are submitted by reference.
 -- @param isLocalBackend boolean Whether the backend can read local files.
 -- @param configured number|string|nil Optional user override.
+-- @param llmActive boolean|nil False when the run generates no AI metadata.
+--   Absent means "assume it does", which is the behaviour every caller had
+--   before the non-LLM path existed.
 -- @return number Photos per request; always >= 1.
 --
-function Util.groupedBatchSize(provider, useOriginals, isLocalBackend, configured)
+function Util.groupedBatchSize(provider, useOriginals, isLocalBackend, configured, llmActive)
 	if not useOriginals or not isLocalBackend then
 		return 1
 	end
-	-- Only llama.cpp benefits. MLX is a local backend too, but it decodes one
-	-- photo at a time against a fresh KV cache (no pinned prefix, no parallel
-	-- sequences), so grouping there would only delay the first result without
-	-- producing any of them sooner — the server reports a preferred batch size
-	-- of 1 for it, and this matches.
+	-- No model in the loop, so no provider policy applies.
+	if llmActive == false then
+		return clampBatch(configured, DEFAULT_NON_LLM_BATCH_SIZE)
+	end
 	if type(provider) ~= "string" or provider:lower() ~= "llamacpp" then
 		return 1
 	end
-	-- An unusable override (absent, unparseable, zero, negative, NaN) means the
-	-- default, matching how the server treats a bad `llm_batch_size`. Zero in
-	-- particular must not become a literal batch of no photos.
-	local n = tonumber(configured)
-	if n == nil or n ~= n or n < 1 then -- n ~= n catches NaN
-		return DEFAULT_GROUPED_BATCH_SIZE
-	end
-	return math.floor(n)
+	return clampBatch(configured, DEFAULT_GROUPED_BATCH_SIZE)
 end
 
 ---
@@ -1724,8 +1750,14 @@ end
 -- which photo failed. The caller needs that to retry only the failures and to
 -- fire its per-photo callback only for the ones that landed.
 --
--- @param results table|nil Array of { photo_id, success, error }.
--- @return table Map of photo_id -> { success = boolean, error = string|nil }.
+-- Each entry's own `warnings` are carried through as well. The response also
+-- has a request-level `warnings` list, but that one cannot say which photo
+-- lost a signal — and a caller that reports "some photo indexed without face
+-- detection" for a group of sixteen has not reported anything actionable.
+--
+-- @param results table|nil Array of { photo_id, success, error, warnings }.
+-- @return table Map of photo_id ->
+--   { success = boolean, error = string|nil, warnings = table|nil }.
 --
 function Util.resultsByPhotoId(results)
 	local byId = {}
@@ -1737,10 +1769,38 @@ function Util.resultsByPhotoId(results)
 			byId[entry.photo_id] = {
 				success = entry.success == true,
 				error = entry.error,
+				warnings = type(entry.warnings) == "table" and entry.warnings or nil,
 			}
 		end
 	end
 	return byId
+end
+
+---
+-- True when a run's task list reaches an LLM.
+--
+-- `metadata` is the only task that does — embeddings, faces, species and cull
+-- all run against local ONNX models. Callers use this to decide whether the
+-- LLM's batching rules apply or whether the run is free to group as large as
+-- memory allows.
+--
+-- An absent or malformed list means "assume it does": guessing wrong in that
+-- direction only costs a smaller batch, while the opposite would send a cloud
+-- provider sixteen photos in one request.
+--
+-- @param tasks table|nil Array of task names.
+-- @return boolean
+--
+function Util.tasksCallLlm(tasks)
+	if type(tasks) ~= "table" then
+		return true
+	end
+	for _, task in ipairs(tasks) do
+		if task == "metadata" then
+			return true
+		end
+	end
+	return false
 end
 
 ---

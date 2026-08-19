@@ -764,10 +764,12 @@ end
 ---
 -- Analyzes and indexes several photos in one /index_by_reference request.
 --
--- Only worthwhile for the in-process llama.cpp backend, which evaluates the
--- run-constant prompt prefix once for the whole group and decodes the photos
--- in parallel sequences. Remote providers gain nothing and are kept at one
--- photo per request by Util.groupedBatchSize.
+-- Worthwhile in two cases, both decided by Util.groupedBatchSize: a run that
+-- generates no AI metadata (the server reads, decodes and measures the group
+-- in parallel instead of one photo per round trip), and a run on the
+-- in-process llama.cpp backend, which evaluates the run-constant prompt prefix
+-- once for the whole group and decodes the photos in parallel sequences.
+-- Remote providers with metadata on gain nothing and stay at one per request.
 --
 -- The volatile per-photo context (capture time, existing keywords, folder
 -- names) travels inside each `images` entry rather than as a top-level field,
@@ -785,6 +787,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		return false, "No photos provided"
 	end
 	options = options or {}
+	local llmRun = Util.tasksCallLlm(options.tasks)
 
 	local images = {}
 	for _, entry in ipairs(entries) do
@@ -845,7 +848,11 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
-		llm_batch_size = tostring(#images),
+		-- Only meaningful when the LLM runs, and only correct when the group
+		-- exists *because* of the LLM. A non-LLM group is sized for decode
+		-- throughput, and forcing that number on the provider would override
+		-- its own preferred batch size with an unrelated one.
+		llm_batch_size = llmRun and tostring(#images) or nil,
 		-- Local-engine tuning. Ignored by every remote provider; changing one
 		-- makes the server reload the local model, so these are settings the
 		-- user adjusts in Plug-in Manager, not per photo.
@@ -856,9 +863,14 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 
 	log:trace("Analyzing and indexing " .. tostring(#images) .. " photos (grouped by reference)")
 
-	-- Scale the timeout with the group: the single-photo call allows 720s and
-	-- a group of N is roughly N photos' work in one request.
-	local timeout = 720 * #images
+	-- Scale the timeout with the group: a group of N is roughly N photos' work
+	-- in one request. The per-photo budget is the 720s the single-photo call
+	-- allows when a model has to generate text, and a far smaller one when the
+	-- work is decode plus a local embedding — at 720s a batch of sixteen would
+	-- otherwise ask Lightroom to wait three hours before admitting the backend
+	-- had died. The floor keeps a small group from timing out on a cold start.
+	local perPhoto = llmRun and 720 or 60
+	local timeout = math.max(300, perPhoto * #images)
 	local response, err = _request("POST", getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE, body, timeout)
 
 	if not response then
@@ -2102,15 +2114,27 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			LrTasks.yield()
 		end
 	else
-		-- Grouped indexing. Only the in-process llama.cpp backend benefits, so
-		-- for every other provider groupSize is 1 and the loop below behaves
-		-- exactly as it always has. maxWorkers stays 1 either way: the
-		-- batching is server-side, not new plugin concurrency.
+		-- Grouped indexing. A run that generates no AI metadata groups by
+		-- default; one that does only groups on the in-process llama.cpp
+		-- backend, so for every other provider groupSize is 1 and the loop
+		-- below behaves exactly as it always has. maxWorkers stays 1 either
+		-- way: the batching is server-side, not new plugin concurrency.
+		--
+		-- The two paths read different overrides because they are sized for
+		-- different limits — a context window against decode throughput.
+		local llmRun = Util.tasksCallLlm(options.tasks)
+		local configuredBatch
+		if llmRun then
+			configuredBatch = options.llm_batch_size or (prefs and prefs.llmBatchSize)
+		else
+			configuredBatch = prefs and prefs.indexBatchSize
+		end
 		local groupSize = Util.groupedBatchSize(
 			options.provider,
 			useOriginals,
 			SearchIndexAPI.isLocalBackend(),
-			options.llm_batch_size or (prefs and prefs.llmBatchSize)
+			configuredBatch,
+			llmRun
 		)
 		-- photo -> { success, error, response }. Filled a group at a time and
 		-- consumed one photo at a time, so the per-photo bookkeeping below
@@ -2143,6 +2167,25 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 				entry.options = buildPhotoOptions(entry.photo, entry.photoId, options)
 			end
 
+			-- The whole group is one request, so this is the last moment the
+			-- user's cancel can be honoured for the next #entries photos.
+			if progressScope:isCanceled() then
+				return
+			end
+			-- Name the span before blocking on it: with a group of sixteen the
+			-- bar sits still for the length of the request, and a caption that
+			-- still reads "Processing 32 successful" looks like a hang.
+			if #entries > 1 then
+				progressScope:setCaption(
+					LOC(
+						"$$$/LrGeniusAI/AnalyzeAndIndex/ProcessingGroup=Indexing photos ^1-^2 of ^3...",
+						tostring(stats.processed + 1),
+						tostring(stats.processed + #entries),
+						tostring(numPhotos)
+					)
+				)
+			end
+
 			local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			-- A transport-level failure has no per-photo detail; leave the
 			-- memo empty so every photo retries on its own and can still reach
@@ -2153,22 +2196,22 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			end
 
 			local byId = Util.resultsByPhotoId(response.results)
-			local warningsAttached = false
+			-- Request-level warnings describe the request, not any one photo,
+			-- so they are collected once here rather than pinned to whichever
+			-- photo happened to come back first. The per-photo lists below say
+			-- which photo actually lost a signal.
+			if type(response.warnings) == "table" then
+				for _, w in ipairs(response.warnings) do
+					table.insert(warningsList, w)
+				end
+			end
 			for _, entry in ipairs(entries) do
 				local outcome = byId[entry.photoId]
 				if outcome ~= nil then
-					-- Warnings belong to the request, not to a photo, so they
-					-- ride on the first photo that succeeded — attaching them
-					-- to a failed one would put a table where the caller logs
-					-- an error string.
-					local carriesWarnings = outcome.success and not warningsAttached
-					if carriesWarnings then
-						warningsAttached = true
-					end
 					groupMemo[entry.photo] = {
 						success = outcome.success,
 						error = outcome.error,
-						response = carriesWarnings and response or nil,
+						warnings = outcome.warnings,
 					}
 				end
 			end
@@ -2223,7 +2266,16 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 										groupMemo[photo] = nil
 										log:trace("Using grouped result for " .. filename)
 										success = memo.success
-										indexResponse = memo.response or memo.error
+										-- The group already collected its own
+										-- request-level warnings; this photo's
+										-- go through the same list the
+										-- single-photo path writes to.
+										if memo.warnings then
+											for _, w in ipairs(memo.warnings) do
+												table.insert(warningsList, w)
+											end
+										end
+										indexResponse = memo.error
 									else
 										log:trace("Submitting original by reference for " .. filename)
 										success, indexResponse = SearchIndexAPI.analyzeAndIndexPhotoByReference(

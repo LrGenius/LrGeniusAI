@@ -102,13 +102,16 @@ smaller batches.
 ## 4. "Submit original files for fastest indexing" (experimental)
 
 In *Plug-in Manager*, this option skips the export step entirely — the
-backend reads the RAW/JPEG/HEIC file directly (local backend) or uploads it
-raw (remote provider), instead of Lightroom rendering a JPEG first. It's the
-fastest indexing path, with tradeoffs:
+backend reads the RAW/JPEG/TIFF/PNG file directly (local backend) or uploads
+it raw (remote provider), instead of Lightroom rendering a JPEG first. It's
+the fastest indexing path, with tradeoffs:
 
 - Uses the file's embedded camera preview, so **crops and develop edits are
   not reflected** in what the AI sees.
 - **Location keywords from Lightroom's address lookup are unavailable.**
+- **HEIC is not among the formats the backend can decode.** Those photos fall
+  back to the export path automatically, so a mixed library still indexes —
+  just without the speedup for the HEIC part of it.
 - Results may differ slightly from the classic export-based path.
 
 If you use it, re-index later the classic way if you want search results
@@ -116,20 +119,30 @@ consistent with your final edited/cropped images.
 
 ---
 
-## 5. llama.cpp batching (built-in local engine only)
+## 5. Batching several photos into one request
 
-If you're on the built-in **llamacpp** engine, batching multiple photos into
-one request only happens when **both** are true:
+Batching only happens when **both** are true:
 
 1. **Submit original files** (above) is enabled, and
 2. the backend can read the files locally (i.e. it's running on the same
    machine as Lightroom, or has access to the same file paths).
 
-Under those conditions, llama.cpp shares one pinned prompt prefix across the
-photos in a group and decodes them in parallel — noticeably faster than one
-request per photo. Every other path (any cloud provider, or llama.cpp without
-originals) sends **one photo per request**, because remote APIs are billed
-and rate-limited per call and gain nothing from grouping.
+Given those, what gets batched depends on whether the run generates AI
+metadata:
+
+- **Runs without AI metadata batch on any provider.** A pass that only
+  computes embeddings, faces or species — and the preparation step of *Cull
+  Photos*, which computes pHash and image metrics — never talks to a language
+  model at all, so there is no per-request billing or context window to
+  respect. The backend reads, decodes and measures a group of photos across
+  several CPU cores instead of one at a time, which is where most of the time
+  in such a run goes. Uncheck **AI metadata** in the indexing dialog to get
+  this.
+- **Runs with AI metadata batch only on the built-in `llamacpp` engine**,
+  which shares one pinned prompt prefix across the group and decodes the
+  photos in parallel. Every cloud provider stays at **one photo per request**,
+  because remote APIs are billed and rate-limited per call and gain nothing
+  from grouping.
 
 Two advanced llama.cpp settings trade against each other:
 
@@ -141,9 +154,10 @@ prefix; the backend automatically reduces the parallel count (with a
 warning) rather than overrunning it. Leave both empty for sensible defaults
 unless you've hit that warning.
 
-**MLX (Apple silicon) never batches** — it allocates a fresh cache per
-request and always processes one photo at a time, regardless of these
-settings. This is a deliberate limitation of the MLX decoder, not a bug. On
+**MLX (Apple silicon) never batches the language model** — it allocates a
+fresh cache per request and always processes one photo at a time, regardless
+of these settings. A run without AI metadata is unaffected by this, since it
+never reaches the language model. This is a deliberate limitation of the MLX decoder, not a bug. On
 Apple silicon, run the same 10–20 photos through both `llamacpp` and `mlx`
 to see which wins for your batch size before committing to one for a large run.
 
@@ -151,12 +165,13 @@ to see which wins for your batch size before committing to one for a large run.
 
 ## 6. The plugin always processes one photo at a time
 
-Regardless of provider, the plugin runs a **single worker** — it does not
-send several photos to the LLM concurrently. This is intentional: earlier
+Regardless of provider, the plugin runs a **single worker** — it never has
+two requests to the backend in flight at once. This is intentional: earlier
 attempts at multi-threaded indexing caused crashes on Windows, so it's
-hardcoded off on every platform. The one exception is llama.cpp's own
-server-side batching (§5), which is not the same as the plugin issuing
-concurrent requests.
+hardcoded off on every platform, and batching (§5) does not change it. The
+parallelism in a batched run is entirely on the backend's side, inside one
+request: it is free to use several cores, while the plugin still waits for a
+single answer.
 
 On macOS, when you're *not* using "submit originals," the plugin pipelines
 export and upload — the next photo's JPEG export overlaps with the previous

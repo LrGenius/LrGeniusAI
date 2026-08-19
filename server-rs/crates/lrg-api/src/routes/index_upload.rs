@@ -14,6 +14,7 @@ use std::time::Instant;
 use axum::extract::{Multipart, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::Utc;
+use futures_util::StreamExt;
 use serde_json::{json, Map, Value};
 
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
@@ -388,8 +389,8 @@ pub(crate) struct UploadedImage {
 /// points at the user's originals — 25–50 MB raw files — and reading the whole
 /// group before normalising any of it kept every one of them resident at once.
 /// The normalised JPEG is a few hundred KB and the raw bytes are dead the
-/// moment it exists, so reading one file at a time bounds the raw side of the
-/// batch to a single photo. The normalised results still all live until the
+/// moment it exists, so only a bounded number of files is ever in flight (see
+/// [`decode_concurrency`]). The normalised results still all live until the
 /// batch finishes, because the LLM call needs them together.
 pub(crate) enum ImageSource {
     /// Already in memory: the multipart path, where axum buffered the request
@@ -411,33 +412,115 @@ impl ImageSource {
         self.len() == 0
     }
 
-    /// Takes photo `index` out of the source, reading it from disk if needed.
+    /// Splits the source into one independently loadable item per photo.
     ///
-    /// Consuming: the in-memory variant leaves an empty `Vec` behind so the
-    /// bytes are freed as the loop advances rather than at the end of it.
-    async fn take(&mut self, index: usize) -> Result<UploadedImage, String> {
+    /// Consuming, and per-photo rather than indexed, because the loading is no
+    /// longer a `&mut self` loop: several photos are read and normalised at
+    /// once, which cannot be expressed while one borrow of the whole source is
+    /// held across every await.
+    fn into_pending(self) -> Vec<PendingImage> {
         match self {
-            ImageSource::Loaded(images) => Ok(UploadedImage {
-                bytes: std::mem::take(&mut images[index].bytes),
-                filename: std::mem::take(&mut images[index].filename),
-            }),
-            ImageSource::Paths(paths) => {
-                let path = std::mem::take(&mut paths[index]);
-                let bytes = tokio::fs::read(&path).await.map_err(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        format!("File not found: {path}")
-                    } else {
-                        format!("Error reading {path}: {e}")
-                    }
-                })?;
-                let filename = std::path::Path::new(&path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or(path);
-                Ok(UploadedImage { bytes, filename })
-            }
+            ImageSource::Loaded(images) => images.into_iter().map(PendingImage::Loaded).collect(),
+            ImageSource::Paths(paths) => paths.into_iter().map(PendingImage::Path).collect(),
         }
     }
+}
+
+/// One photo's bytes, or where to find them.
+enum PendingImage {
+    Loaded(UploadedImage),
+    Path(String),
+}
+
+/// How many photos are read and normalised at once.
+///
+/// Decode is pure CPU and embarrassingly parallel — the same reasoning that
+/// already applies to [`precompute_cull_signals`] — and for a batch of raw
+/// originals it is the single largest sequential cost in the request.
+///
+/// Deliberately small, and small by default. This is the one place a bigger
+/// batch could reintroduce the memory blowup the by-reference path was built
+/// to avoid: `k` raw originals are resident at once, so at 50 MB apiece the
+/// default already accounts for ~150 MB before anything is normalised. Raising
+/// it trades that directly against wall time.
+///
+/// `GENIUSAI_INDEX_DECODE_CONCURRENCY=1` restores the strictly sequential
+/// behaviour this replaced.
+fn decode_concurrency() -> usize {
+    concurrency_from(std::env::var("GENIUSAI_INDEX_DECODE_CONCURRENCY").ok())
+}
+
+/// The parsing half of [`decode_concurrency`], split out so it can be tested
+/// without reaching into the process environment.
+fn concurrency_from(configured: Option<String>) -> usize {
+    if let Some(raw) = configured {
+        match raw.trim().parse::<usize>() {
+            Ok(n) if n >= 1 => return n,
+            _ => log::warn!(
+                "GENIUSAI_INDEX_DECODE_CONCURRENCY={raw:?} is not a positive integer; ignoring"
+            ),
+        }
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(3))
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// Produces one photo's bytes, reading from disk only for the path variant.
+///
+/// A read failure names the file, because it is reported against that photo's
+/// own `photo_id` and the caller retries exactly that photo.
+async fn load_pending(pending: PendingImage) -> Result<UploadedImage, String> {
+    match pending {
+        PendingImage::Loaded(img) => Ok(img),
+        PendingImage::Path(path) => {
+            let bytes = tokio::fs::read(&path).await.map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    format!("File not found: {path}")
+                } else {
+                    format!("Error reading {path}: {e}")
+                }
+            })?;
+            let filename = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or(path);
+            Ok(UploadedImage { bytes, filename })
+        }
+    }
+}
+
+/// Reads one photo if needed and normalises it, off the async worker.
+///
+/// The raw bytes are dropped inside the blocking task, the moment the
+/// normalised JPEG exists, so they never overlap with the next photo's read
+/// any longer than they have to.
+async fn load_and_normalize(
+    pending: PendingImage,
+    photo_id: String,
+    max_edge: u32,
+    quality: u8,
+) -> Result<(Vec<u8>, String), String> {
+    let img = load_pending(pending).await?;
+
+    let t0 = Instant::now();
+    let filename = img.filename;
+    let bytes = img.bytes;
+    // `normalize_image_bytes` is hundreds of milliseconds of pure CPU for a raw
+    // original; it used to run directly on a tokio worker thread.
+    let (result, filename) = tokio::task::spawn_blocking(move || {
+        let out = normalize_image_bytes(&bytes, Some(&filename), max_edge, quality);
+        (out, filename)
+    })
+    .await
+    .map_err(|e| format!("image conversion panicked: {e}"))?;
+
+    log::debug!(
+        "Photo {photo_id} ({filename}): decode+resize+encode took {:?}",
+        t0.elapsed()
+    );
+    result.map_err(|UnsupportedImageError(msg)| msg)
 }
 
 async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
@@ -528,7 +611,7 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
 pub(crate) async fn process_batch(
     state: Arc<AppState>,
     fields: HashMap<String, String>,
-    mut images: ImageSource,
+    images: ImageSource,
     photo_ids: Vec<String>,
     overrides: Vec<PhotoOverrides>,
     pre_failures: Vec<String>,
@@ -601,37 +684,38 @@ pub(crate) async fn process_batch(
     // a full copy, so a 200-photo batch held the batch three times over.
     let mut triplets: Vec<(Arc<[u8]>, String, String, PhotoOverrides)> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
-    // One photo in flight at a time: read, normalise, drop the original. With
-    // `ImageSource::Paths` that is what keeps a group of raw files from all
-    // being resident at once. A read failure is recorded against its photo_id
-    // rather than as an anonymous string, which is what the caller needs in
-    // order to retry that photo alone.
-    for (index, (photo_id, photo_overrides)) in photo_ids.into_iter().zip(overrides).enumerate() {
-        let img = match images.take(index).await {
-            Ok(img) => img,
-            Err(msg) => {
-                log::warn!("Skipping {photo_id}: {msg}");
-                results.push(json!({
-                    "photo_id": photo_id, "success": false, "error": msg.clone(),
-                }));
-                conversion_errors.push(msg);
-                continue;
-            }
-        };
-        let t0 = Instant::now();
-        let result = normalize_image_bytes(&img.bytes, Some(&img.filename), max_edge, quality);
-        drop(img.bytes);
-        log::debug!(
-            "Photo {photo_id} ({}): decode+resize+encode took {:?}",
-            img.filename,
-            t0.elapsed()
-        );
+    // A bounded number of photos in flight: read, normalise, drop the original.
+    // With `ImageSource::Paths` that is what keeps a group of raw files from
+    // all being resident at once. `buffered` preserves order, so a failure is
+    // still recorded against its own photo_id — which is what the caller needs
+    // in order to retry that photo alone.
+    let concurrency = decode_concurrency();
+    let t_decode = Instant::now();
+    let normalized: Vec<Result<(Vec<u8>, String), String>> = futures_util::stream::iter(
+        images
+            .into_pending()
+            .into_iter()
+            .zip(photo_ids.iter().cloned()),
+    )
+    .map(|(pending, photo_id)| load_and_normalize(pending, photo_id, max_edge, quality))
+    .buffered(concurrency)
+    .collect()
+    .await;
+    log::debug!(
+        "Read and normalised {} photo(s) at concurrency {concurrency} in {:?}",
+        normalized.len(),
+        t_decode.elapsed()
+    );
+
+    for ((photo_id, photo_overrides), result) in
+        photo_ids.into_iter().zip(overrides).zip(normalized)
+    {
         match result {
             Ok((bytes, filename)) => {
                 triplets.push((Arc::from(bytes), photo_id, filename, photo_overrides))
             }
-            Err(UnsupportedImageError(msg)) => {
-                log::warn!("Skipping {}: {msg}", img.filename);
+            Err(msg) => {
+                log::warn!("Skipping {photo_id}: {msg}");
                 results.push(json!({
                     "photo_id": photo_id, "success": false, "error": msg.clone(),
                 }));
@@ -906,7 +990,7 @@ pub(crate) async fn process_batch(
         // still needs to know which photo hit which error.
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": msg, "results": results})),
+            Json(json!({"error": msg, "results": results, "warnings": warnings})),
         )
             .into_response();
     }
@@ -2289,11 +2373,9 @@ mod sharp_s_tests {
 mod image_source_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn loaded_images_are_freed_as_the_batch_advances() {
-        // The point of taking rather than borrowing: a 200-photo multipart
-        // batch should not hold all 200 buffers until the loop ends.
-        let mut source = ImageSource::Loaded(vec![
+    #[test]
+    fn into_pending_preserves_order_for_both_variants() {
+        let loaded = ImageSource::Loaded(vec![
             UploadedImage {
                 bytes: vec![1, 2, 3],
                 filename: "a.jpg".into(),
@@ -2302,31 +2384,31 @@ mod image_source_tests {
                 bytes: vec![4, 5],
                 filename: "b.jpg".into(),
             },
-        ]);
-        assert_eq!(source.len(), 2);
-
-        let first = source.take(0).await.expect("in-memory take cannot fail");
-        assert_eq!(first.bytes, vec![1, 2, 3]);
-        assert_eq!(first.filename, "a.jpg");
-
-        let ImageSource::Loaded(remaining) = &source else {
-            unreachable!()
+        ])
+        .into_pending();
+        assert_eq!(loaded.len(), 2);
+        let PendingImage::Loaded(first) = &loaded[0] else {
+            panic!("multipart images stay in memory")
         };
-        assert!(
-            remaining[0].bytes.is_empty(),
-            "the taken photo's buffer must be released, not cloned"
-        );
-        assert_eq!(remaining[1].bytes, vec![4, 5], "later photos untouched");
+        assert_eq!(first.filename, "a.jpg", "order must survive the split");
+
+        let paths =
+            ImageSource::Paths(vec!["/one.cr3".to_string(), "/two.cr3".to_string()]).into_pending();
+        let PendingImage::Path(second) = &paths[1] else {
+            panic!("by-reference images stay unread")
+        };
+        assert_eq!(second, "/two.cr3");
     }
 
     #[tokio::test]
-    async fn paths_are_read_one_at_a_time() {
+    async fn a_path_is_read_lazily_and_keeps_only_its_filename() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("Straße.jpg");
         std::fs::write(&path, b"jpegbytes").expect("write");
 
-        let mut source = ImageSource::Paths(vec![path.to_string_lossy().to_string()]);
-        let img = source.take(0).await.expect("existing file reads");
+        let img = load_pending(PendingImage::Path(path.to_string_lossy().to_string()))
+            .await
+            .expect("existing file reads");
         assert_eq!(img.bytes, b"jpegbytes");
         assert_eq!(img.filename, "Straße.jpg", "filename, not the whole path");
     }
@@ -2335,13 +2417,65 @@ mod image_source_tests {
     async fn a_missing_file_is_an_error_for_that_photo_only() {
         // It used to be an anonymous string in `pre_failures` with no photo_id,
         // so the plugin could not tell which photo to retry.
-        let mut source = ImageSource::Paths(vec!["/nonexistent/nope.cr3".to_string()]);
-        let Err(err) = source.take(0).await else {
+        let Err(err) = load_pending(PendingImage::Path("/nonexistent/nope.cr3".to_string())).await
+        else {
             panic!("a missing file must not read successfully")
         };
         assert!(
             err.contains("File not found") && err.contains("nope.cr3"),
             "the message has to name the file, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_loads_stay_in_batch_order_around_a_failure() {
+        // The whole per-photo error attribution downstream rests on `buffered`
+        // handing results back in submission order, not completion order.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = dir.path().join("first.jpg");
+        let third = dir.path().join("third.jpg");
+        std::fs::write(&first, b"one").expect("write");
+        std::fs::write(&third, b"three").expect("write");
+
+        let pending = vec![
+            PendingImage::Path(first.to_string_lossy().to_string()),
+            PendingImage::Path("/nonexistent/second.cr3".to_string()),
+            PendingImage::Path(third.to_string_lossy().to_string()),
+        ];
+
+        let loaded: Vec<Result<UploadedImage, String>> = futures_util::stream::iter(pending)
+            .map(load_pending)
+            .buffered(3)
+            .collect()
+            .await;
+
+        assert_eq!(loaded[0].as_ref().expect("first reads").bytes, b"one");
+        let Err(second) = &loaded[1] else {
+            panic!("the middle photo must not read successfully")
+        };
+        assert!(
+            second.contains("second.cr3"),
+            "the middle photo keeps its own failure, got {second:?}"
+        );
+        assert_eq!(loaded[2].as_ref().expect("third reads").bytes, b"three");
+    }
+
+    #[test]
+    fn concurrency_override_is_honoured_but_never_zero() {
+        assert_eq!(
+            concurrency_from(Some("1".into())),
+            1,
+            "1 restores sequential"
+        );
+        assert_eq!(concurrency_from(Some(" 8 ".into())), 8);
+
+        // A bad value must not become a batch that never decodes anything.
+        for bad in ["0", "-2", "lots", ""] {
+            assert!(
+                concurrency_from(Some(bad.into())) >= 1,
+                "{bad:?} must fall back to the default"
+            );
+        }
+        assert!(concurrency_from(None) >= 1);
     }
 }
