@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 use crate::keyword_taxonomy::{CategoryLabels, KeywordLeafEncoding};
-use crate::types::KeywordCategories;
+use crate::types::{KeywordCategories, MetadataGenerationRequest};
 
 /// Turn one positional keyword leaf back into the named form the rest of this
 /// module works in (`{name, synonyms, aliases, synonym_aliases}`).
@@ -360,6 +360,76 @@ pub fn normalize_keywords(
     }
 }
 
+/// Names the fields the caller asked for that the model did not deliver.
+///
+/// This is the metadata path's "degraded success": `success: true` with a
+/// caption the user requested and did not get. Nothing about the response
+/// distinguishes that from a photo the model simply had nothing to say about,
+/// and until this existed nothing reported it — the field was written as
+/// `warning: None` by every provider and the count of indexed photos went up
+/// either way.
+///
+/// Returns `None` when everything requested came back, so the common case
+/// stays quiet. Keywords count as missing when the container is empty, not
+/// just when the key is absent: an empty array is what a model returns when it
+/// declines, and `finish_one` drops it without storing anything.
+///
+/// Deliberately one shared function rather than a copy per provider. The five
+/// providers already parse their responses six near-identical ways, and a
+/// warning only some of them emit would be worse than none — the user would
+/// learn that Gemini sometimes skips captions and never that Ollama does too.
+pub fn missing_field_warning(
+    request: &MetadataGenerationRequest,
+    keywords: Option<&Value>,
+    caption: Option<&String>,
+    title: Option<&String>,
+    alt_text: Option<&String>,
+) -> Option<String> {
+    fn empty(text: Option<&String>) -> bool {
+        text.map(|s| s.trim().is_empty()).unwrap_or(true)
+    }
+    let keywords_empty = match keywords {
+        None => true,
+        Some(Value::Array(a)) => a.is_empty(),
+        Some(Value::Object(o)) => o.is_empty(),
+        Some(_) => false,
+    };
+
+    let mut missing = Vec::new();
+    if request.generate_keywords && keywords_empty {
+        missing.push("keywords");
+    }
+    if request.generate_caption && empty(caption) {
+        missing.push("caption");
+    }
+    if request.generate_title && empty(title) {
+        missing.push("title");
+    }
+    if request.generate_alt_text && empty(alt_text) {
+        missing.push("alt text");
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    // Phrased as something to act on rather than as an internal state: the
+    // two fixes that actually work are a different model and a longer token
+    // budget, so the message names them.
+    Some(format!(
+        "the model returned no {} for this photo — the rest was kept. \
+         A stronger model, or a higher Max Tokens setting, usually fixes this.",
+        join_human(&missing)
+    ))
+}
+
+/// "a", "a and b", "a, b and c" — so the warning reads like a sentence.
+fn join_human(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,5 +669,84 @@ mod tests {
         let input = json!({"name": "Sunset"});
         let out = normalize_keywords_structure(&input);
         assert_eq!(out, json!({"name": "Sunset"}));
+    }
+
+    /// A request that asked for everything, so each case below only has to say
+    /// what came back.
+    fn asked_for_everything() -> MetadataGenerationRequest {
+        MetadataGenerationRequest {
+            generate_keywords: true,
+            generate_caption: true,
+            generate_title: true,
+            generate_alt_text: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_complete_response_warns_about_nothing() {
+        let got = missing_field_warning(
+            &asked_for_everything(),
+            Some(&json!(["berg"])),
+            Some(&"a caption".to_string()),
+            Some(&"a title".to_string()),
+            Some(&"alt text".to_string()),
+        );
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn a_field_that_was_not_requested_is_not_missing() {
+        // The all-false default: nothing was asked for, so nothing can be
+        // absent — this is the path a keywords-only run takes.
+        let got = missing_field_warning(
+            &MetadataGenerationRequest::default(),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn a_requested_field_that_came_back_empty_is_reported() {
+        let got = missing_field_warning(
+            &asked_for_everything(),
+            Some(&json!(["berg"])),
+            Some(&"   ".to_string()),
+            Some(&"a title".to_string()),
+            Some(&"alt text".to_string()),
+        )
+        .expect("whitespace is not a caption");
+        assert!(got.contains("caption"), "{got}");
+        assert!(!got.contains("title"), "{got}");
+    }
+
+    #[test]
+    fn empty_keyword_containers_count_as_missing() {
+        // An empty array is what a model returns when it declines, and
+        // `finish_one` stores nothing for it — so it must not read as success.
+        for empty in [json!([]), json!({})] {
+            let got = missing_field_warning(
+                &asked_for_everything(),
+                Some(&empty),
+                Some(&"c".to_string()),
+                Some(&"t".to_string()),
+                Some(&"a".to_string()),
+            )
+            .unwrap_or_else(|| panic!("{empty} should count as missing keywords"));
+            assert!(got.contains("keywords"), "{got}");
+        }
+    }
+
+    #[test]
+    fn several_missing_fields_read_as_a_sentence() {
+        let got = missing_field_warning(&asked_for_everything(), None, None, None, None)
+            .expect("everything is missing");
+        assert!(
+            got.contains("keywords, caption, title and alt text"),
+            "{got}"
+        );
     }
 }

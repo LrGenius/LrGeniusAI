@@ -1305,6 +1305,12 @@ async fn finish_one(
     let photo_id = photo_id.as_str();
     let filename = filename.as_str();
 
+    // A vec, not one slot: metadata generation, faces and species can each
+    // degrade independently, and a single `Option` meant whichever failed
+    // second erased the other's report — the user was told about the species
+    // model while the missing face model went unmentioned.
+    let mut warnings: Vec<String> = Vec::new();
+
     if llm_request.is_some() {
         let response =
             llm_response.ok_or_else(|| "metadata generation returned no response".to_string())?;
@@ -1312,6 +1318,14 @@ async fn finish_one(
             return Err(response
                 .error
                 .unwrap_or_else(|| "Unknown metadata generation error".to_string()));
+        }
+        // The provider says `success: true` even when it dropped a field the
+        // user asked for; `warning` is where it says so. Reading it here is
+        // the whole reason the field exists — it was written as `None` by
+        // every provider and read by nobody, so a photo that came back
+        // without its caption counted as a clean success.
+        if let Some(w) = response.warning.filter(|s| !s.trim().is_empty()) {
+            warnings.push(format!("{filename}: {w}"));
         }
         if let Some(title) = response.title.filter(|s| !s.is_empty()) {
             main_metadata.insert("title".into(), json!(title));
@@ -1386,11 +1400,6 @@ async fn finish_one(
     // themselves on the stale pre-catalog_id `record`, so indexing with
     // both faces and catalog_id set silently dropped the catalog_ids
     // field once face processing's write landed last.
-    // A vec, not one slot: faces and species can each degrade independently,
-    // and a single `Option` meant whichever failed second erased the other's
-    // report — the user was told about the species model while the missing
-    // face model went unmentioned.
-    let mut warnings: Vec<String> = Vec::new();
     if options.compute_faces {
         // "Checked" means checked *by the models this build runs*. A photo
         // whose faces were found by the retired SCRFD/ArcFace pair carries
