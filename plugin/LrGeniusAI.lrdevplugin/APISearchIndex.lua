@@ -195,8 +195,12 @@ local function parseCompletedMigrations(raw)
 	local inProgress = false
 	local inProgressSince = nil
 	if raw and raw ~= "" then
-		for part in string.gmatch(raw, "([^,]+)") do
-			part = part:match("^%s*(.-)%s*$") or part
+		-- Trimmed into a fresh local rather than reassigning the loop
+		-- variable: Lightroom's Lua 5.1 allows that, but 5.3+ makes the
+		-- generic-for control variable const, and the headless `busted` suite
+		-- runs on the system Lua — where the whole module failed to load.
+		for rawPart in string.gmatch(raw, "([^,]+)") do
+			local part = rawPart:match("^%s*(.-)%s*$") or rawPart
 			if part == MIGRATION_IN_PROGRESS_PREFIX then
 				-- Legacy unversioned marker (pre-timestamp plugin version): treat as stale.
 				inProgress = true
@@ -921,6 +925,146 @@ end
 -- served by the backend, so this wrapper stays as the way back to the
 -- prompt-driven LLM edit rather than being deleted with it.
 ---
+-- Reduces a run's raw tallies into the status + message pair the Task layer shows.
+--
+-- Extracted from analyzeAndIndexSelectedPhotos so the dedup/cap rules can be
+-- tested directly; they are what decides whether a user hears about a problem
+-- at all.
+--
+-- Both lists are deduplicated (a run-wide cause otherwise repeats once per
+-- photo) and capped, and the cap *counts* what it hides rather than dropping
+-- it silently — "show a handful and count the rest" per the escalation rules
+-- in CLAUDE.md. Warnings previously had no cap at all, so a large run could
+-- produce a dialog thousands of lines long; errors were capped at 5 but said
+-- nothing about the remainder.
+--
+-- @param stats table { processed = number, failed = number }
+-- @param errorMessages table Array of raw error strings.
+-- @param warningsList table Array of raw warning strings.
+-- @return string status "success" | "somefailed" | "allfailed"
+-- @return string|nil combinedError
+-- @return string|nil combinedWarnings
+function SearchIndexAPI.summarizeRun(stats, errorMessages, warningsList)
+	local status
+	if stats.failed == 0 then
+		status = "success"
+	elseif stats.failed >= stats.processed and stats.processed > 0 then
+		status = "allfailed"
+	else
+		status = "somefailed"
+	end
+
+	return status, SearchIndexAPI.condenseMessages(errorMessages), SearchIndexAPI.condenseMessages(warningsList)
+end
+
+-- How many distinct messages a summary shows before it starts counting.
+local MAX_SUMMARY_MESSAGES = 5
+
+---
+-- Deduplicates a message list, keeps the first few, and counts the remainder.
+--
+-- @param messages table|nil Array of strings.
+-- @return string|nil nil when there is nothing to report.
+function SearchIndexAPI.condenseMessages(messages)
+	if type(messages) ~= "table" or #messages == 0 then
+		return nil
+	end
+	local seen = {}
+	local unique = {}
+	for _, msg in ipairs(messages) do
+		local text = tostring(msg)
+		if not seen[text] then
+			seen[text] = true
+			table.insert(unique, text)
+		end
+	end
+	if #unique == 0 then
+		return nil
+	end
+
+	local shown = {}
+	for i = 1, math.min(#unique, MAX_SUMMARY_MESSAGES) do
+		table.insert(shown, unique[i])
+	end
+	local hidden = #unique - #shown
+	if hidden > 0 then
+		table.insert(shown, LOC("$$$/LrGeniusAI/common/AndNMore=...and ^1 more", tostring(hidden)))
+	end
+	return table.concat(shown, "\n")
+end
+
+---
+-- Interprets an /edit response into the (ok, valueOrError) pair the callers use.
+--
+-- Extracted from generateEditRecipePhoto so it can be unit tested: the
+-- surrounding function builds a multipart body and does HTTP, but every bug
+-- this file has had on the edit path was in *reading the reply* — a status
+-- spelled differently, a non-table body, an error field nobody forwarded.
+--
+-- @param response table|nil Decoded response body, or nil on transport failure.
+-- @param err string|nil Transport error, when response is nil.
+-- @return boolean ok
+-- @return table|string responseOrError
+function SearchIndexAPI.interpretEditResponse(response, err)
+	if not response then
+		log:error("Failed to generate AI edit recipe: " .. tostring(err))
+		return false, err or "Unknown error"
+	end
+	if type(response) ~= "table" then
+		log:error(
+			"AI edit recipe response has unexpected type: "
+				.. tostring(type(response))
+				.. " value="
+				.. tostring(response)
+		)
+		return false, "Invalid response type from /edit endpoint: " .. tostring(type(response))
+	end
+	if response.status == "success" then
+		return true, response
+	end
+	log:error("Unexpected response status for AI edit recipe: " .. tostring(response.status))
+	return false, response.error or "Unexpected response status"
+end
+
+---
+-- Interprets an /index response for a single photo.
+--
+-- Extracted from analyzeAndIndexPhoto for the same reason as
+-- interpretEditResponse. Returns the whole response on success so the caller
+-- can read `warnings` off it — a success here can still be degraded.
+--
+-- @param response table|nil Decoded response body, or nil on transport failure.
+-- @param err string|nil Transport error, when response is nil.
+-- @param filename string For log lines only.
+-- @return boolean ok
+-- @return table|string responseOrError
+function SearchIndexAPI.interpretIndexResponse(response, err, filename)
+	if not response then
+		log:error("Failed to analyze/index photo: " .. tostring(err))
+		return false, err or "Unknown error"
+	end
+	if type(response) ~= "table" then
+		log:error("Index response has unexpected type: " .. tostring(type(response)))
+		return false, "Invalid response type from /index endpoint: " .. tostring(type(response))
+	end
+
+	if response.status == "processed" then
+		local success_count = response.success_count or 0
+
+		if success_count > 0 then
+			log:trace("Successfully processed photo: " .. tostring(filename))
+			return true, response
+		else
+			log:error("Photo processing failed: " .. tostring(filename))
+			return false, response.error or "Processing failed"
+		end
+	else
+		log:error("Unexpected response status: " .. tostring(response.status))
+		return false, "Unexpected response status"
+	end
+end
+
+---
 
 function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	if filepath == nil then
@@ -1036,24 +1180,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 
 	log:trace("Generating AI edit recipe for photo: " .. filename .. " with id " .. photoId)
 	local response, err = _requestMultipart(url, mimeChunks, 720)
-	if not response then
-		log:error("Failed to generate AI edit recipe: " .. tostring(err))
-		return false, err or "Unknown error"
-	end
-	if type(response) ~= "table" then
-		log:error(
-			"AI edit recipe response has unexpected type: "
-				.. tostring(type(response))
-				.. " value="
-				.. tostring(response)
-		)
-		return false, "Invalid response type from /edit endpoint: " .. tostring(type(response))
-	end
-	if response.status == "success" then
-		return true, response
-	end
-	log:error("Unexpected response status for AI edit recipe: " .. tostring(response.status))
-	return false, response.error or "Unexpected response status"
+	return SearchIndexAPI.interpretEditResponse(response, err)
 end
 
 function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
@@ -1198,26 +1325,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 
 	local response, err = _requestMultipart(url, mimeChunks, 720)
 
-	if not response then
-		log:error("Failed to analyze/index photo: " .. tostring(err))
-		return false, err or "Unknown error"
-	end
-
-	-- Check response status
-	if response.status == "processed" then
-		local success_count = response.success_count or 0
-
-		if success_count > 0 then
-			log:trace("Successfully processed photo: " .. filename)
-			return true, response
-		else
-			log:error("Photo processing failed: " .. filename)
-			return false, response.error or "Processing failed"
-		end
-	else
-		log:error("Unexpected response status: " .. tostring(response.status))
-		return false, "Unexpected response status"
-	end
+	return SearchIndexAPI.interpretIndexResponse(response, err, filename)
 end
 
 ---
@@ -2405,44 +2513,7 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 		return "canceled", stats.processed, stats.failed, processedPhotos
 	end
 
-	local status
-	if stats.failed == 0 then
-		status = "success"
-	elseif stats.failed >= stats.processed and stats.processed > 0 then
-		status = "allfailed"
-	else
-		status = "somefailed"
-	end
-
-	local combinedError
-	if #errorMessages > 0 then
-		local uniqueErrors = {}
-		local errorList = {}
-		for _, msg in ipairs(errorMessages) do
-			if not uniqueErrors[msg] then
-				uniqueErrors[msg] = true
-				table.insert(errorList, msg)
-				if #errorList >= 5 then
-					break
-				end
-			end
-		end
-		combinedError = table.concat(errorList, "\n")
-	end
-
-	local combinedWarnings
-	if #warningsList > 0 then
-		local uniqueWarnings = {}
-		local warningListStrings = {}
-		for _, w in ipairs(warningsList) do
-			if not uniqueWarnings[w] then
-				uniqueWarnings[w] = true
-				table.insert(warningListStrings, w)
-			end
-		end
-		combinedWarnings = table.concat(warningListStrings, "\n")
-	end
-
+	local status, combinedError, combinedWarnings = SearchIndexAPI.summarizeRun(stats, errorMessages, warningsList)
 	return status, stats.processed, stats.failed, processedPhotos, combinedError, combinedWarnings
 end
 
