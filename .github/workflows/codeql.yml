@@ -66,9 +66,20 @@ jobs:
         if: matrix.language == 'rust'
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          # Named explicitly: with the ref pinned to a hash, the branch name no
-          # longer conveys which toolchain this installs.
-          toolchain: stable
+          # Pinned to 1.94, deliberately behind stable. The extractor parses the
+          # sysroot with the rust-analyzer vendored into the CodeQL bundle, and
+          # 2.26.3 vendors ra_ap_* 0.0.301, which chokes on the std that ships
+          # with rustc >= 1.96: `vec!`, `format!`, `assert!` and friends all
+          # fail to expand, which is what drags the database-quality metrics
+          # under their thresholds ("Percentage of calls with call target").
+          # Nothing here is compiled, so the version only decides which std
+          # rust-analyzer reads -- it does not have to match the release build.
+          # https://github.com/github/codeql/issues/19982
+          #
+          # Drop the pin once the runner picks up a bundle that contains
+          # https://github.com/github/codeql/pull/21714 (rust-analyzer 0.0.328,
+          # merged 2026-08-14, so 2.26.4 or later) and go back to `stable`.
+          toolchain: "1.94"
 
       - name: Cache cargo registry
         if: matrix.language == 'rust'
