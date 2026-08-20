@@ -105,7 +105,7 @@ pub fn eye_openness_proxy(
 /// How far the detected landmarks are from a plausible face geometry, as a
 /// fraction of the aligned crop's width.
 ///
-/// The five SCRFD keypoints are fitted to ArcFace's canonical template with the
+/// The five detector keypoints are fitted to the canonical `ARCFACE_DST` template with the
 /// same similarity transform the recognition pipeline already uses. A similarity
 /// transform has four degrees of freedom and can absorb any translation,
 /// rotation, uniform scale — so on an unobstructed frontal face the residual is

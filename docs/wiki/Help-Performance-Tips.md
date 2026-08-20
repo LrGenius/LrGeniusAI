@@ -199,7 +199,7 @@ These are secondary compared to §2–4, but worth knowing:
 - **Extra context toggles** (folder names, capture date, existing keywords,
   GPS) add a small amount to every prompt. Harmless individually; skip the
   ones you don't need if you're optimizing a very large bulk run.
-- **Face detection during indexing** is local compute (SCRFD + ArcFace), not
+- **Face detection during indexing** is local compute (YuNet + FaceNet), not
   an LLM call, so it doesn't affect cloud cost — but it does add per-photo
   processing time on the backend machine. Worth it if you'll use
   People/Faces or want face-aware Cull scoring; skip it for a pure

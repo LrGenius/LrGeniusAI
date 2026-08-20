@@ -27,7 +27,7 @@ them as signposts rather than exact addresses.
    the sharp region alongside the global mean. The pair distinguishes "soft frame" from
    "correctly shallow".
 2. Where faces exist, measure sharpness on a **native-resolution eye-region crop**, not the
-   2048 px working image. Face boxes are already available from SCRFD.
+   2048 px working image. Face boxes are already available from YuNet.
 3. Add a **motion-blur direction** estimate (anisotropy of the gradient orientation histogram)
    so directional camera shake is separable from defocus and from intentional panning.
 
@@ -52,19 +52,20 @@ keep `max` only for prominence. Currently nothing is weighted by face size at al
 
 ### Blink detection itself is a ≤8 px gradient — OUTSTANDING
 `face_quality.rs:56-104`: mean absolute *vertical* gradient in a patch of radius
-`clamp(min(w,h) × 0.08, 2, 8)` around SCRFD's two eye keypoints.
+`clamp(min(w,h) × 0.08, 2, 8)` around YuNet's two eye keypoints.
 
 - The `EYE_PATCH_RADIUS_MAX: 8` clamp means the window **stops scaling with face size** — on a
   headshot where the face is 1200 px, the analysis window is a 17×17 px sliver.
-- SCRFD runs on a **640×640 letterbox** (`scrfd.rs:15`), so keypoints carry several pixels of
-  error when scaled back, and small faces in group shots go undetected.
+- YuNet runs on a **640×640 letterbox** (`yunet.rs:31`), so keypoints carry several pixels of
+  error when scaled back, and small faces in group shots go undetected. The letterbox size was
+  kept deliberately when the detector was swapped, so this limit is unchanged.
 - Eyelashes, eyeliner, glasses frames and dark eyebrows all produce strong vertical gradients on
   a *closed* eye; squinting in sunlight reads as closed.
 - **`blink_penalty` is literally `1.0 - eye_openness`** (`faces.rs:279`) — it carries no
   independent information, yet `reject_blink_penalty_threshold` is tuned as if it did.
 
 **Fix:** a small eye-state ONNX classifier on a native-resolution eye crop (24×24 or 32×32,
-1–3 MB, sub-millisecond). SCRFD's single point per eye cannot support an eye-aspect-ratio
+1–3 MB, sub-millisecond). YuNet's single point per eye cannot support an eye-aspect-ratio
 measure, so this genuinely needs a model. Remove `blink_penalty` as a separate field or derive
 it from the classifier's confidence.
 
@@ -81,6 +82,11 @@ gate. Either replace it with a real measurement or delete it and stop pretending
 > it — which is what a covered feature does to the detector's estimate) and **mirror asymmetry**
 > on the aligned 112 px crop, normalised by the crop's own luminance spread so it is not just
 > re-measuring contrast. Neither `det_score` nor `center_proximity` is an input any more.
+>
+> The template is still `ARCFACE_DST` and the crop is still 112 px even though recognition
+> moved from ArcFace to FaceNet: both are kept byte-for-byte (`umeyama.rs`) precisely so the
+> detector/recognizer swap left every culling score untouched. FaceNet gets its own wider
+> framing instead (`FACENET_ZOOM_OUT`), which is not what this measure runs on.
 >
 > Two honest caveats. Strong out-of-plane rotation raises the geometry term, and hard side
 > lighting raises the symmetry term; the field measures "obstructed *or* turned away", which is
@@ -209,7 +215,7 @@ differ only in ranking weights, and the user picks one by hand.
 | **Wedding / event** | 2–5k/day | Every face eyes-open; key-person priority; the moment (kiss, ring, first dance); mixed dim light | `max`-aggregation hides nine blinkers behind one open-eyed face; blink proxy weak; absolute noise penalty misfires at high ISO |
 | **Portrait / headshot** | low, high precision | Sharpness **on the eye plane**; catchlight; micro-expression; hair across face; half-blink | 512 px global sharpness cannot resolve eye vs. nose focus; 17 px eye window |
 | **Sports / action** | 1–5k bursts | Subject sharp — background *should* be soft; peak action; subject not clipped by frame edge | Global sharpness penalises correct shallow DOF and panning |
-| **Wildlife / birds** | large bursts | Animal **eye** sharp + catchlight; wing/limb position; background separation | SCRFD is human-only; no animal-eye detection at all |
+| **Wildlife / birds** | large bursts | Animal **eye** sharp + catchlight; wing/limb position; background separation | YuNet is human-only; no animal-eye detection at all |
 | **Landscape / architecture** | low | Corner-to-corner sharpness; horizon level; **brackets/stacks/panos must survive intact** | Intentional sets are culled |
 | **Street / documentary** | low burst rate | Moment and gesture over technical; grain and motion blur are legitimate | Technical weights over-penalise the aesthetic |
 | **Real estate / product** | tripod-locked repeats | Sharpest of identical frames; verticals; bracket sets | Bracket sets again |
