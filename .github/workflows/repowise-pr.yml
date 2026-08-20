@@ -1,0 +1,91 @@
+name: "repowise PR report"
+
+# Posts a repowise read of each PR: the change's own defect-risk profile, how
+# the health of the touched files moved against the merge base, and the
+# findings this PR introduced as distinct from the ones already there.
+#
+# Advisory by construction — the job never fails on a finding, and the report
+# always lands in the run summary even when it cannot be posted as a comment.
+# A check that can block a merge on a heuristic gets disabled within a month;
+# one that just tells you what it noticed gets read.
+#
+# Needs no API key and no index: `repowise risk` works from the git history,
+# and `repowise health` runs in-process with no LLM and no network.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Least privilege: read the code, write one comment. No checks:write, because
+# this deliberately does not gate anything.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # A force-push should replace the in-flight report, not race it.
+  group: repowise-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    name: Analyse the change
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Full history: the whole point is the fix-history and churn signal, and
+      # the default depth-1 checkout has none of it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install repowise
+        run: |
+          set -euo pipefail
+          uv tool install repowise
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Opt out of telemetry
+        run: repowise telemetry disable || true
+
+      - name: Build the report
+        id: report
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          python3 scripts/repowise_pr_report.py --base "$base" --head "$head" > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Skipped for forks, whose GITHUB_TOKEN is read-only. They still get the
+      # report in the run summary above rather than nothing at all.
+      - name: Post or update the PR comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          marker='<!-- repowise-pr-report -->'
+          printf '%s\n' "$marker" | cat - report.md > body.md
+
+          # One comment per PR, edited in place. A new comment per push would
+          # bury the conversation under near-identical reports.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --paginate --jq \
+            "map(select(.body | startswith(\"$marker\"))) | .[0].id // empty")
+
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              -F body=@body.md >/dev/null
+            echo "Updated comment $existing"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+              -F body=@body.md >/dev/null
+            echo "Created a new comment"
+          fi
