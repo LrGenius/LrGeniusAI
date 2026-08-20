@@ -26,6 +26,36 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: server-rs
+      # The face pair is 89 MB — small enough to fetch on every PR, unlike
+      # BioCLIP (834 MB) and SigLIP2 (2.2 GB), which the nightly job covers.
+      # Without this the face golden test takes its skip branch, and a skip
+      # is reported as a pass: CI would be green on a build whose face
+      # embeddings were numerically wrong. LRG_REQUIRE_GOLDENS below is what
+      # makes that impossible — if this download breaks, the test fails
+      # rather than quietly going back to skipping.
+      - name: Cache face model assets
+        id: face-assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/lrgenius/models
+          key: face-assets-v1
+      - name: Download face model assets
+        if: steps.face-assets.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cache/lrgenius/models
+          gh release download face-assets-v1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'yunet_face_detection.onnx' \
+            --pattern 'facenet_vggface2.onnx' \
+            --dir ~/.cache/lrgenius/models
+          ls -lh ~/.cache/lrgenius/models
       - name: Run cargo test
         working-directory: server-rs
+        # Asserts the face assets above were really used. Any other family
+        # still skips here; the nightly job runs those with LRG_REQUIRE_GOLDENS=all.
+        env:
+          LRG_REQUIRE_GOLDENS: face
         run: cargo test --workspace

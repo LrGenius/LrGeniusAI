@@ -40,6 +40,33 @@ cargo build --release -p lrg-server
 `cargo test --workspace` and `cargo clippy --workspace --all-targets` should
 both be clean before sending changes.
 
+### Golden tests and `LRG_REQUIRE_GOLDENS`
+
+The ML golden tests — SigLIP2, BioCLIP 2 and the face pipeline — compare real
+inference against torch-computed reference values. They need their model files
+on disk and **skip when those are absent**, which the Rust test harness reports
+as a pass. That is fine on a working copy, and dangerous in CI: a green run is
+otherwise indistinguishable from one where the numerical checks never executed.
+
+`LRG_REQUIRE_GOLDENS` turns the skip into a failure for the families you name,
+so a job that provisions assets can prove it used them:
+
+```bash
+LRG_REQUIRE_GOLDENS=face          cargo test --workspace   # one family
+LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
+LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
+```
+
+Family names are `face`, `siglip` and `bioclip`. Per-family rather than a
+single switch because they differ in cost by more than an order of magnitude
+(89 MB, 2.2 GB and 834 MB respectively).
+
+CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
+and sets `LRG_REQUIRE_GOLDENS=face`, while the nightly `golden-tests-full.yml`
+fetches all three and runs with `all`. The models resolve through the same
+`LRG_*_ONNX` env vars and `~/.cache/lrgenius/models/` fallback the server uses,
+so a machine that has run the plugin's model download needs no extra setup.
+
 ### Optional feature: `llamacpp`
 
 The in-process local LLM is behind a cargo feature that is **off by default**.

@@ -84,6 +84,15 @@ cargo test --workspace
 cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
 ```
 
+**The ML golden tests skip when their model files are absent, and a skip is
+reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
+are present (`face`, `siglip`, `bioclip`, or `all`) to turn that skip into a
+failure — this is what stops CI being green on numerical checks that never ran.
+PR CI provisions the face pair (89 MB) and requires it; the nightly
+`golden-tests-full.yml` fetches all three. If you add a golden test, gate it
+through `crates/lrg-ml/tests/common/assets_ready` rather than an early
+`return`.
+
 ### Plugin — load into Lightroom
 
 Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua`.
