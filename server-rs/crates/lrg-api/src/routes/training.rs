@@ -18,7 +18,7 @@ use lrg_analysis::training::{
 };
 use lrg_store::TRAINING_TABLE;
 
-use crate::routes::route_util::{compute_scene_tags, local_hour};
+use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart, SinglePhotoForm};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -55,31 +55,16 @@ async fn add_training_example(
 ) -> Response {
     log::info!("Training add request received");
 
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut image_bytes: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => {
-                return err(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid multipart body: {e}"),
-                )
-            }
-        };
-        let name = field.name().unwrap_or("").to_string();
-        if name == "image" {
-            filename = field.file_name().map(str::to_string);
-            if let Ok(bytes) = field.bytes().await {
-                image_bytes = Some(bytes.to_vec());
-            }
-        } else if let Ok(text) = field.text().await {
-            fields.insert(name, text);
-        }
-    }
+    let form = match parse_multipart(&mut multipart).await {
+        Ok(form) => form,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let SinglePhotoForm {
+        photo_ids,
+        image_bytes,
+        filename,
+        fields,
+    } = form.into_single_photo();
 
     if let Some(db_path) = fields.get("db_path") {
         if let Err(e) = state.ensure_db_path(db_path).await {
@@ -93,8 +78,11 @@ async fn add_training_example(
         );
     };
 
-    let photo_id = fields
-        .get("photo_id")
+    // Reads the parsed `photo_id` part rather than `fields`: the shared
+    // parser gives ids their own slot, so they no longer arrive in the
+    // catch-all map this used to search.
+    let photo_id = photo_ids
+        .first()
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     if photo_id.is_empty() {
