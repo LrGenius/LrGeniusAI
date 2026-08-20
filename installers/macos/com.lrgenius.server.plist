@@ -4,17 +4,32 @@
 <dict>
     <key>Label</key>
     <string>com.lrgenius.server</string>
+
+    <!-- Deliberately not StandardOutPath/StandardErrorPath. launchd opens
+         those before it execs the program: it will create a missing directory
+         when it can, but /Library/Logs is root:wheel and this is a LaunchAgent
+         running as the logged-in user, so once a disk cleaner deletes
+         /Library/Logs/LrGeniusAI nobody but root can put it back. launchd then
+         refuses to spawn the job at all -- EX_CONFIG (78) -- and the server
+         never runs, which is a hard failure to pay for a missing log file.
+
+         Redirecting from a shell instead lets us fall back to
+         ~/Library/Logs/LrGeniusAI, which is always ours to recreate, so every
+         launch attempt heals itself. `exec` keeps the server on the PID
+         launchd is watching, so KeepAlive still works, and ${LOG:-/dev/null}
+         means an unwritable pair of candidates costs us the log, not the
+         server. -->
+
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/LrGeniusAI/Server/lrgenius-server</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>for d in /Library/Logs/LrGeniusAI "$HOME/Library/Logs/LrGeniusAI"; do mkdir -p "$d" 2>/dev/null; if [ -w "$d" ]; then LOG="$d/service.log"; break; fi; done; exec /Applications/LrGeniusAI/Server/lrgenius-server >>"${LOG:-/dev/null}" 2&gt;&amp;1</string>
     </array>
+
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
-    <key>StandardOutPath</key>
-    <string>/Library/Logs/LrGeniusAI/service.log</string>
-    <key>StandardErrorPath</key>
-    <string>/Library/Logs/LrGeniusAI/service.log</string>
 </dict>
 </plist>

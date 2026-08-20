@@ -97,7 +97,7 @@ display dialog "Are you sure you want to uninstall LrGeniusAI? This will remove 
 if button returned of result is "Uninstall" then
     try
         set userHome to (do shell script "dscl . -read /Users/$(id -un " & currentUser & ") NFSHomeDirectory | awk '{print $2}'")
-        do shell script "launchctl asuser " & currentUser & " launchctl unload /Library/LaunchAgents/com.lrgenius.server.plist 2>/dev/null || true; rm -f /Library/LaunchAgents/com.lrgenius.server.plist; rm -rf '" & userHome & "/Library/Application Support/Adobe/Lightroom/Modules/LrGeniusAI.lrplugin'; rm -rf /Library/Logs/LrGeniusAI; rm -rf /Applications/LrGeniusAI" with administrator privileges
+        do shell script "launchctl asuser " & currentUser & " launchctl unload /Library/LaunchAgents/com.lrgenius.server.plist 2>/dev/null || true; rm -f /Library/LaunchAgents/com.lrgenius.server.plist; rm -rf '" & userHome & "/Library/Application Support/Adobe/Lightroom/Modules/LrGeniusAI.lrplugin'; rm -rf /Library/Logs/LrGeniusAI; rm -rf '" & userHome & "/Library/Logs/LrGeniusAI'; rm -rf /Applications/LrGeniusAI" with administrator privileges
         display dialog "LrGeniusAI has been successfully uninstalled." with title "Uninstall LrGeniusAI" buttons {"OK"} default button "OK"
     on error errMsg
         display dialog "Uninstallation failed: " & errMsg with title "Uninstall LrGeniusAI" buttons {"OK"} default button "OK" with icon stop
