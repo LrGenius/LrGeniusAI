@@ -7,9 +7,16 @@
 //! Requires the ONNX files `scripts/export_face_models.py` produces. They are
 //! looked up exactly where the server looks (`LRG_YUNET_ONNX` /
 //! `LRG_FACENET_ONNX`, else `~/.cache/lrgenius/models/`), so a machine that
-//! has run the plugin's model download already has them. Skips when not found.
+//! has run the plugin's model download already has them.
+//!
+//! Skips when not found — but see `common::assets_ready`. At 89 MB this is
+//! the one family cheap enough for every PR, so CI downloads it and sets
+//! `LRG_REQUIRE_GOLDENS=face`, making a broken download a test failure
+//! rather than a silent pass.
 
 use lrg_ml::faces::{FaceModel, FaceModelPaths};
+
+mod common;
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -33,12 +40,15 @@ fn iou(a: [i64; 4], b: &[f64]) -> f64 {
 #[test]
 fn detects_and_embeds_real_face_matching_reference_models() {
     let paths = lrg_ml::model_paths::resolve_face();
-    if !paths.all_exist() {
-        eprintln!(
-            "face ONNX models not found at {} / {}; skipping face golden test",
+    if !common::assets_ready(
+        "face",
+        paths.all_exist(),
+        &format!(
+            "face ONNX models not found at {} / {}",
             paths.det_onnx.display(),
             paths.rec_onnx.display()
-        );
+        ),
+    ) {
         return;
     }
     let model = FaceModel::new(FaceModelPaths {

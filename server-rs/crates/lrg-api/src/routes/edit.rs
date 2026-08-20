@@ -24,6 +24,7 @@ use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse};
 use lrg_store::{meta, Store, StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
+use crate::routes::route_util::{parse_multipart, SinglePhotoForm};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -760,45 +761,22 @@ fn guardrail_explanations(codes: &[String]) -> Vec<String> {
 async fn edit_multipart(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     log::info!("Edit recipe request received");
 
-    let mut image_bytes: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-    let mut photo_ids: Vec<String> = Vec::new();
-    let mut fields: HashMap<String, String> = HashMap::new();
-
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({"error": format!("invalid multipart body: {e}")})),
-                )
-                    .into_response()
-            }
-        };
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "image" => {
-                filename = field.file_name().map(str::to_string);
-                if let Ok(bytes) = field.bytes().await {
-                    image_bytes = Some(bytes.to_vec());
-                }
-            }
-            "photo_id" | "uuid" => {
-                if let Ok(text) = field.text().await {
-                    if !text.is_empty() {
-                        photo_ids.push(text);
-                    }
-                }
-            }
-            _ => {
-                if let Ok(text) = field.text().await {
-                    fields.insert(name, text);
-                }
-            }
+    let form = match parse_multipart(&mut multipart).await {
+        Ok(form) => form,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error": e})),
+            )
+                .into_response()
         }
-    }
+    };
+    let SinglePhotoForm {
+        photo_ids,
+        image_bytes,
+        filename,
+        fields,
+    } = form.into_single_photo();
 
     if let Some(db_path) = fields.get("db_path") {
         if let Err(e) = state.ensure_db_path(db_path).await {

@@ -28,7 +28,7 @@ use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_rgb;
 use crate::keyword_taxonomy::KeywordLeafEncoding;
 use crate::local::{LocalImage, LocalRequest, SharedLocalEngine};
-use crate::normalize::{alt_text_from, normalize_keywords};
+use crate::normalize::{alt_text_from, missing_field_warning, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt_split, prepare_system_prompt,
     prepare_user_prompt_split,
@@ -123,17 +123,29 @@ impl LocalProvider {
         };
         let caption = field("caption", request.generate_caption);
         let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
+        let title = field("title", request.generate_title);
+        // A requested field the model did not return is a degraded
+        // success, not a success: see `missing_field_warning`. This matters
+        // more here than for the cloud providers — a small local model is the
+        // most likely of the five to silently drop a field.
+        let warning = missing_field_warning(
+            request,
+            Some(&keywords),
+            caption.as_ref(),
+            title.as_ref(),
+            alt_text.as_ref(),
+        );
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
             caption,
-            title: field("title", request.generate_title),
+            title,
             alt_text,
             input_tokens: prompt_tokens,
             output_tokens: completion_tokens,
             error: None,
-            warning: None,
+            warning,
         }
     }
 }

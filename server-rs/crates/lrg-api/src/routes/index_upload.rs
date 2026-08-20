@@ -26,6 +26,7 @@ use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree};
 use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE, VERTEX_TABLE};
 
+use crate::routes::route_util::parse_multipart;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -526,57 +527,28 @@ async fn load_and_normalize(
 async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     log::info!("Index request received");
 
-    let mut images: Vec<UploadedImage> = Vec::new();
-    let mut photo_ids: Vec<String> = Vec::new();
-    let mut uuids_fallback: Vec<String> = Vec::new();
-    let mut fields: HashMap<String, String> = HashMap::new();
-
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({"error": format!("invalid multipart body: {e}")})),
-                )
-                    .into_response()
-            }
-        };
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "image" => {
-                let filename = field.file_name().unwrap_or("photo").to_string();
-                match field.bytes().await {
-                    Ok(bytes) => images.push(UploadedImage {
-                        bytes: bytes.to_vec(),
-                        filename,
-                    }),
-                    Err(e) => log::warn!("Skipping unreadable image field: {e}"),
-                }
-            }
-            "photo_id" => {
-                if let Ok(text) = field.text().await {
-                    photo_ids.push(text);
-                }
-            }
-            "uuid" => {
-                if let Ok(text) = field.text().await {
-                    uuids_fallback.push(text);
-                }
-            }
-            _ => {
-                if let Ok(text) = field.text().await {
-                    fields.insert(name, text);
-                }
-            }
+    let form = match parse_multipart(&mut multipart).await {
+        Ok(form) => form,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error": e})),
+            )
+                .into_response()
         }
-    }
-    let photo_ids = if photo_ids.is_empty() {
-        uuids_fallback
-    } else {
-        photo_ids
     };
+    let photo_ids = form.photo_ids_or_uuids();
+    let fields = form.fields;
+    // `"photo"` is this route's own default for an unnamed part; the parser
+    // keeps `filename` optional precisely so it does not impose one.
+    let images: Vec<UploadedImage> = form
+        .images
+        .into_iter()
+        .map(|img| UploadedImage {
+            bytes: img.bytes,
+            filename: img.filename.unwrap_or_else(|| "photo".to_string()),
+        })
+        .collect();
 
     // Multipart uploads carry no per-image context, so every photo falls back
     // to the batch-level options exactly as before.
@@ -1333,6 +1305,12 @@ async fn finish_one(
     let photo_id = photo_id.as_str();
     let filename = filename.as_str();
 
+    // A vec, not one slot: metadata generation, faces and species can each
+    // degrade independently, and a single `Option` meant whichever failed
+    // second erased the other's report — the user was told about the species
+    // model while the missing face model went unmentioned.
+    let mut warnings: Vec<String> = Vec::new();
+
     if llm_request.is_some() {
         let response =
             llm_response.ok_or_else(|| "metadata generation returned no response".to_string())?;
@@ -1340,6 +1318,14 @@ async fn finish_one(
             return Err(response
                 .error
                 .unwrap_or_else(|| "Unknown metadata generation error".to_string()));
+        }
+        // The provider says `success: true` even when it dropped a field the
+        // user asked for; `warning` is where it says so. Reading it here is
+        // the whole reason the field exists — it was written as `None` by
+        // every provider and read by nobody, so a photo that came back
+        // without its caption counted as a clean success.
+        if let Some(w) = response.warning.filter(|s| !s.trim().is_empty()) {
+            warnings.push(format!("{filename}: {w}"));
         }
         if let Some(title) = response.title.filter(|s| !s.is_empty()) {
             main_metadata.insert("title".into(), json!(title));
@@ -1414,11 +1400,6 @@ async fn finish_one(
     // themselves on the stale pre-catalog_id `record`, so indexing with
     // both faces and catalog_id set silently dropped the catalog_ids
     // field once face processing's write landed last.
-    // A vec, not one slot: faces and species can each degrade independently,
-    // and a single `Option` meant whichever failed second erased the other's
-    // report — the user was told about the species model while the missing
-    // face model went unmentioned.
-    let mut warnings: Vec<String> = Vec::new();
     if options.compute_faces {
         // "Checked" means checked *by the models this build runs*. A photo
         // whose faces were found by the retired SCRFD/ArcFace pair carries

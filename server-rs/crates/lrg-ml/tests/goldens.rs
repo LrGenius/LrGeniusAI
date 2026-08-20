@@ -6,22 +6,18 @@
 //! pipeline, not just the exported ONNX graph — this is the full-stack
 //! check that spike S1 didn't cover).
 //!
-//! Requires local model files (from the M0 S1 spike export) — set:
-//!   LRG_SIGLIP_IMAGE_ONNX, LRG_SIGLIP_TEXT_ONNX, LRG_SIGLIP_TOKENIZER
-//! Skips (not fails) when unset, so CI without the multi-GB models stays
-//! green until M9 wires up model distribution.
+//! Requires the SigLIP2 ONNX files. They are looked up exactly where the
+//! server looks (`LRG_SIGLIP_IMAGE_ONNX` / `LRG_SIGLIP_TEXT_ONNX` /
+//! `LRG_SIGLIP_TOKENIZER`, else `~/.cache/lrgenius/models/`), so a machine
+//! that has run the plugin's model download already has them.
+//!
+//! Skips when they are absent — but see `common::assets_ready`: set
+//! `LRG_REQUIRE_GOLDENS=siglip` and the skip becomes a failure, which is how
+//! a job that *did* provision the assets proves they were actually used.
 
-use std::path::PathBuf;
+use lrg_ml::siglip::{l2_normalize, SiglipModel};
 
-use lrg_ml::siglip::{l2_normalize, ModelPaths, SiglipModel};
-
-fn env_paths() -> Option<ModelPaths> {
-    Some(ModelPaths {
-        image_onnx: PathBuf::from(std::env::var("LRG_SIGLIP_IMAGE_ONNX").ok()?),
-        text_onnx: PathBuf::from(std::env::var("LRG_SIGLIP_TEXT_ONNX").ok()?),
-        tokenizer_json: PathBuf::from(std::env::var("LRG_SIGLIP_TOKENIZER").ok()?),
-    })
-}
+mod common;
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -58,11 +54,19 @@ fn build_image(name: &str) -> (Vec<u8>, usize, usize) {
 
 #[test]
 fn image_and_text_embeddings_match_torch() {
-    let Some(paths) = env_paths() else {
-        eprintln!("LRG_SIGLIP_* env vars not set; skipping ONNX golden test");
+    let paths = lrg_ml::model_paths::resolve();
+    if !common::assets_ready(
+        "siglip",
+        paths.all_exist(),
+        &format!(
+            "SigLIP2 assets not found at {} / {} / {}",
+            paths.image_onnx.display(),
+            paths.text_onnx.display(),
+            paths.tokenizer_json.display()
+        ),
+    ) {
         return;
-    };
-    assert!(paths.all_exist(), "configured model paths do not exist");
+    }
     let model = SiglipModel::new(paths);
 
     let path = concat!(

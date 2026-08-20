@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
 use crate::keyword_taxonomy::KeywordLeafEncoding;
-use crate::normalize::{alt_text_from, normalize_keywords};
+use crate::normalize::{alt_text_from, missing_field_warning, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
@@ -240,24 +240,34 @@ impl OpenAiProvider {
             None
         };
         let alt_text = alt_text_from(&parsed, request.generate_alt_text, caption.as_ref());
+        let title = if request.generate_title {
+            parsed
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        };
+        // A requested field the model did not return is a degraded
+        // success, not a success: see `missing_field_warning`.
+        let warning = missing_field_warning(
+            request,
+            Some(&keywords),
+            caption.as_ref(),
+            title.as_ref(),
+            alt_text.as_ref(),
+        );
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
             success: true,
             keywords: Some(keywords),
             caption,
-            title: if request.generate_title {
-                parsed
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            } else {
-                None
-            },
+            title,
             alt_text,
             input_tokens,
             output_tokens,
             error: None,
-            warning: None,
+            warning,
         }
     }
 

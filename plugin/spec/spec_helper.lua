@@ -7,9 +7,26 @@
 --
 -- This helper is loaded by busted (see /.busted) before any spec runs.
 
--- LOC() in tests just returns the key/default string unchanged.
+-- LOC() mirrors what Lightroom actually does: strip the "$$$/path=" key
+-- prefix and substitute ^1..^9 with the trailing arguments.
+--
+-- It used to return the raw key string unchanged, which quietly made every
+-- assertion about user-facing text meaningless — a test could assert on
+-- "$$$/Foo/Bar=..." and pass while the real dialog said something else.
 _G.LOC = function(s, ...)
-	return s
+	if type(s) ~= "string" then
+		return s
+	end
+	local text = s:match("^%$%$%$/[^=]*=(.*)$") or s
+	local args = { ... }
+	text = text:gsub("%^(%d)", function(digit)
+		local value = args[tonumber(digit)]
+		if value == nil then
+			return "^" .. digit
+		end
+		return tostring(value)
+	end)
+	return text
 end
 
 -- import("LrFoo") returns a no-op stand-in. Any field access yields a function

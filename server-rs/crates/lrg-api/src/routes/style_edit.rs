@@ -6,7 +6,6 @@
 //! few-shot training injection) when confidence is too low and the
 //! caller opted in.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Multipart, State};
@@ -25,7 +24,7 @@ use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
     success_payload,
 };
-use crate::routes::route_util::{compute_scene_tags, local_hour};
+use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart, SinglePhotoForm};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -123,45 +122,16 @@ async fn fetch_style_candidates(
 async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     log::info!("Style edit request received");
 
-    let mut image_bytes: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-    let mut photo_ids: Vec<String> = Vec::new();
-    let mut fields: HashMap<String, String> = HashMap::new();
-
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": format!("invalid multipart body: {e}")})),
-                )
-                    .into_response()
-            }
-        };
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "image" => {
-                filename = field.file_name().map(str::to_string);
-                if let Ok(bytes) = field.bytes().await {
-                    image_bytes = Some(bytes.to_vec());
-                }
-            }
-            "photo_id" | "uuid" => {
-                if let Ok(text) = field.text().await {
-                    if !text.is_empty() {
-                        photo_ids.push(text);
-                    }
-                }
-            }
-            _ => {
-                if let Ok(text) = field.text().await {
-                    fields.insert(name, text);
-                }
-            }
-        }
-    }
+    let form = match parse_multipart(&mut multipart).await {
+        Ok(form) => form,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+    let SinglePhotoForm {
+        photo_ids,
+        image_bytes,
+        filename,
+        fields,
+    } = form.into_single_photo();
 
     if let Some(db_path) = fields.get("db_path") {
         if let Err(e) = state.ensure_db_path(db_path).await {

@@ -85,7 +85,10 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 
 `warnings` is where a *degraded success* is reported: the photo was indexed, but
 an optional signal was lost — most often `"<file> faces: face model is not
-downloaded yet …"` or the same for species. These never fail the photo
+downloaded yet …"` or the same for species. Metadata generation reports here
+too: when the LLM returns `success` but omits a field that was asked for, the
+provider says so in its own `warning` and it arrives as
+`"<file>: the model returned no caption for this photo — the rest was kept …"`. These never fail the photo
 (`success_count` still counts it), so a caller that ignores `warnings` shows the
 user a clean run that silently produced worse data. Each entry also rides on its
 own photo's `results` element as `warnings`, so a grouped caller can attribute it.

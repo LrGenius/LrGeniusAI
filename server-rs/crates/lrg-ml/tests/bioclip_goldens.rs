@@ -11,9 +11,24 @@
 //!
 //! Requires the exported assets; set `LRG_BIOCLIP_IMAGE_ONNX` (and the taxa
 //! files) or place them in `~/.cache/lrgenius/models/`. Skips when not found,
-//! like the face goldens — CI without model assets must not fail here.
+//! like the face goldens — at 834 MB this family is too heavy for every PR.
+//! The nightly full-assets job provisions it and sets
+//! `LRG_REQUIRE_GOLDENS=all`, which turns that skip into a failure; see
+//! `common::assets_ready`.
 
 use lrg_ml::bioclip::{BioclipModel, RANKS};
+
+mod common;
+
+/// The three files this family needs, for the gate's failure message.
+fn bioclip_missing(paths: &lrg_ml::bioclip::BioclipModelPaths) -> String {
+    format!(
+        "BioCLIP assets not found at {} / {} / {}",
+        paths.image_onnx.display(),
+        paths.taxa_bin.display(),
+        paths.taxa_json.display()
+    )
+}
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -53,8 +68,14 @@ fn golden_image(name: &str) -> (Vec<u8>, usize, usize) {
 #[test]
 fn image_tower_matches_open_clip() {
     let paths = lrg_ml::model_paths::resolve_bioclip();
-    if !paths.image_onnx.is_file() {
-        eprintln!("BioCLIP image tower not found; skipping golden test");
+    if !common::assets_ready(
+        "bioclip",
+        paths.image_onnx.is_file(),
+        &format!(
+            "BioCLIP image tower not found at {}",
+            paths.image_onnx.display()
+        ),
+    ) {
         return;
     }
     let golden_path = concat!(
@@ -62,7 +83,16 @@ fn image_tower_matches_open_clip() {
         "/../../testdata/bioclip_goldens.json"
     );
     let Ok(raw) = std::fs::read_to_string(golden_path) else {
-        eprintln!("bioclip_goldens.json missing; skipping golden test");
+        // Unlike the model files this one *is* checked in, so its absence is
+        // a broken checkout rather than an un-provisioned machine — but it is
+        // gated the same way so that one switch covers the whole family.
+        // Called for its panic-when-required side effect; the branch returns
+        // either way, so the "should I run?" answer has nothing left to decide.
+        let _ = common::assets_ready(
+            "bioclip",
+            false,
+            &format!("{golden_path} missing (it is checked in — is the tree intact?)"),
+        );
         return;
     };
     let goldens: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -98,8 +128,7 @@ fn image_tower_matches_open_clip() {
 #[test]
 fn classification_is_a_consistent_lineage() {
     let paths = lrg_ml::model_paths::resolve_bioclip();
-    if !paths.all_exist() {
-        eprintln!("BioCLIP assets not found; skipping classification test");
+    if !common::assets_ready("bioclip", paths.all_exist(), &bioclip_missing(&paths)) {
         return;
     }
     let model = BioclipModel::new(paths);
@@ -166,8 +195,7 @@ fn classification_is_a_consistent_lineage() {
 #[test]
 fn an_unreachable_floor_reports_nothing() {
     let paths = lrg_ml::model_paths::resolve_bioclip();
-    if !paths.all_exist() {
-        eprintln!("BioCLIP assets not found; skipping floor test");
+    if !common::assets_ready("bioclip", paths.all_exist(), &bioclip_missing(&paths)) {
         return;
     }
     let model = BioclipModel::new(paths);
