@@ -118,6 +118,16 @@ pub fn init_with_options(log_path: &Path, debug: bool, stdout_echo: bool) {
         } else {
             LevelFilter::Info
         });
+        // Losing the file is the one failure this module cannot report through
+        // itself, so say it on the channel that is still working. Whoever reads
+        // the log later would otherwise just find nothing and have no idea why.
+        if r.file.lock().map(|g| g.is_none()).unwrap_or(true) {
+            log::warn!(
+                "Could not open the log file at {} - logging to stdout only for this run. \
+                 Check that the directory exists and is writable.",
+                log_path.display()
+            );
+        }
     }
 }
 
@@ -134,6 +144,7 @@ pub fn swap_log_file(new_path: &Path) {
         }
     }
     let new_file = open_log_file(new_path);
+    let opened = new_file.is_some();
     {
         let mut guard = logger.file.lock().unwrap();
         *guard = new_file;
@@ -142,7 +153,17 @@ pub fn swap_log_file(new_path: &Path) {
         let mut current = logger.path.write().unwrap();
         *current = new_path.to_path_buf();
     }
-    log::info!("Log path context updated to: {}", new_path.display());
+    if opened {
+        log::info!("Log path context updated to: {}", new_path.display());
+    } else {
+        // Don't claim a move that didn't happen: from here on the only output
+        // is stdout, and the reason has to travel with that.
+        log::warn!(
+            "Could not open the log file at {} - logging to stdout only from here. \
+             Check that the directory exists and is writable.",
+            new_path.display()
+        );
+    }
 }
 
 /// The currently active log file path (config.LOG_PATH equivalent).
