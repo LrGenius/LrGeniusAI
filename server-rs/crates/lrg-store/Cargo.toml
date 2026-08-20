@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 lancedb = "0.37"
-arrow-array = "58"
-arrow-schema = "58"
 futures = "0.3"
 serde_json.workspace = true
 lrg-chroma-reader.workspace = true
