@@ -50,7 +50,11 @@ fn platform_key() -> &'static str {
 fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {

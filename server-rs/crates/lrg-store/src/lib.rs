@@ -12,12 +12,17 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use arrow_array::builder::{FixedSizeListBuilder, Float32Builder, StringBuilder};
-use arrow_array::{
+use futures::TryStreamExt;
+// Arrow comes from lancedb's own re-export rather than a direct dependency, so
+// the version is always the one lancedb was built against. Declaring arrow
+// ourselves lets cargo pick a semver-incompatible major (arrow 59 while lancedb
+// pins ^58), which puts two arrow trees in the build and breaks every type that
+// crosses the lancedb boundary.
+use lancedb::arrow::arrow_array::builder::{FixedSizeListBuilder, Float32Builder, StringBuilder};
+use lancedb::arrow::arrow_array::{
     Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
 };
-use arrow_schema::{DataType, Field, Schema};
-use futures::TryStreamExt;
+use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
 use lancedb::index::scalar::BTreeIndexBuilder;
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -120,7 +125,7 @@ pub enum StoreError {
     #[error("lancedb error: {0}")]
     Lance(#[from] lancedb::Error),
     #[error("arrow error: {0}")]
-    Arrow(#[from] arrow_schema::ArrowError),
+    Arrow(#[from] lancedb::arrow::arrow_schema::ArrowError),
     #[error("unknown table: {0}")]
     UnknownTable(String),
     #[error("dimension mismatch in {table}: expected {expected}, got {got} for id {id}")]
@@ -443,7 +448,9 @@ impl Store {
             .when_matched_update_all(None)
             .when_not_matched_insert_all();
         builder
-            .execute(Box::new(reader) as Box<dyn arrow_array::RecordBatchReader + Send>)
+            .execute(
+                Box::new(reader) as Box<dyn lancedb::arrow::arrow_array::RecordBatchReader + Send>
+            )
             .await?;
         self.write_ops.fetch_add(1, Ordering::Relaxed);
         Ok(())
