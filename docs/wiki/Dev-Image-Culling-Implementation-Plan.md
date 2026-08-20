@@ -469,7 +469,7 @@ inline in a sequential loop.
 ### Landed
 
 - **`tasks=cull`** — a cull-only ingest computing pHash, image metrics and face
-  quality, skipping the embedding, the LLM, ArcFace and face thumbnails.
+  quality, skipping the embedding, the LLM, FaceNet and face thumbnails.
   `FacePass::QualityOnly` writes no `FACE_TABLE` rows and leaves `faces_checked`
   unset, so person clustering is untouched and a later `faces` run still does
   the real pass.
@@ -509,7 +509,7 @@ out of a real complaint about a soccer series.
 
 1. **A real eye-state classifier.** `blink_penalty` is still exactly
    `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
-   a patch clamped to ≤8px radius that stops scaling with face size. SCRFD's
+   a patch clamped to ≤8px radius that stops scaling with face size. YuNet's
    single keypoint per eye cannot support an eye-aspect-ratio measure, so this
    needs a small ONNX eye-state model shipped as a new asset.
 2. **A noise estimator that does not compete with sharpness.** The current one
@@ -662,7 +662,7 @@ match the photographer's taste.
 
 ### Why that happens
 
-Players are small in frame and SCRFD runs on a 640×640 letterbox, so an action
+Players are small in frame and YuNet runs on a 640×640 letterbox, so an action
 burst usually detects **no faces** — which removes the entire face branch
 (expression, eyes, blink) from the score. What is left is:
 

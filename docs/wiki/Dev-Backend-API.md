@@ -13,7 +13,7 @@ Minimal liveness check. Returns `{"status": "ok"}`.
 
 ### `GET /health`
 Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
-`face_model`/`face_error` (SCRFD/ArcFace), each `"loaded"`, `"not_loaded"`, or
+`face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
 `"failed"`. It does **not** report cloud/local LLM provider availability —
 the backend has no stored API keys or base URLs to probe on a bare GET. The
 plugin checks provider availability itself (stored keys plus a direct ping to
