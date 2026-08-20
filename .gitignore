@@ -44,3 +44,10 @@ entities.json
 # xcodebuild layouts live under .build/; Package.resolved is committed so the
 # pinned mlx-swift-lm revision is reproducible.
 native/mlx-sidecar/.build/
+# repowise local codebase-intelligence index (rebuildable via `repowise
+# init --no-prose -y --no-editor-setup`; contains a LanceDB vector store and
+# a SQLite wiki.db, both derived from source, never source itself)
+.repowise/
+# symlink to .repowise/mcp.json so Claude Code's project-root MCP
+# auto-discovery finds the repowise server; not a real file to track
+.mcp.json
