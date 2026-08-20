@@ -98,6 +98,7 @@ pub(crate) fn compute_scene_tags(siglip: &SiglipModel, image_embedding: &[f32]) 
 /// `/index` substitutes `"photo"`, the edit routes keep `None` and let the
 /// image sniffer decide — and baking either one in here would silently change
 /// the other's behaviour.
+#[derive(Debug)]
 pub(crate) struct MultipartImage {
     pub(crate) bytes: Vec<u8>,
     pub(crate) filename: Option<String>,
@@ -116,6 +117,7 @@ pub(crate) struct MultipartImage {
 /// `filename` stays `None` rather than acquiring someone's default. Callers
 /// that want the tidied view take [`MultipartForm::photo_ids_or_uuids`] or
 /// [`MultipartForm::into_single_photo`], which do drop empties.
+#[derive(Debug)]
 pub(crate) struct MultipartForm {
     pub(crate) images: Vec<MultipartImage>,
     pub(crate) photo_ids: Vec<String>,
@@ -167,6 +169,7 @@ impl MultipartForm {
 }
 
 /// [`MultipartForm`] as the single-photo routes see it.
+#[derive(Debug)]
 pub(crate) struct SinglePhotoForm {
     pub(crate) photo_ids: Vec<String>,
     pub(crate) image_bytes: Option<Vec<u8>>,
@@ -225,4 +228,166 @@ pub(crate) async fn parse_multipart(multipart: &mut Multipart) -> Result<Multipa
         }
     }
     Ok(form)
+}
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::extract::FromRequest;
+    use axum::http::{header, Request};
+
+    const BOUNDARY: &str = "----lrgtestboundary";
+
+    /// One part: field name, optional filename (which makes it a file part),
+    /// and the value.
+    type Part<'a> = (&'a str, Option<&'a str>, &'a str);
+
+    fn body_for(parts: &[Part<'_>]) -> Vec<u8> {
+        let mut body: Vec<u8> = Vec::new();
+        for (name, filename, value) in parts {
+            body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+            match filename {
+                Some(f) => body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{name}\"; filename=\"{f}\"\r\n\r\n"
+                    )
+                    .as_bytes(),
+                ),
+                None => body.extend_from_slice(
+                    format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+                ),
+            }
+            body.extend_from_slice(value.as_bytes());
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+        body
+    }
+
+    async fn parse(parts: &[Part<'_>]) -> Result<MultipartForm, String> {
+        let request = Request::builder()
+            .method("POST")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .body(Body::from(body_for(parts)))
+            .unwrap();
+        let mut multipart = Multipart::from_request(request, &())
+            .await
+            .expect("well-formed body");
+        parse_multipart(&mut multipart).await
+    }
+
+    #[tokio::test]
+    async fn sorts_parts_into_images_ids_and_fields() {
+        let form = parse(&[
+            ("image", Some("a.jpg"), "AAAA"),
+            ("photo_id", None, "id-a"),
+            ("image", Some("b.jpg"), "BBBB"),
+            ("photo_id", None, "id-b"),
+            ("uuid", None, "uuid-a"),
+            ("tasks", None, "embeddings"),
+        ])
+        .await
+        .expect("parses");
+
+        assert_eq!(form.images.len(), 2);
+        assert_eq!(form.images[0].filename.as_deref(), Some("a.jpg"));
+        assert_eq!(form.images[1].bytes, b"BBBB");
+        // photo_id and uuid stay apart: only `/index` distinguishes them, and
+        // merging here would take that choice away from it.
+        assert_eq!(form.photo_ids, vec!["id-a", "id-b"]);
+        assert_eq!(form.uuids, vec!["uuid-a"]);
+        assert_eq!(
+            form.fields.get("tasks").map(String::as_str),
+            Some("embeddings")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_image_part_without_a_filename_keeps_none() {
+        // `/index` substitutes "photo" itself; the parser must not decide for it.
+        let form = parse(&[("image", Some(""), "AAAA")]).await.expect("parses");
+        assert_eq!(form.images.len(), 1);
+        assert_eq!(form.images[0].filename.as_deref(), Some(""));
+    }
+
+    #[tokio::test]
+    async fn photo_ids_win_over_uuids_when_both_are_sent() {
+        let form = parse(&[("photo_id", None, "id-a"), ("uuid", None, "uuid-a")])
+            .await
+            .expect("parses");
+        assert_eq!(form.photo_ids_or_uuids(), vec!["id-a"]);
+    }
+
+    #[tokio::test]
+    async fn uuids_are_the_fallback_when_no_photo_id_is_sent() {
+        let form = parse(&[("uuid", None, "uuid-a")]).await.expect("parses");
+        assert_eq!(form.photo_ids_or_uuids(), vec!["uuid-a"]);
+    }
+
+    #[tokio::test]
+    async fn an_empty_id_does_not_suppress_the_uuid_fallback() {
+        // The raw list keeps the empty value; the accessor drops it. Without
+        // that, an empty `photo_id` made the list non-empty and the real id in
+        // `uuid` was never reached.
+        let form = parse(&[("photo_id", None, ""), ("uuid", None, "uuid-a")])
+            .await
+            .expect("parses");
+        assert_eq!(form.photo_ids, vec![""]);
+        assert_eq!(form.photo_ids_or_uuids(), vec!["uuid-a"]);
+    }
+
+    #[tokio::test]
+    async fn single_photo_view_takes_the_first_image() {
+        let form = parse(&[
+            ("image", Some("a.jpg"), "AAAA"),
+            ("image", Some("b.jpg"), "BBBB"),
+            ("photo_id", None, "id-a"),
+            ("db_path", None, "/tmp/x.db"),
+        ])
+        .await
+        .expect("parses");
+
+        let single = form.into_single_photo();
+        assert_eq!(single.photo_ids, vec!["id-a"]);
+        assert_eq!(single.image_bytes.as_deref(), Some(&b"AAAA"[..]));
+        assert_eq!(single.filename.as_deref(), Some("a.jpg"));
+        assert_eq!(
+            single.fields.get("db_path").map(String::as_str),
+            Some("/tmp/x.db")
+        );
+    }
+
+    #[tokio::test]
+    async fn single_photo_view_reports_no_image_rather_than_failing() {
+        // `/edit` turns this into its "mismatch between images and photo IDs"
+        // reply; the parser's job is only to say the image is absent.
+        let form = parse(&[("photo_id", None, "id-a")]).await.expect("parses");
+        let single = form.into_single_photo();
+        assert!(single.image_bytes.is_none());
+        assert!(single.filename.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_malformed_body_is_an_error_not_a_panic() {
+        let request = Request::builder()
+            .method("POST")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            // A real boundary, but the body stops before the terminator —
+            // what a client that dies mid-upload actually sends.
+            .body(Body::from(format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; \
+                 name=\"image\"\r\n\r\ntruncated"
+            )))
+            .unwrap();
+        let mut multipart = Multipart::from_request(request, &()).await.unwrap();
+        let err = parse_multipart(&mut multipart).await.unwrap_err();
+        assert!(err.contains("invalid multipart body"), "{err}");
+    }
 }
