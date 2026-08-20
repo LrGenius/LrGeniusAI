@@ -141,74 +141,59 @@ def finding_line(f: dict) -> str:
     return f"- {SEVERITY_ICON.get(sev, '⚪')} **{sev}** {where} — {f.get('reason', '')}"
 
 
-def render(base: str, head: str, repo: Path) -> str:
-    files = changed_files(base, head, repo)
-    if not files:
-        return "### repowise\n\nNo changed files to analyse."
-
-    risk = run_json(
-        ["repowise", "risk", f"{base}..{head}", "--format", "json"], cwd=repo
-    )
-    head_health = run_json(["repowise", "health", "--format", "json"], cwd=repo)
-
-    # Health at the merge base, from a throwaway worktree so the checkout under
-    # test is never touched.
-    base_health = None
+def health_at(rev: str, repo: Path):
+    """Run health at `rev` in a throwaway worktree, leaving the checkout alone."""
     with tempfile.TemporaryDirectory() as tmp:
         worktree = Path(tmp) / "base"
-        code, _ = run(
-            ["git", "worktree", "add", "--detach", str(worktree), base], cwd=repo
-        )
-        if code == 0:
-            base_health = run_json(
-                ["repowise", "health", "--format", "json"], cwd=worktree
-            )
+        code, _ = run(["git", "worktree", "add", "--detach", str(worktree), rev], cwd=repo)
+        if code != 0:
+            return None
+        try:
+            return run_json(["repowise", "health", "--format", "json"], cwd=worktree)
+        finally:
             run(["git", "worktree", "remove", "--force", str(worktree)], cwd=repo)
 
-    if risk is None and head_health is None:
-        return (
-            "### repowise\n\n"
-            "_repowise produced no output for this PR; skipping the report._"
+
+def risk_section(risk) -> list[str]:
+    """The change's own defect-risk read: fix history and diff shape."""
+    if not risk:
+        return []
+    out: list[str] = []
+    fh = risk.get("fix_history") or {}
+    shape = risk.get("score_percentile") or risk.get("risk_percentile")
+
+    bits = []
+    pct = fh.get("percentile") if fh.get("available") else None
+    if pct is not None:
+        bits.append(
+            f"touches files that have broken before "
+            f"(**{ordinal(pct)} percentile** of this repo's fix-bearing files)"
         )
+    if shape is not None:
+        bits.append(f"diff shape at the **{ordinal(shape)} percentile** of recent commits")
+    if bits:
+        out += ["", " · ".join(bits) + "."]
 
-    head_scores = health_scores(head_health)
-    base_scores = health_scores(base_health)
+    pressure = [f for f in (fh.get("files") or []) if f.get("fix_pressure", 0) >= 1]
+    if pressure:
+        out += [
+            "",
+            "<details><summary>Files in this PR with prior fix pressure</summary>\n",
+            "| File | Lines changed | Prior fixes (recency-weighted) |",
+            "| --- | ---: | ---: |",
+        ]
+        out += [
+            f"| `{f['path']}` | {f.get('churn', 0)} | {f.get('fix_pressure', 0):.1f} |"
+            for f in pressure[:MAX_ROWS]
+        ]
+        if len(pressure) > MAX_ROWS:
+            out.append(f"\n…and {len(pressure) - MAX_ROWS} more.")
+        out.append("\n</details>")
+    return out
 
-    out: list[str] = ["### repowise"]
 
-    # --- the change's own risk -------------------------------------------
-    if risk:
-        fh = risk.get("fix_history") or {}
-        shape = risk.get("score_percentile") or risk.get("risk_percentile")
-        bits = []
-        if fh.get("available"):
-            pct = fh.get("percentile")
-            if pct is not None:
-                bits.append(
-                    f"touches files that have broken before "
-                    f"(**{ordinal(pct)} percentile** of this repo's fix-bearing files)"
-                )
-        if shape is not None:
-            bits.append(f"diff shape at the **{ordinal(shape)} percentile** of recent commits")
-        if bits:
-            out.append("")
-            out.append(" · ".join(bits) + ".")
-
-        pressure = [f for f in (fh.get("files") or []) if f.get("fix_pressure", 0) >= 1]
-        if pressure:
-            out.append("")
-            out.append("<details><summary>Files in this PR with prior fix pressure</summary>\n")
-            out.append("| File | Lines changed | Prior fixes (recency-weighted) |")
-            out.append("| --- | ---: | ---: |")
-            for f in pressure[:MAX_ROWS]:
-                out.append(
-                    f"| `{f['path']}` | {f.get('churn', 0)} | {f.get('fix_pressure', 0):.1f} |"
-                )
-            if len(pressure) > MAX_ROWS:
-                out.append(f"\n…and {len(pressure) - MAX_ROWS} more.")
-            out.append("\n</details>")
-
-    # --- how the touched files moved --------------------------------------
+def health_section(files, base_scores, base_health, head_scores) -> list[str]:
+    """Before/after health for the files this PR touches, biggest movers first."""
     rows = []
     for path in sorted(files):
         if Path(path).suffix not in CODE_SUFFIXES:
@@ -217,72 +202,88 @@ def render(base: str, head: str, repo: Path) -> str:
         after = (head_scores.get(path) or {}).get("score")
         if before is None and after is None:
             continue
-        moved = before is not None and after is not None and abs(after - before) >= 0.005
-        rows.append((path, before, after, moved))
+        rows.append((path, before, after))
+    if not rows:
+        return []
 
-    if rows:
-        # Biggest movers first; a file that did not move is context, not news.
-        rows.sort(key=lambda r: -(abs((r[2] or 0) - (r[1] or 0))))
-        out.append("")
-        out.append("#### Health of the files this PR touches")
-        out.append("")
-        out.append("| File | Before | After | Change |")
-        out.append("| --- | ---: | ---: | ---: |")
-        for path, before, after, _ in rows[:MAX_ROWS]:
-            out.append(
-                f"| `{path}` | {fmt_score(before)} | {fmt_score(after)} "
-                f"| {delta_cell(before, after)} |"
-            )
-        if len(rows) > MAX_ROWS:
-            out.append("")
-            out.append(f"…and {len(rows) - MAX_ROWS} more changed file(s).")
-        if base_health is None:
-            out.append("")
-            out.append("_Base-revision health unavailable, so the before column is empty._")
+    # A file that did not move is context, not news.
+    rows.sort(key=lambda r: -abs((r[2] or 0) - (r[1] or 0)))
+    out = [
+        "",
+        "#### Health of the files this PR touches",
+        "",
+        "| File | Before | After | Change |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    out += [
+        f"| `{path}` | {fmt_score(before)} | {fmt_score(after)} | {delta_cell(before, after)} |"
+        for path, before, after in rows[:MAX_ROWS]
+    ]
+    if len(rows) > MAX_ROWS:
+        out += ["", f"…and {len(rows) - MAX_ROWS} more changed file(s)."]
+    if base_health is None:
+        out += ["", "_Base-revision health unavailable, so the before column is empty._"]
+    return out
 
-    # --- findings, restricted to what this PR touched ----------------------
+
+def findings_section(files, head_health, base_health) -> list[str]:
+    """Findings in changed files, split by whether this PR introduced them."""
     touched = set(files)
     head_findings = [
         f for f in (head_health or {}).get("findings", []) if f.get("file_path") in touched
     ]
-    # What the base already had, so the PR is credited only with what it added.
-    # Keyed on the finding's identity rather than its position: line numbers
-    # move in any edit, and keying on them would mark every finding as new.
     base_keys = {finding_key(f) for f in (base_health or {}).get("findings", [])}
     introduced = [f for f in head_findings if finding_key(f) not in base_keys]
     pre_existing = [f for f in head_findings if finding_key(f) in base_keys]
 
+    out: list[str] = []
     if introduced:
-        out.append("")
-        out.append(f"#### New findings in this PR ({len(introduced)})")
-        out.append("")
-        for f in sort_findings(introduced)[:MAX_FINDINGS]:
-            out.append(finding_line(f))
+        out += ["", f"#### New findings in this PR ({len(introduced)})", ""]
+        out += [finding_line(f) for f in sort_findings(introduced)[:MAX_FINDINGS]]
         if len(introduced) > MAX_FINDINGS:
             out.append(f"\n…and {len(introduced) - MAX_FINDINGS} more.")
     elif head_findings and base_health is not None:
-        out.append("")
-        out.append("#### New findings in this PR")
-        out.append("")
-        out.append("None — every finding below was already there.")
+        out += ["", "#### New findings in this PR", "", "None — every finding below was already there."]
 
     if pre_existing:
-        out.append("")
-        out.append(
+        out += [
+            "",
             f"<details><summary>Pre-existing findings in these files "
-            f"({len(pre_existing)}) — not introduced here</summary>\n"
-        )
-        for f in sort_findings(pre_existing)[:MAX_FINDINGS]:
-            out.append(finding_line(f))
+            f"({len(pre_existing)}) — not introduced here</summary>\n",
+        ]
+        out += [finding_line(f) for f in sort_findings(pre_existing)[:MAX_FINDINGS]]
         if len(pre_existing) > MAX_FINDINGS:
             out.append(f"\n…and {len(pre_existing) - MAX_FINDINGS} more.")
         out.append("\n</details>")
+    return out
 
-    out.append("")
-    out.append(
-        "<sub>Advisory only — this check never fails a build. "
-        "Health is 1–10, higher is better.</sub>"
+
+def render(base: str, head: str, repo: Path) -> str:
+    files = changed_files(base, head, repo)
+    if not files:
+        return "### repowise\n\nNo changed files to analyse."
+
+    risk = run_json(["repowise", "risk", f"{base}..{head}", "--format", "json"], cwd=repo)
+    head_health = run_json(["repowise", "health", "--format", "json"], cwd=repo)
+    base_health = health_at(base, repo)
+
+    if risk is None and head_health is None:
+        return (
+            "### repowise\n\n"
+            "_repowise produced no output for this PR; skipping the report._"
+        )
+
+    out = ["### repowise"]
+    out += risk_section(risk)
+    out += health_section(
+        files, health_scores(base_health), base_health, health_scores(head_health)
     )
+    out += findings_section(files, head_health, base_health)
+    out += [
+        "",
+        "<sub>Advisory only — this check never fails a build. "
+        "Health is 1–10, higher is better.</sub>",
+    ]
     return "\n".join(out)
 
 
