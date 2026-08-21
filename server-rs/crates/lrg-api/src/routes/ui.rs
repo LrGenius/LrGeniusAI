@@ -2,14 +2,18 @@
 //! out of Lightroom's view factory, plus the action bridge they talk back
 //! through ([`crate::ui_bridge`]).
 //!
-//! `/ui/people` replaces the old LrView People dialog. That dialog had to
+//! Paths here are spelled as the domain only — `"/ui/people"` — and
+//! `build_router` nests them under [`crate::API_PREFIX`], so the served path is
+//! `/v1/ui/people`, like every other domain.
+//!
+//! `/v1/ui/people` replaces the old LrView People dialog. That dialog had to
 //! decode every face thumbnail to a temp file (`f:picture` takes paths, not
 //! bytes), lay the grid out at construction time, and ask the user to close
 //! and reopen the window after re-clustering, because an LrView tree cannot
 //! be rebuilt. A page re-renders.
 //!
 //! The page is served from the backend's own origin, so its `fetch` calls
-//! reach `/faces/*` with no CORS setup, and it carries the plugin's `db_path`
+//! reach `/v1/faces/*` with no CORS setup, and it carries the plugin's `db_path`
 //! in the query string exactly like the plugin's own requests do — the
 //! auto-bind middleware treats both the same.
 //!

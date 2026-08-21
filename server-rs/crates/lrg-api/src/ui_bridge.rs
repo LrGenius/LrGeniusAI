@@ -1,6 +1,6 @@
-//! The browser ↔ Lightroom bridge behind `/ui/*`.
+//! The browser ↔ Lightroom bridge behind `/v1/ui/*`.
 //!
-//! A `/ui/` page runs in the browser and can do everything that is purely
+//! A `/v1/ui/` page runs in the browser and can do everything that is purely
 //! backend data on its own — listing persons, renaming them, re-clustering.
 //! What it cannot do is touch the Lightroom catalog: only the plugin can
 //! create a collection or change the Library selection. So actions that end
@@ -41,7 +41,7 @@ struct Inner {
     page_seen: Option<Instant>,
 }
 
-/// Shared, process-global; one queue serves whichever `/ui/` page is open,
+/// Shared, process-global; one queue serves whichever `/v1/ui/` page is open,
 /// since Lightroom runs one modal task at a time anyway.
 #[derive(Default)]
 pub struct UiBridge {

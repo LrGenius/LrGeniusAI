@@ -123,9 +123,9 @@ Entry point: `Init.lua` — sets up globals, imports all Lightroom SDK modules, 
 - `TaskAutomatedTests.lua` — smoke tests (plugin ↔ backend connectivity)
 
 Not every task builds its interface out of LrView. `TaskPeople.lua` has no
-dialog of its own: the People UI is a page the backend serves at `/ui/people`,
+dialog of its own: the People UI is a page the backend serves at `/v1/ui/people`,
 which the task opens in the browser. Lightroom keeps only what a browser
-cannot do — the page queues actions through `/ui/actions` and the task
+cannot do — the page queues actions through `/v1/ui/actions` and the task
 performs them against the catalog. Reach for this when a task is a grid of
 server-side data that LrView cannot re-render (see
 [Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);

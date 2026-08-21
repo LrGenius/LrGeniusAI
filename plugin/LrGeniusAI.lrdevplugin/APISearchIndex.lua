@@ -120,6 +120,11 @@ local ENDPOINTS = {
 
 	-- Species links
 	SPECIES_LINKS = "/v1/species/links",
+
+	-- Browser UI: the pages the plugin opens instead of building them in
+	-- LrView, and the queue they hand catalog work back through.
+	UI_PEOPLE = "/v1/ui/people",
+	UI_ACTIONS = "/v1/ui/actions",
 }
 
 local EXPORT_SETTINGS = {
@@ -3835,7 +3840,7 @@ end
 -- exactly like it does from `_request`'s injected copy.
 -- @return string
 function SearchIndexAPI.getPeopleUiUrl()
-	local url = getBaseUrl() .. ENDPOINTS.UI_PEOPLE
+	local url = SearchIndexAPI.url("UI_PEOPLE")
 	if SearchIndexAPI.isLocalBackend() then
 		local dbPath = getDbPath()
 		if dbPath then
@@ -3846,13 +3851,12 @@ function SearchIndexAPI.getPeopleUiUrl()
 end
 
 ---
--- Take everything a /ui/ page queued for the plugin. Draining is destructive:
+-- Take everything a /v1/ui/ page queued for the plugin. Draining is destructive:
 -- each action is handed out exactly once, so the caller must act on what it
 -- gets back rather than polling again for it.
 -- @return table|nil { status, actions = { ... }, page_open } or nil, err
 function SearchIndexAPI.takeUiActions()
-	local url = getBaseUrl() .. ENDPOINTS.UI_ACTIONS
-	local result, err = _request("GET", url, nil, 10)
+	local result, err = _request("GET", SearchIndexAPI.url("UI_ACTIONS"), nil, 10)
 	if err then
 		log:error("takeUiActions failed: " .. err)
 		return nil, err

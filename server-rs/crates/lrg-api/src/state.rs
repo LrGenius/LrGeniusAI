@@ -39,7 +39,7 @@ pub struct AppState {
     pub bioclip: Arc<BioclipModel>,
     /// Global — port of `services/jobs.py`, read back through `GET /v1/jobs/{job_id}`.
     pub jobs: Arc<JobRegistry>,
-    /// Hands actions from a `/ui/` page in the browser to the plugin task
+    /// Hands actions from a `/v1/ui/` page in the browser to the plugin task
     /// that is waiting for them, since only the plugin can touch the
     /// Lightroom catalog. Global for the same reason `jobs` is: Lightroom
     /// runs one of these tasks at a time.

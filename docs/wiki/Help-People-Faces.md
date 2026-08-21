@@ -20,7 +20,7 @@ Face data is generated during **Analyze & Index Photos** — tick *Enable face d
 ### Where it opens
 
 People opens as a page in your default web browser, served by the LrGeniusAI
-backend at `http://127.0.0.1:19819/ui/people`. Lightroom shows a progress bar
+backend at `http://127.0.0.1:19819/v1/ui/people`. Lightroom shows a progress bar
 named *People (open in your browser)* while the page is live; it is what
 carries your selections back into the catalog, so leave it running and cancel
 it when you are done.

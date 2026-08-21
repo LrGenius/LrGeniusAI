@@ -184,14 +184,16 @@
       // re-binds instead of answering about an empty catalog.
       const DB_PATH = new URLSearchParams(location.search).get("db_path") || "";
 
-      // One place to fix when the API paths move; the backend's endpoint
-      // names are being reshuffled in parallel with this page.
+      // Every backend path this page calls, in one block. The page is served
+      // from the same binary that answers these, so they move together — and
+      // when they do (the /v1 grouping moved all of them once already), this
+      // is the only place to edit.
       const API = {
-        persons: "/faces/persons",
-        person: (id) => "/faces/persons/" + encodeURIComponent(id),
-        cluster: "/faces/cluster",
-        actions: "/ui/actions",
-        status: "/ui/status",
+        persons: "/v1/faces/persons",
+        person: (id) => "/v1/faces/persons/" + encodeURIComponent(id),
+        cluster: "/v1/faces/cluster",
+        actions: "/v1/ui/actions",
+        status: "/v1/ui/status",
       };
 
       const el = (id) => document.getElementById(id);

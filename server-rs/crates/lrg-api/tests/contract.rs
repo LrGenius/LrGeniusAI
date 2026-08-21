@@ -1154,3 +1154,69 @@ async fn keyword_specific_job_poll_route_is_gone() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+/// The People page has to be reachable through the *assembled* router, not
+/// just through `routes::ui::router()` in isolation.
+///
+/// This is a regression test with a scar behind it: merging the `/v1` grouping
+/// into the branch that added `/ui/` dropped the `.merge(routes::ui::router())`
+/// line, and every unit test still passed because they mount that router
+/// directly. The People menu item opened a 404 and nothing said so.
+#[tokio::test]
+async fn people_page_is_reachable_through_the_assembled_router() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(Request::get("/v1/ui/people").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+    let page = body_string(response).await;
+    // The page's own fetches must name the nested paths, or it renders and
+    // then fails every request it makes.
+    assert!(
+        page.contains("/v1/faces/persons") && page.contains("/v1/ui/actions"),
+        "the People page still points at unprefixed API paths"
+    );
+}
+
+/// The browser→Lightroom queue, end to end through the assembled router: what
+/// the page posts is what the plugin's poll hands back, exactly once.
+#[tokio::test]
+async fn ui_action_survives_the_round_trip_through_the_assembled_router() {
+    let (app, _) = fresh_app();
+    let queued = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/actions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "action": "show_in_library",
+                        "person_ids": ["person_0"],
+                        "match_mode": "intersection"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(queued.status(), StatusCode::OK);
+
+    let drained = body_json(
+        app.oneshot(Request::get("/v1/ui/actions").body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(drained["actions"][0]["person_ids"][0], "person_0");
+    assert_eq!(drained["actions"][0]["match_mode"], "intersection");
+}

@@ -51,7 +51,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::llm::router())
         .merge(routes::style_edit::router())
         .merge(routes::import_::router())
-        .merge(routes::species::router());
+        .merge(routes::species::router())
+        .merge(routes::ui::router());
 
     Router::new()
         // Never versioned — a new plug-in must be able to reach these on an
