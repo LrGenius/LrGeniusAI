@@ -202,8 +202,10 @@ impl TaxaHead {
         }
 
         let matrix: Vec<u16> = raw[TAXA_HEADER_BYTES..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
 
         let text = std::fs::read_to_string(json)
@@ -599,7 +601,12 @@ impl BioclipModel {
             // sum of unit-vector components, well under fp16's own precision.
             let row = &head.matrix[base..base + EMBED_DIM];
             let mut acc = [0.0f32; 4];
-            for (q, e) in row.chunks_exact(4).zip(embedding.chunks_exact(4)) {
+            for (q, e) in row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(embedding.as_chunks::<4>().0.iter())
+            {
                 acc[0] += lut[q[0] as usize] * e[0];
                 acc[1] += lut[q[1] as usize] * e[1];
                 acc[2] += lut[q[2] as usize] * e[2];
