@@ -1,4 +1,4 @@
-//! `/group_similar` and `/cull` — port of `routes/search.py`'s
+//! `/v1/cull/groups` and `/v1/cull/grade` — port of `routes/search.py`'s
 //! `group_similar_route`/`cull_route` + `services/search.py`'s
 //! `group_similar_images`/`cull_images`, backed by
 //! `lrg_analysis::grouping::group_and_sort_images`.
@@ -18,8 +18,8 @@ use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
-        .route("/group_similar", axum::routing::post(group_similar))
-        .route("/cull", axum::routing::post(cull))
+        .route("/cull/groups", axum::routing::post(group_similar))
+        .route("/cull/grade", axum::routing::post(cull))
 }
 
 struct GroupingParams {

@@ -21,7 +21,7 @@
 Both replace InsightFace's ``buffalo_l`` pack (SCRFD + ArcFace), which is
 licensed for non-commercial research only and so could never be published with
 this project. YuNet is Apache-2.0 and facenet-pytorch is MIT, which is what
-lets ``/assets/download/start`` fetch these like every other model family.
+lets ``/v1/models/assets/downloads`` fetch these like every other model family.
 
 **This script deliberately does not join ``scripts/pyproject.toml``.**
 ``facenet-pytorch`` pins ``torch<2.3`` and ``numpy<2.0``; the shared export

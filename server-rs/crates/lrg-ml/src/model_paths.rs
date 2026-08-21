@@ -118,7 +118,7 @@ pub fn resolve_bioclip() -> BioclipModelPaths {
 /// InsightFace's and the only way to get them was to have run its Python
 /// library. YuNet and FaceNet are redistributable, so they are published with
 /// this project and land here like every other model family — which is what
-/// lets `/assets/download/start` fetch them and lets face detection count
+/// lets `/v1/models/assets/downloads` fetch them and lets face detection count
 /// toward the overall readiness flag.
 pub fn resolve_face() -> FaceModelPaths {
     let dir = default_models_dir();

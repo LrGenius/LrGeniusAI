@@ -16,8 +16,12 @@ use axum::{
 use crate::state::AppState;
 
 /// Endpoints that don't need (and shouldn't pay the cost of) binding:
-/// liveness checks and the explicit init route, which handles db_path itself.
-const BYPASS_PATHS: &[&str] = &["/ping", "/initialize"];
+/// liveness checks and the explicit bind route, which handles db_path itself.
+///
+/// Matched against the full request path, so these carry the `/v1` prefix that
+/// `build_router` nests them under. `/ping` is part of the unversioned
+/// bootstrap contract and stays at the root.
+const BYPASS_PATHS: &[&str] = &["/ping", "/v1/db/bind"];
 
 /// JSON bodies are buffered up to this limit for the db_path peek. Larger
 /// bodies (and all non-JSON bodies, e.g. multipart uploads) are passed

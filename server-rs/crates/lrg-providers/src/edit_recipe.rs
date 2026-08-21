@@ -1,7 +1,7 @@
 //! Port of `utils/edit_recipe.py`: the canonical Lightroom edit-recipe
 //! contract shared by every edit-capable provider — field ranges, the
 //! OpenAI/Gemini JSON schemas built from those ranges, LLM-output
-//! normalization/clamping, and per-control filtering for the `/edit`
+//! normalization/clamping, and per-control filtering for the `/v1/edit/recipe`
 //! endpoint's UI toggles.
 
 use std::sync::OnceLock;

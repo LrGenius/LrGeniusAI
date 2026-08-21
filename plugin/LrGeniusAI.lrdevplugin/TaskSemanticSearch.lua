@@ -31,7 +31,7 @@ local function buildCoverageWarning()
 		end
 	end
 
-	-- One /db/stats call, measured at ~95 ms over 14,000 photos, plus the
+	-- One /v1/db/stats call, measured at ~95 ms over 14,000 photos, plus the
 	-- catalog count the search itself already pays for further down. Cheap
 	-- enough to run before every search; if it ever is not, the number it
 	-- produces is the one worth waiting for.

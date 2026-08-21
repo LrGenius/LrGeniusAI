@@ -1,4 +1,4 @@
-//! `/edit` and `/edit_base64` — port of `routes/edit.py`: single-photo
+//! `/v1/edit/recipe` and `/v1/edit/recipe/base64` — port of `routes/edit.py`: single-photo
 //! LLM-backed Lightroom edit-recipe generation across all four providers,
 //! few-shot injection from the user's own training examples (best-effort,
 //! brute-force cosine search over the small `edit_training` table — same
@@ -7,7 +7,7 @@
 //!
 //! Note: mirrors the real Python behavior, not the aspirational one —
 //! `_extract_options` never populates `location_data` for this endpoint
-//! (only the `/index` batch path wires EXIF location through), so the
+//! (only the `/v1/index/photos` batch path wires EXIF location through), so the
 //! edit prompt's "Photo taken in: ..." context is deliberately never
 //! filled here either, matching production.
 
@@ -29,8 +29,8 @@ use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
-        .route("/edit", axum::routing::post(edit_multipart))
-        .route("/edit_base64", axum::routing::post(edit_base64))
+        .route("/edit/recipe", axum::routing::post(edit_multipart))
+        .route("/edit/recipe/base64", axum::routing::post(edit_base64))
 }
 
 pub(crate) struct EditOptions {
@@ -571,7 +571,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
 ///
 /// `is_raw` prefers what the plugin said, because it reads Lightroom's own
 /// `fileFormat` and is therefore authoritative. The filename is the fallback
-/// for older plugins and for `/edit_base64` callers that send neither — it is a
+/// for older plugins and for `/v1/edit/recipe/base64` callers that send neither — it is a
 /// heuristic, and one whose unknown case reads as *not* raw, so a frame that
 /// cannot be placed gets the conservative budget.
 pub(crate) fn capture_conditions(

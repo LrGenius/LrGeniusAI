@@ -517,7 +517,7 @@ impl BioclipModel {
     /// missing or unreadable.
     ///
     /// Deliberately reads the file rather than reporting the loaded model's
-    /// version: this is called by `/index/check-unprocessed`, which runs
+    /// version: this is called by `/v1/index/unprocessed`, which runs
     /// *before* any indexing and must not be the thing that pulls a 608 MB
     /// session and a 258 MB head into memory. An earlier version returned
     /// `None` until the model had loaded once and treated that as "no version

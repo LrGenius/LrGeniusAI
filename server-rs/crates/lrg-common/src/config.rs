@@ -17,11 +17,25 @@ pub fn host() -> String {
     env::var("GENIUSAI_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string())
 }
 
+/// The listen port, from `GENIUSAI_PORT`.
+///
+/// A value that will not parse falls back to the default rather than aborting
+/// startup — but it says so. Silently listening on 19819 after being asked for
+/// something else surfaces to the user as "the backend is not responding",
+/// with nothing anywhere connecting that to a typo in an env var.
 pub fn port() -> u16 {
-    env::var("GENIUSAI_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_PORT)
+    let Ok(raw) = env::var("GENIUSAI_PORT") else {
+        return DEFAULT_PORT;
+    };
+    match raw.parse() {
+        Ok(port) => port,
+        Err(_) => {
+            log::warn!(
+                "GENIUSAI_PORT={raw:?} is not a valid port number; falling back to {DEFAULT_PORT}"
+            );
+            DEFAULT_PORT
+        }
+    }
 }
 
 /// Number of rotated log backups kept on startup (GENIUSAI_LOG_ROTATE_BACKUPS,

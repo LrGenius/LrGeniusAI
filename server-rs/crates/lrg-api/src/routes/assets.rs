@@ -56,9 +56,11 @@ const FACE_ASSETS_RELEASE_TAG: &str = "face-assets-v1";
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/assets/status", get(assets_status))
-        .route("/assets/download/start", post(download_start))
-        .route("/assets/download/status", get(download_status))
+        .route("/models/assets", get(assets_status))
+        .route(
+            "/models/assets/downloads",
+            post(download_start).get(download_status),
+        )
 }
 
 /// Per-family readiness plus one overall flag.

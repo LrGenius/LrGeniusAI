@@ -36,7 +36,7 @@ pub struct AppState {
     /// hundred MB resident, so leaving it out of `run_maintenance` would keep
     /// that memory pinned for the life of the process.
     pub bioclip: Arc<BioclipModel>,
-    /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
+    /// Global — port of `services/jobs.py`, read back through `GET /v1/jobs/{job_id}`.
     pub jobs: Arc<JobRegistry>,
     /// CLIP-IQA prompt embeddings, computed on first use and kept for the
     /// process lifetime.

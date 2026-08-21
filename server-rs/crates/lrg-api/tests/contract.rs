@@ -116,7 +116,7 @@ async fn initialize_requires_db_path() {
     let (app, _) = fresh_app();
     let response = app
         .oneshot(
-            Request::post("/initialize")
+            Request::post("/v1/db/bind")
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))
                 .unwrap(),
@@ -137,7 +137,7 @@ async fn initialize_writes_handshake_files_and_is_idempotent() {
 
     let (app, state) = fresh_app();
     let request = |path: &str| {
-        Request::post("/initialize")
+        Request::post("/v1/db/bind")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::json!({ "db_path": path }).to_string(),
@@ -202,7 +202,7 @@ async fn middleware_auto_binds_db_path_from_query_string() {
 
     let (app, state) = fresh_app();
     let uri = format!(
-        "/health?db_path={}",
+        "/v1/server/health?db_path={}",
         db_path.to_str().unwrap().replace('/', "%2F")
     );
     let response = app
@@ -230,7 +230,11 @@ async fn shutdown_and_restart_respond_before_exiting() {
     );
 
     let response = app
-        .oneshot(Request::post("/restart").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::post("/v1/server/restart")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let json = body_json(response).await;
@@ -241,7 +245,11 @@ async fn shutdown_and_restart_respond_before_exiting() {
 async fn health_reports_model_states() {
     let (app, _) = fresh_app();
     let response = app
-        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get("/v1/server/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -255,7 +263,7 @@ async fn unknown_raw_log_type_returns_404() {
     let (app, _) = fresh_app();
     let response = app
         .oneshot(
-            Request::get("/logs/raw/nonsense")
+            Request::get("/v1/server/logs/nonsense/raw")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -301,7 +309,7 @@ async fn check_unprocessed_reports_only_missing_work() {
 
     let response = app
         .oneshot(
-            Request::post("/index/check-unprocessed")
+            Request::post("/v1/index/unprocessed")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -325,7 +333,7 @@ async fn check_unprocessed_reports_only_missing_work() {
 }
 
 // ---------------------------------------------------------------------------
-// /cull + /group_similar
+// /v1/cull/grade + /v1/cull/groups
 //
 // These had no contract coverage at all, which is how several of the fields
 // below drifted: `debug` was always serialized even though the plugin never
@@ -369,7 +377,7 @@ async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
 async fn cull_request(app: axum::Router, body: serde_json::Value) -> serde_json::Value {
     let response = app
         .oneshot(
-            Request::post("/cull")
+            Request::post("/v1/cull/grade")
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -528,7 +536,7 @@ async fn cull_rejects_unknown_preset_with_the_available_list() {
     let (app, _) = fresh_app();
     let response = app
         .oneshot(
-            Request::post("/cull")
+            Request::post("/v1/cull/grade")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({"photo_ids": ["a"], "culling_preset": "nope"}).to_string(),
@@ -549,7 +557,7 @@ async fn group_similar_requires_photo_ids() {
     let (app, _) = fresh_app();
     let response = app
         .oneshot(
-            Request::post("/group_similar")
+            Request::post("/v1/cull/groups")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::json!({}).to_string()))
                 .unwrap(),
@@ -617,7 +625,7 @@ async fn check_unprocessed_understands_the_cull_task() {
 
     let response = app
         .oneshot(
-            Request::post("/index/check-unprocessed")
+            Request::post("/v1/index/unprocessed")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -723,7 +731,7 @@ async fn check_unprocessed_requeues_faces_from_a_superseded_model() {
 
     let response = app
         .oneshot(
-            Request::post("/index/check-unprocessed")
+            Request::post("/v1/index/unprocessed")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -790,7 +798,7 @@ async fn cluster_leaves_faces_from_a_superseded_model_unassigned() {
 
     let response = app
         .oneshot(
-            Request::post("/faces/cluster")
+            Request::post("/v1/faces/cluster")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -826,7 +834,7 @@ async fn cluster_leaves_faces_from_a_superseded_model_unassigned() {
 }
 
 // ---------------------------------------------------------------------------
-// /style_edit
+// /v1/edit/style
 //
 // The plugin's edit workflow routes here whenever "apply my saved edit style" is
 // on, which is the default, so this is the first endpoint a new user's edit run
@@ -834,7 +842,7 @@ async fn cluster_leaves_faces_from_a_superseded_model_unassigned() {
 // shapes below.
 // ---------------------------------------------------------------------------
 
-/// Builds a `multipart/form-data` body. `/style_edit` and `/edit` are the only
+/// Builds a `multipart/form-data` body. `/v1/edit/style` and `/v1/edit/recipe` are the only
 /// multipart endpoints the plugin calls, and both are driven from
 /// `_requestMultipart` in APISearchIndex.lua.
 fn multipart_body(fields: &[(&str, &str)], image: Option<(&str, &[u8])>) -> (String, Vec<u8>) {
@@ -870,7 +878,7 @@ async fn style_edit_request(
     let (content_type, body) = multipart_body(fields, image);
     let response = app
         .oneshot(
-            Request::post("/style_edit")
+            Request::post("/v1/edit/style")
                 .header("content-type", content_type)
                 .body(Body::from(body))
                 .unwrap(),
@@ -942,4 +950,207 @@ async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
     assert_eq!(json["engine"], "none");
     assert_eq!(json["matched_examples"], 0);
     assert!(json["error"].is_string());
+}
+
+// ---------------------------------------------------------------------------
+// Path layout: the `/v1` prefix and the unversioned bootstrap contract
+// ---------------------------------------------------------------------------
+
+/// The five paths a *new* plug-in must be able to reach on an *old* backend to
+/// pull the install forward. `build_router` merges them at the root instead of
+/// nesting them, and versioning any of them would mean a half-updated machine
+/// could not repair itself. `/update/apply` is covered by its own tests; the
+/// four lifecycle paths are asserted here.
+#[tokio::test]
+async fn bootstrap_contract_is_served_unversioned() {
+    for (method, path) in [
+        ("GET", "/ping"),
+        ("GET", "/version"),
+        ("POST", "/version/check"),
+        ("POST", "/update/apply"),
+    ] {
+        let (app, _) = fresh_app();
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .unwrap();
+        let status = app.oneshot(request).await.unwrap().status();
+        assert_ne!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{method} {path} must stay at the root — a plug-in that updated \
+             ahead of its backend reaches the old binary through these"
+        );
+    }
+}
+
+/// ...and the corollary: they are *only* at the root. A `/v1` alias would
+/// invite new code to depend on it, quietly re-coupling the two halves.
+#[tokio::test]
+async fn bootstrap_contract_is_not_also_versioned() {
+    for path in [
+        "/v1/ping",
+        "/v1/version",
+        "/v1/shutdown",
+        "/v1/update/apply",
+    ] {
+        let (app, _) = fresh_app();
+        let response = app
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "{path} should not exist; the bootstrap contract lives at the root only"
+        );
+    }
+}
+
+/// Everything else moved under `/v1`, with no aliases left behind. This is a
+/// hard cutover, so the old spellings must be gone rather than quietly working
+/// and letting a caller keep using them.
+#[tokio::test]
+async fn pre_v1_paths_are_gone() {
+    for (method, path) in [
+        ("POST", "/index"),
+        ("POST", "/index_by_reference"),
+        ("POST", "/get"),
+        ("GET", "/get/ids"),
+        ("POST", "/remove"),
+        ("POST", "/find_similar"),
+        ("POST", "/group_similar"),
+        ("POST", "/cull"),
+        ("POST", "/edit"),
+        ("POST", "/edit_base64"),
+        ("POST", "/style_edit"),
+        ("POST", "/initialize"),
+        ("GET", "/health"),
+        ("GET", "/logs"),
+        ("GET", "/models"),
+        ("GET", "/clip/status"),
+        ("GET", "/assets/status"),
+        ("GET", "/llm/catalog"),
+        ("GET", "/db/stats"),
+        ("POST", "/training/add"),
+        ("POST", "/keywords/cluster"),
+    ] {
+        let (app, _) = fresh_app();
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .unwrap();
+        let status = app.oneshot(request).await.unwrap().status();
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{method} {path} is a pre-/v1 path and must no longer be served"
+        );
+    }
+}
+
+/// The db_path auto-bind middleware matches on the *full* request path, so the
+/// bypass list had to learn the `/v1` prefix when `/initialize` became
+/// `/v1/db/bind`. A stale entry there would silently re-enable binding on the
+/// one route that handles db_path itself.
+#[tokio::test]
+async fn db_bind_is_reachable_under_v1() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    let (app, state) = fresh_app();
+
+    let body = serde_json::json!({ "db_path": db_path.to_str().unwrap() });
+    let response = app
+        .oneshot(
+            Request::post("/v1/db/bind")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.db_path(), Some(db_path));
+}
+
+/// `photo_id` on the training routes is a file path, so it arrives
+/// percent-encoded from `SearchIndexAPI.url` and has to survive the wildcard
+/// capture intact. The plug-in used to concatenate it raw, which broke on any
+/// id containing `?`, `#` or a space; encoding it only helps if axum decodes
+/// the segment back, so assert the round-trip rather than assume it.
+#[tokio::test]
+async fn training_delete_decodes_a_path_shaped_photo_id() {
+    let raw = "/Users/bm/My Photos/a b?c#d.jpg";
+    let encoded = raw
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'~' | b'-' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect::<String>();
+
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::delete(format!("/v1/edit/training/{encoded}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Unbound store: the handler 404s and echoes the id it actually received.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = body_string(response).await;
+    assert!(
+        body.contains(raw),
+        "wildcard capture should decode back to {raw:?}, got {body}"
+    );
+}
+
+/// Job polling is generic and lives at one path, rather than each async
+/// operation growing its own status route. The keyword-clustering enqueue must
+/// therefore hand back where to poll, not just an opaque id.
+#[tokio::test]
+async fn unknown_job_is_a_404_with_a_reason() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::get("/v1/jobs/does-not-exist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let json = body_json(response).await;
+    assert!(json["status"].is_null());
+    // A collected-or-expired job is indistinguishable from a bad id here, so
+    // the message has to say that rather than assert the id was wrong.
+    let error = json["error"].as_str().unwrap();
+    assert!(
+        error.contains("collected") || error.contains("expired"),
+        "404 should explain the one-shot/TTL semantics, got {error:?}"
+    );
+}
+
+/// The old keyword-shaped poll route is gone; nothing should still answer on it.
+#[tokio::test]
+async fn keyword_specific_job_poll_route_is_gone() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::get("/v1/keywords/clusters/jobs/abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

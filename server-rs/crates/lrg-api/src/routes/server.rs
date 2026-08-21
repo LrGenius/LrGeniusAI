@@ -19,23 +19,21 @@ use lrg_providers::provider::{build_provider, ProviderSelection};
 
 use crate::state::AppState;
 
+/// The versioned slice of this module. `/ping`, `/shutdown`, `/version` and
+/// `/version/check` are registered by [`super::bootstrap`] instead, off the
+/// root; `initialize` and `list_models` are registered by [`super::db`] and
+/// [`super::llm`], whose domains they belong to.
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/ping", get(ping))
-        .route("/shutdown", post(shutdown))
-        .route("/unload", post(unload))
-        .route("/restart", post(restart))
-        .route("/initialize", post(initialize))
-        .route("/version", get(get_version))
-        .route("/version/check", post(version_check))
-        .route("/health", get(health))
-        .route("/logs", get(get_logs))
-        .route("/logs/raw/{log_type}", get(get_raw_log))
-        .route("/models", get(list_models).post(list_models))
+        .route("/server/unload", post(unload))
+        .route("/server/restart", post(restart))
+        .route("/server/health", get(health))
+        .route("/server/logs", get(get_logs))
+        .route("/server/logs/{log_type}/raw", get(get_raw_log))
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ModelsQuery {
+pub(super) struct ModelsQuery {
     openai_apikey: Option<String>,
     gemini_apikey: Option<String>,
     ollama_base_url: Option<String>,
@@ -50,7 +48,7 @@ struct ModelsQuery {
 /// (`TaskAnalyzeAndIndex.lua`), so a provider absent here is unreachable from
 /// the UI. The long-dead `"qwen"` key, which was always `[]`, is no longer
 /// emitted: the plugin's inner loop produced no entries for it anyway.
-async fn list_models(
+pub(super) async fn list_models(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
     body: Option<Json<Value>>,
@@ -150,7 +148,7 @@ async fn list_models(
     }))
 }
 
-async fn ping() -> &'static str {
+pub(super) async fn ping() -> &'static str {
     "pong"
 }
 
@@ -163,7 +161,7 @@ fn schedule_shutdown(state: Arc<AppState>) {
     });
 }
 
-async fn shutdown(State(state): State<Arc<AppState>>) -> Json<Value> {
+pub(super) async fn shutdown(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Shutdown request received");
     schedule_shutdown(state);
     Json(json!({"status": "Server is shutting down..."}))
@@ -185,7 +183,10 @@ async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"status": "Resources unloaded successfully."}))
 }
 
-async fn initialize(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
+pub(super) async fn initialize(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<Value>>,
+) -> Response {
     let db_path = body
         .as_ref()
         .and_then(|Json(v)| v.get("db_path"))
@@ -223,11 +224,11 @@ async fn initialize(State(state): State<Arc<AppState>>, body: Option<Json<Value>
     Json(json!({"status": "success", "db_path": db_path})).into_response()
 }
 
-async fn get_version() -> Json<Value> {
+pub(super) async fn get_version() -> Json<Value> {
     Json(serde_json::to_value(version::get_backend_version_info()).unwrap())
 }
 
-async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
+pub(super) async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
     let plugin_version = data.get("plugin_version").and_then(Value::as_str);
     let plugin_release_tag = data.get("plugin_release_tag").and_then(Value::as_str);

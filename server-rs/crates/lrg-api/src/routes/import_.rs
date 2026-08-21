@@ -1,4 +1,4 @@
-//! `POST /import/metadata` — port of `routes/import_.py` +
+//! `POST /v1/photos/metadata/import` — port of `routes/import_.py` +
 //! `services/import_.py::import_metadata_task`: bulk-import previously
 //! generated title/caption/alt_text/keywords into existing (or newly
 //! created metadata-only) photo records.
@@ -10,7 +10,7 @@
 //! replaces a record's metadata wholesale — the exact reason every other
 //! metadata-writing call site in the Python codebase (`services/index.py`,
 //! `routes/edit.py`) always starts from `dict(existing_meta)` before
-//! layering new fields on top — the real Python `/import/metadata`
+//! layering new fields on top — the real Python `/v1/photos/metadata/import`
 //! silently wipes an already-indexed photo's other metadata (embedding
 //! status, culling metrics, catalog_ids, provider/model, ...) on every
 //! import of an existing photo. That is very likely an unintended data-
@@ -32,7 +32,7 @@ use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route(
-        "/import/metadata",
+        "/photos/metadata/import",
         axum::routing::post(import_metadata_batch),
     )
 }

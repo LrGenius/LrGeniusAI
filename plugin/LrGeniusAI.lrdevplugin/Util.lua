@@ -1948,8 +1948,8 @@ end
 -- quality (the backend's `compute_faces = has_task("faces") || cull_pass`);
 -- it deliberately skips the embedding, so it does not need `clip`.
 --
--- @param tasks table Array of task names as sent to /index.
--- @return table Array of family ids, in the order /assets/status reports them.
+-- @param tasks table Array of task names as sent to /v1/index/photos.
+-- @return table Array of family ids, in the order /v1/models/assets reports them.
 --
 function Util.requiredModelFamilies(tasks)
 	if type(tasks) ~= "table" then
@@ -1979,12 +1979,12 @@ end
 ---
 -- Which of the families a run needs are not downloaded yet.
 --
--- Takes the `families` array from /assets/status. A family the run does not
+-- Takes the `families` array from /v1/models/assets. A family the run does not
 -- need is ignored however unready it is, and a required family the backend
 -- does not report at all is treated as present: an older backend that has
 -- never heard of it must not block a run it can perform perfectly well.
 --
--- @param families table `families` from /assets/status.
+-- @param families table `families` from /v1/models/assets.
 -- @param requiredIds table Array of family ids from Util.requiredModelFamilies.
 -- @return table Array of { id, name, approx_bytes } per missing family, in required order.
 --
@@ -2025,7 +2025,7 @@ end
 -- reveal the ones that were never indexed at all. Falls back to the backend's
 -- figure when the catalog count is unavailable.
 --
--- @param stats table|nil The /db/stats response.
+-- @param stats table|nil The /v1/db/stats response.
 -- @param catalogPhotoCount number|nil Photos in the Lightroom catalog.
 -- @return table|nil { total, searchable, unsearchable }, or nil when unknown.
 --

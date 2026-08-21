@@ -1,4 +1,4 @@
-//! `/index` — port of `routes/index.py::index_images_batch` +
+//! `/v1/index/photos` — port of `routes/index.py::index_images_batch` +
 //! `services/index.py::process_image_task`'s core loop: embeddings
 //! (SigLIP2), pHash + culling metrics (always computed), faces (when
 //! requested), catalog association, existing-record merge for
@@ -30,7 +30,7 @@ use crate::routes::route_util::parse_multipart;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new().route("/index", axum::routing::post(index_batch))
+    axum::Router::new().route("/index/photos", axum::routing::post(index_batch))
 }
 
 pub(crate) struct ParsedOptions {
@@ -64,7 +64,7 @@ pub(crate) struct ParsedOptions {
     api_key: Option<String>,
     capture_time: Option<f64>,
     /// Batch-level exposure compensation, from the single-photo multipart
-    /// path. `/index_by_reference` carries it per photo instead — see
+    /// path. `/v1/index/photos/by-path` carries it per photo instead — see
     /// [`PhotoOverrides::exposure_bias`].
     exposure_bias: Option<f64>,
     /// Whether the original is a raw file, from the multipart path. Stored
@@ -88,7 +88,7 @@ pub(crate) struct ParsedOptions {
 
 /// Per-photo values that must not be shared across a grouped request.
 ///
-/// `/index_by_reference` can carry several photos in one call, but the option
+/// `/v1/index/photos/by-path` can carry several photos in one call, but the option
 /// fields arrive flat, one set for the whole request. These are exactly the
 /// ones `prompts.rs` classifies as volatile — reusing one photo's capture
 /// time, keywords or folders for the whole group would feed the model context
@@ -107,7 +107,7 @@ pub(crate) struct PhotoOverrides {
     /// sequence from a burst, and there is no batch-level fallback because a
     /// per-photo EV shared across a group would be actively misleading.
     pub exposure_bias: Option<f64>,
-    /// Per-photo raw flag, for `/index_by_reference`. Falls back to the
+    /// Per-photo raw flag, for `/v1/index/photos/by-path`. Falls back to the
     /// batch-level [`ParsedOptions::is_raw`] when absent.
     pub is_raw: Option<bool>,
 }
@@ -386,7 +386,7 @@ pub(crate) struct UploadedImage {
 
 /// Where [`process_batch`] gets each photo's bytes.
 ///
-/// The distinction is about peak memory, not convenience. `/index_by_reference`
+/// The distinction is about peak memory, not convenience. `/v1/index/photos/by-path`
 /// points at the user's originals — 25–50 MB raw files — and reading the whole
 /// group before normalising any of it kept every one of them resident at once.
 /// The normalised JPEG is a few hundred KB and the raw bytes are dead the
@@ -564,20 +564,20 @@ async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipar
     .await
 }
 
-/// Shared by `/index` (multipart) and `/index_by_reference` (JSON + on-disk
+/// Shared by `/v1/index/photos` (multipart) and `/v1/index/photos/by-path` (JSON + on-disk
 /// paths) once each has gathered its images/photo_ids/option-fields in its
 /// own way — everything past that point (db_path auto-bind, validation,
 /// per-photo processing, response shape) is identical.
 ///
 /// `pre_failures` are errors the caller already knows about before this
-/// point (e.g. `/index_by_reference`'s file-not-found reads) — folded in
+/// point (e.g. `/v1/index/photos/by-path`'s file-not-found reads) — folded in
 /// exactly like an image-normalization failure so failure_count/
 /// error_messages account for them the same way Python's
 /// `read_failures + processing_failures` does.
 ///
 /// `reject_empty_batch` matches Python's per-endpoint difference on a
-/// genuinely empty batch: `/index` 400s ("no images provided"), while
-/// `/index_by_reference` treats an all-paths-invalid batch as a normal
+/// genuinely empty batch: `/v1/index/photos` 400s ("no images provided"), while
+/// `/v1/index/photos/by-path` treats an all-paths-invalid batch as a normal
 /// zero-success response (or a 500 quoting the read errors, if there
 /// were any) rather than a client-error mismatch.
 pub(crate) async fn process_batch(
@@ -1467,7 +1467,7 @@ async fn finish_one(
                 // empty vectors would corrupt person clustering, and clearing
                 // the photo's existing rows would destroy identities a previous
                 // full run had established. It also deliberately leaves
-                // `faces_checked` unset, so `/index/check-unprocessed` still
+                // `faces_checked` unset, so `/v1/index/unprocessed` still
                 // reports the photo as needing a real face pass later.
                 Ok(faces) if options.face_pass == FacePass::QualityOnly => {
                     let inputs: Vec<FaceMetricsInput> = faces

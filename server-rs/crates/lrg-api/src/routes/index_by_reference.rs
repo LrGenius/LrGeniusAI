@@ -1,5 +1,5 @@
-//! `/index_by_reference` — port of `routes/index.py::index_images_batch_by_reference`.
-//! Same processing pipeline as `/index`, but the plugin sends server-side
+//! `/v1/index/photos/by-path` — port of `routes/index.py::index_images_batch_by_reference`.
+//! Same processing pipeline as `/v1/index/photos`, but the plugin sends server-side
 //! file paths in a JSON body instead of uploading image bytes (used when
 //! the backend has filesystem access to the catalog's photos). Shares
 //! `index_upload::process_batch` for everything past reading the files.
@@ -48,7 +48,7 @@ fn image_overrides(item: &Value) -> PhotoOverrides {
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route(
-        "/index_by_reference",
+        "/index/photos/by-path",
         axum::routing::post(index_by_reference),
     )
 }
@@ -128,7 +128,7 @@ async fn index_by_reference(
     // Paths, not bytes: `process_batch` reads each file only when it is about
     // to normalise it, so a group of raw originals is never all resident at
     // once. It also runs the same `normalize_image_bytes` step on these that
-    // `/index` runs on its multipart uploads — converting here too would
+    // `/v1/index/photos` runs on its multipart uploads — converting here too would
     // double-convert.
     //
     // Files that cannot be read are reported by `process_batch` against their

@@ -1,5 +1,5 @@
 //! Port of `services/jobs.py`: a generic in-memory async-job registry
-//! (used today by keyword clustering, `/keywords/cluster/start`). Jobs
+//! (used today by keyword clustering, `/v1/keywords/clusters/jobs`). Jobs
 //! expire after 600s of inactivity; `get_job` on a finished job
 //! returns it once and then removes it — matching Python's one-shot
 //! poll-then-gone semantics exactly.

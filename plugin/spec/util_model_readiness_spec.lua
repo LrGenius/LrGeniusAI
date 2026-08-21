@@ -8,7 +8,7 @@
 
 local Util = require("Util")
 
---- The `families` array as /assets/status reports it, with the given ids unready.
+--- The `families` array as /v1/models/assets reports it, with the given ids unready.
 local function families(unready)
 	local notReady = {}
 	for _, id in ipairs(unready) do

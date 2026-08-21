@@ -137,7 +137,7 @@ at, the plugin switches the source to *All Photographs* to reach it.
 Earlier versions offered a second, prompt-driven path: pick a provider and
 model, write a system instruction, choose a look preset, and let a vision LLM
 propose the develop settings. That path is no longer reachable from the plugin.
-The backend still implements it (`POST /edit`), so it can come back, but the AI
+The backend still implements it (`POST /v1/edit/recipe`), so it can come back, but the AI
 Edit dialog no longer configures it and no run reaches an LLM.
 
 Model choice now only affects [Analyze & Index](Help-Analyze-and-Index) —

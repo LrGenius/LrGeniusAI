@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod bioclip;
+pub mod bootstrap;
 pub mod clip;
 pub mod db;
 pub mod edit;
@@ -10,6 +11,7 @@ pub mod import_;
 pub mod index;
 pub mod index_by_reference;
 pub mod index_upload;
+pub mod jobs;
 pub mod keywords;
 pub mod llm;
 pub(crate) mod route_util;

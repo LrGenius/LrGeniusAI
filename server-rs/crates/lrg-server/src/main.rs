@@ -131,7 +131,7 @@ fn main() {
 
 /// Spawns the freshly-swapped-in binary, detached, with no arguments —
 /// matching how the installer/OS would normally launch it (the plugin
-/// re-calls `/initialize` once the new process is up, same as any other
+/// re-calls `/v1/db/bind` once the new process is up, same as any other
 /// restart). On Windows this goes through `run_hidden.vbs` next to the
 /// exe (installer-placed) to avoid a console flash; falls back to a
 /// direct spawn if that wrapper isn't present (dev/manual runs).

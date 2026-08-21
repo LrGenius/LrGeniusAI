@@ -1,4 +1,4 @@
-//! DB blueprint — port of `routes/db.py`: /db/stats, /db/backup.
+//! DB blueprint: binding the backend to a catalog, stats, and backups.
 //! /db/migrate-photo-ids is legacy (uuid -> photo_id one-time migration)
 //! and isn't carried over to the Rust backend.
 
@@ -15,7 +15,7 @@ use axum::{
         StatusCode,
     },
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
@@ -27,8 +27,13 @@ use crate::state::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        // Binding the backend to a catalog is a database operation, so the
+        // route lives here; the handler still sits in `server.rs`.
+        .route("/db/bind", post(super::server::initialize))
         .route("/db/stats", get(database_stats))
-        .route("/db/backup", get(backup_database))
+        // POST, not GET: taking a backup also retains a copy on disk, which
+        // is not something a safe method may do.
+        .route("/db/backups", post(backup_database))
 }
 
 #[derive(serde::Deserialize)]
