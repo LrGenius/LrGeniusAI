@@ -40,6 +40,31 @@ cargo build --release -p lrg-server
 `cargo test --workspace` and `cargo clippy --workspace --all-targets` should
 both be clean before sending changes.
 
+### Host and port
+
+The server listens on `127.0.0.1:19819`. Both halves are environment
+variables, which is how the Docker image binds to all interfaces:
+
+| Env var | Default |
+|---|---|
+| `GENIUSAI_HOST` | `127.0.0.1` |
+| `GENIUSAI_PORT` | `19819` |
+
+```bash
+GENIUSAI_PORT=19833 ./target/release/geniusai-server --db-path /path/to/lrgenius.db
+```
+
+An unparseable `GENIUSAI_PORT` falls back to the default rather than refusing
+to start, so a typo costs you the port you asked for, not the server.
+
+Moving the port is mainly useful for running a second instance beside an
+installed one — a dev build cannot share 19819 with the copy the plug-in
+auto-launches. Point the plug-in at it with **Plug-in Manager → Backend server
+URL** (`http://127.0.0.1:19833`); that setting is the only place the plug-in
+learns the address, so nothing else needs changing. Note that
+`SearchIndexAPI.startServer` still launches the *installed* binary on the
+default port, so start a custom-port build yourself.
+
 ### Golden tests and `LRG_REQUIRE_GOLDENS`
 
 The ML golden tests — SigLIP2, BioCLIP 2 and the face pipeline — compare real
