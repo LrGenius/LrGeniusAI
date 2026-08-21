@@ -319,7 +319,9 @@ impl IqaPrompts {
             l2_normalize(e);
         }
         let pairs = embeddings
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| (c[0].clone(), c[1].clone()))
             .collect();
         Ok(IqaPrompts { pairs })
