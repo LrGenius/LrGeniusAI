@@ -27,7 +27,7 @@ use lrg_store::IMAGE_TABLE;
 use crate::state::AppState;
 
 /// Sink for `run_clustering`'s stage updates. Async-job callers point this
-/// at the job registry; the synchronous `/keywords/cluster` route passes
+/// at the job registry; the synchronous `/v1/keywords/clusters` route passes
 /// `None` because nobody can observe a job that hasn't been created.
 type ProgressSink<'a> = Option<&'a (dyn Fn(Value) + Send + Sync)>;
 
@@ -39,17 +39,19 @@ fn report(sink: ProgressSink<'_>, progress: Value) {
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
-        .route("/keywords/cluster", axum::routing::post(cluster_keywords))
+        .route("/keywords/clusters", axum::routing::post(cluster_keywords))
+        // The async variant of the same work: POST enqueues a job, GET polls
+        // one by id.
         .route(
-            "/keywords/cluster/start",
+            "/keywords/clusters/jobs",
             axum::routing::post(cluster_keywords_start),
         )
         .route(
-            "/keywords/cluster/status/{job_id}",
+            "/keywords/clusters/jobs/{job_id}",
             axum::routing::get(cluster_keywords_status),
         )
         .route(
-            "/keywords/apply-merges",
+            "/keywords/merges",
             axum::routing::post(keywords_apply_merges),
         )
 }

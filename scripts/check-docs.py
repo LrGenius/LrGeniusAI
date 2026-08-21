@@ -42,6 +42,16 @@ DOC_MAP = REPO / "docs/doc-sources.toml"
 
 HTTP_METHODS = ("get", "post", "put", "delete", "patch", "head", "options")
 
+# `lrg_api::build_router` nests every route module under this prefix, so the
+# path a module writes is not the path it serves. Keep in step with
+# `API_PREFIX` in `server-rs/crates/lrg-api/src/lib.rs`.
+API_PREFIX = "/v1"
+
+# ...except these two, merged at the root instead. They are the unversioned
+# bootstrap contract a new plug-in uses to talk to an old backend, so they are
+# spelled exactly as served. Keep in step with `build_router`.
+UNVERSIONED_ROUTE_FILES = frozenset({"bootstrap.rs", "update.rs"})
+
 
 # --------------------------------------------------------------------------
 # Extraction
@@ -87,7 +97,10 @@ def backend_routes() -> dict[tuple[str, str], str]:
         for m in re.finditer(r"\.route\(\s*\n?\s*\"([^\"]+)\"", text):
             open_idx = text.index("(", m.start())
             body = text[open_idx : _matching_paren(text, open_idx) + 1]
-            path = normalize_path(m.group(1))
+            path = m.group(1)
+            if src.name not in UNVERSIONED_ROUTE_FILES:
+                path = API_PREFIX + path
+            path = normalize_path(path)
             methods = {
                 v.lower()
                 for v in re.findall(

@@ -1,7 +1,7 @@
 //! BioCLIP 2 asset status and download — the species-recognition counterpart
 //! to [`crate::routes::clip`], sharing that module's download machinery.
 //!
-//! `/bioclip/status` reports whether the files are on disk ("ready to
+//! `/v1/models/bioclip` reports whether the files are on disk ("ready to
 //! lazy-load"), which is deliberately distinct from `/health`'s
 //! `species_model`, which reports whether they are currently in memory. The
 //! plugin gates its "Identify species" checkbox on this one.
@@ -41,9 +41,11 @@ const ASSET_NAMES: [&str; 3] = [
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/bioclip/status", get(bioclip_status))
-        .route("/bioclip/download/start", post(download_start))
-        .route("/bioclip/download/status", get(download_status))
+        .route("/models/bioclip", get(bioclip_status))
+        .route(
+            "/models/bioclip/downloads",
+            post(download_start).get(download_status),
+        )
 }
 
 async fn bioclip_status(State(state): State<Arc<AppState>>) -> Json<Value> {

@@ -23,66 +23,99 @@ function SearchIndexAPI.isLocalBackend()
 	return url:match("^https?://127%.0%.0%.1:") or url:match("^https?://localhost:")
 end
 
+-- Backend paths, grouped by domain. Everything lives under `/v1` except the
+-- five-path bootstrap contract below, which is deliberately unversioned: a
+-- plug-in that updates ahead of its backend still has to reach `/ping`,
+-- `/version`, `/version/check` and `/shutdown` on the *old* binary, and post to
+-- `/update/apply` there, to pull the install forward. Version those and a
+-- half-updated machine could not repair itself.
+--
+-- Build request URLs with `SearchIndexAPI.url(KEY, ...)` rather than
+-- concatenating -- it URL-encodes any id segments you pass.
 local ENDPOINTS = {
-	INDEX = "/index",
-	EDIT = "/edit",
-	INDEX_BY_REFERENCE = "/index_by_reference",
-	EDIT_BASE64 = "/edit_base64",
-	GROUP_SIMILAR = "/group_similar",
-	CULL = "/cull",
-	FIND_SIMILAR = "/find_similar",
-	SEARCH = "/search",
-	STATS = "/db/stats",
-	MODELS = "/models",
-	GET_IDS = "/get/ids",
-	REMOVE = "/remove",
-	REMOVE_METADATA = "/remove/metadata",
+	-- Unversioned bootstrap contract. Do not move these.
 	PING = "/ping",
 	VERSION = "/version",
 	VERSION_CHECK = "/version/check",
 	SHUTDOWN = "/shutdown",
-	UNLOAD = "/unload",
-	IMPORT_METADATA = "/import/metadata",
-	START_CLIP_DOWNLOAD = "/clip/download/start",
-	STATUS_CLIP_DOWNLOAD = "/clip/download/status",
-	CLIP_STATUS = "/clip/status",
-	START_BIOCLIP_DOWNLOAD = "/bioclip/download/start",
-	STATUS_BIOCLIP_DOWNLOAD = "/bioclip/download/status",
-	BIOCLIP_STATUS = "/bioclip/status",
-	SPECIES_LINKS = "/species/links",
-	ASSETS_STATUS = "/assets/status",
-	START_ASSETS_DOWNLOAD = "/assets/download/start",
-	STATUS_ASSETS_DOWNLOAD = "/assets/download/status",
-	LLM_CATALOG = "/llm/catalog",
-	LLM_STATUS = "/llm/status",
-	START_LLM_DOWNLOAD = "/llm/download/start",
-	STATUS_LLM_DOWNLOAD = "/llm/download/status",
-	CHECK_UNPROCESSED = "/index/check-unprocessed",
-	FACES_CLUSTER = "/faces/cluster",
-	FACES_PERSONS = "/faces/persons",
-	FACES_PERSON_PHOTOS = "/faces/persons", -- suffix /<id>/photos
-	FACES_DETECT = "/faces/detect",
-	FACES_QUERY = "/faces/query",
-	DB_BACKUP = "/db/backup",
-	SYNC_CLEANUP = "/sync/cleanup",
-	SYNC_CLAIM = "/sync/claim",
-	TRAINING_ADD = "/training/add",
-	TRAINING_LIST = "/training/list",
-	TRAINING_COUNT = "/training/count",
-	TRAINING_DELETE = "/training", -- DELETE /training/<photo_id>
-	TRAINING_CLEAR = "/training", -- DELETE /training (all)
-	TRAINING_STATS = "/training/stats",
-	STYLE_EDIT = "/style_edit",
-	KEYWORDS_CLUSTER = "/keywords/cluster",
-	KEYWORDS_CLUSTER_START = "/keywords/cluster/start",
-	KEYWORDS_CLUSTER_STATUS = "/keywords/cluster/status",
-	KEYWORDS_APPLY_MERGES = "/keywords/apply-merges",
-	LOGS = "/logs",
-	LOGS_RAW = "/logs/raw",
-	INITIALIZE = "/initialize",
-	RESTART = "/restart",
-	HEALTH = "/health",
 	UPDATE_APPLY = "/update/apply",
+
+	-- Server lifecycle and introspection
+	UNLOAD = "/v1/server/unload",
+	RESTART = "/v1/server/restart",
+	HEALTH = "/v1/server/health",
+	LOGS = "/v1/server/logs",
+	LOGS_RAW = "/v1/server/logs", -- suffix /<log_type>/raw
+	INITIALIZE = "/v1/db/bind",
+
+	-- Database
+	STATS = "/v1/db/stats",
+	DB_BACKUP = "/v1/db/backups",
+
+	-- Stored photo records
+	GET_PHOTO_DATA = "/v1/photos/lookup",
+	GET_IDS = "/v1/photos/ids",
+	REMOVE = "/v1/photos/remove",
+	REMOVE_METADATA = "/v1/photos/metadata/remove",
+	IMPORT_METADATA = "/v1/photos/metadata/import",
+	SYNC_CLAIM = "/v1/photos/catalogs/claim",
+	SYNC_CLEANUP = "/v1/photos/catalogs/cleanup",
+
+	-- Indexing pipeline
+	INDEX = "/v1/index/photos",
+	INDEX_BY_REFERENCE = "/v1/index/photos/by-path",
+	CHECK_UNPROCESSED = "/v1/index/unprocessed",
+
+	-- Search and culling
+	SEARCH = "/v1/search",
+	FIND_SIMILAR = "/v1/search/similar",
+	GROUP_SIMILAR = "/v1/cull/groups",
+	CULL = "/v1/cull/grade",
+
+	-- Faces and persons
+	FACES_DETECT = "/v1/faces/detect",
+	FACES_QUERY = "/v1/faces/search",
+	FACES_CLUSTER = "/v1/faces/cluster",
+	FACES_PERSONS = "/v1/faces/persons",
+	FACES_PERSON_PHOTOS = "/v1/faces/persons", -- suffix /<id>/photos
+
+	-- AI develop edits and the style-training corpus
+	EDIT = "/v1/edit/recipe",
+	EDIT_BASE64 = "/v1/edit/recipe/base64",
+	STYLE_EDIT = "/v1/edit/style",
+	TRAINING_ADD = "/v1/edit/training",
+	TRAINING_LIST = "/v1/edit/training",
+	TRAINING_CLEAR = "/v1/edit/training", -- DELETE /v1/edit/training (all)
+	TRAINING_DELETE = "/v1/edit/training", -- suffix /<photo_id>
+	TRAINING_STATS = "/v1/edit/training/stats",
+	TRAINING_COUNT = "/v1/edit/training/count",
+
+	-- Keyword clustering
+	KEYWORDS_CLUSTER = "/v1/keywords/clusters",
+	KEYWORDS_CLUSTER_START = "/v1/keywords/clusters/jobs",
+	KEYWORDS_CLUSTER_STATUS = "/v1/keywords/clusters/jobs", -- suffix /<job_id>
+	KEYWORDS_APPLY_MERGES = "/v1/keywords/merges",
+
+	-- Local ML model assets
+	CLIP_STATUS = "/v1/models/clip",
+	START_CLIP_DOWNLOAD = "/v1/models/clip/downloads",
+	STATUS_CLIP_DOWNLOAD = "/v1/models/clip/downloads",
+	BIOCLIP_STATUS = "/v1/models/bioclip",
+	START_BIOCLIP_DOWNLOAD = "/v1/models/bioclip/downloads",
+	STATUS_BIOCLIP_DOWNLOAD = "/v1/models/bioclip/downloads",
+	ASSETS_STATUS = "/v1/models/assets",
+	START_ASSETS_DOWNLOAD = "/v1/models/assets/downloads",
+	STATUS_ASSETS_DOWNLOAD = "/v1/models/assets/downloads",
+
+	-- LLM providers and the local engine
+	MODELS = "/v1/llm/providers/models",
+	LLM_CATALOG = "/v1/llm/catalog",
+	LLM_STATUS = "/v1/llm/status",
+	START_LLM_DOWNLOAD = "/v1/llm/downloads",
+	STATUS_LLM_DOWNLOAD = "/v1/llm/downloads",
+
+	-- Species links
+	SPECIES_LINKS = "/v1/species/links",
 }
 
 local EXPORT_SETTINGS = {
@@ -106,6 +139,28 @@ local EXPORT_SETTINGS = {
 local _request
 local _requestMultipart
 local _urlEncode
+
+--- Builds an absolute backend URL for an `ENDPOINTS` key.
+---
+--- Extra arguments are appended as path segments and URL-encoded, so ids that
+--- contain slashes, spaces or `#` survive the trip. `photo_id` in particular is
+--- a file path on the training routes, which is exactly why hand-concatenating
+--- these was wrong.
+---
+--- @param key string a key of `ENDPOINTS`
+--- @param ... string|number path segments to append
+--- @return string
+function SearchIndexAPI.url(key, ...)
+	local path = ENDPOINTS[key]
+	if path == nil then
+		error("SearchIndexAPI.url: unknown endpoint key " .. tostring(key), 2)
+	end
+	local url = getBaseUrl() .. path
+	for _, segment in ipairs({ ... }) do
+		url = url .. "/" .. _urlEncode(tostring(segment))
+	end
+	return url
+end
 
 -- Returns a string safe for logging; never passes a table to tostring (avoids "table: 0x...").
 local function httpStatusForLog(status, hdrs)
@@ -663,7 +718,7 @@ end
 -- Analyzes and indexes a single photo by submitting only its file path; the
 -- backend reads and converts the original file (RAW/JPEG/HEIC) itself.
 -- Only valid when the backend runs on the same machine (see isLocalBackend).
--- Uses the /index_by_reference endpoint; same options as analyzeAndIndexPhoto.
+-- Uses the /v1/index/photos/by-path endpoint; same options as analyzeAndIndexPhoto.
 -- @param photoId string
 -- @param filePath string Absolute path to the original photo file.
 -- @param options table Same as analyzeAndIndexPhoto.
@@ -680,7 +735,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 	end
 
 	options = options or {}
-	local url = getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE
+	local url = SearchIndexAPI.url("INDEX_BY_REFERENCE")
 
 	local body = {
 		images = {
@@ -766,7 +821,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 end
 
 ---
--- Analyzes and indexes several photos in one /index_by_reference request.
+-- Analyzes and indexes several photos in one /v1/index/photos/by-path request.
 --
 -- Worthwhile in two cases, both decided by Util.groupedBatchSize: a run that
 -- generates no AI metadata (the server reads, decodes and measures the group
@@ -875,7 +930,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 	-- had died. The floor keeps a small group from timing out on a cold start.
 	local perPhoto = llmRun and 720 or 60
 	local timeout = math.max(300, perPhoto * #images)
-	local response, err = _request("POST", getBaseUrl() .. ENDPOINTS.INDEX_BY_REFERENCE, body, timeout)
+	local response, err = _request("POST", SearchIndexAPI.url("INDEX_BY_REFERENCE"), body, timeout)
 
 	if not response then
 		log:error("Failed to analyze/index photo group (by reference): " .. tostring(err))
@@ -921,7 +976,7 @@ end
 -- @return boolean success, table|string response - Returns success status and response data or error message
 --
 -- No task calls this any more: AI Edit runs on the style engine
--- (`SearchIndexAPI.styleEdit`) alone. `/edit` and `/edit_base64` are still
+-- (`SearchIndexAPI.styleEdit`) alone. `/v1/edit/recipe` and `/v1/edit/recipe/base64` are still
 -- served by the backend, so this wrapper stays as the way back to the
 -- prompt-driven LLM edit rather than being deleted with it.
 ---
@@ -994,7 +1049,7 @@ function SearchIndexAPI.condenseMessages(messages)
 end
 
 ---
--- Interprets an /edit response into the (ok, valueOrError) pair the callers use.
+-- Interprets an /v1/edit/recipe response into the (ok, valueOrError) pair the callers use.
 --
 -- Extracted from generateEditRecipePhoto so it can be unit tested: the
 -- surrounding function builds a multipart body and does HTTP, but every bug
@@ -1017,7 +1072,7 @@ function SearchIndexAPI.interpretEditResponse(response, err)
 				.. " value="
 				.. tostring(response)
 		)
-		return false, "Invalid response type from /edit endpoint: " .. tostring(type(response))
+		return false, "Invalid response type from /v1/edit/recipe endpoint: " .. tostring(type(response))
 	end
 	if response.status == "success" then
 		return true, response
@@ -1027,7 +1082,7 @@ function SearchIndexAPI.interpretEditResponse(response, err)
 end
 
 ---
--- Interprets an /index response for a single photo.
+-- Interprets an /v1/index/photos response for a single photo.
 --
 -- Extracted from analyzeAndIndexPhoto for the same reason as
 -- interpretEditResponse. Returns the whole response on success so the caller
@@ -1045,7 +1100,7 @@ function SearchIndexAPI.interpretIndexResponse(response, err, filename)
 	end
 	if type(response) ~= "table" then
 		log:error("Index response has unexpected type: " .. tostring(type(response)))
-		return false, "Invalid response type from /index endpoint: " .. tostring(type(response))
+		return false, "Invalid response type from /v1/index/photos endpoint: " .. tostring(type(response))
 	end
 
 	if response.status == "processed" then
@@ -1078,7 +1133,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 
 	local filename = LrPathUtils.leafName(filepath)
 	options = options or {}
-	local url = getBaseUrl() .. ENDPOINTS.EDIT
+	local url = SearchIndexAPI.url("EDIT")
 	local mimeChunks = {}
 
 	table.insert(mimeChunks, { name = "photo_id", value = photoId })
@@ -1197,7 +1252,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 
 	options = options or {}
 
-	local url = getBaseUrl() .. ENDPOINTS.INDEX
+	local url = SearchIndexAPI.url("INDEX")
 
 	-- Prepare multipart content chunks
 	local mimeChunks = {}
@@ -1358,7 +1413,7 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 		params.catalog_id = cid
 	end
 
-	local url = getBaseUrl() .. ENDPOINTS.SEARCH
+	local url = SearchIndexAPI.url("SEARCH")
 
 	-- Build search_sources for API (snake_case). If searchOptions is nil, backend uses defaults.
 	local search_sources = nil
@@ -1430,7 +1485,7 @@ end
 
 function SearchIndexAPI.getStats()
 	local cid = getCatalogId()
-	local url = getBaseUrl() .. ENDPOINTS.STATS
+	local url = SearchIndexAPI.url("STATS")
 	if cid then
 		url = url .. (url:find("?") and "&" or "?") .. "catalog_id=" .. cid
 	end
@@ -1438,7 +1493,7 @@ function SearchIndexAPI.getStats()
 end
 
 function SearchIndexAPI.getBackendVersion()
-	return _request("GET", getBaseUrl() .. ENDPOINTS.VERSION)
+	return _request("GET", SearchIndexAPI.url("VERSION"))
 end
 
 function SearchIndexAPI.checkVersionCompatibility()
@@ -1449,7 +1504,7 @@ function SearchIndexAPI.checkVersionCompatibility()
 		plugin_release_tag = pluginReleaseTag,
 		plugin_build = tonumber(Info.BUILD) or 0,
 	}
-	return _request("POST", getBaseUrl() .. ENDPOINTS.VERSION_CHECK, body)
+	return _request("POST", SearchIndexAPI.url("VERSION_CHECK"), body)
 end
 
 function SearchIndexAPI.ensureVersionCompatibility()
@@ -1502,7 +1557,7 @@ function SearchIndexAPI.formatStats(stats)
 end
 
 function SearchIndexAPI.getAllIndexedPhotoIds(requireEmbeddings)
-	local url = getBaseUrl() .. ENDPOINTS.GET_IDS
+	local url = SearchIndexAPI.url("GET_IDS")
 	local params = {}
 	if requireEmbeddings then
 		params.has_embedding = "true"
@@ -1542,7 +1597,7 @@ function SearchIndexAPI.getPhotoData(photoId)
 		return nil
 	end
 
-	local url = getBaseUrl() .. "/get"
+	local url = SearchIndexAPI.url("GET_PHOTO_DATA")
 	local body = { photo_id = photoId }
 	local cid = getCatalogId()
 	if cid then
@@ -1584,7 +1639,7 @@ function SearchIndexAPI.groupSimilarPhotos(photoIds, options)
 		culling_preset = options.culling_preset or "default",
 	}
 
-	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.GROUP_SIMILAR, body, 300)
+	local result, err = _request("POST", SearchIndexAPI.url("GROUP_SIMILAR"), body, 300)
 	if err then
 		log:error("groupSimilarPhotos failed: " .. tostring(err))
 		return nil, err
@@ -1644,7 +1699,7 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		body.semantic_weight = options.semantic_weight
 	end
 
-	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CULL, body, 300)
+	local result, err = _request("POST", SearchIndexAPI.url("CULL"), body, 300)
 	if err then
 		log:error("cullPhotos failed: " .. tostring(err))
 		return nil, err
@@ -1672,7 +1727,7 @@ function SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, tasks)
 		regenerate_metadata = false,
 	}
 
-	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body, 120)
+	local result, err = _request("POST", SearchIndexAPI.url("CHECK_UNPROCESSED"), body, 120)
 	if err then
 		log:error("checkUnprocessedPhotoIds failed: " .. tostring(err))
 		return nil, err
@@ -1712,7 +1767,7 @@ function SearchIndexAPI.findSimilarImages(photoId, options)
 		body.phash_max_hamming,
 		body.scope_photo_ids and (#body.scope_photo_ids .. " ids") or "all"
 	)
-	local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.FIND_SIMILAR, body, 120)
+	local result, err = _request("POST", SearchIndexAPI.url("FIND_SIMILAR"), body, 120)
 	if err then
 		log:error("findSimilarImages failed: " .. tostring(err))
 		return nil, err
@@ -1723,7 +1778,7 @@ function SearchIndexAPI.findSimilarImages(photoId, options)
 end
 
 function SearchIndexAPI.removePhotoId(photoId)
-	local url = getBaseUrl() .. ENDPOINTS.REMOVE
+	local url = SearchIndexAPI.url("REMOVE")
 	local body = { photo_id = photoId }
 	log:trace("Removing photo_id: " .. photoId)
 
@@ -1743,7 +1798,7 @@ end
 --- Remove only AI-generated metadata for a photo (keeps embeddings so the photo stays in the index).
 --- Use when the user discards a suggestion in the review dialog so they can regenerate later.
 function SearchIndexAPI.removePhotoMetadata(photoId)
-	local url = getBaseUrl() .. ENDPOINTS.REMOVE_METADATA
+	local url = SearchIndexAPI.url("REMOVE_METADATA")
 	local body = { photo_id = photoId }
 	log:trace("Removing metadata for photo_id: " .. photoId)
 
@@ -1814,7 +1869,7 @@ function SearchIndexAPI.syncCleanup()
 		for j = startIdx, stopIdx do
 			batch[#batch + 1] = photoIds[j]
 		end
-		local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.SYNC_CLEANUP, {
+		local result, err = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
 			catalog_id = catalogId,
 			photo_ids = batch,
 		}, 120)
@@ -1922,7 +1977,7 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
 		for j = startIdx, stopIdx do
 			batch[#batch + 1] = photoIds[j]
 		end
-		local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.SYNC_CLAIM, {
+		local result, err = _request("POST", SearchIndexAPI.url("SYNC_CLAIM"), {
 			catalog_id = catalogId,
 			photo_ids = batch,
 		}, 120)
@@ -2583,7 +2638,7 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
 				if importCid then
 					importBody.catalog_id = importCid
 				end
-				local response = _request("POST", getBaseUrl() .. ENDPOINTS.IMPORT_METADATA, importBody)
+				local response = _request("POST", SearchIndexAPI.url("IMPORT_METADATA"), importBody)
 				if response ~= nil and response.status == "processed" then
 					stats.success = stats.success + #metadataBatch
 				else
@@ -2631,7 +2686,7 @@ function SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope
 end
 
 function SearchIndexAPI.pingServer()
-	local url = getBaseUrl() .. "/ping"
+	local url = SearchIndexAPI.url("PING")
 	local result, hdrs = LrHttp.get(url)
 	local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status) or nil
 	if status == 200 and result == "pong" then
@@ -2647,7 +2702,7 @@ function SearchIndexAPI.isBackendOnLocalhost()
 end
 
 function SearchIndexAPI.downloadDatabaseBackup()
-	local url = getBaseUrl() .. ENDPOINTS.DB_BACKUP
+	local url = SearchIndexAPI.url("DB_BACKUP")
 	log:info("downloadDatabaseBackup: start, url=" .. tostring(url))
 	local outputPath = LrDialogs.runSavePanel({
 		title = "Save database backup",
@@ -2902,7 +2957,7 @@ function SearchIndexAPI.shutdownServer(opts)
 		return true
 	end
 
-	local url = getBaseUrl() .. ENDPOINTS.SHUTDOWN
+	local url = SearchIndexAPI.url("SHUTDOWN")
 	log:trace("Requesting graceful backend shutdown")
 
 	-- /shutdown returns JSON, so we can go through _request() decoding.
@@ -2924,7 +2979,7 @@ function SearchIndexAPI.shutdownServer(opts)
 end
 
 function SearchIndexAPI.unloadResources()
-	local url = getBaseUrl() .. ENDPOINTS.UNLOAD
+	local url = SearchIndexAPI.url("UNLOAD")
 	log:trace("Requesting backend model unload")
 	local status, response = LrTasks.pcall(function()
 		return _request("POST", url, {}, 10) -- 10s timeout
@@ -2939,7 +2994,7 @@ function SearchIndexAPI.unloadResources()
 end
 
 function SearchIndexAPI.restartBackend()
-	local url = getBaseUrl() .. ENDPOINTS.RESTART
+	local url = SearchIndexAPI.url("RESTART")
 	log:info("Requesting backend restart via API")
 	local _, err = _request("POST", url, {}, 5)
 	if err then
@@ -2972,7 +3027,7 @@ function SearchIndexAPI.initializeCatalog(dbPath)
 		dbPath = getDbPath()
 	end
 
-	local url = getBaseUrl() .. ENDPOINTS.INITIALIZE
+	local url = SearchIndexAPI.url("INITIALIZE")
 	log:info("Initializing catalog database at backend: " .. tostring(dbPath))
 	local response, err = _request("POST", url, { db_path = dbPath }, 10)
 
@@ -3265,7 +3320,7 @@ _request = function(method, url, body, timeout, options)
 	-- Auto-inject db_path so the backend can transparently re-bind after a
 	-- crash/restart that wiped its in-memory DB_PATH. Only for local backends
 	-- (a remote backend manages its own db_path via argv/env). Skip if the
-	-- caller already supplied db_path (e.g. /initialize itself).
+	-- caller already supplied db_path (e.g. /v1/db/bind itself).
 	if SearchIndexAPI.isLocalBackend() then
 		local dbPath = getDbPath()
 		if dbPath then
@@ -3467,7 +3522,7 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 		if checkCid then
 			body.catalog_id = checkCid
 		end
-		local result, err = _request("POST", getBaseUrl() .. ENDPOINTS.CHECK_UNPROCESSED, body)
+		local result, err = _request("POST", SearchIndexAPI.url("CHECK_UNPROCESSED"), body)
 		if err then
 			ErrorHandler.handleError("Failed to check unprocessed photos", err)
 			return false, {}
@@ -3579,7 +3634,7 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 	end
 
 	-- Start async job
-	local startUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_START
+	local startUrl = SearchIndexAPI.url("KEYWORDS_CLUSTER_START")
 	local startResp, startErr = _request("POST", startUrl, body, 30)
 	if startErr or not startResp or not startResp.job_id then
 		log:error("clusterKeywords: failed to start async job: " .. tostring(startErr))
@@ -3589,7 +3644,7 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 	-- Poll until done. Every poll reports back to the caller so the UI keeps
 	-- moving even while a single LLM round-trip runs for minutes.
 	local jobId = startResp.job_id
-	local statusUrl = getBaseUrl() .. ENDPOINTS.KEYWORDS_CLUSTER_STATUS .. "/" .. jobId
+	local statusUrl = SearchIndexAPI.url("KEYWORDS_CLUSTER_STATUS", jobId)
 	local startedAt = LrDate.currentTime()
 	local lastStageAt = startedAt
 	local lastStageKey = nil
@@ -3679,7 +3734,7 @@ function SearchIndexAPI.applyKeywordMerges(pairs)
 	for _, pair in ipairs(pairs) do
 		table.insert(merges, { duplicate = pair.duplicateName, canonical = pair.canonicalName })
 	end
-	local url = getBaseUrl() .. ENDPOINTS.KEYWORDS_APPLY_MERGES
+	local url = SearchIndexAPI.url("KEYWORDS_APPLY_MERGES")
 	local result, err = _request("POST", url, { merges = merges }, 60)
 	if err then
 		log:error("applyKeywordMerges failed: " .. tostring(err))
@@ -3692,7 +3747,7 @@ end
 -- @param distanceThreshold number Optional cosine distance; default 0.5. Use 0.45 if over-merge; 0.55-0.65 if same person split.
 -- @return table|nil { status, person_count, face_count, updated } or nil, err
 function SearchIndexAPI.clusterFaces(distanceThreshold)
-	local url = getBaseUrl() .. ENDPOINTS.FACES_CLUSTER
+	local url = SearchIndexAPI.url("FACES_CLUSTER")
 	local body = {}
 	if distanceThreshold and type(distanceThreshold) == "number" then
 		body.distance_threshold = distanceThreshold
@@ -3709,7 +3764,7 @@ end
 -- Get list of all persons (face clusters) with name, face_count, photo_count (no thumbnails).
 -- @return table|nil { status, persons = { { person_id, name, face_count, photo_count }, ... } } or nil, err
 function SearchIndexAPI.getPersons()
-	local url = getBaseUrl() .. ENDPOINTS.FACES_PERSONS
+	local url = SearchIndexAPI.url("FACES_PERSONS")
 	local result, err = _request("GET", url)
 	if err then
 		log:error("getPersons failed: " .. err)
@@ -3725,7 +3780,7 @@ function SearchIndexAPI.getPersonThumbnail(personId)
 	if not personId or personId == "" then
 		return nil, "person_id required"
 	end
-	local url = getBaseUrl() .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId .. "/thumbnail"
+	local url = SearchIndexAPI.url("FACES_PERSON_PHOTOS", personId, "thumbnail")
 	local result, err = _request("GET", url)
 	if err then
 		log:error("getPersonThumbnail failed: " .. err)
@@ -3743,7 +3798,7 @@ function SearchIndexAPI.setPersonName(personId, name)
 	if not personId or personId == "" then
 		return false, "person_id required"
 	end
-	local url = getBaseUrl() .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId
+	local url = SearchIndexAPI.url("FACES_PERSON_PHOTOS", personId)
 	local _, err = _request("PUT", url, { name = name or "" })
 	if err then
 		log:error("setPersonName failed: " .. err)
@@ -3760,7 +3815,7 @@ function SearchIndexAPI.getPhotosForPerson(personId)
 	if not personId or personId == "" then
 		return nil, "person_id required"
 	end
-	local url = getBaseUrl() .. ENDPOINTS.FACES_PERSON_PHOTOS .. "/" .. personId .. "/photos"
+	local url = SearchIndexAPI.url("FACES_PERSON_PHOTOS", personId, "photos")
 	local result, err = _request("GET", url, {})
 	if err then
 		log:error("getPhotosForPerson failed: " .. err)
@@ -3777,7 +3832,7 @@ function SearchIndexAPI.detectFacesInImage(imageBase64)
 	if not imageBase64 or imageBase64 == "" then
 		return nil, "image (base64) required"
 	end
-	local url = getBaseUrl() .. ENDPOINTS.FACES_DETECT
+	local url = SearchIndexAPI.url("FACES_DETECT")
 	local result, err = _request("POST", url, { image = imageBase64 })
 	if err then
 		log:error("detectFacesInImage failed: " .. err)
@@ -3796,7 +3851,7 @@ function SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, nResults)
 	if not imageBase64 or imageBase64 == "" then
 		return nil, "image (base64) required"
 	end
-	local url = getBaseUrl() .. ENDPOINTS.FACES_QUERY
+	local url = SearchIndexAPI.url("FACES_QUERY")
 	local body = { image = imageBase64 }
 	if faceIndex ~= nil and type(faceIndex) == "number" then
 		body.face_index = faceIndex
@@ -3833,7 +3888,7 @@ end
 -- @param geminiApiKey string|nil Gemini API key for listing Gemini models
 -- @return table|nil Response from server with format: { models = { qwen = {...}, ollama = {...}, ... } }
 function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
-	local url = getBaseUrl() .. ENDPOINTS.MODELS
+	local url = SearchIndexAPI.url("MODELS")
 	local body = {
 		openai_apikey = openaiApiKey,
 		gemini_apikey = geminiApiKey,
@@ -3855,7 +3910,7 @@ function SearchIndexAPI.downloadRawLog(logType, targetPath)
 		return false
 	end
 
-	local url = getBaseUrl() .. ENDPOINTS.LOGS_RAW .. "/" .. tostring(logType)
+	local url = SearchIndexAPI.url("LOGS_RAW", logType, "raw")
 	log:trace("Downloading raw " .. logType .. " log from: " .. url)
 
 	local ok, res, hdrs = LrTasks.pcall(function()
@@ -3898,7 +3953,7 @@ function SearchIndexAPI.startClipDownload()
 		return
 	end
 
-	local status, err = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
+	local status, err = _request("GET", SearchIndexAPI.url("STATUS_CLIP_DOWNLOAD"))
 	if not err and status ~= nil and status.status == "downloading" then
 		log:trace("CLIP model download is already in progress")
 		return
@@ -3909,7 +3964,7 @@ function SearchIndexAPI.startClipDownload()
 		functionContext = nil,
 	})
 
-	local url = getBaseUrl() .. ENDPOINTS.START_CLIP_DOWNLOAD
+	local url = SearchIndexAPI.url("START_CLIP_DOWNLOAD")
 	local body = {}
 
 	local _, postErr = _request("POST", url, body)
@@ -3921,7 +3976,7 @@ function SearchIndexAPI.startClipDownload()
 
 	LrTasks.startAsyncTask(function()
 		while true do
-			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_CLIP_DOWNLOAD)
+			local loopStatus, loopErr = _request("GET", SearchIndexAPI.url("STATUS_CLIP_DOWNLOAD"))
 			if loopErr then
 				ErrorHandler.handleError("Error downloading CLIP model", loopErr)
 				if progressScope ~= nil then
@@ -3986,7 +4041,7 @@ end
 -- @return string|nil error
 --
 function SearchIndexAPI.getAssetStatus()
-	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.ASSETS_STATUS)
+	local res, err = _request("GET", SearchIndexAPI.url("ASSETS_STATUS"))
 	if err then
 		log:error("getAssetStatus failed: " .. tostring(err))
 		return nil, err
@@ -4008,7 +4063,7 @@ function SearchIndexAPI.startAssetDownload()
 		return
 	end
 
-	local running, runErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_ASSETS_DOWNLOAD)
+	local running, runErr = _request("GET", SearchIndexAPI.url("STATUS_ASSETS_DOWNLOAD"))
 	if not runErr and running ~= nil and running.status == "downloading" then
 		log:trace("Combined model download is already in progress")
 		return
@@ -4019,7 +4074,7 @@ function SearchIndexAPI.startAssetDownload()
 		functionContext = nil,
 	})
 
-	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_ASSETS_DOWNLOAD, {})
+	local _, postErr = _request("POST", SearchIndexAPI.url("START_ASSETS_DOWNLOAD"), {})
 	if postErr then
 		log:error("startAssetDownload failed: " .. postErr)
 		progressScope:done()
@@ -4028,7 +4083,7 @@ function SearchIndexAPI.startAssetDownload()
 
 	LrTasks.startAsyncTask(function()
 		while true do
-			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_ASSETS_DOWNLOAD)
+			local loopStatus, loopErr = _request("GET", SearchIndexAPI.url("STATUS_ASSETS_DOWNLOAD"))
 			if loopErr then
 				ErrorHandler.handleError("Error downloading AI models", loopErr)
 				progressScope:done()
@@ -4082,7 +4137,7 @@ end
 ---
 -- Preflight gate: stop a run that is about to lose a signal it was asked for.
 --
--- /assets/status already knew the models were missing, but nothing consulted
+-- /v1/models/assets already knew the models were missing, but nothing consulted
 -- it when a run started, so the first sign of trouble was a warning after the
 -- indexing time had already been spent. This asks before, while the answer is
 -- still cheap.
@@ -4103,7 +4158,7 @@ function SearchIndexAPI.confirmModelsReadyForTasks(tasks)
 
 	local status, err = SearchIndexAPI.getAssetStatus()
 	if not status or type(status.families) ~= "table" then
-		log:warn("Model readiness preflight skipped: " .. tostring(err or "no families in /assets/status"))
+		log:warn("Model readiness preflight skipped: " .. tostring(err or "no families in /v1/models/assets"))
 		return true
 	end
 
@@ -4168,7 +4223,7 @@ local lastBioclipReadyStatus = nil
 -- @return string|nil message
 --
 function SearchIndexAPI.isBioclipReady()
-	local url = getBaseUrl() .. ENDPOINTS.BIOCLIP_STATUS
+	local url = SearchIndexAPI.url("BIOCLIP_STATUS")
 	local res, err = _request("GET", url)
 	if err then
 		local errStr = (type(err) == "string") and err or "unknown"
@@ -4215,7 +4270,7 @@ function SearchIndexAPI.getSpeciesLinks(name, rank, lang)
 	if type(lang) == "string" and lang ~= "" then
 		params.lang = _urlEncode(lang)
 	end
-	local url = buildUrlWithParams(getBaseUrl() .. ENDPOINTS.SPECIES_LINKS, params)
+	local url = buildUrlWithParams(SearchIndexAPI.url("SPECIES_LINKS"), params)
 	local res, err = _request("GET", url, nil, 20)
 	if err then
 		local errStr = (type(err) == "string") and err or "unknown"
@@ -4242,7 +4297,7 @@ function SearchIndexAPI.startBioclipDownload()
 		return
 	end
 
-	local status, err = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_BIOCLIP_DOWNLOAD)
+	local status, err = _request("GET", SearchIndexAPI.url("STATUS_BIOCLIP_DOWNLOAD"))
 	if not err and status ~= nil and status.status == "downloading" then
 		log:trace("BioCLIP model download is already in progress")
 		return
@@ -4253,7 +4308,7 @@ function SearchIndexAPI.startBioclipDownload()
 		functionContext = nil,
 	})
 
-	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_BIOCLIP_DOWNLOAD, {})
+	local _, postErr = _request("POST", SearchIndexAPI.url("START_BIOCLIP_DOWNLOAD"), {})
 	if postErr then
 		log:error("startBioclipDownload failed: " .. postErr)
 		progressScope:done()
@@ -4262,7 +4317,7 @@ function SearchIndexAPI.startBioclipDownload()
 
 	LrTasks.startAsyncTask(function()
 		while true do
-			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_BIOCLIP_DOWNLOAD)
+			local loopStatus, loopErr = _request("GET", SearchIndexAPI.url("STATUS_BIOCLIP_DOWNLOAD"))
 			if loopErr then
 				ErrorHandler.handleError("Error downloading BioCLIP model", loopErr)
 				progressScope:setCaption(
@@ -4318,7 +4373,7 @@ end
 -- @return string|nil error
 --
 function SearchIndexAPI.getLlmCatalog()
-	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_CATALOG)
+	local res, err = _request("GET", SearchIndexAPI.url("LLM_CATALOG"))
 	if err then
 		log:error("getLlmCatalog failed: " .. tostring(err))
 		return nil, err
@@ -4333,7 +4388,7 @@ end
 -- @return string|nil error
 --
 function SearchIndexAPI.getLlmStatus()
-	local res, err = _request("GET", getBaseUrl() .. ENDPOINTS.LLM_STATUS)
+	local res, err = _request("GET", SearchIndexAPI.url("LLM_STATUS"))
 	if err then
 		log:error("getLlmStatus failed: " .. tostring(err))
 		return nil, err
@@ -4357,13 +4412,13 @@ function SearchIndexAPI.startLlmDownload(modelId)
 		return false, "No model id provided"
 	end
 
-	local status = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+	local status = _request("GET", SearchIndexAPI.url("STATUS_LLM_DOWNLOAD"))
 	if status ~= nil and status.status == "downloading" then
 		log:trace("A local model download is already in progress")
 		return true
 	end
 
-	local _, postErr = _request("POST", getBaseUrl() .. ENDPOINTS.START_LLM_DOWNLOAD, { id = modelId })
+	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), { id = modelId })
 	if postErr then
 		log:error("startLlmDownload failed: " .. tostring(postErr))
 		return false, postErr
@@ -4376,7 +4431,7 @@ function SearchIndexAPI.startLlmDownload(modelId)
 
 	LrTasks.startAsyncTask(function()
 		while true do
-			local loopStatus, loopErr = _request("GET", getBaseUrl() .. ENDPOINTS.STATUS_LLM_DOWNLOAD)
+			local loopStatus, loopErr = _request("GET", SearchIndexAPI.url("STATUS_LLM_DOWNLOAD"))
 			if loopErr then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/LlmDownload/ErrorTitle=Error downloading local AI model"),
@@ -4430,7 +4485,7 @@ end
 
 local lastClipReadyStatus = nil
 function SearchIndexAPI.isClipReady()
-	local url = getBaseUrl() .. ENDPOINTS.CLIP_STATUS
+	local url = SearchIndexAPI.url("CLIP_STATUS")
 	local res, err = _request("GET", url)
 	if err then
 		local errStr = (type(err) == "string") and err or "unknown"
@@ -4470,7 +4525,7 @@ end
 -- back the Plugin Manager's "System Health" panel and the Setup Wizard.
 --
 function SearchIndexAPI.checkServerHealth()
-	local url = getBaseUrl() .. ENDPOINTS.HEALTH
+	local url = SearchIndexAPI.url("HEALTH")
 	local res, err = _request("GET", url)
 	if err then
 		log:warn("checkServerHealth failed (could not reach /health): " .. tostring(err))
@@ -4631,7 +4686,7 @@ function SearchIndexAPI.addTrainingExample(photoId, filepath, developSettings, o
 		return false, "No photo ID provided"
 	end
 	options = options or {}
-	local url = getBaseUrl() .. ENDPOINTS.TRAINING_ADD
+	local url = SearchIndexAPI.url("TRAINING_ADD")
 	local mimeChunks = {}
 
 	table.insert(mimeChunks, { name = "photo_id", value = photoId })
@@ -4702,7 +4757,7 @@ end
 -- @return boolean success, table|string examples list or error message
 ---
 function SearchIndexAPI.listTrainingExamples()
-	local url = getBaseUrl() .. ENDPOINTS.TRAINING_LIST
+	local url = SearchIndexAPI.url("TRAINING_LIST")
 	local response, err = _request("GET", url)
 	if not response then
 		log:error("listTrainingExamples failed: " .. tostring(err))
@@ -4716,7 +4771,7 @@ end
 -- @return number|nil count, string|nil error
 ---
 function SearchIndexAPI.getTrainingCount()
-	local url = getBaseUrl() .. ENDPOINTS.TRAINING_COUNT
+	local url = SearchIndexAPI.url("TRAINING_COUNT")
 	local response, err = _request("GET", url)
 	if not response then
 		log:error("getTrainingCount failed: " .. tostring(err))
@@ -4734,7 +4789,7 @@ function SearchIndexAPI.deleteTrainingExample(photoId)
 	if not photoId or photoId == "" then
 		return false, "No photo ID provided"
 	end
-	local url = getBaseUrl() .. ENDPOINTS.TRAINING_DELETE .. "/" .. photoId
+	local url = SearchIndexAPI.url("TRAINING_DELETE", photoId)
 	local response, err = _request("DELETE", url)
 	if not response then
 		log:error("deleteTrainingExample failed: " .. tostring(err))
@@ -4751,7 +4806,7 @@ end
 -- @return boolean success, string|nil error
 ---
 function SearchIndexAPI.clearAllTrainingExamples()
-	local url = getBaseUrl() .. ENDPOINTS.TRAINING_CLEAR
+	local url = SearchIndexAPI.url("TRAINING_CLEAR")
 	local response, err = _request("DELETE", url)
 	if not response then
 		log:error("clearAllTrainingExamples failed: " .. tostring(err))
@@ -4769,7 +4824,7 @@ end
 -- @return string|nil error message
 ---
 function SearchIndexAPI.getTrainingStats()
-	local url = getBaseUrl() .. ENDPOINTS.TRAINING_STATS
+	local url = SearchIndexAPI.url("TRAINING_STATS")
 	local response, err = _request("GET", url)
 	if not response then
 		log:error("getTrainingStats failed: " .. tostring(err))
@@ -4790,7 +4845,7 @@ end
 -- @return boolean success, table|string response or error message
 ---
 function SearchIndexAPI.getRemoteLogs()
-	local url = getBaseUrl() .. ENDPOINTS.LOGS
+	local url = SearchIndexAPI.url("LOGS")
 	log:trace("Fetching remote logs from: " .. url)
 	local response, err = _request("GET", url, nil, 10)
 	log:trace("getRemoteLogs: _request returned type=" .. type(response))
@@ -4807,7 +4862,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 		return false, "No photo ID provided"
 	end
 	options = options or {}
-	local url = getBaseUrl() .. ENDPOINTS.STYLE_EDIT
+	local url = SearchIndexAPI.url("STYLE_EDIT")
 	local mimeChunks = {}
 
 	table.insert(mimeChunks, { name = "photo_id", value = photoId })
@@ -4832,7 +4887,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	-- `TaskAiEditPhotos` no longer asks for that fallback — it never sends
 	-- `use_llm_fallback`, so the backend's default (off) applies and a photo the
 	-- style engine cannot answer for comes back as an error rather than as an
-	-- LLM edit. The fields stay because `/style_edit` still accepts them and a
+	-- LLM edit. The fields stay because `/v1/edit/style` still accepts them and a
 	-- caller that does want the fallback has to be able to send everything
 	-- `generateEditRecipePhoto` sends; `addEditOpt` skips whatever is absent,
 	-- so the style-engine-only path pays nothing for them.
@@ -4913,7 +4968,7 @@ end
 --- @param manifest table
 --- @return boolean success, string|table responseOrError
 function SearchIndexAPI.applyUpdate(manifest)
-	local url = getBaseUrl() .. ENDPOINTS.UPDATE_APPLY
+	local url = SearchIndexAPI.url("UPDATE_APPLY")
 	local body = {
 		manifest = manifest,
 		plugin_path = _PLUGIN.path,

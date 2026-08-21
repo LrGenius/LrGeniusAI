@@ -70,12 +70,12 @@ pub fn has_embedding(metadata: &Map<String, Value>) -> bool {
         .unwrap_or(true)
 }
 
-/// Keys holding AI-generated metadata, cleared by /remove/metadata while
+/// Keys holding AI-generated metadata, cleared by /v1/photos/metadata/remove while
 /// the photo stays indexed (port of AI_METADATA_KEYS).
 ///
 /// `species_checked` is in here on purpose: clearing AI metadata has to mean
 /// "recompute", and leaving the done-marker behind would make
-/// `/index/check-unprocessed` report the photo as finished forever.
+/// `/v1/index/unprocessed` report the photo as finished forever.
 pub const AI_METADATA_KEYS: [&str; 22] = [
     "title",
     "caption",

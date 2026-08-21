@@ -428,7 +428,7 @@ impl Store {
     }
 
     /// Bytes currently held by LanceDB's index + file-metadata caches.
-    /// Walks the caches, so it's for diagnostics (`/db/stats`, the
+    /// Walks the caches, so it's for diagnostics (`/v1/db/stats`, the
     /// maintenance log line) — not for a hot path.
     pub fn session_bytes(&self) -> u64 {
         self.session.size_bytes()

@@ -18,10 +18,19 @@ use axum::Router;
 
 use state::AppState;
 
-/// Build the full application router (M1: server blueprint only; the
-/// remaining blueprints are added milestone by milestone).
+/// The API version prefix every route is served under, bar the frozen
+/// bootstrap contract. Declared once here rather than repeated in each
+/// module's path literals, so it cannot drift.
+pub const API_PREFIX: &str = "/v1";
+
+/// Build the full application router.
+///
+/// Two tiers: the version-independent bootstrap contract at the root (see
+/// [`routes::bootstrap`]) and everything else under [`API_PREFIX`]. Route
+/// modules therefore spell only their domain path — `"/faces/detect"`, not
+/// `"/v1/faces/detect"` — and nesting supplies the prefix.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let v1 = Router::new()
         .merge(routes::server::router())
         .merge(routes::index::router())
         .merge(routes::db::router())
@@ -40,15 +49,21 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::llm::router())
         .merge(routes::style_edit::router())
         .merge(routes::import_::router())
+        .merge(routes::species::router());
+
+    Router::new()
+        // Never versioned — a new plug-in must be able to reach these on an
+        // old binary to pull the install forward.
+        .merge(routes::bootstrap::router())
         .merge(routes::update::router())
-        .merge(routes::species::router())
+        .nest(API_PREFIX, v1)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::auto_bind_db_path,
         ))
         // Flask never set MAX_CONTENT_LENGTH, so the Python backend had no
         // request-body cap; axum's own default (2 MiB) is far below a real
-        // Lightroom-exported JPEG preview (or a multi-photo /index batch),
+        // Lightroom-exported JPEG preview (or a multi-photo /v1/index/photos batch),
         // which silently failed `Multipart` field reads on the `image`
         // field once exceeded. Disable it to restore parity.
         .layer(DefaultBodyLimit::disable())

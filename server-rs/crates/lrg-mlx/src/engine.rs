@@ -26,7 +26,7 @@ pub struct MlxEngineConfig {
     pub sidecar_path: Option<PathBuf>,
 }
 
-/// What the sidecar reported after loading, for `/llm/status` and the logs.
+/// What the sidecar reported after loading, for `/v1/llm/status` and the logs.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineInfo {
     pub model_path: String,

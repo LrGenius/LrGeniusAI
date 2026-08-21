@@ -195,7 +195,7 @@ fn downscale_max512(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, usi
 
 /// Port of `compute_exposure_metrics`, operating on already-decoded RGB8
 /// pixels rather than raw file bytes (decoding happens once at the route
-/// layer and is shared with the rest of the `/training/add` pipeline).
+/// layer and is shared with the rest of the `/v1/edit/training` pipeline).
 pub fn compute_exposure_metrics(pixels: &[u8], width: usize, height: usize) -> ExposureMetrics {
     if width == 0 || height == 0 {
         return ExposureMetrics {

@@ -45,7 +45,7 @@ impl Default for LlamaEngineConfig {
     }
 }
 
-/// What the engine settled on after inspecting the model, for `/llm/status`
+/// What the engine settled on after inspecting the model, for `/v1/llm/status`
 /// and for the logs.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineInfo {

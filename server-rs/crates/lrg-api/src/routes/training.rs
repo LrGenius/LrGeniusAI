@@ -23,15 +23,24 @@ use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
-        .route("/training/add", axum::routing::post(add_training_example))
-        .route("/training/list", axum::routing::get(list_training_examples))
-        .route("/training/stats", axum::routing::get(get_training_stats))
-        .route("/training/count", axum::routing::get(get_training_count))
         .route(
-            "/training/{*photo_id}",
+            "/edit/training",
+            axum::routing::post(add_training_example)
+                .get(list_training_examples)
+                .delete(clear_training_examples),
+        )
+        .route(
+            "/edit/training/stats",
+            axum::routing::get(get_training_stats),
+        )
+        .route(
+            "/edit/training/count",
+            axum::routing::get(get_training_count),
+        )
+        .route(
+            "/edit/training/{*photo_id}",
             axum::routing::delete(delete_training_example),
         )
-        .route("/training", axum::routing::delete(clear_training_examples))
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {

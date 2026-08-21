@@ -95,7 +95,7 @@ pub(crate) fn compute_scene_tags(siglip: &SiglipModel, image_embedding: &[f32]) 
 /// One `image` part of an upload.
 ///
 /// `filename` stays optional because the callers disagree about the default —
-/// `/index` substitutes `"photo"`, the edit routes keep `None` and let the
+/// `/v1/index/photos` substitutes `"photo"`, the edit routes keep `None` and let the
 /// image sniffer decide — and baking either one in here would silently change
 /// the other's behaviour.
 #[derive(Debug)]
@@ -106,14 +106,14 @@ pub(crate) struct MultipartImage {
 
 /// Everything a multipart upload in this API can carry.
 ///
-/// The four upload routes (`/edit`, `/style_edit`, `/index`, `/training/add`)
+/// The four upload routes (`/v1/edit/recipe`, `/v1/edit/style`, `/v1/index/photos`, `/v1/edit/training`)
 /// had four copies of the same field loop — 49 duplicated lines, and the
 /// widest co-change surface in the crate: a change to how one route reads a
 /// part had to be remembered in three other files. They differ only in which
 /// parts they care about afterwards, which is what this shape captures.
 ///
 /// The raw fields filter and default nothing: `photo_ids` and `uuids` stay
-/// separate (only `/index` distinguishes them), empty values are kept, and
+/// separate (only `/v1/index/photos` distinguishes them), empty values are kept, and
 /// `filename` stays `None` rather than acquiring someone's default. Callers
 /// that want the tidied view take [`MultipartForm::photo_ids_or_uuids`] or
 /// [`MultipartForm::into_single_photo`], which do drop empties.
@@ -150,7 +150,7 @@ impl MultipartForm {
 
     /// Collapses the form to what a single-photo route actually uses.
     ///
-    /// `/edit`, `/style_edit` and `/training/add` each take one image and one
+    /// `/v1/edit/recipe`, `/v1/edit/style` and `/v1/edit/training` each take one image and one
     /// id; this hands them that directly so the call site is a destructuring
     /// `let` rather than four mutable accumulators.
     pub(crate) fn into_single_photo(self) -> SinglePhotoForm {
@@ -296,7 +296,7 @@ mod multipart_tests {
         assert_eq!(form.images.len(), 2);
         assert_eq!(form.images[0].filename.as_deref(), Some("a.jpg"));
         assert_eq!(form.images[1].bytes, b"BBBB");
-        // photo_id and uuid stay apart: only `/index` distinguishes them, and
+        // photo_id and uuid stay apart: only `/v1/index/photos` distinguishes them, and
         // merging here would take that choice away from it.
         assert_eq!(form.photo_ids, vec!["id-a", "id-b"]);
         assert_eq!(form.uuids, vec!["uuid-a"]);
@@ -308,7 +308,7 @@ mod multipart_tests {
 
     #[tokio::test]
     async fn an_image_part_without_a_filename_keeps_none() {
-        // `/index` substitutes "photo" itself; the parser must not decide for it.
+        // `/v1/index/photos` substitutes "photo" itself; the parser must not decide for it.
         let form = parse(&[("image", Some(""), "AAAA")]).await.expect("parses");
         assert_eq!(form.images.len(), 1);
         assert_eq!(form.images[0].filename.as_deref(), Some(""));
@@ -363,7 +363,7 @@ mod multipart_tests {
 
     #[tokio::test]
     async fn single_photo_view_reports_no_image_rather_than_failing() {
-        // `/edit` turns this into its "mismatch between images and photo IDs"
+        // `/v1/edit/recipe` turns this into its "mismatch between images and photo IDs"
         // reply; the parser's job is only to say the image is absent.
         let form = parse(&[("photo_id", None, "id-a")]).await.expect("parses");
         let single = form.into_single_photo();

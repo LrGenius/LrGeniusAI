@@ -1,9 +1,9 @@
-//! Clip blueprint — port of `routes/clip.py`. `/clip/status` checks the
+//! Clip blueprint — port of `routes/clip.py`. `/v1/models/clip` checks the
 //! ONNX+tokenizer files are on disk (matching Python's `is_model_cached()`
 //! "ready to lazy-load" semantics — distinct from `/health`'s "currently
 //! loaded in memory" status).
 //!
-//! `/clip/download/*` differs in *source* from Python (which pulls the
+//! `/v1/models/clip/downloads` differs in *source* from Python (which pulls the
 //! fp32 PyTorch checkpoint straight from Hugging Face Hub): this binary
 //! has no PyTorch/onnxscript toolchain to run
 //! `scripts/export_siglip2_fp16.py` itself, so it instead downloads the
@@ -42,10 +42,10 @@ const ASSET_NAMES: [&str; 3] = [
 ];
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/clip/status", get(clip_status))
-        .route("/clip/download/start", post(download_start))
-        .route("/clip/download/status", get(download_status))
+    Router::new().route("/models/clip", get(clip_status)).route(
+        "/models/clip/downloads",
+        post(download_start).get(download_status),
+    )
 }
 
 async fn clip_status(State(state): State<Arc<AppState>>) -> Json<Value> {

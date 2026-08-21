@@ -1,4 +1,4 @@
-//! `POST /style_edit` — port of `routes/style_edit.py`: the LLM-free
+//! `POST /v1/edit/style` — port of `routes/style_edit.py`: the LLM-free
 //! style-matched edit endpoint. Retrieves the photo's own CLIP embedding
 //! (if already indexed), scores training examples on visual + exposure +
 //! scene + time-of-day proximity via `lrg-analysis::style_engine`, and
@@ -28,7 +28,7 @@ use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart,
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new().route("/style_edit", axum::routing::post(style_edit))
+    axum::Router::new().route("/edit/style", axum::routing::post(style_edit))
 }
 
 fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> TrainingCandidate {

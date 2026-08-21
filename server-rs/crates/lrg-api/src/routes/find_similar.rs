@@ -1,4 +1,4 @@
-//! `/find_similar` — port of `routes/search.py::find_similar_route` +
+//! `/v1/search/similar` — port of `routes/search.py::find_similar_route` +
 //! `services/chroma.py::find_similar_to_photo`/`find_similar_to_photo_by_clip`.
 
 use std::collections::HashSet;
@@ -13,7 +13,7 @@ use lrg_store::{meta, IMAGE_TABLE};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new().route("/find_similar", axum::routing::post(find_similar))
+    axum::Router::new().route("/search/similar", axum::routing::post(find_similar))
 }
 
 fn phash_to_int(value: Option<&Value>) -> Option<u64> {

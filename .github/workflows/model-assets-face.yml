@@ -65,7 +65,7 @@ jobs:
           name: Face model assets (YuNet + FaceNet)
           body: |
             ONNX assets for the backend's face pipeline, fetched by
-            `POST /assets/download/start`.
+            `POST /v1/models/assets/downloads`.
 
             - `yunet_face_detection.onnx` — OpenCV Zoo YuNet 2023mar, Apache-2.0
             - `facenet_vggface2.onnx` — facenet-pytorch Inception-ResNet-v1

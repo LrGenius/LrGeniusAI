@@ -11,7 +11,7 @@ This reference is intended for developers integrating with or extending the back
 ### `GET /ping`
 Minimal liveness check. Returns `{"status": "ok"}`.
 
-### `GET /health`
+### `GET /v1/server/health`
 Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
 `face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
 `"failed"`. It does **not** report cloud/local LLM provider availability —
@@ -27,25 +27,25 @@ Returns the running backend version string.
 ### `POST /version/check`
 Checks whether the backend version is compatible with the plugin version passed in the request body.
 
-### `POST /initialize`
+### `POST /v1/db/bind`
 Called by the Lightroom plugin on first connect. Accepts catalog/configuration parameters and initializes per-catalog state.
 
-### `GET /models` / `POST /models`
+### `POST /v1/llm/providers/models`
 Returns the list of available AI models grouped by provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`). Filters out providers that are not configured or not reachable; the two local backends report what is installed on disk, so they are empty when no local model has been downloaded.
 
-### `GET /logs`
+### `GET /v1/server/logs`
 Returns recent log lines from the server log.
 
-### `GET /logs/raw/<log_type>`
+### `GET /v1/server/logs/<log_type>/raw`
 Streams raw log file content. `log_type` can be `server` or `plugin`.
 
 ### `POST /shutdown`
 Gracefully shuts down the backend process.
 
-### `POST /restart`
+### `POST /v1/server/restart`
 Restarts the backend process. Note: this endpoint is known to be unreliable on Windows (see [Troubleshooting](Troubleshooting)).
 
-### `POST /unload`
+### `POST /v1/server/unload`
 Unloads heavy ML models from memory without shutting the server down (useful to reclaim VRAM/RAM between sessions).
 
 ### `POST /update/apply`
@@ -55,7 +55,7 @@ Triggers an in-place backend self-update from the latest GitHub release.
 
 ## Photo Indexing
 
-### `POST /index`
+### `POST /v1/index/photos`
 Indexes a batch of photos sent as multipart file uploads. Generates embeddings and/or AI metadata depending on options.
 
 **Key request fields:**
@@ -78,7 +78,7 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `is_raw` | bool | Whether the original is raw. Stored on the photo so later work (style training above all) can keep raw and rendered originals apart. Omit when unknown |
 | `extra_context` | object | Optional context hints (folder, date, GPS, keywords) |
 
-`/index_by_reference` carries `exposure_bias` and `is_raw` per image inside the
+`/v1/index/photos/by-path` carries `exposure_bias` and `is_raw` per image inside the
 `images` array instead, since both are properties of the individual photo.
 
 **Response:** `{status, success_count, failure_count, error_messages, warnings, results}`.
@@ -93,7 +93,7 @@ provider says so in its own `warning` and it arrives as
 user a clean run that silently produced worse data. Each entry also rides on its
 own photo's `results` element as `warnings`, so a grouped caller can attribute it.
 
-### `POST /index_by_reference`
+### `POST /v1/index/photos/by-path`
 Indexes photos using server-side file paths instead of uploading image data (for local-backend
 setups where the server has filesystem access).
 
@@ -110,32 +110,32 @@ the batch.
 the group size for a `llamacpp` run, and omits it otherwise — a group formed for decode
 throughput must not override a provider's own preferred batch size.
 
-### `POST /get`
+### `POST /v1/photos/lookup`
 Returns stored metadata and embedding status for one or more `photo_id` values.
 
-### `GET /get/ids`
+### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
 
-### `POST /index/check-unprocessed`
+### `POST /v1/index/unprocessed`
 Given a list of `photo_id` values, returns which ones are not yet indexed or are missing specific data.
 
-### `POST /remove`
+### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 
-### `POST /remove/metadata`
+### `POST /v1/photos/metadata/remove`
 Removes only the AI-generated metadata fields for a given `photo_id`, leaving embeddings intact.
 
-### `POST /sync/cleanup`
+### `POST /v1/photos/catalogs/cleanup`
 Removes backend records for photos that no longer exist in a given catalog.
 
-### `POST /sync/claim`
+### `POST /v1/photos/catalogs/claim`
 Associates an existing backend record with a (potentially new) catalog ID.
 
 ---
 
 ## Semantic Search
 
-### `GET /search` / `POST /search`
+### `GET /v1/search` / `POST /v1/search`
 Runs a semantic search query against indexed photos.
 
 **Key request fields:**
@@ -159,7 +159,7 @@ check whenever `photo_ids` was present, leaking results from other catalogs.)
 come first, ordered by ascending distance; metadata matches follow with
 `distance: null` and fill whatever is left of `max_results`.
 
-### `POST /find_similar`
+### `POST /v1/search/similar`
 Finds photos similar to a reference photo using perceptual hash (phash) or CLIP embeddings.
 
 **Key request fields:**
@@ -172,25 +172,25 @@ Finds photos similar to a reference photo using perceptual hash (phash) or CLIP 
 | `max_results` | int | Maximum results |
 | `strictness` | string | `strict`, `normal`, or `loose` (phash mode) |
 
-### `POST /group_similar`
+### `POST /v1/cull/groups`
 Groups a set of photos into similarity clusters (used internally by the culling workflow).
 
-### `POST /cull`
+### `POST /v1/cull/grade`
 Runs the full culling pipeline on a set of photos: grouping, scoring, and classification into picks/alternates/rejects.
 
 ---
 
 ## AI Develop Edits
 
-### `POST /edit`
+### `POST /v1/edit/recipe`
 Generates a Lightroom develop recipe for a photo sent as a file upload, using an
 LLM.
 
 > No plugin workflow calls this any more. *AI Edit Photos* runs on
-> `POST /style_edit` alone and never asks for the LLM fallback, so this endpoint
-> and `/edit_base64` are currently reachable only by direct HTTP callers. Both
+> `POST /v1/edit/style` alone and never asks for the LLM fallback, so this endpoint
+> and `/v1/edit/recipe/base64` are currently reachable only by direct HTTP callers. Both
 > are fully supported; `SearchIndexAPI.generateEditRecipePhoto` in the plugin
-> still speaks to `/edit` and is simply not called.
+> still speaks to `/v1/edit/recipe` and is simply not called.
 
 **Key request fields:**
 
@@ -238,15 +238,15 @@ derives a budget from it, and caps contrast-raising fields — `contrast`,
 `whites` against it. The cap runs *before* the creative-control filter, so a
 disabled field is never capped and then discarded.
 
-### `POST /edit_base64`
-Same as `/edit` but accepts image data as base64.
+### `POST /v1/edit/recipe/base64`
+Same as `/v1/edit/recipe` but accepts image data as base64.
 
-### `POST /style_edit`
+### `POST /v1/edit/style`
 Produces a recipe from the user's own saved edits with no LLM involved: it
 retrieves training examples similar to the photo, re-scores them on exposure,
 scene and time of day, and interpolates their develop settings. Needs at least
 five stored examples. The result passes through the same guardrail budget as
-`/edit` and carries the same `guardrail_reasons`.
+`/v1/edit/recipe` and carries the same `guardrail_reasons`.
 
 `temperature` is blended only from examples whose `is_raw` matches the photo
 being edited, because Lightroom's temperature is Kelvin for raw and a relative
@@ -257,7 +257,7 @@ before `is_raw` was recorded count as compatible with anything. Every other
 develop setting means the same on both kinds of file and is blended normally;
 `tint` differs only in range, which the clamp handles.
 
-The `/edit` few-shot path applies the same rule: an example whose raw status
+The `/v1/edit/recipe` few-shot path applies the same rule: an example whose raw status
 conflicts with the target has its white balance stripped before it reaches the
 prompt, so the model is never anchored on a number the schema it must answer in
 cannot express.
@@ -266,20 +266,20 @@ cannot express.
 
 ## Face Detection & Persons
 
-### `POST /faces/detect`
+### `POST /v1/faces/detect`
 Detects faces in an uploaded image and stores their embeddings.
 
-### `POST /faces/query`
+### `POST /v1/faces/search`
 Finds photos containing faces similar to those in a reference image.
 
-### `POST /faces/cluster`
+### `POST /v1/faces/cluster`
 Re-clusters all stored face embeddings into person groups. Faces whose row carries no
 usable embedding are reported as unassigned rather than clustered — an empty
 vector compares as distance 0 to everything and would merge unrelated clusters.
 Above `AGGLOMERATIVE_MAX_POINTS` faces the agglomerative algorithm is skipped
 (its n×n distance matrix would be gigabytes) and DBSCAN is used instead.
 
-### `GET /faces/persons`
+### `GET /v1/faces/persons`
 Returns all detected persons with `person_id`, `name`, `face_count`,
 `photo_count` and a representative `thumbnail` (base64 JPEG, empty when the
 person has none).
@@ -287,80 +287,80 @@ person has none).
 Every face without a person — an empty `person_id` from a row that was never
 clustered, or `person_unassigned` written by the clusterer — is reported as a
 single entry with an empty `person_id`. The thumbnail is included here on
-purpose: fetching it per person from `/faces/persons/<id>/thumbnail` meant one
+purpose: fetching it per person from `/v1/faces/persons/<id>/thumbnail` meant one
 full table scan per person.
 
-### `GET /faces/persons/<person_id>/thumbnail`
+### `GET /v1/faces/persons/<person_id>/thumbnail`
 Returns the representative face thumbnail for a person as base64 JPEG. Kept for
-older plugin builds; `GET /faces/persons` already includes it, and this scans
+older plugin builds; `GET /v1/faces/persons` already includes it, and this scans
 the whole face table for one image, so it must not be called in a loop.
 
-### `PUT /faces/persons/<person_id>`
+### `PUT /v1/faces/persons/<person_id>`
 Updates the name assigned to a person cluster.
 
-### `GET /faces/persons/<person_id>/photos`
+### `GET /v1/faces/persons/<person_id>/photos`
 Returns the list of `photo_id` values associated with a specific person.
 
 ---
 
 ## Metadata Import
 
-### `POST /import/metadata`
+### `POST /v1/photos/metadata/import`
 Imports existing Lightroom catalog metadata (keywords, title, caption, rating, etc.) into the backend database for a batch of photos.
 
 ---
 
 ## Keyword Management
 
-### `POST /keywords/cluster`
+### `POST /v1/keywords/clusters`
 Synchronous keyword clustering: groups catalog keywords by semantic similarity.
 
-### `POST /keywords/cluster/start`
+### `POST /v1/keywords/clusters/jobs`
 Async version: starts a background clustering job and returns a `job_id`.
 
-### `GET /keywords/cluster/status/<job_id>`
+### `GET /v1/keywords/clusters/jobs/<job_id>`
 Polls the status and result of an async clustering job.
 
-### `POST /keywords/apply-merges`
+### `POST /v1/keywords/merges`
 Applies a list of approved keyword merge pairs to the backend's metadata records.
 
 ---
 
 ## Style Training
 
-### `POST /training/add`
+### `POST /v1/edit/training`
 Stores one photo's develop settings as a training example. `is_raw` is recorded
 with it and decides, later, whether the example may contribute a temperature —
-see `POST /style_edit`.
+see `POST /v1/edit/style`.
 
 Saves a photo's Lightroom develop settings as a labeled training example.
 
-### `GET /training/list`
+### `GET /v1/edit/training`
 Lists all stored training examples.
 
-### `GET /training/stats`
+### `GET /v1/edit/training/stats`
 Returns aggregated statistics about stored training examples (count per label, coverage).
 
-### `GET /training/count`
+### `GET /v1/edit/training/count`
 Returns the total number of stored training examples.
 
-### `DELETE /training/<photo_id>`
+### `DELETE /v1/edit/training/<photo_id>`
 Removes the training example for a specific photo.
 
-### `DELETE /training`
+### `DELETE /v1/edit/training`
 Clears all training examples.
 
 ---
 
 ## CLIP Model Management
 
-### `GET /clip/status`
+### `GET /v1/models/clip`
 Returns whether the SigLIP2 embedding model is downloaded and ready.
 
-### `POST /clip/download/start`
+### `POST /v1/models/clip/downloads`
 Triggers a background download of the CLIP model.
 
-### `GET /clip/download/status`
+### `GET /v1/models/clip/downloads`
 Returns the current progress of an ongoing CLIP model download.
 
 ---
@@ -372,7 +372,7 @@ the plugin's setup flows drive these instead: three downloads, three progress
 bars and three ready indicators ask a photographer to care about which neural
 network does which job.
 
-### `GET /assets/status`
+### `GET /v1/models/assets`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
 for the "this will download about N GB" line. All three families — `clip`,
 `bioclip` and `face` — are `downloadable: true` and all three gate `ready`.
@@ -382,13 +382,13 @@ Face detection used to be the exception: its `buffalo_l` weights came from
 could not fix. Replacing them with YuNet + FaceNet removed that carve-out;
 `downloadable` remains in the response because the plugin reads it.
 
-### `POST /assets/download/start`
+### `POST /v1/models/assets/downloads`
 Downloads every downloadable family that is **missing**, under one progress
 entry keyed `assets`. Families already on disk are skipped, so this doubles as
 "finish setting up" after an upgrade. With nothing missing it reports
 `completed` rather than idling.
 
-### `GET /assets/download/status`
+### `GET /v1/models/assets/downloads`
 Same shape as the other download-status routes.
 
 ---
@@ -406,17 +406,17 @@ The head is pruned from upstream's 867,455 taxa; see
 `server-rs/scripts/bioclip_taxa_filter.toml` for the rules and for what
 pruning costs at the species rank.
 
-### `GET /bioclip/status`
+### `GET /v1/models/bioclip`
 Returns whether the BioCLIP assets are on disk (`bioclip: "ready" | "not_ready"`),
 plus `model` — the head identifier, e.g. `bioclip-2/taxa-v2`, read from the
 labels file when the head is not loaded, so it answers without pulling 866 MB
-into memory. Deliberately distinct from `/health`'s `species_model`, which
+into memory. Deliberately distinct from `/v1/server/health`'s `species_model`, which
 reports whether it is currently resident in memory.
 
-### `POST /bioclip/download/start`
+### `POST /v1/models/bioclip/downloads`
 Triggers a background download of the BioCLIP assets.
 
-### `GET /bioclip/download/status`
+### `GET /v1/models/bioclip/downloads`
 Returns the current progress of an ongoing BioCLIP download. Same shape as the
 CLIP and LLM download status; all three share one progress map keyed by asset
 group, so a species download and a GGUF download can be in flight at once.
@@ -441,7 +441,7 @@ repeat so heavily that resolving on demand costs a handful of calls for a whole
 library. Outbound calls are spaced ~1.1 s apart to stay inside iNaturalist's
 published rate limit.
 
-### `GET /species/links`
+### `GET /v1/species/links`
 Query: `name` (scientific name, required), `rank` (`species`, `genus`, … —
 narrows both lookups so a genus query cannot match a same-named species),
 `lang` (two-letter; picks the Wikipedia edition and the iNaturalist
@@ -480,7 +480,7 @@ The plugin calls this from `MetadataManager.applySpecies` and writes
 `speciesWikipediaUrl` catalog fields, which Lightroom renders as clickable
 links in the Metadata panel.
 
-### `POST /species/links/batch`
+### `POST /v1/species/links/batch`
 Same resolution for several taxa in one request. Resolved sequentially — the
 rate gate would serialize concurrent calls anyway.
 
@@ -497,7 +497,7 @@ name, in request order.
 
 The backend hosts two local inference engines: `llamacpp` (in-process llama.cpp, GGUF models, present only in builds compiled with the `llamacpp` cargo feature) and `mlx` (an `lrgenius-mlx` helper process, Apple silicon only, no cargo feature). Both are exposed through the same routes — the MLX half is nested under an `mlx` key so that older plugins reading the top-level fields still see the llama.cpp engine.
 
-### `GET /llm/catalog`
+### `GET /v1/llm/catalog`
 Lists local models that are installed and those offered for download.
 
 ```json
@@ -518,20 +518,20 @@ Lists local models that are installed and those offered for download.
 
 `supported: false` always carries a `reason` for MLX; for llama.cpp it means the binary was built without the `llamacpp` feature.
 
-### `GET /llm/status`
+### `GET /v1/llm/status`
 Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with the MLX engine's equivalent nested under `mlx`.
 
-### `POST /llm/download/start`
+### `POST /v1/llm/downloads`
 Starts a background download of a catalog entry. Body: `{ "id": "gemma4-e4b" }`. The id space is shared across both catalogs and the id alone selects the backend, so there is a single download queue: a GGUF pair is fetched as two files, an MLX entry as a repo snapshot staged into a `.part` directory and renamed on success.
 
-### `GET /llm/download/status`
+### `GET /v1/llm/downloads`
 Progress of the current local-model download (same shape as the CLIP download status).
 
 ---
 
 ## Database Operations
 
-### `GET /db/stats`
+### `GET /v1/db/stats`
 Returns aggregate database statistics:
 - total indexed photos
 - photos with SigLIP embeddings
@@ -542,7 +542,7 @@ Returns aggregate database statistics:
 - total detected faces
 - total persons
 
-### `GET /db/backup`
+### `POST /v1/db/backups`
 Creates and streams a ZIP backup of the full persistent LanceDB data directory.
 
 > **Not available:** `POST /db/migrate-photo-ids` existed on the retired Python backend and

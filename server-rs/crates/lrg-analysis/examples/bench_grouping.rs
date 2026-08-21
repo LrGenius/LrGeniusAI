@@ -2,7 +2,7 @@
 //!
 //! Grouping used to be a full O(n^2) sweep with a 1152-dimensional f64 cosine
 //! per pair, run inline on a tokio worker thread, so a large cull was the
-//! dominant cost of `/cull`. This measures the sweep at several catalog sizes
+//! dominant cost of `/v1/cull/grade`. This measures the sweep at several catalog sizes
 //! so the scaling curve is visible rather than assumed.
 //!
 //! ```text

@@ -67,7 +67,7 @@ so a machine that has run the plugin's model download needs no extra setup.
 
 The in-process local LLM is behind a cargo feature that is **off by default**.
 Without it the `llamacpp` provider reports that the build has no local-model
-support and `/llm/catalog` returns `supported: false`, so the plugin's "Local AI
+support and `/v1/llm/catalog` returns `supported: false`, so the plugin's "Local AI
 Model" settings have nothing to work with. It is opt-in because it compiles
 llama.cpp from source: that needs `cmake` and `libclang` (for bindgen) and adds
 minutes to a cold build, which nobody working on an unrelated crate should pay.
@@ -119,7 +119,7 @@ xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
 export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
 ```
 
-Without it, `/llm/catalog` reports `mlx.supported: false` with a reason naming
+Without it, `/v1/llm/catalog` reports `mlx.supported: false` with a reason naming
 what is missing (wrong architecture, or no helper found). The sidecar is
 resolved from `LRG_MLX_SIDECAR`, then from next to the running server, which is
 how the shipped `.pkg` finds it. See
@@ -135,7 +135,7 @@ cargo test -p lrg-mlx --test sidecar_smoke -- --ignored
 
 ### SigLIP2 (semantic embeddings)
 
-`POST /clip/download/start` + `GET /clip/download/status` fetch the fp16
+`POST /v1/models/clip/downloads` + `GET /v1/models/clip/downloads` fetch the fp16
 ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
 `tokenizer.json`) and place them at the `LRG_SIGLIP_*` paths below,
 pulling CI-exported ONNX assets from a release instead of the fp32
@@ -232,7 +232,7 @@ export LRG_BIOCLIP_TAXA_JSON=/path/to/models/bioclip2/bioclip2_taxa.json
 
 Without these, `lrg-ml` falls back to
 `~/.cache/lrgenius/models/bioclip2_{image.onnx,taxa.bin,taxa.json}`, which is
-where `POST /bioclip/download/start` — and `POST /assets/download/start`, which
+where `POST /v1/models/bioclip/downloads` — and `POST /v1/models/assets/downloads`, which
 the plugin actually calls — put them. Note the fallback name for the tower is
 `bioclip2_image.onnx`, without the export script's `_fp16` suffix.
 
@@ -265,7 +265,7 @@ export LRG_FACENET_ONNX=/path/to/face-assets/facenet_vggface2.onnx
 
 Without these, `lrg-ml` falls back to
 `~/.cache/lrgenius/models/{yunet_face_detection.onnx,facenet_vggface2.onnx}`,
-which is where `POST /assets/download/start` puts them. Assets are published
+which is where `POST /v1/models/assets/downloads` puts them. Assets are published
 by `.github/workflows/model-assets-face.yml` to the fixed `face-assets-v1`
 tag, independent of the other two families.
 
@@ -280,11 +280,11 @@ ignored by clustering and re-queued for detection.
 
 Only present in builds compiled with the `llamacpp` cargo feature; without
 it the `llamacpp` provider reports that the build has no local-model
-support and `/llm/catalog` returns `supported: false`.
+support and `/v1/llm/catalog` returns `supported: false`.
 
 Models are GGUF pairs — the weights plus an `mmproj` vision projector,
-which is what lets the model see the photo. `GET /llm/catalog` lists what
-is installed and what can be downloaded; `POST /llm/download/start` fetches
+which is what lets the model see the photo. `GET /v1/llm/catalog` lists what
+is installed and what can be downloaded; `POST /v1/llm/downloads` fetches
 a catalog entry. Discovery looks at, in order: the explicit env overrides,
 `LRG_LLAMA_MODEL_DIR` (default `~/.cache/lrgenius/models/llm/`), and any
 GGUFs already under `~/.lmstudio/models`, so a model you downloaded in LM
@@ -323,8 +323,8 @@ or more safetensors shards, and the tokenizer files. Discovery therefore looks
 for directories that contain a `config.json` *and* at least one `.safetensors`
 (the config alone would match a half-finished download).
 
-`GET /llm/catalog` reports MLX under a nested `mlx` key alongside the GGUF half,
-including `supported`/`reason`, and `POST /llm/download/start` takes an MLX
+`GET /v1/llm/catalog` reports MLX under a nested `mlx` key alongside the GGUF half,
+including `supported`/`reason`, and `POST /v1/llm/downloads` takes an MLX
 catalog id on the same route — the id alone picks the backend, so there is one
 download queue rather than two competing for the network.
 

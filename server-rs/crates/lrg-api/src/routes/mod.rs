@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod bioclip;
+pub mod bootstrap;
 pub mod clip;
 pub mod db;
 pub mod edit;

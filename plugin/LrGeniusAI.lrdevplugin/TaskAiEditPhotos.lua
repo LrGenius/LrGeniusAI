@@ -1,11 +1,11 @@
 require("DevelopEditManager")
 
--- AI Edit runs on the Style Engine only. The LLM edit path (`/edit`, provider
+-- AI Edit runs on the Style Engine only. The LLM edit path (`/v1/edit/recipe`, provider
 -- and model choice, prompts, intent presets, creative controls, per-photo
 -- instructions) is gone from this task: none of it reached the style engine,
 -- which builds a recipe purely by matching the photo against the training
 -- examples the user saved from their own edits. The backend still serves
--- `/edit`, and `SearchIndexAPI.generateEditRecipePhoto` still speaks to it —
+-- `/v1/edit/recipe`, and `SearchIndexAPI.generateEditRecipePhoto` still speaks to it —
 -- nothing here calls either.
 
 -- Mirrors `MIN_TRAINING_EXAMPLES` in

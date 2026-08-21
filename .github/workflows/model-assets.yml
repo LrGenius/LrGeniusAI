@@ -62,7 +62,7 @@ jobs:
           name: "SigLIP2 model assets (fp16 ONNX)"
           body: |
             Pinned SigLIP2 fp16 ONNX export (`timm/ViT-SO400M-16-SigLIP2-384`), downloaded
-            at runtime by the backend's `/clip/download/start` — **not an app release**,
+            at runtime by the backend's `/v1/models/clip/downloads` — **not an app release**,
             see the tagged `v*` releases for those. Regenerated only when
             `server-rs/scripts/export_siglip2_fp16.py` or its pinned deps change.
           files: model-assets/*
