@@ -1540,7 +1540,10 @@ async fn finish_one(
                             })
                             .collect();
                         let carried = carry_over_person_ids(&previous, &embeddings);
-                        let carried_count = carried.iter().filter(|p| !p.is_empty()).count();
+                        let carried_count = carried
+                            .iter()
+                            .filter(|(p, manual)| !p.is_empty() || *manual)
+                            .count();
                         if carried_count > 0 {
                             log::debug!(
                                 "Photo {photo_id}: carried {carried_count} person assignment(s) \
@@ -1556,10 +1559,10 @@ async fn finish_one(
                                 m.insert("photo_id".into(), json!(photo_id));
                                 m.insert("photo_uuid".into(), json!(photo_id));
                                 m.insert("thumbnail".into(), json!(f.thumbnail_base64));
-                                m.insert(
-                                    "person_id".into(),
-                                    json!(carried.get(i).cloned().unwrap_or_default()),
-                                );
+                                let (person_id, person_manual) =
+                                    carried.get(i).cloned().unwrap_or_default();
+                                m.insert("person_id".into(), json!(person_id));
+                                m.insert("person_manual".into(), json!(person_manual));
                                 m.insert(
                                     "bbox".into(),
                                     json!(serde_json::to_string(&f.bbox).unwrap()),
@@ -1870,16 +1873,17 @@ fn apply_species_metadata(
 /// face in the same frame, which is worse than carrying nothing over.
 const FACE_CARRY_OVER_MAX_DISTANCE: f64 = 0.2;
 
-/// Re-attach the `person_id`s from a photo's previous FACE_TABLE rows to its
-/// freshly detected faces, matched by nearest embedding.
+/// Re-attach the person assignment from a photo's previous FACE_TABLE rows to
+/// its freshly detected faces, matched by nearest embedding. Each entry is the
+/// `person_id` and whether a human chose it (`person_manual`).
 ///
 /// Pairs are assigned globally best-first rather than in detection order, so
 /// the result does not depend on which face the detector happened to report
 /// first. Each old row is claimed at most once, so two faces in one frame
 /// cannot both inherit the same identity. Faces with no match keep an empty
 /// `person_id` and are picked up by the next clustering run.
-fn carry_over_person_ids(previous: &[StoreRecord], embeddings: &[&[f32]]) -> Vec<String> {
-    let mut out = vec![String::new(); embeddings.len()];
+fn carry_over_person_ids(previous: &[StoreRecord], embeddings: &[&[f32]]) -> Vec<(String, bool)> {
+    let mut out = vec![(String::new(), false); embeddings.len()];
     if previous.is_empty() || embeddings.is_empty() {
         return out;
     }
@@ -1891,12 +1895,20 @@ fn carry_over_person_ids(previous: &[StoreRecord], embeddings: &[&[f32]]) -> Vec
                 continue;
             };
             // An empty assignment is what a fresh row already carries, so
-            // matching against one buys nothing and would only consume a slot.
-            if old
+            // matching against one buys nothing and would only consume a slot
+            // — unless a human put it there. "This face is not that person" is
+            // a decision too, and re-detecting the photo must not forget it.
+            let old_manual = old
                 .metadata
-                .get("person_id")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
+                .get("person_manual")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !old_manual
+                && old
+                    .metadata
+                    .get("person_id")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
             {
                 continue;
             }
@@ -1914,13 +1926,17 @@ fn carry_over_person_ids(previous: &[StoreRecord], embeddings: &[&[f32]]) -> Vec
         if new_taken[i] || old_taken[j] {
             continue;
         }
-        if let Some(person) = previous[j]
+        let person = previous[j]
             .metadata
             .get("person_id")
             .and_then(Value::as_str)
-        {
-            out[i] = person.to_string();
-        }
+            .unwrap_or("");
+        let manual = previous[j]
+            .metadata
+            .get("person_manual")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        out[i] = (person.to_string(), manual);
         new_taken[i] = true;
         old_taken[j] = true;
     }
@@ -2055,6 +2071,20 @@ mod face_carry_over_tests {
         }
     }
 
+    fn manual_row(id: &str, person: &str, vector: Vec<f32>) -> StoreRecord {
+        let mut row = face_row(id, person, vector);
+        row.metadata.insert("person_manual".into(), json!(true));
+        row
+    }
+
+    fn guessed(person: &str) -> (String, bool) {
+        (person.to_string(), false)
+    }
+
+    fn nobody() -> (String, bool) {
+        (String::new(), false)
+    }
+
     /// The regression this exists for: re-indexing a photo replaces its face
     /// rows, and a fresh row starts with an empty `person_id`, so every named
     /// person in the catalog used to be lost on a plain re-index.
@@ -2065,7 +2095,7 @@ mod face_carry_over_tests {
         // still has to match.
         let embedding = [0.999_f32, 0.044, 0.0];
         let carried = carry_over_person_ids(&previous, &[&embedding]);
-        assert_eq!(carried, vec!["person_7".to_string()]);
+        assert_eq!(carried, vec![guessed("person_7")]);
     }
 
     #[test]
@@ -2074,7 +2104,7 @@ mod face_carry_over_tests {
         let embedding = [0.0_f32, 1.0, 0.0];
         assert_eq!(
             carry_over_person_ids(&previous, &[&embedding]),
-            vec![String::new()]
+            vec![nobody()]
         );
     }
 
@@ -2086,8 +2116,8 @@ mod face_carry_over_tests {
         let a = [1.0_f32, 0.0, 0.0];
         let b = [0.995_f32, 0.1, 0.0];
         let carried = carry_over_person_ids(&previous, &[&a, &b]);
-        assert_eq!(carried[0], "person_7", "the closer face wins the identity");
-        assert_eq!(carried[1], "", "the other one starts unassigned");
+        assert_eq!(carried[0], guessed("person_7"), "the closer face wins");
+        assert_eq!(carried[1], nobody(), "the other one starts unassigned");
     }
 
     /// Assignment is global-best-first, not detection order, so the result must
@@ -2100,9 +2130,9 @@ mod face_carry_over_tests {
 
         let forward = carry_over_person_ids(&previous, &[&near, &far]);
         let reversed = carry_over_person_ids(&previous, &[&far, &near]);
-        assert_eq!(forward[0], "person_7");
-        assert_eq!(reversed[1], "person_7");
-        assert_eq!(reversed[0], "");
+        assert_eq!(forward[0], guessed("person_7"));
+        assert_eq!(reversed[1], guessed("person_7"));
+        assert_eq!(reversed[0], nobody());
     }
 
     #[test]
@@ -2111,16 +2141,38 @@ mod face_carry_over_tests {
         let embedding = [1.0_f32, 0.0, 0.0];
         assert_eq!(
             carry_over_person_ids(&previous, &[&embedding]),
-            vec![String::new()]
+            vec![nobody()]
         );
     }
 
     #[test]
     fn no_previous_rows_yields_empty_assignments() {
         let embedding = [1.0_f32, 0.0, 0.0];
+        assert_eq!(carry_over_person_ids(&[], &[&embedding]), vec![nobody()]);
+    }
+
+    /// A person the user assigned by hand must come back marked as such, or
+    /// the next clustering run would treat it as a guess and revise it.
+    #[test]
+    fn a_manual_assignment_stays_manual() {
+        let previous = vec![manual_row("p_0", "person_7", vec![1.0, 0.0, 0.0])];
+        let embedding = [1.0_f32, 0.0, 0.0];
         assert_eq!(
-            carry_over_person_ids(&[], &[&embedding]),
-            vec![String::new()]
+            carry_over_person_ids(&previous, &[&embedding]),
+            vec![("person_7".to_string(), true)]
+        );
+    }
+
+    /// "This face is not that person" is a decision with an *empty*
+    /// `person_id`. Re-detection has to carry it, or the correction is undone
+    /// by the next re-index.
+    #[test]
+    fn a_face_the_user_detached_stays_detached() {
+        let previous = vec![manual_row("p_0", "", vec![1.0, 0.0, 0.0])];
+        let embedding = [1.0_f32, 0.0, 0.0];
+        assert_eq!(
+            carry_over_person_ids(&previous, &[&embedding]),
+            vec![(String::new(), true)]
         );
     }
 }

@@ -51,16 +51,68 @@ Detection during indexing finds faces; grouping them into persons is a separate
 step. Press **Cluster faces** to (re-)group everything the backend has. The run
 reports how many persons and faces it produced, and the grid updates itself.
 
+Anything you decided by hand — a face you moved, two people you merged — is
+kept. Those faces are pinned: clustering rebuilds the guesses around them
+instead of overwriting them, so re-clustering is never a step that loses work.
+
 The **threshold** next to the button is the cosine distance clustering works
 at. Leave it at 0.5 unless the result is wrong in a specific way: lower it
 towards 0.45 when different people were merged into one cluster, raise it
 towards 0.55–0.65 when one person was split across several.
+
+**Tuning** opens the quality gate underneath it. A blurred, tiny or
+half-covered face is the one that sits between two people and welds them
+together, so faces below the gate are not allowed to *start* a person — they
+are attached to a finished cluster afterwards, or left unassigned. Raise the
+minimum sharpness or detection score if strangers keep landing in the same
+cluster; lower them if too many faces end up unassigned.
+
+After each run the page prints what actually happened: how many faces were
+pinned, gated out, attached afterwards, and — the two numbers worth reading —
+how tightly the clusters sit (*spread*) and how many pairs of separate people
+ended up closer together than your threshold. Many such pairs means one person
+is split across cards and the threshold should go up. It also says in plain
+words which way to move it.
 
 ### Assigning names
 
 Type into a card's name field and press Enter or click away — each name is
 saved on its own, and the card says *Saved* when it lands. Names survive
 re-clustering and are used as context elsewhere.
+
+### Looking inside a person
+
+Double-click a card to open that person and see every face in it, not just the
+one on the thumbnail. This is where you check whether the clustering was
+actually right.
+
+Each face shows how much it looks like the rest of the group. A face further
+from the group than the clustering threshold is marked as an outlier, and a
+face that failed the quality gate says which measurement was bad. The **sort**
+control offers *least like this person first*, *most like this person first*
+and *best quality first* — the first of those is the fast way to spot a face
+that does not belong, so it is what the view opens on.
+
+Click faces to select them (shift-click for a range), then:
+
+- **Move to…** — pick another person in the dropdown next to it and the faces
+  go there.
+- **Move to a new person** — split the selected faces off into a person of
+  their own, with a name if you give one.
+- **Not this person** — detach them; they return to *Unassigned faces*.
+
+Every one of these counts as a decision by you, so it survives the next
+**Cluster faces** run and the next re-index of those photos.
+
+### Merging two people
+
+When the same person ended up on two cards, drag one card onto the other. A
+dialog asks which name the merged person should keep — either of the two, or
+one you type — and then all the faces move across.
+
+A merge is permanent in the sense that matters: it is remembered as your
+decision, not a guess, so clustering at a different threshold will not pull the
+two apart again.
 
 ### Jumping to a Lightroom collection
 
@@ -102,7 +154,8 @@ the whole indexed catalog.
 
 - **Better names = better workflow.** Naming persons early makes it easy to find all photos of a specific subject across your entire catalog.
 - Run indexing with face detection on all portrait-heavy shoots before using the People workflow.
-- Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. The People page lets you rename a cluster and re-cluster at a different threshold, not split or merge one by hand — if a cluster is wrong, try the threshold first, then index more photos of that person and cluster again.
+- Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. Open the person (double-click) to see which faces are actually wrong, move them out, and merge cards that are the same person by dragging one onto the other. Fixing it by hand is worth more than re-running: your corrections are kept and make every later run start from firmer ground.
+- The fastest way to judge a threshold is not to guess it but to look. Double-click your biggest person, sort by *outliers first*, and see whether the faces at the far end are still the same human. If they are, the threshold can go up; if strangers appear, it should come down.
 - For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eye openness, blink detection, face sharpness). See [Help: Cull Photos](Help-Cull-Photos).
 
 ## Upgrading from a version before the face-model change

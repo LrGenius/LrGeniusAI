@@ -7,6 +7,7 @@ pub mod culling_config;
 pub mod edit_guardrails;
 pub mod eval;
 pub mod face_aggregate;
+pub mod face_cluster;
 pub mod grouping;
 pub mod keywords;
 pub mod persons;

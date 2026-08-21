@@ -40,7 +40,7 @@ fn euclidean(a: &[f32], b: &[f32]) -> f64 {
 /// codebase has a history of exactly that failure mode during indexing.
 pub const AGGLOMERATIVE_MAX_POINTS: usize = 6000;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Linkage {
     Complete,
     Average,
@@ -153,6 +153,209 @@ pub fn agglomerative(
         next_label += 1;
     }
     Some(labels)
+}
+
+/// One initial cluster handed to [`agglomerative_seeded`] — a group of points
+/// that is already decided and must stay together.
+///
+/// This is how manual assignments enter clustering. A person the user built by
+/// hand in the People UI arrives as one seed, so the algorithm can only grow it
+/// or leave it alone; it can never take it apart.
+pub struct Seed {
+    /// Indices into the caller's embedding list, used to measure this seed's
+    /// linkage distance to the others. Sub-sample large seeds down to
+    /// [`MAX_SEED_REPS`] before building them: complete linkage between two
+    /// seeds costs `|a| * |b|` distance computations, so two hand-curated
+    /// people of a few thousand faces each would otherwise dominate the run.
+    pub reps: Vec<usize>,
+    /// Seeds carrying different `Some(group)` values are never merged, whatever
+    /// their distance. Two people the user has separately confirmed are not one
+    /// person, and no threshold should be able to say otherwise.
+    pub group: Option<usize>,
+}
+
+/// The most members of one seed that take part in a linkage measurement.
+///
+/// Complete linkage only needs the *furthest* pair, and a sample of this size
+/// finds a near-worst pair reliably enough; the alternative is a quadratic blow-up
+/// the moment someone merges two large people together.
+pub const MAX_SEED_REPS: usize = 32;
+
+/// Agglomerative clustering that starts from pre-formed groups instead of
+/// singletons, honouring must-link (within a seed) and cannot-link (between
+/// seeds with different `group`s) constraints.
+///
+/// Returns one label per *seed*, not per point. `None` above
+/// [`AGGLOMERATIVE_MAX_POINTS`] seeds, exactly like [`agglomerative`].
+pub fn agglomerative_seeded(
+    embeddings: &[Vec<f32>],
+    seeds: &[Seed],
+    distance_threshold: f64,
+    linkage: Linkage,
+) -> Option<Vec<i64>> {
+    let n = seeds.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    if n == 1 {
+        return Some(vec![0]);
+    }
+    if n > AGGLOMERATIVE_MAX_POINTS {
+        return None;
+    }
+
+    // Linkage distance between every pair of seeds, measured over their
+    // representatives. Row-parallel: nothing here is written twice.
+    let upper: Vec<Vec<f64>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            (0..n)
+                .map(|j| {
+                    if j > i {
+                        seed_distance(embeddings, &seeds[i], &seeds[j], linkage)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let mut dist: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            dist[i][j] = upper[i][j];
+            dist[j][i] = upper[i][j];
+        }
+    }
+
+    let mut clusters: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    let mut weight: Vec<f64> = seeds.iter().map(|s| s.reps.len().max(1) as f64).collect();
+    let mut group: Vec<Option<usize>> = seeds.iter().map(|s| s.group).collect();
+    let mut alive: Vec<bool> = vec![true; n];
+
+    loop {
+        let mut best = (f64::INFINITY, usize::MAX, usize::MAX);
+        for i in 0..n {
+            if !alive[i] {
+                continue;
+            }
+            for j in (i + 1)..n {
+                if !alive[j] || !may_merge(group[i], group[j]) {
+                    continue;
+                }
+                if dist[i][j] < best.0 {
+                    best = (dist[i][j], i, j);
+                }
+            }
+        }
+        if best.1 == usize::MAX || best.0 > distance_threshold {
+            break;
+        }
+        let (_, i, j) = best;
+
+        let (wi, wj) = (weight[i], weight[j]);
+        for k in 0..n {
+            if !alive[k] || k == i || k == j {
+                continue;
+            }
+            let new_d = match linkage {
+                Linkage::Complete => dist[i][k].max(dist[j][k]),
+                Linkage::Average => (wi * dist[i][k] + wj * dist[j][k]) / (wi + wj),
+            };
+            dist[i][k] = new_d;
+            dist[k][i] = new_d;
+        }
+        let moved = std::mem::take(&mut clusters[j]);
+        clusters[i].extend(moved);
+        weight[i] = wi + wj;
+        // The merged cluster inherits whichever side was pinned; `may_merge`
+        // guarantees at most one of them was.
+        group[i] = group[i].or(group[j]);
+        alive[j] = false;
+    }
+
+    let mut labels = vec![0i64; n];
+    let mut next_label = 0i64;
+    for c in 0..n {
+        if !alive[c] {
+            continue;
+        }
+        for &seed in &clusters[c] {
+            labels[seed] = next_label;
+        }
+        next_label += 1;
+    }
+    Some(labels)
+}
+
+fn may_merge(a: Option<usize>, b: Option<usize>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => x == y,
+        _ => true,
+    }
+}
+
+fn seed_distance(embeddings: &[Vec<f32>], a: &Seed, b: &Seed, linkage: Linkage) -> f64 {
+    // Complete takes the running max (distances are non-negative, so 0.0 is a
+    // safe identity); Average accumulates a sum.
+    let mut acc = 0.0f64;
+    let mut pairs = 0usize;
+    for &i in &a.reps {
+        for &j in &b.reps {
+            let d = euclidean(&embeddings[i], &embeddings[j]);
+            match linkage {
+                Linkage::Complete => acc = acc.max(d),
+                Linkage::Average => acc += d,
+            }
+            pairs += 1;
+        }
+    }
+    if pairs == 0 {
+        return f64::INFINITY;
+    }
+    match linkage {
+        Linkage::Complete => acc,
+        Linkage::Average => acc / pairs as f64,
+    }
+}
+
+/// A cheap linear pre-partition ("canopy"): walks the points once, joining each
+/// to the first running centroid within `threshold` and starting a new one
+/// otherwise. Returns one canopy id per point.
+///
+/// Used only to keep [`agglomerative_seeded`] under its size cap on large
+/// catalogs. The threshold is deliberately loose — its job is to separate
+/// people who are obviously nothing alike, so that the real, chaining-resistant
+/// pass runs inside each canopy. Order matters (it is greedy), so callers pass
+/// points best-first.
+pub fn canopy_partition(points: &[Vec<f32>], threshold: f64, order: &[usize]) -> Vec<usize> {
+    let mut canopy_of = vec![usize::MAX; points.len()];
+    let mut centroids: Vec<Vec<f32>> = Vec::new();
+    let mut counts: Vec<f64> = Vec::new();
+
+    for &i in order {
+        let mut best = (f64::INFINITY, usize::MAX);
+        for (c, centroid) in centroids.iter().enumerate() {
+            let d = euclidean(&points[i], centroid);
+            if d < best.0 {
+                best = (d, c);
+            }
+        }
+        if best.1 != usize::MAX && best.0 <= threshold {
+            let c = best.1;
+            let n = counts[c];
+            for (slot, v) in centroids[c].iter_mut().zip(&points[i]) {
+                *slot = ((*slot as f64 * n + *v as f64) / (n + 1.0)) as f32;
+            }
+            counts[c] = n + 1.0;
+            canopy_of[i] = c;
+        } else {
+            canopy_of[i] = centroids.len();
+            centroids.push(points[i].clone());
+            counts.push(1.0);
+        }
+    }
+    canopy_of
 }
 
 /// Classic DBSCAN (brute-force region query), matching sklearn's
@@ -326,6 +529,84 @@ mod tests {
                 assert_same_partition(&got, &want);
             }
         }
+    }
+
+    #[test]
+    fn seeded_agglomerative_keeps_a_seed_together_and_apart() {
+        // Four near-identical points. Two are pinned to different groups, so
+        // no distance can merge them; the unpinned pair joins whichever it is
+        // allowed to.
+        let points = vec![
+            vec![1.0, 0.0],
+            vec![0.999, 0.001],
+            vec![0.998, 0.002],
+            vec![0.997, 0.003],
+        ];
+        let seeds = vec![
+            Seed {
+                reps: vec![0],
+                group: Some(0),
+            },
+            Seed {
+                reps: vec![1],
+                group: Some(1),
+            },
+            Seed {
+                reps: vec![2],
+                group: None,
+            },
+            Seed {
+                reps: vec![3],
+                group: None,
+            },
+        ];
+        let labels = agglomerative_seeded(&points, &seeds, 1.0, Linkage::Complete).unwrap();
+        assert_ne!(labels[0], labels[1], "two pinned groups must never merge");
+        assert_eq!(
+            labels.iter().collect::<HashSet<_>>().len(),
+            2,
+            "everything else is within the threshold, so two clusters is the answer"
+        );
+    }
+
+    #[test]
+    fn a_seed_with_many_members_is_measured_by_its_furthest_representative() {
+        // Complete linkage across seeds: seed A spans a wide arc, so its
+        // distance to B is set by A's far end, not its near one.
+        let points = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.1, 0.995]];
+        let seeds = vec![
+            Seed {
+                reps: vec![0, 1],
+                group: None,
+            },
+            Seed {
+                reps: vec![2],
+                group: None,
+            },
+        ];
+        // point 2 is close to point 1 but far from point 0.
+        let close = agglomerative_seeded(&points, &seeds, 0.2, Linkage::Complete).unwrap();
+        assert_ne!(
+            close[0], close[1],
+            "the furthest pair is well over 0.2 apart"
+        );
+        let loose = agglomerative_seeded(&points, &seeds, 2.0, Linkage::Complete).unwrap();
+        assert_eq!(loose[0], loose[1]);
+    }
+
+    #[test]
+    fn canopy_partition_separates_two_distant_blobs() {
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![0.05, 0.0],
+            vec![10.0, 0.0],
+            vec![10.05, 0.0],
+        ];
+        let order: Vec<usize> = (0..points.len()).collect();
+        let canopies = canopy_partition(&points, 1.0, &order);
+        assert_eq!(canopies[0], canopies[1]);
+        assert_eq!(canopies[2], canopies[3]);
+        assert_ne!(canopies[0], canopies[2]);
     }
 
     #[test]
