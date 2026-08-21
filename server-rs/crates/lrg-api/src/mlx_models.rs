@@ -276,7 +276,7 @@ mod tests {
     }
 
     /// The ids must not collide with the GGUF catalog's: both appear in the
-    /// same plugin dropdown, and `/llm/download/start` picks an entry by id
+    /// same plugin dropdown, and `/v1/llm/downloads` picks an entry by id
     /// alone.
     #[test]
     fn catalog_ids_do_not_collide_with_the_gguf_catalog() {

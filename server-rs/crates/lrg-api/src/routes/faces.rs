@@ -23,7 +23,7 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/faces/detect", post(detect))
-        .route("/faces/query", post(query))
+        .route("/faces/search", post(query))
         .route("/faces/cluster", post(cluster))
         .route("/faces/persons", get(list_persons))
         .route(
@@ -274,7 +274,7 @@ async fn cluster(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) 
         // embeddings are 512-d unit vectors exactly like FaceNet's, so mixing
         // them produces no error at all, just clusters built from distances
         // between two unrelated spaces. Photos in this state are re-queued for
-        // detection by `/index/check-unprocessed`; until that runs, leaving
+        // detection by `/v1/index/unprocessed`; until that runs, leaving
         // their faces unassigned is the honest answer.
         let current_model = state.face.model_id();
         let expected_dim = records

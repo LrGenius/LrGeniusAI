@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Value};
@@ -27,7 +27,7 @@ use lrg_store::IMAGE_TABLE;
 use crate::state::AppState;
 
 /// Sink for `run_clustering`'s stage updates. Async-job callers point this
-/// at the job registry; the synchronous `/keywords/cluster` route passes
+/// at the job registry; the synchronous `/v1/keywords/clusters` route passes
 /// `None` because nobody can observe a job that hasn't been created.
 type ProgressSink<'a> = Option<&'a (dyn Fn(Value) + Send + Sync)>;
 
@@ -39,17 +39,14 @@ fn report(sink: ProgressSink<'_>, progress: Value) {
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
-        .route("/keywords/cluster", axum::routing::post(cluster_keywords))
+        .route("/keywords/clusters", axum::routing::post(cluster_keywords))
+        // Enqueues a job; poll it at `GET /v1/jobs/{job_id}`.
         .route(
-            "/keywords/cluster/start",
+            "/keywords/clusters/jobs",
             axum::routing::post(cluster_keywords_start),
         )
         .route(
-            "/keywords/cluster/status/{job_id}",
-            axum::routing::get(cluster_keywords_status),
-        )
-        .route(
-            "/keywords/apply-merges",
+            "/keywords/merges",
             axum::routing::post(keywords_apply_merges),
         )
 }
@@ -243,23 +240,14 @@ async fn cluster_keywords_start(
 
     (
         StatusCode::ACCEPTED,
-        Json(json!({"job_id": job_id_for_log, "error": null, "warning": null})),
+        Json(json!({
+            "job_id": job_id_for_log,
+            "poll_url": super::jobs::poll_url(&job_id_for_log),
+            "error": null,
+            "warning": null,
+        })),
     )
         .into_response()
-}
-
-async fn cluster_keywords_status(
-    State(state): State<Arc<AppState>>,
-    Path(job_id): Path<String>,
-) -> Response {
-    match state.jobs.get_job(&job_id) {
-        Some(snapshot) => Json(snapshot.to_json()).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "job not found", "status": null, "result": null})),
-        )
-            .into_response(),
-    }
 }
 
 async fn keywords_apply_merges(

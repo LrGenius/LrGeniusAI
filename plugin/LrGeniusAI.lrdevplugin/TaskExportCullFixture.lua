@@ -261,7 +261,7 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- The grouping and the stored metrics both come from a real /cull call,
+		-- The grouping and the stored metrics both come from a real /v1/cull/grade call,
 		-- so the fixture describes exactly what the backend saw. The labels
 		-- layered on top are the only human input.
 		local progressScope = LrProgressScope({

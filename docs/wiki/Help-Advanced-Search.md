@@ -18,7 +18,7 @@ there. The dialog says so before you type: if the search model is not
 downloaded, or some of the catalog has no search index yet, an orange note at
 the top gives the count and what to run to fix it.
 
-The check is two cheap lookups (`/db/stats` plus the catalog's photo count) and
+The check is two cheap lookups (`/v1/db/stats` plus the catalog's photo count) and
 runs every time the dialog opens. It is a note, not a gate — the search still
 runs across whatever *is* indexed.
 

@@ -37,7 +37,7 @@ pub struct AppState {
     /// hundred MB resident, so leaving it out of `run_maintenance` would keep
     /// that memory pinned for the life of the process.
     pub bioclip: Arc<BioclipModel>,
-    /// Global — port of `services/jobs.py`, backs `/keywords/cluster/start`.
+    /// Global — port of `services/jobs.py`, read back through `GET /v1/jobs/{job_id}`.
     pub jobs: Arc<JobRegistry>,
     /// Hands actions from a `/ui/` page in the browser to the plugin task
     /// that is waiting for them, since only the plugin can touch the

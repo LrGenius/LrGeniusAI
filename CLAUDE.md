@@ -26,7 +26,7 @@ cd server-rs
 cargo build --release -p lrg-server
 ```
 
-**The in-process local LLM is behind the `llamacpp` cargo feature, off by default.** Without it the `llamacpp` provider reports "this backend build has no local-model support" and `/llm/catalog` returns `supported: false` — which is the answer to "why doesn't the Local AI Model section do anything". It is off by default because it compiles llama.cpp from source, so it needs `cmake` and `libclang` (bindgen) and adds minutes to a cold build; anyone touching an unrelated crate should not pay that.
+**The in-process local LLM is behind the `llamacpp` cargo feature, off by default.** Without it the `llamacpp` provider reports "this backend build has no local-model support" and `/v1/llm/catalog` returns `supported: false` — which is the answer to "why doesn't the Local AI Model section do anything". It is off by default because it compiles llama.cpp from source, so it needs `cmake` and `libclang` (bindgen) and adds minutes to a cold build; anyone touching an unrelated crate should not pay that.
 
 **Which local engine ships is a per-platform decision.** Release builds enable `llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not compile the feature at all (see `cargo_features` in the release matrix, `.github/workflows/release.yml`). The plugin mirrors that: `sectionsForTopOfDialog` and the onboarding wizard build the MLX group box on macOS and the llama.cpp one elsewhere, and the provider dropdown needs no special-casing because `/models` reports `llamacpp: []` when the feature is absent. The feature still *builds* on macOS, so enabling it locally to compare the two engines is fine — just don't re-add it to the macOS release job.
 
@@ -49,7 +49,7 @@ xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
 export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
 ```
 
-Without it, `/llm/catalog` reports `mlx.supported: false` with a reason naming what is missing. See [native/mlx-sidecar/README.md](native/mlx-sidecar/README.md) for the protocol, the model layout (a directory, not a GGUF file), and why MLX has no pinned prompt prefix.
+Without it, `/v1/llm/catalog` reports `mlx.supported: false` with a reason naming what is missing. See [native/mlx-sidecar/README.md](native/mlx-sidecar/README.md) for the protocol, the model layout (a directory, not a GGUF file), and why MLX has no pinned prompt prefix.
 
 Point llama.cpp at a model with `LRG_LLAMA_MODEL_GGUF` + `LRG_LLAMA_MMPROJ_GGUF` (a GGUF needs both the weights and an `mmproj` vision projector), or download one from the plugin's settings. Discovery also picks up GGUFs already under `~/.lmstudio/models`. The `lrg-llama` tests that exercise a real model are `#[ignore]`d and need `LRG_TEST_MODEL_GGUF`/`LRG_TEST_MMPROJ_GGUF`:
 
@@ -59,7 +59,7 @@ cargo test -p lrg-llama --test engine_smoke -- --ignored
 
 When Lightroom is involved, note the plugin auto-launches the *installed* binary (`/Applications/LrGeniusAI/Server/lrgenius-server`), which is not your dev build. `startServer` pings port 19819 first and short-circuits if something already answers, so start your feature-enabled build by hand and the plugin will use it.
 
-`POST /clip/download/start` fetches the SigLIP2 fp16 ONNX assets from the fixed `model-assets-v1` release tag (not the build's own version tag); that release exists with all three assets, so this works on any build. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers the face models — YuNet needs no export step, FaceNet does). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
+`POST /v1/models/clip/downloads` fetches the SigLIP2 fp16 ONNX assets from the fixed `model-assets-v1` release tag (not the build's own version tag); that release exists with all three assets, so this works on any build. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers the face models — YuNet needs no export step, FaceNet does). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
 
 ### Pre-commit hooks (formatting + linting)
 

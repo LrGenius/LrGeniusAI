@@ -90,7 +90,7 @@ expect a noticeably longer cold build than the baseline.
 ### 3. MLX sidecar
 
 Not applicable — MLX is Apple-silicon only. On Windows, local inference is
-llama.cpp-only; `/llm/catalog` will report `mlx.supported: false`.
+llama.cpp-only; `/v1/llm/catalog` will report `mlx.supported: false`.
 
 ### 4. Pre-commit hooks
 
@@ -157,7 +157,7 @@ xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
 export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
 ```
 
-Without `LRG_MLX_SIDECAR` set (or the binary built), `/llm/catalog` reports
+Without `LRG_MLX_SIDECAR` set (or the binary built), `/v1/llm/catalog` reports
 `mlx.supported: false` with a reason naming what's missing. The build also
 produces bundles (`mlx-swift_Cmlx.bundle`, tokenizer resource bundles) that
 must ship **next to** the executable — `Bundle.module` resolves them relative

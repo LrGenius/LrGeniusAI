@@ -3,7 +3,7 @@
 --
 -- Both the plug-in settings dialog and the onboarding wizard need the same
 -- picture of "what can this machine run, what is installed, what can I
--- download", so the mapping from /llm/catalog + /llm/status onto property-table
+-- download", so the mapping from /v1/llm/catalog + /v1/llm/status onto property-table
 -- fields lives here instead of being written twice.
 --
 -- Fields written into the caller's property table:
@@ -65,7 +65,7 @@ local function pickValidChoice(choices, current)
 	return choices[1] and choices[1].value or nil
 end
 
--- The llama.cpp half of /llm/catalog + /llm/status.
+-- The llama.cpp half of /v1/llm/catalog + /v1/llm/status.
 local function updateLlamaCppFields(propertyTable, catalog, status)
 	if catalog.supported == false then
 		propertyTable.llmStatusText = LOC(
@@ -154,7 +154,7 @@ local function updateMlxFields(propertyTable, catalog, status)
 end
 
 ---
--- Refreshes both local-model sections from /llm/catalog and /llm/status.
+-- Refreshes both local-model sections from /v1/llm/catalog and /v1/llm/status.
 --
 -- Everything here is best-effort: the backend may be down, or built without
 -- local-model support, and neither should break the calling dialog. Runs in

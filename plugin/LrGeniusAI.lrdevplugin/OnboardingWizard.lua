@@ -35,7 +35,7 @@ function OnboardingWizard.show(manualTrigger)
 				propertyTable.backendRunning = SearchIndexAPI.pingServer()
 			end
 
-			-- The on-device models answer through /assets/status, which covers
+			-- The on-device models answer through /v1/models/assets, which covers
 			-- every family in one request. Same source as the Plug-in Manager's
 			-- indicator, so the two cannot disagree about what is on disk.
 			local function refreshAssetStatus()

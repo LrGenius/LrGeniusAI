@@ -83,7 +83,7 @@ local function collectLeafGroups(roots, onProgress, isCanceled)
 	return groups, examined, canceled
 end
 
--- Turn a backend progress report from /keywords/cluster/status into a phrase
+-- Turn a backend progress report from /v1/keywords/clusters/jobs into a phrase
 -- for the progress caption.
 local function describeClusterStage(progress)
 	local stage = progress and progress.stage

@@ -39,8 +39,13 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/llm/catalog", get(catalog))
         .route("/llm/status", get(status))
-        .route("/llm/download/start", post(download_start))
-        .route("/llm/download/status", get(download_status))
+        // POST starts a download, GET reports its progress — the verb is the
+        // method's job, so both share one path.
+        .route("/llm/downloads", post(download_start).get(download_status))
+        // Probing the cloud providers means sending their API keys. POST only:
+        // the old `GET /models` accepted them as query parameters, which land
+        // in access logs and process listings.
+        .route("/llm/providers/models", post(super::server::list_models))
 }
 
 /// Resolve the engine for a request, loading the model if needed.

@@ -1,5 +1,5 @@
 //! Index blueprint (M2 subset) — port of `routes/index.py`: /get,
-//! /get/ids, /remove, /remove/metadata. The upload/indexing endpoints
+//! /v1/photos/ids, /v1/photos/remove, /v1/photos/metadata/remove. The upload/indexing endpoints
 //! arrive with the ML pipeline in M4-M6.
 
 use std::sync::Arc;
@@ -19,13 +19,13 @@ use crate::state::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/get", post(get_photo_data))
-        .route("/get/ids", get(get_ids))
-        .route("/remove", post(remove_image))
-        .route("/remove/metadata", post(remove_metadata))
-        .route("/sync/claim", post(sync_claim))
-        .route("/sync/cleanup", post(sync_cleanup))
-        .route("/index/check-unprocessed", post(check_unprocessed))
+        .route("/photos/lookup", post(get_photo_data))
+        .route("/photos/ids", get(get_ids))
+        .route("/photos/remove", post(remove_image))
+        .route("/photos/metadata/remove", post(remove_metadata))
+        .route("/photos/catalogs/claim", post(sync_claim))
+        .route("/photos/catalogs/cleanup", post(sync_cleanup))
+        .route("/index/unprocessed", post(check_unprocessed))
 }
 
 /// Port of `get_photo_ids_needing_processing` + the option subset that

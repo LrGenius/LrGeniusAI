@@ -3,7 +3,7 @@ PluginInfoDialogSections = {}
 function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.useClip = prefs.useClip
 
-	-- One poller for every model, not one per model: /assets/status answers for
+	-- One poller for every model, not one per model: /v1/models/assets answers for
 	-- all of them in a single request, and two loops on separate 5s timers used
 	-- to make the two indicators update at visibly different moments.
 	--
@@ -339,7 +339,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 	-- .github/workflows/release.yml), so a llama.cpp box there could never do
 	-- anything but report "this backend build has no local-model support".
 	-- Windows is the mirror image — MLX is Apple silicon only, and its half of
-	-- /llm/catalog always comes back unsupported.
+	-- /v1/llm/catalog always comes back unsupported.
 	--
 	-- Building only the box that applies, rather than hiding the other one,
 	-- keeps the dialog free of a dead group and means neither set of bindings

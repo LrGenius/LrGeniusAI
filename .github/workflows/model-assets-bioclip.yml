@@ -70,7 +70,7 @@ jobs:
           body: |
             Pinned BioCLIP 2 export (`imageomics/bioclip-2`, MIT) plus a pruned
             TreeOfLife-200M zero-shot head, downloaded at runtime by the backend's
-            `/bioclip/download/start` — **not an app release**, see the tagged `v*`
+            `/v1/models/bioclip/downloads` — **not an app release**, see the tagged `v*`
             releases for those. Regenerated only when
             `server-rs/scripts/export_bioclip2_fp16.py`, the taxa filter, or their
             pinned deps change.
