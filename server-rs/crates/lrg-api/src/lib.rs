@@ -10,6 +10,7 @@ pub mod mlx_models;
 pub mod routes;
 pub mod species_links;
 pub mod state;
+pub mod ui_bridge;
 
 use std::sync::Arc;
 
@@ -42,6 +43,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::import_::router())
         .merge(routes::update::router())
         .merge(routes::species::router())
+        .merge(routes::ui::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::auto_bind_db_path,

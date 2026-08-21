@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>People — LrGeniusAI</title>
+    <style>
+      :root {
+        --bg: #1e1e1e;
+        --panel: #2b2b2b;
+        --panel-hi: #333;
+        --line: #3d3d3d;
+        --text: #d8d8d8;
+        --dim: #8f8f8f;
+        --accent: #4a90d9;
+        --warn: #c9962f;
+        --error: #d05252;
+        --ok: #5fa85f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-hi);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 11px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) { background: #3c3c3c; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.primary:hover:not(:disabled) { background: #5a9fe4; }
+      input, select {
+        font: inherit;
+        color: var(--text);
+        background: #232323;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 7px;
+      }
+      input:focus, select:focus { outline: 1px solid var(--accent); }
+      label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); }
+      .spacer { flex: 1; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
+      .dot.on { background: var(--ok); }
+      #banners { padding: 0 16px; }
+      .banner {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        margin-top: 10px;
+        padding: 9px 12px;
+        border-radius: 4px;
+        border-left: 3px solid var(--warn);
+        background: #33302a;
+      }
+      .banner.error { border-left-color: var(--error); background: #382a2a; }
+      .banner.info { border-left-color: var(--accent); background: #26303a; }
+      .banner button { padding: 0 6px; background: none; border: none; color: var(--dim); }
+      main {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 14px;
+        padding: 16px;
+        padding-bottom: 84px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        text-align: center;
+      }
+      .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+      .card.unassigned { opacity: 0.75; }
+      .thumb {
+        width: 112px;
+        height: 112px;
+        object-fit: cover;
+        border-radius: 4px;
+        background: #171717;
+        cursor: pointer;
+        display: block;
+        margin: 0 auto 8px;
+      }
+      .thumb.placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #555;
+        font-size: 30px;
+      }
+      .card input[type="text"] { width: 100%; text-align: center; }
+      .card .counts { color: var(--dim); font-size: 12px; margin-top: 6px; }
+      .card .state { font-size: 11px; min-height: 14px; margin-top: 4px; color: var(--dim); }
+      .card .state.saved { color: var(--ok); }
+      .card .state.failed { color: var(--error); }
+      .card .name-static { padding: 6px 0; color: var(--dim); }
+      #empty { padding: 40px 16px; color: var(--dim); text-align: center; }
+      footer {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+      }
+      footer[hidden] { display: none; }
+      .busy { color: var(--dim); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>People</h1>
+      <button id="cluster">Cluster faces</button>
+      <label class="inline" title="Cosine distance. Lower splits people apart, higher merges them together. 0.45 if different people were merged, 0.55–0.65 if one person was split up.">
+        threshold
+        <input id="threshold" type="number" min="0.1" max="1" step="0.05" value="0.5" style="width: 64px" />
+      </label>
+      <button id="refresh">Refresh</button>
+      <span class="spacer"></span>
+      <input id="search" type="search" placeholder="Filter by name…" style="width: 160px" />
+      <label class="inline"><input id="unnamed-only" type="checkbox" /> Unnamed only</label>
+      <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-text">Lightroom: connecting…</span></span>
+    </header>
+
+    <div id="banners"></div>
+    <main id="grid"></main>
+    <div id="empty" hidden></div>
+
+    <footer id="actionbar" hidden>
+      <strong id="selection-count"></strong>
+      <label class="inline">
+        Match
+        <select id="match-mode">
+          <option value="intersection">photos with all selected people</option>
+          <option value="union">photos with any selected person</option>
+        </select>
+      </label>
+      <button id="show-in-library" class="primary">Show in Lightroom</button>
+      <button id="clear-selection">Clear selection</button>
+      <span class="spacer"></span>
+      <span class="busy" id="action-state"></span>
+    </footer>
+
+    <script>
+      "use strict";
+
+      // The plugin passes its catalog's db_path when it opens this page, and
+      // every request carries it back. The backend's auto-bind middleware
+      // accepts it from the query string exactly like it does from the
+      // plugin's own calls, so a backend that restarted underneath us
+      // re-binds instead of answering about an empty catalog.
+      const DB_PATH = new URLSearchParams(location.search).get("db_path") || "";
+
+      // One place to fix when the API paths move; the backend's endpoint
+      // names are being reshuffled in parallel with this page.
+      const API = {
+        persons: "/faces/persons",
+        person: (id) => "/faces/persons/" + encodeURIComponent(id),
+        cluster: "/faces/cluster",
+        actions: "/ui/actions",
+        status: "/ui/status",
+      };
+
+      const el = (id) => document.getElementById(id);
+      const grid = el("grid");
+
+      let persons = [];
+      const selected = new Set();
+      let pluginConnected = false;
+
+      function withDbPath(path) {
+        if (!DB_PATH) return path;
+        return path + (path.includes("?") ? "&" : "?") + "db_path=" + encodeURIComponent(DB_PATH);
+      }
+
+      async function api(method, path, body) {
+        let response;
+        try {
+          response = await fetch(withDbPath(path), {
+            method,
+            headers: body ? { "Content-Type": "application/json" } : undefined,
+            body: body ? JSON.stringify(body) : undefined,
+          });
+        } catch (e) {
+          throw new Error(
+            "Could not reach the LrGeniusAI backend. It may have stopped — close this page, " +
+              "then open People again in Lightroom to restart it. (" + e.message + ")"
+          );
+        }
+        const text = await response.text();
+        let data = {};
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch (e) {
+            throw new Error("Backend returned a malformed response: " + text.slice(0, 300));
+          }
+        }
+        if (!response.ok || data.error) {
+          throw new Error(data.error || "Backend returned HTTP " + response.status);
+        }
+        // A degraded success still has something to say — never drop it.
+        if (data.warning) banner(data.warning, "warn");
+        if (Array.isArray(data.warnings)) data.warnings.forEach((w) => banner(w, "warn"));
+        return data;
+      }
+
+      function banner(message, kind) {
+        // A run-wide cause (one unloaded model, one unreachable service) comes
+        // back on every refresh. Show it once and keep it, rather than
+        // stacking the same sentence down the page — but never drop it.
+        for (const shown of document.querySelectorAll(".banner")) {
+          if (shown.firstChild && shown.firstChild.textContent === message) return;
+        }
+        const box = document.createElement("div");
+        box.className = "banner" + (kind === "error" ? " error" : kind === "info" ? " info" : "");
+        const text = document.createElement("div");
+        text.textContent = message;
+        const close = document.createElement("button");
+        close.textContent = "✕";
+        close.title = "Dismiss";
+        close.onclick = () => box.remove();
+        box.append(text, close);
+        el("banners").append(box);
+        if (kind === "info") setTimeout(() => box.remove(), 6000);
+      }
+
+      function displayName(person) {
+        return typeof person.name === "string" ? person.name : "";
+      }
+
+      function sortForDisplay(list) {
+        return list.slice().sort((a, b) => {
+          // Unassigned faces are not a person; they belong at the end.
+          if (!a.person_id !== !b.person_id) return a.person_id ? -1 : 1;
+          const named = (p) => (displayName(p) ? 0 : 1);
+          if (named(a) !== named(b)) return named(a) - named(b);
+          return (b.photo_count || 0) - (a.photo_count || 0);
+        });
+      }
+
+      function visiblePersons() {
+        const q = el("search").value.trim().toLowerCase();
+        const unnamedOnly = el("unnamed-only").checked;
+        return sortForDisplay(persons).filter((p) => {
+          const name = displayName(p);
+          if (unnamedOnly && name) return false;
+          if (q && !name.toLowerCase().includes(q)) return false;
+          return true;
+        });
+      }
+
+      function countsLabel(person) {
+        const photos = person.photo_count || 0;
+        const faces = person.face_count || 0;
+        return photos + (photos === 1 ? " photo" : " photos") + " · " + faces + (faces === 1 ? " face" : " faces");
+      }
+
+      function renderCard(person) {
+        const card = document.createElement("div");
+        card.className = "card" + (person.person_id ? "" : " unassigned");
+        if (selected.has(person.person_id)) card.classList.add("selected");
+
+        if (person.thumbnail) {
+          const img = document.createElement("img");
+          img.className = "thumb";
+          img.alt = displayName(person) || "Unnamed person";
+          img.src = "data:image/jpeg;base64," + person.thumbnail;
+          card.append(img);
+        } else {
+          const box = document.createElement("div");
+          box.className = "thumb placeholder";
+          box.textContent = "?";
+          card.append(box);
+        }
+
+        const state = document.createElement("div");
+        state.className = "state";
+
+        if (person.person_id) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = displayName(person);
+          input.placeholder = "Add a name";
+          input.onchange = () => saveName(person, input.value.trim(), state);
+          input.onkeydown = (e) => {
+            if (e.key === "Enter") input.blur();
+          };
+          card.append(input);
+          const thumb = card.querySelector(".thumb");
+          thumb.title = "Click to select this person for “Show in Lightroom”";
+          thumb.onclick = () => toggleSelection(person.person_id, card);
+        } else {
+          const label = document.createElement("div");
+          label.className = "name-static";
+          label.textContent = "Unassigned faces";
+          label.title = "Faces that clustering could not place with anyone. Re-cluster to try again.";
+          card.append(label);
+        }
+
+        const counts = document.createElement("div");
+        counts.className = "counts";
+        counts.textContent = countsLabel(person);
+        card.append(counts, state);
+        return card;
+      }
+
+      function render() {
+        grid.textContent = "";
+        const list = visiblePersons();
+        for (const person of list) grid.append(renderCard(person));
+
+        const empty = el("empty");
+        if (list.length === 0) {
+          empty.hidden = false;
+          empty.textContent = persons.length
+            ? "No people match this filter."
+            : "No people yet. Index photos with face detection turned on, then click “Cluster faces”.";
+        } else {
+          empty.hidden = true;
+        }
+        renderSelection();
+      }
+
+      function renderSelection() {
+        const bar = el("actionbar");
+        bar.hidden = selected.size === 0;
+        el("selection-count").textContent =
+          selected.size + (selected.size === 1 ? " person selected" : " people selected");
+        el("match-mode").disabled = selected.size < 2;
+      }
+
+      function toggleSelection(personId, card) {
+        if (selected.has(personId)) {
+          selected.delete(personId);
+          card.classList.remove("selected");
+        } else {
+          selected.add(personId);
+          card.classList.add("selected");
+        }
+        renderSelection();
+      }
+
+      async function saveName(person, name, state) {
+        if (name === displayName(person)) return;
+        state.className = "state";
+        state.textContent = "Saving…";
+        try {
+          await api("PUT", API.person(person.person_id), { name });
+          person.name = name;
+          state.className = "state saved";
+          state.textContent = "Saved";
+          setTimeout(() => {
+            if (state.textContent === "Saved") state.textContent = "";
+          }, 2000);
+        } catch (e) {
+          state.className = "state failed";
+          state.textContent = "Not saved";
+          banner("Could not rename this person: " + e.message, "error");
+        }
+      }
+
+      async function loadPersons() {
+        el("refresh").disabled = true;
+        try {
+          const data = await api("GET", API.persons);
+          persons = Array.isArray(data.persons) ? data.persons : [];
+          for (const id of Array.from(selected)) {
+            if (!persons.some((p) => p.person_id === id)) selected.delete(id);
+          }
+          render();
+        } catch (e) {
+          banner("Could not load people: " + e.message, "error");
+        } finally {
+          el("refresh").disabled = false;
+        }
+      }
+
+      async function clusterFaces() {
+        const button = el("cluster");
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = "Clustering…";
+        try {
+          const threshold = parseFloat(el("threshold").value);
+          const body = {};
+          if (!Number.isNaN(threshold)) body.distance_threshold = threshold;
+          const data = await api("POST", API.cluster, body);
+          banner(
+            "Clustering finished: " + (data.person_count || 0) + " people from " + (data.face_count || 0) + " faces.",
+            "info"
+          );
+          await loadPersons();
+        } catch (e) {
+          banner("Face clustering failed: " + e.message, "error");
+        } finally {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      }
+
+      async function showInLightroom() {
+        if (selected.size === 0) return;
+        const names = {};
+        for (const person of persons) {
+          if (selected.has(person.person_id) && displayName(person)) names[person.person_id] = displayName(person);
+        }
+        const state = el("action-state");
+        state.textContent = "Sending…";
+        try {
+          const data = await api("POST", API.actions, {
+            action: "show_in_library",
+            person_ids: Array.from(selected),
+            person_names: names,
+            match_mode: selected.size > 1 ? el("match-mode").value : "union",
+          });
+          if (data.plugin_connected) {
+            state.textContent = "Sent — switch to Lightroom.";
+            setTimeout(() => {
+              if (state.textContent.startsWith("Sent")) state.textContent = "";
+            }, 6000);
+          } else {
+            // Queued, but nothing is draining it: say so instead of letting
+            // the user wait on a Lightroom window that will never change.
+            state.textContent = "";
+            banner(
+              "Lightroom is not listening, so nothing will happen. The People window was closed there — " +
+                "reopen Library ▸ Plug-in Extras ▸ People…, then send this again.",
+              "error"
+            );
+          }
+        } catch (e) {
+          state.textContent = "";
+          banner("Could not send the selection to Lightroom: " + e.message, "error");
+        }
+      }
+
+      async function heartbeat() {
+        try {
+          const response = await fetch(withDbPath(API.status));
+          const data = await response.json();
+          pluginConnected = !!data.plugin_connected;
+        } catch (e) {
+          pluginConnected = false;
+        }
+        el("conn-dot").classList.toggle("on", pluginConnected);
+        el("conn-text").textContent = pluginConnected
+          ? "Lightroom: connected"
+          : "Lightroom: not listening";
+      }
+
+      el("cluster").onclick = clusterFaces;
+      el("refresh").onclick = loadPersons;
+      el("search").oninput = render;
+      el("unnamed-only").onchange = render;
+      el("show-in-library").onclick = showInLightroom;
+      el("clear-selection").onclick = () => {
+        selected.clear();
+        render();
+      };
+
+      heartbeat();
+      setInterval(heartbeat, 5000);
+      loadPersons();
+    </script>
+  </body>
+</html>

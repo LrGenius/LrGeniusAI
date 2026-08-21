@@ -54,6 +54,9 @@ sources = [
 sources = [
   "server-rs/crates/lrg-api/src/routes/*.rs",
   "plugin/LrGeniusAI.lrdevplugin/APISearchIndex.lua",
+  # The /ui/ section documents the browser↔plugin action queue, which lives
+  # here rather than in a route module.
+  "server-rs/crates/lrg-api/src/ui_bridge.rs",
   # The page names the release tags the download routes pull assets from, so a
   # change to how a tag is published belongs in the same review.
   ".github/workflows/model-assets-bioclip.yml",
@@ -151,6 +154,9 @@ sources = [
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskPeople.lua",
   "server-rs/crates/lrg-api/src/routes/faces.rs",
+  # The People interface itself: the page the plugin opens in the browser.
+  "server-rs/crates/lrg-api/src/ui/people.html",
+  "server-rs/crates/lrg-api/src/routes/ui.rs",
 ]
 
 [page."Help-Advanced-Search.md"]

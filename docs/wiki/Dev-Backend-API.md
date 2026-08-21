@@ -303,6 +303,50 @@ Returns the list of `photo_id` values associated with a specific person.
 
 ---
 
+## Browser UI (`/ui/`)
+
+Pages the plugin opens in the browser instead of rebuilding them out of
+Lightroom's view factory, plus the queue they talk back through. The pages are
+compiled into the binary from `crates/lrg-api/src/ui/`, so they can never go
+stale against the server serving them.
+
+A page can call the rest of this API directly — it is served from the
+backend's own origin, so no CORS setup is involved — and it forwards the
+`db_path` the plugin put in its URL on every request, which the auto-bind
+middleware honours exactly like the plugin's own calls.
+
+What a page *cannot* do is touch the Lightroom catalog. Those actions are
+queued instead: the page POSTs one, and the plugin task that is waiting on it
+drains the queue and performs it. Both ends stamp when they were last heard
+from, so each can tell the user the other one is gone instead of appearing to
+hang.
+
+### `GET /ui/people`
+Serves the People page: person grid, renaming, re-clustering, filtering, and
+the selection that becomes a Lightroom collection. Replaced the plugin's LrView
+People dialog.
+
+### `GET /ui/status`
+Page heartbeat. Returns `plugin_connected` — false once the plugin has not
+polled for 5 seconds, which is how the page reports that People was closed in
+Lightroom instead of silently queueing work nobody will run.
+
+### `GET /ui/actions`
+Plugin poll. Returns every queued action and clears the queue, so each action
+is handed out exactly once — a caller that drops the response drops the work.
+Also returns `page_open`, false when no page has been seen for 90 seconds —
+wide enough that a page throttled in a hidden browser tab still counts —
+which lets the plugin report a browser that never opened.
+
+### `POST /ui/actions`
+Queues one action for the plugin. The body needs an `action` naming one the
+backend knows (`show_in_library`, which additionally needs a non-empty
+`person_ids` array); anything else is a 400 rather than an entry nothing will
+ever run. Returns `plugin_connected` as it was *before* the enqueue — the
+answer to "will anything pick this up".
+
+---
+
 ## Metadata Import
 
 ### `POST /import/metadata`

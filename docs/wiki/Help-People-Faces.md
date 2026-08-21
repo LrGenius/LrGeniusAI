@@ -2,14 +2,14 @@
 
 LrGeniusAI provides two face-related workflows:
 
-- **People** — browse face clusters (persons), assign names, and jump to Lightroom collections per person.
+- **People** — browse face clusters (persons), assign names, and jump to Lightroom collections per person. Its interface opens in your web browser.
 - **Find Similar Faces** — select a photo containing a face and find other photos featuring the same person.
 
 ---
 
 ## Prerequisites
 
-Face data is generated during **Analyze & Index Photos** — tick *Enable face detection* on the *General* tab. It needs the face models on disk; they arrive with the **Download AI models** button in the plugin settings, alongside the search and species ones. Without indexed face data neither workflow finds anything, and the People dialog stays empty until you have also pressed **Cluster faces** at least once.
+Face data is generated during **Analyze & Index Photos** — tick *Enable face detection* on the *General* tab. It needs the face models on disk; they arrive with the **Download AI models** button in the plugin settings, alongside the search and species ones. Without indexed face data neither workflow finds anything, and the People page stays empty until you have also pressed **Cluster faces** at least once.
 
 ---
 
@@ -17,42 +17,65 @@ Face data is generated during **Analyze & Index Photos** — tick *Enable face d
 
 `Library → Plug-in Extras → People...`
 
+### Where it opens
+
+People opens as a page in your default web browser, served by the LrGeniusAI
+backend at `http://127.0.0.1:19819/ui/people`. Lightroom shows a progress bar
+named *People (open in your browser)* while the page is live; it is what
+carries your selections back into the catalog, so leave it running and cancel
+it when you are done.
+
+If the browser never comes up — a blocked pop-up, no default browser — the
+plugin tells you after about half a minute and gives you the address to open
+by hand.
+
 ### What it shows
 
-The dialog shows a grid of persons from your indexed photos. Each cell has:
+A grid of persons from your indexed photos. Each card has:
 
 - A thumbnail of the representative face.
-- An editable name field, or *Unnamed* for faces not yet grouped into a person.
-- The number of photos this person appears in.
-- A **Library** checkbox.
+- A name field, or *Unassigned faces* for the faces not yet grouped into a
+  person.
+- The number of photos this person appears in and how many faces are in the
+  cluster.
 
 Named persons come first, then unnamed ones; within each group the person with
 the most photos is first. Every face that belongs to no person — never
-clustered, or left over by the last run — shares a single *Unnamed* entry.
+clustered, or left over by the last run — shares a single *Unassigned faces*
+entry. The **Filter by name** box and **Unnamed only** checkbox narrow a long
+list; **Refresh** re-reads it from the backend.
 
 ### Clustering
 
 Detection during indexing finds faces; grouping them into persons is a separate
 step. Press **Cluster faces** to (re-)group everything the backend has. The run
-reports how many persons and faces it produced — reopen *People...* afterwards
-to see the new list, the open dialog does not refresh itself.
+reports how many persons and faces it produced, and the grid updates itself.
+
+The **threshold** next to the button is the cosine distance clustering works
+at. Leave it at 0.5 unless the result is wrong in a specific way: lower it
+towards 0.45 when different people were merged into one cluster, raise it
+towards 0.55–0.65 when one person was split across several.
 
 ### Assigning names
 
-Type directly into a person's name field. **OK** writes all edited names to the
-backend, **Reset** reverts your edits, **Cancel** closes without saving. Names
-survive re-clustering and are used as context elsewhere.
+Type into a card's name field and press Enter or click away — each name is
+saved on its own, and the card says *Saved* when it lands. Names survive
+re-clustering and are used as context elsewhere.
 
 ### Jumping to a Lightroom collection
 
-Tick **Library** on one or more people and press **Show in Library**. With
+Click the thumbnails of the people you want; selected cards get a blue border.
+The bar at the bottom of the page then offers **Show in Lightroom**. With
 several people selected, the dropdown decides what you get:
 
-- **Photos with any selected person** — the union
-- **Photos with all selected people** — only photos where everyone appears
+- **photos with all selected people** — only photos where everyone appears
   together (the default)
+- **photos with any selected person** — the union
 
-The result opens as a Lightroom collection.
+Lightroom builds the collection and switches the Library to it. This is the one
+thing the page cannot do on its own, so it needs the *People* progress bar
+still running in Lightroom — if it is not, the page says so instead of leaving
+you waiting.
 
 ---
 
@@ -79,7 +102,7 @@ the whole indexed catalog.
 
 - **Better names = better workflow.** Naming persons early makes it easy to find all photos of a specific subject across your entire catalog.
 - Run indexing with face detection on all portrait-heavy shoots before using the People workflow.
-- Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. The People dialog lets you rename a cluster, not split or merge one — if a cluster is wrong, index more photos of that person and cluster again.
+- Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. The People page lets you rename a cluster and re-cluster at a different threshold, not split or merge one by hand — if a cluster is wrong, try the threshold first, then index more photos of that person and cluster again.
 - For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eye openness, blink detection, face sharpness). See [Help: Cull Photos](Help-Cull-Photos).
 
 ## Upgrading from a version before the face-model change
@@ -99,4 +122,4 @@ faces detected by the old models are not silently reused:
   re-detected, its faces reclaim the person they were assigned to.
 
 So: download the models, then re-index the photos with people in them. Until you
-do, the People dialog will show those faces as unassigned.
+do, the People page will show those faces as unassigned.

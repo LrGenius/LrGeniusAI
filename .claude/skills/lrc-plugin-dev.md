@@ -700,6 +700,6 @@ return {
 
 6. **AI lock** — In SDK 15.3, `photo:isAvailableForEditing()` returns false when an AI operation is in progress. Check before editing. Also use `catalog:getPhotosAvailableForEditing(photos)` for batches.
 
-7. **`LOC` for strings** — Always use `LOC "$$$/path=Default"` for user-visible strings to support localization.
+7. **Strings** — This project dropped translations: write user-visible strings as plain finished English. `LOC "$$$/path=Default"` (which renders the inline default) is only still around in older files.
 
 8. **`LrFunctionContext.callWithContext`** is blocking; `LrFunctionContext.postAsyncTaskWithContext` is async. Use async for long operations.

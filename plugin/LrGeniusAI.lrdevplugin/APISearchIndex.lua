@@ -62,6 +62,8 @@ local ENDPOINTS = {
 	FACES_PERSONS = "/faces/persons",
 	FACES_PERSON_PHOTOS = "/faces/persons", -- suffix /<id>/photos
 	FACES_DETECT = "/faces/detect",
+	UI_PEOPLE = "/ui/people",
+	UI_ACTIONS = "/ui/actions",
 	FACES_QUERY = "/faces/query",
 	DB_BACKUP = "/db/backup",
 	SYNC_CLEANUP = "/sync/cleanup",
@@ -3764,6 +3766,38 @@ function SearchIndexAPI.getPhotosForPerson(personId)
 	local result, err = _request("GET", url, {})
 	if err then
 		log:error("getPhotosForPerson failed: " .. err)
+		return nil, err
+	end
+	return result
+end
+
+---
+-- URL of the People page the plugin opens in the browser.
+-- Carries the catalog's db_path so the page's own requests bind the same
+-- catalog the plugin talks to — the backend accepts it from the query string
+-- exactly like it does from `_request`'s injected copy.
+-- @return string
+function SearchIndexAPI.getPeopleUiUrl()
+	local url = getBaseUrl() .. ENDPOINTS.UI_PEOPLE
+	if SearchIndexAPI.isLocalBackend() then
+		local dbPath = getDbPath()
+		if dbPath then
+			url = url .. "?db_path=" .. _urlEncode(dbPath)
+		end
+	end
+	return url
+end
+
+---
+-- Take everything a /ui/ page queued for the plugin. Draining is destructive:
+-- each action is handed out exactly once, so the caller must act on what it
+-- gets back rather than polling again for it.
+-- @return table|nil { status, actions = { ... }, page_open } or nil, err
+function SearchIndexAPI.takeUiActions()
+	local url = getBaseUrl() .. ENDPOINTS.UI_ACTIONS
+	local result, err = _request("GET", url, nil, 10)
+	if err then
+		log:error("takeUiActions failed: " .. err)
 		return nil, err
 	end
 	return result
