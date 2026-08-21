@@ -93,8 +93,12 @@ local ENDPOINTS = {
 	-- Keyword clustering
 	KEYWORDS_CLUSTER = "/v1/keywords/clusters",
 	KEYWORDS_CLUSTER_START = "/v1/keywords/clusters/jobs",
-	KEYWORDS_CLUSTER_STATUS = "/v1/keywords/clusters/jobs", -- suffix /<job_id>
 	KEYWORDS_APPLY_MERGES = "/v1/keywords/merges",
+
+	-- Async jobs. Enqueueing belongs to the domain that starts the work; every
+	-- such response carries a `poll_url` alongside its `job_id`, and this is
+	-- where it points.
+	JOB_STATUS = "/v1/jobs", -- suffix /<job_id>
 
 	-- Local ML model assets
 	CLIP_STATUS = "/v1/models/clip",
@@ -3644,7 +3648,7 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 	-- Poll until done. Every poll reports back to the caller so the UI keeps
 	-- moving even while a single LLM round-trip runs for minutes.
 	local jobId = startResp.job_id
-	local statusUrl = SearchIndexAPI.url("KEYWORDS_CLUSTER_STATUS", jobId)
+	local statusUrl = SearchIndexAPI.url("JOB_STATUS", jobId)
 	local startedAt = LrDate.currentTime()
 	local lastStageAt = startedAt
 	local lastStageKey = nil

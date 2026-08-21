@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Value};
@@ -40,15 +40,10 @@ fn report(sink: ProgressSink<'_>, progress: Value) {
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
         .route("/keywords/clusters", axum::routing::post(cluster_keywords))
-        // The async variant of the same work: POST enqueues a job, GET polls
-        // one by id.
+        // Enqueues a job; poll it at `GET /v1/jobs/{job_id}`.
         .route(
             "/keywords/clusters/jobs",
             axum::routing::post(cluster_keywords_start),
-        )
-        .route(
-            "/keywords/clusters/jobs/{job_id}",
-            axum::routing::get(cluster_keywords_status),
         )
         .route(
             "/keywords/merges",
@@ -245,23 +240,14 @@ async fn cluster_keywords_start(
 
     (
         StatusCode::ACCEPTED,
-        Json(json!({"job_id": job_id_for_log, "error": null, "warning": null})),
+        Json(json!({
+            "job_id": job_id_for_log,
+            "poll_url": super::jobs::poll_url(&job_id_for_log),
+            "error": null,
+            "warning": null,
+        })),
     )
         .into_response()
-}
-
-async fn cluster_keywords_status(
-    State(state): State<Arc<AppState>>,
-    Path(job_id): Path<String>,
-) -> Response {
-    match state.jobs.get_job(&job_id) {
-        Some(snapshot) => Json(snapshot.to_json()).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "job not found", "status": null, "result": null})),
-        )
-            .into_response(),
-    }
 }
 
 async fn keywords_apply_merges(

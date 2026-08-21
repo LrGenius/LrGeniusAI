@@ -1112,3 +1112,45 @@ async fn training_delete_decodes_a_path_shaped_photo_id() {
         "wildcard capture should decode back to {raw:?}, got {body}"
     );
 }
+
+/// Job polling is generic and lives at one path, rather than each async
+/// operation growing its own status route. The keyword-clustering enqueue must
+/// therefore hand back where to poll, not just an opaque id.
+#[tokio::test]
+async fn unknown_job_is_a_404_with_a_reason() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::get("/v1/jobs/does-not-exist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let json = body_json(response).await;
+    assert!(json["status"].is_null());
+    // A collected-or-expired job is indistinguishable from a bad id here, so
+    // the message has to say that rather than assert the id was wrong.
+    let error = json["error"].as_str().unwrap();
+    assert!(
+        error.contains("collected") || error.contains("expired"),
+        "404 should explain the one-shot/TTL semantics, got {error:?}"
+    );
+}
+
+/// The old keyword-shaped poll route is gone; nothing should still answer on it.
+#[tokio::test]
+async fn keyword_specific_job_poll_route_is_gone() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::get("/v1/keywords/clusters/jobs/abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

@@ -316,10 +316,23 @@ Imports existing Lightroom catalog metadata (keywords, title, caption, rating, e
 Synchronous keyword clustering: groups catalog keywords by semantic similarity.
 
 ### `POST /v1/keywords/clusters/jobs`
-Async version: starts a background clustering job and returns a `job_id`.
+Async version: starts a background clustering job. Returns `202` with a
+`job_id` and the `poll_url` to read it back from — see `GET /v1/jobs/<job_id>`.
 
-### `GET /v1/keywords/clusters/jobs/<job_id>`
-Polls the status and result of an async clustering job.
+## Async Jobs
+
+Long-running work is enqueued by the domain that knows what to start, and read
+back from one place. Every enqueue response carries a `job_id` and a `poll_url`
+pointing here, so the poll location is never derived from the enqueue path.
+
+### `GET /v1/jobs/<job_id>`
+Returns `{status, result, error, progress}`, where `status` is `running`,
+`done` or `error`.
+
+A finished job is returned **once** and then dropped from the registry, and
+jobs expire after 600s without activity (polling or reporting progress counts
+as activity). A `404` therefore means the job never existed, was already
+collected, or expired — not necessarily that the id was wrong.
 
 ### `POST /v1/keywords/merges`
 Applies a list of approved keyword merge pairs to the backend's metadata records.
