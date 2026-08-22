@@ -605,7 +605,7 @@ impl BioclipModel {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .zip(embedding.as_chunks::<4>().0.iter())
+                .zip(embedding.as_chunks::<4>().0)
             {
                 acc[0] += lut[q[0] as usize] * e[0];
                 acc[1] += lut[q[1] as usize] * e[1];
