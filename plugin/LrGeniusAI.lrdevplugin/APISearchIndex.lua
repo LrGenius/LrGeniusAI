@@ -2738,8 +2738,11 @@ function SearchIndexAPI.downloadDatabaseBackup()
 
 	log:info("Downloading database backup from " .. url .. " to " .. outputPath)
 
-	-- _request mit leerer Tabelle als body, kein Timeout (vermeidet SDK-Crash), raw=true für Binär-Zip
-	local responseBody, hdrs = _request("GET", url, {}, nil, { raw = true })
+	-- POST, not GET: the backend registers this route as POST only (taking a
+	-- backup also retains a copy on disk), and a GET here answers 405.
+	-- Empty table as body so `_request` can inject db_path; no timeout (avoids
+	-- an SDK crash); raw = true because the response is a binary zip.
+	local responseBody, hdrs = _request("POST", url, {}, nil, { raw = true })
 	if responseBody == nil then
 		local err = hdrs or "Backup download failed"
 		log:error("downloadDatabaseBackup: " .. tostring(err))
