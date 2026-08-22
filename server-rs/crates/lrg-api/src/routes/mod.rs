@@ -20,4 +20,5 @@ pub mod server;
 pub mod species;
 pub mod style_edit;
 pub mod training;
+pub mod ui;
 pub mod update;

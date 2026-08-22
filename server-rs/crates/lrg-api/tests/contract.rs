@@ -1155,6 +1155,690 @@ async fn keyword_specific_job_poll_route_is_gone() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// The People page has to be reachable through the *assembled* router, not
+/// just through `routes::ui::router()` in isolation.
+///
+/// This is a regression test with a scar behind it: merging the `/v1` grouping
+/// into the branch that added `/ui/` dropped the `.merge(routes::ui::router())`
+/// line, and every unit test still passed because they mount that router
+/// directly. The People menu item opened a 404 and nothing said so.
+#[tokio::test]
+async fn people_page_is_reachable_through_the_assembled_router() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(Request::get("/v1/ui/people").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+    let page = body_string(response).await;
+    // The page's own fetches must name the nested paths, or it renders and
+    // then fails every request it makes.
+    assert!(
+        page.contains("/v1/faces/persons") && page.contains("/v1/ui/actions"),
+        "the People page still points at unprefixed API paths"
+    );
+}
+
+/// The browser→Lightroom queue, end to end through the assembled router: what
+/// the page posts is what the plugin's poll hands back, exactly once.
+#[tokio::test]
+async fn ui_action_survives_the_round_trip_through_the_assembled_router() {
+    let (app, _) = fresh_app();
+    let queued = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/ui/actions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "action": "show_in_library",
+                        "person_ids": ["person_0"],
+                        "match_mode": "intersection"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(queued.status(), StatusCode::OK);
+
+    let drained = body_json(
+        app.oneshot(Request::get("/v1/ui/actions").body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(drained["actions"][0]["person_ids"][0], "person_0");
+    assert_eq!(drained["actions"][0]["match_mode"], "intersection");
+}
+
+// ---------------------------------------------------------------------------
+// The People page's editing surface: looking inside a person, moving faces
+// between people, and merging two people into one.
+//
+// These go through the real store rather than a mock, because the thing that
+// matters about all three is what `FACE_TABLE` looks like afterwards — and in
+// particular that a decision the user made survives the next clustering run.
+
+/// A face row: an embedding pointing `angle` radians into the first two
+/// dimensions, plus quality metrics good enough to pass the clustering gate.
+fn people_face(id: &str, photo: &str, person: &str, angle: f64) -> lrg_store::StoreRecord {
+    let mut m = serde_json::Map::new();
+    m.insert("photo_id".into(), serde_json::json!(photo));
+    m.insert("person_id".into(), serde_json::json!(person));
+    m.insert("thumbnail".into(), serde_json::json!("AAAA"));
+    m.insert(
+        "face_model".into(),
+        serde_json::json!(lrg_ml::faces::MODEL_ID),
+    );
+    m.insert("face_det_score".into(), serde_json::json!(0.95));
+    m.insert("face_area_ratio".into(), serde_json::json!(0.05));
+    m.insert("face_sharpness".into(), serde_json::json!(0.6));
+    m.insert("face_occlusion".into(), serde_json::json!(0.1));
+    let mut v = vec![0.0f32; 512];
+    v[0] = angle.cos() as f32;
+    v[1] = angle.sin() as f32;
+    lrg_store::StoreRecord {
+        id: id.into(),
+        vector: Some(v),
+        metadata: m,
+    }
+}
+
+async fn people_fixture() -> (axum::Router, Arc<AppState>, tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::FACE_TABLE,
+            &[
+                // Two people, far enough apart that no sane threshold merges them.
+                people_face("a1_0", "a1", "person_0", 0.0),
+                people_face("a2_0", "a2", "person_0", 0.05),
+                people_face("a3_0", "a3", "person_0", 0.08),
+                people_face("b1_0", "b1", "person_1", 1.5),
+                people_face("b2_0", "b2", "person_1", 1.55),
+                people_face("c1_0", "c1", "", 3.0),
+            ],
+        )
+        .await
+        .unwrap();
+    (app, state, dir, db_path)
+}
+
+async fn get_json(app: &axum::Router, uri: &str) -> serde_json::Value {
+    let response = app
+        .clone()
+        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {uri}");
+    body_json(response).await
+}
+
+async fn post_json(
+    app: &axum::Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn person_faces_returns_thumbnails_and_a_distance_per_face() {
+    let (app, _state, _dir, db_path) = people_fixture().await;
+    let json = get_json(
+        &app,
+        &format!("/v1/faces/persons/person_0/faces?db_path={db_path}"),
+    )
+    .await;
+
+    assert_eq!(json["total"], 3);
+    let faces = json["faces"].as_array().unwrap();
+    assert_eq!(faces.len(), 3);
+    for face in faces {
+        assert!(face["face_id"].is_string(), "got {face}");
+        assert_eq!(face["thumbnail"], "AAAA");
+        assert!(
+            face["distance"].as_f64().is_some(),
+            "the page shows how far each face sits from its person: {face}"
+        );
+        assert_eq!(face["manual"], false);
+    }
+    // `typical` is the default: the face closest to the person's average first.
+    let distances: Vec<f64> = faces
+        .iter()
+        .map(|f| f["distance"].as_f64().unwrap())
+        .collect();
+    assert!(
+        distances.windows(2).all(|w| w[0] <= w[1] + 1e-9),
+        "default sort is closest-first, got {distances:?}"
+    );
+}
+
+/// The unassigned bucket is reachable under a name a URL path can carry, and
+/// answers about faces with no person however their `person_id` is spelled.
+#[tokio::test]
+async fn the_unassigned_bucket_can_be_opened_like_a_person() {
+    let (app, _state, _dir, db_path) = people_fixture().await;
+    let json = get_json(
+        &app,
+        &format!("/v1/faces/persons/_unassigned/faces?db_path={db_path}"),
+    )
+    .await;
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["faces"][0]["face_id"], "c1_0");
+    assert_eq!(
+        json["faces"][0]["distance"],
+        serde_json::Value::Null,
+        "unassigned faces are not a person, so there is no average to measure against"
+    );
+}
+
+#[tokio::test]
+async fn assigning_a_face_moves_it_and_marks_it_as_the_user_s_decision() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/assign",
+        serde_json::json!({
+            "face_ids": ["c1_0"],
+            "person_id": "person_0",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["updated"], 1);
+    assert_eq!(json["person_id"], "person_0");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(lrg_store::FACE_TABLE, &["c1_0".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(rows[0].metadata["person_id"], "person_0");
+    assert_eq!(
+        rows[0].metadata["person_manual"], true,
+        "without this flag the next clustering run would undo the move"
+    );
+}
+
+#[tokio::test]
+async fn detaching_a_face_takes_it_off_the_person_without_forgetting_the_decision() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/assign",
+        serde_json::json!({"face_ids": ["a1_0"], "person_id": "", "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(lrg_store::FACE_TABLE, &["a1_0".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(rows[0].metadata["person_id"], "person_unassigned");
+    assert_eq!(rows[0].metadata["person_manual"], true);
+}
+
+#[tokio::test]
+async fn moving_faces_to_a_new_person_picks_an_unused_id() {
+    let (app, _state, _dir, db_path) = people_fixture().await;
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/assign",
+        serde_json::json!({
+            "face_ids": ["a1_0", "a2_0"],
+            "new_person": true,
+            "name": "Split off",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["updated"], 2);
+    let new_id = json["person_id"].as_str().unwrap();
+    assert_ne!(new_id, "person_0");
+    assert_ne!(new_id, "person_1");
+    assert_eq!(json["name"], "Split off");
+
+    let persons = get_json(&app, &format!("/v1/faces/persons?db_path={db_path}")).await;
+    let entry = persons["persons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["person_id"] == new_id)
+        .unwrap_or_else(|| panic!("the new person is missing from the list: {persons}"));
+    assert_eq!(entry["face_count"], 2);
+    assert_eq!(entry["manual_count"], 2);
+}
+
+#[tokio::test]
+async fn assigning_reports_face_ids_that_no_longer_exist() {
+    let (app, _state, _dir, db_path) = people_fixture().await;
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/assign",
+        serde_json::json!({
+            "face_ids": ["a1_0", "gone_0"],
+            "person_id": "person_1",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["updated"], 1);
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "moving fewer faces than asked for is not a silent success: {json}"
+    );
+}
+
+#[tokio::test]
+async fn merging_two_people_keeps_the_chosen_name() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/persons/merge",
+        serde_json::json!({
+            "person_ids": ["person_0", "person_1"],
+            "into": "person_1",
+            "name": "Anna",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["person_id"], "person_1");
+    assert_eq!(json["name"], "Anna");
+    assert_eq!(json["moved"], 3, "person_0's three faces move: {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    for (id, meta) in rows {
+        if id == "c1_0" {
+            continue;
+        }
+        assert_eq!(meta["person_id"], "person_1", "{id} did not move");
+        assert_eq!(
+            meta["person_manual"], true,
+            "{id}: the whole merged person is pinned, or the next run splits it again"
+        );
+    }
+}
+
+#[tokio::test]
+async fn merging_needs_two_real_people() {
+    let (app, _state, _dir, db_path) = people_fixture().await;
+    for body in [
+        serde_json::json!({"person_ids": ["person_0"], "db_path": db_path}),
+        serde_json::json!({"person_ids": ["person_0", ""], "db_path": db_path}),
+        serde_json::json!({"person_ids": ["person_0", "person_0"], "db_path": db_path}),
+    ] {
+        let (status, json) = post_json(&app, "/v1/faces/persons/merge", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "got {json}");
+    }
+}
+
+/// The reason a merge marks its faces manual. Two people the user merged are
+/// deliberately far apart in the embedding space, so a plain re-cluster would
+/// take them straight back apart — which would make merging pointless.
+#[tokio::test]
+async fn a_merge_survives_the_next_clustering_run() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, _) = post_json(
+        &app,
+        "/v1/faces/persons/merge",
+        serde_json::json!({
+            "person_ids": ["person_0", "person_1"],
+            "into": "person_0",
+            "name": "Anna",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/cluster",
+        // A threshold far below the distance between the two merged halves:
+        // nothing but the pin can hold them together.
+        serde_json::json!({"distance_threshold": 0.1, "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["diagnostics"]["pinned_faces"], 5, "got {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    for (id, meta) in rows {
+        if id == "c1_0" {
+            continue;
+        }
+        assert_eq!(
+            meta["person_id"], "person_0",
+            "{id} was pulled back out of the merged person"
+        );
+    }
+}
+
+/// The other half of the same rule: a face the user took off a person must not
+/// be quietly put back by the next run, even though it sits right next to that
+/// person in the embedding space.
+#[tokio::test]
+async fn a_detached_face_is_not_re_attached_by_clustering() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, _) = post_json(
+        &app,
+        "/v1/faces/assign",
+        serde_json::json!({"face_ids": ["a3_0"], "person_id": "", "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/cluster",
+        serde_json::json!({"distance_threshold": 0.5, "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(lrg_store::FACE_TABLE, &["a3_0".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(rows[0].metadata["person_id"], "person_unassigned");
+}
+
+/// The clustering complaint this all started from: a chain of borderline faces
+/// used to walk from one person to another. Complete linkage caps the distance
+/// across the *whole* group, so it cannot.
+#[tokio::test]
+async fn clustering_does_not_chain_two_people_through_a_borderline_face() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    // Evenly spaced: each neighbour is inside the threshold, the two ends are
+    // not. Anything density-based folds all five into one person.
+    let step = 0.45_f64.acos();
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::FACE_TABLE,
+            &[
+                people_face("a1_0", "a1", "", 0.0),
+                people_face("a2_0", "a2", "", 0.02),
+                people_face("mid_0", "mid", "", step),
+                people_face("b1_0", "b1", "", step * 2.0),
+                people_face("b2_0", "b2", "", step * 2.0 + 0.02),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/cluster",
+        serde_json::json!({
+            "distance_threshold": 0.56,
+            "min_faces_per_person": 1,
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    let person = |id: &str| {
+        rows.iter()
+            .find(|(row_id, _)| row_id == id)
+            .map(|(_, m)| m["person_id"].as_str().unwrap().to_string())
+            .unwrap()
+    };
+    assert_ne!(
+        person("a1_0"),
+        person("b1_0"),
+        "the two ends are 1.6 apart and must not share a person: {json}"
+    );
+}
+
+async fn put_json(
+    app: &axum::Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::put(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+/// Naming a cluster is the user saying "this is Anna", which is a claim about
+/// the faces in it and not only about the label. Without the pin the next
+/// **Cluster faces** run would happily regroup a person the user has already
+/// vouched for, and the name would then sit on a different set of faces.
+#[tokio::test]
+async fn naming_a_person_confirms_every_face_it_has() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = put_json(
+        &app,
+        &format!("/v1/faces/persons/person_0?db_path={db_path}"),
+        serde_json::json!({"name": "Anna"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["name"], "Anna");
+    assert_eq!(json["confirmed"], 3, "person_0 has three faces: {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    for (id, meta) in &rows {
+        let manual = meta
+            .get("person_manual")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let is_annas = meta["person_id"] == "person_0";
+        assert_eq!(
+            manual, is_annas,
+            "naming person_0 must pin its faces and nobody else's, but {id} came back {manual}"
+        );
+    }
+
+    // And the listing the page renders has to agree, or the card would show a
+    // name with no "confirmed" badge next to it.
+    let listing = get_json(&app, &format!("/v1/faces/persons?db_path={db_path}")).await;
+    let anna = listing["persons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["person_id"] == "person_0")
+        .expect("person_0 is in the listing");
+    assert_eq!(anna["name"], "Anna");
+    assert_eq!(anna["manual_count"], anna["face_count"]);
+}
+
+/// Clearing the name must not unpin anything. The same flag also records
+/// hand-assignments and merges, and nothing in a row says which of those wrote
+/// it — so undoing the naming would silently throw away decisions it never made.
+#[tokio::test]
+async fn clearing_a_name_leaves_the_faces_confirmed() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let uri = format!("/v1/faces/persons/person_0?db_path={db_path}");
+    put_json(&app, &uri, serde_json::json!({"name": "Anna"})).await;
+
+    let (status, json) = put_json(&app, &uri, serde_json::json!({"name": "   "})).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["name"], "");
+    assert_eq!(json["confirmed"], 0, "there is nothing to confirm: {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(
+            lrg_store::FACE_TABLE,
+            &["a1_0".to_string(), "a2_0".to_string(), "a3_0".to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    for record in &rows {
+        assert_eq!(
+            record.metadata["person_manual"], true,
+            "{} lost its pin when the name went away",
+            record.id
+        );
+    }
+}
+
+/// The unassigned bucket is not a person, so naming it pins nothing — the
+/// faces in it are precisely the ones no decision has been made about.
+#[tokio::test]
+async fn naming_the_unassigned_bucket_confirms_nothing() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = put_json(
+        &app,
+        &format!("/v1/faces/persons/_unassigned?db_path={db_path}"),
+        serde_json::json!({"name": "Nobody"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["confirmed"], 0);
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(lrg_store::FACE_TABLE, &["c1_0".to_string()])
+        .await
+        .unwrap();
+    assert!(
+        !rows[0]
+            .metadata
+            .get("person_manual")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "an unassigned face must stay open for the next clustering run"
+    );
+}
+
+/// Entering a name another person already has is how the People page merges
+/// two clusters: the page asks, then sends this. Both sides come out pinned,
+/// so the merge survives the next re-cluster.
+#[tokio::test]
+async fn merging_by_name_keeps_the_name_and_confirms_both_sides() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    put_json(
+        &app,
+        &format!("/v1/faces/persons/person_0?db_path={db_path}"),
+        serde_json::json!({"name": "Anna"}),
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/persons/merge",
+        serde_json::json!({
+            "person_ids": ["person_1", "person_0"],
+            "into": "person_0",
+            "name": "Anna",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["person_id"], "person_0");
+    assert_eq!(json["name"], "Anna");
+    assert_eq!(json["moved"], 2, "person_1's two faces move: {json}");
+
+    let listing = get_json(&app, &format!("/v1/faces/persons?db_path={db_path}")).await;
+    let persons = listing["persons"].as_array().unwrap();
+    assert!(
+        !persons.iter().any(|p| p["person_id"] == "person_1"),
+        "person_1 is gone after the merge: {listing}"
+    );
+    let anna = persons
+        .iter()
+        .find(|p| p["person_id"] == "person_0")
+        .expect("person_0 survived");
+    assert_eq!(anna["face_count"], 5);
+    assert_eq!(
+        anna["manual_count"], 5,
+        "every face of a merged person is pinned, or the next run splits it again"
+    );
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    assert!(
+        !rows.iter().any(|(_, m)| m["person_id"] == "person_1"),
+        "no face may still point at the merged-away id"
+    );
+}
+
 /// `/v1/db/backups` is POST-only on purpose (taking a backup also retains a
 /// copy on disk), and the plugin's `downloadDatabaseBackup` has to match: it
 /// once sent `GET` here and every backup download died with a bare `405`.

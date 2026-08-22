@@ -1,0 +1,1678 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>People — LrGeniusAI</title>
+    <style>
+      :root {
+        --bg: #1e1e1e;
+        --panel: #2b2b2b;
+        --panel-hi: #333;
+        --line: #3d3d3d;
+        --text: #d8d8d8;
+        --dim: #8f8f8f;
+        --accent: #4a90d9;
+        --warn: #c9962f;
+        --error: #d05252;
+        --ok: #5fa85f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-hi);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 11px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) { background: #3c3c3c; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.primary:hover:not(:disabled) { background: #5a9fe4; }
+      button.danger { border-color: #6d3a3a; }
+      button.danger:hover:not(:disabled) { background: #4a2c2c; }
+      input, select {
+        font: inherit;
+        color: var(--text);
+        background: #232323;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 7px;
+      }
+      input:focus, select:focus { outline: 1px solid var(--accent); }
+      label.inline { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); }
+      .spacer { flex: 1; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
+      .dot.on { background: var(--ok); }
+
+      #tuning {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: center;
+        padding: 10px 16px;
+        background: #262626;
+        border-bottom: 1px solid var(--line);
+        color: var(--dim);
+      }
+      #tuning[hidden] { display: none; }
+      #tuning input[type="number"] { width: 78px; }
+      #diagnostics {
+        padding: 0 16px;
+        color: var(--dim);
+        font-size: 12px;
+        margin-top: 10px;
+      }
+      #diagnostics[hidden] { display: none; }
+      #diagnostics b { color: var(--text); font-weight: 600; }
+
+      #banners { padding: 0 16px; }
+      .banner {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        margin-top: 10px;
+        padding: 9px 12px;
+        border-radius: 4px;
+        border-left: 3px solid var(--warn);
+        background: #33302a;
+      }
+      .banner.error { border-left-color: var(--error); background: #382a2a; }
+      .banner.info { border-left-color: var(--accent); background: #26303a; }
+      .banner > div { flex: 1; }
+      .banner button { padding: 0 6px; background: none; border: none; color: var(--dim); }
+
+      main {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 14px;
+        padding: 16px;
+        padding-bottom: 84px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        text-align: center;
+      }
+      .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+      .card.unassigned { opacity: 0.75; }
+      .card.dragging { opacity: 0.4; }
+      .card.drop-target {
+        border-color: var(--ok);
+        box-shadow: 0 0 0 2px var(--ok);
+      }
+      .thumb {
+        width: 112px;
+        height: 112px;
+        object-fit: cover;
+        border-radius: 4px;
+        background: #171717;
+        cursor: pointer;
+        display: block;
+        margin: 0 auto 8px;
+      }
+      .thumb.placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #555;
+        font-size: 30px;
+      }
+      .card input[type="text"] { width: 100%; text-align: center; }
+      .card .counts { color: var(--dim); font-size: 12px; margin-top: 6px; }
+      .card .state { font-size: 11px; min-height: 14px; margin-top: 4px; color: var(--dim); }
+      .card .state.saved { color: var(--ok); }
+      .card .state.failed { color: var(--error); }
+      .card .name-static { padding: 6px 0; color: var(--dim); }
+      .badge {
+        display: inline-block;
+        margin-top: 4px;
+        padding: 1px 6px;
+        border-radius: 8px;
+        font-size: 10px;
+        background: #2f3b46;
+        color: #9dc0e0;
+      }
+      #empty { padding: 40px 16px; color: var(--dim); text-align: center; }
+
+      footer {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+        z-index: 3;
+      }
+      footer[hidden] { display: none; }
+      .busy { color: var(--dim); }
+
+      /* ---- Overlays: the person detail sheet and the merge dialog. ---- */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .overlay[hidden] { display: none; }
+      .sheet {
+        display: flex;
+        flex-direction: column;
+        width: min(1100px, 100%);
+        max-height: 100%;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .sheet > .top {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      .sheet > .body { overflow: auto; padding: 14px 16px; }
+      .sheet > .bottom {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+      }
+      .sheet h2 { font-size: 15px; margin: 0; font-weight: 600; }
+      .hint { color: var(--dim); font-size: 12px; }
+
+      #face-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+        gap: 10px;
+      }
+      .face {
+        position: relative;
+        border: 2px solid transparent;
+        border-radius: 6px;
+        overflow: hidden;
+        cursor: pointer;
+        background: #171717;
+        user-select: none;
+      }
+      .face img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+      .face.picked { border-color: var(--accent); }
+      .face .meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 4px;
+        padding: 3px 5px;
+        font-size: 10px;
+        color: var(--dim);
+        background: #202020;
+      }
+      .face .far { color: var(--warn); }
+      .face .flag {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        padding: 1px 5px;
+        border-radius: 7px;
+        font-size: 9px;
+        background: rgba(0, 0, 0, 0.72);
+        color: #d0b070;
+      }
+      .face .pin {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        font-size: 10px;
+        color: #9dc0e0;
+        background: rgba(0, 0, 0, 0.72);
+        border-radius: 7px;
+        padding: 1px 5px;
+      }
+      .face .none { color: #555; display: flex; align-items: center; justify-content: center; aspect-ratio: 1; }
+
+      .merge-pair { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+      .merge-pair figure { margin: 0; text-align: center; }
+      .merge-pair img, .merge-pair .thumb.placeholder {
+        width: 88px; height: 88px; border-radius: 4px; object-fit: cover; background: #171717;
+      }
+      .merge-pair figcaption { color: var(--dim); font-size: 12px; margin-top: 5px; }
+      .name-choice { display: block; margin: 6px 0; }
+      .name-choice input[type="text"] { width: 240px; margin-left: 6px; }
+
+      /* ---- Name autocomplete: one floating list, reused by every name field. ---- */
+      #suggest {
+        position: fixed;
+        z-index: 20;
+        min-width: 170px;
+        max-height: 236px;
+        overflow-y: auto;
+        padding: 3px;
+        background: var(--panel-hi);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+      }
+      #suggest[hidden] { display: none; }
+      .suggest-row {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        justify-content: space-between;
+        padding: 4px 8px;
+        border-radius: 3px;
+        cursor: pointer;
+        text-align: left;
+        white-space: nowrap;
+      }
+      .suggest-row.on { background: var(--accent); color: #fff; }
+      .suggest-hint { color: var(--dim); font-size: 11px; }
+      .suggest-row.on .suggest-hint { color: #dce9f7; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>People</h1>
+      <button id="cluster">Cluster faces</button>
+      <label class="inline" title="Cosine distance. Every face in one person stays within this of every other, so lower splits people apart and higher merges them together.">
+        threshold
+        <input id="threshold" type="number" min="0.05" max="1.2" step="0.05" value="0.5" style="width: 64px" />
+      </label>
+      <button id="toggle-tuning">Tuning…</button>
+      <button id="refresh">Refresh</button>
+      <span class="spacer"></span>
+      <input id="search" type="search" placeholder="Filter by name…" style="width: 160px" />
+      <label class="inline"><input id="unnamed-only" type="checkbox" /> Unnamed only</label>
+      <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-text">Lightroom: connecting…</span></span>
+    </header>
+
+    <div id="tuning" hidden>
+      <span class="hint">
+        Faces below these are not allowed to <em>form</em> a person — they are attached to one
+        afterwards instead. That is what stops a blurry stranger gluing two people together.
+      </span>
+      <label class="inline">min detection<input id="min-det" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
+      <label class="inline">min sharpness<input id="min-sharp" type="number" min="0" max="1" step="0.02" value="0.12" /></label>
+      <label class="inline">min size<input id="min-area" type="number" min="0" max="0.2" step="0.0002" value="0.0008" /></label>
+      <label class="inline">max hidden<input id="max-occ" type="number" min="0" max="1" step="0.05" value="0.55" /></label>
+      <label class="inline">min faces / person<input id="min-faces" type="number" min="1" max="20" step="1" value="2" /></label>
+      <button id="reset-tuning">Reset</button>
+    </div>
+
+    <div id="diagnostics" hidden></div>
+    <div id="banners"></div>
+    <main id="grid"></main>
+    <div id="empty" hidden></div>
+
+    <footer id="actionbar" hidden>
+      <strong id="selection-count"></strong>
+      <label class="inline">
+        Match
+        <select id="match-mode">
+          <option value="intersection">photos with all selected people</option>
+          <option value="union">photos with any selected person</option>
+        </select>
+      </label>
+      <button id="show-in-library" class="primary">Show in Lightroom</button>
+      <button id="merge-selected">Merge into one person…</button>
+      <button id="clear-selection">Clear selection</button>
+      <span class="spacer"></span>
+      <span class="busy" id="action-state"></span>
+    </footer>
+
+    <!-- Person detail: every face on one person, so a wrong one can be seen and moved. -->
+    <div class="overlay" id="detail" hidden>
+      <div class="sheet">
+        <div class="top">
+          <h2 id="detail-title">Person</h2>
+          <input id="detail-name" type="text" placeholder="Add a name" style="width: 200px" />
+          <span class="hint" id="detail-summary"></span>
+          <span class="spacer"></span>
+          <label class="inline">
+            sort
+            <select id="detail-sort">
+              <option value="outlier">least like this person first</option>
+              <option value="typical">most like this person first</option>
+              <option value="quality">best quality first</option>
+            </select>
+          </label>
+          <button id="detail-close">Close</button>
+        </div>
+        <div class="body"><div id="face-grid"></div><div id="face-more"></div></div>
+        <div class="bottom">
+          <button id="pick-all">Select all</button>
+          <button id="pick-none">Select none</button>
+          <strong id="pick-count" class="hint"></strong>
+          <span class="spacer"></span>
+          <select id="move-target"></select>
+          <button id="move-to">Move to…</button>
+          <button id="move-new">Move to a new person</button>
+          <button id="detach" class="danger">Not this person</button>
+          <span class="busy" id="detail-state"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Merge: two or more people become one, and the user picks the name. -->
+    <div class="overlay" id="merge" hidden>
+      <div class="sheet" style="width: min(560px, 100%)">
+        <div class="top"><h2>Merge into one person</h2></div>
+        <div class="body">
+          <div class="merge-pair" id="merge-pair"></div>
+          <div class="hint" style="margin-bottom: 8px">Which name should the merged person keep?</div>
+          <div id="merge-names"></div>
+          <div class="hint" style="margin-top: 12px">
+            Merging is remembered: the next “Cluster faces” run keeps these faces together instead
+            of splitting them apart again.
+          </div>
+        </div>
+        <div class="bottom">
+          <button id="merge-confirm" class="primary">Merge</button>
+          <button id="merge-cancel">Cancel</button>
+          <span class="busy" id="merge-state"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Naming a person the same as another one: offer to make them one person. -->
+    <div class="overlay" id="name-merge" hidden>
+      <div class="sheet" style="width: min(560px, 100%)">
+        <div class="top"><h2 id="name-merge-title">That name is already used</h2></div>
+        <div class="body">
+          <div class="merge-pair" id="name-merge-pair"></div>
+          <div id="name-merge-question" style="margin-bottom: 10px"></div>
+          <div class="hint">
+            Merging is remembered: the next “Cluster faces” run keeps these faces together instead
+            of splitting them apart again. Keep them separate when two different people really do
+            share a name — both will then show the same name.
+          </div>
+        </div>
+        <div class="bottom">
+          <button id="name-merge-yes" class="primary">Merge into one person</button>
+          <button id="name-merge-separate">Keep them separate</button>
+          <button id="name-merge-cancel">Cancel</button>
+          <span class="busy" id="name-merge-state"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- The autocomplete list. One element, moved under whichever name field has focus. -->
+    <div id="suggest" hidden></div>
+
+    <script>
+      "use strict";
+
+      // The plugin passes its catalog's db_path when it opens this page, and
+      // every request carries it back. The backend's auto-bind middleware
+      // accepts it from the query string exactly like it does from the
+      // plugin's own calls, so a backend that restarted underneath us
+      // re-binds instead of answering about an empty catalog.
+      const DB_PATH = new URLSearchParams(location.search).get("db_path") || "";
+
+      // Every backend path this page calls, in one block. The page is served
+      // from the same binary that answers these, so they move together — and
+      // when they do (the /v1 grouping moved all of them once already), this
+      // is the only place to edit.
+      const API = {
+        persons: "/v1/faces/persons",
+        person: (id) => "/v1/faces/persons/" + encodeURIComponent(id),
+        personFaces: (id) => "/v1/faces/persons/" + encodeURIComponent(id) + "/faces",
+        cluster: "/v1/faces/cluster",
+        assign: "/v1/faces/assign",
+        merge: "/v1/faces/persons/merge",
+        actions: "/v1/ui/actions",
+        status: "/v1/ui/status",
+      };
+
+      // A URL path cannot carry an empty segment, so the backend answers to
+      // this name for the faces that belong to nobody.
+      const UNASSIGNED = "_unassigned";
+
+      const GATE_DEFAULTS = {
+        "min-det": 0.8,
+        "min-sharp": 0.12,
+        "min-area": 0.0008,
+        "max-occ": 0.55,
+        "min-faces": 2,
+      };
+
+      const el = (id) => document.getElementById(id);
+      const grid = el("grid");
+
+      let persons = [];
+      const selected = new Set();
+      let pluginConnected = false;
+      let lastThreshold = 0.5;
+
+      // Person detail state.
+      let detail = null; // { personId, name, total, faces: [], picked: Set, lastIndex }
+
+      function withDbPath(path) {
+        if (!DB_PATH) return path;
+        return path + (path.includes("?") ? "&" : "?") + "db_path=" + encodeURIComponent(DB_PATH);
+      }
+
+      async function api(method, path, body) {
+        let response;
+        try {
+          response = await fetch(withDbPath(path), {
+            method,
+            headers: body ? { "Content-Type": "application/json" } : undefined,
+            body: body ? JSON.stringify(body) : undefined,
+          });
+        } catch (e) {
+          throw new Error(
+            "Could not reach the LrGeniusAI backend. It may have stopped — close this page, " +
+              "then open People again in Lightroom to restart it. (" + e.message + ")"
+          );
+        }
+        const text = await response.text();
+        let data = {};
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch (e) {
+            throw new Error("Backend returned a malformed response: " + text.slice(0, 300));
+          }
+        }
+        if (!response.ok || data.error) {
+          throw new Error(data.error || "Backend returned HTTP " + response.status);
+        }
+        // A degraded success still has something to say — never drop it.
+        if (data.warning) banner(data.warning, "warn");
+        if (Array.isArray(data.warnings)) data.warnings.forEach((w) => banner(w, "warn"));
+        return data;
+      }
+
+      function banner(message, kind) {
+        // A run-wide cause (one unloaded model, one unreachable service) comes
+        // back on every refresh. Show it once and keep it, rather than
+        // stacking the same sentence down the page — but never drop it.
+        for (const shown of document.querySelectorAll(".banner")) {
+          if (shown.firstChild && shown.firstChild.textContent === message) return;
+        }
+        const box = document.createElement("div");
+        box.className = "banner" + (kind === "error" ? " error" : kind === "info" ? " info" : "");
+        const text = document.createElement("div");
+        text.textContent = message;
+        const close = document.createElement("button");
+        close.textContent = "✕";
+        close.title = "Dismiss";
+        close.onclick = () => box.remove();
+        box.append(text, close);
+        el("banners").append(box);
+        if (kind === "info") setTimeout(() => box.remove(), 6000);
+      }
+
+      function displayName(person) {
+        return typeof person.name === "string" ? person.name : "";
+      }
+
+      function personLabel(person) {
+        return displayName(person) || (person.person_id ? "Unnamed person" : "Unassigned faces");
+      }
+
+      function personById(id) {
+        return persons.find((p) => p.person_id === id) || null;
+      }
+
+      function sortForDisplay(list) {
+        return list.slice().sort((a, b) => {
+          // Unassigned faces are not a person; they belong at the end.
+          if (!a.person_id !== !b.person_id) return a.person_id ? -1 : 1;
+          const named = (p) => (displayName(p) ? 0 : 1);
+          if (named(a) !== named(b)) return named(a) - named(b);
+          return (b.photo_count || 0) - (a.photo_count || 0);
+        });
+      }
+
+      function visiblePersons() {
+        const q = el("search").value.trim().toLowerCase();
+        const unnamedOnly = el("unnamed-only").checked;
+        return sortForDisplay(persons).filter((p) => {
+          const name = displayName(p);
+          if (unnamedOnly && name) return false;
+          if (q && !name.toLowerCase().includes(q)) return false;
+          return true;
+        });
+      }
+
+      function countsLabel(person) {
+        const photos = person.photo_count || 0;
+        const faces = person.face_count || 0;
+        return photos + (photos === 1 ? " photo" : " photos") + " · " + faces + (faces === 1 ? " face" : " faces");
+      }
+
+      function thumbFor(person, className) {
+        if (person.thumbnail) {
+          const img = document.createElement("img");
+          img.className = className;
+          img.alt = personLabel(person);
+          img.src = "data:image/jpeg;base64," + person.thumbnail;
+          img.draggable = false;
+          return img;
+        }
+        const box = document.createElement("div");
+        box.className = className + " placeholder";
+        box.textContent = "?";
+        return box;
+      }
+
+      function renderCard(person) {
+        const card = document.createElement("div");
+        card.className = "card" + (person.person_id ? "" : " unassigned");
+        card.dataset.personId = person.person_id;
+        if (selected.has(person.person_id)) card.classList.add("selected");
+
+        const thumb = thumbFor(person, "thumb");
+        card.append(thumb);
+
+        const state = document.createElement("div");
+        state.className = "state";
+
+        if (person.person_id) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = displayName(person);
+          input.placeholder = "Add a name";
+          input.title =
+            "Naming a person confirms it: clustering then keeps these faces together instead of " +
+            "re-deciding them. Enter a name that already exists to merge the two people.";
+          const field = attachNameField(input, {
+            exclude: () => person.person_id,
+            commit: (value) =>
+              saveName(person, value, state, { revert: () => field.reset(displayName(person)) }),
+          });
+          card.append(input);
+          thumb.title =
+            "Click to select · double-click to see every face · drag onto another person to merge";
+          thumb.onclick = () => toggleSelection(person.person_id, card);
+          enableMergeDrag(card, person);
+        } else {
+          const label = document.createElement("div");
+          label.className = "name-static";
+          label.textContent = "Unassigned faces";
+          label.title = "Faces clustering could not place. Open them and put them on someone.";
+          card.append(label);
+          thumb.title = "Double-click to go through these faces";
+        }
+        // Double-click anywhere on the card, not just the thumbnail: on the
+        // unassigned card the thumbnail is the only thing to aim at, and on a
+        // named one the name field swallows the event.
+        card.ondblclick = (e) => {
+          if (e.target.tagName === "INPUT") return;
+          openDetail(person.person_id);
+        };
+
+        const counts = document.createElement("div");
+        counts.className = "counts";
+        counts.textContent = countsLabel(person);
+        card.append(counts);
+
+        if (person.manual_count > 0) card.append(confirmedBadge(person));
+
+        card.append(state);
+        return card;
+      }
+
+      // ---- Drag one person onto another to merge them. --------------------
+
+      function enableMergeDrag(card, person) {
+        card.draggable = true;
+        card.ondragstart = (e) => {
+          e.dataTransfer.setData("text/plain", person.person_id);
+          e.dataTransfer.effectAllowed = "move";
+          card.classList.add("dragging");
+        };
+        card.ondragend = () => {
+          card.classList.remove("dragging");
+          for (const other of document.querySelectorAll(".drop-target")) {
+            other.classList.remove("drop-target");
+          }
+        };
+        card.ondragover = (e) => {
+          const source = dragSourceId();
+          // Unassigned is not a person, so it can neither be merged away nor
+          // merged into. Moving faces out of it is what the detail view is for.
+          if (!source || source === person.person_id) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          card.classList.add("drop-target");
+        };
+        card.ondragleave = () => card.classList.remove("drop-target");
+        card.ondrop = (e) => {
+          e.preventDefault();
+          card.classList.remove("drop-target");
+          const sourceId = e.dataTransfer.getData("text/plain");
+          if (!sourceId || sourceId === person.person_id) return;
+          openMerge([sourceId, person.person_id], person.person_id);
+        };
+      }
+
+      // `dragover` cannot read the payload (the browser withholds it until
+      // drop), so the dragged card is found by its own class instead.
+      function dragSourceId() {
+        const dragging = document.querySelector(".card.dragging");
+        return dragging ? dragging.dataset.personId : null;
+      }
+
+      function render() {
+        grid.textContent = "";
+        const list = visiblePersons();
+        for (const person of list) grid.append(renderCard(person));
+
+        const empty = el("empty");
+        if (list.length === 0) {
+          empty.hidden = false;
+          empty.textContent = persons.length
+            ? "No people match this filter."
+            : "No people yet. Index photos with face detection turned on, then click “Cluster faces”.";
+        } else {
+          empty.hidden = true;
+        }
+        renderSelection();
+      }
+
+      function renderSelection() {
+        const bar = el("actionbar");
+        bar.hidden = selected.size === 0;
+        el("selection-count").textContent =
+          selected.size + (selected.size === 1 ? " person selected" : " people selected");
+        el("match-mode").disabled = selected.size < 2;
+        el("merge-selected").disabled = selected.size < 2;
+      }
+
+      function toggleSelection(personId, card) {
+        if (selected.has(personId)) {
+          selected.delete(personId);
+          card.classList.remove("selected");
+        } else {
+          selected.add(personId);
+          card.classList.add("selected");
+        }
+        renderSelection();
+      }
+
+      const BADGE_TITLE =
+        "Faces you confirmed — by naming this person, by assigning them by hand, or by a " +
+        "merge. Clustering keeps these together instead of re-deciding them.";
+
+      function confirmedBadge(person) {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent =
+          person.manual_count >= person.face_count ? "confirmed" : person.manual_count + " confirmed";
+        badge.title = BADGE_TITLE;
+        return badge;
+      }
+
+      // Naming confirms, so the badge has to appear the moment the name is
+      // saved. Rebuilding the whole grid instead would re-sort it out from
+      // under the cursor and wipe the "Saved" note next to the field.
+      function updateConfirmedBadge(person, state) {
+        const card = state && state.closest ? state.closest(".card") : null;
+        if (!card) return;
+        const existing = card.querySelector(".badge");
+        if (!(person.manual_count > 0)) {
+          if (existing) existing.remove();
+          return;
+        }
+        const badge = confirmedBadge(person);
+        if (existing) existing.replaceWith(badge);
+        else card.insertBefore(badge, state);
+      }
+
+      // Everyone else already carrying this name. Case- and space-insensitive:
+      // "anna " and "Anna" are the same claim about who this is.
+      function sameNamePersons(name, excludeId) {
+        const key = name.trim().toLocaleLowerCase();
+        if (!key) return [];
+        return persons.filter(
+          (p) =>
+            p.person_id &&
+            p.person_id !== excludeId &&
+            displayName(p).toLocaleLowerCase() === key
+        );
+      }
+
+      // `opts`: `force` skips the same-name check (the user already answered
+      // it), `revert` puts the field back when they cancel, `onSaved` runs
+      // after a successful write.
+      async function saveName(person, name, state, opts) {
+        opts = opts || {};
+        if (name === displayName(person)) return;
+        if (name && !opts.force) {
+          const twins = sameNamePersons(name, person.person_id);
+          if (twins.length > 0) {
+            openNameMerge(person, name, twins, state, opts);
+            return;
+          }
+        }
+        state.className = "state";
+        state.textContent = "Saving…";
+        try {
+          const data = await api("PUT", API.person(person.person_id), { name });
+          person.name = name;
+          // The backend pins every face of a person it just named, so the
+          // card must show that without waiting for the next full reload.
+          if (typeof data.confirmed === "number" && data.confirmed > 0) {
+            person.manual_count = Math.max(person.manual_count || 0, data.confirmed);
+            updateConfirmedBadge(person, state);
+          }
+          state.className = "state saved";
+          state.textContent = name && data.confirmed > 0 ? "Saved · confirmed" : "Saved";
+          const shown = state.textContent;
+          setTimeout(() => {
+            if (state.textContent === shown) state.textContent = "";
+          }, 2500);
+          if (opts.onSaved) opts.onSaved();
+        } catch (e) {
+          state.className = "state failed";
+          state.textContent = "Not saved";
+          banner("Could not rename this person: " + e.message, "error");
+        }
+      }
+
+      // ---- Name autocomplete ----------------------------------------------
+
+      const SUGGEST_LIMIT = 8;
+      let suggest = null; // { input, matches, index, accept }
+
+      // Every name already in use, folded case-insensitively. Two people who
+      // deliberately share a name are one suggestion, not two identical rows.
+      function knownNames(exclude) {
+        const skip = new Set((Array.isArray(exclude) ? exclude : [exclude]).filter(Boolean));
+        const byKey = new Map();
+        for (const person of persons) {
+          const name = displayName(person);
+          if (!name || !person.person_id || skip.has(person.person_id)) continue;
+          const key = name.toLocaleLowerCase();
+          const entry = byKey.get(key);
+          if (entry) {
+            entry.photos += person.photo_count || 0;
+            entry.people += 1;
+          } else {
+            byKey.set(key, { name, photos: person.photo_count || 0, people: 1 });
+          }
+        }
+        return Array.from(byKey.values());
+      }
+
+      function initialsOf(name) {
+        return name
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((word) => word[0])
+          .join("");
+      }
+
+      function isSubsequence(needle, haystack) {
+        let i = 0;
+        for (const ch of haystack) {
+          if (ch === needle[i]) i += 1;
+          if (i === needle.length) return true;
+        }
+        return needle.length === 0;
+      }
+
+      // Ranked rather than merely filtered: what was typed is far likelier to
+      // start the name, or a word of it, than to sit in its middle — and "ms"
+      // should still find "Maria Schmidt". Ties go to the person with the most
+      // photos, which is the one most likely being named again.
+      function rankNames(query, candidates) {
+        const q = query.trim().toLocaleLowerCase();
+        const scored = [];
+        for (const candidate of candidates) {
+          const name = candidate.name.toLocaleLowerCase();
+          let tier;
+          if (!q || name.startsWith(q)) tier = 0;
+          else if (name.split(/\s+/).some((word) => word.startsWith(q))) tier = 1;
+          else if (name.includes(q)) tier = 2;
+          else if (initialsOf(name).startsWith(q)) tier = 3;
+          else if (isSubsequence(q, name)) tier = 4;
+          else continue;
+          scored.push({ candidate, tier });
+        }
+        scored.sort(
+          (a, b) =>
+            a.tier - b.tier ||
+            (b.candidate.photos || 0) - (a.candidate.photos || 0) ||
+            a.candidate.name.localeCompare(b.candidate.name)
+        );
+        return scored.map((s) => s.candidate);
+      }
+
+      function showSuggestions(input, opts, accept) {
+        const exclude = typeof opts.exclude === "function" ? opts.exclude() : opts.exclude;
+        const matches = rankNames(input.value, knownNames(exclude)).slice(0, SUGGEST_LIMIT);
+        if (matches.length === 0) {
+          hideSuggestions();
+          return;
+        }
+        suggest = { input, matches, index: -1, accept };
+
+        const box = el("suggest");
+        box.textContent = "";
+        matches.forEach((match, index) => {
+          const row = document.createElement("div");
+          row.className = "suggest-row";
+          const name = document.createElement("span");
+          name.textContent = match.name;
+          const hint = document.createElement("span");
+          hint.className = "suggest-hint";
+          hint.textContent =
+            match.people > 1
+              ? match.people + " people share this name"
+              : match.photos + (match.photos === 1 ? " photo" : " photos");
+          row.append(name, hint);
+          // mousedown, not click: a click arrives after the field has already
+          // lost focus, and preventDefault here is what stops it losing focus.
+          row.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            accept(match.name);
+          });
+          row.addEventListener("mouseenter", () => {
+            suggest.index = index;
+            highlightSuggestion();
+          });
+          box.append(row);
+        });
+
+        const rect = input.getBoundingClientRect();
+        box.style.left = Math.round(rect.left) + "px";
+        box.style.top = Math.round(rect.bottom + 2) + "px";
+        box.style.minWidth = Math.round(Math.max(170, rect.width)) + "px";
+        box.hidden = false;
+        // Flip above the field when there is no room for the list below it.
+        if (rect.bottom + 2 + box.offsetHeight > window.innerHeight && rect.top > box.offsetHeight) {
+          box.style.top = Math.round(rect.top - 2 - box.offsetHeight) + "px";
+        }
+        highlightSuggestion();
+      }
+
+      function highlightSuggestion() {
+        const rows = el("suggest").children;
+        for (let i = 0; i < rows.length; i += 1) {
+          rows[i].classList.toggle("on", !!suggest && suggest.index === i);
+        }
+        if (suggest && suggest.index >= 0 && rows[suggest.index]) {
+          rows[suggest.index].scrollIntoView({ block: "nearest" });
+        }
+      }
+
+      function hideSuggestions() {
+        el("suggest").hidden = true;
+        suggest = null;
+      }
+
+      function suggestionKey(e, input) {
+        if (!suggest || suggest.input !== input) return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          let next = suggest.index + (e.key === "ArrowDown" ? 1 : -1);
+          if (next < -1) next = suggest.matches.length - 1;
+          if (next >= suggest.matches.length) next = -1;
+          suggest.index = next;
+          highlightSuggestion();
+        } else if (e.key === "Enter" && suggest.index >= 0) {
+          e.preventDefault();
+          suggest.accept(suggest.matches[suggest.index].name);
+        } else if (e.key === "Escape") {
+          // Stop here, or the document-level handler would read this as
+          // "close the dialog" when the user only meant "close the list".
+          e.preventDefault();
+          e.stopPropagation();
+          hideSuggestions();
+        } else if (e.key === "Tab") {
+          hideSuggestions();
+        }
+      }
+
+      /// The autocomplete on its own, for fields that are not a person's name.
+      function attachSuggestions(input, opts) {
+        input.setAttribute("autocomplete", "off");
+        const accept = (name) => {
+          input.value = name;
+          hideSuggestions();
+          if (opts.onAccept) opts.onAccept(name);
+        };
+        const open = () => showSuggestions(input, opts, accept);
+        input.addEventListener("input", open);
+        input.addEventListener("focus", open);
+        input.addEventListener("blur", hideSuggestions);
+        input.addEventListener("keydown", (e) => suggestionKey(e, input));
+        return accept;
+      }
+
+      // A person's name field: autocomplete plus a commit that runs once per
+      // distinct value however it was entered. Picking from the list commits
+      // straight away and the browser then fires "change" on blur as well, so
+      // the guard is what keeps one edit from being saved twice.
+      function attachNameField(input, opts) {
+        function commit() {
+          const value = input.value.trim();
+          if (input.dataset.committed === value) return;
+          input.dataset.committed = value;
+          opts.commit(value);
+        }
+        attachSuggestions(input, { exclude: opts.exclude, onAccept: commit });
+        input.dataset.committed = input.value.trim();
+        input.addEventListener("change", commit);
+        input.addEventListener("keydown", (e) => {
+          if (e.defaultPrevented) return; // the list took this key
+          if (e.key === "Enter") input.blur();
+        });
+        return {
+          commit,
+          reset: (value) => {
+            input.value = value;
+            input.dataset.committed = value;
+          },
+        };
+      }
+
+      // ---- "That name is already used" -------------------------------------
+
+      let nameMergeState = null; // { person, name, twins, state, opts }
+
+      // Typing a name someone else already has is how two clusters of the same
+      // face become one person. It is never done silently: two people really
+      // can share a name, and a merge cannot be undone from this page.
+      function openNameMerge(person, name, twins, state, opts) {
+        nameMergeState = { person, name, twins, state, opts: opts || {} };
+        el("name-merge").hidden = false;
+        el("name-merge-state").textContent = "";
+        el("name-merge-title").textContent = "“" + name + "” is already used";
+
+        const pair = el("name-merge-pair");
+        pair.textContent = "";
+        const captionFor = (p) =>
+          (p === person ? displayName(person) || "the person you are naming" : personLabel(p)) +
+          " · " +
+          (p.photo_count || 0) +
+          ((p.photo_count || 0) === 1 ? " photo" : " photos");
+        for (const p of [person].concat(twins)) {
+          const figure = document.createElement("figure");
+          figure.append(thumbFor(p, "thumb"));
+          const caption = document.createElement("figcaption");
+          caption.textContent = captionFor(p);
+          figure.append(caption);
+          pair.append(figure);
+        }
+
+        el("name-merge-question").textContent =
+          twins.length === 1
+            ? "Another person is already named “" + name + "”. Is this the same person?"
+            : twins.length + " other people are already named “" + name +
+              "”. Are they all the same person?";
+        setTimeout(() => el("name-merge-yes").focus(), 0);
+      }
+
+      function closeNameMerge(keepName) {
+        const pending = nameMergeState;
+        nameMergeState = null;
+        el("name-merge").hidden = true;
+        // Backing out has to put the field back, or it keeps showing a name
+        // that was never saved and the next blur re-asks the same question.
+        if (!keepName && pending && pending.opts.revert) pending.opts.revert();
+      }
+
+      async function confirmNameMerge() {
+        if (!nameMergeState) return;
+        const { person, name, twins } = nameMergeState;
+        const state = el("name-merge-state");
+        state.textContent = "Merging…";
+        // The survivor is the biggest of the people who already have the name:
+        // that id is what the name has been referring to, so keeping it keeps
+        // anything else pointing at this person pointing at the same one.
+        const target = twins.reduce(
+          (best, p) => ((p.face_count || 0) > (best.face_count || 0) ? p : best),
+          twins[0]
+        );
+        try {
+          const data = await api("POST", API.merge, {
+            person_ids: [person.person_id].concat(twins.map((p) => p.person_id)),
+            into: target.person_id,
+            name,
+          });
+          closeNameMerge(true);
+          selected.clear();
+          banner(
+            "Merged into one “" + (data.name || name) + "”: " + (data.moved || 0) +
+              " faces moved and confirmed.",
+            "info"
+          );
+          await loadPersons();
+          // The person the detail sheet was showing may be the one that was
+          // merged away, so follow the faces to whoever survived.
+          if (detail) await openDetail(data.person_id || target.person_id, detail.sort);
+        } catch (e) {
+          state.textContent = "";
+          banner("Could not merge those people: " + e.message, "error");
+        }
+      }
+
+      async function keepNameSeparate() {
+        if (!nameMergeState) return;
+        const { person, name, state, opts } = nameMergeState;
+        closeNameMerge(true);
+        await saveName(person, name, state, Object.assign({}, opts, { force: true }));
+      }
+
+      async function loadPersons() {
+        el("refresh").disabled = true;
+        try {
+          const data = await api("GET", API.persons);
+          persons = Array.isArray(data.persons) ? data.persons : [];
+          for (const id of Array.from(selected)) {
+            if (!persons.some((p) => p.person_id === id)) selected.delete(id);
+          }
+          render();
+        } catch (e) {
+          banner("Could not load people: " + e.message, "error");
+        } finally {
+          el("refresh").disabled = false;
+        }
+      }
+
+      // ---- Clustering ------------------------------------------------------
+
+      function numberField(id, fallback) {
+        const value = parseFloat(el(id).value);
+        return Number.isNaN(value) ? fallback : value;
+      }
+
+      async function clusterFaces() {
+        const button = el("cluster");
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = "Clustering…";
+        try {
+          const threshold = numberField("threshold", 0.5);
+          lastThreshold = threshold;
+          const body = {
+            distance_threshold: threshold,
+            min_det_score: numberField("min-det", GATE_DEFAULTS["min-det"]),
+            min_sharpness: numberField("min-sharp", GATE_DEFAULTS["min-sharp"]),
+            min_area_ratio: numberField("min-area", GATE_DEFAULTS["min-area"]),
+            max_occlusion: numberField("max-occ", GATE_DEFAULTS["max-occ"]),
+            min_faces_per_person: numberField("min-faces", GATE_DEFAULTS["min-faces"]),
+          };
+          const data = await api("POST", API.cluster, body);
+          banner(
+            "Clustering finished: " + (data.person_count || 0) + " people from " + (data.face_count || 0) + " faces.",
+            "info"
+          );
+          showDiagnostics(data.diagnostics);
+          await loadPersons();
+        } catch (e) {
+          banner("Face clustering failed: " + e.message, "error");
+        } finally {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      }
+
+      // The numbers that answer "is this threshold reasonable" — shown in
+      // plain words, because a run that produced 400 near-identical people is
+      // a result the user has to be able to see without reading the log.
+      function showDiagnostics(d) {
+        const box = el("diagnostics");
+        if (!d) {
+          box.hidden = true;
+          return;
+        }
+        box.hidden = false;
+        box.textContent = "";
+        const bits = [
+          ["threshold", (d.threshold ?? 0).toFixed(2)],
+          ["people", d.clusters ?? 0],
+          ["typical spread", (d.mean_spread ?? 0).toFixed(3)],
+          ["with a near-twin", d.near_duplicates ?? 0],
+          ["attached afterwards", d.attached ?? 0],
+          ["held back as low quality", d.low_quality ?? 0],
+        ];
+        if (d.pinned_faces) bits.push(["confirmed by you", d.pinned_faces]);
+        bits.forEach(([label, value], i) => {
+          if (i) box.append(document.createTextNode("  ·  "));
+          const strong = document.createElement("b");
+          strong.textContent = String(value);
+          box.append(document.createTextNode(label + ": "), strong);
+        });
+        const advice = document.createElement("div");
+        advice.style.marginTop = "4px";
+        const spread = d.mean_spread ?? 0;
+        if ((d.near_duplicates ?? 0) > 0) {
+          advice.textContent =
+            (d.near_duplicates) +
+            " people came out close enough that a slightly higher threshold would have merged them. " +
+            "If they really are the same person, drag one card onto the other — that sticks.";
+        } else if (spread > 0 && spread > (d.threshold ?? 1) * 0.75) {
+          advice.textContent =
+            "Faces sit far from their own person's average, which usually means the threshold is " +
+            "too high and different people were folded together. Try a lower one.";
+        } else {
+          advice.textContent =
+            "No two people came out suspiciously close at this threshold. Open a person to check " +
+            "the faces furthest from its average.";
+        }
+        box.append(advice);
+      }
+
+      // ---- Person detail ---------------------------------------------------
+
+      function pathIdFor(personId) {
+        return personId || UNASSIGNED;
+      }
+
+      async function openDetail(personId, sort) {
+        const person = personById(personId) || { person_id: personId, name: "" };
+        detail = {
+          personId,
+          name: displayName(person),
+          faces: [],
+          picked: new Set(),
+          lastIndex: -1,
+          total: 0,
+          sort: sort || el("detail-sort").value,
+        };
+        el("detail").hidden = false;
+        el("detail-title").textContent = personLabel(person);
+        detailNameField.reset(displayName(person));
+        el("detail-name").hidden = !personId;
+        el("detail-state").textContent = "";
+        el("face-grid").textContent = "";
+        el("face-more").textContent = "";
+        el("detail-summary").textContent = "Loading…";
+        renderMoveTargets();
+        await loadFaces(0);
+      }
+
+      function closeDetail() {
+        el("detail").hidden = true;
+        detail = null;
+      }
+
+      async function loadFaces(offset) {
+        if (!detail) return;
+        const query =
+          "?offset=" + offset + "&limit=200&sort=" + encodeURIComponent(detail.sort);
+        try {
+          const data = await api("GET", API.personFaces(pathIdFor(detail.personId)) + query);
+          if (!detail) return;
+          detail.total = data.total || 0;
+          detail.spread = data.spread;
+          const incoming = Array.isArray(data.faces) ? data.faces : [];
+          detail.faces = offset === 0 ? incoming : detail.faces.concat(incoming);
+          renderFaces();
+        } catch (e) {
+          el("detail-summary").textContent = "";
+          banner("Could not load this person's faces: " + e.message, "error");
+        }
+      }
+
+      function renderFaces() {
+        const container = el("face-grid");
+        container.textContent = "";
+        detail.faces.forEach((face, index) => container.append(renderFace(face, index)));
+
+        const summary = [];
+        summary.push(detail.total + (detail.total === 1 ? " face" : " faces"));
+        if (typeof detail.spread === "number") {
+          summary.push("average distance from this person " + detail.spread.toFixed(3));
+          summary.push("threshold " + lastThreshold.toFixed(2));
+        }
+        el("detail-summary").textContent = summary.join(" · ");
+
+        const more = el("face-more");
+        more.textContent = "";
+        if (detail.faces.length < detail.total) {
+          const button = document.createElement("button");
+          button.textContent =
+            "Load the next " + Math.min(200, detail.total - detail.faces.length) + " faces";
+          button.style.marginTop = "12px";
+          button.onclick = () => loadFaces(detail.faces.length);
+          more.append(button);
+        }
+        renderPickCount();
+      }
+
+      function renderFace(face, index) {
+        const tile = document.createElement("div");
+        tile.className = "face" + (detail.picked.has(face.face_id) ? " picked" : "");
+
+        if (face.thumbnail) {
+          const img = document.createElement("img");
+          img.src = "data:image/jpeg;base64," + face.thumbnail;
+          img.alt = "";
+          img.draggable = false;
+          tile.append(img);
+        } else {
+          const none = document.createElement("div");
+          none.className = "none";
+          none.textContent = "?";
+          tile.append(none);
+        }
+
+        if (face.quality_note) {
+          const flag = document.createElement("span");
+          flag.className = "flag";
+          flag.textContent = face.quality_note;
+          flag.title =
+            "This face was too poor to help decide who is who. It was attached to this person " +
+            "afterwards, so it is the most likely one to be wrong.";
+          tile.append(flag);
+        }
+        if (face.manual) {
+          const pin = document.createElement("span");
+          pin.className = "pin";
+          pin.textContent = "✓";
+          pin.title = "You put this face here. Clustering will not move it.";
+          tile.append(pin);
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const distance = document.createElement("span");
+        if (typeof face.distance === "number") {
+          distance.textContent = face.distance.toFixed(2);
+          distance.title = "Cosine distance from this person's average face.";
+          if (face.distance > lastThreshold) distance.className = "far";
+        } else {
+          distance.textContent = "—";
+        }
+        const sharp = document.createElement("span");
+        sharp.textContent = Math.round((face.sharpness || 0) * 100) + "%";
+        sharp.title = "Sharpness of this face crop.";
+        meta.append(distance, sharp);
+        tile.append(meta);
+
+        tile.onclick = (e) => pickFace(index, e.shiftKey);
+        return tile;
+      }
+
+      function pickFace(index, extend) {
+        const face = detail.faces[index];
+        if (extend && detail.lastIndex >= 0) {
+          const [from, to] =
+            detail.lastIndex < index ? [detail.lastIndex, index] : [index, detail.lastIndex];
+          for (let i = from; i <= to; i++) detail.picked.add(detail.faces[i].face_id);
+        } else if (detail.picked.has(face.face_id)) {
+          detail.picked.delete(face.face_id);
+        } else {
+          detail.picked.add(face.face_id);
+        }
+        detail.lastIndex = index;
+        renderFaces();
+      }
+
+      function renderPickCount() {
+        const n = detail ? detail.picked.size : 0;
+        el("pick-count").textContent = n ? n + " selected" : "Select faces to move them";
+        for (const id of ["move-to", "move-new", "detach"]) el(id).disabled = n === 0;
+        el("move-target").disabled = n === 0;
+      }
+
+      function renderMoveTargets() {
+        const select = el("move-target");
+        select.textContent = "";
+        const options = sortForDisplay(persons).filter(
+          (p) => p.person_id && p.person_id !== detail.personId
+        );
+        if (options.length === 0) {
+          const option = document.createElement("option");
+          option.textContent = "no other people yet";
+          option.value = "";
+          select.append(option);
+          return;
+        }
+        for (const person of options) {
+          const option = document.createElement("option");
+          option.value = person.person_id;
+          option.textContent = personLabel(person) + " (" + (person.face_count || 0) + ")";
+          select.append(option);
+        }
+      }
+
+      async function moveSelectedFaces(body, verb) {
+        if (!detail || detail.picked.size === 0) return;
+        const state = el("detail-state");
+        state.textContent = verb + "…";
+        try {
+          const data = await api("POST", API.assign, {
+            face_ids: Array.from(detail.picked),
+            ...body,
+          });
+          state.textContent = (data.updated || 0) + " moved.";
+          detail.picked.clear();
+          detail.lastIndex = -1;
+          // The person list changed underneath the sheet — counts, and
+          // possibly a person that now exists or no longer does.
+          await loadPersons();
+          if (detail) {
+            renderMoveTargets();
+            await loadFaces(0);
+          }
+          setTimeout(() => {
+            if (state.textContent.endsWith("moved.")) state.textContent = "";
+          }, 4000);
+        } catch (e) {
+          state.textContent = "";
+          banner("Could not move those faces: " + e.message, "error");
+        }
+      }
+
+      // ---- Merge -----------------------------------------------------------
+
+      let mergeState = null; // { ids: [], into: "" }
+
+      function openMerge(personIds, into) {
+        const ids = personIds.filter((id) => id);
+        if (ids.length < 2) {
+          banner("Merging needs at least two people. Unassigned faces are not a person.", "warn");
+          return;
+        }
+        mergeState = { ids, into: into || ids[0] };
+        el("merge").hidden = false;
+        el("merge-state").textContent = "";
+
+        const pair = el("merge-pair");
+        pair.textContent = "";
+        for (const id of ids) {
+          const person = personById(id) || { person_id: id, name: "" };
+          const figure = document.createElement("figure");
+          figure.append(thumbFor(person, "thumb"));
+          const caption = document.createElement("figcaption");
+          caption.textContent = personLabel(person) + " · " + (person.face_count || 0) + " faces";
+          figure.append(caption);
+          pair.append(figure);
+        }
+
+        const names = el("merge-names");
+        names.textContent = "";
+        const candidates = [];
+        for (const id of ids) {
+          const person = personById(id);
+          const name = person ? displayName(person) : "";
+          if (name && !candidates.includes(name)) candidates.push(name);
+        }
+        candidates.forEach((name, i) => {
+          const label = document.createElement("label");
+          label.className = "name-choice";
+          const radio = document.createElement("input");
+          radio.type = "radio";
+          radio.name = "merge-name";
+          radio.value = name;
+          radio.checked = i === 0;
+          label.append(radio, document.createTextNode(" " + name));
+          names.append(label);
+        });
+
+        const custom = document.createElement("label");
+        custom.className = "name-choice";
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "merge-name";
+        radio.value = "__custom__";
+        radio.checked = candidates.length === 0;
+        const field = document.createElement("input");
+        field.type = "text";
+        field.id = "merge-custom-name";
+        field.placeholder = candidates.length ? "a different name" : "name this person";
+        field.addEventListener("input", () => (radio.checked = true));
+        attachSuggestions(field, {
+          exclude: () => ids,
+          onAccept: () => (radio.checked = true),
+        });
+        custom.append(radio, document.createTextNode(" "), field);
+        names.append(custom);
+        if (candidates.length === 0) setTimeout(() => field.focus(), 0);
+      }
+
+      function closeMerge() {
+        el("merge").hidden = true;
+        mergeState = null;
+      }
+
+      function chosenMergeName() {
+        const picked = document.querySelector('input[name="merge-name"]:checked');
+        if (!picked) return "";
+        if (picked.value !== "__custom__") return picked.value;
+        const field = el("merge-custom-name");
+        return field ? field.value.trim() : "";
+      }
+
+      async function confirmMerge() {
+        if (!mergeState) return;
+        const state = el("merge-state");
+        state.textContent = "Merging…";
+        try {
+          const data = await api("POST", API.merge, {
+            person_ids: mergeState.ids,
+            into: mergeState.into,
+            name: chosenMergeName(),
+          });
+          closeMerge();
+          selected.clear();
+          banner(
+            "Merged into one person: " + (data.moved || 0) + " faces moved" +
+              (data.name ? ' and kept the name "' + data.name + '".' : "."),
+            "info"
+          );
+          await loadPersons();
+          if (detail) {
+            renderMoveTargets();
+            await loadFaces(0);
+          }
+        } catch (e) {
+          state.textContent = "";
+          banner("Could not merge those people: " + e.message, "error");
+        }
+      }
+
+      // ---- Lightroom -------------------------------------------------------
+
+      async function showInLightroom(personIds) {
+        const ids = personIds.filter((id) => id);
+        if (ids.length === 0) {
+          banner("Unassigned faces are not a person, so there is nothing to collect.", "warn");
+          return;
+        }
+        const names = {};
+        for (const person of persons) {
+          if (ids.includes(person.person_id) && displayName(person)) {
+            names[person.person_id] = displayName(person);
+          }
+        }
+        const state = el("action-state");
+        state.textContent = "Sending…";
+        try {
+          const data = await api("POST", API.actions, {
+            action: "show_in_library",
+            person_ids: ids,
+            person_names: names,
+            match_mode: ids.length > 1 ? el("match-mode").value : "union",
+          });
+          if (data.plugin_connected) {
+            state.textContent = "Sent — switch to Lightroom.";
+            setTimeout(() => {
+              if (state.textContent.startsWith("Sent")) state.textContent = "";
+            }, 6000);
+          } else {
+            // Queued, but nothing is draining it: say so instead of letting
+            // the user wait on a Lightroom window that will never change.
+            state.textContent = "";
+            banner(
+              "Lightroom is not listening, so nothing will happen. The People window was closed there — " +
+                "reopen Library ▸ Plug-in Extras ▸ People…, then send this again.",
+              "error"
+            );
+          }
+        } catch (e) {
+          state.textContent = "";
+          banner("Could not send the selection to Lightroom: " + e.message, "error");
+        }
+      }
+
+      async function heartbeat() {
+        try {
+          const response = await fetch(withDbPath(API.status));
+          const data = await response.json();
+          pluginConnected = !!data.plugin_connected;
+        } catch (e) {
+          pluginConnected = false;
+        }
+        el("conn-dot").classList.toggle("on", pluginConnected);
+        el("conn-text").textContent = pluginConnected
+          ? "Lightroom: connected"
+          : "Lightroom: not listening";
+      }
+
+      // ---- Wiring ----------------------------------------------------------
+
+      el("cluster").onclick = clusterFaces;
+      el("refresh").onclick = loadPersons;
+      el("search").oninput = render;
+      el("unnamed-only").onchange = render;
+      el("threshold").onchange = () => (lastThreshold = numberField("threshold", 0.5));
+      el("toggle-tuning").onclick = () => {
+        const box = el("tuning");
+        box.hidden = !box.hidden;
+      };
+      el("reset-tuning").onclick = () => {
+        for (const [id, value] of Object.entries(GATE_DEFAULTS)) el(id).value = value;
+      };
+
+      el("show-in-library").onclick = () => showInLightroom(Array.from(selected));
+      el("merge-selected").onclick = () => openMerge(Array.from(selected));
+      el("clear-selection").onclick = () => {
+        selected.clear();
+        render();
+      };
+
+      el("detail-close").onclick = closeDetail;
+      el("detail-sort").onchange = () => {
+        if (detail) openDetail(detail.personId, el("detail-sort").value);
+      };
+      const detailNameField = attachNameField(el("detail-name"), {
+        exclude: () => (detail ? detail.personId : ""),
+        commit: (value) => {
+          if (!detail || !detail.personId) return;
+          const person = personById(detail.personId);
+          if (!person) return;
+          // Detached: the detail sheet has no per-card status line, so the
+          // outcome is reported through the title, the grid and any banner.
+          const state = document.createElement("div");
+          saveName(person, value, state, {
+            revert: () => detailNameField.reset(displayName(person)),
+            onSaved: () => {
+              el("detail-title").textContent = personLabel(person);
+              render();
+            },
+          });
+        },
+      });
+      el("pick-all").onclick = () => {
+        detail.faces.forEach((f) => detail.picked.add(f.face_id));
+        renderFaces();
+      };
+      el("pick-none").onclick = () => {
+        detail.picked.clear();
+        renderFaces();
+      };
+      el("detach").onclick = () => moveSelectedFaces({ person_id: "" }, "Detaching");
+      el("move-new").onclick = () => moveSelectedFaces({ new_person: true }, "Moving");
+      el("move-to").onclick = () => {
+        const target = el("move-target").value;
+        if (!target) {
+          banner("There is no other person to move these faces to yet.", "warn");
+          return;
+        }
+        moveSelectedFaces({ person_id: target }, "Moving");
+      };
+
+      el("merge-confirm").onclick = confirmMerge;
+      el("merge-cancel").onclick = closeMerge;
+
+      el("name-merge-yes").onclick = confirmNameMerge;
+      el("name-merge-separate").onclick = keepNameSeparate;
+      el("name-merge-cancel").onclick = () => closeNameMerge(false);
+
+      // Click the dimmed backdrop, or press Escape, to back out of either
+      // overlay — both are non-destructive, so neither needs confirming.
+      for (const [id, close] of [
+        ["detail", closeDetail],
+        ["merge", closeMerge],
+        ["name-merge", () => closeNameMerge(false)],
+      ]) {
+        el(id).onclick = (e) => {
+          if (e.target === el(id)) close();
+        };
+      }
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (suggest) return; // the name list closes first, on its own handler
+        if (!el("name-merge").hidden) closeNameMerge(false);
+        else if (!el("merge").hidden) closeMerge();
+        else if (!el("detail").hidden) closeDetail();
+      });
+
+      // A list positioned once cannot follow its field, so anything that moves
+      // the field closes it rather than leaving it stranded mid-page.
+      window.addEventListener(
+        "scroll",
+        (e) => {
+          if (e.target !== el("suggest")) hideSuggestions();
+        },
+        true
+      );
+      window.addEventListener("resize", hideSuggestions);
+
+      heartbeat();
+      setInterval(heartbeat, 5000);
+      loadPersons();
+    </script>
+  </body>
+</html>

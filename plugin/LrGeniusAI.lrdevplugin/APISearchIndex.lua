@@ -120,6 +120,11 @@ local ENDPOINTS = {
 
 	-- Species links
 	SPECIES_LINKS = "/v1/species/links",
+
+	-- Browser UI: the pages the plugin opens instead of building them in
+	-- LrView, and the queue they hand catalog work back through.
+	UI_PEOPLE = "/v1/ui/people",
+	UI_ACTIONS = "/v1/ui/actions",
 }
 
 local EXPORT_SETTINGS = {
@@ -3798,20 +3803,27 @@ end
 
 ---
 -- Set display name for a person.
+--
+-- Naming also confirms the person: the backend pins every one of its faces so
+-- the next clustering run keeps them together. It reports how many in
+-- `confirmed`, and if the name saved but the pinning did not, it says so in
+-- `warnings` — hence the whole response comes back, so a caller can show them.
+--
 -- @param personId string e.g. "person_0"
 -- @param name string Display name (empty to clear)
--- @return boolean success, err
+-- @return boolean ok
+-- @return table|string responseOrError { status, person_id, name, confirmed, warnings }
 function SearchIndexAPI.setPersonName(personId, name)
 	if not personId or personId == "" then
 		return false, "person_id required"
 	end
 	local url = SearchIndexAPI.url("FACES_PERSON_PHOTOS", personId)
-	local _, err = _request("PUT", url, { name = name or "" })
+	local result, err = _request("PUT", url, { name = name or "" })
 	if err then
 		log:error("setPersonName failed: " .. err)
 		return false, err
 	end
-	return true
+	return true, result or {}
 end
 
 ---
@@ -3826,6 +3838,37 @@ function SearchIndexAPI.getPhotosForPerson(personId)
 	local result, err = _request("GET", url, {})
 	if err then
 		log:error("getPhotosForPerson failed: " .. err)
+		return nil, err
+	end
+	return result
+end
+
+---
+-- URL of the People page the plugin opens in the browser.
+-- Carries the catalog's db_path so the page's own requests bind the same
+-- catalog the plugin talks to — the backend accepts it from the query string
+-- exactly like it does from `_request`'s injected copy.
+-- @return string
+function SearchIndexAPI.getPeopleUiUrl()
+	local url = SearchIndexAPI.url("UI_PEOPLE")
+	if SearchIndexAPI.isLocalBackend() then
+		local dbPath = getDbPath()
+		if dbPath then
+			url = url .. "?db_path=" .. _urlEncode(dbPath)
+		end
+	end
+	return url
+end
+
+---
+-- Take everything a /v1/ui/ page queued for the plugin. Draining is destructive:
+-- each action is handed out exactly once, so the caller must act on what it
+-- gets back rather than polling again for it.
+-- @return table|nil { status, actions = { ... }, page_open } or nil, err
+function SearchIndexAPI.takeUiActions()
+	local result, err = _request("GET", SearchIndexAPI.url("UI_ACTIONS"), nil, 10)
+	if err then
+		log:error("takeUiActions failed: " .. err)
 		return nil, err
 	end
 	return result

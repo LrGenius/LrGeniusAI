@@ -122,6 +122,15 @@ Entry point: `Init.lua` — sets up globals, imports all Lightroom SDK modules, 
 - `TaskCullPhotos.lua` — burst/duplicate grouping
 - `TaskAutomatedTests.lua` — smoke tests (plugin ↔ backend connectivity)
 
+Not every task builds its interface out of LrView. `TaskPeople.lua` has no
+dialog of its own: the People UI is a page the backend serves at `/v1/ui/people`,
+which the task opens in the browser. Lightroom keeps only what a browser
+cannot do — the page queues actions through `/v1/ui/actions` and the task
+performs them against the catalog. Reach for this when a task is a grid of
+server-side data that LrView cannot re-render (see
+[Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);
+keep settings and short forms native.
+
 All long-running operations run inside `LrTasks.startAsyncTask`. Use `LrTasks.pcall` (never native `pcall`) so tasks can yield.
 
 Photo identity uses the stable `globalPhotoId` via `Util.getGlobalPhotoIdForPhoto` (metadata-based, cross-catalog consistent). Two globals are defined everywhere: `WIN_ENV` and `MAC_ENV`.
@@ -137,7 +146,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
 - `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
-- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry.
+- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
 - `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
 
 `APISearchIndex.lua` on the plugin side defines the API contract; keep it in sync with any endpoint changes here.
@@ -155,7 +164,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 ### Lua / Plugin
 
 - Use `LrTasks.pcall` — never native `pcall`.
-- All GUI strings must use `LOC(...)`. The plugin ships no `TranslatedStrings_*.txt` files — the default string written inline in the `LOC()` call is what the UI shows, so write it as finished user-facing English.
+- GUI strings are plain English. Translations were dropped, so new code writes the finished user-facing string directly. (`LOC(...)` survives in older files, where it just renders its inline default — leave it alone, but don't add more.)
 - Surface all errors to the user via `ErrorHandler.handleError`; no silent failures.
 - Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
 - New top-level actions must follow the `Task*.lua` naming convention.

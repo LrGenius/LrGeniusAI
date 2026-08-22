@@ -266,6 +266,16 @@ cannot express.
 
 ## Face Detection & Persons
 
+Two metadata fields on a face row carry a person, and the difference between
+them decides what a re-cluster is allowed to touch:
+
+- `person_id` — who the face belongs to. Empty or `person_unassigned` means
+  nobody.
+- `person_manual` — true when a human said so on the People page. A guess the
+  clusterer may revise versus a fact it must preserve. Every editing endpoint
+  below sets it, `POST /v1/faces/cluster` honours it, and re-detection during
+  indexing carries it over.
+
 ### `POST /v1/faces/detect`
 Detects faces in an uploaded image and stores their embeddings.
 
@@ -273,16 +283,67 @@ Detects faces in an uploaded image and stores their embeddings.
 Finds photos containing faces similar to those in a reference image.
 
 ### `POST /v1/faces/cluster`
-Re-clusters all stored face embeddings into person groups. Faces whose row carries no
-usable embedding are reported as unassigned rather than clustered — an empty
-vector compares as distance 0 to everything and would merge unrelated clusters.
-Above `AGGLOMERATIVE_MAX_POINTS` faces the agglomerative algorithm is skipped
-(its n×n distance matrix would be gigabytes) and DBSCAN is used instead.
+Re-clusters all stored face embeddings into person groups. The policy lives in
+`lrg_analysis::face_cluster`; this endpoint is the store side of it.
+
+Request fields (all optional): `distance_threshold` (cosine, default 0.5),
+`min_faces_per_person` (default 2, `null` keeps singletons),
+`linkage` (`"complete"` default, or `"average"`), `min_det_score`,
+`min_area_ratio`, `min_sharpness`, `max_occlusion`, `attach_factor`,
+`ignore_manual`, and `algorithm`.
+
+What the default path does, and why:
+
+- **Quality gate first.** A blurred, tiny, or half-occluded face is the one
+  that sits between two people and welds them together. Faces below the gate
+  may not *form* a person; after clustering they are attached to the nearest
+  finished cluster whose centroid is within `distance_threshold × attach_factor`
+  (0.9), or left unassigned. A face row indexed before this version measured
+  quality has no scores at all — an unmeasured field never rejects, and the
+  response warns that those rows were passed through ungated.
+- **Complete linkage, not DBSCAN.** DBSCAN's density connectivity is
+  transitive, so a single borderline face chains two people into one cluster.
+  Complete linkage requires *every* pair across two clusters to be within the
+  threshold. Passing `"algorithm": "dbscan"` restores the old behaviour and
+  always returns a warning saying it chains.
+- **Manual assignments are pinned.** Faces with `person_manual` enter as
+  pre-formed seeds that keep their `person_id`, cannot be split, and cannot
+  merge with a different pinned person. `"ignore_manual": true` opts out.
+- **Canopy pre-partition above `AGGLOMERATIVE_MAX_POINTS`.** The agglomerative
+  n×n distance matrix would be gigabytes, so a greedy centroid pass splits the
+  faces into canopies at a loose threshold and each is clustered separately.
+  This is reported in `diagnostics.canopies` and warned about, because a canopy
+  boundary can split one person.
+
+Faces whose row carries no usable embedding, or whose embedding came from a
+superseded face model, are reported as unassigned rather than clustered — an
+empty vector compares as distance 0 to everything and would merge unrelated
+clusters.
+
+The response carries `person_count`, `warnings`, and a `diagnostics` object —
+`threshold`, `algorithm`, `clusters`, `pinned_faces`, `low_quality`,
+`unmeasured`, `attached`, `dropped_small`, `canopies`, `mean_spread` and
+`near_duplicates` — how many clusters have another cluster within 1.2× the
+threshold, i.e. how many a slightly looser run would have merged. The last two
+are what makes the threshold judgeable: a high `near_duplicates` means one
+person is probably split across several clusters, and a `mean_spread`
+approaching the threshold means clusters are being stretched over more than one
+face.
+
+### `POST /v1/faces/assign`
+Moves specific faces to a person. Body: `face_ids` (required), plus either
+`person_id`, or `"new_person": true` to allocate the next free id, optionally
+with a `name`. Assigning to `person_unassigned` detaches the faces from
+everyone. Every touched row gets `person_manual: true`, so the next
+**Cluster faces** run preserves the decision. Face ids that no longer exist are
+returned as warnings rather than failing the request.
 
 ### `GET /v1/faces/persons`
 Returns all detected persons with `person_id`, `name`, `face_count`,
-`photo_count` and a representative `thumbnail` (base64 JPEG, empty when the
-person has none).
+`photo_count`, `manual_count` (how many of the faces a human placed) and a
+representative `thumbnail` (base64 JPEG, empty when the person has none). The
+representative is the highest-scoring face by `det_score + sharpness`, not the
+first row found.
 
 Every face without a person — an empty `person_id` from a row that was never
 clustered, or `person_unassigned` written by the clusterer — is reported as a
@@ -290,16 +351,105 @@ single entry with an empty `person_id`. The thumbnail is included here on
 purpose: fetching it per person from `/v1/faces/persons/<id>/thumbnail` meant one
 full table scan per person.
 
+### `POST /v1/faces/persons/merge`
+Merges two or more persons into one. Body: `person_ids` (at least two distinct
+real persons — the unassigned pseudo-person is not one), optional `into` (the
+survivor; defaults to whichever has the most faces) and optional `name`.
+
+Every face of every person involved — including the target's own — is rewritten
+to the surviving id with `person_manual: true`, so the merge holds through the
+next re-cluster. The name is resolved in order: an explicit `name`, else the
+target's existing name, else any name from a merged-away person. The merged-away
+ids are removed from the names file.
+
 ### `GET /v1/faces/persons/<person_id>/thumbnail`
 Returns the representative face thumbnail for a person as base64 JPEG. Kept for
 older plugin builds; `GET /v1/faces/persons` already includes it, and this scans
 the whole face table for one image, so it must not be called in a loop.
 
 ### `PUT /v1/faces/persons/<person_id>`
-Updates the name assigned to a person cluster.
+Names a person cluster, and by naming it confirms it. Body: `name` (empty or
+absent clears it).
+
+Every face of that person is marked `person_manual: true`, exactly as a merge
+does, and the count comes back as `confirmed`. Naming is the user's claim that
+the cluster really is one person, so the next **Cluster faces** run has to keep
+it together — without the pin the name could end up on a different set of faces.
+
+Clearing the name pins nothing (`confirmed: 0`) and unpins nothing: the same
+flag also records hand-assignments and merges, and no row says which of those
+wrote it, so undoing the naming would throw away decisions it never made.
+Naming the unassigned pseudo-person pins nothing either. If the name saves but
+the pinning fails, the request still succeeds and says so in `warnings`.
+
+The People page uses this endpoint's name collision — a name another person
+already has — as its merge gesture: it asks, then either posts to
+`/v1/faces/persons/merge` or sends the name anyway when the user says the two
+really are different people with the same name.
 
 ### `GET /v1/faces/persons/<person_id>/photos`
 Returns the list of `photo_id` values associated with a specific person.
+
+### `GET /v1/faces/persons/<person_id>/faces`
+Returns the individual faces in one person, which is what the People page's
+detail view is built on. Query parameters: `limit` (default 200, max 500),
+`offset`, and `sort` — `typical` (closest to the cluster centroid first),
+`outlier` (furthest first, which surfaces wrong faces) or `quality`.
+
+Only this person's vectors are fetched, so the endpoint is cheap enough to page
+through. Each face carries `face_id`, `photo_id`, `thumbnail`, `distance` from
+the cluster centroid, `manual`, the four quality measurements
+(`det_score`, `area_ratio`, `sharpness`, `occlusion`) and a `quality_note` when
+one of them is below the gate. The envelope adds `total`, `offset`, `limit`,
+`returned`, `name` and `spread` (mean distance to the centroid).
+
+`distance` is what lets a threshold be judged by eye rather than guessed: a
+face further from the centroid than the clustering threshold is drawn as an
+outlier on the page.
+
+---
+
+## Browser UI (`/v1/ui/`)
+
+Pages the plugin opens in the browser instead of rebuilding them out of
+Lightroom's view factory, plus the queue they talk back through. The pages are
+compiled into the binary from `crates/lrg-api/src/ui/`, so they can never go
+stale against the server serving them.
+
+A page can call the rest of this API directly — it is served from the
+backend's own origin, so no CORS setup is involved — and it forwards the
+`db_path` the plugin put in its URL on every request, which the auto-bind
+middleware honours exactly like the plugin's own calls.
+
+What a page *cannot* do is touch the Lightroom catalog. Those actions are
+queued instead: the page POSTs one, and the plugin task that is waiting on it
+drains the queue and performs it. Both ends stamp when they were last heard
+from, so each can tell the user the other one is gone instead of appearing to
+hang.
+
+### `GET /v1/ui/people`
+Serves the People page: person grid, renaming, re-clustering, filtering, and
+the selection that becomes a Lightroom collection. Replaced the plugin's LrView
+People dialog.
+
+### `GET /v1/ui/status`
+Page heartbeat. Returns `plugin_connected` — false once the plugin has not
+polled for 5 seconds, which is how the page reports that People was closed in
+Lightroom instead of silently queueing work nobody will run.
+
+### `GET /v1/ui/actions`
+Plugin poll. Returns every queued action and clears the queue, so each action
+is handed out exactly once — a caller that drops the response drops the work.
+Also returns `page_open`, false when no page has been seen for 90 seconds —
+wide enough that a page throttled in a hidden browser tab still counts —
+which lets the plugin report a browser that never opened.
+
+### `POST /v1/ui/actions`
+Queues one action for the plugin. The body needs an `action` naming one the
+backend knows (`show_in_library`, which additionally needs a non-empty
+`person_ids` array); anything else is a 400 rather than an entry nothing will
+ever run. Returns `plugin_connected` as it was *before* the enqueue — the
+answer to "will anything pick this up".
 
 ---
 

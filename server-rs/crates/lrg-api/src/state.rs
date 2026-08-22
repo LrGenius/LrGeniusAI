@@ -17,6 +17,7 @@ use lrg_store::{migrate, Store};
 use crate::llm_engine::LlmEngineSlot;
 use crate::mlx_engine::MlxEngineSlot;
 use crate::routes::clip::ModelDownloadStatus;
+use crate::ui_bridge::UiBridge;
 
 pub struct AppState {
     db_path: RwLock<Option<PathBuf>>,
@@ -38,6 +39,11 @@ pub struct AppState {
     pub bioclip: Arc<BioclipModel>,
     /// Global — port of `services/jobs.py`, read back through `GET /v1/jobs/{job_id}`.
     pub jobs: Arc<JobRegistry>,
+    /// Hands actions from a `/v1/ui/` page in the browser to the plugin task
+    /// that is waiting for them, since only the plugin can touch the
+    /// Lightroom catalog. Global for the same reason `jobs` is: Lightroom
+    /// runs one of these tasks at a time.
+    pub ui_bridge: Arc<UiBridge>,
     /// CLIP-IQA prompt embeddings, computed on first use and kept for the
     /// process lifetime.
     ///
@@ -86,6 +92,7 @@ impl AppState {
             face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
             bioclip: Arc::new(BioclipModel::new(lrg_ml::model_paths::resolve_bioclip())),
             jobs: Arc::new(JobRegistry::new()),
+            ui_bridge: Arc::new(UiBridge::new()),
             clip_iqa: Arc::new(StdMutex::new(HashMap::new())),
             model_download: Arc::new(StdMutex::new(HashMap::new())),
             llm: Arc::default(),

@@ -41,6 +41,9 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Cluster faces into persons
 - Rename persons
 - Jump from a person directly to a Lightroom collection
+- The People interface opens in your web browser (served by the backend at
+  `/v1/ui/people`); Lightroom keeps a progress bar running while it is open,
+  which is what turns a selection there into a collection here
 
 ### AI Develop Edits
 
