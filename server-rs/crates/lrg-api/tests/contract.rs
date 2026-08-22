@@ -1154,3 +1154,65 @@ async fn keyword_specific_job_poll_route_is_gone() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+/// `/v1/db/backups` is POST-only on purpose (taking a backup also retains a
+/// copy on disk), and the plugin's `downloadDatabaseBackup` has to match: it
+/// once sent `GET` here and every backup download died with a bare `405`.
+#[tokio::test]
+async fn db_backup_is_post_only_and_streams_a_zip() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    let (app, _) = fresh_app();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/db/bind")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "db_path": db_path_str }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // What the plugin sends: POST with the db_path body the auto-bind
+    // middleware injects.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/db/backups")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "db_path": db_path_str }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/zip"),
+    );
+    let zip = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        zip.starts_with(b"PK"),
+        "expected a zip archive, got {} bytes starting {:?}",
+        zip.len(),
+        &zip[..zip.len().min(8)]
+    );
+
+    // And the method the plugin must not send: a GET is a 405, not a backup.
+    let response = app
+        .oneshot(Request::get("/v1/db/backups").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}

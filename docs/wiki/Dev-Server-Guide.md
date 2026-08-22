@@ -26,7 +26,7 @@ If you are experiencing unexpected backend behavior:
 ## Database Backup Workflow
 
 Given the importance of your generated search indexes and AI metadata, the backend exposes a dedicated backup download flow:
-- API endpoint: `GET /v1/db/backups`
+- API endpoint: `POST /v1/db/backups` (POST, not GET: taking a backup also retains a copy on the server, which a safe method may not do — a `GET` answers `405`)
 - Output: A comprehensive ZIP archive containing the complete LanceDB data directory.
 
 **To create a backup via Lightroom:**

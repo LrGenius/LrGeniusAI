@@ -1216,17 +1216,20 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						width = share("backendButtonWidth"),
 						action = function(button)
 							LrTasks.startAsyncTask(function()
-								local result, path = SearchIndexAPI.downloadDatabaseBackup()
-								if result then
-									LrShell.revealInShell(path)
+								-- On failure the message is the *second* return value; `ok` is
+								-- only ever `true`/`false`/`nil`, so never report it to the user.
+								local ok, pathOrErr = SearchIndexAPI.downloadDatabaseBackup()
+								if ok then
+									LrShell.revealInShell(pathOrErr)
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/DbBackupDownloaded=Database backup downloaded."),
-										path
+										pathOrErr
 									)
-								else
+								elseif pathOrErr ~= "canceled" then
+									-- A user-canceled save panel is not an error; anything else is.
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/DbBackupFailed=Database backup failed"),
-										tostring(result or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error")),
+										tostring(pathOrErr or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error")),
 										"critical"
 									)
 								end
