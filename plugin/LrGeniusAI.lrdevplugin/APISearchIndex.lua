@@ -3800,20 +3800,27 @@ end
 
 ---
 -- Set display name for a person.
+--
+-- Naming also confirms the person: the backend pins every one of its faces so
+-- the next clustering run keeps them together. It reports how many in
+-- `confirmed`, and if the name saved but the pinning did not, it says so in
+-- `warnings` — hence the whole response comes back, so a caller can show them.
+--
 -- @param personId string e.g. "person_0"
 -- @param name string Display name (empty to clear)
--- @return boolean success, err
+-- @return boolean ok
+-- @return table|string responseOrError { status, person_id, name, confirmed, warnings }
 function SearchIndexAPI.setPersonName(personId, name)
 	if not personId or personId == "" then
 		return false, "person_id required"
 	end
 	local url = SearchIndexAPI.url("FACES_PERSON_PHOTOS", personId)
-	local _, err = _request("PUT", url, { name = name or "" })
+	local result, err = _request("PUT", url, { name = name or "" })
 	if err then
 		log:error("setPersonName failed: " .. err)
 		return false, err
 	end
-	return true
+	return true, result or {}
 end
 
 ---

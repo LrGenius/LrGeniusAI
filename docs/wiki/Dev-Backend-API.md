@@ -368,7 +368,24 @@ older plugin builds; `GET /v1/faces/persons` already includes it, and this scans
 the whole face table for one image, so it must not be called in a loop.
 
 ### `PUT /v1/faces/persons/<person_id>`
-Updates the name assigned to a person cluster.
+Names a person cluster, and by naming it confirms it. Body: `name` (empty or
+absent clears it).
+
+Every face of that person is marked `person_manual: true`, exactly as a merge
+does, and the count comes back as `confirmed`. Naming is the user's claim that
+the cluster really is one person, so the next **Cluster faces** run has to keep
+it together — without the pin the name could end up on a different set of faces.
+
+Clearing the name pins nothing (`confirmed: 0`) and unpins nothing: the same
+flag also records hand-assignments and merges, and no row says which of those
+wrote it, so undoing the naming would throw away decisions it never made.
+Naming the unassigned pseudo-person pins nothing either. If the name saves but
+the pinning fails, the request still succeeds and says so in `warnings`.
+
+The People page uses this endpoint's name collision — a name another person
+already has — as its merge gesture: it asks, then either posts to
+`/v1/faces/persons/merge` or sends the name anyway when the user says the two
+really are different people with the same name.
 
 ### `GET /v1/faces/persons/<person_id>/photos`
 Returns the list of `photo_id` values associated with a specific person.

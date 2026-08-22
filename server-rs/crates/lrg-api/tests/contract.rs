@@ -1651,3 +1651,190 @@ async fn clustering_does_not_chain_two_people_through_a_borderline_face() {
         "the two ends are 1.6 apart and must not share a person: {json}"
     );
 }
+
+async fn put_json(
+    app: &axum::Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::put(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+/// Naming a cluster is the user saying "this is Anna", which is a claim about
+/// the faces in it and not only about the label. Without the pin the next
+/// **Cluster faces** run would happily regroup a person the user has already
+/// vouched for, and the name would then sit on a different set of faces.
+#[tokio::test]
+async fn naming_a_person_confirms_every_face_it_has() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = put_json(
+        &app,
+        &format!("/v1/faces/persons/person_0?db_path={db_path}"),
+        serde_json::json!({"name": "Anna"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["name"], "Anna");
+    assert_eq!(json["confirmed"], 3, "person_0 has three faces: {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    for (id, meta) in &rows {
+        let manual = meta
+            .get("person_manual")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let is_annas = meta["person_id"] == "person_0";
+        assert_eq!(
+            manual, is_annas,
+            "naming person_0 must pin its faces and nobody else's, but {id} came back {manual}"
+        );
+    }
+
+    // And the listing the page renders has to agree, or the card would show a
+    // name with no "confirmed" badge next to it.
+    let listing = get_json(&app, &format!("/v1/faces/persons?db_path={db_path}")).await;
+    let anna = listing["persons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["person_id"] == "person_0")
+        .expect("person_0 is in the listing");
+    assert_eq!(anna["name"], "Anna");
+    assert_eq!(anna["manual_count"], anna["face_count"]);
+}
+
+/// Clearing the name must not unpin anything. The same flag also records
+/// hand-assignments and merges, and nothing in a row says which of those wrote
+/// it — so undoing the naming would silently throw away decisions it never made.
+#[tokio::test]
+async fn clearing_a_name_leaves_the_faces_confirmed() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let uri = format!("/v1/faces/persons/person_0?db_path={db_path}");
+    put_json(&app, &uri, serde_json::json!({"name": "Anna"})).await;
+
+    let (status, json) = put_json(&app, &uri, serde_json::json!({"name": "   "})).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["name"], "");
+    assert_eq!(json["confirmed"], 0, "there is nothing to confirm: {json}");
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(
+            lrg_store::FACE_TABLE,
+            &["a1_0".to_string(), "a2_0".to_string(), "a3_0".to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    for record in &rows {
+        assert_eq!(
+            record.metadata["person_manual"], true,
+            "{} lost its pin when the name went away",
+            record.id
+        );
+    }
+}
+
+/// The unassigned bucket is not a person, so naming it pins nothing — the
+/// faces in it are precisely the ones no decision has been made about.
+#[tokio::test]
+async fn naming_the_unassigned_bucket_confirms_nothing() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    let (status, json) = put_json(
+        &app,
+        &format!("/v1/faces/persons/_unassigned?db_path={db_path}"),
+        serde_json::json!({"name": "Nobody"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["confirmed"], 0);
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(lrg_store::FACE_TABLE, &["c1_0".to_string()])
+        .await
+        .unwrap();
+    assert!(
+        !rows[0]
+            .metadata
+            .get("person_manual")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "an unassigned face must stay open for the next clustering run"
+    );
+}
+
+/// Entering a name another person already has is how the People page merges
+/// two clusters: the page asks, then sends this. Both sides come out pinned,
+/// so the merge survives the next re-cluster.
+#[tokio::test]
+async fn merging_by_name_keeps_the_name_and_confirms_both_sides() {
+    let (app, state, _dir, db_path) = people_fixture().await;
+    put_json(
+        &app,
+        &format!("/v1/faces/persons/person_0?db_path={db_path}"),
+        serde_json::json!({"name": "Anna"}),
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/faces/persons/merge",
+        serde_json::json!({
+            "person_ids": ["person_1", "person_0"],
+            "into": "person_0",
+            "name": "Anna",
+            "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["person_id"], "person_0");
+    assert_eq!(json["name"], "Anna");
+    assert_eq!(json["moved"], 2, "person_1's two faces move: {json}");
+
+    let listing = get_json(&app, &format!("/v1/faces/persons?db_path={db_path}")).await;
+    let persons = listing["persons"].as_array().unwrap();
+    assert!(
+        !persons.iter().any(|p| p["person_id"] == "person_1"),
+        "person_1 is gone after the merge: {listing}"
+    );
+    let anna = persons
+        .iter()
+        .find(|p| p["person_id"] == "person_0")
+        .expect("person_0 survived");
+    assert_eq!(anna["face_count"], 5);
+    assert_eq!(
+        anna["manual_count"], 5,
+        "every face of a merged person is pinned, or the next run splits it again"
+    );
+
+    let rows = state
+        .store()
+        .unwrap()
+        .scan_meta(lrg_store::FACE_TABLE)
+        .await
+        .unwrap();
+    assert!(
+        !rows.iter().any(|(_, m)| m["person_id"] == "person_1"),
+        "no face may still point at the merged-away id"
+    );
+}

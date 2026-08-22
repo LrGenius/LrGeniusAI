@@ -77,8 +77,34 @@ words which way to move it.
 ### Assigning names
 
 Type into a card's name field and press Enter or click away — each name is
-saved on its own, and the card says *Saved* when it lands. Names survive
-re-clustering and are used as context elsewhere.
+saved on its own, and the card says *Saved · confirmed* when it lands. Names
+survive re-clustering and are used as context elsewhere.
+
+As you type, existing names are offered below the field, best match first. It
+matches more than the beginning of a name: *schm* finds “Anna Schmidt”, and
+*ms* finds “Maria Schmidt” by its initials. Arrow keys move through the list,
+Enter takes the highlighted one, Escape closes it. Each suggestion shows how
+many photos that person has, which is what tells two similar names apart. Use
+it — a name typed slightly differently the second time makes a second person.
+
+**Naming a person confirms it.** The name is your judgement that this cluster
+really is one person, so all of its faces are pinned exactly as if you had
+placed them by hand, and the card gets the *confirmed* badge. The next **Cluster
+faces** run then keeps them together instead of re-deciding them — otherwise a
+name could quietly end up on a different set of faces. Clearing the name later
+does not unpin them; take wrong faces off inside the person instead.
+
+### Merging by naming
+
+Entering a name another person already has is the other way to merge two cards.
+The page asks first, showing both people side by side, and offers three
+answers:
+
+- **Merge into one person** — they become one, keeping that name.
+- **Keep them separate** — both keep the name. This is the right answer when
+  two different people really do share a name; the suggestion list then shows
+  it once and says how many people have it.
+- **Cancel** — nothing is saved and the field goes back to what it was.
 
 ### Looking inside a person
 
@@ -108,7 +134,8 @@ Every one of these counts as a decision by you, so it survives the next
 
 When the same person ended up on two cards, drag one card onto the other. A
 dialog asks which name the merged person should keep — either of the two, or
-one you type — and then all the faces move across.
+one you type — and then all the faces move across. Typing an existing name into
+a card's name field does the same thing; see *Merging by naming* above.
 
 A merge is permanent in the sense that matters: it is remembered as your
 decision, not a guess, so clustering at a different threshold will not pull the

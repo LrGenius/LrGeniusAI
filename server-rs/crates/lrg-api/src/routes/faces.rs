@@ -779,6 +779,18 @@ async fn person_thumbnail(
     Json(json!({"status": "ok", "person_id": person_id, "thumbnail": thumb})).into_response()
 }
 
+/// Names a person — and, by naming it, confirms it.
+///
+/// Putting a name on a cluster is the user saying "this is Anna", which is a
+/// statement about the faces in it, not only about the label. So every face of
+/// that person is marked `person_manual`, exactly as a merge does: the next
+/// **Cluster faces** run then keeps them together instead of re-deciding the
+/// grouping under a name the user already trusts.
+///
+/// Clearing the name does *not* unpin them. The pin also records assignments
+/// and merges the user made by hand, and those rows are indistinguishable from
+/// the ones this pinned, so dropping the name would silently throw away
+/// decisions it never made. Wrong faces come off in the detail view instead.
 async fn set_person_name(
     State(state): State<Arc<AppState>>,
     UrlPath(person_id): UrlPath<String>,
@@ -806,7 +818,79 @@ async fn set_person_name(
         )
             .into_response();
     }
-    Json(json!({"status": "ok", "person_id": person_id, "name": trimmed})).into_response()
+
+    let mut warnings: Vec<String> = Vec::new();
+    let confirmed = if trimmed.is_empty() || is_unassigned(&person_id) {
+        0
+    } else {
+        match confirm_person_faces(&state, &person_id).await {
+            Ok(n) => n,
+            Err(e) => {
+                // The name is already saved, so this is a degraded success and
+                // has to be reported as one: the user would otherwise believe
+                // the naming also pinned the cluster.
+                log::warn!("Confirming the faces of {person_id} failed: {e}");
+                warnings.push(format!(
+                    "The name was saved, but these faces could not be confirmed, so the next \
+                     “Cluster faces” run may regroup them: {e}"
+                ));
+                0
+            }
+        }
+    };
+
+    Json(json!({
+        "status": "ok",
+        "person_id": person_id,
+        "name": trimmed,
+        "confirmed": confirmed,
+        "warnings": warnings,
+    }))
+    .into_response()
+}
+
+/// Marks every face of one person `person_manual`, and reports how many rows
+/// that touched. Rows already marked are rewritten too — the upsert is one
+/// round trip either way, and skipping them would mean reading the table twice.
+async fn confirm_person_faces(state: &AppState, person_id: &str) -> Result<usize, String> {
+    let Some(store) = state.store() else {
+        return Err("no catalog is open".to_string());
+    };
+    let rows = store
+        .scan_meta(FACE_TABLE)
+        .await
+        .map_err(|e| e.to_string())?;
+    let face_ids: Vec<String> = rows
+        .into_iter()
+        .filter(|(_, m)| person_of(m) == person_id)
+        .map(|(id, _)| id)
+        .collect();
+    if face_ids.is_empty() {
+        return Ok(0);
+    }
+    let records = store
+        .get(FACE_TABLE, &face_ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let updated: Vec<StoreRecord> = records
+        .into_iter()
+        .map(|r| {
+            let mut metadata = r.metadata;
+            metadata.insert("person_manual".into(), json!(true));
+            StoreRecord {
+                id: r.id,
+                vector: r.vector,
+                metadata,
+            }
+        })
+        .collect();
+    let count = updated.len();
+    store
+        .upsert(FACE_TABLE, &updated)
+        .await
+        .map_err(|e| e.to_string())?;
+    log::info!("Naming {person_id} confirmed {count} face(s).");
+    Ok(count)
 }
 
 async fn person_photos(
