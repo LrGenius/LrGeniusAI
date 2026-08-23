@@ -426,8 +426,12 @@ fn now_unix() -> i64 {
 /// No CoreML here even on macOS: this graph has a dynamic batch axis, which
 /// is exactly the case `siglip::build_session` documents as not qualifying
 /// for CoreML's MLProgram path.
+///
+/// Optimization level pinned per [`crate::OPTIMIZATION_LEVEL`] — onnxruntime
+/// segfaults on this exact graph at its own `ORT_ENABLE_ALL` default.
 fn build_session(path: &Path) -> ort::Result<Session> {
     let builder = Session::builder()?
+        .with_optimization_level(crate::OPTIMIZATION_LEVEL)?
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
     crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
 }

@@ -42,6 +42,41 @@ pub fn kleidiai_disabled() -> bool {
     std::env::var("LRG_DISABLE_KLEIDIAI").as_deref() == Ok("1")
 }
 
+/// The graph optimization level every session in this crate is pinned to.
+///
+/// **Do not remove this pin, and do not raise it to `All`.** `Session::builder()`
+/// sets no level, which leaves onnxruntime on its own default of
+/// `ORT_ENABLE_ALL` — and at that level onnxruntime *segfaults* inside
+/// `commit_from_file` on two of this project's five graphs. Not an error, not
+/// an `ort::Error`: SIGSEGV in the optimizer, which takes the whole server
+/// down with it and cannot be caught, logged, or surfaced to the user.
+///
+/// Measured by loading each model at each level on x86-64 Linux, resident
+/// megabytes after load:
+///
+/// | model | `ENABLE_LAYOUT` (= `Level3`) | `ENABLE_ALL` |
+/// |---|---|---|
+/// | `bioclip2_image` (fp16 ViT) | 649 | **SIGSEGV** |
+/// | `siglip2_text` (fp16) | 1974 | **SIGSEGV** |
+/// | `siglip2_image` (fp16 ViT) | 882 | 2597 |
+/// | `facenet_vggface2` (fp32) | 248 | 253 |
+/// | `yunet_face_detection` (fp32) | 50 | 50 |
+///
+/// So the large fp16 transformer graphs either crash or cost 3x the memory,
+/// and the small fp32 convolutional ones are indifferent. Reproduced
+/// identically on onnxruntime 1.26.0, 1.27.0 and 1.28.0, and every model
+/// passes `onnx.checker.check_model(full_check=True)` — this is a bug in
+/// whatever `ORT_ENABLE_ALL` runs on top of the layout tier, not a bad export.
+///
+/// Nothing is given up by pinning here. `Level3` *is* `ORT_ENABLE_LAYOUT`,
+/// onnxruntime's top documented tier, including the NCHWc memory-layout
+/// transforms; `ORT_ENABLE_ALL` is the open-ended "and whatever else is
+/// registered" level above it. The golden tests check the embeddings these
+/// sessions produce against their PyTorch/open_clip references, so a level
+/// that changed the numbers would fail rather than pass quietly.
+pub(crate) const OPTIMIZATION_LEVEL: ort::session::builder::GraphOptimizationLevel =
+    ort::session::builder::GraphOptimizationLevel::Level3;
+
 /// Applies the KleidiAI policy above to a session builder.
 pub(crate) fn apply_kleidiai_policy(
     builder: ort::session::builder::SessionBuilder,

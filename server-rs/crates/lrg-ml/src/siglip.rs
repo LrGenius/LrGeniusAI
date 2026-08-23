@@ -71,8 +71,12 @@ fn now_unix() -> i64 {
 /// crashing — the dynamic-batch graphs used here/in CI don't qualify yet.
 /// M9's model export pipeline will ship per-purpose static exports and
 /// this can default to CoreML on macOS at that point.
+///
+/// Optimization level pinned per [`crate::OPTIMIZATION_LEVEL`] — onnxruntime
+/// segfaults loading `siglip2_text.onnx` at its own `ORT_ENABLE_ALL` default,
+/// and triples the image tower's resident memory.
 fn build_session(path: &Path) -> ort::Result<Session> {
-    let mut builder = Session::builder()?;
+    let mut builder = Session::builder()?.with_optimization_level(crate::OPTIMIZATION_LEVEL)?;
     #[cfg(target_os = "macos")]
     if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
         use ort::ep::coreml::{ComputeUnits, ModelFormat};
