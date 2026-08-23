@@ -1,8 +1,10 @@
-//! Small helpers shared by `training.rs`, `style_edit.rs`, `group_similar.rs`
-//! and `index_upload.rs`: multipart request parsing, local-hour resolution for
-//! time-of-day bucketing, CLIP zero-shot scene-tag probing, and the CLIP-IQA
-//! prompt-set cache.
+//! Small helpers shared by `training.rs`, `style_edit.rs`, `group_similar.rs`,
+//! `index_upload.rs` and `faces.rs`: multipart request parsing, local-hour
+//! resolution for time-of-day bucketing, CLIP zero-shot scene-tag probing, the
+//! CLIP-IQA prompt-set cache, and sanitising request-supplied text for the
+//! log.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use axum::extract::Multipart;
@@ -13,6 +15,29 @@ use lrg_ml::clip_iqa::{IqaPrompts, PromptSet};
 use lrg_ml::siglip::{l2_normalize, SiglipModel};
 
 use crate::state::AppState;
+
+/// Make a request-supplied string safe to write into the log.
+///
+/// Ids and names arrive from the plugin and from the People page, which means
+/// they arrive over HTTP and can contain anything — including the newlines
+/// that would let a crafted `person_id` write what looks like its own log
+/// line ("log injection"). Control characters are replaced so a value can
+/// only ever be *one* line of the log, whatever it contains.
+///
+/// Borrows in the normal case: a well-formed id costs a scan and no
+/// allocation.
+pub(crate) fn log_safe(value: &str) -> Cow<'_, str> {
+    if value.chars().any(char::is_control) {
+        Cow::Owned(
+            value
+                .chars()
+                .map(|c| if c.is_control() { '\u{fffd}' } else { c })
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(value)
+    }
+}
 
 /// Local-hour equivalent of Python's `datetime.fromtimestamp(unix).hour`.
 pub(crate) fn local_hour(capture_time_unix: Option<f64>) -> Option<u32> {
@@ -228,6 +253,28 @@ pub(crate) async fn parse_multipart(multipart: &mut Multipart) -> Result<Multipa
         }
     }
     Ok(form)
+}
+
+#[cfg(test)]
+mod log_safe_tests {
+    use super::log_safe;
+
+    #[test]
+    fn an_ordinary_id_is_returned_untouched() {
+        assert_eq!(log_safe("person_12"), "person_12");
+    }
+
+    #[test]
+    fn a_newline_cannot_start_a_second_log_line() {
+        let forged = log_safe("person_12\nINFO  Deleted the catalog");
+        assert!(!forged.contains('\n'), "{forged}");
+        assert!(forged.starts_with("person_12"), "{forged}");
+    }
+
+    #[test]
+    fn non_ascii_names_survive() {
+        assert_eq!(log_safe("Renée 中村"), "Renée 中村");
+    }
 }
 
 #[cfg(test)]

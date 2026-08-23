@@ -1,5 +1,10 @@
 name: "Lint/format check"
 on: [push, pull_request]
+
+# Only ever reads the checkout; nothing here writes back to the repository.
+permissions:
+  contents: read
+
 jobs:
   format-lint:
     runs-on: ubuntu-latest

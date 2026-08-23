@@ -34,6 +34,7 @@ use lrg_analysis::face_cluster::{self, ClusterParams, FaceInput, QualityGate};
 use lrg_analysis::{clustering, persons};
 use lrg_store::{StoreRecord, FACE_TABLE};
 
+use crate::routes::route_util::log_safe;
 use crate::state::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -759,7 +760,10 @@ async fn person_thumbnail(
     State(state): State<Arc<AppState>>,
     UrlPath(person_id): UrlPath<String>,
 ) -> Response {
-    log::info!("Get person thumbnail request received for person_id={person_id}");
+    log::info!(
+        "Get person thumbnail request received for person_id={}",
+        log_safe(&person_id)
+    );
     let Some(store) = state.store() else {
         return Json(json!({"status": "ok", "person_id": person_id, "thumbnail": ""}))
             .into_response();
@@ -796,7 +800,10 @@ async fn set_person_name(
     UrlPath(person_id): UrlPath<String>,
     body: Option<Json<Value>>,
 ) -> Response {
-    log::info!("Set person name request received for person_id={person_id}");
+    log::info!(
+        "Set person name request received for person_id={}",
+        log_safe(&person_id)
+    );
     let name = body
         .as_ref()
         .and_then(|Json(v)| v.get("name"))
@@ -829,7 +836,10 @@ async fn set_person_name(
                 // The name is already saved, so this is a degraded success and
                 // has to be reported as one: the user would otherwise believe
                 // the naming also pinned the cluster.
-                log::warn!("Confirming the faces of {person_id} failed: {e}");
+                log::warn!(
+                    "Confirming the faces of {} failed: {e}",
+                    log_safe(&person_id)
+                );
                 warnings.push(format!(
                     "The name was saved, but these faces could not be confirmed, so the next \
                      “Cluster faces” run may regroup them: {e}"
@@ -889,7 +899,7 @@ async fn confirm_person_faces(state: &AppState, person_id: &str) -> Result<usize
         .upsert(FACE_TABLE, &updated)
         .await
         .map_err(|e| e.to_string())?;
-    log::info!("Naming {person_id} confirmed {count} face(s).");
+    log::info!("Naming {} confirmed {count} face(s).", log_safe(person_id));
     Ok(count)
 }
 
@@ -897,7 +907,10 @@ async fn person_photos(
     State(state): State<Arc<AppState>>,
     UrlPath(person_id): UrlPath<String>,
 ) -> Response {
-    log::info!("Get photos for person request received for person_id={person_id}");
+    log::info!(
+        "Get photos for person request received for person_id={}",
+        log_safe(&person_id)
+    );
     let Some(store) = state.store() else {
         return Json(
             json!({"status": "ok", "person_id": person_id, "photo_ids": [], "photo_uuids": []}),
@@ -960,7 +973,10 @@ async fn person_faces(
     UrlPath(person_id): UrlPath<String>,
     Query(params): Query<PersonFacesQuery>,
 ) -> Response {
-    log::info!("Get faces for person request received for person_id={person_id}");
+    log::info!(
+        "Get faces for person request received for person_id={}",
+        log_safe(&person_id)
+    );
     let limit = params
         .limit
         .unwrap_or(PERSON_FACES_MAX_LIMIT)
@@ -1012,7 +1028,10 @@ async fn person_faces(
         Err(e) => {
             // Distances are a diagnostic, not the content: losing them should
             // not cost the user the face grid they asked for.
-            log::warn!("Could not load embeddings for {person_id}: {e}");
+            log::warn!(
+                "Could not load embeddings for {}: {e}",
+                log_safe(&person_id)
+            );
             HashMap::new()
         }
     };
@@ -1285,7 +1304,10 @@ async fn assign_faces(State(state): State<Arc<AppState>>, body: Option<Json<Valu
             request.face_ids.len()
         ));
     }
-    log::info!("Assigned {count} face(s) to person_id=\"{target}\"");
+    log::info!(
+        "Assigned {count} face(s) to person_id=\"{}\"",
+        log_safe(&target)
+    );
     Json(json!({
         "status": "ok",
         "person_id": target,
@@ -1470,8 +1492,9 @@ async fn merge_persons(State(state): State<Arc<AppState>>, body: Option<Json<Val
 
     let merged_from: Vec<&String> = sources.iter().filter(|p| *p != &target).collect();
     log::info!(
-        "Merged {} person(s) into {target}: {moved} face(s) moved, {touched} pinned.",
-        merged_from.len()
+        "Merged {} person(s) into {}: {moved} face(s) moved, {touched} pinned.",
+        merged_from.len(),
+        log_safe(&target)
     );
     Json(json!({
         "status": "ok",

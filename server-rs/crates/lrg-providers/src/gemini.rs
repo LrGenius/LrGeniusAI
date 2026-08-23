@@ -29,6 +29,14 @@ use crate::types::{
 const DEFAULT_MAX_TOKENS: u32 = 2048;
 const API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
+/// Gemini accepts the API key either as a `?key=` query parameter or in this
+/// header. The header is the one to use: a URL travels into places a header
+/// does not — `reqwest`'s error messages (which this module hands to the
+/// plugin, and the plugin shows the user), proxy and server access logs, and
+/// anything that later prints the request. Same wire, one fewer place for the
+/// key to end up in clear text.
+const API_KEY_HEADER: &str = "x-goog-api-key";
+
 const ALLOWED_PREFIX: &str = "gemini-";
 const BLOCKED_PREFIXES: [&str; 1] = ["gemini-1.0"];
 const BLOCKED_SUBSTRINGS: [&str; 11] = [
@@ -137,10 +145,7 @@ impl GeminiProvider {
         generation_config: Value,
     ) -> Result<Value, String> {
         let image_b64 = image_to_base64(image_data).map_err(|e| e.to_string())?;
-        let url = format!(
-            "{API_BASE}/models/{model_name}:generateContent?key={}",
-            self.api_key
-        );
+        let url = format!("{API_BASE}/models/{model_name}:generateContent");
         let body = json!({
             "systemInstruction": {"parts": [{"text": system_instruction}]},
             "contents": [{
@@ -156,6 +161,7 @@ impl GeminiProvider {
         let resp = self
             .client
             .post(&url)
+            .header(API_KEY_HEADER, &self.api_key)
             .json(&body)
             .timeout(Duration::from_secs(300))
             .send()
@@ -184,10 +190,7 @@ impl GeminiProvider {
         user_prompt: &str,
     ) -> Option<String> {
         let model = model.unwrap_or("gemini-2.0-flash");
-        let url = format!(
-            "{API_BASE}/models/{model}:generateContent?key={}",
-            self.api_key
-        );
+        let url = format!("{API_BASE}/models/{model}:generateContent");
         let body = json!({
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -196,6 +199,7 @@ impl GeminiProvider {
         let resp = self
             .client
             .post(&url)
+            .header(API_KEY_HEADER, &self.api_key)
             .json(&body)
             .timeout(Duration::from_secs(120))
             .send()
@@ -431,11 +435,17 @@ impl GeminiProvider {
         let mut raw_models: Vec<Value> = Vec::new();
         let mut page_token: Option<String> = None;
         for _ in 0..20 {
-            let mut url = format!("{API_BASE}/models?key={}&pageSize=200", self.api_key);
+            let mut url = format!("{API_BASE}/models?pageSize=200");
             if let Some(token) = &page_token {
                 url.push_str(&format!("&pageToken={token}"));
             }
-            let Ok(resp) = self.client.get(&url).send().await else {
+            let Ok(resp) = self
+                .client
+                .get(&url)
+                .header(API_KEY_HEADER, &self.api_key)
+                .send()
+                .await
+            else {
                 return Vec::new();
             };
             let Ok(body) = resp.json::<Value>().await else {

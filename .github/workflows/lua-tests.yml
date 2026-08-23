@@ -11,6 +11,10 @@ on:
       - "plugin/**"
       - ".busted"
       - ".github/workflows/lua-tests.yml"
+# Only ever reads the checkout; nothing here writes back to the repository.
+permissions:
+  contents: read
+
 jobs:
   busted:
     runs-on: ubuntu-latest

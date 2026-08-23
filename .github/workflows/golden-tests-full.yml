@@ -18,6 +18,10 @@ on:
     - cron: '30 4 * * *'
   workflow_dispatch: {}
 
+# Only ever reads the checkout; the model assets come from public releases.
+permissions:
+  contents: read
+
 jobs:
   golden-tests:
     name: Goldens with real model assets
