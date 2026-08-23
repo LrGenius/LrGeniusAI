@@ -281,8 +281,12 @@ def render(base: str, head: str, repo: Path) -> str:
     out += findings_section(files, head_health, base_health)
     out += [
         "",
-        "<sub>Advisory only — this check never fails a build. "
-        "Health is 1–10, higher is better.</sub>",
+        # Parenthesised so the wrap reads as one string, not as two list items
+        # with a missing comma.
+        (
+            "<sub>Advisory only — this check never fails a build. "
+            "Health is 1–10, higher is better.</sub>"
+        ),
     ]
     return "\n".join(out)
 

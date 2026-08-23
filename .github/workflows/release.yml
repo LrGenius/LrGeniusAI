@@ -11,6 +11,11 @@ on:
         type: boolean
         default: false
 
+# Default for every job below; the jobs that need more (contents: write to
+# publish the release, packages: write to push images) raise it themselves.
+permissions:
+  contents: read
+
 jobs:
   validate-tag:
     runs-on: ubuntu-latest
@@ -37,6 +42,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: [validate-tag]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      # The SignPath action downloads the just-uploaded artifact through the
+      # Actions API, which the contents scope alone does not cover.
+      actions: read
     strategy:
       fail-fast: false
       matrix:
