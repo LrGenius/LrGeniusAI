@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::sync::{Mutex, Notify};
 
 use lrg_common::{config, jobs::JobRegistry, logging};
-use lrg_ml::bioclip::BioclipModel;
-use lrg_ml::faces::FaceModel;
-use lrg_ml::siglip::SiglipModel;
+use lrg_ml::bioclip::{BioclipModel, BioclipModelPaths};
+use lrg_ml::faces::{FaceModel, FaceModelPaths};
+use lrg_ml::siglip::{ModelPaths as SiglipModelPaths, SiglipModel};
 use lrg_store::{migrate, Store};
 
 use crate::llm_engine::LlmEngineSlot;
@@ -80,17 +80,55 @@ pub struct AppState {
     pub species_links: Arc<crate::species_links::LinkResolver>,
 }
 
+/// Where the three ONNX model families live on disk.
+///
+/// Bundled into one value so an `AppState` can be built with the model
+/// locations *supplied* rather than resolved from the environment.
+///
+/// That distinction is what lets a caller guarantee no model is loadable.
+/// [`AppState::new`] resolves to the shared `~/.cache/lrgenius/models`
+/// directory, so on any machine that has actually downloaded the assets a
+/// route that touches a model loads one for real — which is the correct
+/// behaviour for the server and the wrong one for a test asserting response
+/// shapes. See `tests/contract.rs` for the failure that motivated this.
+pub struct ModelAssetPaths {
+    pub siglip: SiglipModelPaths,
+    pub face: FaceModelPaths,
+    pub bioclip: BioclipModelPaths,
+}
+
+impl ModelAssetPaths {
+    /// The env-var-then-shared-cache resolution the server itself uses.
+    pub fn from_env() -> Self {
+        Self {
+            siglip: lrg_ml::model_paths::resolve(),
+            face: lrg_ml::model_paths::resolve_face(),
+            bioclip: lrg_ml::model_paths::resolve_bioclip(),
+        }
+    }
+}
+
 impl AppState {
     pub fn new(initial_db_path: Option<PathBuf>, debug: bool) -> Self {
+        Self::with_model_paths(initial_db_path, debug, ModelAssetPaths::from_env())
+    }
+
+    /// [`AppState::new`] with the ML model locations given explicitly instead
+    /// of resolved from the environment.
+    pub fn with_model_paths(
+        initial_db_path: Option<PathBuf>,
+        debug: bool,
+        models: ModelAssetPaths,
+    ) -> Self {
         Self {
             db_path: RwLock::new(initial_db_path),
             store: RwLock::new(None),
             bind_lock: Mutex::new(()),
             shutdown: Notify::new(),
             debug,
-            siglip: Arc::new(SiglipModel::new(lrg_ml::model_paths::resolve())),
-            face: Arc::new(FaceModel::new(lrg_ml::model_paths::resolve_face())),
-            bioclip: Arc::new(BioclipModel::new(lrg_ml::model_paths::resolve_bioclip())),
+            siglip: Arc::new(SiglipModel::new(models.siglip)),
+            face: Arc::new(FaceModel::new(models.face)),
+            bioclip: Arc::new(BioclipModel::new(models.bioclip)),
             jobs: Arc::new(JobRegistry::new()),
             ui_bridge: Arc::new(UiBridge::new()),
             clip_iqa: Arc::new(StdMutex::new(HashMap::new())),

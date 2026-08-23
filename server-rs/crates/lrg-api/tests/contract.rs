@@ -1,7 +1,7 @@
 //! API contract tests for the M1 surface, asserting the exact response
 //! shapes the Lightroom plugin (APISearchIndex.lua) depends on.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::{
     body::Body,
@@ -10,14 +10,61 @@ use axum::{
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use lrg_api::state::AppState;
+use lrg_api::state::{AppState, ModelAssetPaths};
 
 fn app(state: Arc<AppState>) -> axum::Router {
     lrg_api::build_router(state)
 }
 
+/// An empty directory, kept for the lifetime of the test process, that every
+/// `AppState` here resolves its model files out of.
+///
+/// These are *contract* tests: they assert the response shapes
+/// `APISearchIndex.lua` parses, and every one of them was written against a
+/// server with no models on disk —
+/// `cull_warning_tracks_stored_embeddings_not_model_residency` says so in as
+/// many words ("SigLIP definitely not resident in this test process").
+/// `AppState::new` resolves to the shared `~/.cache/lrgenius/models`
+/// directory, so that comment only held where the assets happened to be
+/// absent, and the suite quietly became a different suite where they were
+/// present: four cull tests seed non-zero embeddings, `/v1/cull/grade` scores
+/// them through CLIP-IQA, and — because each test builds its own `AppState`,
+/// where the server has exactly one — each loads its *own* private copy of
+/// SigLIP2's 818 MB image and 1.4 GB text towers. Four run at once under the
+/// default harness parallelism, for 13.7 GB of resident model. That is what
+/// OOM-killed the nightly `golden-tests-full` runner three nights running,
+/// and it would do the same to any developer who had run the plugin's model
+/// download before `cargo test`.
+///
+/// Pointing all three families at an empty directory makes the suite
+/// hermetic: same assertions, same cost, whether or not the assets are on the
+/// machine. Numerical coverage of the real weights belongs to the golden
+/// tests in `lrg-ml`, which is where `LRG_REQUIRE_GOLDENS` enforces it.
+static NO_MODELS: LazyLock<tempfile::TempDir> =
+    LazyLock::new(|| tempfile::tempdir().expect("temp dir for the empty model directory"));
+
+fn models_absent() -> ModelAssetPaths {
+    let dir = NO_MODELS.path();
+    ModelAssetPaths {
+        siglip: lrg_ml::siglip::ModelPaths {
+            image_onnx: dir.join("siglip2_image.onnx"),
+            text_onnx: dir.join("siglip2_text.onnx"),
+            tokenizer_json: dir.join("tokenizer.json"),
+        },
+        face: lrg_ml::faces::FaceModelPaths {
+            det_onnx: dir.join("yunet_face_detection.onnx"),
+            rec_onnx: dir.join("facenet_vggface2.onnx"),
+        },
+        bioclip: lrg_ml::bioclip::BioclipModelPaths {
+            image_onnx: dir.join("bioclip2_image.onnx"),
+            taxa_bin: dir.join("bioclip2_taxa.bin"),
+            taxa_json: dir.join("bioclip2_taxa.json"),
+        },
+    }
+}
+
 fn fresh_app() -> (axum::Router, Arc<AppState>) {
-    let state = Arc::new(AppState::new(None, false));
+    let state = Arc::new(AppState::with_model_paths(None, false, models_absent()));
     (app(state.clone()), state)
 }
 
