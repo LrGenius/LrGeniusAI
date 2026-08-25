@@ -11,7 +11,7 @@ tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 ndarray = "0.17"
 thiserror = "2"
 log.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
