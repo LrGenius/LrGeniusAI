@@ -12,7 +12,7 @@ serde_json.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio.workspace = true
 regex.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 thiserror = "2"
 gcp_auth = "0.12"
