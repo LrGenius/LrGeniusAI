@@ -39,7 +39,7 @@ jobs:
       # rather than quietly going back to skipping.
       - name: Cache face model assets
         id: face-assets
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/lrgenius/models
           key: face-assets-v1
