@@ -77,9 +77,15 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `exposure_bias` | float | Exposure compensation in EV. Stored, and the decisive signal for culling's bracket detection. Omit when the camera did not record it; never default it to 0 |
 | `is_raw` | bool | Whether the original is raw. Stored on the photo so later work (style training above all) can keep raw and rendered originals apart. Omit when unknown |
 | `extra_context` | object | Optional context hints (folder, date, GPS, keywords) |
+| `existing_keywords` | string[] | The photo's keywords, *without* face tags. Only reaches the prompt when `submit_keywords` is set |
+| `existing_face_tags` | string[] | Names Lightroom's face recognition put on the photo. Sent apart from `existing_keywords` and labelled as people in the prompt, so a person's name is not read as a place (issue #315). Same `submit_keywords` switch; omit it and the request behaves exactly as before the field existed |
 
-`/v1/index/photos/by-path` carries `exposure_bias` and `is_raw` per image inside the
-`images` array instead, since both are properties of the individual photo.
+`/v1/index/photos/by-path` carries `exposure_bias`, `is_raw`, `existing_keywords` and
+`existing_face_tags` per image inside the `images` array instead, since all four are
+properties of the individual photo.
+
+`/v1/edit/recipe` and `/v1/edit/recipe/base64` accept the same
+`existing_keywords`/`existing_face_tags` pair, under the same switch.
 
 **Response:** `{status, success_count, failure_count, error_messages, warnings, results}`.
 

@@ -80,6 +80,14 @@ _G.LrStringUtils.trimWhitespace = function(s)
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- LrTasks.pcall is the SDK's yield-safe pcall, and the plugin uses it wherever
+-- a catalog call might fail. The no-op stub made every such call look like a
+-- failure, so give it the real semantics: outside a Lightroom task the only
+-- difference from Lua's pcall is that yielding is impossible anyway.
+_G.LrTasks.pcall = function(fn, ...)
+	return pcall(fn, ...)
+end
+
 -- Init.lua requires Util before ErrorHandler and APISearchIndex, so at runtime
 -- the `Util` global those modules call into is always in place. Specs require
 -- modules one at a time, in whatever order busted loads the files, so establish

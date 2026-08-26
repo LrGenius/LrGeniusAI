@@ -44,6 +44,9 @@ pub(crate) struct EditOptions {
     submit_keywords: bool,
     submit_folder_names: bool,
     existing_keywords: Option<Vec<String>>,
+    /// Face tags, kept apart from `existing_keywords` — see
+    /// [`lrg_providers::types::MetadataGenerationRequest::existing_face_tags`].
+    existing_face_tags: Option<Vec<String>>,
     folder_names: Option<String>,
     user_context: Option<String>,
     date_time: Option<String>,
@@ -92,6 +95,7 @@ impl Default for EditOptions {
             submit_keywords: false,
             submit_folder_names: false,
             existing_keywords: None,
+            existing_face_tags: None,
             folder_names: None,
             user_context: None,
             date_time: None,
@@ -129,14 +133,18 @@ fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> boo
 
 pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditOptions {
     let defaults = EditOptions::default();
-    let existing_keywords = fields.get("existing_keywords").map(|raw| {
-        serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| {
-            raw.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
+    let parse_terms = |key: &str| {
+        fields.get(key).map(|raw| {
+            serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
         })
-    });
+    };
+    let existing_keywords = parse_terms("existing_keywords");
+    let existing_face_tags = parse_terms("existing_face_tags");
     let composition_mode = fields
         .get("composition_mode")
         .map(|s| s.to_lowercase())
@@ -162,6 +170,7 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         submit_keywords: bool_field(fields, "submit_keywords", false),
         submit_folder_names: bool_field(fields, "submit_folder_names", false),
         existing_keywords,
+        existing_face_tags,
         folder_names: fields.get("folder_names").cloned(),
         user_context: fields.get("user_context").cloned(),
         date_time: fields.get("date_time").cloned(),
@@ -201,20 +210,24 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
     let get_bool =
         |key: &str, default: bool| data.get(key).and_then(Value::as_bool).unwrap_or(default);
 
-    let existing_keywords = data.get("existing_keywords").and_then(|v| match v {
-        Value::Array(arr) => Some(
-            arr.iter()
-                .filter_map(|x| x.as_str().map(str::to_string))
-                .collect(),
-        ),
-        Value::String(s) => Some(
-            s.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-        ),
-        _ => None,
-    });
+    let json_terms = |key: &str| {
+        data.get(key).and_then(|v| match v {
+            Value::Array(arr) => Some(
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect(),
+            ),
+            Value::String(s) => Some(
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            ),
+            _ => None,
+        })
+    };
+    let existing_keywords = json_terms("existing_keywords");
+    let existing_face_tags = json_terms("existing_face_tags");
     let composition_mode = get_str("composition_mode")
         .map(|s| s.to_lowercase())
         .filter(|s| matches!(s.as_str(), "none" | "subtle" | "aggressive"))
@@ -243,6 +256,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         submit_keywords: get_bool("submit_keywords", false),
         submit_folder_names: get_bool("submit_folder_names", false),
         existing_keywords,
+        existing_face_tags,
         folder_names: get_str("folder_names"),
         user_context: get_str("user_context"),
         date_time: get_str("date_time"),
@@ -473,6 +487,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     request.submit_keywords = options.submit_keywords;
     request.submit_folder_names = options.submit_folder_names;
     request.existing_keywords = options.existing_keywords.clone();
+    request.existing_face_tags = options.existing_face_tags.clone();
     request.folder_names = options.folder_names.clone();
     request.user_context = options.user_context.clone();
     request.date_time = options.date_time.clone();

@@ -220,7 +220,10 @@ Prompt templates, plus a free-text custom prompt appended to the built-in one.
 
 Extra information sent alongside the photo to improve accuracy:
 
-- **Existing Keywords**
+- **Existing Keywords** — the photo's keywords go into the prompt. Names that
+  Lightroom's face recognition put on the photo are sent separately from the
+  rest, and labelled as the people in the picture, so a person called *Ivo* is
+  no longer read as scenery and turned into "Ivo Beach".
 - **Folder Names**
 - **Location (looked up from the photo's GPS coordinates)** — on by default.
   The backend turns the photo's own EXIF position into a place name and puts

@@ -14,6 +14,17 @@ use serde_json::{json, Map, Value};
 use crate::routes::index_upload::{process_batch, ImageSource, PhotoOverrides};
 use crate::state::AppState;
 
+/// Reads one `images[]` key as an array of strings; `None` when it is absent
+/// or not an array.
+fn string_array(item: &Value, key: &str) -> Option<Vec<String>> {
+    item.get(key).and_then(Value::as_array).map(|a| {
+        a.iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    })
+}
+
 /// Pulls the per-photo context out of one `images[]` entry.
 ///
 /// A grouped request carries several photos whose capture time, keywords and
@@ -28,15 +39,8 @@ fn image_overrides(item: &Value) -> PhotoOverrides {
             .get("date_time")
             .and_then(Value::as_str)
             .map(str::to_string),
-        existing_keywords: item
-            .get("existing_keywords")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            }),
+        existing_keywords: string_array(item, "existing_keywords"),
+        existing_face_tags: string_array(item, "existing_face_tags"),
         folder_names: item
             .get("folder_names")
             .and_then(Value::as_str)
@@ -160,4 +164,34 @@ async fn index_by_reference(
         false,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Face tags travel per photo in their own key. Folding them back into
+    /// `existing_keywords` would put a person's name back among the scenery,
+    /// which is what made a model write "the rocky shore of Ivo Beach"
+    /// (issue #315).
+    #[test]
+    fn per_image_face_tags_are_read_separately_from_keywords() {
+        let overrides = image_overrides(&json!({
+            "existing_keywords": ["beach", "sunset"],
+            "existing_face_tags": ["Ivo"],
+        }));
+        assert_eq!(
+            overrides.existing_keywords,
+            Some(vec!["beach".to_string(), "sunset".to_string()])
+        );
+        assert_eq!(overrides.existing_face_tags, Some(vec!["Ivo".to_string()]));
+    }
+
+    /// An older plugin sends no face-tag key at all; that must stay a
+    /// keywords-only request rather than becoming an empty people list.
+    #[test]
+    fn absent_face_tags_stay_none() {
+        let overrides = image_overrides(&json!({ "existing_keywords": ["beach"] }));
+        assert_eq!(overrides.existing_face_tags, None);
+    }
 }

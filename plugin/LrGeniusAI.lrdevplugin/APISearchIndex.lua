@@ -809,6 +809,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = options.user_context,
 		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
+		existing_face_tags = options.existing_face_tags and JSON:encode(options.existing_face_tags) or nil,
 		folder_names = options.folder_names,
 		prompt = options.prompt,
 		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
@@ -905,6 +906,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			date_time = po.date_time,
 			date_time_unix = po.date_time_unix,
 			existing_keywords = po.existing_keywords,
+			existing_face_tags = po.existing_face_tags,
 			folder_names = po.folder_names,
 			exposure_bias = po.exposure_bias,
 			is_raw = po.is_raw,
@@ -1011,7 +1013,8 @@ end
 --   - generate_alt_text boolean: Generate alt text (default: false)
 --   - submit_gps boolean: Include the photo's location in the AI context (default: true)
 --   - submit_keywords boolean: Submit existing keywords (default: false)
---   - existing_keywords table: Array of existing keywords
+--   - existing_keywords table: Array of existing keywords (no face tags)
+--   - existing_face_tags table: Array of names Lightroom face recognition tagged
 --   - submit_folder_names boolean: Submit folder names (default: false)
 --   - folder_names string: Folder path
 --   - user_context string: Additional context for the photo
@@ -1249,6 +1252,9 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
 	end
+	if options.existing_face_tags then
+		table.insert(mimeChunks, { name = "existing_face_tags", value = JSON:encode(options.existing_face_tags) })
+	end
 	if options.folder_names then
 		table.insert(mimeChunks, { name = "folder_names", value = options.folder_names })
 	end
@@ -1342,6 +1348,9 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	end
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
+	end
+	if options.existing_face_tags then
+		table.insert(mimeChunks, { name = "existing_face_tags", value = JSON:encode(options.existing_face_tags) })
 	end
 	if options.folder_names then
 		table.insert(mimeChunks, { name = "folder_names", value = options.folder_names })
@@ -2062,10 +2071,21 @@ local function buildPhotoOptions(photo, photoId, options)
 	if options.submit_keywords then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
+			local keywordList
 			if type(keywords) == "string" then
-				photoOptions.existing_keywords = Util.string_split(keywords, ",")
+				keywordList = Util.string_split(keywords, ",")
 			else
-				photoOptions.existing_keywords = keywords
+				keywordList = keywords
+			end
+			-- Face tags travel in their own field. Lightroom flattens a named
+			-- face into the same comma-separated list as every other keyword,
+			-- and a model handed "Ivo" between "beach" and "sunset" reads it as
+			-- scenery: "the rocky shore of Ivo Beach" (issue #315). Splitting
+			-- them here lets the prompt say which names are people.
+			local plainKeywords, faceTags = Util.partitionPersonKeywords(keywordList, Util.getPersonKeywordNames(photo))
+			photoOptions.existing_keywords = plainKeywords
+			if #faceTags > 0 then
+				photoOptions.existing_face_tags = faceTags
 			end
 		end
 	end
@@ -5052,6 +5072,9 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	end
 	if options.existing_keywords then
 		table.insert(mimeChunks, { name = "existing_keywords", value = JSON:encode(options.existing_keywords) })
+	end
+	if options.existing_face_tags then
+		table.insert(mimeChunks, { name = "existing_face_tags", value = JSON:encode(options.existing_face_tags) })
 	end
 
 	if filepath and LrFileUtils.exists(filepath) then

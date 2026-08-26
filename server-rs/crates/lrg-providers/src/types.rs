@@ -31,6 +31,15 @@ pub struct MetadataGenerationRequest {
     pub submit_folder_names: bool,
 
     pub existing_keywords: Option<Vec<String>>,
+    /// Names Lightroom's face recognition put on the photo, kept apart from
+    /// `existing_keywords` so the prompt can say they are people.
+    ///
+    /// Lightroom flattens a named face into the same keyword list as
+    /// everything else, and a model reading "Ivo" between "beach" and "sunset"
+    /// takes it for scenery — issue #315's "the rocky shore of Ivo Beach".
+    /// Same switch as `existing_keywords` (`submit_keywords`): this splits the
+    /// context that was already being sent, it does not add more.
+    pub existing_face_tags: Option<Vec<String>>,
     pub location_data: Option<LocationTags>,
     pub folder_names: Option<String>,
     pub user_context: Option<String>,
@@ -110,6 +119,9 @@ pub struct EditGenerationRequest {
     pub submit_folder_names: bool,
 
     pub existing_keywords: Option<Vec<String>>,
+    /// Face tags, kept apart from `existing_keywords` — see
+    /// [`MetadataGenerationRequest::existing_face_tags`].
+    pub existing_face_tags: Option<Vec<String>>,
     pub location_data: Option<LocationTags>,
     pub folder_names: Option<String>,
     pub user_context: Option<String>,
@@ -162,6 +174,7 @@ impl EditGenerationRequest {
             submit_keywords: false,
             submit_folder_names: false,
             existing_keywords: None,
+            existing_face_tags: None,
             location_data: None,
             folder_names: None,
             user_context: None,

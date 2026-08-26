@@ -244,6 +244,142 @@ function Util.isRawPhoto(photo)
 end
 
 ---
+-- Names of the people Lightroom's face recognition has tagged on a photo.
+--
+-- Lightroom stores a named face as an ordinary keyword whose `keywordType`
+-- attribute is "person", so once keywords have been flattened to plain strings
+-- a person's name is indistinguishable from a place or an object. That is the
+-- bug this exists to fix: handed "Ivo" in the same breath as "beach" and
+-- "sunset", a model happily writes "the rocky shore of Ivo Beach" (issue
+-- #315). Reading the keyword objects is the only way to tell the two apart.
+--
+-- Defensive throughout: `getAttributes` is not implemented by every keyword
+-- object we may be handed, and a photo whose keywords cannot be read has to
+-- degrade to "no face tags known" -- which is exactly the behaviour the
+-- plug-in had before this existed -- rather than fail the indexing run.
+--
+-- @param photo LrPhoto The photo object.
+-- @return table Array of person names (and their synonyms), in catalog order,
+--         deduplicated.
+--
+function Util.getPersonKeywordNames(photo)
+	if photo == nil then
+		return {}
+	end
+	local keywords = safeGetRawMetadata(photo, "keywords")
+	if type(keywords) ~= "table" then
+		return {}
+	end
+
+	local names = {}
+	local seen = {}
+	local function remember(value)
+		if type(value) ~= "string" then
+			return
+		end
+		local cleaned = trim(value)
+		if cleaned ~= "" and not seen[cleaned:lower()] then
+			seen[cleaned:lower()] = true
+			table.insert(names, cleaned)
+		end
+	end
+
+	for _, keyword in ipairs(keywords) do
+		local ok, attributes = LrTasks.pcall(function()
+			return keyword:getAttributes()
+		end)
+		-- Compared case-insensitively: the SDK documents the value as
+		-- "person", and a keyword written by another tool is not worth losing
+		-- over its capitalisation.
+		local keywordType = ok and type(attributes) == "table" and attributes.keywordType or nil
+		if type(keywordType) == "string" and keywordType:lower() == "person" then
+			local okName, name = LrTasks.pcall(function()
+				return keyword:getName()
+			end)
+			if okName then
+				remember(name)
+			end
+			-- A person keyword's synonyms are more names for the same person,
+			-- and Lightroom writes them into the exported keyword list beside
+			-- the name itself. Left out of this list they would stay in the
+			-- plain keywords and read as scenery again.
+			if type(attributes.synonyms) == "table" then
+				for _, synonym in ipairs(attributes.synonyms) do
+					remember(synonym)
+				end
+			end
+		end
+	end
+	return names
+end
+
+---
+-- Splits a flattened keyword list into ordinary keywords and face tags.
+--
+-- `keywordTagsForExport` flattens person keywords and the rest of the
+-- catalog's keywords into one comma-separated list, which is precisely what
+-- makes a person's name readable as scenery. Matching is case-insensitive and
+-- on the whole name, so a person called "Ivo" pulls "Ivo" out of the keywords
+-- and leaves "Ivory Coast" alone.
+--
+-- Only names that actually occur in `keywords` are reported as face tags: a
+-- person keyword excluded from export was never sent to the model before, and
+-- this change is about labelling the context correctly, not about widening it.
+--
+-- @param keywords table Array of keyword strings (may be nil).
+-- @param personNames table Array of person names from Util.getPersonKeywordNames (may be nil).
+-- @return table Keywords with every person name removed.
+-- @return table The person names found among those keywords, in catalog order.
+--
+function Util.partitionPersonKeywords(keywords, personNames)
+	local plain = {}
+	local faces = {}
+
+	local personByLower = {}
+	if type(personNames) == "table" then
+		for _, name in ipairs(personNames) do
+			if type(name) == "string" then
+				local cleaned = trim(name)
+				if cleaned ~= "" then
+					personByLower[cleaned:lower()] = cleaned
+				end
+			end
+		end
+	end
+
+	local matched = {}
+	if type(keywords) == "table" then
+		for _, keyword in ipairs(keywords) do
+			if type(keyword) == "string" then
+				local cleaned = trim(keyword)
+				if cleaned ~= "" then
+					local person = personByLower[cleaned:lower()]
+					if person then
+						matched[person] = true
+					else
+						table.insert(plain, cleaned)
+					end
+				end
+			end
+		end
+	end
+
+	if type(personNames) == "table" then
+		for _, name in ipairs(personNames) do
+			if type(name) == "string" then
+				local cleaned = trim(name)
+				if matched[cleaned] then
+					matched[cleaned] = nil
+					table.insert(faces, cleaned)
+				end
+			end
+		end
+	end
+
+	return plain, faces
+end
+
+---
 -- Extracts standardized EXIF metadata from a photo for use by the backend.
 -- Handles robustness for newer RAW formats (like .CR3) where raw metadata might be elusive.
 -- @param photo LrPhoto The photo object.
