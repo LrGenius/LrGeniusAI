@@ -755,6 +755,7 @@ pub(crate) async fn process_batch(
         let msg = cull_signals
             .first()
             .and_then(|r| r.as_ref().err().cloned())
+            .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "cull metric pass produced no result".to_string());
         cull_signals = triplets.iter().map(|_| Err(msg.clone())).collect();
     }
@@ -1317,6 +1318,7 @@ async fn finish_one(
         if !response.success {
             return Err(response
                 .error
+                .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "Unknown metadata generation error".to_string()));
         }
         // The provider says `success: true` even when it dropped a field the
