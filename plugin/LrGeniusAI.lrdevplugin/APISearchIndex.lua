@@ -191,6 +191,39 @@ local function httpStatusForLog(status, hdrs)
 	return "unknown"
 end
 
+-- Flattens whatever LrHttp handed back as `hdrs` into a readable string.
+--
+-- On a transport-level failure LrHttp reports no status and puts the reason in
+-- a nested sub-table here. _request already unpacked that; _requestMultipart
+-- did not, so every dropped or timed-out upload reached the user as the bare
+-- "API request failed. HTTP status: unknown" with the cause discarded.
+local function describeHeaders(hdrs)
+	if type(hdrs) == "string" then
+		return hdrs
+	end
+	if type(hdrs) ~= "table" then
+		return nil
+	end
+	local parts = {}
+	for k, v in pairs(hdrs) do
+		local vStr
+		if type(v) == "table" then
+			local inner = {}
+			for ik, iv in pairs(v) do
+				table.insert(inner, tostring(ik) .. "=" .. tostring(iv))
+			end
+			vStr = #inner > 0 and ("{" .. table.concat(inner, ", ") .. "}") or "{}"
+		else
+			vStr = tostring(v)
+		end
+		table.insert(parts, tostring(k) .. "=" .. vStr)
+	end
+	if #parts == 0 then
+		return nil
+	end
+	return table.concat(parts, ", ")
+end
+
 local function sanitizeForLog(s)
 	if type(s) ~= "string" then
 		return tostring(s)
@@ -806,7 +839,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 
 	if not response then
 		log:error("Failed to analyze/index photo (by reference): " .. tostring(err))
-		return false, err or "Unknown error"
+		return false, Util.errorText(err, "The backend did not respond, and gave no reason.")
 	end
 	if response.status == "processed" then
 		local success_count = response.success_count or 0
@@ -819,9 +852,9 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 			errMsg = table.concat(response.error_messages, " | ")
 		end
 		log:error("Photo processing failed (by reference): " .. tostring(filePath))
-		return false, errMsg or "Processing failed"
+		return false, Util.errorText(errMsg, "Processing failed, and the backend reported no reason.")
 	end
-	if response.error then
+	if not Util.nilOrEmpty(response.error) then
 		log:error("Backend error (by reference): " .. tostring(response.error))
 		return false, response.error
 	end
@@ -1105,7 +1138,7 @@ end
 function SearchIndexAPI.interpretIndexResponse(response, err, filename)
 	if not response then
 		log:error("Failed to analyze/index photo: " .. tostring(err))
-		return false, err or "Unknown error"
+		return false, Util.errorText(err, "The backend did not respond, and gave no reason.")
 	end
 	if type(response) ~= "table" then
 		log:error("Index response has unexpected type: " .. tostring(type(response)))
@@ -1120,7 +1153,7 @@ function SearchIndexAPI.interpretIndexResponse(response, err, filename)
 			return true, response
 		else
 			log:error("Photo processing failed: " .. tostring(filename))
-			return false, response.error or "Processing failed"
+			return false, Util.errorText(response.error, "Processing failed, and the backend reported no reason.")
 		end
 	else
 		log:error("Unexpected response status: " .. tostring(response.status))
@@ -2084,6 +2117,7 @@ end
 -- @return number processed Number of photos processed.
 -- @return number failed Number of photos that failed.
 -- @return table responses Array of response data from the server for each photo.
+-- @return string|nil combinedError Condensed failure messages, nil when nothing failed.
 -- @return string|nil warnings Combined warnings from the server.
 --
 function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressScope, options, closeProgressScope)
@@ -2093,7 +2127,15 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	end
 
 	if not SearchIndexAPI.pingServer() then
-		return "allfailed", numPhotos, numPhotos, {}
+		-- The fifth value is combinedError. Leaving it off is what produced a
+		-- "Task Failed" dialog with no cause in it at all: the caller has
+		-- nothing else to report from.
+		return "allfailed",
+			numPhotos,
+			numPhotos,
+			{},
+			"The backend server is not responding. Open Plug-in Manager > LrGeniusAI and use "
+				.. "Restart Backend, or check that nothing else is using port 19819."
 	end
 
 	options = options or {}
@@ -2504,13 +2546,14 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 							end
 						else
 							stats.failed = stats.failed + 1
-							table.insert(errorMessages, tostring(indexResponse or "Unknown"))
-							log:error(
-								"Failed to analyze/index photo: "
-									.. filename
-									.. " Error: "
-									.. (indexResponse or "Unknown")
+							-- "Unknown" told the user nothing they could act on, and an
+							-- empty `indexResponse` never even reached it: "" is truthy.
+							local reason = Util.errorText(
+								indexResponse,
+								"The backend rejected this photo without saying why - see lrgenius-server.log."
 							)
+							table.insert(errorMessages, reason)
+							log:error("Failed to analyze/index photo: " .. filename .. " Error: " .. reason)
 						end
 					else
 						stats.failed = stats.failed + 1
@@ -3305,10 +3348,17 @@ _requestMultipart = function(url, mimeChunks, timeout)
 			local ok, decoded_err = LrTasks.pcall(function()
 				return JSON:decode(result)
 			end)
-			if ok and type(decoded_err) == "table" and decoded_err.error then
+			if ok and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
 				err_msg = err_msg .. " - " .. decoded_err.error
 			else
 				err_msg = err_msg .. " Response: " .. tostring(result)
+			end
+		elseif type(status) ~= "number" then
+			-- No body and no status: the request never completed. Whatever
+			-- LrHttp knows about why is in `hdrs`, and it is all the user gets.
+			local detail = describeHeaders(hdrs)
+			if detail then
+				err_msg = err_msg .. " - " .. detail
 			end
 		end
 		log:error(err_msg)
@@ -3386,8 +3436,11 @@ _request = function(method, url, body, timeout, options)
 		if result and #result > 0 then
 			-- log:trace("_request: decoding JSON result of length " .. #result)
 			local ok2, decoded = LrTasks.pcall(JSON.decode, JSON, result)
-			if ok2 then
+			if ok2 and decoded ~= nil then
 				return decoded
+			elseif ok2 then
+				log:error("_request: server returned a null JSON body | URL: " .. tostring(url))
+				return nil, "The backend returned an empty JSON body."
 			else
 				local snippet = sanitizeForLog(tostring(result):sub(1, 1000))
 				log:error(
@@ -3411,31 +3464,17 @@ _request = function(method, url, body, timeout, options)
 			err_msg = "API request failed (no response). URL: " .. urlFixed
 			if type(hdrs) == "string" and hdrs ~= "" then
 				err_msg = err_msg .. " - error: " .. hdrs
-			elseif type(hdrs) == "table" then
-				local hdrsInfo = {}
-				for k, v in pairs(hdrs) do
-					local vStr
-					if type(v) == "table" then
-						-- LrHttp sometimes nests the error as a sub-table; flatten it
-						local inner = {}
-						for ik, iv in pairs(v) do
-							table.insert(inner, tostring(ik) .. "=" .. tostring(iv))
-						end
-						vStr = #inner > 0 and ("{" .. table.concat(inner, ", ") .. "}") or "{}"
-					else
-						vStr = tostring(v)
-					end
-					table.insert(hdrsInfo, tostring(k) .. "=" .. vStr)
-				end
-				if #hdrsInfo > 0 then
-					err_msg = err_msg .. " - hdrs: " .. table.concat(hdrsInfo, ", ")
+			else
+				local detail = describeHeaders(hdrs)
+				if detail then
+					err_msg = err_msg .. " - hdrs: " .. detail
 				end
 			end
 		else
 			err_msg = "API request failed. HTTP status: " .. statusStr
 			if result and #result > 0 then
 				local ok2, decoded_err = LrTasks.pcall(JSON.decode, JSON, result)
-				if ok2 and type(decoded_err) == "table" and decoded_err.error then
+				if ok2 and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
 					err_msg = err_msg .. " - " .. decoded_err.error
 				else
 					err_msg = err_msg .. " Response: " .. sanitizeForLog(tostring(result):sub(1, 400))

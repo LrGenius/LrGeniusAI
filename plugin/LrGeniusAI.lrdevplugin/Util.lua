@@ -106,6 +106,32 @@ function Util.nilOrEmpty(val)
 end
 
 ---
+-- The text to show the user for an error value, or `fallback` when the value
+-- carries no text at all.
+--
+-- Callers used to write `err or "Something failed"`, which looks like it
+-- guarantees a message but does not: the empty string is truthy in Lua, so a
+-- backend answering `"error": ""` sailed straight through every one of those
+-- guards and produced a dialog with a blank line where the reason belongs.
+-- Anything that is not a non-blank string resolves to the fallback instead;
+-- a table would otherwise reach the user as "table: 0x7f...".
+--
+-- @param value any        The error value, from a response or a pcall.
+-- @param fallback string  Optional; what to say when `value` says nothing.
+-- @return string
+---
+function Util.errorText(value, fallback)
+	fallback = fallback or "No further details were reported."
+	if type(value) == "number" then
+		return tostring(value)
+	end
+	if type(value) ~= "string" or Util.nilOrEmpty(value) then
+		return fallback
+	end
+	return value
+end
+
+---
 -- Returns a stable unique identifier for the given catalog, for cross-catalog backend tracking.
 -- Stored in catalog plugin properties; generated once (MD5 of path + timestamp) and reused.
 -- @param catalog LrCatalog|nil Optional; defaults to LrApplication.activeCatalog().

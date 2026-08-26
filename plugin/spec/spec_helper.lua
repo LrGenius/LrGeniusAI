@@ -79,3 +79,9 @@ _G.LrStringUtils.trimWhitespace = function(s)
 	end
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
+
+-- Init.lua requires Util before ErrorHandler and APISearchIndex, so at runtime
+-- the `Util` global those modules call into is always in place. Specs require
+-- modules one at a time, in whatever order busted loads the files, so establish
+-- it here instead of making each spec remember to.
+require("Util")

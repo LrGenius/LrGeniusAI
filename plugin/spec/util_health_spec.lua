@@ -12,6 +12,7 @@
 -- Run from the repo root with:  busted
 
 local SearchIndexAPI = require("APISearchIndex")
+local Util = require("Util")
 
 --- A health table as SearchIndexAPI.getDetailedHealth() returns it, with the
 --- named providers switched on.
@@ -58,5 +59,37 @@ describe("SearchIndexAPI.hasAnyLlmProvider", function()
 	it("treats a missing or malformed health table as no provider", function()
 		assert.is_false(SearchIndexAPI.hasAnyLlmProvider(nil))
 		assert.is_false(SearchIndexAPI.hasAnyLlmProvider("healthy"))
+	end)
+end)
+
+describe("Util.errorText", function()
+	it("passes a real message through unchanged", function()
+		assert.are.equal("Model failed to load", Util.errorText("Model failed to load", "fallback"))
+	end)
+
+	it("falls back when the value is an empty or blank string", function()
+		-- The bug this exists for: `err or "fallback"` never fires for "",
+		-- because the empty string is truthy in Lua. The user got a dialog with
+		-- a blank line where the reason should have been.
+		assert.are.equal("fallback", Util.errorText("", "fallback"))
+		assert.are.equal("fallback", Util.errorText("   ", "fallback"))
+		assert.are.equal("fallback", Util.errorText("\t\n", "fallback"))
+	end)
+
+	it("falls back when there is no value at all", function()
+		assert.are.equal("fallback", Util.errorText(nil, "fallback"))
+	end)
+
+	it("falls back rather than rendering a table as 'table: 0x...'", function()
+		assert.are.equal("fallback", Util.errorText({ error = "nested" }, "fallback"))
+	end)
+
+	it("keeps a numeric error value, which still tells the user something", function()
+		assert.are.equal("500", Util.errorText(500, "fallback"))
+	end)
+
+	it("has a usable fallback of its own when the caller gives none", function()
+		local text = Util.errorText(nil)
+		assert.is_true(type(text) == "string" and #text > 0)
 	end)
 end)

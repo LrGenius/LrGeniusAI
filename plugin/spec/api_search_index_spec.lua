@@ -42,7 +42,27 @@ describe("SearchIndexAPI.interpretIndexResponse", function()
 	it("falls back to a generic message when a failure carries no error text", function()
 		local ok, err = SearchIndexAPI.interpretIndexResponse({ status = "processed", success_count = 0 }, nil, "a.jpg")
 		assert.is_false(ok)
-		assert.are.equal("Processing failed", err)
+		assert.are.equal("Processing failed, and the backend reported no reason.", err)
+	end)
+
+	it("falls back when the backend sends an empty error string", function()
+		-- "" is truthy in Lua, so `response.error or "..."` handed the empty
+		-- string straight through and the user got a dialog with a blank line
+		-- where the reason belongs (issue #313).
+		local ok, err =
+			SearchIndexAPI.interpretIndexResponse({ status = "processed", success_count = 0, error = "" }, nil, "a.jpg")
+		assert.is_false(ok)
+		assert.are.equal("Processing failed, and the backend reported no reason.", err)
+	end)
+
+	it("reports the backend's error when it actually sent one", function()
+		local ok, err = SearchIndexAPI.interpretIndexResponse(
+			{ status = "processed", success_count = 0, error = "model not loaded" },
+			nil,
+			"a.jpg"
+		)
+		assert.is_false(ok)
+		assert.are.equal("model not loaded", err)
 	end)
 
 	it("treats a missing success_count as zero rather than as success", function()
@@ -59,7 +79,13 @@ describe("SearchIndexAPI.interpretIndexResponse", function()
 	it("still fails when there is neither a response nor an error", function()
 		local ok, err = SearchIndexAPI.interpretIndexResponse(nil, nil, "a.jpg")
 		assert.is_false(ok)
-		assert.are.equal("Unknown error", err)
+		assert.are.equal("The backend did not respond, and gave no reason.", err)
+	end)
+
+	it("still fails, with a reason, when the transport error is an empty string", function()
+		local ok, err = SearchIndexAPI.interpretIndexResponse(nil, "", "a.jpg")
+		assert.is_false(ok)
+		assert.are.equal("The backend did not respond, and gave no reason.", err)
 	end)
 
 	it("rejects a non-table body instead of indexing into it", function()

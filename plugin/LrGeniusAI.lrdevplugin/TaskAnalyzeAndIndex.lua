@@ -1236,7 +1236,7 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
 			)
 		elseif status == "allfailed" then
-			if combinedError then
+			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
 					combinedError
@@ -1249,7 +1249,7 @@ LrTasks.startAsyncTask(function()
 			end
 		elseif status == "somefailed" then
 			local successCount = processed - failed
-			if combinedError then
+			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(
 					LOC(
 						"$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
