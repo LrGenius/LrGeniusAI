@@ -1,5 +1,14 @@
 PluginInfoDialogSections = {}
 
+-- Which run of startDialog the polling loops below belong to. `keepChecksRunning`
+-- alone was not enough to stop them: it is cleared in endDialog, so a dialog that
+-- went away without endDialog completing — an error while saving preferences, a
+-- teardown that never called it — left a loop hitting the backend every ten
+-- seconds for the rest of the Lightroom session. Each run takes the next
+-- generation and the loops stop as soon as they are no longer the current one,
+-- so reopening the dialog retires whatever the last one leaked.
+local checksGeneration = 0
+
 function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.useClip = prefs.useClip
 
@@ -16,6 +25,12 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.faceReady = false
 	propertyTable.assetsReady = false
 	propertyTable.keepChecksRunning = true
+
+	checksGeneration = checksGeneration + 1
+	local myGeneration = checksGeneration
+	local function checksStillWanted()
+		return propertyTable.keepChecksRunning == true and checksGeneration == myGeneration
+	end
 
 	local function refreshAssetStatus()
 		local assets = SearchIndexAPI.getAssetStatus()
@@ -38,9 +53,9 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 		end
 	end
 
-	LrTasks.startAsyncTask(function(context)
+	LrTasks.startAsyncTask(function()
 		refreshAssetStatus()
-		while propertyTable.keepChecksRunning do
+		while checksStillWanted() do
 			LrTasks.sleep(5)
 			refreshAssetStatus()
 		end
@@ -174,7 +189,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	updateHealth()
 	LrTasks.startAsyncTask(function()
-		while propertyTable.keepChecksRunning do
+		while checksStillWanted() do
 			LrTasks.sleep(10)
 			updateHealth()
 		end
@@ -1347,6 +1362,10 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 end
 
 function PluginInfoDialogSections.endDialog(propertyTable)
+	-- First, before any of the preference saving below: if one of those lines
+	-- throws, the polling loops must still stop.
+	propertyTable.keepChecksRunning = false
+
 	prefs.geminiApiKey = propertyTable.geminiApiKey
 	prefs.chatgptApiKey = propertyTable.chatgptApiKey
 	-- Vertex AI is disabled in the GUI; the backend code is untouched.
@@ -1430,6 +1449,4 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	else
 		prefs.llmGpuLayers = math.floor(gpuLayers)
 	end
-
-	propertyTable.keepChecksRunning = false -- Stop the async task checking for CLIP readiness
 end

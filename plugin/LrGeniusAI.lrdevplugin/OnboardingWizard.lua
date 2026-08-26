@@ -74,6 +74,15 @@ function OnboardingWizard.show(manualTrigger)
 			-- backend that comes up late) has to flip the status lines here
 			-- without the user reopening the wizard.
 			propertyTable.keepChecksRunning = true
+
+			-- Tied to the context rather than only to the line after the dialog
+			-- returns: if anything between here and there throws, that line never
+			-- runs and the loop keeps polling the backend for the rest of the
+			-- Lightroom session. atexit fires on both paths.
+			LrFunctionContext.atexit(context, function()
+				propertyTable.keepChecksRunning = false
+			end)
+
 			LrTasks.startAsyncTask(function()
 				refreshModelStatus()
 				while propertyTable.keepChecksRunning do
