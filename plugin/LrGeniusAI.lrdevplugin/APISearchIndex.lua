@@ -4718,6 +4718,32 @@ function SearchIndexAPI.getDetailedHealth()
 	return health
 end
 
+---
+-- True when at least one LLM provider is usable: a cloud API key, a reachable
+-- local app (Ollama / LM Studio), or the engine built into the backend (MLX on
+-- macOS, llama.cpp on Windows).
+--
+-- This lives here, next to the health table it reads, because two callers used
+-- to spell the same condition out by hand and drifted apart: the Plug-in
+-- Manager panel learned about `localEngine` and the preflight in
+-- `Util.checkPluginHealth` did not. Local-model-only users were told they had
+-- no provider at all and every task refused to start (issue #313). Both
+-- callers now go through this one function.
+--
+-- @param health table  A table as returned by SearchIndexAPI.getDetailedHealth().
+-- @return boolean
+---
+function SearchIndexAPI.hasAnyLlmProvider(health)
+	if type(health) ~= "table" then
+		return false
+	end
+	return health.localEngine == true
+		or health.gemini == true
+		or health.chatgpt == true
+		or health.ollama == true
+		or health.lmstudio == true
+end
+
 -- ---------------------------------------------------------------------------
 -- Training API functions
 -- ---------------------------------------------------------------------------

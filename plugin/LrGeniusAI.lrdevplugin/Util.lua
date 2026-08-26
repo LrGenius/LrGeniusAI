@@ -1439,8 +1439,10 @@ function Util.showDiagnosticFailureDialog(diag)
 		)
 	end
 
-	local contents = f:column({
-		spacing = f:control_spacing(),
+	-- Built as a flat table and handed to f:column() in one call. Appending to
+	-- an already-constructed column does nothing, which is why the log snippet
+	-- below never reached the user (issue #313).
+	local rows = {
 		f:static_text({
 			title = message,
 			font = "<system/bold>",
@@ -1454,24 +1456,23 @@ function Util.showDiagnosticFailureDialog(diag)
 			title = hint,
 			width_in_chars = 60,
 		}),
-	})
+	}
 
 	if diag.logSnippet then
-		table.insert(contents, f:spacer({ height = 10 }))
-		table.insert(
-			contents,
-			f:static_text({ title = LOC("$$$/LrGeniusAI/Diagnostics/LogSnippet=Recent server errors:") })
-		)
-		table.insert(
-			contents,
-			f:edit_field({
-				value = diag.logSnippet,
-				width_in_chars = 60,
-				height_in_lines = 10,
-				enabled = false,
-			})
-		)
+		rows[#rows + 1] = f:spacer({ height = 10 })
+		rows[#rows + 1] = f:static_text({ title = LOC("$$$/LrGeniusAI/Diagnostics/LogSnippet=Recent server errors:") })
+		rows[#rows + 1] = f:edit_field({
+			value = diag.logSnippet,
+			width_in_chars = 60,
+			height_in_lines = 10,
+			enabled = false,
+		})
 	end
+
+	local contents = f:column({
+		spacing = f:control_spacing(),
+		unpack(rows),
+	})
 
 	local result = LrDialogs.presentModalDialog({
 		title = LOC("$$$/LrGeniusAI/Health/DialogTitle=LrGeniusAI System Check"),
@@ -1519,7 +1520,7 @@ function Util.checkPluginHealth(options)
 		})
 	end
 
-	if not health.gemini and not health.chatgpt and not health.ollama and not health.lmstudio then
+	if not SearchIndexAPI.hasAnyLlmProvider(health) then
 		report.healthy = false
 		table.insert(report.issues, {
 			title = LOC("$$$/LrGeniusAI/Health/ApiKeysMissing=No AI providers configured for AI generation."),
@@ -1539,45 +1540,62 @@ end
 function Util.showHealthIssuesDialog(report)
 	local f = LrView.osFactory()
 
-	local contents = f:column({
-		spacing = f:control_spacing(),
+	local issues = report.issues or {}
+
+	-- A dialog that says "we found some issues" and then lists none tells the
+	-- user nothing they can act on, which is exactly the failure the "errors
+	-- must surface" rule exists to prevent. If the report ever arrives without
+	-- its reasons, say so and point at the log rather than showing a blank box.
+	if #issues == 0 then
+		issues = {
+			{
+				title = "The system check reported a problem but could not identify it.",
+				hint = "Please open Plug-in Manager > LrGeniusAI > Show logfile and include the log if you report this.",
+				critical = false,
+			},
+		}
+	end
+
+	-- Children must be passed to f:column() in one go: the view is built from
+	-- this table at construction time, so rows appended to the finished column
+	-- afterwards are silently dropped and never rendered (issue #313).
+	local rows = {
 		f:static_text({
 			title = LOC(
 				"$$$/LrGeniusAI/Health/IssuesFound=We found some issues that might prevent the plugin from working correctly:"
 			),
 			font = "<system/bold>",
 		}),
-	})
+	}
 
-	for _, issue in ipairs(report.issues) do
-		table.insert(
-			contents,
-			f:row({
-				f:static_text({
-					title = "• " .. issue.title,
-					text_color = issue.critical and LrColor(1, 0, 0) or LrColor(0.8, 0.8, 0),
-					font = issue.critical and "<system/bold>" or "<system>",
-				}),
-			})
-		)
-		table.insert(
-			contents,
-			f:row({
-				f:spacer({ width = 20 }),
-				f:static_text({
-					title = issue.hint,
-					width_in_chars = 60,
-					size = "small",
-				}),
-			})
-		)
+	for _, issue in ipairs(issues) do
+		rows[#rows + 1] = f:row({
+			f:static_text({
+				title = "• " .. issue.title,
+				text_color = issue.critical and LrColor(1, 0, 0) or LrColor(0.8, 0.8, 0),
+				font = issue.critical and "<system/bold>" or "<system>",
+			}),
+		})
+		rows[#rows + 1] = f:row({
+			f:spacer({ width = 20 }),
+			f:static_text({
+				title = issue.hint,
+				width_in_chars = 60,
+				size = "small",
+			}),
+		})
 	end
+
+	local contents = f:column({
+		spacing = f:control_spacing(),
+		unpack(rows),
+	})
 
 	local result = LrDialogs.presentModalDialog({
 		title = LOC("$$$/LrGeniusAI/Health/DialogTitle=LrGeniusAI System Check"),
 		contents = contents,
 		actionVerb = report.critical and LOC("$$$/LrGeniusAI/Health/OpenWizard=Run Setup Wizard")
-			or LOC("$$$/LrGeniusAI/Health/IgnoreAndContinue=Ignore & Continue"),
+			or LOC("$$$/LrGeniusAI/Health/IgnoreAndContinue=Ignore and Continue"),
 		cancelVerb = LOC("$$$/LrGeniusAI/common/Cancel=Cancel"),
 		otherVerb = not report.critical and LOC("$$$/LrGeniusAI/Health/OpenWizard=Run Setup Wizard") or nil,
 	})

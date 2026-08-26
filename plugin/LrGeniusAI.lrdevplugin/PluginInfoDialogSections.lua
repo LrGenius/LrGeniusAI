@@ -155,13 +155,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 				end
 				table.insert(issues, LOC("$$$/LrGeniusAI/Health/ClipMissing=AI search model is missing."))
 			end
-			if
-				not health.localEngine
-				and not health.gemini
-				and not health.chatgpt
-				and not health.ollama
-				and not health.lmstudio
-			then
+			if not SearchIndexAPI.hasAnyLlmProvider(health) then
 				if status ~= "critical" then
 					status = "warning"
 					color = { 0.8, 0.8, 0 }
