@@ -99,6 +99,9 @@ pub(crate) struct PhotoOverrides {
     pub capture_time: Option<f64>,
     pub date_time: Option<String>,
     pub existing_keywords: Option<Vec<String>>,
+    /// Face tags for this photo, separate from `existing_keywords` — see
+    /// [`lrg_providers::types::MetadataGenerationRequest::existing_face_tags`].
+    pub existing_face_tags: Option<Vec<String>>,
     pub folder_names: Option<String>,
     /// Exposure compensation in EV (`exposureBias` in the Lightroom SDK).
     ///
@@ -133,6 +136,7 @@ struct MetadataOptions {
     /// installs keep the context they have been getting.
     submit_gps: bool,
     existing_keywords: Option<Vec<String>>,
+    existing_face_tags: Option<Vec<String>>,
     folder_names: Option<String>,
     user_context: Option<String>,
     /// Custom system prompt from the plugin's "Instructions / Prompt" field
@@ -272,14 +276,18 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             })
         });
 
-    let existing_keywords = fields.get("existing_keywords").map(|raw| {
-        serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| {
-            raw.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
+    let parse_terms = |key: &str| {
+        fields.get(key).map(|raw| {
+            serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
         })
-    });
+    };
+    let existing_keywords = parse_terms("existing_keywords");
+    let existing_face_tags = parse_terms("existing_face_tags");
 
     ParsedOptions {
         compute_embeddings: has_task("embeddings"),
@@ -351,6 +359,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             submit_folder_names: bool_field(fields, "submit_folder_names", false),
             submit_gps: bool_field(fields, "submit_gps", true),
             existing_keywords,
+            existing_face_tags,
             folder_names: fields.get("folder_names").cloned(),
             user_context: fields.get("user_context").cloned(),
             system_prompt: fields
@@ -2042,6 +2051,10 @@ fn build_metadata_request(
             .existing_keywords
             .clone()
             .or_else(|| mo.existing_keywords.clone()),
+        existing_face_tags: overrides
+            .existing_face_tags
+            .clone()
+            .or_else(|| mo.existing_face_tags.clone()),
         location_data,
         folder_names: overrides
             .folder_names
@@ -2203,6 +2216,7 @@ mod keyword_option_tests {
             capture_time: Some(1234.0),
             date_time: Some("2026-08-07 12:00:00".to_string()),
             existing_keywords: Some(vec!["mine".to_string()]),
+            existing_face_tags: Some(vec!["Ivo".to_string()]),
             folder_names: Some("MyFolder".to_string()),
             exposure_bias: None,
             is_raw: None,
@@ -2210,6 +2224,7 @@ mod keyword_option_tests {
         let req = build_metadata_request(&opts, &overrides, &[], "p1");
         assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));
         assert_eq!(req.existing_keywords, Some(vec!["mine".to_string()]));
+        assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
         assert_eq!(req.folder_names.as_deref(), Some("MyFolder"));
     }
 
@@ -2226,6 +2241,32 @@ mod keyword_option_tests {
         assert_eq!(req.date_time.as_deref(), Some("2026-01-01 00:00:00"));
         assert_eq!(req.existing_keywords, Some(vec!["batch".to_string()]));
         assert_eq!(req.folder_names.as_deref(), Some("BatchFolder"));
+    }
+
+    /// Face tags arrive in their own field and stay out of the keyword list:
+    /// merged back together they would read as scenery again (issue #315).
+    #[test]
+    fn face_tags_parse_separately_from_keywords() {
+        let opts = parse_options(&fields(&[
+            ("existing_keywords", r#"["beach","sunset"]"#),
+            ("existing_face_tags", r#"["Ivo"]"#),
+        ]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1");
+        assert_eq!(
+            req.existing_keywords,
+            Some(vec!["beach".to_string(), "sunset".to_string()])
+        );
+        assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
+    }
+
+    /// A plugin build that predates the split sends only `existing_keywords`;
+    /// it must keep working, with no face-tag line in the prompt.
+    #[test]
+    fn absent_face_tags_leave_the_request_unchanged() {
+        let opts = parse_options(&fields(&[("existing_keywords", r#"["beach"]"#)]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1");
+        assert_eq!(req.existing_keywords, Some(vec!["beach".to_string()]));
+        assert_eq!(req.existing_face_tags, None);
     }
 
     #[test]

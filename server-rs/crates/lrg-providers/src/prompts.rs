@@ -67,6 +67,40 @@ fn split_from_parts(base: String, stable: Vec<String>, per_photo: Vec<String>) -
     }
 }
 
+/// Trims, drops empties and joins a list of terms for a prompt line.
+/// Returns `None` when nothing is left, so callers can skip the line entirely.
+fn join_terms(terms: &[String]) -> Option<String> {
+    let joined = terms
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
+/// The prompt line that tells the model a name belongs to a person.
+///
+/// Lightroom hands face tags over as plain keywords, so without this the model
+/// sees "Ivo" next to "beach" and writes "the rocky shore of Ivo Beach"
+/// (issue #315). Naming what the terms are is the whole fix; the explicit
+/// prohibition is there because a bare list still leaves the model free to
+/// read a name as a place.
+fn face_tag_line(faces: &[String]) -> Option<String> {
+    join_terms(faces).map(|joined| {
+        format!(
+            "People in this photo, named by face recognition: {joined}. These are names of \
+             people who appear in the photo. Use them only to refer to those people; never \
+             treat such a name as a place, landmark, event, brand or object, and never build \
+             a location name out of one."
+        )
+    })
+}
+
 /// Flatten nested keyword categories to a simple list (pre-order:
 /// category, then its children), matching `_flatten_keyword_categories`.
 pub fn flatten_keyword_categories(categories: &KeywordCategories) -> Vec<String> {
@@ -248,16 +282,17 @@ pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPr
     }
 
     if request.submit_keywords {
-        if let Some(kw) = &request.existing_keywords {
-            let joined = kw
-                .iter()
-                .map(|k| k.trim())
-                .filter(|k| !k.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ");
-            if !joined.is_empty() {
-                per_photo_additions.push(format!("Some keywords are: {joined}"));
-            }
+        if let Some(joined) = request.existing_keywords.as_deref().and_then(join_terms) {
+            per_photo_additions.push(format!("Some keywords are: {joined}"));
+        }
+        // After the keywords, not before: the contrast between the two lines is
+        // what tells the model that these particular terms are not scenery.
+        if let Some(line) = request
+            .existing_face_tags
+            .as_deref()
+            .and_then(face_tag_line)
+        {
+            per_photo_additions.push(line);
         }
     }
 
@@ -497,16 +532,15 @@ pub fn prepare_edit_user_prompt_split(request: &EditGenerationRequest) -> SplitP
     // --- per-photo context: everything below changes from photo to photo ---
 
     if request.submit_keywords {
-        if let Some(kw) = &request.existing_keywords {
-            let joined = kw
-                .iter()
-                .map(|k| k.trim())
-                .filter(|k| !k.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ");
-            if !joined.is_empty() {
-                per_photo_additions.push(format!("Existing keywords: {joined}"));
-            }
+        if let Some(joined) = request.existing_keywords.as_deref().and_then(join_terms) {
+            per_photo_additions.push(format!("Existing keywords: {joined}"));
+        }
+        if let Some(line) = request
+            .existing_face_tags
+            .as_deref()
+            .and_then(face_tag_line)
+        {
+            per_photo_additions.push(line);
         }
     }
     if request.submit_folder_names {
@@ -613,6 +647,55 @@ mod tests {
         req.submit_keywords = true;
         let prompt = prepare_user_prompt(&req);
         assert!(prompt.contains("Some keywords are: cat, dog"));
+    }
+
+    #[test]
+    fn face_tags_are_named_as_people_and_kept_out_of_the_keyword_line() {
+        // Issue #315: handed a face tag as an ordinary keyword, the model read
+        // "Ivo" as scenery and wrote "the rocky shore of Ivo Beach".
+        let mut req = base_request();
+        req.submit_keywords = true;
+        req.existing_keywords = Some(vec!["beach".to_string(), "sunset".to_string()]);
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("Some keywords are: beach, sunset"));
+        assert!(prompt.contains("People in this photo, named by face recognition: Ivo"));
+        // The name must not also arrive as an unlabelled keyword, which is the
+        // form that caused the misreading in the first place.
+        assert!(!prompt.contains("Some keywords are: beach, sunset, Ivo"));
+    }
+
+    #[test]
+    fn face_tags_follow_the_same_switch_as_keywords() {
+        // They are the same catalog context under a different label, so the
+        // user's "existing keywords" choice governs both.
+        let mut req = base_request();
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+        req.submit_keywords = false;
+        assert!(!prepare_user_prompt(&req).contains("People in this photo"));
+        req.submit_keywords = true;
+        assert!(prepare_user_prompt(&req).contains("People in this photo"));
+    }
+
+    #[test]
+    fn face_tags_stay_in_the_per_photo_half() {
+        // Who is in the frame changes with every photo; in `stable` it would
+        // cut the reusable KV-cache prefix at the first photo with a face tag.
+        let mut req = base_request();
+        req.submit_keywords = true;
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+        let split = prepare_user_prompt_split(&req);
+        assert!(split.per_photo.contains("People in this photo"));
+        assert!(!split.stable.contains("People in this photo"));
+    }
+
+    #[test]
+    fn blank_face_tags_produce_no_line() {
+        let mut req = base_request();
+        req.submit_keywords = true;
+        req.existing_face_tags = Some(vec!["  ".to_string(), String::new()]);
+        assert!(!prepare_user_prompt(&req).contains("People in this photo"));
     }
 
     #[test]
@@ -825,6 +908,17 @@ mod tests {
         assert!(prompt.contains("Do not adjust white balance"));
         assert!(prompt.contains("Do not use `tone_curve.point_curve`"));
         assert!(prompt.contains("Do not use `crop`"));
+    }
+
+    #[test]
+    fn edit_prompt_labels_face_tags_as_people() {
+        let mut req = base_edit_request();
+        req.submit_keywords = true;
+        req.existing_keywords = Some(vec!["beach".to_string()]);
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+        let prompt = prepare_edit_user_prompt(&req);
+        assert!(prompt.contains("Existing keywords: beach"));
+        assert!(prompt.contains("People in this photo, named by face recognition: Ivo"));
     }
 
     #[test]
