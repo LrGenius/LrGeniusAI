@@ -4473,7 +4473,8 @@ end
 ---
 -- Reports whether a local model is loaded, and with which settings.
 --
--- @return table|nil status { status, model_path, supports_vision, n_ctx, n_parallel }
+-- @return table|nil status { status, model_path, supports_vision, n_ctx, n_ctx_seq, n_parallel }
+--         n_ctx is the whole KV cache; n_ctx_seq is the share one photo gets.
 -- @return string|nil error
 --
 function SearchIndexAPI.getLlmStatus()

@@ -682,7 +682,7 @@ Lists local models that are installed and those offered for download.
 `supported: false` always carries a `reason` for MLX; for llama.cpp it means the binary was built without the `llamacpp` feature.
 
 ### `GET /v1/llm/status`
-Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with the MLX engine's equivalent nested under `mlx`.
+Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with the MLX engine's equivalent nested under `mlx`. `n_ctx` is the whole KV cache; `n_ctx_seq` is the share one photo gets, which is what a prompt plus its `max_tokens` has to fit inside. They differ whenever `n_parallel > 1`, because llama.cpp splits the cache per sequence. `n_parallel` is the effective value: the engine lowers a requested count that would leave each photo too little.
 
 ### `POST /v1/llm/downloads`
 Starts a background download of a catalog entry. Body: `{ "id": "gemma4-e4b" }`. The id space is shared across both catalogs and the id alone selects the backend, so there is a single download queue: a GGUF pair is fetched as two files, an MLX entry as a repo snapshot staged into a `.part` directory and renamed on success.

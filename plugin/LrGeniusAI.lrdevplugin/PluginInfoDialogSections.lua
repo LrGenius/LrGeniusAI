@@ -454,10 +454,11 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 			f:group_box({
 				fill_horizontal = 1,
 				title = LOC("$$$/LrGeniusAI/LocalModel/AdvancedTitle=Advanced"),
-				-- The group of photos in a request has to fit the context
-				-- window alongside the shared prompt prefix, so these two trade
-				-- against each other; the server reduces parallel sequences
-				-- rather than overrunning the context.
+				-- llama.cpp splits the KV cache between the sequences it
+				-- decodes at once, so these two trade against each other: each
+				-- photo gets context size / photos in parallel, and Max Tokens
+				-- has to fit in that share alongside the prompt. The server
+				-- reduces the parallel count rather than overrunning it.
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({

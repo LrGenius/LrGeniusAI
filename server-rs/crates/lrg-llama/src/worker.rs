@@ -3,13 +3,23 @@
 //!
 //! # The prefix cache
 //!
-//! Sequence 0 is reserved. It holds the evaluated run-constant prefix
-//! (`system_prompt` + `stable_prompt`, rendered through the model's chat
-//! template) and is never generated into. Each photo `i` gets sequence `i + 1`,
-//! seeded with `kv_cache_seq_cp(0, i + 1, ..)` — a metadata-only copy, not a
-//! re-evaluation — then evaluates only its own volatile tail and image.
-//! Afterwards that tail is dropped with `kv_cache_seq_rm(i + 1, prefix_len, ..)`
-//! while sequence 0 survives for the next batch.
+//! Sequence 0 holds the evaluated run-constant prefix (`system_prompt` +
+//! `stable_prompt`, rendered through the model's chat template). Photo `i` gets
+//! sequence `i`, so the *first* photo of a batch shares sequence 0 with the
+//! prefix and the others are seeded from it with `kv_cache_seq_cp(0, i, ..)`
+//! before anyone appends a tail. Afterwards each tail is dropped with
+//! `kv_cache_seq_rm(i, prefix_len, ..)` while the prefix in sequence 0 survives
+//! for the next batch.
+//!
+//! Sequence 0 is shared rather than reserved because a sequence is not free:
+//! llama.cpp splits the KV cache per sequence unless `kv_unified` is set, which
+//! `llama-cpp-2` does not expose, so every sequence costs each photo a share of
+//! the context window (see [`ctx_per_seq`]). Reserving one for the prefix cost
+//! the single-photo default half of its window.
+//!
+//! The copy is metadata in a unified cache and a stream copy otherwise; either
+//! way it beats re-evaluating the prefix, and either way it has to happen while
+//! sequence 0 still holds nothing but the prefix.
 //!
 //! The split is derived, not assumed: the prompt is rendered once through the
 //! model's chat template and then cut immediately after the run-constant text
@@ -46,12 +56,52 @@ pub(crate) enum Job {
     },
 }
 
-/// Sequence 0 is the pinned prefix and is never generated into.
+/// Sequence 0 holds the pinned prefix, and is also the first photo's sequence.
 const PREFIX_SEQ: i32 = 0;
+
+/// The smallest per-photo window worth loading with. Below this a run cannot
+/// fit a realistic prompt plus its answer, so `n_parallel` is reduced instead —
+/// slower, but it produces results rather than `NoKvCacheSlot`.
+const MIN_CTX_PER_SEQ: u32 = 4096;
 
 struct PinnedPrefix {
     hash: u64,
     len: i32,
+}
+
+/// The prefix a whole chunk shares, already evaluated into sequence 0 and
+/// copied into the chunk's other sequences.
+struct ChunkPrefix {
+    text: String,
+    len: i32,
+}
+
+/// The window one sequence actually gets.
+///
+/// llama.cpp splits the KV cache per sequence unless `kv_unified` is set, and
+/// `llama-cpp-2` exposes no way to set it, so llama.cpp's default (off) applies:
+///
+/// ```text
+/// n_ctx_seq = kv_unified ? n_ctx : GGML_PAD(n_ctx / n_seq_max, 256)
+/// ```
+///
+/// llama.cpp pads *up*; this rounds *down* to the same boundary, so the budget
+/// handed to a photo can never exceed what the cache holds. Budgeting against
+/// the undivided `n_ctx` is what produced `Decode Error 1: NoKvCacheSlot`
+/// minutes into a run instead of an actionable error before it.
+fn ctx_per_seq(n_ctx: u32, n_seq_max: u32) -> u32 {
+    if n_seq_max <= 1 {
+        return n_ctx;
+    }
+    (n_ctx / n_seq_max) & !255
+}
+
+/// Reduce `n_parallel` until each sequence still gets a usable window.
+///
+/// This is the behaviour the plugin's settings dialog and the wiki have always
+/// described; it did not exist, and the context was quietly overrun instead.
+fn parallel_that_fits(n_ctx: u32, requested: u32) -> u32 {
+    requested.max(1).min((n_ctx / MIN_CTX_PER_SEQ).max(1))
 }
 
 pub(crate) fn run(
@@ -107,9 +157,20 @@ pub(crate) fn run(
         }
     };
 
-    // One sequence for the pinned prefix plus one per concurrently decoded photo.
-    let n_parallel = config.n_parallel.max(1);
-    let n_seq_max = n_parallel + 1;
+    // One sequence per concurrently decoded photo; the first photo shares
+    // sequence 0 with the pinned prefix rather than the prefix reserving one of
+    // its own. See the module docs.
+    let n_parallel = parallel_that_fits(config.n_ctx, config.n_parallel);
+    if n_parallel < config.n_parallel.max(1) {
+        log::warn!(
+            "llama: {} photos in parallel would leave each one under {MIN_CTX_PER_SEQ} tokens of \
+             the {}-token context; using {n_parallel} instead. Raise the context size to run more \
+             photos at once.",
+            config.n_parallel.max(1),
+            config.n_ctx,
+        );
+    }
+    let n_seq_max = n_parallel;
     let mut ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(config.n_ctx))
         .with_n_batch(config.n_ctx.min(2048))
@@ -165,10 +226,13 @@ pub(crate) fn run(
     // once and reuse it for every grammar and every request.
     let tok_env = LlamaSampler::llguidance_tok_env(&model);
 
+    // Ask the context, not the config: llama.cpp pads `n_ctx` up.
+    let n_ctx_seq = ctx_per_seq(ctx.n_ctx(), n_seq_max);
     let info = EngineInfo {
         model_path: config.model_path.display().to_string(),
         mmproj_path: config.mmproj_path.as_ref().map(|p| p.display().to_string()),
         n_ctx: ctx.n_ctx(),
+        n_ctx_seq,
         n_parallel,
         supports_vision,
     };
@@ -183,6 +247,7 @@ pub(crate) fn run(
         tok_env,
         prefix: None,
         n_parallel,
+        n_ctx_seq: i32::try_from(n_ctx_seq).unwrap_or(i32::MAX),
     };
 
     // `recv` fails once the engine handle is dropped: that is the shutdown signal.
@@ -281,6 +346,9 @@ struct WorkerState<'a> {
     tok_env: toktrie::TokEnv,
     prefix: Option<PinnedPrefix>,
     n_parallel: u32,
+    /// The per-photo window, i.e. what every budget check has to measure
+    /// against. Never `ctx.n_ctx()`, which is the whole cache.
+    n_ctx_seq: i32,
 }
 
 impl WorkerState<'_> {
@@ -415,21 +483,36 @@ impl WorkerState<'_> {
         let len = i32::try_from(tokens.len())
             .map_err(|_| LlamaError::Prompt("the prompt is implausibly long".to_string()))?;
 
-        let n_ctx = i32::try_from(ctx.n_ctx()).unwrap_or(i32::MAX);
-        if len >= n_ctx {
+        let n_ctx_seq = self.n_ctx_seq;
+        if len >= n_ctx_seq {
             return Err(LlamaError::ContextOverflow(format!(
-                "the fixed part of the prompt is {len} tokens but the context window is only \
-                 {n_ctx}. Shrink the keyword taxonomy or catalog vocabulary, or raise the \
-                 context size in the plugin settings."
+                "the fixed part of the prompt is {len} tokens but each photo only gets \
+                 {n_ctx_seq} of the context window. Shrink the keyword taxonomy or catalog \
+                 vocabulary, lower Photos in parallel, or raise the context size in the plugin \
+                 settings."
             )));
         }
 
-        let mut batch = LlamaBatch::new(tokens.len(), 1);
-        batch
-            .add_sequence(&tokens, PREFIX_SEQ, false)
-            .map_err(|e| LlamaError::Inference(format!("building the prompt batch failed: {e}")))?;
-        ctx.decode(&mut batch)
-            .map_err(|e| LlamaError::Inference(format!("evaluating the prompt failed: {e}")))?;
+        // A catalog vocabulary of a few hundred keywords can outgrow `n_batch`,
+        // and a batch larger than that is rejected outright, so feed the prefix
+        // in slices. Only the very last token needs logits, matching what
+        // `add_sequence` would have requested.
+        let n_batch = usize::try_from(ctx.n_batch()).unwrap_or(512).max(1);
+        let mut pos = 0i32;
+        for slice in tokens.chunks(n_batch) {
+            let mut batch = LlamaBatch::new(slice.len(), 1);
+            for (offset, token) in slice.iter().enumerate() {
+                let at = pos + i32::try_from(offset).unwrap_or(0);
+                batch
+                    .add(*token, at, &[PREFIX_SEQ], at + 1 == len)
+                    .map_err(|e| {
+                        LlamaError::Inference(format!("building the prompt batch failed: {e}"))
+                    })?;
+            }
+            ctx.decode(&mut batch)
+                .map_err(|e| LlamaError::Inference(format!("evaluating the prompt failed: {e}")))?;
+            pos += i32::try_from(slice.len()).unwrap_or(0);
+        }
 
         self.prefix = Some(PinnedPrefix { hash, len });
         log::debug!("llama prefix cache miss: evaluated {len} tokens");
@@ -468,9 +551,25 @@ impl WorkerState<'_> {
         // not shown up as a cost worth its own timer.
         let t_prefill = std::time::Instant::now();
 
+        // Pin the chunk's shared prefix and hand it to every sequence *before*
+        // any photo appends a tail: sequence 0 both holds the prefix and serves
+        // the first photo, and the copy is only valid while sequence 0 holds
+        // nothing else.
+        let (chunk_prefix, mut seeding) =
+            match self.prepare_chunk(ctx, requests, &mut prefix_reused) {
+                Ok(prepared) => prepared,
+                // The shared prefix is shared: if it cannot be evaluated, no photo
+                // in this chunk can run, and each one has to say so.
+                Err(e) => return requests.iter().map(|_| Err(clone_err(&e))).collect(),
+            };
+
         for (idx, request) in requests.iter().enumerate() {
-            let seq_id = i32::try_from(idx).unwrap_or(i32::MAX) + 1;
-            match self.prefill_one(ctx, request, idx, seq_id, &mut prefix_reused) {
+            let seq_id = i32::try_from(idx).unwrap_or(i32::MAX);
+            let prefilled = match seeding[idx].take() {
+                Some(e) => Err(e),
+                None => self.prefill_one(ctx, request, idx, seq_id, chunk_prefix.as_ref()),
+            };
+            match prefilled {
                 Ok(slot) => {
                     results.push(Ok(GenerationOutput::default()));
                     slots.push(slot);
@@ -478,7 +577,14 @@ impl WorkerState<'_> {
                 Err(e) => {
                     // Drop anything this sequence wrote, so one bad photo
                     // cannot corrupt the cache for the rest of the batch.
-                    let _ = ctx.kv_cache_seq_rm(seq_id, None, None);
+                    // Sequence 0 keeps the pinned prefix; everything past it
+                    // goes.
+                    let keep = if seq_id == PREFIX_SEQ {
+                        self.prefix.as_ref().map_or(0, |p| p.len)
+                    } else {
+                        0
+                    };
+                    let _ = ctx.kv_cache_seq_rm(seq_id, Some(keep.cast_unsigned()), None);
                     results.push(Err(e));
                 }
             }
@@ -499,10 +605,12 @@ impl WorkerState<'_> {
 
         let mut total_prompt: u32 = 0;
         let mut total_completion: u32 = 0;
-        let prefix_len = self.prefix.as_ref().map_or(0, |p| p.len);
         for slot in slots {
-            // Release only this photo's tail; sequence 0 keeps the prefix.
-            let _ = ctx.kv_cache_seq_rm(slot.seq_id, Some(prefix_len.cast_unsigned()), None);
+            // Release only this photo's tail; sequence 0 keeps the prefix. The
+            // length is the slot's own: a photo that fell back to evaluating its
+            // whole prompt holds no prefix, and keeping bytes of its prompt
+            // would leave the next batch reading them as one.
+            let _ = ctx.kv_cache_seq_rm(slot.seq_id, Some(slot.prefix_len.cast_unsigned()), None);
             if results[slot.idx].is_ok() {
                 total_prompt = total_prompt.saturating_add(slot.prompt_tokens);
                 total_completion = total_completion.saturating_add(slot.completion_tokens);
@@ -535,13 +643,76 @@ impl WorkerState<'_> {
         results
     }
 
+    /// Evaluate the chunk's shared prefix into sequence 0 and copy it into the
+    /// chunk's other sequences.
+    ///
+    /// This runs before any photo appends its tail, which is what makes the copy
+    /// legal (llama.cpp asserts `seq_cp() is only supported for full KV buffers`)
+    /// and what makes sharing sequence 0 with the first photo safe.
+    ///
+    /// Returns the pinned prefix, if the chunk has one, and per request the
+    /// error that stopped its sequence from being seeded.
+    fn prepare_chunk(
+        &mut self,
+        ctx: &mut LlamaContext,
+        requests: &[GenerationRequest],
+        prefix_reused: &mut bool,
+    ) -> Result<(Option<ChunkPrefix>, Vec<Option<LlamaError>>), LlamaError> {
+        let mut seeding: Vec<Option<LlamaError>> = requests.iter().map(|_| None).collect();
+
+        // A render failure is reported per photo by `prefill_one`, on the photo
+        // it belongs to; here it only means there is nothing to pin.
+        let prefix_text = requests
+            .first()
+            .and_then(|first| self.split_render(first).ok())
+            .and_then(|split| split.prefix);
+        let Some(prefix_text) = prefix_text else {
+            // Every photo will evaluate its whole prompt, starting by clearing
+            // its sequence — including sequence 0, so nothing may stay pinned.
+            self.prefix = None;
+            return Ok((None, seeding));
+        };
+
+        let (len, reused) = self.ensure_prefix(ctx, &prefix_text)?;
+        *prefix_reused = reused;
+
+        for (idx, seeded) in seeding.iter_mut().enumerate().skip(1) {
+            let seq_id = i32::try_from(idx).unwrap_or(i32::MAX);
+            if let Err(e) = ctx.kv_cache_seq_cp(PREFIX_SEQ, seq_id, None, None) {
+                *seeded = Some(LlamaError::Inference(format!(
+                    "seeding sequence {seq_id} failed: {e}"
+                )));
+            }
+        }
+
+        Ok((
+            Some(ChunkPrefix {
+                text: prefix_text,
+                len,
+            }),
+            seeding,
+        ))
+    }
+
+    /// Hand a sequence to a photo that evaluates its whole prompt. Sequence 0
+    /// doubles as the prefix's home, so emptying it un-pins the prefix too.
+    fn clear_seq(&mut self, ctx: &mut LlamaContext, seq_id: i32) -> Result<(), LlamaError> {
+        if seq_id == PREFIX_SEQ {
+            self.prefix = None;
+        }
+        ctx.kv_cache_seq_rm(seq_id, None, None).map_err(|e| {
+            LlamaError::Inference(format!("clearing sequence {seq_id} failed: {e}"))
+        })?;
+        Ok(())
+    }
+
     fn prefill_one(
         &mut self,
         ctx: &mut LlamaContext,
         request: &GenerationRequest,
         idx: usize,
         seq_id: i32,
-        prefix_reused: &mut bool,
+        chunk_prefix: Option<&ChunkPrefix>,
     ) -> Result<Slot, LlamaError> {
         if request.image.is_some() && self.mtmd.is_none() {
             return Err(LlamaError::Prompt(
@@ -551,35 +722,30 @@ impl WorkerState<'_> {
         }
 
         let split = self.split_render(request)?;
-        let prefix_len = match &split.prefix {
-            Some(prefix_text) => {
-                let (len, reused) = self.ensure_prefix(ctx, prefix_text)?;
-                *prefix_reused = reused;
-                // Metadata-only copy of the prefix KV — no recomputation.
-                //
-                // The range must be the whole sequence: llama.cpp asserts
-                // `seq_cp() is only supported for full KV buffers`. That is
-                // exactly what we want anyway, because sequence 0 is reserved
-                // for the prefix and never generated into, so "all of seq 0"
-                // and "the prefix" are the same thing.
-                ctx.kv_cache_seq_cp(PREFIX_SEQ, seq_id, None, None)
-                    .map_err(|e| {
-                        LlamaError::Inference(format!("seeding sequence {seq_id} failed: {e}"))
-                    })?;
-                len
-            }
-            None => {
-                ctx.kv_cache_seq_rm(seq_id, None, None).map_err(|e| {
-                    LlamaError::Inference(format!("clearing sequence {seq_id} failed: {e}"))
-                })?;
-                0
-            }
+        // `prepare_chunk` already evaluated the chunk's prefix and seeded this
+        // sequence with it. Re-pinning here would clear the cache out from under
+        // the photos already prefilled in this chunk.
+        let shared = match (&split.prefix, chunk_prefix) {
+            (Some(text), Some(chunk)) => text == &chunk.text,
+            _ => false,
         };
-        // The prefix carries BOS and the template's opening tags; re-adding
-        // specials for the tail would corrupt both.
-        let add_special = split.prefix.is_none();
+        let (prefix_len, tail, add_special) = if shared {
+            // The prefix carries BOS and the template's opening tags; re-adding
+            // specials for the tail would corrupt both.
+            (chunk_prefix.map_or(0, |c| c.len), split.tail, false)
+        } else {
+            // Either the template gave no clean split, or this photo's stable
+            // half differs from the one the chunk pinned. Evaluate the whole
+            // prompt into this sequence instead — correct, just not cached.
+            self.clear_seq(ctx, seq_id)?;
+            let whole = match split.prefix {
+                Some(prefix) => prefix + &split.tail,
+                None => split.tail,
+            };
+            (0, whole, true)
+        };
 
-        let n_ctx = i32::try_from(ctx.n_ctx()).unwrap_or(i32::MAX);
+        let n_ctx_seq = self.n_ctx_seq;
         let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
         let mut sampler = self.build_sampler(request)?;
 
@@ -596,7 +762,7 @@ impl WorkerState<'_> {
                 let chunks = mtmd
                     .tokenize(
                         MtmdInputText {
-                            text: split.tail,
+                            text: tail,
                             add_special,
                             parse_special: true,
                         },
@@ -606,7 +772,7 @@ impl WorkerState<'_> {
                         LlamaError::Prompt(format!("preparing the photo prompt failed: {e}"))
                     })?;
                 let tail_tokens = i32::try_from(chunks.total_tokens()).unwrap_or(i32::MAX);
-                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx)?;
+                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx_seq)?;
                 let n_past = chunks
                     .eval_chunks(mtmd, ctx, prefix_len, seq_id, n_batch, true)
                     .map_err(|e| {
@@ -620,11 +786,11 @@ impl WorkerState<'_> {
                 } else {
                     AddBos::Never
                 };
-                let tokens = self.model.str_to_token(&split.tail, bos).map_err(|e| {
+                let tokens = self.model.str_to_token(&tail, bos).map_err(|e| {
                     LlamaError::Prompt(format!("tokenizing the prompt failed: {e}"))
                 })?;
                 let tail_tokens = i32::try_from(tokens.len()).unwrap_or(i32::MAX);
-                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx)?;
+                check_budget(prefix_len, tail_tokens, request.max_tokens, n_ctx_seq)?;
 
                 let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
                 for (offset, token) in tokens.iter().enumerate() {
@@ -658,6 +824,7 @@ impl WorkerState<'_> {
         let mut slot = Slot {
             idx,
             seq_id,
+            prefix_len,
             n_past,
             prompt_tokens: (prefix_len + tail_tokens).cast_unsigned(),
             completion_tokens: 0,
@@ -707,7 +874,7 @@ impl WorkerState<'_> {
     /// This is where batching pays off: the weights are read once per step
     /// regardless of how many photos are in flight.
     fn decode(&self, ctx: &mut LlamaContext, slots: &mut [Slot]) -> Result<(), LlamaError> {
-        let n_ctx = i32::try_from(ctx.n_ctx()).unwrap_or(i32::MAX);
+        let n_ctx_seq = self.n_ctx_seq;
         let capacity = slots.len().max(1);
         let mut batch = LlamaBatch::new(capacity, i32::try_from(capacity).unwrap_or(1) + 1);
 
@@ -719,7 +886,7 @@ impl WorkerState<'_> {
                 if slot.done {
                     continue;
                 }
-                if slot.completion_tokens >= slot.budget || slot.n_past >= n_ctx {
+                if slot.completion_tokens >= slot.budget || slot.n_past >= n_ctx_seq {
                     slot.done = true;
                     continue;
                 }
@@ -769,6 +936,8 @@ impl WorkerState<'_> {
 struct Slot {
     idx: usize,
     seq_id: i32,
+    /// How much of this sequence is shared prefix and must survive cleanup.
+    prefix_len: i32,
     n_past: i32,
     prompt_tokens: u32,
     completion_tokens: u32,
@@ -809,18 +978,21 @@ fn token_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, LlamaEr
     }
 }
 
+/// `n_ctx_seq` is the window *one photo* gets, not the whole cache — see
+/// [`ctx_per_seq`].
 fn check_budget(
     prefix_len: i32,
     tail_tokens: i32,
     max_tokens: u32,
-    n_ctx: i32,
+    n_ctx_seq: i32,
 ) -> Result<(), LlamaError> {
     let needed = i64::from(prefix_len) + i64::from(tail_tokens) + i64::from(max_tokens);
-    if needed > i64::from(n_ctx) {
+    if needed > i64::from(n_ctx_seq) {
         return Err(LlamaError::ContextOverflow(format!(
             "the prompt ({} tokens) plus the requested {max_tokens} output tokens exceeds the \
-             {n_ctx}-token context window. Lower Max Tokens, shrink the keyword taxonomy, or \
-             raise the context size in the plugin settings.",
+             {n_ctx_seq} tokens each photo gets of the context window. Lower Max Tokens, shrink \
+             the keyword taxonomy, lower Photos in parallel, or raise the context size in the \
+             plugin settings.",
             prefix_len + tail_tokens
         )));
     }
@@ -850,12 +1022,61 @@ mod tests {
         assert!(check_budget(1000, 500, 200, 4096).is_ok());
         let err = check_budget(3000, 1000, 512, 4096).unwrap_err();
         assert!(matches!(err, LlamaError::ContextOverflow(_)));
-        assert!(err.to_string().contains("4096-token context window"));
+        assert!(err.to_string().contains("4096 tokens each photo gets"));
     }
 
     #[test]
     fn budget_check_is_exact_at_the_boundary() {
         assert!(check_budget(2000, 1000, 1096, 4096).is_ok());
         assert!(check_budget(2000, 1000, 1097, 4096).is_err());
+    }
+
+    /// The bug behind #316: the KV cache is split per sequence, so budgeting
+    /// against the undivided `n_ctx` promises a photo roughly `n_seq_max` times
+    /// the room it has, and the overrun only surfaces mid-decode as
+    /// `NoKvCacheSlot`.
+    #[test]
+    fn context_is_divided_between_sequences() {
+        assert_eq!(ctx_per_seq(8192, 1), 8192);
+        assert_eq!(ctx_per_seq(8192, 2), 4096);
+        // Rounded down to llama.cpp's 256 boundary, never up: 2730 -> 2560.
+        assert_eq!(ctx_per_seq(8192, 3), 2560);
+    }
+
+    #[test]
+    fn a_budget_that_fits_the_whole_cache_can_still_overflow_one_sequence() {
+        // 8192 total, two photos at once: 4096 each. A 2000-token prompt asking
+        // for 4096 output fits the cache and not the sequence.
+        let per_seq = i32::try_from(ctx_per_seq(8192, 2)).unwrap();
+        assert!(check_budget(1500, 500, 4096, 8192).is_ok());
+        assert!(check_budget(1500, 500, 4096, per_seq).is_err());
+    }
+
+    #[test]
+    fn parallelism_is_capped_by_what_the_context_can_be_split_into() {
+        // The shipped defaults: 8192 tokens, two photos at once.
+        assert_eq!(parallel_that_fits(8192, 2), 2);
+        assert_eq!(ctx_per_seq(8192, parallel_that_fits(8192, 2)), 4096);
+        // Asking for more than the context can serve is reduced, not honoured.
+        assert_eq!(parallel_that_fits(8192, 8), 2);
+        assert_eq!(parallel_that_fits(32768, 8), 8);
+        // Never below one, however small the context.
+        assert_eq!(parallel_that_fits(1024, 4), 1);
+        assert_eq!(parallel_that_fits(8192, 0), 1);
+    }
+
+    #[test]
+    fn every_sequence_keeps_a_usable_window() {
+        for n_ctx in [4096u32, 8192, 16384, 32768, 131_072] {
+            for requested in 1..=16u32 {
+                let n_seq_max = parallel_that_fits(n_ctx, requested);
+                assert!(n_seq_max >= 1);
+                let per_seq = ctx_per_seq(n_ctx, n_seq_max);
+                assert!(
+                    per_seq >= n_ctx.min(MIN_CTX_PER_SEQ),
+                    "n_ctx={n_ctx} requested={requested} left {per_seq} per photo"
+                );
+            }
+        }
     }
 }

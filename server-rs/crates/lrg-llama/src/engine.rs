@@ -18,13 +18,14 @@ pub struct LlamaEngineConfig {
     /// Path to the multimodal projector GGUF. Without it the engine is
     /// text-only and any request carrying an image is rejected.
     pub mmproj_path: Option<PathBuf>,
-    /// Context window. Must accommodate `n_parallel * (prefix + per-photo +
-    /// generation)`; [`LlamaEngine::new`] logs and reduces `n_parallel` rather
-    /// than letting a decode run off the end.
+    /// Total context window. llama.cpp divides it between the concurrently
+    /// decoded sequences, so what one photo gets is `n_ctx / n_parallel`; the
+    /// engine logs and reduces `n_parallel` rather than letting a decode run off
+    /// the end of its share. [`EngineInfo::n_ctx_seq`] reports the result.
     pub n_ctx: u32,
     /// Sequences decoded concurrently. Sharing one pinned prefix across
     /// several sequences is what makes batching worth more than the sum of its
-    /// parts.
+    /// parts — but each one costs a share of `n_ctx`.
     pub n_parallel: u32,
     /// Layers offloaded to the GPU. `u32::MAX` means "all", which is what you
     /// want on Metal and on a CUDA/Vulkan card with enough VRAM.
@@ -51,7 +52,13 @@ impl Default for LlamaEngineConfig {
 pub struct EngineInfo {
     pub model_path: String,
     pub mmproj_path: Option<String>,
+    /// The whole KV cache, as llama.cpp allocated it.
     pub n_ctx: u32,
+    /// What one photo actually gets: the cache is split per sequence, so this
+    /// is `n_ctx / n_parallel` and it is the number every budget is measured
+    /// against. Equal to `n_ctx` when one photo runs at a time.
+    pub n_ctx_seq: u32,
+    /// Effective value, which may be below the requested one — see `n_ctx`.
     pub n_parallel: u32,
     pub supports_vision: bool,
 }
@@ -134,10 +141,12 @@ impl LlamaEngine {
         };
 
         log::info!(
-            "llama engine ready: model={} mmproj={} n_ctx={} n_parallel={} vision={}",
+            "llama engine ready: model={} mmproj={} n_ctx={} n_ctx_per_photo={} n_parallel={} \
+             vision={}",
             info.model_path,
             info.mmproj_path.as_deref().unwrap_or("none"),
             info.n_ctx,
+            info.n_ctx_seq,
             info.n_parallel,
             info.supports_vision,
         );

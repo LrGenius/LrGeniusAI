@@ -93,10 +93,13 @@ local function updateLlamaCppFields(propertyTable, catalog, status)
 	propertyTable.llmDownloadChoice = pickValidChoice(choices, propertyTable.llmDownloadChoice)
 
 	if status ~= nil and status.status == "loaded" then
+		-- The per-photo window is what a user has to keep Max Tokens under, so
+		-- that is the number to show; n_ctx alone reads as far more room than
+		-- any one photo gets. Older backends do not send n_ctx_seq.
 		propertyTable.llmStatusText = LOC(
-			"$$$/LrGeniusAI/LocalModel/Loaded=Loaded: ^1 (context ^2, ^3 parallel)",
+			"$$$/LrGeniusAI/LocalModel/Loaded=Loaded: ^1 (^2 tokens per photo, ^3 parallel)",
 			tostring(status.model_path or "?"),
-			tostring(status.n_ctx or "?"),
+			tostring(status.n_ctx_seq or status.n_ctx or "?"),
 			tostring(status.n_parallel or "?")
 		)
 	elseif #names > 0 then

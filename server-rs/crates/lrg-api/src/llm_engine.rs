@@ -41,7 +41,13 @@ pub struct LlmEngineStatus {
     pub model_path: Option<String>,
     pub mmproj_path: Option<String>,
     pub supports_vision: bool,
+    /// The whole KV cache llama.cpp allocated.
     pub n_ctx: u32,
+    /// What one photo gets of it — `n_ctx` divided by the sequences decoding in
+    /// parallel. This is the number a user has to keep Max Tokens under.
+    pub n_ctx_seq: u32,
+    /// Effective value; the engine lowers it when `n_ctx` cannot be split that
+    /// many ways.
     pub n_parallel: u32,
 }
 
@@ -267,6 +273,7 @@ mod imp {
                         mmproj_path: info.mmproj_path.clone(),
                         supports_vision: info.supports_vision,
                         n_ctx: info.n_ctx,
+                        n_ctx_seq: info.n_ctx_seq,
                         n_parallel: info.n_parallel,
                     }
                 }
@@ -276,6 +283,7 @@ mod imp {
                     mmproj_path: None,
                     supports_vision: false,
                     n_ctx: 0,
+                    n_ctx_seq: 0,
                     n_parallel: 0,
                 },
             }
@@ -319,6 +327,7 @@ mod imp {
                 mmproj_path: None,
                 supports_vision: false,
                 n_ctx: 0,
+                n_ctx_seq: 0,
                 n_parallel: 0,
             }
         }

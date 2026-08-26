@@ -112,13 +112,20 @@ Defaults.exportSizes = {
 Defaults.defaultOllamaBaseUrl = "http://localhost:11434"
 Defaults.defaultLmStudioBaseUrl = "localhost:1234"
 
--- Local (in-process) model tuning. The whole group of photos in a request has
--- to fit the context window alongside the shared prompt prefix, so context size
--- and parallel sequences trade against each other; the server clamps parallel
--- sequences down if they will not fit. Deliberately conservative defaults:
--- selecting the local provider should not cause a multi-gigabyte memory jump.
+-- Local (in-process) model tuning. llama.cpp splits its KV cache between the
+-- sequences it decodes at once, so each photo gets context size / parallel
+-- sequences, and its prompt plus Max Tokens has to fit that share; the server
+-- clamps the parallel count down when it would not. Deliberately conservative
+-- defaults: selecting the local provider should not cause a multi-gigabyte
+-- memory jump.
+--
+-- One photo at a time is what makes the whole 8192 available to it. Two used to
+-- be the default and left roughly 2.7k per photo, which a catalog vocabulary of
+-- a few hundred keywords plus a 2048-token answer does not fit (#316). Raising
+-- the parallel count is worth it once the context size is raised with it — it
+-- costs no extra memory either way, the cache is only divided differently.
 Defaults.defaultLlmContextSize = 8192
-Defaults.defaultLlmParallel = 2
+Defaults.defaultLlmParallel = 1
 -- llama.cpp keeps on the CPU whatever does not fit, so "all layers" is a safe
 -- request on Metal and on any card with enough VRAM.
 Defaults.defaultLlmGpuLayers = 999

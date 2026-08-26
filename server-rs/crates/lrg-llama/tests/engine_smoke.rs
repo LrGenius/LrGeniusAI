@@ -15,7 +15,10 @@ fn config_from_env(n_parallel: u32) -> Option<LlamaEngineConfig> {
     Some(LlamaEngineConfig {
         model_path: model_path.into(),
         mmproj_path: std::env::var("LRG_TEST_MMPROJ_GGUF").ok().map(Into::into),
-        n_ctx: 4096,
+        // llama.cpp splits the KV cache between concurrent sequences and the
+        // engine refuses to leave any of them under 4096 tokens, so a test that
+        // wants `n_parallel` sequences has to pay for them.
+        n_ctx: 4096 * n_parallel.max(1),
         n_parallel,
         ..Default::default()
     })
@@ -165,6 +168,42 @@ async fn decodes_a_batch_in_parallel_sequences() {
     }
 }
 
+/// Regression for #316: a generation long enough to fill a sequence used to die
+/// mid-decode with `Decode Error 1: NoKvCacheSlot`, because the budget was
+/// measured against the whole KV cache while llama.cpp hands each sequence only
+/// `n_ctx / n_parallel` of it. One photo at a time must therefore be able to
+/// spend the *whole* configured context.
+#[tokio::test]
+#[ignore = "requires LRG_TEST_MODEL_GGUF"]
+async fn a_single_photo_may_use_the_whole_context() {
+    let Some(mut config) = config_from_env(1) else {
+        return;
+    };
+    config.n_ctx = 4096;
+    let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
+        .await
+        .unwrap()
+        .expect("engine should load");
+    assert_eq!(
+        engine.info().n_ctx_seq,
+        engine.info().n_ctx,
+        "a lone photo must not be charged for a sequence it does not have"
+    );
+
+    let mut request = base_request();
+    // No schema, so nothing stops the model early: this runs until the budget
+    // is spent, which is exactly the path that used to run off the end.
+    request.schema = None;
+    request.max_tokens = 2048;
+    request.per_photo_prompt = "Describe this photo in exhaustive detail.".to_string();
+
+    let out = engine.generate(vec![request]).await.unwrap();
+    let response = out[0]
+        .as_ref()
+        .unwrap_or_else(|e| panic!("a photo inside the context window must not fail: {e}"));
+    assert!(!response.text.trim().is_empty(), "no output");
+}
+
 #[tokio::test]
 #[ignore = "requires LRG_TEST_MODEL_GGUF"]
 async fn refuses_to_overrun_the_context_window() {
@@ -181,6 +220,10 @@ async fn refuses_to_overrun_the_context_window() {
     request.stable_prompt = "word ".repeat(2000);
     let out = engine.generate(vec![request]).await.unwrap();
     let err = out[0].as_ref().expect_err("should refuse, not truncate");
+    assert!(
+        matches!(err, lrg_llama::LlamaError::ContextOverflow(_)),
+        "an overrun must be refused up front, not surface as a decode failure: {err}"
+    );
     let message = err.to_string();
     assert!(
         message.contains("context"),
