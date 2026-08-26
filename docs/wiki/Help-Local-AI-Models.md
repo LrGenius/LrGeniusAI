@@ -89,16 +89,23 @@ Anything found there shows up in the **Installed** list and the model dropdown.
 
 Under the llama.cpp section:
 
-- **Context size (tokens)** — how much prompt+photo the model can hold at once.
-- **Photos in parallel** — how many photos are decoded concurrently.
+- **Context size (tokens)** — the total window the model holds at once.
+- **Photos in parallel** — how many photos are decoded concurrently. Each one
+  takes a share of the context size.
 - **Layers on the GPU** — `0` runs entirely on the CPU; anything that does not
   fit in VRAM stays on the CPU anyway.
 
-Context size and photos-in-parallel trade against each other: the whole group
-of photos has to fit the context window alongside the shared prompt prefix, and
-the backend reduces the parallel count with a warning rather than overrunning
-it. Leave the fields empty for sensible defaults. Changing any of them reloads
-the model on the next request.
+Context size and photos-in-parallel trade against each other, and the trade is a
+plain division: llama.cpp splits its cache between the photos it decodes at once,
+so **each photo gets context size ÷ photos in parallel**. The prompt — including
+the catalog keywords sent as vocabulary — plus **Max Tokens** has to fit inside
+that share, not inside the full context. The defaults (8192 and 1) hand the whole
+8192 to one photo; setting two photos in parallel halves it to 4096 each without
+using any more memory. The plug-in reports the per-photo figure next to the
+loaded model. The backend reduces the parallel count with a warning rather than
+overrunning it, and refuses a request that cannot fit rather than failing partway
+through. Leave the fields empty for sensible defaults. Changing any of them
+reloads the model on the next request.
 
 **MLX has no equivalent knobs**, and that is a deliberate limitation rather than
 an oversight: the MLX decoder allocates a fresh cache per request, so there is
@@ -154,6 +161,12 @@ an interrupted download is discarded rather than offered as a broken model.
 **Analysis is very slow or the machine swaps**
 The model is too large for your RAM. Move down a size (Gemma 4 E2B or
 Qwen2.5-VL 3B), or reduce **Photos in parallel** to 1.
+
+**"the prompt … exceeds the N tokens each photo gets of the context window"**
+The prompt and **Max Tokens** together do not fit one photo's share. Lower **Max
+Tokens**, set **Photos in parallel** to 1 (which hands the whole context to a
+single photo), raise **Context size**, or send fewer catalog keywords as
+vocabulary.
 
 ---
 
