@@ -48,6 +48,12 @@ Note: GPT-5 and GPT-5.4 models ignore the `temperature` slider and use a
 fixed reasoning effort — small differences in plugin temperature settings
 will not affect output for these models.
 
+They do use the **Max Tokens** setting (*General tab → AI Model section*),
+and they spend part of that budget on internal reasoning before writing a
+single word of the answer. If a GPT-5 model reports that it stopped because
+the token limit was reached, raise Max Tokens to 4096 or higher — the same
+value that is comfortable for `gpt-4.1` can be too tight here.
+
 ### ~~Vertex AI (embeddings only)~~ — REMOVED
 
 > **⚠️ Removed in August 2026.** The plugin no longer offers Vertex AI anywhere: no
