@@ -27,6 +27,48 @@ use crate::types::{
 const DEFAULT_MAX_TOKENS: u32 = 2048;
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 
+/// OpenAI deprecated `max_tokens` in the Chat Completions API, and the
+/// reasoning families reject it outright: "Unsupported parameter:
+/// 'max_tokens' is not supported with this model. Use
+/// 'max_completion_tokens' instead." (issue #324). Every model this
+/// provider offers accepts the new name, so we always send that one.
+const TOKEN_LIMIT_FIELD: &str = "max_completion_tokens";
+
+/// GPT-5 and the o-series are reasoning models: they accept only the
+/// default temperature, they take a `reasoning_effort`, and they spend
+/// part of the completion budget on hidden reasoning tokens.
+fn is_reasoning_model(model: &str) -> bool {
+    ["gpt-5", "o1", "o3", "o4"]
+        .iter()
+        .any(|prefix| model.starts_with(prefix))
+}
+
+/// Fill in the tuning knobs every chat call shares: the completion-token
+/// cap (under the name the model accepts — see [`TOKEN_LIMIT_FIELD`]), a
+/// temperature the model will not reject, and reasoning effort.
+fn apply_model_tuning(body: &mut Value, model: &str, temperature: f64, max_tokens: u32) {
+    body[TOKEN_LIMIT_FIELD] = json!(max_tokens);
+    if is_reasoning_model(model) {
+        body["temperature"] = json!(1.0);
+        body["reasoning_effort"] = json!("low");
+    } else {
+        body["temperature"] = json!(temperature);
+    }
+}
+
+/// The user-facing explanation for `finish_reason == "length"`.
+fn length_error(model: &str, max_tokens: u32) -> String {
+    let mut msg = format!(
+        "OpenAI stopped before finishing the response because the token limit was reached ({TOKEN_LIMIT_FIELD}={max_tokens}). Please raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher."
+    );
+    if is_reasoning_model(model) {
+        msg.push_str(
+            " GPT-5 and o-series models also spend part of that budget on internal reasoning, so they need a higher limit than other models do.",
+        );
+    }
+    msg
+}
+
 const ALLOWED_PREFIXES: [&str; 2] = ["gpt-4.1", "gpt-5"];
 const BLOCKED_SUBSTRINGS: [&str; 9] = [
     "-instruct",
@@ -98,15 +140,14 @@ impl OpenAiProvider {
         user_prompt: &str,
     ) -> Option<String> {
         let model = model.unwrap_or("gpt-4.1");
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.1,
-            "max_tokens": 4096,
         });
+        apply_model_tuning(&mut body, model, 0.1, 4096);
         let resp = self
             .client
             .post("https://api.openai.com/v1/chat/completions")
@@ -138,8 +179,6 @@ impl OpenAiProvider {
         let system_prompt = prepare_system_prompt(request);
         let user_prompt = prepare_user_prompt(request);
         let response_format = self.response_format(request);
-        let is_gpt5 = request.model.starts_with("gpt-5");
-        let temperature = if is_gpt5 { 1.0 } else { request.temperature };
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
 
         let mut body = json!({
@@ -150,12 +189,8 @@ impl OpenAiProvider {
                 {"role": "user", "content": [{"type": "image_url", "image_url": {"url": data_uri}}]},
             ],
             "response_format": response_format,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
         });
-        if is_gpt5 {
-            body["reasoning_effort"] = json!("low");
-        }
+        apply_model_tuning(&mut body, &request.model, request.temperature, max_tokens);
 
         let resp = match self
             .client
@@ -199,9 +234,7 @@ impl OpenAiProvider {
 
         if finish_reason != "stop" {
             let msg = if finish_reason == "length" {
-                format!(
-                    "OpenAI stopped before finishing the response because the token limit was reached (max_tokens={max_tokens}). Please raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher."
-                )
+                length_error(&request.model, max_tokens)
             } else {
                 format!("OpenAI generation failed: {finish_reason}")
             };
@@ -292,8 +325,6 @@ impl OpenAiProvider {
         let system_prompt = prepare_edit_system_prompt(request);
         let user_prompt = prepare_edit_user_prompt(request);
         let response_format = self.edit_response_format(request.is_raw);
-        let is_gpt5 = request.model.starts_with("gpt-5");
-        let temperature = if is_gpt5 { 1.0 } else { request.temperature };
         let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
 
         let mut body = json!({
@@ -304,12 +335,8 @@ impl OpenAiProvider {
                 {"role": "user", "content": [{"type": "image_url", "image_url": {"url": data_uri}}]},
             ],
             "response_format": response_format,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
         });
-        if is_gpt5 {
-            body["reasoning_effort"] = json!("low");
-        }
+        apply_model_tuning(&mut body, &request.model, request.temperature, max_tokens);
 
         let resp = match self
             .client
@@ -353,9 +380,7 @@ impl OpenAiProvider {
 
         if finish_reason != "stop" {
             let msg = if finish_reason == "length" {
-                format!(
-                    "OpenAI stopped before finishing the response because the token limit was reached (max_tokens={max_tokens}). Please raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher."
-                )
+                length_error(&request.model, max_tokens)
             } else {
                 format!("OpenAI generation failed: {finish_reason}")
             };
@@ -493,6 +518,41 @@ mod tests {
         // gpt-5 itself is a legitimate standalone model (only "gpt-5-chat"
         // is blocked via the "-chat" substring).
         assert_eq!(filtered, vec!["gpt-4.1", "gpt-4.1-mini", "gpt-5"]);
+    }
+
+    #[test]
+    fn body_sends_max_completion_tokens_not_the_rejected_max_tokens() {
+        // Issue #324: GPT-5 answers `max_tokens` with "Unsupported
+        // parameter ... Use 'max_completion_tokens' instead".
+        for model in ["gpt-5-mini", "gpt-4.1", "o3"] {
+            let mut body = json!({"model": model});
+            apply_model_tuning(&mut body, model, 0.2, 1234);
+            assert_eq!(body["max_completion_tokens"], json!(1234), "{model}");
+            assert!(body.get("max_tokens").is_none(), "{model}");
+        }
+    }
+
+    #[test]
+    fn reasoning_models_get_default_temperature_and_effort() {
+        let mut body = json!({});
+        apply_model_tuning(&mut body, "gpt-5.6-luna", 0.2, 2048);
+        assert_eq!(body["temperature"], json!(1.0));
+        assert_eq!(body["reasoning_effort"], json!("low"));
+
+        let mut body = json!({});
+        apply_model_tuning(&mut body, "gpt-4.1-mini", 0.2, 2048);
+        assert_eq!(body["temperature"], json!(0.2));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn length_error_names_the_parameter_actually_sent() {
+        let msg = length_error("gpt-4.1", 2048);
+        assert!(msg.contains("max_completion_tokens=2048"), "{msg}");
+        assert!(!msg.contains("reasoning"), "{msg}");
+        // Reasoning models burn part of the same budget invisibly, so the
+        // advice to raise the limit needs that context.
+        assert!(length_error("gpt-5-mini", 2048).contains("internal reasoning"));
     }
 
     #[test]
