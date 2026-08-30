@@ -881,6 +881,14 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 	-- apply time in addKeywordRecursively, so there is nothing to preview here.
 	local kwVal, kwMeta, orderedIds = Util.extractAllKeywords(keywords or {})
 
+	-- ── Species ──────────────────────────────────────────────────────────
+	-- Shown read-only, unlike everything else here: a taxonomic identification
+	-- comes from a classifier over a fixed vocabulary, so there is nothing
+	-- sensible to reword. There *is* something to decide, though — before #327
+	-- the species keywords and links were written whichever button the user
+	-- pressed, so a discarded photo kept half its results.
+	local speciesSummary = MetadataManager.speciesSummary(response.species)
+
 	-- ── Property table initialisation ────────────────────────────────────
 	for _, id in ipairs(orderedIds) do
 		local fullPath = kwVal[id] or ""
@@ -900,6 +908,7 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 	propertyTable.saveTitle = title ~= nil and title ~= ""
 	propertyTable.saveCaption = caption ~= nil and caption ~= ""
 	propertyTable.saveAltText = altText ~= nil and altText ~= ""
+	propertyTable.saveSpecies = speciesSummary ~= nil
 
 	-- ── Keyword rows ──────────────────────────────────────────────────────
 	local keywordRows = { spacing = 2 }
@@ -917,6 +926,110 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 					width_in_chars = 45,
 					immediate = true,
 					enabled = bind("saveKeywords"),
+				}),
+			})
+		)
+	end
+
+	-- ── Right panel contents ────────────────────────────────────────────
+	local rightColumn = {
+		f:group_box({
+			title = LOC("$$$/LrGeniusAI/Keywords=Keywords"),
+			fill_horizontal = 1,
+			f:row({
+				f:spacer({ fill_horizontal = 1 }),
+				f:push_button({
+					title = LOC("$$$/LrGeniusAI/MetadataManager/SelectAll=Select All"),
+					action = function()
+						for _, id in ipairs(orderedIds) do
+							propertyTable["keywordsSel_" .. id] = true
+						end
+					end,
+				}),
+				f:push_button({
+					title = LOC("$$$/LrGeniusAI/MetadataManager/DeselectAll=Deselect All"),
+					action = function()
+						for _, id in ipairs(orderedIds) do
+							propertyTable["keywordsSel_" .. id] = false
+						end
+					end,
+				}),
+				f:checkbox({
+					value = bind("saveKeywords"),
+					title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveKeywords=Save keywords"),
+				}),
+			}),
+			f:scrolled_view({
+				height = 250,
+				width = 560,
+				f:column(keywordRows),
+			}),
+		}),
+
+		f:group_box({
+			title = LOC("$$$/LrGeniusAI/Metadata=Metadata"),
+			fill_horizontal = 1,
+			f:row({
+				f:checkbox({
+					value = bind("saveTitle"),
+					title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveTitle=Save title"),
+				}),
+				f:edit_field({
+					value = bind("title"),
+					fill_horizontal = 1,
+					height_in_lines = 1,
+					enabled = bind("saveTitle"),
+				}),
+			}),
+			f:row({
+				f:checkbox({
+					value = bind("saveCaption"),
+					title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveCaption=Save caption"),
+				}),
+				f:edit_field({
+					value = bind("caption"),
+					fill_horizontal = 1,
+					height_in_lines = 5,
+					enabled = bind("saveCaption"),
+				}),
+			}),
+			f:row({
+				f:checkbox({
+					value = bind("saveAltText"),
+					title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveAltText=Save alt text"),
+				}),
+				f:edit_field({
+					value = bind("altText"),
+					fill_horizontal = 1,
+					height_in_lines = 3,
+					enabled = bind("saveAltText"),
+				}),
+			}),
+		}),
+	}
+
+	-- Appended rather than written into the table above, because most photos
+	-- have no organism in them and an empty "Species" box on every one of
+	-- them would be worse than no box at all.
+	if speciesSummary then
+		local speciesLines = {
+			f:static_text({ title = speciesSummary.name, font = "<system/bold>", width = 500 }),
+			f:static_text({ title = speciesSummary.rank, width = 500 }),
+		}
+		if speciesSummary.taxonomy ~= "" then
+			table.insert(speciesLines, f:static_text({ title = speciesSummary.taxonomy, width = 500 }))
+		end
+		table.insert(
+			rightColumn,
+			f:group_box({
+				title = "Species",
+				fill_horizontal = 1,
+				f:row({
+					f:checkbox({
+						value = bind("saveSpecies"),
+						title = "Save species",
+					}),
+					f:column(speciesLines),
 				}),
 			})
 		)
@@ -948,82 +1061,8 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 			}),
 		}),
 
-		-- Right panel: keywords + metadata
-		f:column({
-			f:group_box({
-				title = LOC("$$$/LrGeniusAI/Keywords=Keywords"),
-				fill_horizontal = 1,
-				f:row({
-					f:spacer({ fill_horizontal = 1 }),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/MetadataManager/SelectAll=Select All"),
-						action = function()
-							for _, id in ipairs(orderedIds) do
-								propertyTable["keywordsSel_" .. id] = true
-							end
-						end,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/MetadataManager/DeselectAll=Deselect All"),
-						action = function()
-							for _, id in ipairs(orderedIds) do
-								propertyTable["keywordsSel_" .. id] = false
-							end
-						end,
-					}),
-					f:checkbox({
-						value = bind("saveKeywords"),
-						title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveKeywords=Save keywords"),
-					}),
-				}),
-				f:scrolled_view({
-					height = 250,
-					width = 560,
-					f:column(keywordRows),
-				}),
-			}),
-
-			f:group_box({
-				title = LOC("$$$/LrGeniusAI/Metadata=Metadata"),
-				fill_horizontal = 1,
-				f:row({
-					f:checkbox({
-						value = bind("saveTitle"),
-						title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveTitle=Save title"),
-					}),
-					f:edit_field({
-						value = bind("title"),
-						fill_horizontal = 1,
-						height_in_lines = 1,
-						enabled = bind("saveTitle"),
-					}),
-				}),
-				f:row({
-					f:checkbox({
-						value = bind("saveCaption"),
-						title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveCaption=Save caption"),
-					}),
-					f:edit_field({
-						value = bind("caption"),
-						fill_horizontal = 1,
-						height_in_lines = 5,
-						enabled = bind("saveCaption"),
-					}),
-				}),
-				f:row({
-					f:checkbox({
-						value = bind("saveAltText"),
-						title = LOC("$$$/lrc-ai-assistant/AnalyzeImageTask/SaveAltText=Save alt text"),
-					}),
-					f:edit_field({
-						value = bind("altText"),
-						fill_horizontal = 1,
-						height_in_lines = 3,
-						enabled = bind("saveAltText"),
-					}),
-				}),
-			}),
-		}),
+		-- Right panel: keywords, metadata, and species when there is one.
+		f:column(rightColumn),
 	})
 
 	local result = LrDialogs.presentModalDialog({
@@ -1060,6 +1099,10 @@ function MetadataManager.showValidationDialog(ctx, photo, response, options)
 	results.saveCaption = propertyTable.saveCaption
 	results.altText = propertyTable.altText
 	results.saveAltText = propertyTable.saveAltText
+	-- False both when the user unticked it and when there was no
+	-- identification to offer, so a caller can simply ask "should I write the
+	-- species?" without re-deriving whether the box was even shown.
+	results.saveSpecies = propertyTable.saveSpecies
 	results.skipFromHere = propertyTable.skipFromHere
 
 	return result, results
@@ -1267,6 +1310,50 @@ function MetadataManager.getPhotoKeywordHierarchy(photo)
 
 	-- log:trace("Photo keyword hierarchy: " .. Util.dumpTable(hierarchy))
 	return hierarchy
+end
+
+---
+-- One-line-per-fact description of a species identification, for the review
+-- dialog.
+--
+-- Pure string work, so it is testable without a catalog (see
+-- `plugin/spec/metadata_manager_spec.lua`). Returning nil when nothing was
+-- identified is what keeps the section out of the dialog entirely, rather
+-- than showing an empty box on every photo that has no organism in it.
+--
+-- @param species table|nil Backend block: rank, taxonomy, scientific_name,
+--   common_name, confidence.
+-- @return table|nil `{ name = string, rank = string, taxonomy = string }`.
+function MetadataManager.speciesSummary(species)
+	if type(species) ~= "table" then
+		return nil
+	end
+	local rank = species.rank
+	if type(rank) ~= "string" or rank == "" or rank == "none" then
+		return nil
+	end
+	local scientific = type(species.scientific_name) == "string" and Util.trim(species.scientific_name) or ""
+	local common = type(species.common_name) == "string" and Util.trim(species.common_name) or ""
+	local name
+	if common ~= "" and scientific ~= "" then
+		name = common .. " (" .. scientific .. ")"
+	elseif common ~= "" then
+		name = common
+	elseif scientific ~= "" then
+		name = scientific
+	else
+		-- A rank with neither name behind it is not something to show a user.
+		return nil
+	end
+
+	local rankLine = rank
+	local confidence = tonumber(species.confidence)
+	if confidence then
+		rankLine = rankLine .. string.format(", %d%% confidence", math.floor(confidence * 100 + 0.5))
+	end
+
+	local taxonomy = type(species.taxonomy) == "string" and Util.trim(species.taxonomy) or ""
+	return { name = name, rank = rankLine, taxonomy = taxonomy }
 end
 
 ---

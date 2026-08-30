@@ -1042,6 +1042,25 @@ LrTasks.startAsyncTask(function()
 		-- rebuilt per photo. Also lets keywords resolved for earlier photos dedupe later ones.
 		local keywordSessionCache = {}
 
+		-- Writes one photo's species identification, when the run asked for
+		-- one. A function rather than an inline block because the call now
+		-- happens at three different points: the review path can only make it
+		-- once the dialog has said whether the results were kept (#327), and
+		-- the two paths without a dialog make it straight away.
+		--
+		-- `props.enableSpecies` gates all three. The inline path used to write
+		-- whatever species the backend had on file even on a run with species
+		-- switched off, which could add species keywords nobody asked for;
+		-- backfilling old identifications is what "Retrieve metadata" is for.
+		local function saveSpecies(photo, response)
+			if props.enableSpecies and response and response.species then
+				MetadataManager.applySpecies(photo, response.species, {
+					applySpeciesKeywords = props.speciesKeywords,
+					keywordSessionCache = keywordSessionCache,
+				})
+			end
+		end
+
 		-- When validation is disabled, apply metadata inline as each photo's analysis returns
 		-- so keywords/title/caption land on photos progressively instead of all at the end.
 		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
@@ -1050,12 +1069,7 @@ LrTasks.startAsyncTask(function()
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
 				local response = SearchIndexAPI.getPhotoData(photoId)
-				if response and response.species then
-					MetadataManager.applySpecies(photo, response.species, {
-						applySpeciesKeywords = props.speciesKeywords,
-						keywordSessionCache = keywordSessionCache,
-					})
-				end
+				saveSpecies(photo, response)
 				if response and response.metadata then
 					MetadataManager.applyMetadata(photo, response, nil, {
 						applyKeywords = props.generateKeywords,
@@ -1097,10 +1111,7 @@ LrTasks.startAsyncTask(function()
 				if photoId then
 					local response = SearchIndexAPI.getPhotoData(photoId)
 					if response and response.species then
-						MetadataManager.applySpecies(photo, response.species, {
-							applySpeciesKeywords = props.speciesKeywords,
-							keywordSessionCache = keywordSessionCache,
-						})
+						saveSpecies(photo, response)
 						speciesCount = speciesCount + 1
 					end
 				end
@@ -1121,16 +1132,15 @@ LrTasks.startAsyncTask(function()
 				if photoId then
 					local response = SearchIndexAPI.getPhotoData(photoId)
 
-					-- Applied here rather than in the species-only pass below so
-					-- both features share this loop's one /get per photo. Species
-					-- deliberately skips the validation dialog: a taxonomic
-					-- identification is not free text to review and edit.
-					if props.enableSpecies and response and response.species then
-						MetadataManager.applySpecies(photo, response.species, {
-							applySpeciesKeywords = props.speciesKeywords,
-							keywordSessionCache = keywordSessionCache,
-						})
-					end
+					-- Written at the end of this iteration rather than here, so
+					-- it shares the loop's one /get per photo without being
+					-- written before the user has said what to do with the
+					-- photo's results. The review dialog shows the
+					-- identification read-only — a taxonomic call is not free
+					-- text to reword — but Discard has to discard it along
+					-- with everything else, and Cancel has to write nothing
+					-- at all (#327).
+					local writeSpecies = true
 
 					log:trace("Got generated data for photo: " .. (photo:getFormattedMetadata("fileName") or "unknown"))
 					log:trace("Response: " .. (Util.dumpTable(response) or "nil"))
@@ -1152,6 +1162,8 @@ LrTasks.startAsyncTask(function()
 								log:trace("Skipping validation from here for subsequent photos.")
 								skipFromHere = true
 							end
+
+							writeSpecies = result == "ok" and validatedData ~= nil and validatedData.saveSpecies == true
 
 							if result == "ok" and validatedData then
 								-- Apply validated metadata
@@ -1219,6 +1231,12 @@ LrTasks.startAsyncTask(function()
 							keywordSessionCache = keywordSessionCache,
 						})
 						savedCount = savedCount + 1
+					end
+
+					-- The deferred write from the top of the loop. Unreachable
+					-- on Cancel, which breaks out above — that is the point.
+					if writeSpecies then
+						saveSpecies(photo, response)
 					end
 				else
 					log:error("Skipping photo data retrieval due to missing photo_id: " .. tostring(photoIdErr))
