@@ -122,3 +122,48 @@ describe("MetadataManager.speciesKeywordChain", function()
 		assert.are.same({ "Plantae", "Tracheophyta", "Magnoliopsida", "Fagales", "Fagaceae", "Quercus" }, names(result))
 	end)
 end)
+
+-- The review dialog's species section. Its only job beyond formatting is
+-- deciding when there is nothing to show: issue #327 was the species being
+-- written no matter which button the user pressed, and the fix is a section
+-- with a checkbox — which must not appear on the overwhelming majority of
+-- photos, the ones with no organism in them.
+describe("MetadataManager.speciesSummary", function()
+	local summary = MetadataManager.speciesSummary
+
+	it("puts the common name first and the binomial in parentheses", function()
+		local result = summary({
+			rank = "species",
+			taxonomy = "Animalia > Chordata > Mammalia",
+			scientific_name = "Oryctolagus cuniculus",
+			common_name = "European Rabbit",
+			confidence = 0.873,
+		})
+		assert.are.equal("European Rabbit (Oryctolagus cuniculus)", result.name)
+		assert.are.equal("species, 87% confidence", result.rank)
+		assert.are.equal("Animalia > Chordata > Mammalia", result.taxonomy)
+	end)
+
+	it("falls back to whichever name the taxon has", function()
+		assert.are.equal("Leporidae", summary({ rank = "family", scientific_name = "Leporidae" }).name)
+		assert.are.equal("Rabbits", summary({ rank = "family", common_name = "Rabbits" }).name)
+	end)
+
+	it("leaves out the confidence when the backend sent none", function()
+		assert.are.equal("genus", summary({ rank = "genus", scientific_name = "Quercus" }).rank)
+	end)
+
+	it("shows nothing when the photo holds no organism", function()
+		assert.is_nil(summary({ rank = "none", scientific_name = "", common_name = "" }))
+		assert.is_nil(summary({ rank = "" }))
+		assert.is_nil(summary(nil))
+		assert.is_nil(summary("not a table"))
+	end)
+
+	-- A rank with neither name behind it would show an empty box with a
+	-- checkbox and nothing to decide about.
+	it("shows nothing when the identification has no name", function()
+		assert.is_nil(summary({ rank = "species", scientific_name = "", common_name = "" }))
+		assert.is_nil(summary({ rank = "species" }))
+	end)
+end)

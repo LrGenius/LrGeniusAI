@@ -285,7 +285,13 @@ LrTasks.startAsyncTask(function()
 						-- and Wikipedia links, most recently). Keywords stay
 						-- off — retrieving stored metadata should not reshape
 						-- the catalog's keyword tree behind the user's back.
-						MetadataManager.applySpecies(photo, retrievedData.species, { applySpeciesKeywords = false })
+						--
+						-- `validatedData` is nil whenever no dialog was shown,
+						-- which is the case that must still write; when one
+						-- was shown, it carries the user's answer (#327).
+						if validatedData == nil or validatedData.saveSpecies then
+							MetadataManager.applySpecies(photo, retrievedData.species, { applySpeciesKeywords = false })
+						end
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 
