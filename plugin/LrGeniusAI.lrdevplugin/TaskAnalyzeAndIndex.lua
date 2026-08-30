@@ -529,9 +529,9 @@ local function showAnalyzeAndIndexDialog(ctx)
 						f:spacer({ width = share("ctxLabelWidth") }),
 						f:checkbox({
 							value = bind("submitGps"),
-							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/SubmitGps=Location (looked up from the photo's GPS coordinates)"
-							),
+							-- Plain text, not LOC: new strings are written as
+							-- finished English (see CLAUDE.md).
+							title = "Location (from the catalog, the file, or looked up from the GPS coordinates)",
 						}),
 					}),
 					f:separator({ fill_horizontal = 1 }),

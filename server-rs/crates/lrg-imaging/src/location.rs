@@ -2,8 +2,10 @@
 //! location tags (IPTC IIM record 2 in the JPEG APP13 segment) plus GPS
 //! coordinates from EXIF, for LLM prompt context.
 //!
-//! Note: the Python module's docstring mentions XMP but only implements
-//! IPTC + GPS; this port matches the implementation, not the docstring.
+//! The IPTC path only sees what is embedded in a JPEG. Lightroom keeps the
+//! place a photo was taken in its catalog and writes it into an XMP sidecar
+//! next to a raw original, so [`read_sidecar_location`] reads that too — for a
+//! raw workflow it is the only copy of the location that exists on disk.
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -31,6 +33,15 @@ pub struct LocationTags {
     pub country_code: Option<String>,
     pub gps_latitude: Option<f64>,
     pub gps_longitude: Option<f64>,
+    /// Set when the place names above were *derived* from the coordinates by
+    /// [`crate::geocode::fill_place_from_gps`] rather than read off the photo:
+    /// how far the named place is, in kilometres.
+    ///
+    /// The prompt needs the difference. A city the photographer put on the
+    /// photo is a fact about it; the nearest town to a GPS fix is an estimate,
+    /// and a model told the estimate as fact will write a caption about a
+    /// harbour the photo does not show.
+    pub gps_place_distance_km: Option<f64>,
 }
 
 impl LocationTags {
@@ -42,6 +53,63 @@ impl LocationTags {
             && self.country_code.is_none()
             && self.gps_latitude.is_none()
             && self.gps_longitude.is_none()
+    }
+
+    /// Whether anything here names a place, as opposed to locating one.
+    /// Coordinates alone do not: they are what reverse geocoding consumes.
+    pub fn has_place_name(&self) -> bool {
+        self.location.is_some()
+            || self.city.is_some()
+            || self.state.is_some()
+            || self.country.is_some()
+    }
+
+    /// Fills empty fields from `other`, keeping everything already set.
+    ///
+    /// Used to layer the sources by how much each knows about the
+    /// photographer's intent: what the plugin read out of the catalog first,
+    /// then what the file itself carries.
+    ///
+    /// Coordinates fill in freely — a position is a position. Place *names* do
+    /// not: two sources that disagree describe two different places, and
+    /// filling the gaps between them invents a third. A catalog that says
+    /// "Sankt Peter-Ording, Germany" merged field-wise with a file that says
+    /// "Ribadeo, Galicia, Spain" yields "Sankt Peter-Ording, Galicia, Germany",
+    /// which is nowhere. So the names are only filled in when the two agree on
+    /// every name they both carry; otherwise ours stand alone.
+    pub fn merge_missing(&mut self, other: &LocationTags) {
+        if self.names_agree_with(other) {
+            fn fill(target: &mut Option<String>, source: &Option<String>) {
+                if target.is_none() {
+                    target.clone_from(source);
+                }
+            }
+            fill(&mut self.location, &other.location);
+            fill(&mut self.city, &other.city);
+            fill(&mut self.state, &other.state);
+            fill(&mut self.country, &other.country);
+            fill(&mut self.country_code, &other.country_code);
+        }
+        if self.gps_latitude.is_none() && self.gps_longitude.is_none() {
+            self.gps_latitude = other.gps_latitude;
+            self.gps_longitude = other.gps_longitude;
+        }
+    }
+
+    /// Whether two sources contradict each other on any place name they both
+    /// carry. Compared case-insensitively and ignoring surrounding space:
+    /// "spain" and "Spain " are the same claim.
+    fn names_agree_with(&self, other: &LocationTags) -> bool {
+        fn same(a: &Option<String>, b: &Option<String>) -> bool {
+            match (a, b) {
+                (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+                _ => true,
+            }
+        }
+        same(&self.location, &other.location)
+            && same(&self.city, &other.city)
+            && same(&self.state, &other.state)
+            && same(&self.country, &other.country)
     }
 }
 
@@ -197,6 +265,158 @@ pub fn extract_location_tags(image_bytes: &[u8]) -> Option<LocationTags> {
     }
 }
 
+/// The largest sidecar we will read. An XMP sidecar is a few kilobytes;
+/// anything past this is not one, and we are about to hold it in memory for
+/// every photo of a batch.
+const MAX_SIDECAR_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Unescapes the five XML predefined entities. XMP values are attribute or
+/// element text, so nothing else can appear in them.
+fn unescape_xml(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Reads one qualified XMP property, in either shape Lightroom may write it:
+/// an attribute on `rdf:Description`, or its own element. An `rdf:Alt`
+/// language table (which is how a localised value is stored) yields its first
+/// `rdf:li`.
+fn xmp_value(xmp: &str, qualified_name: &str) -> Option<String> {
+    if let Some(value) = xmp
+        .split_once(&format!("{qualified_name}=\""))
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(value, _)| value)
+    {
+        let value = unescape_xml(value).trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+
+    let open = format!("<{qualified_name}>");
+    let close = format!("</{qualified_name}>");
+    let inner = xmp
+        .split_once(&open)
+        .and_then(|(_, rest)| rest.split_once(&close))
+        .map(|(inner, _)| inner)?;
+    // <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Text</rdf:li></rdf:Alt>
+    let inner = match inner.split_once("<rdf:li") {
+        Some((_, rest)) => rest
+            .split_once('>')
+            .and_then(|(_, text)| text.split_once("</rdf:li>"))
+            .map(|(text, _)| text)?,
+        None => inner,
+    };
+    let value = unescape_xml(inner).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+/// Parses an XMP GPS coordinate: `"43,32.220000N"` (degrees, decimal minutes)
+/// or `"43,32,13N"` (degrees, minutes, seconds), the two forms the XMP
+/// specification allows. A plain decimal is accepted too, because some writers
+/// emit one.
+fn parse_xmp_coordinate(raw: &str) -> Option<f64> {
+    let raw = raw.trim();
+    let (numbers, hemisphere) = match raw.chars().last() {
+        Some(c) if matches!(c.to_ascii_uppercase(), 'N' | 'S' | 'E' | 'W') => {
+            (&raw[..raw.len() - c.len_utf8()], c.to_ascii_uppercase())
+        }
+        _ => (raw, 'N'),
+    };
+
+    let mut parts = numbers.split(',');
+    let degrees: f64 = parts.next()?.trim().parse().ok()?;
+    let minutes: f64 = match parts.next() {
+        Some(m) => m.trim().parse().ok()?,
+        None => 0.0,
+    };
+    let seconds: f64 = match parts.next() {
+        Some(s) => s.trim().parse().ok()?,
+        None => 0.0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let magnitude = degrees.abs() + minutes / 60.0 + seconds / 3600.0;
+    let negative = matches!(hemisphere, 'S' | 'W') || degrees.is_sign_negative();
+    Some(if negative { -magnitude } else { magnitude })
+}
+
+/// Pulls the location out of XMP packet text (a sidecar's contents, or an XMP
+/// block lifted from a file). Returns `None` when it holds no location.
+pub fn extract_location_from_xmp(xmp: &str) -> Option<LocationTags> {
+    let mut tags = LocationTags {
+        location: xmp_value(xmp, "Iptc4xmpCore:Location"),
+        city: xmp_value(xmp, "photoshop:City"),
+        state: xmp_value(xmp, "photoshop:State"),
+        country: xmp_value(xmp, "photoshop:Country"),
+        country_code: xmp_value(xmp, "Iptc4xmpCore:CountryCode"),
+        ..Default::default()
+    };
+
+    let latitude = xmp_value(xmp, "exif:GPSLatitude")
+        .as_deref()
+        .and_then(parse_xmp_coordinate);
+    let longitude = xmp_value(xmp, "exif:GPSLongitude")
+        .as_deref()
+        .and_then(parse_xmp_coordinate);
+    if let (Some(lat), Some(lon)) = (latitude, longitude) {
+        tags.gps_latitude = Some(round6(lat));
+        tags.gps_longitude = Some(round6(lon));
+    }
+
+    (!tags.is_empty()).then_some(tags)
+}
+
+/// Reads the location from the XMP sidecar belonging to `image_path`.
+///
+/// This is the raw shooter's copy of the location: normalising a raw original
+/// re-encodes it to a metadata-free JPEG, and a raw container never carried
+/// Lightroom's IPTC place names in the first place — they live in the catalog
+/// and, when the user has sidecars turned on, in the `.xmp` beside the file.
+///
+/// Both conventions are tried: `IMG_1234.xmp` (Lightroom's, replacing the
+/// extension) and `IMG_1234.CR2.xmp` (appended, used by several other tools).
+pub fn read_sidecar_location(image_path: &std::path::Path) -> Option<LocationTags> {
+    let mut candidates = vec![
+        image_path.with_extension("xmp"),
+        image_path.with_extension("XMP"),
+    ];
+    let appended = {
+        let mut name = image_path.file_name()?.to_os_string();
+        name.push(".xmp");
+        image_path.with_file_name(name)
+    };
+    candidates.push(appended);
+
+    for candidate in candidates {
+        if candidate == image_path {
+            continue;
+        }
+        let readable = std::fs::metadata(&candidate)
+            .map(|m| m.is_file() && m.len() <= MAX_SIDECAR_BYTES)
+            .unwrap_or(false);
+        if !readable {
+            continue;
+        }
+        match std::fs::read_to_string(&candidate) {
+            Ok(text) => {
+                if let Some(tags) = extract_location_from_xmp(&text) {
+                    log::debug!("Read location from sidecar {}", candidate.display());
+                    return Some(tags);
+                }
+            }
+            Err(e) => log::debug!("Could not read sidecar {}: {e}", candidate.display()),
+        }
+    }
+    None
+}
+
 /// Port of `format_location_for_prompt`.
 pub fn format_location_for_prompt(location: &LocationTags) -> Option<String> {
     let parts: Vec<&str> = [
@@ -286,6 +506,126 @@ mod tests {
             format_location_for_prompt(&tags).unwrap(),
             "47.855600, 12.365700"
         );
+    }
+
+    /// The shape Lightroom writes: GPS as degrees + decimal minutes with a
+    /// hemisphere letter, and — because the user never confirmed the address
+    /// suggestions — no city, state or country at all. Coordinates are the
+    /// only thing there is, which is what reverse geocoding is for.
+    #[test]
+    fn reads_gps_from_a_lightroom_sidecar_without_place_names() {
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    exif:GPSVersionID="2.3.0.0"
+    exif:GPSLatitude="48,27.5784N"
+    exif:GPSLongitude="12,5.3578E"
+    exif:GPSAltitude="50493/100"/>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let tags = extract_location_from_xmp(xmp).unwrap();
+        assert!(!tags.has_place_name());
+        assert_eq!(tags.gps_latitude, Some(48.45964));
+        assert_eq!(tags.gps_longitude, Some(12.089297));
+    }
+
+    #[test]
+    fn reads_place_names_from_a_sidecar() {
+        let xmp = r#"<rdf:Description rdf:about=""
+    photoshop:City="Ribadeo" photoshop:State="Galicia"
+    photoshop:Country="Spain" Iptc4xmpCore:CountryCode="ES">
+    <Iptc4xmpCore:Location>Praia das Catedrais &amp; cliffs</Iptc4xmpCore:Location>
+</rdf:Description>"#;
+        let tags = extract_location_from_xmp(xmp).unwrap();
+        assert_eq!(tags.city.as_deref(), Some("Ribadeo"));
+        assert_eq!(tags.state.as_deref(), Some("Galicia"));
+        assert_eq!(tags.country.as_deref(), Some("Spain"));
+        assert_eq!(tags.country_code.as_deref(), Some("ES"));
+        assert_eq!(
+            tags.location.as_deref(),
+            Some("Praia das Catedrais & cliffs")
+        );
+        assert!(tags.has_place_name());
+    }
+
+    #[test]
+    fn xmp_without_location_is_none() {
+        assert!(extract_location_from_xmp("<rdf:Description dc:title=\"x\"/>").is_none());
+        assert!(extract_location_from_xmp("").is_none());
+    }
+
+    #[test]
+    fn coordinate_forms_and_hemispheres() {
+        assert_eq!(parse_xmp_coordinate("48,27.5784N"), Some(48.45964));
+        assert_eq!(parse_xmp_coordinate("7,2,30W"), Some(-7.041666666666667));
+        assert_eq!(parse_xmp_coordinate("43.5370"), Some(43.5370));
+        assert_eq!(parse_xmp_coordinate("-7.0409"), Some(-7.0409));
+        assert!(parse_xmp_coordinate("north-ish").is_none());
+        assert!(parse_xmp_coordinate("1,2,3,4N").is_none());
+    }
+
+    #[test]
+    fn sidecar_is_found_next_to_the_original() {
+        let dir = std::env::temp_dir().join(format!("lrg-sidecar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw = dir.join("IMG_1234.CR2");
+        std::fs::write(&raw, b"not really a raw file").unwrap();
+        assert!(read_sidecar_location(&raw).is_none());
+
+        std::fs::write(
+            dir.join("IMG_1234.xmp"),
+            r#"<rdf:Description photoshop:City="Ribadeo"/>"#,
+        )
+        .unwrap();
+        let tags = read_sidecar_location(&raw).unwrap();
+        assert_eq!(tags.city.as_deref(), Some("Ribadeo"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn merge_fills_the_gaps_when_both_sources_agree() {
+        let mut catalog = LocationTags {
+            city: Some("Ribadeo".into()),
+            ..Default::default()
+        };
+        catalog.merge_missing(&LocationTags {
+            city: Some("ribadeo ".into()),
+            state: Some("Galicia".into()),
+            country: Some("Spain".into()),
+            gps_latitude: Some(43.5),
+            gps_longitude: Some(-7.0),
+            ..Default::default()
+        });
+        assert_eq!(catalog.city.as_deref(), Some("Ribadeo"));
+        assert_eq!(catalog.state.as_deref(), Some("Galicia"));
+        assert_eq!(catalog.country.as_deref(), Some("Spain"));
+        assert_eq!(catalog.gps_latitude, Some(43.5));
+    }
+
+    /// Two sources describing different places must not be stitched into a
+    /// third that exists nowhere — caught by a live run, which produced
+    /// "Sankt Peter-Ording, Galicia, Germany".
+    #[test]
+    fn merge_never_stitches_two_different_places_together() {
+        let mut catalog = LocationTags {
+            city: Some("Sankt Peter-Ording".into()),
+            country: Some("Germany".into()),
+            ..Default::default()
+        };
+        catalog.merge_missing(&LocationTags {
+            city: Some("Ribadeo".into()),
+            state: Some("Galicia".into()),
+            country: Some("Spain".into()),
+            gps_latitude: Some(54.3),
+            gps_longitude: Some(8.6),
+            ..Default::default()
+        });
+        assert_eq!(catalog.city.as_deref(), Some("Sankt Peter-Ording"));
+        assert_eq!(catalog.state, None);
+        assert_eq!(catalog.country.as_deref(), Some("Germany"));
+        // The coordinates are not a name and still fill in.
+        assert_eq!(catalog.gps_latitude, Some(54.3));
     }
 
     #[test]

@@ -241,12 +241,33 @@ Extra information sent alongside the photo to improve accuracy:
 - **Existing Keywords** — the photo's keywords go into the prompt. Names that
   Lightroom's face recognition put on the photo are sent separately from the
   rest, and labelled as the people in the picture, so a person called *Ivo* is
-  no longer read as scenery and turned into "Ivo Beach".
+  no longer read as scenery and turned into "Ivo Beach". The model is also
+  asked to *use* those names: a photo of two tagged people gets "Ivo and
+  Myriam on the beach" rather than "a man and a woman on a beach".
 - **Folder Names**
-- **Location (looked up from the photo's GPS coordinates)** — on by default.
-  The backend turns the photo's own EXIF position into a place name and puts
-  that in the prompt; raw coordinates are never sent. Untick it and nothing
-  about where the photo was taken leaves your machine.
+- **Location** — on by default, and the place reaches the prompt from whichever
+  of these knows it:
+  1. Lightroom's own location fields (Sublocation, City, State/Province,
+     Country) as the catalog holds them, which is also the only version that
+     includes a place you corrected after import;
+  2. failing that, what the file itself carries — its IPTC/EXIF, and the XMP
+     sidecar beside a raw original;
+  3. failing that, the photo's GPS coordinates, looked up against an offline
+     list of ~145,000 places (GeoNames `cities1000`, bundled — nothing is asked
+     of the network). This is what covers the common case where Lightroom's
+     address lookup only ever *suggested* a city and you never confirmed it:
+     the suggestions are not stored anywhere the plug-in can read, but the
+     coordinates are. The prompt marks a looked-up place as looked up, and says
+     "near" when the nearest known place is more than 5 km away, so the model
+     names the area rather than inventing a landmark.
+
+  Raw coordinates only leave your machine if no place name can be worked out at
+  all. Untick the option and nothing about where the photo was taken is sent.
+
+  Two configurations used to lose the location silently, and no longer do:
+  **Submit originals instead of exports** (Plug-in Manager) and an **export size
+  above 2048 px**. Both make the backend re-encode the image, and the JPEG it
+  produces has no metadata left to read.
 - **Ask for context before each batch** — opens a dialog where you can type
   context for the upcoming photos by hand
 

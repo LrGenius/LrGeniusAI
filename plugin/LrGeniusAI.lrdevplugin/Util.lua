@@ -244,6 +244,60 @@ function Util.isRawPhoto(photo)
 end
 
 ---
+-- Where the catalog says a photo was taken.
+--
+-- The backend used to read this out of the image bytes it was handed, which
+-- worked only for the small exported JPEGs: normalising a raw original -- or
+-- any JPEG over the server's 2048 px limit -- re-encodes it, and the JPEG that
+-- comes out carries neither EXIF nor IPTC. So a run with "submit originals"
+-- turned on sent no location at all, however carefully the user had set the
+-- switch (issue #321). The catalog does not have that problem, and it is also
+-- the only source that reflects a place corrected in Lightroom after import.
+--
+-- Only the confirmed fields are here. Lightroom's reverse-geocoding
+-- *suggestions* (the greyed-out ones) are not reachable through the SDK and do
+-- not reach the exported file or the XMP sidecar either -- the backend turns
+-- the coordinates into a place name itself for exactly that case.
+--
+-- @param photo LrPhoto The photo object.
+-- @return table Fields to merge into a photo's request options; empty when the
+--         catalog knows nothing about where the photo was taken.
+--
+function Util.getPhotoLocation(photo)
+	local location = {}
+	if photo == nil then
+		return location
+	end
+
+	local fields = {
+		location_sublocation = "location",
+		location_city = "city",
+		location_state = "stateProvince",
+		location_country = "country",
+		location_country_code = "isoCountryCode",
+	}
+	for field, metadataKey in pairs(fields) do
+		local value = safeGetFormattedMetadata(photo, metadataKey)
+		if type(value) == "string" then
+			local cleaned = trim(value)
+			if cleaned ~= "" then
+				location[field] = cleaned
+			end
+		end
+	end
+
+	-- Both halves or neither: a latitude on its own is not a position, and the
+	-- backend would have nothing to look a place name up with.
+	local gps = safeGetRawMetadata(photo, "gps")
+	if type(gps) == "table" and type(gps.latitude) == "number" and type(gps.longitude) == "number" then
+		location.gps_latitude = gps.latitude
+		location.gps_longitude = gps.longitude
+	end
+
+	return location
+end
+
+---
 -- Names of the people Lightroom's face recognition has tagged on a photo.
 --
 -- Lightroom stores a named face as an ordinary keyword whose `keywordType`

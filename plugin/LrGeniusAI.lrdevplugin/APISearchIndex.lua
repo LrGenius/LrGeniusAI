@@ -144,6 +144,36 @@ local EXPORT_SETTINGS = {
 	LR_embeddedMetadataOption = "all",
 }
 
+--- Appends the catalog's location fields to a multipart request.
+---
+--- Shared by both upload transports, and skipped field by field: a photo the
+--- catalog knows no city for must not arrive with an empty one, because an
+--- empty string still counts as "a place is known" and would stop the backend
+--- from looking one up from the coordinates.
+---
+--- @param mimeChunks table The multipart chunk list, appended to in place.
+--- @param options table The photo's request options.
+local function appendLocationChunks(mimeChunks, options)
+	local textFields = {
+		"location_sublocation",
+		"location_city",
+		"location_state",
+		"location_country",
+		"location_country_code",
+	}
+	for _, field in ipairs(textFields) do
+		local value = options[field]
+		if type(value) == "string" and value ~= "" then
+			table.insert(mimeChunks, { name = field, value = value })
+		end
+	end
+	for _, field in ipairs({ "gps_latitude", "gps_longitude" }) do
+		if type(options[field]) == "number" then
+			table.insert(mimeChunks, { name = field, value = tostring(options[field]) })
+		end
+	end
+end
+
 -- Forward declarations for private helper functions
 local _request
 local _requestMultipart
@@ -821,6 +851,16 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
 		date_time = options.date_time,
 		date_time_unix = options.date_time_unix,
+		-- Where the catalog says the photo was taken; absent when it does not
+		-- know, which is when the backend falls back to the file and then to
+		-- the GPS coordinates.
+		location_sublocation = options.location_sublocation,
+		location_city = options.location_city,
+		location_state = options.location_state,
+		location_country = options.location_country,
+		location_country_code = options.location_country_code,
+		gps_latitude = options.gps_latitude and tostring(options.gps_latitude) or nil,
+		gps_longitude = options.gps_longitude and tostring(options.gps_longitude) or nil,
 		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
 		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
 		vertex_project_id = options.vertex_project_id,
@@ -910,6 +950,13 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			folder_names = po.folder_names,
 			exposure_bias = po.exposure_bias,
 			is_raw = po.is_raw,
+			location_sublocation = po.location_sublocation,
+			location_city = po.location_city,
+			location_state = po.location_state,
+			location_country = po.location_country,
+			location_country_code = po.location_country_code,
+			gps_latitude = po.gps_latitude,
+			gps_longitude = po.gps_longitude,
 		})
 	end
 
@@ -1264,6 +1311,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
 	end
+	appendLocationChunks(mimeChunks, options)
 	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
 		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
 	end
@@ -1374,6 +1422,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
 	end
+	appendLocationChunks(mimeChunks, options)
 	-- Exposure compensation, needed by culling's bracket detection. Only sent
 	-- when the camera recorded it; see the note in buildPhotoOptions.
 	if type(options.exposure_bias) == "number" then
@@ -2063,11 +2112,16 @@ local function buildPhotoOptions(photo, photoId, options)
 	for k, v in pairs(options) do
 		photoOptions[k] = v
 	end
-	-- No `gps_coordinates` here on purpose. The plug-in used to attach the raw
-	-- coordinates to every request and the backend never read the field: it
-	-- derives place names from the photo's own EXIF instead, which is why
-	-- `submit_gps` is the switch that matters. Sending coordinates nothing
-	-- consumes is noise, and privacy-sensitive noise at that.
+	-- The catalog's own location fields, and only under `submit_gps`: this is
+	-- the same context the switch has always governed, just taken from the
+	-- source that survives. Reading it out of the image bytes found nothing at
+	-- all for a raw original or a full-size JPEG, because normalising those
+	-- re-encodes them and the metadata does not survive (issue #321).
+	if options.submit_gps ~= false then
+		for field, value in pairs(Util.getPhotoLocation(photo)) do
+			photoOptions[field] = value
+		end
+	end
 	if options.submit_keywords then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
