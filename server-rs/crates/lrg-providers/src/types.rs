@@ -40,6 +40,14 @@ pub struct MetadataGenerationRequest {
     /// Same switch as `existing_keywords` (`submit_keywords`): this splits the
     /// context that was already being sent, it does not add more.
     pub existing_face_tags: Option<Vec<String>>,
+    /// What the local BioCLIP 2 classifier made of the organism in the frame,
+    /// when species identification ran for this photo.
+    ///
+    /// A vision LLM guesses at animals and plants from the whole scene and
+    /// gets them confidently wrong — issue #326's two rabbits captioned as
+    /// sheep. The classifier is a domain model over a taxonomy, so where it
+    /// speaks it outranks the LLM, and the prompt says so.
+    pub detected_species: Option<DetectedSpecies>,
     pub location_data: Option<LocationTags>,
     pub folder_names: Option<String>,
     pub user_context: Option<String>,
@@ -53,6 +61,25 @@ pub struct MetadataGenerationRequest {
 
     pub ollama_base_url: Option<String>,
     pub lmstudio_base_url: Option<String>,
+}
+
+/// One taxonomic identification, as the prompt needs it.
+///
+/// A flattened view of `lrg_ml::bioclip::TaxonomyPrediction` rather than the
+/// type itself: `lrg-providers` does not depend on `lrg-ml`, and the prompt
+/// only ever wants the winning candidate's names and how deep the classifier
+/// was willing to go.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DetectedSpecies {
+    /// `"species"` / `"genus"` / ... / `"kingdom"`. Empty or `"none"` means
+    /// the classifier declined to name anything.
+    pub rank: String,
+    /// Kingdom-down-to-rank path, `>`-joined. Not put in the prompt itself —
+    /// it is what tells the line whether to say "animal" or "plant".
+    pub taxonomy: String,
+    pub scientific_name: String,
+    /// GBIF vernacular name; often empty above species rank.
+    pub common_name: String,
 }
 
 /// Keyword hierarchy: either a flat list of category names, or a nested

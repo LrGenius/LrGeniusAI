@@ -87,6 +87,17 @@ properties of the individual photo.
 `/v1/edit/recipe` and `/v1/edit/recipe/base64` accept the same
 `existing_keywords`/`existing_face_tags` pair, under the same switch.
 
+**Species reaches the prompt, not the request.** When `tasks` includes
+`species`, BioCLIP 2 runs *before* the LLM call rather than after it, and the
+identification is written into that photo's prompt as the answer to use (issue
+#326 — a general vision model captioned two rabbits as sheep while the species
+field on the same photo read "European Rabbit"). A coarse rank is passed on as
+a ceiling instead of a name. There is no request field for this: a photo
+identified by an earlier run contributes its *stored* identification, so a
+metadata-only re-run over already-identified photos benefits too. The line sits
+in the per-photo half of the split prompt, so the run-constant KV-cache prefix
+is unaffected.
+
 **Response:** `{status, success_count, failure_count, error_messages, warnings, results}`.
 
 `warnings` is where a *degraded success* is reported: the photo was indexed, but

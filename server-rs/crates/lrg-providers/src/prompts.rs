@@ -14,7 +14,9 @@
 use lrg_imaging::location::format_location_for_prompt;
 
 use crate::keyword_taxonomy::{CategoryLabels, KeywordLeafEncoding};
-use crate::types::{EditGenerationRequest, KeywordCategories, MetadataGenerationRequest};
+use crate::types::{
+    DetectedSpecies, EditGenerationRequest, KeywordCategories, MetadataGenerationRequest,
+};
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a professional photography analyst with expertise in object recognition and computer-generated image description. \nYou also try to identify famous buildings and landmarks as well as the location where the photo was taken. \nFurthermore, you aim to specify animal and plant species as accurately as possible. \nYou also describe objects—such as vehicle types and manufacturers—as specifically as you can.";
 
@@ -99,6 +101,66 @@ fn face_tag_line(faces: &[String]) -> Option<String> {
              a location name out of one."
         )
     })
+}
+
+/// What the classifier's kingdom says the subject is, for the prompt's first
+/// word. Falls back to "organism" for the kingdoms a photographer will
+/// essentially never hit (and for a taxonomy string that arrived empty).
+fn subject_noun(taxonomy: &str) -> &'static str {
+    match taxonomy.split('>').next().map(str::trim) {
+        Some("Animalia") => "animal",
+        Some("Plantae") => "plant",
+        Some("Fungi") => "fungus",
+        _ => "organism",
+    }
+}
+
+/// The prompt line that hands BioCLIP 2's identification to the LLM.
+///
+/// The system prompt asks the model to "specify animal and plant species as
+/// accurately as possible", and a general vision model obliges with a
+/// confident wrong answer — issue #326's pair of rabbits described as sheep
+/// while the species field on the same photo read "European Rabbit". The
+/// classifier is a domain model over the tree of life, so when it has spoken
+/// the LLM's job is to use its answer, not to re-guess it.
+///
+/// Two shapes, because a coarse identification is a different instruction from
+/// a precise one: at genus or species rank there is a name to use, while a
+/// class- or family-level call means "do not go deeper than this", which is
+/// exactly the mistake being fixed.
+fn species_line(species: &DetectedSpecies) -> Option<String> {
+    let rank = species.rank.trim();
+    if rank.is_empty() || rank == "none" {
+        return None;
+    }
+    let scientific = species.scientific_name.trim();
+    let common = species.common_name.trim();
+    let name = match (common.is_empty(), scientific.is_empty()) {
+        (true, true) => return None,
+        (true, false) => scientific.to_string(),
+        (false, true) => common.to_string(),
+        (false, false) => format!("{common} ({scientific})"),
+    };
+    let noun = subject_noun(&species.taxonomy);
+
+    if rank == "species" || rank == "genus" {
+        Some(format!(
+            "The {noun} in this photo has been identified by a specialist biological \
+             classifier as: {name}. That classifier is trained on the tree of life and is \
+             more reliable here than judging the {noun} from the picture, so use this \
+             identification wherever you name the {noun} — in the title, the caption, the \
+             alt text and the keywords — and never name a different species. Only ignore it \
+             if the photo plainly contains no {noun} at all."
+        ))
+    } else {
+        Some(format!(
+            "A specialist biological classifier placed the {noun} in this photo at {rank} \
+             rank only: {name}. Describe it at that level or in plain everyday words; do not \
+             invent a more precise species or genus than the classifier gave, and do not name \
+             a different group. Only ignore this if the photo plainly contains no {noun} at \
+             all."
+        ))
+    }
 }
 
 /// Flatten nested keyword categories to a simple list (pre-order:
@@ -308,6 +370,15 @@ pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPr
         if !dt.trim().is_empty() {
             per_photo_additions.push(format!("Capture Time: {dt}"));
         }
+    }
+
+    // Last of the per-photo lines on purpose. It is the most specific claim
+    // anything here makes about the frame, and it has to win against the
+    // system prompt's standing instruction to name species as accurately as
+    // possible — so it sits immediately before the image, not buried between
+    // the keyword list and the folder names.
+    if let Some(line) = request.detected_species.as_ref().and_then(species_line) {
+        per_photo_additions.push(line);
     }
 
     split_from_parts(base_prompt, context_additions, per_photo_additions)
@@ -696,6 +767,87 @@ mod tests {
         req.submit_keywords = true;
         req.existing_face_tags = Some(vec!["  ".to_string(), String::new()]);
         assert!(!prepare_user_prompt(&req).contains("People in this photo"));
+    }
+
+    fn rabbit() -> DetectedSpecies {
+        DetectedSpecies {
+            rank: "species".to_string(),
+            taxonomy:
+                "Animalia > Chordata > Mammalia > Lagomorpha > Leporidae > Oryctolagus > cuniculus"
+                    .to_string(),
+            scientific_name: "Oryctolagus cuniculus".to_string(),
+            common_name: "European Rabbit".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_detected_species_is_handed_to_the_model_as_the_answer() {
+        // Issue #326: BioCLIP said "European Rabbit" and the LLM, looking at
+        // the same photo unaided, titled it "Sheep in Green Pasture".
+        let mut req = base_request();
+        req.detected_species = Some(rabbit());
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("European Rabbit (Oryctolagus cuniculus)"));
+        assert!(prompt.contains("The animal in this photo"));
+        assert!(prompt.contains("never name a different species"));
+    }
+
+    #[test]
+    fn a_coarse_identification_forbids_guessing_deeper() {
+        // The classifier reporting "family" is it saying it does not know the
+        // species. Handing that over as if it were one would reintroduce the
+        // confident wrong answer from the other direction.
+        let mut req = base_request();
+        req.detected_species = Some(DetectedSpecies {
+            rank: "family".to_string(),
+            scientific_name: "Leporidae".to_string(),
+            common_name: String::new(),
+            ..rabbit()
+        });
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("at family rank only: Leporidae"));
+        assert!(prompt.contains("do not invent a more precise species"));
+    }
+
+    #[test]
+    fn the_kingdom_decides_what_the_subject_is_called() {
+        let mut req = base_request();
+        req.detected_species = Some(DetectedSpecies {
+            taxonomy: "Plantae > Tracheophyta > Magnoliopsida".to_string(),
+            scientific_name: "Bellis perennis".to_string(),
+            common_name: "Common Daisy".to_string(),
+            ..rabbit()
+        });
+        assert!(prepare_user_prompt(&req).contains("The plant in this photo"));
+    }
+
+    #[test]
+    fn no_identification_means_no_species_line() {
+        let mut req = base_request();
+        assert!(!prepare_user_prompt(&req).contains("in this photo has been identified"));
+        // What a photo with no organism in it gets from the classifier.
+        req.detected_species = Some(DetectedSpecies {
+            rank: "none".to_string(),
+            ..Default::default()
+        });
+        assert!(!prepare_user_prompt(&req).contains("in this photo has been identified"));
+        // A rank with no name behind it is nothing to tell the model about.
+        req.detected_species = Some(DetectedSpecies {
+            rank: "species".to_string(),
+            ..Default::default()
+        });
+        assert!(!prepare_user_prompt(&req).contains("in this photo has been identified"));
+    }
+
+    #[test]
+    fn the_species_line_stays_in_the_per_photo_half() {
+        // It is the most per-photo fact there is; in `stable` it would cut the
+        // reusable KV-cache prefix at the first identified organism.
+        let mut req = base_request();
+        req.detected_species = Some(rabbit());
+        let split = prepare_user_prompt_split(&req);
+        assert!(split.per_photo.contains("European Rabbit"));
+        assert!(!split.stable.contains("European Rabbit"));
     }
 
     #[test]
