@@ -40,10 +40,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 
 	-- Metadata generation options
 	props.temperature = prefs.temperature or 0.1
-	props.promptTitles = {}
-	for title in pairs(prefs.prompts) do
-		table.insert(props.promptTitles, { title = title, value = title })
-	end
+	props.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
 	props.prompt = prefs.prompt
 	props.prompts = prefs.prompts
@@ -109,6 +106,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 
 	-- Context options
 	props.submitKeywords = prefs.submitKeywords or false
+	-- Its own switch since #321: whether the names Lightroom put on the faces
+	-- may be sent is a different question from how much scenery vocabulary the
+	-- model gets, and a name is the one piece of context here that identifies a
+	-- person. Init.lua seeds it from submitKeywords so upgrades change nothing.
+	props.submitFaceNames = prefs.submitFaceNames ~= false
 	props.submitFolderName = prefs.submitFolderName or false
 	-- Defaults on: the backend has always read the photo's GPS and put the
 	-- place name in the prompt, so switching it off by default would silently
@@ -521,6 +523,14 @@ local function showAnalyzeAndIndexDialog(ctx)
 					f:row({
 						f:spacer({ width = share("ctxLabelWidth") }),
 						f:checkbox({
+							value = bind("submitFaceNames"),
+							title = "People's names from face recognition",
+							tooltip = 'Lets the AI write "Ivo and Myriam at the beach" instead of "a couple at the beach". Turn it off to keep the names of the people in your photos on this computer.',
+						}),
+					}),
+					f:row({
+						f:spacer({ width = share("ctxLabelWidth") }),
+						f:checkbox({
 							value = bind("submitFolderName"),
 							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/folderNames=Folder Names"),
 						}),
@@ -675,6 +685,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.temperature = props.temperature
 		prefs.maxTokens = props.maxTokens
 		prefs.submitKeywords = props.submitKeywords
+		prefs.submitFaceNames = props.submitFaceNames
 		prefs.submitFolderName = props.submitFolderName
 		prefs.submitGps = props.submitGps
 		prefs.showPhotoContextDialog = props.showPhotoContextDialog
@@ -879,6 +890,7 @@ LrTasks.startAsyncTask(function()
 			generate_title = props.generateTitle,
 			generate_alt_text = props.generateAltText,
 			submit_keywords = props.submitKeywords,
+			submit_face_tags = props.submitFaceNames,
 			submit_folder_names = props.submitFolderName,
 			submit_gps = props.submitGps,
 			submit_user_context = props.showPhotoContextDialog,

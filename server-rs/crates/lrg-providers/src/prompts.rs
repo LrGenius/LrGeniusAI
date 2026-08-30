@@ -433,8 +433,12 @@ pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPr
         if let Some(joined) = request.existing_keywords.as_deref().and_then(join_terms) {
             per_photo_additions.push(format!("Some keywords are: {joined}"));
         }
-        // After the keywords, not before: the contrast between the two lines is
-        // what tells the model that these particular terms are not scenery.
+    }
+
+    // After the keywords, not before: the contrast between the two lines is
+    // what tells the model that these particular terms are not scenery. Its
+    // own switch, though — see `MetadataGenerationRequest::submit_face_tags`.
+    if request.submit_face_tags {
         if let Some(line) = request
             .existing_face_tags
             .as_deref()
@@ -692,6 +696,8 @@ pub fn prepare_edit_user_prompt_split(request: &EditGenerationRequest) -> SplitP
         if let Some(joined) = request.existing_keywords.as_deref().and_then(join_terms) {
             per_photo_additions.push(format!("Existing keywords: {joined}"));
         }
+    }
+    if request.submit_face_tags {
         if let Some(line) = request
             .existing_face_tags
             .as_deref()
@@ -842,6 +848,7 @@ mod tests {
     fn face_tags_are_to_be_used_by_name() {
         let mut req = base_request();
         req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_face_tags = Some(vec!["Ivo".to_string(), "Myriam".to_string()]);
         let prompt = prepare_user_prompt(&req);
         assert!(prompt.contains("Refer to them by name in the title and the caption"));
@@ -870,6 +877,7 @@ mod tests {
         // "Ivo" as scenery and wrote "the rocky shore of Ivo Beach".
         let mut req = base_request();
         req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_keywords = Some(vec!["beach".to_string(), "sunset".to_string()]);
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
 
@@ -881,16 +889,48 @@ mod tests {
         assert!(!prompt.contains("Some keywords are: beach, sunset, Ivo"));
     }
 
+    /// The two switches are independent: naming the people in a private photo
+    /// to a cloud model is a different decision from sending "beach, sunset",
+    /// and either answer must be expressible without the other.
     #[test]
-    fn face_tags_follow_the_same_switch_as_keywords() {
-        // They are the same catalog context under a different label, so the
-        // user's "existing keywords" choice governs both.
+    fn people_have_their_own_switch_separate_from_keywords() {
         let mut req = base_request();
+        req.existing_keywords = Some(vec!["beach".to_string()]);
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+
         req.submit_keywords = false;
-        assert!(!prepare_user_prompt(&req).contains("People in this photo"));
+        req.submit_face_tags = false;
+        let neither = prepare_user_prompt(&req);
+        assert!(!neither.contains("People in this photo"));
+        assert!(!neither.contains("Some keywords are"));
+
+        // Keywords without the names: the scenery goes, the people stay home.
         req.submit_keywords = true;
-        assert!(prepare_user_prompt(&req).contains("People in this photo"));
+        req.submit_face_tags = false;
+        let keywords_only = prepare_user_prompt(&req);
+        assert!(keywords_only.contains("Some keywords are: beach"));
+        assert!(!keywords_only.contains("People in this photo"));
+
+        // Names without the keywords: what issue #321 wanted the title to say,
+        // for a catalog whose keywords are not worth sending.
+        req.submit_keywords = false;
+        req.submit_face_tags = true;
+        let people_only = prepare_user_prompt(&req);
+        assert!(people_only.contains("People in this photo, named by face recognition: Ivo"));
+        assert!(!people_only.contains("Some keywords are"));
+    }
+
+    /// The edit prompt asks for the names for its own reasons (skin tones, who
+    /// the subject is), but it answers to the same switch.
+    #[test]
+    fn edit_prompt_people_follow_the_people_switch() {
+        let mut req = base_edit_request();
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+        req.submit_keywords = true;
+        req.submit_face_tags = false;
+        assert!(!prepare_edit_user_prompt(&req).contains("People in this photo"));
+        req.submit_face_tags = true;
+        assert!(prepare_edit_user_prompt(&req).contains("People in this photo"));
     }
 
     #[test]
@@ -898,7 +938,7 @@ mod tests {
         // Who is in the frame changes with every photo; in `stable` it would
         // cut the reusable KV-cache prefix at the first photo with a face tag.
         let mut req = base_request();
-        req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
         let split = prepare_user_prompt_split(&req);
         assert!(split.per_photo.contains("People in this photo"));
@@ -908,7 +948,7 @@ mod tests {
     #[test]
     fn blank_face_tags_produce_no_line() {
         let mut req = base_request();
-        req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_face_tags = Some(vec!["  ".to_string(), String::new()]);
         assert!(!prepare_user_prompt(&req).contains("People in this photo"));
     }
@@ -1210,6 +1250,7 @@ mod tests {
     fn edit_prompt_labels_face_tags_as_people() {
         let mut req = base_edit_request();
         req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_keywords = Some(vec!["beach".to_string()]);
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
         let prompt = prepare_edit_user_prompt(&req);

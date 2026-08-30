@@ -23,6 +23,23 @@ function SearchIndexAPI.isLocalBackend()
 	return url:match("^https?://127%.0%.0%.1:") or url:match("^https?://localhost:")
 end
 
+-- Whether the names Lightroom's face recognition put on a photo may be sent
+-- with this request.
+--
+-- A caller that asked the user -- the Analyze & Index dialog has the checkbox
+-- -- passes the answer in `options.submit_face_tags`. Any other caller (the AI
+-- edit task, an automated test) says nothing, and then the saved preference
+-- decides: unticking the box in the one dialog that owns it must not be undone
+-- by a task that never asks. Only an explicit `false` turns the names off, so
+-- a missing preference still sends them, which is what every install did
+-- before the switch existed (issue #321).
+function SearchIndexAPI.wantsFaceNames(options)
+	if options ~= nil and options.submit_face_tags ~= nil then
+		return options.submit_face_tags ~= false
+	end
+	return not (prefs ~= nil and prefs.submitFaceNames == false)
+end
+
 -- Backend paths, grouped by domain. Everything lives under `/v1` except the
 -- five-path bootstrap contract below, which is deliberately unversioned: a
 -- plug-in that updates ahead of its backend still has to reach `/ping`,
@@ -836,6 +853,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		-- regardless, so a caller that does not mention it must not now lose it.
 		submit_gps = tostring(options.submit_gps ~= false),
 		submit_keywords = tostring(options.submit_keywords or false),
+		submit_face_tags = tostring(SearchIndexAPI.wantsFaceNames(options)),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = options.user_context,
 		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
@@ -983,6 +1001,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		-- regardless, so a caller that does not mention it must not now lose it.
 		submit_gps = tostring(options.submit_gps ~= false),
 		submit_keywords = tostring(options.submit_keywords or false),
+		submit_face_tags = tostring(SearchIndexAPI.wantsFaceNames(options)),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = base.user_context or options.user_context,
 		prompt = options.prompt,
@@ -1253,6 +1272,7 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	-- at all (see the module comment in `routes/edit.rs`), so this stays off.
 	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps or false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
+	table.insert(mimeChunks, { name = "submit_face_tags", value = tostring(SearchIndexAPI.wantsFaceNames(options)) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 	table.insert(mimeChunks, { name = "include_masks", value = tostring(options.include_masks ~= false) })
 
@@ -1389,6 +1409,7 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	-- Absent means enabled; see the note in indexPhotosByReference.
 	table.insert(mimeChunks, { name = "submit_gps", value = tostring(options.submit_gps ~= false) })
 	table.insert(mimeChunks, { name = "submit_keywords", value = tostring(options.submit_keywords or false) })
+	table.insert(mimeChunks, { name = "submit_face_tags", value = tostring(SearchIndexAPI.wantsFaceNames(options)) })
 	table.insert(mimeChunks, { name = "submit_folder_names", value = tostring(options.submit_folder_names or false) })
 
 	if options.user_context then
@@ -2122,7 +2143,11 @@ local function buildPhotoOptions(photo, photoId, options)
 			photoOptions[field] = value
 		end
 	end
-	if options.submit_keywords then
+	-- The keyword list is read once and split, but the two halves leave the
+	-- machine under their own switches: sending "beach, sunset" and naming the
+	-- people in a private photo are different decisions (issue #321).
+	local wantsFaceNames = SearchIndexAPI.wantsFaceNames(options)
+	if options.submit_keywords or wantsFaceNames then
 		local keywords = photo:getFormattedMetadata("keywordTagsForExport")
 		if keywords then
 			local keywordList
@@ -2137,8 +2162,13 @@ local function buildPhotoOptions(photo, photoId, options)
 			-- scenery: "the rocky shore of Ivo Beach" (issue #315). Splitting
 			-- them here lets the prompt say which names are people.
 			local plainKeywords, faceTags = Util.partitionPersonKeywords(keywordList, Util.getPersonKeywordNames(photo))
-			photoOptions.existing_keywords = plainKeywords
-			if #faceTags > 0 then
+			if options.submit_keywords then
+				photoOptions.existing_keywords = plainKeywords
+			end
+			-- Never both: with names off, the split still has to happen, or the
+			-- names would ride along inside existing_keywords — which is the
+			-- bug #315 fixed, and here it would also defeat the switch.
+			if wantsFaceNames and #faceTags > 0 then
 				photoOptions.existing_face_tags = faceTags
 			end
 		end
@@ -5100,6 +5130,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("date_time", options.date_time)
 	addEditOpt("folder_names", options.folder_names)
 	addEditOpt("submit_keywords", options.submit_keywords)
+	addEditOpt("submit_face_tags", SearchIndexAPI.wantsFaceNames(options))
 	addEditOpt("submit_folder_names", options.submit_folder_names)
 	addEditOpt("include_masks", options.include_masks)
 	addEditOpt("adjust_white_balance", options.adjust_white_balance)

@@ -210,3 +210,36 @@ describe("SearchIndexAPI.summarizeRun", function()
 		assert.is_nil(warnings)
 	end)
 end)
+
+describe("SearchIndexAPI.wantsFaceNames", function()
+	local savedPref
+
+	before_each(function()
+		savedPref = prefs.submitFaceNames
+	end)
+
+	after_each(function()
+		prefs.submitFaceNames = savedPref
+	end)
+
+	it("takes the caller's answer when it has one", function()
+		prefs.submitFaceNames = true
+		assert.is_false(SearchIndexAPI.wantsFaceNames({ submit_face_tags = false }))
+		prefs.submitFaceNames = false
+		assert.is_true(SearchIndexAPI.wantsFaceNames({ submit_face_tags = true }))
+	end)
+
+	it("falls back to the saved preference when the caller says nothing", function()
+		-- The AI edit task has no checkbox of its own; unticking the box in the
+		-- Analyze dialog still has to keep the names off its requests.
+		prefs.submitFaceNames = false
+		assert.is_false(SearchIndexAPI.wantsFaceNames({}))
+		assert.is_false(SearchIndexAPI.wantsFaceNames(nil))
+	end)
+
+	it("sends the names when nobody has said otherwise", function()
+		prefs.submitFaceNames = nil
+		assert.is_true(SearchIndexAPI.wantsFaceNames({}))
+		assert.is_true(SearchIndexAPI.wantsFaceNames(nil))
+	end)
+end)

@@ -43,6 +43,10 @@ pub(crate) struct EditOptions {
     prompt: Option<String>,
     submit_keywords: bool,
     submit_folder_names: bool,
+    /// Whether the names on the photo's faces may be sent — see
+    /// [`lrg_providers::types::MetadataGenerationRequest::submit_face_tags`].
+    /// Defaults to true for the same wire-compatibility reason.
+    submit_face_tags: bool,
     existing_keywords: Option<Vec<String>>,
     /// Face tags, kept apart from `existing_keywords` — see
     /// [`lrg_providers::types::MetadataGenerationRequest::existing_face_tags`].
@@ -94,6 +98,7 @@ impl Default for EditOptions {
             prompt: None,
             submit_keywords: false,
             submit_folder_names: false,
+            submit_face_tags: true,
             existing_keywords: None,
             existing_face_tags: None,
             folder_names: None,
@@ -169,6 +174,7 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         prompt: fields.get("prompt").cloned(),
         submit_keywords: bool_field(fields, "submit_keywords", false),
         submit_folder_names: bool_field(fields, "submit_folder_names", false),
+        submit_face_tags: bool_field(fields, "submit_face_tags", true),
         existing_keywords,
         existing_face_tags,
         folder_names: fields.get("folder_names").cloned(),
@@ -255,6 +261,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         prompt: get_str("prompt"),
         submit_keywords: get_bool("submit_keywords", false),
         submit_folder_names: get_bool("submit_folder_names", false),
+        submit_face_tags: get_bool("submit_face_tags", true),
         existing_keywords,
         existing_face_tags,
         folder_names: get_str("folder_names"),
@@ -486,6 +493,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     request.system_prompt = options.prompt.clone();
     request.submit_keywords = options.submit_keywords;
     request.submit_folder_names = options.submit_folder_names;
+    request.submit_face_tags = options.submit_face_tags;
     request.existing_keywords = options.existing_keywords.clone();
     request.existing_face_tags = options.existing_face_tags.clone();
     request.folder_names = options.folder_names.clone();

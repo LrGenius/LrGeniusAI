@@ -135,6 +135,14 @@ struct MetadataOptions {
     generate_alt_text: bool,
     submit_keywords: bool,
     submit_folder_names: bool,
+    /// Whether the names on the photo's faces may be sent to the model.
+    ///
+    /// Defaults to true, which is not the plugin's default but the right one
+    /// for the wire: a plugin old enough not to send the field only ever sends
+    /// `existing_face_tags` when its own keyword switch is on, so trusting
+    /// what arrived keeps that client's behaviour exactly as it was. A new
+    /// plugin sends the field and decides for itself.
+    submit_face_tags: bool,
     /// Whether the photo's own GPS may be turned into place names and sent to
     /// the model along with the image.
     ///
@@ -406,6 +414,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             generate_alt_text: bool_field(fields, "generate_alt_text", true),
             submit_keywords: bool_field(fields, "submit_keywords", false),
             submit_folder_names: bool_field(fields, "submit_folder_names", false),
+            submit_face_tags: bool_field(fields, "submit_face_tags", true),
             submit_gps: bool_field(fields, "submit_gps", true),
             location: location_from_fields(&|key| fields.get(key).cloned()),
             existing_keywords,
@@ -2300,6 +2309,7 @@ fn build_metadata_request(
         user_prompt: None,
         submit_keywords: mo.submit_keywords,
         submit_folder_names: mo.submit_folder_names,
+        submit_face_tags: mo.submit_face_tags,
         existing_keywords: overrides
             .existing_keywords
             .clone()
@@ -2566,8 +2576,10 @@ mod keyword_option_tests {
             }),
             ..Default::default()
         };
+        // The file agrees on the city, so what it knows on top of that is the
+        // same place's country and fills in.
         let file = LocationTags {
-            city: Some("FileCity".to_string()),
+            city: Some("Ribadeo".to_string()),
             country: Some("Spain".to_string()),
             gps_latitude: Some(48.1372),
             gps_longitude: Some(11.5755),
@@ -2576,10 +2588,58 @@ mod keyword_option_tests {
         let req = build_metadata_request(&opts, &overrides, &[], "p1", Some(&file), None);
         let location = req.location_data.expect("a location");
         assert_eq!(location.city.as_deref(), Some("Ribadeo"));
-        // Filled in from the file, because the catalog had nothing to say.
         assert_eq!(location.country.as_deref(), Some("Spain"));
         // A name was already known, so Munich's coordinates changed nothing.
         assert_eq!(location.gps_place_distance_km, None);
+    }
+
+    /// The same request with a file that names a *different* city: its country
+    /// is that other place's country, and pairing it with the catalog's city
+    /// would describe somewhere neither source meant.
+    #[test]
+    fn a_file_naming_another_place_contributes_no_names() {
+        let opts = parse_options(&fields(&[]));
+        let overrides = PhotoOverrides {
+            location: Some(LocationTags {
+                city: Some("Sankt Peter-Ording".to_string()),
+                country: Some("Germany".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let file = LocationTags {
+            city: Some("Ribadeo".to_string()),
+            state: Some("Galicia".to_string()),
+            country: Some("Spain".to_string()),
+            ..Default::default()
+        };
+        let req = build_metadata_request(&opts, &overrides, &[], "p1", Some(&file), None);
+        let location = req.location_data.expect("a location");
+        assert_eq!(location.city.as_deref(), Some("Sankt Peter-Ording"));
+        assert_eq!(location.country.as_deref(), Some("Germany"));
+        assert_eq!(location.state, None);
+    }
+
+    /// The people switch reaches the request on its own, and an older plugin
+    /// that never heard of it keeps sending names exactly as before: it only
+    /// puts `existing_face_tags` on the wire when its keyword switch is on, so
+    /// the absent field has to mean "use what arrived", not "drop it".
+    #[test]
+    fn people_switch_is_read_and_defaults_to_what_the_client_sent() {
+        let sent = parse_options(&fields(&[("submit_face_tags", "false")]));
+        let req = build_metadata_request(&sent, &PhotoOverrides::default(), &[], "p1", None, None);
+        assert!(!req.submit_face_tags);
+
+        let older_client = parse_options(&fields(&[("submit_keywords", "true")]));
+        let req = build_metadata_request(
+            &older_client,
+            &PhotoOverrides::default(),
+            &[],
+            "p1",
+            None,
+            None,
+        );
+        assert!(req.submit_face_tags);
     }
 
     /// The switch has to keep meaning what it says: with location context off,

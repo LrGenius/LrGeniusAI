@@ -368,6 +368,85 @@ function Util.getPersonKeywordNames(photo)
 end
 
 ---
+-- Adds the prompts that ship with the plugin to the user's set, once each.
+--
+-- "Add it if it is missing" would put a preset the user deleted back on every
+-- launch; "add it only on a fresh install" would never reach the people who
+-- already have the plugin, who are exactly the ones a new preset is for. So
+-- what is remembered is not which prompts exist but which have already been
+-- offered: seeded once, then the user's set is theirs — edits stay edited and
+-- deletions stay deleted.
+--
+-- @param prompts table|nil Map of prompt name -> instruction (the user's set).
+-- @param seeded table|nil Map of prompt name -> true, the names already offered.
+-- @param builtins table Array of `{ name = ..., instruction = ... }`, in order.
+-- @return table The prompts, with any newly offered built-in added.
+-- @return table The record of offered names, updated.
+-- @return boolean Whether anything changed and the two are worth storing.
+--
+function Util.seedBuiltinPrompts(prompts, seeded, builtins)
+	local result = prompts or {}
+	local offered = seeded or {}
+	local changed = prompts == nil or seeded == nil
+
+	for _, preset in ipairs(builtins or {}) do
+		if not offered[preset.name] then
+			-- Only when the name is free: a user who wrote their own "Default"
+			-- keeps it, and it is still marked as offered so this never runs
+			-- against that name again.
+			if result[preset.name] == nil then
+				result[preset.name] = preset.instruction
+			end
+			offered[preset.name] = true
+			changed = true
+		end
+	end
+
+	return result, offered, changed
+end
+
+---
+-- Builds the items for a prompt-picker popup menu, in a fixed order.
+--
+-- Three dialogs each built this list by iterating the prompts table with
+-- `pairs`, whose order Lua does not define and which changes between runs.
+-- With a single prompt that was invisible; the moment a second one shipped it
+-- became a menu that reorders itself behind the user's back.
+--
+-- @param prompts table Map of prompt name -> instruction text (may be nil).
+-- @param firstName string|nil A name to pin to the top (the default prompt).
+-- @return table Array of `{ title = name, value = name }`, `firstName` first
+--   and the rest alphabetically, compared case-insensitively so "beach" and
+--   "Beach" do not depend on the locale's idea of order.
+--
+function Util.promptMenuItems(prompts, firstName)
+	local names = {}
+	for name in pairs(prompts or {}) do
+		table.insert(names, name)
+	end
+	table.sort(names, function(a, b)
+		if firstName ~= nil then
+			if a == firstName then
+				return b ~= firstName
+			elseif b == firstName then
+				return false
+			end
+		end
+		local la, lb = string.lower(a), string.lower(b)
+		if la == lb then
+			return a < b
+		end
+		return la < lb
+	end)
+
+	local items = {}
+	for _, name in ipairs(names) do
+		table.insert(items, { title = name, value = name })
+	end
+	return items
+end
+
+---
 -- Splits a flattened keyword list into ordinary keywords and face tags.
 --
 -- `keywordTagsForExport` flattens person keywords and the rest of the

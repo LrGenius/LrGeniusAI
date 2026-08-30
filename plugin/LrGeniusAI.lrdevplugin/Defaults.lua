@@ -137,6 +137,46 @@ Defaults.defaultExportSize = "3072"
 
 Defaults.defaultSystemInstruction =
 	"You are a professional photography analyst with expertise in object recognition and computer-generated image description. You also try to identify famous buildings and landmarks as well as the location where the photo was taken. Furthermore, you aim to specify animal and plant species as accurately as possible. You also describe objects—such as vehicle types and manufacturers—as specifically as you can."
+
+Defaults.familyPromptName = "Family & Everyday Photos"
+
+-- The prompts that ship with the plugin, in menu order. `Default` is the
+-- catalogue-and-stock voice the plugin has always used: it names species,
+-- landmarks and vehicle makes, and describes the people in a frame as "a man
+-- and a woman" because that is what it was asked for. That voice is wrong for
+-- the shoebox of family photos issue #321 was about, where the answer wanted is
+-- who, where and what for. Hence a second preset rather than a different
+-- default: nobody's existing output changes, and the other job is one menu
+-- pick away.
+--
+-- Both are ordinary editable prompts once seeded. Init.lua adds each one once,
+-- so a preset the user rewrites stays rewritten and one they delete stays
+-- deleted.
+Defaults.builtinPrompts = {
+	{ name = Defaults.defaultPromptName, instruction = Defaults.defaultSystemInstruction },
+	{
+		name = Defaults.familyPromptName,
+		instruction = "You are describing personal and family photographs for the people who took them. "
+			.. "Write the way someone would label their own album: say who is in the picture, what they are doing, where it happened, and what the occasion appears to be. "
+			.. "When the photo's data names the people in it, use those names in the title and the caption instead of describing them as a man, a woman or a couple. "
+			.. "When it names the place, put the place in the title where it reads naturally. "
+			.. "Prefer the people, the place and the occasion over generic scene words, and keep the tone plain and warm rather than promotional. "
+			.. "Never invent what you were not given: no names, no relationships between the people, no birthdays, weddings or holidays, and no landmark or town that the photo and its data do not support. "
+			.. "Say only what you can see or were told.",
+	},
+}
+-- The built-in prompts as the `name -> instruction` table `prefs.prompts`
+-- holds. Used by "Reset to defaults", which restores every built-in rather
+-- than only `Default` -- a reset that quietly dropped the other preset would
+-- be a reset that removes a feature.
+function Defaults.builtinPromptTable()
+	local prompts = {}
+	for _, preset in ipairs(Defaults.builtinPrompts) do
+		prompts[preset.name] = preset.instruction
+	end
+	return prompts
+end
+
 Defaults.defaultEditSystemInstruction =
 	"You are a senior Lightroom Classic retoucher. Return only a structured Lightroom edit recipe that matches the schema exactly. No prose, no markdown, no unsupported controls. Build edits in this order: white balance and exposure foundation, tonal shaping, color refinement, detail/effects. Use masks only when materially beneficial and only for subject, sky, or background. Prefer subtle, natural, premium output unless explicitly asked for a stylized look. When a curve-shaped response is needed, prefer explicit tone_curve point curves over simulating everything with contrast alone."
 Defaults.defaultEditIntent = "Natural professional Lightroom edit"

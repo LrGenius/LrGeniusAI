@@ -230,6 +230,24 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
 
 Prompt templates, plus a free-text custom prompt appended to the built-in one.
 
+Two templates ship with the plug-in:
+
+- **Default** — the analytical voice: species, landmarks, vehicle makes,
+  described precisely. Unchanged, and still what every catalog uses unless you
+  pick otherwise.
+- **Family & Everyday Photos** — the album voice: who is in the picture, what
+  they are doing, where, and what the occasion appears to be. It asks for the
+  people by the names your catalog already has on them and for the place in the
+  title, and it is explicitly forbidden to invent what it was not given — no
+  relationships, no birthdays or weddings, no landmark the photo's own data
+  does not support. Pair it with **People's names from face recognition** and
+  **Location** below; without those it has nothing to name.
+
+Both are ordinary templates once they appear: edit them, add your own, delete
+what you do not want. A template you delete stays deleted, and one you rewrite
+stays rewritten — the plug-in only ever offers each built-in once. "Reset to
+defaults" in the prompt dialog brings both back.
+
 ---
 
 ## Context & Save
@@ -238,12 +256,23 @@ Prompt templates, plus a free-text custom prompt appended to the built-in one.
 
 Extra information sent alongside the photo to improve accuracy:
 
-- **Existing Keywords** — the photo's keywords go into the prompt. Names that
-  Lightroom's face recognition put on the photo are sent separately from the
-  rest, and labelled as the people in the picture, so a person called *Ivo* is
-  no longer read as scenery and turned into "Ivo Beach". The model is also
-  asked to *use* those names: a photo of two tagged people gets "Ivo and
-  Myriam on the beach" rather than "a man and a woman on a beach".
+- **Existing Keywords** — the photo's keywords go into the prompt.
+- **People's names from face recognition** — the names Lightroom put on the
+  faces are sent, separately from the keywords and labelled as the people in
+  the picture. Two things follow: a person called *Ivo* is no longer read as
+  scenery and turned into "Ivo Beach", and the model is asked to *use* the
+  names, so a photo of two tagged people gets "Ivo and Myriam on the beach"
+  rather than "a man and a woman on a beach". With several people named and no
+  way to tell which face is which, it names them together rather than guessing
+  who is who.
+
+  Its own switch since it is its own decision: a name identifies a person, and
+  a household happy to send "beach, sunset" to a cloud provider may well not
+  want to send "Ivo, Myriam" with it. Untick it and no name from your catalog
+  leaves the computer — for AI edits either, which never had a checkbox of
+  their own and follow this one. On upgrade it inherits whatever **Existing
+  Keywords** was set to, so nothing starts being sent that was not being sent
+  before.
 - **Folder Names**
 - **Location** — on by default, and the place reaches the prompt from whichever
   of these knows it:
