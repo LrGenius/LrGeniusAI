@@ -1010,6 +1010,13 @@ struct PreparedPhoto {
     existing_vector: Option<Vec<f32>>,
     existing_has_embedding: bool,
     new_embedding: Option<Vec<f32>>,
+    /// BioCLIP 2's embedding, when species identification ran and the organism
+    /// gate let the photo through. Phase 3 writes it to `SPECIES_TABLE`; the
+    /// identification itself is already folded into `main_metadata`.
+    species_vector: Option<Vec<f32>>,
+    /// Degradations phase 1 has to report — currently only species
+    /// identification, which produces one here instead of failing the photo.
+    warnings: Vec<String>,
     /// `Some` when this photo still needs an LLM call. `None` covers both
     /// "metadata generation is off" and "it already has metadata".
     llm_request: Option<lrg_providers::types::MetadataGenerationRequest>,
@@ -1238,6 +1245,47 @@ async fn prepare_one(
         new_embedding = Some(emb);
     }
 
+    // Species identification, ahead of the LLM call rather than after it.
+    // Identifying the organism is the one thing a general vision model is
+    // reliably bad at — issue #326 had a photo captioned "Sheep in Green
+    // Pasture" while the species field on the same photo read "European
+    // Rabbit" — and BioCLIP's answer can only correct the caption if it
+    // exists before the prompt is built. Everything it writes still goes into
+    // `main_metadata`, which phase 3 persists in its one coalesced upsert.
+    let mut species_vector: Option<Vec<f32>> = None;
+    let mut warnings: Vec<String> = Vec::new();
+    if options.compute_species {
+        let already_checked = main_metadata
+            .get("species_checked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if options.regenerate_metadata || !already_checked {
+            // The organism gate scores the SigLIP embedding, which is this
+            // pass's when it computed one and the stored one otherwise —
+            // the same fallback phase 3 used to apply to `final_vector`.
+            let gate_vector = match &new_embedding {
+                Some(v) => Some(v.as_slice()),
+                None => existing
+                    .as_ref()
+                    .filter(|_| existing_has_embedding)
+                    .and_then(|r| r.vector.as_deref()),
+            };
+            match run_species(state, options, photo_id, image_bytes, gate_vector) {
+                Ok((prediction, vector)) => {
+                    apply_species_metadata(&mut main_metadata, &prediction, &state.bioclip);
+                    species_vector = vector;
+                }
+                Err(e) => {
+                    // Same contract as faces: an optional signal must never
+                    // sink the photo, and `species_checked` stays unset so a
+                    // later run retries rather than treating this as done.
+                    log::warn!("Species identification failed for {photo_id}: {e}");
+                    warnings.push(format!("{filename} species: {e}"));
+                }
+            }
+        }
+    }
+
     let llm_request = if options.compute_metadata {
         let has_any_metadata = ["title", "caption", "alt_text", "keywords"]
             .iter()
@@ -1250,7 +1298,14 @@ async fn prepare_one(
                 })
             });
         let need_metadata = options.regenerate_metadata || !has_any_metadata;
-        need_metadata.then(|| build_metadata_request(options, overrides, image_bytes, photo_id))
+        // Read back out of the metadata blob rather than from the prediction
+        // above, so a photo whose species was identified by an *earlier* run
+        // (and therefore skipped here) still gets to correct this run's
+        // prompt.
+        let detected_species = species_for_prompt(&main_metadata);
+        need_metadata.then(|| {
+            build_metadata_request(options, overrides, image_bytes, photo_id, detected_species)
+        })
     } else {
         None
     };
@@ -1263,8 +1318,43 @@ async fn prepare_one(
         existing_vector: existing.as_ref().and_then(|r| r.vector.clone()),
         existing_has_embedding,
         new_embedding,
+        species_vector,
+        warnings,
         llm_request,
     })
+}
+
+/// The species block of a photo's metadata, in the shape the prompt wants.
+///
+/// Reads the stored fields rather than taking a `TaxonomyPrediction` so it
+/// covers both cases with one path: the identification this run just made, and
+/// the one an earlier run left behind on a photo that is only here for its
+/// metadata. Returns `None` when there is no usable identification, which is
+/// what keeps the line out of the prompt entirely.
+fn species_for_prompt(
+    metadata: &Map<String, Value>,
+) -> Option<lrg_providers::types::DetectedSpecies> {
+    let field = |key: &str| {
+        metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let rank = field("species_rank");
+    if rank.is_empty() || rank == "none" {
+        return None;
+    }
+    let species = lrg_providers::types::DetectedSpecies {
+        rank,
+        taxonomy: field("species_taxonomy"),
+        scientific_name: field("species_scientific_name"),
+        common_name: field("species_common_name"),
+    };
+    if species.scientific_name.is_empty() && species.common_name.is_empty() {
+        return None;
+    }
+    Some(species)
 }
 
 /// Fields the "Replace ß with ss" option applies to: the generated text, and
@@ -1310,6 +1400,8 @@ async fn finish_one(
         existing_vector,
         existing_has_embedding,
         new_embedding,
+        species_vector,
+        warnings: warnings_from_phase_1,
         llm_request,
     } = prepared;
     let photo_id = photo_id.as_str();
@@ -1319,7 +1411,11 @@ async fn finish_one(
     // degrade independently, and a single `Option` meant whichever failed
     // second erased the other's report — the user was told about the species
     // model while the missing face model went unmentioned.
-    let mut warnings: Vec<String> = Vec::new();
+    //
+    // Seeded from phase 1 rather than started empty: species identification
+    // runs there now (its answer has to reach the prompt), and a warning it
+    // raised is the user's only sign that a photo indexed without one.
+    let mut warnings: Vec<String> = warnings_from_phase_1;
 
     if llm_request.is_some() {
         let response =
@@ -1626,40 +1722,6 @@ async fn finish_one(
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");
                     warnings.push(format!("{filename} faces: {e}"));
-                }
-            }
-        }
-    }
-
-    // Species identification. Runs before the coalesced write below so its
-    // results land in the same upsert as everything else — see the comment
-    // above the face block for why nothing here gets its own `merge_insert`.
-    // The 768-d BioCLIP vector is the one thing that cannot go in that write,
-    // and it goes to SPECIES_TABLE after it, like the Vertex embedding.
-    let mut species_vector: Option<Vec<f32>> = None;
-    if options.compute_species {
-        let already_checked = main_metadata
-            .get("species_checked")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if options.regenerate_metadata || !already_checked {
-            match run_species(
-                state,
-                options,
-                photo_id,
-                &image_bytes,
-                final_vector.as_deref(),
-            ) {
-                Ok((prediction, vector)) => {
-                    apply_species_metadata(&mut main_metadata, &prediction, &state.bioclip);
-                    species_vector = vector;
-                }
-                Err(e) => {
-                    // Same contract as faces: an optional signal must never
-                    // sink the photo, and `species_checked` stays unset so a
-                    // later run retries rather than treating this as done.
-                    log::warn!("Species identification failed for {photo_id}: {e}");
-                    warnings.push(format!("{filename} species: {e}"));
                 }
             }
         }
@@ -2017,6 +2079,7 @@ fn build_metadata_request(
     overrides: &PhotoOverrides,
     image_bytes: &[u8],
     photo_id: &str,
+    detected_species: Option<lrg_providers::types::DetectedSpecies>,
 ) -> lrg_providers::types::MetadataGenerationRequest {
     let provider = provider_name(options);
     let model = options.model.clone().unwrap_or_default();
@@ -2055,6 +2118,7 @@ fn build_metadata_request(
             .existing_face_tags
             .clone()
             .or_else(|| mo.existing_face_tags.clone()),
+        detected_species,
         location_data,
         folder_names: overrides
             .folder_names
@@ -2221,7 +2285,7 @@ mod keyword_option_tests {
             exposure_bias: None,
             is_raw: None,
         };
-        let req = build_metadata_request(&opts, &overrides, &[], "p1");
+        let req = build_metadata_request(&opts, &overrides, &[], "p1", None);
         assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));
         assert_eq!(req.existing_keywords, Some(vec!["mine".to_string()]));
         assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
@@ -2237,7 +2301,7 @@ mod keyword_option_tests {
             ("existing_keywords", r#"["batch"]"#),
             ("folder_names", "BatchFolder"),
         ]));
-        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1");
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None);
         assert_eq!(req.date_time.as_deref(), Some("2026-01-01 00:00:00"));
         assert_eq!(req.existing_keywords, Some(vec!["batch".to_string()]));
         assert_eq!(req.folder_names.as_deref(), Some("BatchFolder"));
@@ -2251,7 +2315,7 @@ mod keyword_option_tests {
             ("existing_keywords", r#"["beach","sunset"]"#),
             ("existing_face_tags", r#"["Ivo"]"#),
         ]));
-        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1");
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None);
         assert_eq!(
             req.existing_keywords,
             Some(vec!["beach".to_string(), "sunset".to_string()])
@@ -2259,12 +2323,52 @@ mod keyword_option_tests {
         assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
     }
 
+    /// Issue #326: the classifier's answer only helps if it reaches the
+    /// prompt, and it reaches it through the photo's stored metadata.
+    #[test]
+    fn a_stored_identification_becomes_prompt_context() {
+        let mut m = Map::new();
+        m.insert("species_rank".into(), json!("species"));
+        m.insert(
+            "species_taxonomy".into(),
+            json!("Animalia > Chordata > Mammalia"),
+        );
+        m.insert(
+            "species_scientific_name".into(),
+            json!("Oryctolagus cuniculus"),
+        );
+        m.insert("species_common_name".into(), json!("European Rabbit"));
+        let species = species_for_prompt(&m).expect("an identification");
+        assert_eq!(species.rank, "species");
+        assert_eq!(species.common_name, "European Rabbit");
+        assert_eq!(species.scientific_name, "Oryctolagus cuniculus");
+    }
+
+    /// The two shapes a photo without an organism produces: never checked, and
+    /// checked with nothing found. Neither may put a line in the prompt.
+    #[test]
+    fn no_identification_produces_no_prompt_context() {
+        assert!(species_for_prompt(&Map::new()).is_none());
+        let mut m = Map::new();
+        m.insert("species_rank".into(), json!("none"));
+        m.insert("species_checked".into(), json!(true));
+        assert!(species_for_prompt(&m).is_none());
+    }
+
+    /// A rank with neither name behind it says nothing a model could use.
+    #[test]
+    fn a_nameless_rank_produces_no_prompt_context() {
+        let mut m = Map::new();
+        m.insert("species_rank".into(), json!("genus"));
+        assert!(species_for_prompt(&m).is_none());
+    }
+
     /// A plugin build that predates the split sends only `existing_keywords`;
     /// it must keep working, with no face-tag line in the prompt.
     #[test]
     fn absent_face_tags_leave_the_request_unchanged() {
         let opts = parse_options(&fields(&[("existing_keywords", r#"["beach"]"#)]));
-        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1");
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None);
         assert_eq!(req.existing_keywords, Some(vec!["beach".to_string()]));
         assert_eq!(req.existing_face_tags, None);
     }

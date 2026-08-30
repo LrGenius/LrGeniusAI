@@ -131,6 +131,24 @@ Both fields are filled in as photos are analyzed, so photos identified before
 this feature existed have them empty; re-running *Analyze & Index* over them,
 or *Retrieve Metadata from Backend*, fills them in.
 
+### The AI model is told what the classifier found
+
+When species identification and AI metadata run together, the identification
+is put into the prompt before the LLM writes anything, and the prompt says to
+use it. A general vision model is confident and often wrong about animals and
+plants — a photo of two rabbits came back titled *"Sheep in Green Pasture"*
+while the species field on the same photo read *European Rabbit* — and BioCLIP
+is a specialist trained on the tree of life, so where the two disagree the
+classifier wins.
+
+A coarse answer is passed on as a limit rather than a name: told *family:
+Leporidae*, the model is asked to stay at that level instead of inventing a
+species. Photos with no identification are unaffected, and a photo identified
+by an earlier run contributes its stored answer to a later metadata-only run.
+
+This needs no separate switch — ticking *Identify animal and plant species*
+is what turns it on.
+
 ### Why the answer is sometimes just "Aves"
 
 The model reports the **deepest rank it is actually confident about**. A clear
