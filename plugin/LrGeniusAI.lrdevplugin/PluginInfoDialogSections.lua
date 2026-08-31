@@ -71,10 +71,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.exportQuality = prefs.exportQuality
 	propertyTable.indexSubmitOriginals = (prefs.indexSubmitOriginals == true)
 
-	propertyTable.promptTitles = {}
-	for title in pairs(prefs.prompts) do
-		table.insert(propertyTable.promptTitles, { title = title, value = title })
-	end
+	propertyTable.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
 	propertyTable.prompt = prefs.prompt
 	propertyTable.prompts = prefs.prompts

@@ -153,3 +153,85 @@ describe("Util.keywordToHierarchyString", function()
 		assert.are.equal("Animal", Util.keywordToHierarchyString(fakeKeyword("Animal", nil)))
 	end)
 end)
+
+describe("Util.promptMenuItems", function()
+	it("puts the default prompt first and sorts the rest alphabetically", function()
+		local items = Util.promptMenuItems({
+			["Zoo Visit"] = "z",
+			["Default"] = "d",
+			["Family & Everyday Photos"] = "f",
+		}, "Default")
+		assert.are.same({
+			{ title = "Default", value = "Default" },
+			{ title = "Family & Everyday Photos", value = "Family & Everyday Photos" },
+			{ title = "Zoo Visit", value = "Zoo Visit" },
+		}, items)
+	end)
+
+	it("orders case-insensitively and stays deterministic for equal names", function()
+		local items = Util.promptMenuItems({ ["beach"] = "1", ["Album"] = "2", ["Beach"] = "3" }, nil)
+		assert.are.same({ "Album", "Beach", "beach" }, {
+			items[1].title,
+			items[2].title,
+			items[3].title,
+		})
+	end)
+
+	it("returns an empty list rather than failing on nil", function()
+		assert.are.same({}, Util.promptMenuItems(nil, "Default"))
+	end)
+
+	it("keeps every prompt when the pinned name is not there", function()
+		local items = Util.promptMenuItems({ ["One"] = "1", ["Two"] = "2" }, "Default")
+		assert.are.equal(2, #items)
+	end)
+end)
+
+describe("Util.seedBuiltinPrompts", function()
+	local builtins = {
+		{ name = "Default", instruction = "documentary" },
+		{ name = "Family & Everyday Photos", instruction = "album voice" },
+	}
+
+	it("seeds both prompts on a fresh install", function()
+		local prompts, seeded, changed = Util.seedBuiltinPrompts(nil, nil, builtins)
+		assert.is_true(changed)
+		assert.are.equal("documentary", prompts["Default"])
+		assert.are.equal("album voice", prompts["Family & Everyday Photos"])
+		assert.is_true(seeded["Default"])
+	end)
+
+	it("adds a newly shipped prompt to an existing install", function()
+		-- What an upgrade looks like: the old default is there, edited, and the
+		-- new preset has never been offered.
+		local prompts, _, changed = Util.seedBuiltinPrompts(
+			{ Default = "my own wording" },
+			{ Default = true },
+			builtins
+		)
+		assert.is_true(changed)
+		assert.are.equal("my own wording", prompts["Default"])
+		assert.are.equal("album voice", prompts["Family & Everyday Photos"])
+	end)
+
+	it("does not resurrect a prompt the user deleted", function()
+		local prompts, _, changed = Util.seedBuiltinPrompts(
+			{ Default = "documentary" },
+			{ ["Default"] = true, ["Family & Everyday Photos"] = true },
+			builtins
+		)
+		assert.is_nil(prompts["Family & Everyday Photos"])
+		assert.is_false(changed)
+	end)
+
+	it("leaves a user's own prompt of the same name alone", function()
+		local prompts = Util.seedBuiltinPrompts({ ["Family & Everyday Photos"] = "mine" }, {}, builtins)
+		assert.are.equal("mine", prompts["Family & Everyday Photos"])
+	end)
+
+	it("reports no change once everything has been offered", function()
+		local prompts, seeded = Util.seedBuiltinPrompts(nil, nil, builtins)
+		local _, _, changed = Util.seedBuiltinPrompts(prompts, seeded, builtins)
+		assert.is_false(changed)
+	end)
+end)

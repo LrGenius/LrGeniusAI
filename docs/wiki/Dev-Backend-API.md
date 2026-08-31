@@ -78,11 +78,34 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `is_raw` | bool | Whether the original is raw. Stored on the photo so later work (style training above all) can keep raw and rendered originals apart. Omit when unknown |
 | `extra_context` | object | Optional context hints (folder, date, GPS, keywords) |
 | `existing_keywords` | string[] | The photo's keywords, *without* face tags. Only reaches the prompt when `submit_keywords` is set |
-| `existing_face_tags` | string[] | Names Lightroom's face recognition put on the photo. Sent apart from `existing_keywords` and labelled as people in the prompt, so a person's name is not read as a place (issue #315). Same `submit_keywords` switch; omit it and the request behaves exactly as before the field existed |
+| `existing_face_tags` | string[] | Names Lightroom's face recognition put on the photo. Sent apart from `existing_keywords` and labelled as people in the prompt, so a person's name is not read as a place (issue #315), and asked for by name in the title and caption rather than "a man and a woman" (issue #321) |
+| `submit_face_tags` | bool | Whether `existing_face_tags` may reach the prompt. **Defaults to true**, unlike `submit_keywords`: a client old enough not to send this field only puts the names on the wire when its own keyword switch is on, so trusting what arrived leaves that client's behaviour unchanged. Governs the edit routes too |
+| `location_sublocation`, `location_city`, `location_state`, `location_country`, `location_country_code` | string | Where the catalog says the photo was taken. Omit a field the catalog has no value for — an empty string counts as "a place is known" and suppresses the GPS lookup below |
+| `gps_latitude`, `gps_longitude` | float | The photo's coordinates. Both or neither; a lone latitude is discarded |
 
-`/v1/index/photos/by-path` carries `exposure_bias`, `is_raw`, `existing_keywords` and
-`existing_face_tags` per image inside the `images` array instead, since all four are
-properties of the individual photo.
+All seven location fields are governed by `submit_gps` (default on) and, like the
+keyword fields, are only read when metadata is generated. `submit_keywords` and
+`submit_face_tags` are separate switches on purpose: sending "beach, sunset" and
+naming the people in a private photo to a cloud provider are different
+decisions, and each is expressible without the other.
+
+`/v1/index/photos/by-path` carries `exposure_bias`, `is_raw`, `existing_keywords`,
+`existing_face_tags` and the seven location fields per image inside the `images`
+array instead, since they are properties of the individual photo.
+
+**Where the location comes from, in order.** The catalog fields above win,
+because they are the most current — a city corrected in Lightroom is never
+written back into a raw original. What they leave open is filled from the file
+itself: its EXIF/IPTC, read *before* normalisation, plus any XMP sidecar beside
+it. Failing a place name entirely, the coordinates are reverse-geocoded offline
+against GeoNames' `cities1000` and the prompt says the name was looked up and
+how far away it is.
+
+Reading the file's metadata before normalisation is the fix for issue #321:
+normalising re-encodes every raw original and every JPEG over 2048 px, and the
+JPEG that comes out has neither EXIF nor IPTC — so location context reached the
+model only for small exported JPEGs, and silently vanished for anyone using
+"submit originals" or an export size above 2048 px.
 
 `/v1/edit/recipe` and `/v1/edit/recipe/base64` accept the same
 `existing_keywords`/`existing_face_tags` pair, under the same switch.

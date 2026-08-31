@@ -47,6 +47,13 @@ fn image_overrides(item: &Value) -> PhotoOverrides {
             .map(str::to_string),
         exposure_bias: item.get("exposure_bias").and_then(Value::as_f64),
         is_raw: item.get("is_raw").and_then(Value::as_bool),
+        // The coordinates arrive as JSON numbers and the place names as
+        // strings, so both are rendered back to text for the shared parser.
+        location: super::index_upload::location_from_fields(&|key| match item.get(key) {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        }),
     }
 }
 
@@ -193,5 +200,32 @@ mod tests {
     fn absent_face_tags_stay_none() {
         let overrides = image_overrides(&json!({ "existing_keywords": ["beach"] }));
         assert_eq!(overrides.existing_face_tags, None);
+    }
+
+    /// Location is per photo for the same reason capture time is: a group of
+    /// sixteen photos travels in one request, and the first photo's city is
+    /// not the others' (issue #321).
+    #[test]
+    fn per_image_location_is_read_including_numeric_coordinates() {
+        let overrides = image_overrides(&json!({
+            "location_city": "Ribadeo",
+            "location_country": "Spain",
+            "gps_latitude": 43.537,
+            "gps_longitude": -7.0409,
+        }));
+        let location = overrides.location.expect("a location");
+        assert_eq!(location.city.as_deref(), Some("Ribadeo"));
+        assert_eq!(location.country.as_deref(), Some("Spain"));
+        assert_eq!(location.gps_latitude, Some(43.537));
+        assert_eq!(location.gps_longitude, Some(-7.0409));
+    }
+
+    /// A plugin that sends no location at all leaves the backend to the file
+    /// and its sidecar, exactly as before.
+    #[test]
+    fn absent_location_stays_none() {
+        assert!(image_overrides(&json!({ "existing_keywords": ["beach"] }))
+            .location
+            .is_none());
     }
 }

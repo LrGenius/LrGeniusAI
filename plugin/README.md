@@ -177,7 +177,10 @@ In the plugin settings dialog you can configure:
   The section reports why it is unavailable when the host cannot use it — a
   source build without the `llamacpp` feature, or a missing MLX helper.
 - Export size and quality used for AI processing
-- Prompt presets
+- Prompt presets — two ship with the plug-in: **Default** (the analytical voice)
+  and **Family & Everyday Photos** (who, where, what for, using the names your
+  catalog has on the faces). Both editable; each is offered once, so an edit or
+  a deletion sticks.
 - Optional CLIP model download for advanced search
 
 ---

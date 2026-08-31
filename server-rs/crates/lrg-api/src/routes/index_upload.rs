@@ -20,6 +20,7 @@ use serde_json::{json, Map, Value};
 use lrg_analysis::face_aggregate::{aggregate_face_culling_metrics, FaceMetricsInput};
 use lrg_imaging::convert::{normalize_image_bytes, UnsupportedImageError};
 use lrg_imaging::cull_config::{FaceMetricsConfig, ImageMetricsConfig};
+use lrg_imaging::location::LocationTags;
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
@@ -113,6 +114,13 @@ pub(crate) struct PhotoOverrides {
     /// Per-photo raw flag, for `/v1/index/photos/by-path`. Falls back to the
     /// batch-level [`ParsedOptions::is_raw`] when absent.
     pub is_raw: Option<bool>,
+    /// Where the catalog says this photo was taken.
+    ///
+    /// The plugin reads Lightroom's own location fields and sends them, which
+    /// is the only source that survives everything: normalising a raw original
+    /// re-encodes it to a metadata-free JPEG, and the catalog also holds
+    /// corrections the file was never rewritten with.
+    pub location: Option<LocationTags>,
 }
 
 /// The metadata-generation-specific subset of `_extract_options`, kept
@@ -127,6 +135,14 @@ struct MetadataOptions {
     generate_alt_text: bool,
     submit_keywords: bool,
     submit_folder_names: bool,
+    /// Whether the names on the photo's faces may be sent to the model.
+    ///
+    /// Defaults to true, which is not the plugin's default but the right one
+    /// for the wire: a plugin old enough not to send the field only ever sends
+    /// `existing_face_tags` when its own keyword switch is on, so trusting
+    /// what arrived keeps that client's behaviour exactly as it was. A new
+    /// plugin sends the field and decides for itself.
+    submit_face_tags: bool,
     /// Whether the photo's own GPS may be turned into place names and sent to
     /// the model along with the image.
     ///
@@ -135,6 +151,9 @@ struct MetadataOptions {
     /// existed on the wire but not in behaviour. Defaults to true so existing
     /// installs keep the context they have been getting.
     submit_gps: bool,
+    /// Batch-level location, for the single-photo transports. Per-photo
+    /// [`PhotoOverrides::location`] wins when both are present.
+    location: Option<LocationTags>,
     existing_keywords: Option<Vec<String>>,
     existing_face_tags: Option<Vec<String>>,
     folder_names: Option<String>,
@@ -151,6 +170,44 @@ struct MetadataOptions {
     catalog_keywords: Option<Vec<String>>,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+}
+
+/// Reads the catalog's location fields out of a request.
+///
+/// Shared by every transport: the multipart form sends them flat, the by-path
+/// route sends them per image, and both arrive here as string lookups. Empty
+/// strings are dropped rather than stored, so a photo Lightroom knows no city
+/// for does not arrive with an empty one that would suppress reverse geocoding.
+pub(crate) fn location_from_fields(get: &dyn Fn(&str) -> Option<String>) -> Option<LocationTags> {
+    let text = |key: &str| {
+        get(key)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let coordinate = |key: &str| text(key).and_then(|v| v.parse::<f64>().ok());
+
+    let tags = LocationTags {
+        location: text("location_sublocation"),
+        city: text("location_city"),
+        state: text("location_state"),
+        country: text("location_country"),
+        country_code: text("location_country_code"),
+        gps_latitude: coordinate("gps_latitude"),
+        gps_longitude: coordinate("gps_longitude"),
+        gps_place_distance_km: None,
+    };
+    // Latitude without longitude is not a position; keep the place names and
+    // drop the half-pair rather than reverse-geocoding a guess.
+    let tags = if tags.gps_latitude.is_none() || tags.gps_longitude.is_none() {
+        LocationTags {
+            gps_latitude: None,
+            gps_longitude: None,
+            ..tags
+        }
+    } else {
+        tags
+    };
+    (!tags.is_empty()).then_some(tags)
 }
 
 /// Parses the `keyword_categories` multipart field (JSON, sent by the plugin
@@ -357,7 +414,9 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             generate_alt_text: bool_field(fields, "generate_alt_text", true),
             submit_keywords: bool_field(fields, "submit_keywords", false),
             submit_folder_names: bool_field(fields, "submit_folder_names", false),
+            submit_face_tags: bool_field(fields, "submit_face_tags", true),
             submit_gps: bool_field(fields, "submit_gps", true),
+            location: location_from_fields(&|key| fields.get(key).cloned()),
             existing_keywords,
             existing_face_tags,
             folder_names: fields.get("folder_names").cloned(),
@@ -436,6 +495,23 @@ impl ImageSource {
     }
 }
 
+/// What normalising one photo produces: the JPEG every later stage reads, the
+/// name to report it under, and whatever the original said about where it was
+/// taken before the conversion dropped its metadata.
+type NormalizedImage = (Vec<u8>, String, Option<LocationTags>);
+
+/// One photo after normalisation, on its way into phase 1.
+struct NormalizedPhoto {
+    /// The normalised JPEG every later stage reads.
+    bytes: Arc<[u8]>,
+    photo_id: String,
+    filename: String,
+    overrides: PhotoOverrides,
+    /// What the original file said about where it was taken, read before
+    /// normalisation dropped its metadata. See [`load_and_normalize`].
+    file_location: Option<LocationTags>,
+}
+
 /// One photo's bytes, or where to find them.
 enum PendingImage {
     Loaded(UploadedImage),
@@ -506,12 +582,27 @@ async fn load_pending(pending: PendingImage) -> Result<UploadedImage, String> {
 /// The raw bytes are dropped inside the blocking task, the moment the
 /// normalised JPEG exists, so they never overlap with the next photo's read
 /// any longer than they have to.
+///
+/// Location comes out of the *original* bytes, before that happens. It has to:
+/// normalisation decodes and re-encodes anything raw or larger than
+/// [`lrg_imaging::convert::default_max_long_edge`], and the JPEG it writes
+/// carries no EXIF and no IPTC — so reading location from its output found a
+/// place name only for the small exported JPEGs that pass through untouched,
+/// and silently found nothing for every raw original and every full-size
+/// camera JPEG (issue #321). For a file on disk the XMP sidecar beside it is
+/// read too, which for a raw workflow is the only place Lightroom's place
+/// names exist outside the catalog.
 async fn load_and_normalize(
     pending: PendingImage,
     photo_id: String,
     max_edge: u32,
     quality: u8,
-) -> Result<(Vec<u8>, String), String> {
+    read_location: bool,
+) -> Result<NormalizedImage, String> {
+    let source_path = match &pending {
+        PendingImage::Path(path) => Some(path.clone()),
+        PendingImage::Loaded(_) => None,
+    };
     let img = load_pending(pending).await?;
 
     let t0 = Instant::now();
@@ -519,9 +610,27 @@ async fn load_and_normalize(
     let bytes = img.bytes;
     // `normalize_image_bytes` is hundreds of milliseconds of pure CPU for a raw
     // original; it used to run directly on a tokio worker thread.
-    let (result, filename) = tokio::task::spawn_blocking(move || {
+    let (result, filename, file_location) = tokio::task::spawn_blocking(move || {
+        let location = read_location
+            .then(|| {
+                let mut tags = lrg_imaging::location::extract_location_tags(&bytes);
+                if let Some(sidecar) = source_path
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .and_then(lrg_imaging::location::read_sidecar_location)
+                {
+                    match tags.as_mut() {
+                        // The file's own EXIF/IPTC first: a sidecar can lag
+                        // behind what was last written into the image.
+                        Some(tags) => tags.merge_missing(&sidecar),
+                        None => tags = Some(sidecar),
+                    }
+                }
+                tags
+            })
+            .flatten();
         let out = normalize_image_bytes(&bytes, Some(&filename), max_edge, quality);
-        (out, filename)
+        (out, filename, location)
     })
     .await
     .map_err(|e| format!("image conversion panicked: {e}"))?;
@@ -530,7 +639,9 @@ async fn load_and_normalize(
         "Photo {photo_id} ({filename}): decode+resize+encode took {:?}",
         t0.elapsed()
     );
-    result.map_err(|UnsupportedImageError(msg)| msg)
+    result
+        .map(|(bytes, filename)| (bytes, filename, file_location))
+        .map_err(|UnsupportedImageError(msg)| msg)
 }
 
 async fn index_batch(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
@@ -663,7 +774,7 @@ pub(crate) async fn process_batch(
     // the batch is handed to the parallel cull pass, kept in `PreparedPhoto`
     // for phase 2, and read again by face detection. Each of those used to be
     // a full copy, so a 200-photo batch held the batch three times over.
-    let mut triplets: Vec<(Arc<[u8]>, String, String, PhotoOverrides)> = Vec::new();
+    let mut normalized_photos: Vec<NormalizedPhoto> = Vec::new();
     let mut conversion_errors: Vec<String> = pre_failures;
     // A bounded number of photos in flight: read, normalise, drop the original.
     // With `ImageSource::Paths` that is what keeps a group of raw files from
@@ -672,13 +783,18 @@ pub(crate) async fn process_batch(
     // in order to retry that photo alone.
     let concurrency = decode_concurrency();
     let t_decode = Instant::now();
-    let normalized: Vec<Result<(Vec<u8>, String), String>> = futures_util::stream::iter(
+    // Only when the user asked for location context; reading it means a second
+    // pass over every original's bytes plus a sidecar stat per photo.
+    let read_location = options.compute_metadata && options.metadata_request.submit_gps;
+    let normalized: Vec<Result<NormalizedImage, String>> = futures_util::stream::iter(
         images
             .into_pending()
             .into_iter()
             .zip(photo_ids.iter().cloned()),
     )
-    .map(|(pending, photo_id)| load_and_normalize(pending, photo_id, max_edge, quality))
+    .map(|(pending, photo_id)| {
+        load_and_normalize(pending, photo_id, max_edge, quality, read_location)
+    })
     .buffered(concurrency)
     .collect()
     .await;
@@ -692,9 +808,13 @@ pub(crate) async fn process_batch(
         photo_ids.into_iter().zip(overrides).zip(normalized)
     {
         match result {
-            Ok((bytes, filename)) => {
-                triplets.push((Arc::from(bytes), photo_id, filename, photo_overrides))
-            }
+            Ok((bytes, filename, file_location)) => normalized_photos.push(NormalizedPhoto {
+                bytes: Arc::from(bytes),
+                photo_id,
+                filename,
+                overrides: photo_overrides,
+                file_location,
+            }),
             Err(msg) => {
                 log::warn!("Skipping {photo_id}: {msg}");
                 results.push(json!({
@@ -705,7 +825,7 @@ pub(crate) async fn process_batch(
         }
     }
 
-    if triplets.is_empty() {
+    if normalized_photos.is_empty() {
         if !conversion_errors.is_empty() {
             let joined = conversion_errors
                 .iter()
@@ -746,35 +866,43 @@ pub(crate) async fn process_batch(
     // parallel. Pure CPU work with no model behind it, so unlike phase 1 there
     // is nothing here that wants the whole machine to itself.
     let t_cull = Instant::now();
-    let image_blobs: Vec<Arc<[u8]>> = triplets.iter().map(|(b, _, _, _)| Arc::clone(b)).collect();
+    let image_blobs: Vec<Arc<[u8]>> = normalized_photos
+        .iter()
+        .map(|p| Arc::clone(&p.bytes))
+        .collect();
     let mut cull_signals =
         tokio::task::spawn_blocking(move || precompute_cull_signals(&image_blobs))
             .await
             .unwrap_or_else(|e| vec![Err(format!("cull metric pass panicked: {e}"))]);
-    if !triplets.is_empty() {
+    if !normalized_photos.is_empty() {
         log::debug!(
             "Cull signals for {} photo(s) took {:?}",
-            triplets.len(),
+            normalized_photos.len(),
             t_cull.elapsed()
         );
     }
     // A join failure yields a single error; widen it so the zip below still
     // lines up one entry per photo.
-    if cull_signals.len() != triplets.len() {
+    if cull_signals.len() != normalized_photos.len() {
         let msg = cull_signals
             .first()
             .and_then(|r| r.as_ref().err().cloned())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "cull metric pass produced no result".to_string());
-        cull_signals = triplets.iter().map(|_| Err(msg.clone())).collect();
+        cull_signals = normalized_photos.iter().map(|_| Err(msg.clone())).collect();
     }
 
     // Phase 1 — everything that does not need the LLM, still strictly
     // sequential (SigLIP2 and the face detector each want the whole machine).
-    let mut prepared: Vec<PreparedPhoto> = Vec::with_capacity(triplets.len());
-    for ((image_bytes, photo_id, filename, photo_overrides), cull) in
-        triplets.into_iter().zip(cull_signals)
-    {
+    let mut prepared: Vec<PreparedPhoto> = Vec::with_capacity(normalized_photos.len());
+    for (photo, cull) in normalized_photos.into_iter().zip(cull_signals) {
+        let NormalizedPhoto {
+            bytes: image_bytes,
+            photo_id,
+            filename,
+            overrides: photo_overrides,
+            file_location,
+        } = photo;
         let Some(store_ref) = store.as_ref() else {
             failure_count += 1;
             let msg = "database not initialized (no db_path bound)";
@@ -803,6 +931,7 @@ pub(crate) async fn process_batch(
             &image_bytes,
             &photo_id,
             &filename,
+            file_location.as_ref(),
             cull,
         )
         .await
@@ -1094,6 +1223,7 @@ async fn prepare_one(
     image_bytes: &Arc<[u8]>,
     photo_id: &str,
     filename: &str,
+    file_location: Option<&LocationTags>,
     cull: CullSignals,
 ) -> Result<PreparedPhoto, String> {
     // The cull signals arrive precomputed from the parallel pass, so the only
@@ -1304,7 +1434,14 @@ async fn prepare_one(
         // prompt.
         let detected_species = species_for_prompt(&main_metadata);
         need_metadata.then(|| {
-            build_metadata_request(options, overrides, image_bytes, photo_id, detected_species)
+            build_metadata_request(
+                options,
+                overrides,
+                image_bytes,
+                photo_id,
+                file_location,
+                detected_species,
+            )
         })
     } else {
         None
@@ -2070,6 +2207,68 @@ async fn provider_for_batch(
     })
 }
 
+/// Assembles one photo's location from every source that knows something, in
+/// order of how much each one knows about what the photographer meant.
+///
+/// 1. What the plugin read out of the Lightroom catalog for this photo. It is
+///    the most current — a city corrected in Lightroom is never written back
+///    into a raw original — and the only source a re-encoded file cannot lose.
+/// 2. What the file itself carries: its EXIF/IPTC, plus any XMP sidecar,
+///    read before normalisation ([`load_and_normalize`]).
+/// 3. Failing a place name, the nearest settlement to the coordinates.
+///
+/// Step 3 only ever runs when the first two produced no name at all. A place
+/// on the photo is a statement; the nearest town to a fix is an estimate, and
+/// mixing the two would pair a photographer's sub-location with a country
+/// looked up from somewhere else.
+fn resolve_location(
+    overrides: &PhotoOverrides,
+    mo: &MetadataOptions,
+    file_location: Option<&LocationTags>,
+    image_bytes: &[u8],
+    photo_id: &str,
+) -> Option<LocationTags> {
+    let mut location = overrides
+        .location
+        .clone()
+        .or_else(|| mo.location.clone())
+        .unwrap_or_default();
+
+    match file_location {
+        Some(from_file) => location.merge_missing(from_file),
+        // No pre-normalisation read happened (an older caller, or a test):
+        // fall back to the normalised bytes, which is all this used to do.
+        None => {
+            if let Some(from_bytes) = lrg_imaging::location::extract_location_tags(image_bytes) {
+                location.merge_missing(&from_bytes);
+            }
+        }
+    }
+
+    let geocoded = lrg_imaging::geocode::fill_place_from_gps(&mut location);
+    if location.is_empty() {
+        return None;
+    }
+    // One line per photo saying what the model will be told and where it came
+    // from. "The location is wrong" and "the location is missing" are
+    // different bugs with the same symptom in the caption, and this is what
+    // tells them apart in a support log.
+    log::debug!(
+        "Photo {photo_id}: location {:?} ({})",
+        lrg_imaging::location::format_location_for_prompt(&location),
+        match (
+            geocoded,
+            overrides.location.is_some() || mo.location.is_some()
+        ) {
+            (true, _) => "looked up from GPS",
+            (false, true) => "from the catalog",
+            (false, false) => "from the file",
+        }
+    );
+
+    Some(location)
+}
+
 /// Builds one photo's `MetadataGenerationRequest` from the parsed options.
 ///
 /// Pure and cheap on purpose: phase 1 builds these for the whole group, and
@@ -2079,20 +2278,20 @@ fn build_metadata_request(
     overrides: &PhotoOverrides,
     image_bytes: &[u8],
     photo_id: &str,
+    file_location: Option<&LocationTags>,
     detected_species: Option<lrg_providers::types::DetectedSpecies>,
 ) -> lrg_providers::types::MetadataGenerationRequest {
     let provider = provider_name(options);
     let model = options.model.clone().unwrap_or_default();
     let mo = &options.metadata_request;
 
-    // Reading the EXIF location is what turns "this photo was taken at these
-    // coordinates" into a place name in the prompt, so it is gated on the
-    // user's choice rather than done unconditionally.
-    let location_data = if mo.submit_gps {
-        lrg_imaging::location::extract_location_tags(image_bytes)
-    } else {
-        None
-    };
+    // Turning "these coordinates" into a place name is what puts the place in
+    // the title and the caption, so it is gated on the user's choice rather
+    // than done unconditionally.
+    let location_data = mo
+        .submit_gps
+        .then(|| resolve_location(overrides, mo, file_location, image_bytes, photo_id))
+        .flatten();
     lrg_providers::types::MetadataGenerationRequest {
         image_data: image_bytes.to_vec(),
         uuid: photo_id.to_string(),
@@ -2110,6 +2309,7 @@ fn build_metadata_request(
         user_prompt: None,
         submit_keywords: mo.submit_keywords,
         submit_folder_names: mo.submit_folder_names,
+        submit_face_tags: mo.submit_face_tags,
         existing_keywords: overrides
             .existing_keywords
             .clone()
@@ -2284,8 +2484,9 @@ mod keyword_option_tests {
             folder_names: Some("MyFolder".to_string()),
             exposure_bias: None,
             is_raw: None,
+            location: None,
         };
-        let req = build_metadata_request(&opts, &overrides, &[], "p1", None);
+        let req = build_metadata_request(&opts, &overrides, &[], "p1", None, None);
         assert_eq!(req.date_time.as_deref(), Some("2026-08-07 12:00:00"));
         assert_eq!(req.existing_keywords, Some(vec!["mine".to_string()]));
         assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
@@ -2301,7 +2502,7 @@ mod keyword_option_tests {
             ("existing_keywords", r#"["batch"]"#),
             ("folder_names", "BatchFolder"),
         ]));
-        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None);
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
         assert_eq!(req.date_time.as_deref(), Some("2026-01-01 00:00:00"));
         assert_eq!(req.existing_keywords, Some(vec!["batch".to_string()]));
         assert_eq!(req.folder_names.as_deref(), Some("BatchFolder"));
@@ -2315,12 +2516,175 @@ mod keyword_option_tests {
             ("existing_keywords", r#"["beach","sunset"]"#),
             ("existing_face_tags", r#"["Ivo"]"#),
         ]));
-        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None);
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
         assert_eq!(
             req.existing_keywords,
             Some(vec!["beach".to_string(), "sunset".to_string()])
         );
         assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
+    }
+
+    /// The catalog is the source that survives everything: a raw original is
+    /// re-encoded before anything reads it, so what Lightroom knows has to
+    /// travel as fields (issue #321).
+    #[test]
+    fn the_catalog_location_reaches_the_prompt() {
+        let opts = parse_options(&fields(&[
+            ("location_city", "Ribadeo"),
+            ("location_state", "Galicia"),
+            ("location_country", "Spain"),
+            ("location_country_code", "ES"),
+            ("gps_latitude", "43.537"),
+            ("gps_longitude", "-7.0409"),
+        ]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
+        let location = req.location_data.expect("a location");
+        assert_eq!(location.city.as_deref(), Some("Ribadeo"));
+        assert_eq!(location.country.as_deref(), Some("Spain"));
+        assert_eq!(location.gps_latitude, Some(43.537));
+        // Named by the catalog, so nothing was looked up.
+        assert_eq!(location.gps_place_distance_km, None);
+    }
+
+    /// Coordinates and nothing else is the case the reporter hit: Lightroom's
+    /// address suggestions were never confirmed, so no city exists anywhere.
+    /// A pair of decimals in the prompt is useless to a model — the place name
+    /// has to be looked up.
+    #[test]
+    fn coordinates_alone_are_turned_into_a_place_name() {
+        let opts = parse_options(&fields(&[
+            ("gps_latitude", "43.537"),
+            ("gps_longitude", "-7.0409"),
+        ]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
+        let location = req.location_data.expect("a location");
+        assert_eq!(location.city.as_deref(), Some("Ribadeo"));
+        assert_eq!(location.country.as_deref(), Some("Spain"));
+        assert!(location.gps_place_distance_km.is_some());
+    }
+
+    /// The user's own place names outrank both the file and the geocoder, and
+    /// per-photo outranks the batch — a grouped request must not hand every
+    /// photo the first one's city.
+    #[test]
+    fn per_photo_location_wins_over_batch_and_file() {
+        let opts = parse_options(&fields(&[("location_city", "BatchCity")]));
+        let overrides = PhotoOverrides {
+            location: Some(LocationTags {
+                city: Some("Ribadeo".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // The file agrees on the city, so what it knows on top of that is the
+        // same place's country and fills in.
+        let file = LocationTags {
+            city: Some("Ribadeo".to_string()),
+            country: Some("Spain".to_string()),
+            gps_latitude: Some(48.1372),
+            gps_longitude: Some(11.5755),
+            ..Default::default()
+        };
+        let req = build_metadata_request(&opts, &overrides, &[], "p1", Some(&file), None);
+        let location = req.location_data.expect("a location");
+        assert_eq!(location.city.as_deref(), Some("Ribadeo"));
+        assert_eq!(location.country.as_deref(), Some("Spain"));
+        // A name was already known, so Munich's coordinates changed nothing.
+        assert_eq!(location.gps_place_distance_km, None);
+    }
+
+    /// The same request with a file that names a *different* city: its country
+    /// is that other place's country, and pairing it with the catalog's city
+    /// would describe somewhere neither source meant.
+    #[test]
+    fn a_file_naming_another_place_contributes_no_names() {
+        let opts = parse_options(&fields(&[]));
+        let overrides = PhotoOverrides {
+            location: Some(LocationTags {
+                city: Some("Sankt Peter-Ording".to_string()),
+                country: Some("Germany".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let file = LocationTags {
+            city: Some("Ribadeo".to_string()),
+            state: Some("Galicia".to_string()),
+            country: Some("Spain".to_string()),
+            ..Default::default()
+        };
+        let req = build_metadata_request(&opts, &overrides, &[], "p1", Some(&file), None);
+        let location = req.location_data.expect("a location");
+        assert_eq!(location.city.as_deref(), Some("Sankt Peter-Ording"));
+        assert_eq!(location.country.as_deref(), Some("Germany"));
+        assert_eq!(location.state, None);
+    }
+
+    /// The people switch reaches the request on its own, and an older plugin
+    /// that never heard of it keeps sending names exactly as before: it only
+    /// puts `existing_face_tags` on the wire when its keyword switch is on, so
+    /// the absent field has to mean "use what arrived", not "drop it".
+    #[test]
+    fn people_switch_is_read_and_defaults_to_what_the_client_sent() {
+        let sent = parse_options(&fields(&[("submit_face_tags", "false")]));
+        let req = build_metadata_request(&sent, &PhotoOverrides::default(), &[], "p1", None, None);
+        assert!(!req.submit_face_tags);
+
+        let older_client = parse_options(&fields(&[("submit_keywords", "true")]));
+        let req = build_metadata_request(
+            &older_client,
+            &PhotoOverrides::default(),
+            &[],
+            "p1",
+            None,
+            None,
+        );
+        assert!(req.submit_face_tags);
+    }
+
+    /// The switch has to keep meaning what it says: with location context off,
+    /// nothing about where the photo was taken may reach the model.
+    #[test]
+    fn submit_gps_false_suppresses_every_source() {
+        let opts = parse_options(&fields(&[
+            ("submit_gps", "false"),
+            ("location_city", "Ribadeo"),
+            ("gps_latitude", "43.537"),
+            ("gps_longitude", "-7.0409"),
+        ]));
+        let file = LocationTags {
+            city: Some("FileCity".to_string()),
+            ..Default::default()
+        };
+        let req = build_metadata_request(
+            &opts,
+            &PhotoOverrides::default(),
+            &[],
+            "p1",
+            Some(&file),
+            None,
+        );
+        assert!(req.location_data.is_none());
+    }
+
+    /// Half a coordinate pair is not a position, and reverse geocoding one
+    /// would invent a place from a longitude alone.
+    #[test]
+    fn a_half_coordinate_pair_is_dropped() {
+        let parsed = location_from_fields(&|key| match key {
+            "gps_latitude" => Some("43.537".to_string()),
+            _ => None,
+        });
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn blank_location_fields_are_not_a_known_place() {
+        let parsed = location_from_fields(&|key| match key {
+            "location_city" => Some("   ".to_string()),
+            _ => None,
+        });
+        assert!(parsed.is_none());
     }
 
     /// Issue #326: the classifier's answer only helps if it reaches the
@@ -2368,7 +2732,7 @@ mod keyword_option_tests {
     #[test]
     fn absent_face_tags_leave_the_request_unchanged() {
         let opts = parse_options(&fields(&[("existing_keywords", r#"["beach"]"#)]));
-        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None);
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
         assert_eq!(req.existing_keywords, Some(vec!["beach".to_string()]));
         assert_eq!(req.existing_face_tags, None);
     }

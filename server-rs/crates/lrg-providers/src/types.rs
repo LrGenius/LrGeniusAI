@@ -29,6 +29,16 @@ pub struct MetadataGenerationRequest {
 
     pub submit_keywords: bool,
     pub submit_folder_names: bool,
+    /// Whether the people named on the photo may be sent to the model.
+    ///
+    /// Its own switch rather than a share of `submit_keywords`, because the
+    /// two ask different questions. Keywords are about how much the model has
+    /// to work with; names are about whether the people in a private photo are
+    /// named to a cloud provider at all — and a household that wants "beach,
+    /// sunset" sent may well not want "Ivo, Myriam" sent with it. Wanting the
+    /// names without the keyword clutter is just as reasonable, and neither
+    /// was expressible while one checkbox governed both.
+    pub submit_face_tags: bool,
 
     pub existing_keywords: Option<Vec<String>>,
     /// Names Lightroom's face recognition put on the photo, kept apart from
@@ -37,8 +47,7 @@ pub struct MetadataGenerationRequest {
     /// Lightroom flattens a named face into the same keyword list as
     /// everything else, and a model reading "Ivo" between "beach" and "sunset"
     /// takes it for scenery — issue #315's "the rocky shore of Ivo Beach".
-    /// Same switch as `existing_keywords` (`submit_keywords`): this splits the
-    /// context that was already being sent, it does not add more.
+    /// Gated by `submit_face_tags`.
     pub existing_face_tags: Option<Vec<String>>,
     /// What the local BioCLIP 2 classifier made of the organism in the frame,
     /// when species identification ran for this photo.
@@ -144,6 +153,12 @@ pub struct EditGenerationRequest {
 
     pub submit_keywords: bool,
     pub submit_folder_names: bool,
+    /// Whether the people named on the photo may be sent — see
+    /// [`MetadataGenerationRequest::submit_face_tags`]. The edit prompt asks
+    /// for names for a different reason (skin tones, who the subject is), but
+    /// the user's answer to "may these names leave my machine" is the same
+    /// one, so it is the same switch.
+    pub submit_face_tags: bool,
 
     pub existing_keywords: Option<Vec<String>>,
     /// Face tags, kept apart from `existing_keywords` — see
@@ -200,6 +215,7 @@ impl EditGenerationRequest {
             user_prompt: None,
             submit_keywords: false,
             submit_folder_names: false,
+            submit_face_tags: false,
             existing_keywords: None,
             existing_face_tags: None,
             location_data: None,

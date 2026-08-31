@@ -230,6 +230,24 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
 
 Prompt templates, plus a free-text custom prompt appended to the built-in one.
 
+Two templates ship with the plug-in:
+
+- **Default** — the analytical voice: species, landmarks, vehicle makes,
+  described precisely. Unchanged, and still what every catalog uses unless you
+  pick otherwise.
+- **Family & Everyday Photos** — the album voice: who is in the picture, what
+  they are doing, where, and what the occasion appears to be. It asks for the
+  people by the names your catalog already has on them and for the place in the
+  title, and it is explicitly forbidden to invent what it was not given — no
+  relationships, no birthdays or weddings, no landmark the photo's own data
+  does not support. Pair it with **People's names from face recognition** and
+  **Location** below; without those it has nothing to name.
+
+Both are ordinary templates once they appear: edit them, add your own, delete
+what you do not want. A template you delete stays deleted, and one you rewrite
+stays rewritten — the plug-in only ever offers each built-in once. "Reset to
+defaults" in the prompt dialog brings both back.
+
 ---
 
 ## Context & Save
@@ -238,15 +256,47 @@ Prompt templates, plus a free-text custom prompt appended to the built-in one.
 
 Extra information sent alongside the photo to improve accuracy:
 
-- **Existing Keywords** — the photo's keywords go into the prompt. Names that
-  Lightroom's face recognition put on the photo are sent separately from the
-  rest, and labelled as the people in the picture, so a person called *Ivo* is
-  no longer read as scenery and turned into "Ivo Beach".
+- **Existing Keywords** — the photo's keywords go into the prompt.
+- **People's names from face recognition** — the names Lightroom put on the
+  faces are sent, separately from the keywords and labelled as the people in
+  the picture. Two things follow: a person called *Ivo* is no longer read as
+  scenery and turned into "Ivo Beach", and the model is asked to *use* the
+  names, so a photo of two tagged people gets "Ivo and Myriam on the beach"
+  rather than "a man and a woman on a beach". With several people named and no
+  way to tell which face is which, it names them together rather than guessing
+  who is who.
+
+  Its own switch since it is its own decision: a name identifies a person, and
+  a household happy to send "beach, sunset" to a cloud provider may well not
+  want to send "Ivo, Myriam" with it. Untick it and no name from your catalog
+  leaves the computer — for AI edits either, which never had a checkbox of
+  their own and follow this one. On upgrade it inherits whatever **Existing
+  Keywords** was set to, so nothing starts being sent that was not being sent
+  before.
 - **Folder Names**
-- **Location (looked up from the photo's GPS coordinates)** — on by default.
-  The backend turns the photo's own EXIF position into a place name and puts
-  that in the prompt; raw coordinates are never sent. Untick it and nothing
-  about where the photo was taken leaves your machine.
+- **Location** — on by default, and the place reaches the prompt from whichever
+  of these knows it:
+  1. Lightroom's own location fields (Sublocation, City, State/Province,
+     Country) as the catalog holds them, which is also the only version that
+     includes a place you corrected after import;
+  2. failing that, what the file itself carries — its IPTC/EXIF, and the XMP
+     sidecar beside a raw original;
+  3. failing that, the photo's GPS coordinates, looked up against an offline
+     list of ~145,000 places (GeoNames `cities1000`, bundled — nothing is asked
+     of the network). This is what covers the common case where Lightroom's
+     address lookup only ever *suggested* a city and you never confirmed it:
+     the suggestions are not stored anywhere the plug-in can read, but the
+     coordinates are. The prompt marks a looked-up place as looked up, and says
+     "near" when the nearest known place is more than 5 km away, so the model
+     names the area rather than inventing a landmark.
+
+  Raw coordinates only leave your machine if no place name can be worked out at
+  all. Untick the option and nothing about where the photo was taken is sent.
+
+  Two configurations used to lose the location silently, and no longer do:
+  **Submit originals instead of exports** (Plug-in Manager) and an **export size
+  above 2048 px**. Both make the backend re-encode the image, and the JPEG it
+  produces has no metadata left to read.
 - **Ask for context before each batch** — opens a dialog where you can type
   context for the upcoming photos by hand
 

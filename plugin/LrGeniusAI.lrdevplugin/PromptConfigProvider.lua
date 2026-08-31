@@ -2,7 +2,7 @@ PromptConfigProvider = {}
 
 function PromptConfigProvider.deletePrompt(props)
 	local promptTitle = props.prompt
-	if promptTitle == "Default" then
+	if promptTitle == Defaults.defaultPromptName then
 		LrDialogs.showError(
 			LOC("$$$/LrGeniusAI/PromptConfig/DefaultPromptCannotDelete=Default prompt cannot be deleted.")
 		)
@@ -16,16 +16,15 @@ function PromptConfigProvider.deletePrompt(props)
 				.. promptTitle
 		) == "ok"
 	then
-		for k, v in pairs(props.promptTitles) do
-			if v.title == promptTitle then
-				props.promptTitles[k] = nil
-			end
-		end
 		props.prompts[promptTitle] = nil
+		-- Rebuilt rather than nil'd out of the array: clearing one slot of a
+		-- Lua array leaves a hole, and the menu then stops at it, hiding every
+		-- prompt after the deleted one.
+		props.promptTitles = Util.promptMenuItems(props.prompts, Defaults.defaultPromptName)
 		props.promptTitleMenu.items = props.promptTitles
 
 		if props.prompt == promptTitle then
-			props.prompt = "Default"
+			props.prompt = Defaults.defaultPromptName
 		end
 	end
 end
@@ -76,7 +75,7 @@ function PromptConfigProvider.addPrompt(props)
 	if result == "ok" then
 		props.prompts[propertyTable.name] = propertyTable.prompt
 		props.prompt = propertyTable.name
-		table.insert(props.promptTitles, { title = propertyTable.name, value = propertyTable.name })
+		props.promptTitles = Util.promptMenuItems(props.prompts, Defaults.defaultPromptName)
 		props.promptTitleMenu.items = props.promptTitles
 		return propertyTable.name
 	end
@@ -89,10 +88,7 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 	local bind = LrView.bind
 	local share = LrView.share
 
-	propertyTable.promptTitles = {}
-	for title in pairs(prefs.prompts) do
-		table.insert(propertyTable.promptTitles, { title = title, value = title })
-	end
+	propertyTable.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
 	propertyTable.prompts = prefs.prompts
 
@@ -178,7 +174,15 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 		prefs.prompts = propertyTable.prompts
 		prefs.prompt = propertyTable.prompt
 	elseif result == "other" then
-		prefs.prompts = { Default = Defaults.defaultSystemInstruction }
-		prefs.prompt = "Default"
+		prefs.prompts = Defaults.builtinPromptTable()
+		prefs.prompt = Defaults.defaultPromptName
+		-- The built-ins are back, so the record of what has been offered has to
+		-- agree with that; otherwise nothing changes, since each name is only
+		-- ever seeded once.
+		local seeded = {}
+		for _, preset in ipairs(Defaults.builtinPrompts) do
+			seeded[preset.name] = true
+		end
+		prefs.seededPrompts = seeded
 	end
 end

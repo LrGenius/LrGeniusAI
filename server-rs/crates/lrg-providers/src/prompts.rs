@@ -11,7 +11,7 @@
 //! stable half silently truncates that prefix to nothing — add new context via
 //! the right bucket, not wherever it reads best.
 
-use lrg_imaging::location::format_location_for_prompt;
+use lrg_imaging::location::{format_location_for_prompt, LocationTags};
 
 use crate::keyword_taxonomy::{CategoryLabels, KeywordLeafEncoding};
 use crate::types::{
@@ -85,22 +85,112 @@ fn join_terms(terms: &[String]) -> Option<String> {
     }
 }
 
-/// The prompt line that tells the model a name belongs to a person.
+/// The prompt line that tells the model a name belongs to a person — and that
+/// it is there to be used.
 ///
 /// Lightroom hands face tags over as plain keywords, so without this the model
 /// sees "Ivo" next to "beach" and writes "the rocky shore of Ivo Beach"
-/// (issue #315). Naming what the terms are is the whole fix; the explicit
-/// prohibition is there because a bare list still leaves the model free to
-/// read a name as a place.
+/// (issue #315). Naming what the terms are is what fixed that.
+///
+/// The prohibition alone was not enough, though: a model that is told only
+/// what a name must not be leaves it out altogether and writes "a man and a
+/// woman stand on a beach" for a photo of two people it has been handed the
+/// names of (issue #321). The instruction to prefer the names is the other
+/// half, and it is safe to give because these names come from the user's own
+/// catalog — they were sent precisely so the photo could be described in terms
+/// of who is in it.
+///
+/// It stops short of assigning names to faces. With several people named there
+/// is nothing in the prompt that says which is which, and a guess there is
+/// worse than the generic description it replaces.
 fn face_tag_line(faces: &[String]) -> Option<String> {
     join_terms(faces).map(|joined| {
+        let together = if faces.iter().filter(|f| !f.trim().is_empty()).count() > 1 {
+            " Name them together when you cannot tell from the image which name belongs to \
+             which face; never guess that pairing."
+        } else {
+            ""
+        };
         format!(
             "People in this photo, named by face recognition: {joined}. These are names of \
-             people who appear in the photo. Use them only to refer to those people; never \
-             treat such a name as a place, landmark, event, brand or object, and never build \
-             a location name out of one."
+             people who appear in the photo. Refer to them by name in the title and the \
+             caption instead of describing them generically as a man, a woman or a couple, \
+             wherever naming them reads naturally.{together} Never treat such a name as a \
+             place, landmark, event, brand or object, and never build a location name out of \
+             one."
         )
     })
+}
+
+/// The place names a photo carries, most specific first.
+fn place_names(location: &LocationTags) -> Option<String> {
+    let parts: Vec<&str> = [
+        location.location.as_deref(),
+        location.city.as_deref(),
+        location.state.as_deref(),
+        location.country.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .filter(|p| !p.is_empty())
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+/// The prompt line that tells the model where the photo was taken.
+///
+/// A bare "This photo was taken at: X" was a statement with no instruction
+/// attached, and the model treated it as one more detail it was free to leave
+/// out — hence "A Couple on a Rocky Beach" for a photo whose metadata said
+/// Ribadeo (issue #321). Saying what to do with the place is the fix.
+///
+/// The wording splits on where the place came from, because the two are not
+/// equally true. Names read off the photo are what the photographer (or
+/// Lightroom's address lookup) put there; a name derived from coordinates is
+/// the nearest settlement to a point, which is a fine thing to say "near" about
+/// and a bad thing to build a landmark out of.
+fn location_line(location: &LocationTags) -> Option<String> {
+    if location.is_empty() {
+        return None;
+    }
+
+    if let Some(place) = place_names(location) {
+        return Some(match location.gps_place_distance_km {
+            None => format!(
+                "Where this photo was taken, from the photo's own metadata: {place}. This is \
+                 fact, not a guess: name the place in the title and the caption wherever a \
+                 place belongs, preferring the most specific name given, and use it for \
+                 location keywords. Never name a different place, and never a more precise \
+                 one than this — no street, building or landmark that this does not state."
+            ),
+            Some(km) if km <= lrg_imaging::geocode::IN_PLACE_DISTANCE_KM => format!(
+                "Where this photo was taken, looked up from its GPS coordinates: {place}. Use \
+                 this place in the title and the caption wherever a place belongs, and for \
+                 location keywords. It is the nearest known settlement to the coordinates, so \
+                 name the place, the region or the country — never a street, a building or a \
+                 landmark on this basis, and never a different place than this one."
+            ),
+            Some(km) => format!(
+                "Where this photo was taken, looked up from its GPS coordinates: near {place} \
+                 (the nearest known settlement, about {km:.0} km away). The photo was taken \
+                 close to there but not necessarily in it, so name the wider area, the region \
+                 or the country rather than that settlement itself, and never a street, a \
+                 building or a landmark on this basis."
+            ),
+        });
+    }
+
+    // No name anywhere and nothing near enough to look up — open water, desert,
+    // high mountains. The coordinates are all there is, and they are worth
+    // saying only with the warning attached: a model handed bare coordinates
+    // will otherwise invent a plausible town.
+    let (lat, lon) = (location.gps_latitude?, location.gps_longitude?);
+    Some(format!(
+        "This photo's GPS coordinates are {lat:.6}, {lon:.6}, and no known settlement is near \
+         them. Name a place only if you are certain of it from the coordinates and the image \
+         together; otherwise describe the scene without naming one."
+    ))
 }
 
 /// What the classifier's kingdom says the subject is, for the prompt's first
@@ -335,20 +425,20 @@ pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPr
 
     // --- per-photo context: everything below changes from photo to photo ---
 
-    if let Some(location) = &request.location_data {
-        if !location.is_empty() {
-            if let Some(location_str) = format_location_for_prompt(location) {
-                per_photo_additions.push(format!("This photo was taken at: {location_str}"));
-            }
-        }
+    if let Some(line) = request.location_data.as_ref().and_then(location_line) {
+        per_photo_additions.push(line);
     }
 
     if request.submit_keywords {
         if let Some(joined) = request.existing_keywords.as_deref().and_then(join_terms) {
             per_photo_additions.push(format!("Some keywords are: {joined}"));
         }
-        // After the keywords, not before: the contrast between the two lines is
-        // what tells the model that these particular terms are not scenery.
+    }
+
+    // After the keywords, not before: the contrast between the two lines is
+    // what tells the model that these particular terms are not scenery. Its
+    // own switch, though — see `MetadataGenerationRequest::submit_face_tags`.
+    if request.submit_face_tags {
         if let Some(line) = request
             .existing_face_tags
             .as_deref()
@@ -606,6 +696,8 @@ pub fn prepare_edit_user_prompt_split(request: &EditGenerationRequest) -> SplitP
         if let Some(joined) = request.existing_keywords.as_deref().and_then(join_terms) {
             per_photo_additions.push(format!("Existing keywords: {joined}"));
         }
+    }
+    if request.submit_face_tags {
         if let Some(line) = request
             .existing_face_tags
             .as_deref()
@@ -698,15 +790,74 @@ mod tests {
     }
 
     #[test]
-    fn location_context_uses_shared_format_location_for_prompt() {
+    fn location_from_metadata_is_stated_as_fact_and_asked_for() {
         let mut req = base_request();
-        req.location_data = Some(lrg_imaging::location::LocationTags {
+        req.location_data = Some(LocationTags {
             city: Some("Munich".to_string()),
             country: Some("Germany".to_string()),
             ..Default::default()
         });
         let prompt = prepare_user_prompt(&req);
-        assert!(prompt.contains("This photo was taken at: Munich, Germany"));
+        assert!(prompt.contains("from the photo's own metadata: Munich, Germany"));
+        assert!(prompt.contains("name the place in the title and the caption"));
+    }
+
+    /// The whole point of reverse geocoding: a place the photographer never
+    /// typed still has to reach the model as a name, and has to be marked as
+    /// derived so it is not turned into a landmark.
+    #[test]
+    fn location_derived_from_gps_says_so() {
+        let mut req = base_request();
+        req.location_data = Some(LocationTags {
+            city: Some("Ribadeo".to_string()),
+            state: Some("Galicia".to_string()),
+            country: Some("Spain".to_string()),
+            gps_latitude: Some(43.537),
+            gps_longitude: Some(-7.0409),
+            gps_place_distance_km: Some(1.2),
+            ..Default::default()
+        });
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("looked up from its GPS coordinates: Ribadeo, Galicia, Spain"));
+        assert!(!prompt.contains("near Ribadeo"));
+
+        // Far enough out that the photo is not of that town.
+        req.location_data.as_mut().unwrap().gps_place_distance_km = Some(23.4);
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains(
+            "near Ribadeo, Galicia, Spain (the nearest known settlement, about 23 km away)"
+        ));
+    }
+
+    #[test]
+    fn coordinates_with_no_place_warn_against_guessing() {
+        let mut req = base_request();
+        req.location_data = Some(LocationTags {
+            gps_latitude: Some(-14.5),
+            gps_longitude: Some(-140.25),
+            ..Default::default()
+        });
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("-14.500000, -140.250000"));
+        assert!(prompt.contains("Name a place only if you are certain"));
+    }
+
+    /// A name that is sent must also be used, or the caption stays at "a man
+    /// and a woman" — the other half of issue #321.
+    #[test]
+    fn face_tags_are_to_be_used_by_name() {
+        let mut req = base_request();
+        req.submit_keywords = true;
+        req.submit_face_tags = true;
+        req.existing_face_tags = Some(vec!["Ivo".to_string(), "Myriam".to_string()]);
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("Refer to them by name in the title and the caption"));
+        assert!(prompt.contains("never guess that pairing"));
+        assert!(prompt.contains("never build a location name out of"));
+
+        // One name cannot be mixed up with another, so that clause is dropped.
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+        assert!(!prepare_user_prompt(&req).contains("never guess that pairing"));
     }
 
     #[test]
@@ -726,6 +877,7 @@ mod tests {
         // "Ivo" as scenery and wrote "the rocky shore of Ivo Beach".
         let mut req = base_request();
         req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_keywords = Some(vec!["beach".to_string(), "sunset".to_string()]);
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
 
@@ -737,16 +889,48 @@ mod tests {
         assert!(!prompt.contains("Some keywords are: beach, sunset, Ivo"));
     }
 
+    /// The two switches are independent: naming the people in a private photo
+    /// to a cloud model is a different decision from sending "beach, sunset",
+    /// and either answer must be expressible without the other.
     #[test]
-    fn face_tags_follow_the_same_switch_as_keywords() {
-        // They are the same catalog context under a different label, so the
-        // user's "existing keywords" choice governs both.
+    fn people_have_their_own_switch_separate_from_keywords() {
         let mut req = base_request();
+        req.existing_keywords = Some(vec!["beach".to_string()]);
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+
         req.submit_keywords = false;
-        assert!(!prepare_user_prompt(&req).contains("People in this photo"));
+        req.submit_face_tags = false;
+        let neither = prepare_user_prompt(&req);
+        assert!(!neither.contains("People in this photo"));
+        assert!(!neither.contains("Some keywords are"));
+
+        // Keywords without the names: the scenery goes, the people stay home.
         req.submit_keywords = true;
-        assert!(prepare_user_prompt(&req).contains("People in this photo"));
+        req.submit_face_tags = false;
+        let keywords_only = prepare_user_prompt(&req);
+        assert!(keywords_only.contains("Some keywords are: beach"));
+        assert!(!keywords_only.contains("People in this photo"));
+
+        // Names without the keywords: what issue #321 wanted the title to say,
+        // for a catalog whose keywords are not worth sending.
+        req.submit_keywords = false;
+        req.submit_face_tags = true;
+        let people_only = prepare_user_prompt(&req);
+        assert!(people_only.contains("People in this photo, named by face recognition: Ivo"));
+        assert!(!people_only.contains("Some keywords are"));
+    }
+
+    /// The edit prompt asks for the names for its own reasons (skin tones, who
+    /// the subject is), but it answers to the same switch.
+    #[test]
+    fn edit_prompt_people_follow_the_people_switch() {
+        let mut req = base_edit_request();
+        req.existing_face_tags = Some(vec!["Ivo".to_string()]);
+        req.submit_keywords = true;
+        req.submit_face_tags = false;
+        assert!(!prepare_edit_user_prompt(&req).contains("People in this photo"));
+        req.submit_face_tags = true;
+        assert!(prepare_edit_user_prompt(&req).contains("People in this photo"));
     }
 
     #[test]
@@ -754,7 +938,7 @@ mod tests {
         // Who is in the frame changes with every photo; in `stable` it would
         // cut the reusable KV-cache prefix at the first photo with a face tag.
         let mut req = base_request();
-        req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
         let split = prepare_user_prompt_split(&req);
         assert!(split.per_photo.contains("People in this photo"));
@@ -764,7 +948,7 @@ mod tests {
     #[test]
     fn blank_face_tags_produce_no_line() {
         let mut req = base_request();
-        req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_face_tags = Some(vec!["  ".to_string(), String::new()]);
         assert!(!prepare_user_prompt(&req).contains("People in this photo"));
     }
@@ -944,7 +1128,7 @@ mod tests {
         }
 
         for per_photo in [
-            "This photo was taken at: Reykjavik",
+            "metadata: Reykjavik",
             "Some keywords are: cat",
             "Folders: Iceland Trip",
             "Capture Time: 2026-08-07 10:00",
@@ -1066,6 +1250,7 @@ mod tests {
     fn edit_prompt_labels_face_tags_as_people() {
         let mut req = base_edit_request();
         req.submit_keywords = true;
+        req.submit_face_tags = true;
         req.existing_keywords = Some(vec!["beach".to_string()]);
         req.existing_face_tags = Some(vec!["Ivo".to_string()]);
         let prompt = prepare_edit_user_prompt(&req);

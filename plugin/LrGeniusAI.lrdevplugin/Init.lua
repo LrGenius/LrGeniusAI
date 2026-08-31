@@ -129,6 +129,16 @@ if _G.prefs.submitKeywords == nil then
 	_G.prefs.submitKeywords = true
 end
 
+-- Seeded from the keyword switch rather than simply defaulting to true.
+-- Until now the names Lightroom put on faces travelled with the keywords and
+-- were sent only when that box was ticked, so anyone who had it off had never
+-- sent a name to a cloud provider. Defaulting the new switch on would start
+-- doing that silently on upgrade; taking the answer they already gave keeps
+-- every install exactly where it was. From here the two are independent.
+if _G.prefs.submitFaceNames == nil then
+	_G.prefs.submitFaceNames = _G.prefs.submitKeywords ~= false
+end
+
 if _G.prefs.temperature == nil then
 	_G.prefs.temperature = Defaults.defaultTemperature
 end
@@ -145,8 +155,15 @@ if _G.prefs.useTopLevelKeyword == nil then
 	_G.prefs.useTopLevelKeyword = true
 end
 
-if _G.prefs.prompts == nil then
-	_G.prefs.prompts = { Default = Defaults.defaultSystemInstruction }
+-- The prompts that ship with the plugin, added once each -- see
+-- Util.seedBuiltinPrompts for why "once" and not "whenever missing".
+local seededPrompts, offeredPrompts, promptsChanged =
+	Util.seedBuiltinPrompts(_G.prefs.prompts, _G.prefs.seededPrompts, Defaults.builtinPrompts)
+if promptsChanged then
+	-- Assigned back, not mutated in place: LrPrefs persists a table field when
+	-- it is written, not when its contents change.
+	_G.prefs.prompts = seededPrompts
+	_G.prefs.seededPrompts = offeredPrompts
 end
 
 if _G.prefs.prompt == nil then
