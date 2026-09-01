@@ -25,7 +25,7 @@ jobs:
         with:
           luaVersion: "5.1"
       - name: Set up LuaRocks
-        uses: leafo/gh-actions-luarocks@e65774a6386cb4f24e293dca7fc4ff89165b64c5 # v4.3.0
+        uses: leafo/gh-actions-luarocks@35d062def313a7699a0d513e996bcf4352f05389 # v6.1.0
       - name: Install busted
         run: luarocks install busted
       - name: Run headless unit tests
