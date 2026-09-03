@@ -42,17 +42,20 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.temperature = prefs.temperature or 0.1
 	props.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
-	props.prompt = prefs.prompt
 	props.prompts = prefs.prompts
+	-- The stored name can point at a prompt that is no longer there. Resolving
+	-- it here is what keeps the picker's value among its items; see
+	-- Util.resolvePromptName for what a dangling name does to the dialog.
+	props.prompt = Util.resolvePromptName(prefs.prompts, prefs.prompt, Defaults.defaultPromptName)
 
-	props.selectedPrompt = prefs.prompts[prefs.prompt]
+	props.selectedPrompt = props.prompt and prefs.prompts[props.prompt] or ""
 
 	props:addObserver("prompt", function(properties, key, newValue)
-		properties.selectedPrompt = properties.prompts[newValue]
+		properties.selectedPrompt = (newValue ~= nil and properties.prompts[newValue]) or ""
 	end)
 
 	props:addObserver("selectedPrompt", function(properties, key, newValue)
-		properties.prompts[properties.prompt] = newValue
+		Util.storePromptText(properties.prompts, properties.prompt, newValue)
 	end)
 
 	props.generateKeywords = prefs.generateKeywords ~= false
@@ -692,8 +695,8 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.enableValidation = props.enableValidation
 		prefs.saveDataToCatalog = props.saveDataToCatalog
 		prefs.replaceSS = props.replaceSS
-		prefs.prompt = props.prompt
 		prefs.prompts = props.prompts
+		prefs.prompt = Util.resolvePromptName(props.prompts, props.prompt, Defaults.defaultPromptName)
 		prefs.useKeywordHierarchy = props.useKeywordHierarchy
 		prefs.useCatalogKeywordStructure = props.useCatalogKeywordStructure
 		prefs.useTopLevelKeyword = props.useTopLevelKeyword
@@ -901,7 +904,9 @@ LrTasks.startAsyncTask(function()
 			species_min_confidence = props.speciesMinConfidence,
 			replace_ss = props.replaceSS,
 			regenerate_metadata = props.regenerateMetadata,
-			prompt = props.selectedPrompt,
+			-- Blank means "no persona of my own"; absent is how the backend is
+			-- told to use its own default.
+			prompt = Util.promptForRequest(props.selectedPrompt),
 			bilingual_keywords = props.bilingualKeywords,
 			keyword_secondary_language = props.keywordSecondaryLanguage,
 			generate_aliases = props.keywordAliases,

@@ -73,17 +73,20 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	propertyTable.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
-	propertyTable.prompt = prefs.prompt
 	propertyTable.prompts = prefs.prompts
+	-- See Util.resolvePromptName: a name the prompt table no longer holds
+	-- leaves the picker with no matching item, which is where both the lost
+	-- edit and the crash in the observer below came from.
+	propertyTable.prompt = Util.resolvePromptName(prefs.prompts, prefs.prompt, Defaults.defaultPromptName)
 
-	propertyTable.selectedPrompt = prefs.prompts[prefs.prompt]
+	propertyTable.selectedPrompt = propertyTable.prompt and prefs.prompts[propertyTable.prompt] or ""
 
 	propertyTable:addObserver("prompt", function(properties, key, newValue)
-		properties.selectedPrompt = properties.prompts[newValue]
+		properties.selectedPrompt = (newValue ~= nil and properties.prompts[newValue]) or ""
 	end)
 
 	propertyTable:addObserver("selectedPrompt", function(properties, key, newValue)
-		properties.prompts[properties.prompt] = newValue
+		Util.storePromptText(properties.prompts, properties.prompt, newValue)
 	end)
 
 	propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
@@ -1375,8 +1378,8 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	prefs.exportQuality = propertyTable.exportQuality
 	prefs.indexSubmitOriginals = (propertyTable.indexSubmitOriginals == true)
 
-	prefs.prompt = propertyTable.prompt
 	prefs.prompts = propertyTable.prompts
+	prefs.prompt = Util.resolvePromptName(propertyTable.prompts, propertyTable.prompt, Defaults.defaultPromptName)
 
 	prefs.logging = propertyTable.logging
 	if propertyTable.logging then

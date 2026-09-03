@@ -859,7 +859,7 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		existing_keywords = options.existing_keywords and JSON:encode(options.existing_keywords) or nil,
 		existing_face_tags = options.existing_face_tags and JSON:encode(options.existing_face_tags) or nil,
 		folder_names = options.folder_names,
-		prompt = options.prompt,
+		prompt = Util.promptForRequest(options.prompt),
 		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
 		bilingual_keywords = tostring(options.bilingual_keywords or false),
 		keyword_secondary_language = options.keyword_secondary_language
@@ -1004,7 +1004,7 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		submit_face_tags = tostring(SearchIndexAPI.wantsFaceNames(options)),
 		submit_folder_names = tostring(options.submit_folder_names or false),
 		user_context = base.user_context or options.user_context,
-		prompt = options.prompt,
+		prompt = Util.promptForRequest(options.prompt),
 		keyword_categories = options.keyword_categories and JSON:encode(options.keyword_categories) or "[]",
 		bilingual_keywords = tostring(options.bilingual_keywords or false),
 		keyword_secondary_language = options.keyword_secondary_language
@@ -1325,8 +1325,12 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	if options.folder_names then
 		table.insert(mimeChunks, { name = "folder_names", value = options.folder_names })
 	end
-	if options.prompt then
-		table.insert(mimeChunks, { name = "prompt", value = options.prompt })
+	-- Normalized rather than passed through: a prompt field the user emptied
+	-- must arrive absent, not as an empty system prompt. See
+	-- Util.promptForRequest.
+	local promptText = Util.promptForRequest(options.prompt)
+	if promptText then
+		table.insert(mimeChunks, { name = "prompt", value = promptText })
 	end
 	if options.date_time then
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
@@ -1424,8 +1428,12 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if options.folder_names then
 		table.insert(mimeChunks, { name = "folder_names", value = options.folder_names })
 	end
-	if options.prompt then
-		table.insert(mimeChunks, { name = "prompt", value = options.prompt })
+	-- Normalized rather than passed through: a prompt field the user emptied
+	-- must arrive absent, not as an empty system prompt. See
+	-- Util.promptForRequest.
+	local promptText = Util.promptForRequest(options.prompt)
+	if promptText then
+		table.insert(mimeChunks, { name = "prompt", value = promptText })
 	end
 
 	table.insert(mimeChunks, { name = "keyword_categories", value = JSON:encode(options.keyword_categories or {}) })
@@ -5122,7 +5130,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("language", options.language)
 	addEditOpt("temperature", options.temperature)
 	addEditOpt("max_tokens", options.max_tokens)
-	addEditOpt("prompt", options.prompt)
+	addEditOpt("prompt", Util.promptForRequest(options.prompt))
 	addEditOpt("edit_intent", options.edit_intent)
 	addEditOpt("user_context", options.user_context)
 	addEditOpt("style_strength", options.style_strength)

@@ -166,9 +166,24 @@ if promptsChanged then
 	_G.prefs.seededPrompts = offeredPrompts
 end
 
-if _G.prefs.prompt == nil then
-	_G.prefs.prompt = Defaults.defaultPromptName
+-- `Default` going missing is not a delete anyone could have made: the Delete
+-- button refuses that name. So a table without it lost it, which is what
+-- clearing a prompt's text used to do (see Util.storePromptText), and putting
+-- it back is a repair rather than a re-offer of a preset the user removed.
+-- An empty table is the same story with nothing left at all, and would leave
+-- the prompt picker with no items.
+if type(_G.prefs.prompts) ~= "table" or next(_G.prefs.prompts) == nil then
+	_G.prefs.prompts = Defaults.builtinPromptTable()
+elseif _G.prefs.prompts[Defaults.defaultPromptName] == nil then
+	local repaired = Util.deepcopy(_G.prefs.prompts)
+	repaired[Defaults.defaultPromptName] = Defaults.defaultSystemInstruction
+	_G.prefs.prompts = repaired
 end
+
+-- Resolved, not just defaulted: a name that no longer exists in the table is
+-- as broken as no name at all, and leaves the prompt picker showing a value
+-- none of its items carry.
+_G.prefs.prompt = Util.resolvePromptName(_G.prefs.prompts, _G.prefs.prompt, Defaults.defaultPromptName)
 
 if _G.prefs.editPrompts == nil then
 	_G.prefs.editPrompts = { Default = Defaults.defaultEditSystemInstruction }

@@ -180,7 +180,10 @@ In the plugin settings dialog you can configure:
 - Prompt presets — two ship with the plug-in: **Default** (the analytical voice)
   and **Family & Everyday Photos** (who, where, what for, using the names your
   catalog has on the faces). Both editable; each is offered once, so an edit or
-  a deletion sticks.
+  a deletion sticks. Clearing a preset's text is an edit like any other and is
+  saved — an empty preset means "no persona of my own", and the backend's
+  built-in one is used for that run. `Default` cannot be deleted, and is put
+  back if an older install lost it.
 - Optional CLIP model download for advanced search
 
 ---

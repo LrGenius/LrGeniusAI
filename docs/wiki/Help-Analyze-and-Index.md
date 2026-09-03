@@ -228,7 +228,9 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
 
 ### Instructions / Prompt
 
-Prompt templates, plus a free-text custom prompt appended to the built-in one.
+Prompt templates. The text box holds the selected template's instructions, and
+what is in it *replaces* the backend's built-in persona for that run rather
+than being appended to it.
 
 Two templates ship with the plug-in:
 
@@ -247,6 +249,16 @@ Both are ordinary templates once they appear: edit them, add your own, delete
 what you do not want. A template you delete stays deleted, and one you rewrite
 stays rewritten — the plug-in only ever offers each built-in once. "Reset to
 defaults" in the prompt dialog brings both back.
+
+**Clearing a template's text** is allowed and is saved: an empty template means
+"no persona of my own", and the run uses the backend's built-in one instead of
+being sent an empty instruction. The template itself stays in the menu — it is
+empty, not deleted.
+
+**Default** is the one template the Delete button refuses, because it is the
+fallback every other selection resolves to. If it is missing from an older
+install it is put back the next time the plug-in loads; that is a repair, not a
+re-offer, and it leaves the templates you deleted deleted.
 
 ---
 

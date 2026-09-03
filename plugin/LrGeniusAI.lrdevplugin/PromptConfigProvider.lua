@@ -21,11 +21,15 @@ function PromptConfigProvider.deletePrompt(props)
 		-- Lua array leaves a hole, and the menu then stops at it, hiding every
 		-- prompt after the deleted one.
 		props.promptTitles = Util.promptMenuItems(props.prompts, Defaults.defaultPromptName)
-		props.promptTitleMenu.items = props.promptTitles
-
-		if props.prompt == promptTitle then
-			props.prompt = Defaults.defaultPromptName
+		if props.promptTitleMenu then
+			props.promptTitleMenu.items = props.promptTitles
 		end
+
+		-- Before the menu is asked to show it: the selection has to name a
+		-- prompt that is still there, or the picker is left with a value none
+		-- of its items carry. Util.resolvePromptName has what that costs.
+		props.prompt = Util.resolvePromptName(props.prompts, props.prompt, Defaults.defaultPromptName)
+		props.selectedPrompt = (props.prompt ~= nil and props.prompts[props.prompt]) or ""
 	end
 end
 
@@ -73,11 +77,28 @@ function PromptConfigProvider.addPrompt(props)
 	})
 
 	if result == "ok" then
-		props.prompts[propertyTable.name] = propertyTable.prompt
-		props.prompt = propertyTable.name
+		-- A name is what the prompt is stored and selected under, so an empty
+		-- one is not a prompt with no name: `prompts[nil] = text` raises
+		-- "table index is nil" from inside the dialog's button action, and an
+		-- empty string would add a nameless entry to the picker.
+		local name = Util.trim(propertyTable.name or "")
+		if name == "" then
+			LrDialogs.message(
+				"The prompt needs a name.",
+				"Give the prompt a name and add it again — the name is what the Template menu lists it under.",
+				"warning"
+			)
+			return nil
+		end
+
+		Util.storePromptText(props.prompts, name, propertyTable.prompt)
+		props.prompt = name
+		props.selectedPrompt = props.prompts[name]
 		props.promptTitles = Util.promptMenuItems(props.prompts, Defaults.defaultPromptName)
-		props.promptTitleMenu.items = props.promptTitles
-		return propertyTable.name
+		if props.promptTitleMenu then
+			props.promptTitleMenu.items = props.promptTitles
+		end
+		return name
 	end
 
 	return nil
