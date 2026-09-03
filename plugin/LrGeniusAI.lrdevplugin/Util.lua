@@ -447,6 +447,94 @@ function Util.promptMenuItems(prompts, firstName)
 end
 
 ---
+-- Resolves a prompt name to one that actually exists in `prompts`.
+--
+-- The prompt picker is a popup_menu whose items are built from the prompt
+-- table and whose value is the stored name. Nothing kept the two in step: a
+-- prompt could vanish from the table (deleted, or -- see Util.storePromptText
+-- -- emptied in a way that dropped its key) while `prefs.prompt` still named
+-- it. The menu then has no item matching its value, and what Lightroom does
+-- with that is platform-dependent: it may snap the selection to another
+-- prompt, which reads as "my edit was not saved", or leave the bound value
+-- nil, at which point the dialog's own observer writes `prompts[nil]`, and
+-- "table index is nil" raised inside a binding callback takes Lightroom down
+-- with it.
+--
+-- @param prompts table Map of prompt name -> instruction text (may be nil).
+-- @param name string|nil The stored selection.
+-- @param defaultName string|nil The name to prefer when the selection is gone.
+-- @return string|nil A name present in `prompts`, or nil when it holds none.
+--
+function Util.resolvePromptName(prompts, name, defaultName)
+	if type(prompts) ~= "table" then
+		return nil
+	end
+	if type(name) == "string" and prompts[name] ~= nil then
+		return name
+	end
+	if type(defaultName) == "string" and prompts[defaultName] ~= nil then
+		return defaultName
+	end
+	-- Whatever is first in menu order, so the fallback matches what the user
+	-- sees at the top of the picker rather than an arbitrary hash order.
+	local items = Util.promptMenuItems(prompts, defaultName)
+	if items[1] then
+		return items[1].value
+	end
+	return nil
+end
+
+---
+-- Stores a prompt's text under `name`, keeping the entry alive when the text
+-- is empty.
+--
+-- Two Lua facts meet badly in the dialogs' `selectedPrompt` observer. Writing
+-- nil into a table *removes* the key, so a prompt whose text the user cleared
+-- stopped existing instead of becoming empty -- the entry disappeared, the
+-- menu lost it, and the edit came back on the next open. And `t[nil] = v`
+-- raises "table index is nil", so the same observer firing while no prompt is
+-- selected throws from inside Lightroom's UI callback.
+--
+-- Emptying the field is a legitimate edit -- it means "no custom persona,
+-- use the backend's own" -- so it is stored as an empty string, and
+-- Util.promptForRequest is what turns that into an omitted field on the wire.
+--
+-- @param prompts table Map of prompt name -> instruction text.
+-- @param name string|nil The prompt to write to.
+-- @param text string|nil The new text; nil is stored as "".
+-- @return boolean True when the text was stored.
+--
+function Util.storePromptText(prompts, name, text)
+	if type(prompts) ~= "table" or type(name) ~= "string" or name == "" then
+		return false
+	end
+	prompts[name] = type(text) == "string" and text or ""
+	return true
+end
+
+---
+-- The prompt text to put on the wire, or nil when there is nothing to send.
+--
+-- A blank custom prompt is not an instruction to give the model an empty
+-- system prompt; it means the user wants no persona of their own. Every
+-- backend route already falls back to its built-in default when the field is
+-- absent, so blank is sent as absent.
+--
+-- @param text string|nil The prompt text from the dialog.
+-- @return string|nil The trimmed text, or nil when it is blank.
+--
+function Util.promptForRequest(text)
+	if type(text) ~= "string" then
+		return nil
+	end
+	local trimmed = Util.trim(text)
+	if trimmed == "" then
+		return nil
+	end
+	return trimmed
+end
+
+---
 -- Splits a flattened keyword list into ordinary keywords and face tags.
 --
 -- `keywordTagsForExport` flattens person keywords and the rest of the

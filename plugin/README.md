@@ -177,10 +177,18 @@ In the plugin settings dialog you can configure:
   The section reports why it is unavailable when the host cannot use it — a
   source build without the `llamacpp` feature, or a missing MLX helper.
 - Export size and quality used for AI processing
-- Prompt presets — two ship with the plug-in: **Default** (the analytical voice)
-  and **Family & Everyday Photos** (who, where, what for, using the names your
-  catalog has on the faces). Both editable; each is offered once, so an edit or
-  a deletion sticks.
+- Prompt presets — a preset is the *system* prompt: which expert is looking at
+  the photo, which vocabulary they use, how specific they may be, and what they
+  must never invent. **Default** (the analytical voice) and **Family &
+  Everyday Photos** (who, where, what for, using the names your catalog has on
+  the faces) ship alongside genre presets for Wildlife & Nature, Landscape &
+  Travel, Architecture & Urban, Events & Weddings, Sports & Action, Street &
+  Documentary, Portrait & Studio, Product & Stock, Food & Drink, and Night &
+  Astro. All editable; each is offered once, so an edit or a deletion sticks.
+  Clearing a preset's text is an edit like any other and is saved — an empty
+  preset means "no persona of my own", and the backend's built-in one is used
+  for that run. `Default` cannot be deleted, and is put back if an older
+  install lost it.
 - Optional CLIP model download for advanced search
 
 ---

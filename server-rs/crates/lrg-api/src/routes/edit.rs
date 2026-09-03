@@ -171,7 +171,14 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
             .and_then(|s| s.parse().ok())
             .unwrap_or(defaults.temperature),
         max_tokens: fields.get("max_tokens").and_then(|s| s.parse().ok()),
-        prompt: fields.get("prompt").cloned(),
+        // Trimmed and dropped when blank, matching `/v1/index/photos`: a
+        // prompt field the user emptied means "no persona of my own", and the
+        // answer to that is DEFAULT_EDIT_SYSTEM_PROMPT, not a system prompt
+        // with nothing in it.
+        prompt: fields
+            .get("prompt")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         submit_keywords: bool_field(fields, "submit_keywords", false),
         submit_folder_names: bool_field(fields, "submit_folder_names", false),
         submit_face_tags: bool_field(fields, "submit_face_tags", true),
@@ -926,6 +933,36 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
+    }
+
+    #[test]
+    fn blank_prompt_falls_back_to_the_default_edit_persona() {
+        // The plugin's prompt field can be emptied. Sending that through as an
+        // empty system prompt is not what the user asked for -- it means "no
+        // persona of my own" -- and `/v1/index/photos` has always read it that
+        // way. This route used to keep the empty string.
+        let mut fields = plugin_fields();
+        fields.insert("prompt".to_string(), "   ".to_string());
+        assert!(parse_edit_options_form(&fields).prompt.is_none());
+
+        fields.insert("prompt".to_string(), String::new());
+        assert!(parse_edit_options_form(&fields).prompt.is_none());
+
+        fields.remove("prompt");
+        assert!(parse_edit_options_form(&fields).prompt.is_none());
+    }
+
+    #[test]
+    fn a_real_prompt_is_kept_and_trimmed() {
+        let mut fields = plugin_fields();
+        fields.insert(
+            "prompt".to_string(),
+            "  Retouch like a purist.  ".to_string(),
+        );
+        assert_eq!(
+            parse_edit_options_form(&fields).prompt.as_deref(),
+            Some("Retouch like a purist.")
+        );
     }
 
     #[test]
