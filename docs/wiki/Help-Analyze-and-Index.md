@@ -232,18 +232,58 @@ Prompt templates. The text box holds the selected template's instructions, and
 what is in it *replaces* the backend's built-in persona for that run rather
 than being appended to it.
 
-Two templates ship with the plug-in:
+A template is a *system* prompt: it decides which expert is looking at the
+photo, which vocabulary they reach for, how specific they are allowed to be,
+and what they must never invent. It does not decide the output fields, the
+language or the keyword structure — those come from the request itself, from
+the switches on this dialog. So picking a template changes the voice and the
+precision of what you get, not its shape.
 
-- **Default** — the analytical voice: species, landmarks, vehicle makes,
-  described precisely. Unchanged, and still what every catalog uses unless you
-  pick otherwise.
-- **Family & Everyday Photos** — the album voice: who is in the picture, what
-  they are doing, where, and what the occasion appears to be. It asks for the
-  people by the names your catalog already has on them and for the place in the
-  title, and it is explicitly forbidden to invent what it was not given — no
-  relationships, no birthdays or weddings, no landmark the photo's own data
-  does not support. Pair it with **People's names from face recognition** and
-  **Location** below; without those it has nothing to name.
+**Default** is the analytical voice: species, landmarks, vehicle makes,
+described precisely. Unchanged, and still what every catalog uses unless you
+pick otherwise.
+
+**Family & Everyday Photos** is the album voice: who is in the picture, what
+they are doing, where, and what the occasion appears to be. It asks for the
+people by the names your catalog already has on them and for the place in the
+title, and it is explicitly forbidden to invent what it was not given — no
+relationships, no birthdays or weddings, no landmark the photo's own data does
+not support.
+
+The genre templates each bring a working vocabulary and a specific line they
+will not cross:
+
+- **Wildlife & Nature** — field-biologist naming: common name plus the
+  scientific name where it is certain, genus or family where it is not, with
+  behaviour, life stage, habitat and season. It will not anthropomorphise or
+  guess a species.
+- **Landscape & Travel** — landform and terrain in the words a map would use,
+  plus light, weather and season. It will not invent a named peak, lake, trail
+  or landmark.
+- **Architecture & Urban** — building type, period and style, materials and the
+  elements carrying the composition. It names a specific building or architect
+  only when it is certain.
+- **Events & Weddings** — the part of the day a frame belongs to, people by
+  name or by role, and the details that make a frame findable months later. It
+  will not guess relationships, traditions or the meaning of a ritual.
+- **Sports & Action** — the sport, the discipline and the phase of play, filed
+  the way a wire caption is. It will not invent a team, a competition or a
+  score.
+- **Street & Documentary** — observational restraint: the gesture, the light,
+  the geometry, the setting, with dignity toward everyone in the frame and no
+  inferred story.
+- **Portrait & Studio** — the kind of portrait and the craft behind it,
+  lighting pattern included. It will not speculate about the person.
+- **Product & Stock** — commercial keywording a buyer would actually type: shot
+  type, material, finish, negative space, concept. Brands only when legibly
+  visible.
+- **Food & Drink** — the dish, its components, the preparation and the styling,
+  without inventing an ingredient or a dietary claim.
+- **Night & Astro** — what is actually in the sky and how the frame was made,
+  without inventing a catalogue designation or an event.
+
+The people-facing templates pair with **People's names from face recognition**
+and **Location** below; without those switches they have nothing to name.
 
 Both are ordinary templates once they appear: edit them, add your own, delete
 what you do not want. A template you delete stays deleted, and one you rewrite
