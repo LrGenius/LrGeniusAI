@@ -10,7 +10,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 isocountry = "0.3.2"
 kamadak-exif = "0.6"
 log.workspace = true
-rawler = { version = "0.7.2", default-features = false }
+rawler = { version = "0.8.0", default-features = false }
 reverse_geocoder = "4.1.1"
 thiserror = "2"
 
