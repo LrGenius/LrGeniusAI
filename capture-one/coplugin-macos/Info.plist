@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Key set mirrors the shipping COHeliconFocusPlugin.coplugin, which is the only
+	     verified example of a working Capture One plugin available to this project. -->
+
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+
+	<!-- Capture One instantiates this class by name. It must match the @objc(...) name
+	     on the Swift class, NOT the mangled Swift symbol. -->
+	<key>NSPrincipalClass</key>
+	<string>LrGeniusAIPlugin</string>
+
+	<key>CFBundleExecutable</key>
+	<string>LrGeniusAIPlugin</string>
+
+	<key>CFBundleIdentifier</key>
+	<string>cloud.machek.lrgeniusai.coplugin</string>
+
+	<key>CFBundleName</key>
+	<string>LrGeniusAI</string>
+
+	<key>CFBundleDisplayName</key>
+	<string>LrGeniusAI</string>
+
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+
+	<key>CFBundleVersion</key>
+	<string>1</string>
+
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+
+	<!-- Shown by Capture One in the Plug-ins preference pane. -->
+	<key>CFBundleGetInfoString</key>
+	<string>Send the selected originals to LrGeniusAI for AI tagging, description and search.</string>
+
+	<key>COPluginAuthor</key>
+	<string>Bastian Machek</string>
+
+	<key>COPluginAuthorURL</key>
+	<string>https://github.com/LrGenius/LrGeniusAI</string>
+
+	<!-- Capture One 16.8.5 itself declares LSMinimumSystemVersion 14.0, and
+	     CaptureOnePlugins.framework is built for macOS 14.0. Anything lower produces a
+	     linker warning and could not be loaded by this host anyway. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © Bastian Machek. All rights reserved.</string>
+
+	<!-- Uncomment once Resources/LrGeniusAI.icns exists; menuIcon() looks it up by this name.
+	<key>CFBundleIconFile</key>
+	<string>LrGeniusAI</string>
+	-->
+</dict>
+</plist>
