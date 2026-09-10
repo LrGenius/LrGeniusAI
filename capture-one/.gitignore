@@ -1,0 +1,9 @@
+# Build output.
+build/
+dist/
+
+# `scripts/build.sh` stages a copy of Capture One's own CaptureOnePlugins.framework
+# under build/ so the compiler has something to link against. That binary is Phase
+# One's property and is taken out of the locally installed app — it must never be
+# committed or redistributed. It is covered by the build/ rule above; this comment
+# exists so nobody "fixes" that rule without knowing why it is there.

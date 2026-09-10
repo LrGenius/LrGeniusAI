@@ -1,0 +1,14 @@
+// Consumed by scripts/build.sh, which assembles a *shim* framework:
+//
+//   build/CaptureOnePlugins.framework/
+//     Headers/CaptureOnePlugins.h   <- copied from ../Headers
+//     Modules/module.modulemap      <- copied from this file
+//     CaptureOnePlugins             <- the real binary, from Capture One.app
+//
+// That gives Swift a module to import and the linker real symbols to bind against,
+// without writing anything into /Applications.
+framework module CaptureOnePlugins {
+    umbrella header "CaptureOnePlugins.h"
+    export *
+    module * { export * }
+}
