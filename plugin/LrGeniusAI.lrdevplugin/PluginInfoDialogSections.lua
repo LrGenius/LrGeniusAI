@@ -205,7 +205,18 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	local function checkUpdates()
 		LrTasks.startAsyncTask(function()
 			local info = UpdateCheck.getLatestReleaseInfo()
-			if info and info.is_newer then
+			if not info then
+				-- A failed reach is not "up to date". getLatestReleaseInfo
+				-- returns nil for any network or parse failure and only logs, so
+				-- claiming the plugin is current here would report a check that
+				-- never actually happened.
+				propertyTable.updateStatus = "Could not check for updates"
+				propertyTable.updateStatusColor = { 0.7, 0.4, 0.1 }
+				propertyTable.updateButtonTitle =
+					LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/UpdateCheck=Check for updates")
+				propertyTable.updateAvailable = false
+				propertyTable.latestReleaseInfo = nil
+			elseif info.is_newer then
 				propertyTable.latestReleaseInfo = info
 				propertyTable.updateAvailable = true
 				propertyTable.updateStatus =
