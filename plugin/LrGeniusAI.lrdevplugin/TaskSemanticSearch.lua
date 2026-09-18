@@ -275,6 +275,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("showAdvancedSearchDialog", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		-- Check server connection and health (ensure CLIP is ready for semantic search)
 		if not Util.waitForServerDialog({ requireClip = true }) then
 			return

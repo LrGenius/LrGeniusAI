@@ -279,7 +279,7 @@ local function pollForActions(scope, pageUrl)
 				ErrorHandler.handleError(
 					"Lost the connection to the LrGeniusAI backend",
 					"People is no longer listening for the browser page. Close the page and open People again. ("
-						.. tostring(err)
+						.. Util.userFacingError(tostring(err))
 						.. ")"
 				)
 				return
@@ -330,6 +330,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskPeople", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end
