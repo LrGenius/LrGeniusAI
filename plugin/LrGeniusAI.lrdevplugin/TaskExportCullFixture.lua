@@ -400,11 +400,10 @@ LrTasks.startAsyncTask(function()
 		LrDialogs.message(
 			LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"),
 			LOC(
-				'$$$/LrGeniusAI/CullFixture/DoneMessage=Wrote ^1 group(s), ^2 of them labelled, covering ^3 photo(s).\n\nScore it with:\ncargo run --release -p lrg-analysis --example cull_eval -- "^4"',
+				"$$$/LrGeniusAI/CullFixture/DoneMessage=Wrote ^1 group(s), ^2 of them labelled, covering ^3 photo(s).\n\nThe full path is in the logfile. Score it with the cull_eval example (see the developer docs).",
 				tostring(#fixtureGroups),
 				tostring(labelledGroupCount),
-				tostring(#photoIds),
-				tostring(outputPath)
+				tostring(#photoIds)
 			)
 		)
 	end)
