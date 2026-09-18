@@ -397,15 +397,21 @@ LrTasks.startAsyncTask(function()
 		end
 
 		log:info("Culling fixture written to " .. tostring(outputPath))
-		LrDialogs.message(
-			LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"),
-			LOC(
-				'$$$/LrGeniusAI/CullFixture/DoneMessage=Wrote ^1 group(s), ^2 of them labelled, covering ^3 photo(s).\n\nScore it with:\ncargo run --release -p lrg-analysis --example cull_eval -- "^4"',
-				tostring(#fixtureGroups),
-				tostring(labelledGroupCount),
-				tostring(#photoIds),
-				tostring(outputPath)
-			)
+		local doneMessage = LOC(
+			'$$$/LrGeniusAI/CullFixture/DoneMessage=Wrote ^1 group(s), ^2 of them labelled, covering ^3 photo(s).\n\nScore it with:\ncargo run --release -p lrg-analysis --example cull_eval -- "^4"',
+			tostring(#fixtureGroups),
+			tostring(labelledGroupCount),
+			tostring(#photoIds),
+			tostring(outputPath)
 		)
+		if missingStored > 0 then
+			doneMessage = doneMessage
+				.. "\n\n"
+				.. string.format(
+					"%d photo(s) had no stored metrics (the backend is older than this flag), so the fixture cannot fully reproduce cull scores. Update the backend and re-export for a complete fixture.",
+					missingStored
+				)
+		end
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"), doneMessage)
 	end)
 end)
