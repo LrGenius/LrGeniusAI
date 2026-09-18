@@ -191,9 +191,7 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 					spacing = f:control_spacing(),
 					f:checkbox({
 						value = bind("searchInSemanticSiglip"),
-						title = LOC(
-							"$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (SigLIP / local AI)"
-						),
+						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (AI search)"),
 					}),
 					-- Vertex AI is disabled in the GUI; the backend code is untouched.
 					-- f:checkbox({
@@ -300,13 +298,13 @@ LrTasks.startAsyncTask(function()
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 						LOC(
-							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection or collection set is selected."
+							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
 						)
 					)
 				else
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos were found in the selected scope.")
+						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
 					)
 				end
 				return
@@ -383,7 +381,7 @@ LrTasks.startAsyncTask(function()
 		end
 
 		if results and results.warning then
-			LrDialogs.message(LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"), results.warning, "warning")
+			LrDialogs.message(LOC("$$$/LrGeniusAI/common/BackendWarning=Search warning"), results.warning, "warning")
 		end
 
 		local finalResults = {}

@@ -227,7 +227,7 @@ LrTasks.startAsyncTask(function()
 				return a.title < b.title
 			end)
 			if #modelItems == 0 then
-				table.insert(modelItems, { title = "qwen: (default)", value = "qwen::" })
+				table.insert(modelItems, { title = "Default (built-in)", value = "qwen::" })
 			end
 		end
 
