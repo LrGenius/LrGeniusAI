@@ -117,7 +117,7 @@ LrTasks.startAsyncTask(function()
 
 			ErrorHandler.handleError(
 				LOC("$$$/LrGeniusAI/TaskAutomatedTests/FailedTitle=Some Tests Failed"),
-				combinedError
+				summary .. combinedError
 			)
 		else
 			LrDialogs.message(LOC("$$$/LrGeniusAI/TaskAutomatedTests/PassedTitle=All Tests Passed"), summary, "info")

@@ -1178,13 +1178,21 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 								local ok, err, result = SearchIndexAPI.claimPhotosForCatalog(progressScope)
 								progressScope:done()
 								if ok then
-									local msg = result
-											and (LOC("$$$/LrGeniusAI/PluginInfo/ClaimedPrefix=Claimed: ") .. tostring(
-												result.claimed
-											) .. (result.errors and result.errors > 0 and (LOC(
-												"$$$/LrGeniusAI/PluginInfo/ClaimedErrors=; errors: "
-											) .. tostring(result.errors)) or ""))
-										or LOC("$$$/LrGeniusAI/common/Done=Done.")
+									local msg = LOC("$$$/LrGeniusAI/common/Done=Done.")
+									if result then
+										msg = LOC(
+											"$$$/LrGeniusAI/PluginInfo/ClaimedPrefix=Claimed ^1 photo(s).",
+											tostring(result.claimed)
+										)
+										if result.errors and result.errors > 0 then
+											msg = msg
+												.. "\n"
+												.. LOC(
+													"$$$/LrGeniusAI/PluginInfo/ClaimedErrors=^1 photo(s) could not be claimed; run Analyze & Index on them again.",
+													tostring(result.errors)
+												)
+										end
+									end
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/ClaimPhotosTitle=Claim photos"),
 										msg
@@ -1233,7 +1241,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									LrShell.revealInShell(pathOrErr)
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/DbBackupDownloaded=Database backup downloaded."),
-										pathOrErr
+										LrPathUtils.leafName(pathOrErr)
 									)
 								elseif pathOrErr ~= "canceled" then
 									-- A user-canceled save panel is not an error; anything else is.

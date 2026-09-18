@@ -167,10 +167,12 @@ function LocalModelCatalog.refresh(propertyTable)
 	LrTasks.startAsyncTask(function()
 		local catalog = SearchIndexAPI.getLlmCatalog()
 		if catalog == nil then
-			propertyTable.llmStatusText =
-				LOC("$$$/LrGeniusAI/LocalModel/Unreachable=Backend not reachable — cannot list local models.")
-			propertyTable.mlxStatusText =
-				LOC("$$$/LrGeniusAI/MlxModel/Unreachable=Backend not reachable — cannot list MLX models.")
+			propertyTable.llmStatusText = LOC(
+				"$$$/LrGeniusAI/LocalModel/Unreachable=The backend is not running yet — local models will appear once it starts."
+			)
+			propertyTable.mlxStatusText = LOC(
+				"$$$/LrGeniusAI/MlxModel/Unreachable=The backend is not running yet — MLX models will appear once it starts."
+			)
 			propertyTable.llmSupported = false
 			propertyTable.mlxSupported = false
 			propertyTable.llmDownloadChoice = nil
