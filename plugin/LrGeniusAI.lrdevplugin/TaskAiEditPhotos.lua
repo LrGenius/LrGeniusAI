@@ -563,7 +563,7 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if errorCount > 0 then
+			if errorCount > 0 and successCount == 0 then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompletionTitle=AI Edit Completed"),
 					combinedReport
