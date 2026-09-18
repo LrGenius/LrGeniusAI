@@ -132,6 +132,35 @@ function Util.errorText(value, fallback)
 end
 
 ---
+-- Rewrites the API wrapper's transport/HTTP errors into something a user can
+-- act on. The raw text is logged where the request was made, so this only
+-- changes what a dialog shows; anything unrecognised passes through untouched.
+--
+-- @param value any  The error value, usually from a response or a pcall.
+-- @return string
+---
+function Util.userFacingError(value)
+	if type(value) ~= "string" or value == "" then
+		return value
+	end
+	local status, backend = value:match("^API request failed%. HTTP status: (.-)%s*%-%s*(.+)$")
+	if status then
+		return "The server reported an error (HTTP " .. status .. "): " .. backend
+	end
+	local statusOnly = value:match("^API request failed%. HTTP status: (.+)$")
+	if statusOnly then
+		return "The server reported an error (HTTP " .. statusOnly .. "). Check the logfile for details."
+	end
+	if value:match("^API request failed %(no response%)") then
+		return "The LrGeniusAI server could not be reached. Check that it is running, then try again."
+	end
+	if value:match("^JSON decode failed") then
+		return "The server returned a response that could not be read. Check the logfile for details."
+	end
+	return value
+end
+
+---
 -- Returns a stable unique identifier for the given catalog, for cross-catalog backend tracking.
 -- Stored in catalog plugin properties; generated once (MD5 of path + timestamp) and reused.
 -- @param catalog LrCatalog|nil Optional; defaults to LrApplication.activeCatalog().

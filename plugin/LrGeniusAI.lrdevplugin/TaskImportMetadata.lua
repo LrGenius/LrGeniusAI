@@ -51,6 +51,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("ImportMetadataTask", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		-- Check server connection
 		if not Util.waitForServerDialog() then
 			return

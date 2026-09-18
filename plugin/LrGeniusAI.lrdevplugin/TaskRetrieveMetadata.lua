@@ -161,6 +161,7 @@ end
 --
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("retrieveMetadataTask", function(ctx)
+		LrDialogs.attachErrorDialogToFunctionContext(ctx)
 		-- Check server connection
 		if not Util.waitForServerDialog() then
 			return

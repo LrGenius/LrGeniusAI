@@ -793,6 +793,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("AnalyzeAndIndexTask", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		-- Check server connection
 		if not Util.waitForServerDialog() then
 			return
