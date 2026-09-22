@@ -1047,9 +1047,22 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		local runWarnings = {}
+
 		if props.enableImportBeforeIndex then
 			log:trace("Importing existing metadata from catalog before indexing...")
-			SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, false)
+			local _, importProcessed, importFailed =
+				SearchIndexAPI.importMetadataFromCatalog(photosToProcess, progressScope, false)
+			if importFailed and importFailed > 0 then
+				table.insert(
+					runWarnings,
+					"Before indexing, metadata could not be imported for "
+						.. tostring(importFailed)
+						.. " of "
+						.. tostring(importProcessed)
+						.. " selected photo(s); those photos were analyzed without the catalog keywords and captions they already have."
+				)
+			end
 		end
 
 		log:trace("Starting AnalyzeAndIndexTask with " .. #photosToProcess .. " photos")
@@ -1107,8 +1120,17 @@ LrTasks.startAsyncTask(function()
 						generateAliases = props.keywordAliases,
 						appendMetadata = props.appendMetadata,
 						keywordSessionCache = keywordSessionCache,
-					}))
-					SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false)
+					})
+					local impFailed =
+						select(3, SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false))
+					if impFailed and impFailed > 0 then
+						table.insert(
+							runWarnings,
+							"After applying metadata, the search index could not be updated for "
+								.. tostring(impFailed)
+								.. " photo(s)."
+						)
+					end
 				end
 			end
 		end
@@ -1210,7 +1232,16 @@ LrTasks.startAsyncTask(function()
 									"Reimported validated metadata for photo: "
 										.. (photo:getFormattedMetadata("fileName") or "unknown")
 								)
-								SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
+								local impFailed =
+									select(3, SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false))
+								if impFailed and impFailed > 0 then
+									table.insert(
+										runWarnings,
+										"After applying metadata, the search index could not be updated for "
+											.. tostring(impFailed)
+											.. " photo(s)."
+									)
+								end
 
 								savedCount = savedCount + 1
 							elseif result == "other" then
@@ -1239,7 +1270,16 @@ LrTasks.startAsyncTask(function()
 								"Applied metadata without validation for photo (skipFromHere active): "
 									.. (photo:getFormattedMetadata("fileName") or "unknown")
 							)
-							SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
+							local impFailed =
+								select(3, SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false))
+							if impFailed and impFailed > 0 then
+								table.insert(
+									runWarnings,
+									"After applying metadata, the search index could not be updated for "
+										.. tostring(impFailed)
+										.. " photo(s)."
+								)
+							end
 
 							savedCount = savedCount + 1
 						end
@@ -1310,13 +1350,18 @@ LrTasks.startAsyncTask(function()
 		else -- success
 			local msg =
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
-			local warningsText = combinedWarnings
-			if #metadataWarnings > 0 then
-				local condensed = SearchIndexAPI.condenseMessages(metadataWarnings)
-				warningsText = warningsText and (warningsText .. "\n" .. condensed) or condensed
+			local allWarnings = {}
+			if combinedWarnings then
+				table.insert(allWarnings, combinedWarnings)
 			end
-			if warningsText then
-				msg = msg .. "\n\nWarnings:\n" .. warningsText
+			if #runWarnings > 0 then
+				local condensed = SearchIndexAPI.condenseMessages(runWarnings)
+				if condensed then
+					table.insert(allWarnings, condensed)
+				end
+			end
+			if #allWarnings > 0 then
+				msg = msg .. "\n\nWarnings:\n" .. table.concat(allWarnings, "\n")
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)
