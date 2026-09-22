@@ -1319,8 +1319,10 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 												.. backendTag
 												.. "\n"
 												.. LOC("$$$/LrGeniusAI/PluginInfo/ReasonPrefix=Reason: ")
-												.. tostring(
-													result.reason or LOC("$$$/LrGeniusAI/common/Unknown=unknown")
+												.. Util.userFacingError(
+													tostring(
+														result.reason or LOC("$$$/LrGeniusAI/common/Unknown=unknown")
+													)
 												)
 												.. "\n\n"
 												.. buildInfo,
@@ -1330,7 +1332,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 								else
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/VersionCheckFailed=Version check failed"),
-										tostring(err or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error")),
+										Util.userFacingError(
+											tostring(err or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"))
+										),
 										"critical"
 									)
 								end

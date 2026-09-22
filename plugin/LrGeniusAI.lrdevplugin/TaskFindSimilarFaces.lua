@@ -122,9 +122,16 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 	end
 
 	local collectionSet, collection
-	catalog:withWriteAccessDo("Create Collection Set", function()
-		collectionSet = catalog:createCollectionSet(LOC("$$$/LrGeniusAI/People/CollectionSetName=People"), nil, true)
-	end, Defaults.catalogWriteAccessOptions)
+	local okSet, setErr = LrTasks.pcall(function()
+		catalog:withWriteAccessDo("Create Collection Set", function()
+			collectionSet =
+				catalog:createCollectionSet(LOC("$$$/LrGeniusAI/People/CollectionSetName=People"), nil, true)
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not okSet then
+		ErrorHandler.handleError(LOC("$$$/LrGeniusAI/People/CollectionSetError=Collection set error"), tostring(setErr))
+		return
+	end
 	if not collectionSet then
 		ErrorHandler.handleError(
 			LOC("$$$/LrGeniusAI/People/CollectionSetError=Collection set error"),
@@ -133,9 +140,15 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 		return
 	end
 
-	catalog:withWriteAccessDo("Create Collection", function()
-		collection = catalog:createCollection(collectionName, collectionSet, false)
-	end, Defaults.catalogWriteAccessOptions)
+	local okCollection, collectionErr = LrTasks.pcall(function()
+		catalog:withWriteAccessDo("Create Collection", function()
+			collection = catalog:createCollection(collectionName, collectionSet, false)
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not okCollection then
+		ErrorHandler.handleError(LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"), tostring(collectionErr))
+		return
+	end
 	if not collection then
 		ErrorHandler.handleError(
 			LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"),
@@ -144,9 +157,15 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 		return
 	end
 
-	catalog:withWriteAccessDo("Add Photos to Collection", function()
-		collection:addPhotos(photos)
-	end, Defaults.catalogWriteAccessOptions)
+	local okAddPhotos, addPhotosErr = LrTasks.pcall(function()
+		catalog:withWriteAccessDo("Add Photos to Collection", function()
+			collection:addPhotos(photos)
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not okAddPhotos then
+		ErrorHandler.handleError(LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"), tostring(addPhotosErr))
+		return
+	end
 
 	catalog:setActiveSources({ collection })
 	LrApplicationView.gridView()
@@ -162,6 +181,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskFindSimilarFaces", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end

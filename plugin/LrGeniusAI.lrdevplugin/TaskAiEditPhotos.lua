@@ -386,7 +386,7 @@ LrTasks.startAsyncTask(function()
 					then
 						local errMsg = "Unknown error"
 						if not apiOk then
-							errMsg = tostring(apiResponse)
+							errMsg = Util.userFacingError(tostring(apiResponse))
 						elseif type(response) == "string" then
 							errMsg = response
 						elseif response and response.error then

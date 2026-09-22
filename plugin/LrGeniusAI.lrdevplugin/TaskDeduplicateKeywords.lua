@@ -203,6 +203,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("DeduplicateKeywordsTask", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		local catalog = LrApplication.activeCatalog()
 		local f = LrView.osFactory()
 		local bind = LrView.bind
