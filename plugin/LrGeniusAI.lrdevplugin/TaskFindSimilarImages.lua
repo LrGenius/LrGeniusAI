@@ -205,7 +205,7 @@ LrTasks.startAsyncTask(function()
 		if not photoId or photoId == "" then
 			ErrorHandler.handleError(
 				LOC("$$$/LrGeniusAI/FindSimilarImages/PhotoIdError=Could not get photo ID"),
-				photoIdErr or "Photo has no UUID. Run Analyze & Index first."
+				photoIdErr or "Photo has no ID yet. Run Analyze & Index first."
 			)
 			return
 		end
@@ -258,7 +258,11 @@ LrTasks.startAsyncTask(function()
 
 		-- If the server returned a warning (e.g. reference photo not indexed), show it and stop.
 		if result and result.warning then
-			LrDialogs.message(LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"), result.warning, "warning")
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/common/BackendWarning=Find similar images"),
+				result.warning,
+				"warning"
+			)
 			return
 		end
 

@@ -55,7 +55,7 @@ the search. Default 100.
 
 At least one of these has to be on:
 
-- **Semantic (SigLIP / local AI)** — matches the meaning of the query against
+- **Semantic (AI search)** — matches the meaning of the query against
   the image embedding. Requires the photos to have been indexed with
   *Create search embeddings*, and the SigLIP model to be downloaded.
 - **Metadata** — plain substring matching against the AI-generated fields.

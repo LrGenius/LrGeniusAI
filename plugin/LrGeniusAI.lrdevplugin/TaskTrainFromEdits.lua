@@ -152,8 +152,11 @@ LrTasks.startAsyncTask(function()
 		local errorMessages = {}
 		local backendWarnings = {}
 
+		local canceled = false
+
 		for index, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
+				canceled = true
 				break
 			end
 
@@ -293,27 +296,23 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if errorCount > 0 and successCount == 0 then
-				ErrorHandler.handleError(
-					LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
-					combinedReport
-				)
-			else
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
-					combinedReport,
-					"warning"
-				)
+			if canceled then
+				combinedReport = combinedReport .. "\n\n" .. "Canceled before all photos were processed."
 			end
-		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/Training/SuccessTitle=Training Examples Saved"),
-				LOC(
-					"$$$/LrGeniusAI/Training/SuccessSummary=Successfully saved ^1 training example(s).\nAI Edit Photos will use your style when editing visually similar photos.",
-					tostring(successCount)
-				),
-				"info"
+
+			ErrorHandler.handleError(
+				LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
+				combinedReport
 			)
+		else
+			local summary = LOC(
+				"$$$/LrGeniusAI/Training/SuccessSummary=Successfully saved ^1 training example(s).\nAI Edit Photos will use your style when editing visually similar photos.",
+				tostring(successCount)
+			)
+			if canceled then
+				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/Training/SuccessTitle=Training Examples Saved"), summary, "info")
 		end
 	end)
 end)

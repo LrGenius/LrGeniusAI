@@ -101,7 +101,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 	end)
 	if not modelItems or #modelItems == 0 then
 		-- Fallback option if nothing matched filters
-		table.insert(modelItems, { title = "qwen: (default)", value = "qwen::" })
+		table.insert(modelItems, { title = "Default (built-in)", value = "qwen::" })
 	end
 	if not props.modelKey or props.modelKey == "" then
 		props.modelKey = modelItems[1].value
@@ -205,7 +205,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:static_text({
 							title = LOC(
-								"$$$/LrGeniusAI/AnalyzeAndIndex/ClipNotReady=(OpenCLIP model is missing. Please download it in the Plugin Manager)"
+								"$$$/LrGeniusAI/AnalyzeAndIndex/ClipNotReady=(The AI search model is missing. Download it in the Plug-in Manager)"
 							),
 							text_color = LrColor(1, 0, 0),
 							visible = not props.clipReady,
@@ -1039,6 +1039,10 @@ LrTasks.startAsyncTask(function()
 								.. (photo:getFormattedMetadata("fileName") or "unknown")
 						)
 						progressScope:done()
+						LrDialogs.message(
+							LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
+							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+						)
 						return
 					end
 				end

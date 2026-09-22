@@ -203,10 +203,12 @@ LrTasks.startAsyncTask(function()
 		local errorMessages = {}
 		local backendWarnings = {}
 		local skipValidation = false
+		local canceled = false
 
 		for i, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
 				log:info("Retrieve metadata task canceled by user")
+				canceled = true
 				break
 			end
 
@@ -273,6 +275,7 @@ LrTasks.startAsyncTask(function()
 							Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
 						else
 							-- Validation canceled
+							canceled = true
 							break
 						end
 					end
@@ -392,28 +395,24 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if errorCount > 0 and successCount == 0 then
-				ErrorHandler.handleError(
-					LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
-					combinedReport
-				)
-			else
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
-					combinedReport,
-					"warning"
-				)
+			if canceled then
+				combinedReport = combinedReport .. "\n\n" .. "Canceled before all photos were processed."
 			end
-		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/RetrieveMetadata/SuccessTitle=Metadata Retrieval"),
-				LOC(
-					"$$$/LrGeniusAI/RetrieveMetadata/SuccessSummary=Successfully retrieved metadata for ^1 photo(s).\nSkipped: ^2",
-					tostring(successCount),
-					tostring(skipCount)
-				),
-				"info"
+
+			ErrorHandler.handleError(
+				LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
+				combinedReport
 			)
+		else
+			local summary = LOC(
+				"$$$/LrGeniusAI/RetrieveMetadata/SuccessSummary=Successfully retrieved metadata for ^1 photo(s).\nSkipped: ^2",
+				tostring(successCount),
+				tostring(skipCount)
+			)
+			if canceled then
+				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/RetrieveMetadata/SuccessTitle=Metadata Retrieval"), summary, "info")
 		end
 
 		log:info(

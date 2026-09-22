@@ -398,12 +398,14 @@ LrTasks.startAsyncTask(function()
 		end
 
 		log:info("Culling fixture written to " .. tostring(outputPath))
-		local doneMessage = LOC(
-			'$$$/LrGeniusAI/CullFixture/DoneMessage=Wrote ^1 group(s), ^2 of them labelled, covering ^3 photo(s).\n\nScore it with:\ncargo run --release -p lrg-analysis --example cull_eval -- "^4"',
-			tostring(#fixtureGroups),
-			tostring(labelledGroupCount),
-			tostring(#photoIds),
-			tostring(outputPath)
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"),
+			LOC(
+				"$$$/LrGeniusAI/CullFixture/DoneMessage=Wrote ^1 group(s), ^2 of them labelled, covering ^3 photo(s).\n\nThe full path is in the logfile. Score it with the cull_eval example (see the developer docs).",
+				tostring(#fixtureGroups),
+				tostring(labelledGroupCount),
+				tostring(#photoIds)
+			)
 		)
 		if missingStored > 0 then
 			doneMessage = doneMessage

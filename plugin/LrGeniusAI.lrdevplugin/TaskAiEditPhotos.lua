@@ -324,8 +324,11 @@ LrTasks.startAsyncTask(function()
 		local errorMessages = {}
 		local backendWarnings = {}
 
+		local canceled = false
+
 		for index, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
+				canceled = true
 				break
 			end
 
@@ -582,15 +585,15 @@ LrTasks.startAsyncTask(function()
 				)
 			end
 		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SuccessTitle=AI Lightroom Edit"),
-				LOC(
-					"$$$/LrGeniusAI/TaskAiEditPhotos/SuccessSummary=Applied edits to ^1 photo(s).\nSkipped: ^2",
-					tostring(successCount),
-					tostring(skippedCount)
-				),
-				"info"
+			local summary = LOC(
+				"$$$/LrGeniusAI/TaskAiEditPhotos/SuccessSummary=Applied edits to ^1 photo(s).\nSkipped: ^2",
+				tostring(successCount),
+				tostring(skippedCount)
 			)
+			if canceled then
+				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SuccessTitle=AI Lightroom Edit"), summary, "info")
 		end
 		log:info(
 			"AI Edit task completed. success="
