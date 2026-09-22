@@ -1072,6 +1072,15 @@ LrTasks.startAsyncTask(function()
 		-- rebuilt per photo. Also lets keywords resolved for earlier photos dedupe later ones.
 		local keywordSessionCache = {}
 
+		-- Keyword writes report their failures back instead of only logging
+		-- them; collect them for the completion dialog.
+		local metadataWarnings = {}
+		local function collectMetadataWarnings(returned)
+			for _, warning in ipairs(returned or {}) do
+				table.insert(metadataWarnings, warning)
+			end
+		end
+
 		-- Writes one photo's species identification, when the run asked for
 		-- one. A function rather than an inline block because the call now
 		-- happens at three different points: the review path can only make it
@@ -1084,10 +1093,10 @@ LrTasks.startAsyncTask(function()
 		-- backfilling old identifications is what "Retrieve metadata" is for.
 		local function saveSpecies(photo, response)
 			if props.enableSpecies and response and response.species then
-				MetadataManager.applySpecies(photo, response.species, {
+				collectMetadataWarnings(MetadataManager.applySpecies(photo, response.species, {
 					applySpeciesKeywords = props.speciesKeywords,
 					keywordSessionCache = keywordSessionCache,
-				})
+				}))
 			end
 		end
 
@@ -1101,7 +1110,7 @@ LrTasks.startAsyncTask(function()
 				local response = SearchIndexAPI.getPhotoData(photoId)
 				saveSpecies(photo, response)
 				if response and response.metadata then
-					MetadataManager.applyMetadata(photo, response, nil, {
+					collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, nil, {
 						applyKeywords = props.generateKeywords,
 						applyTitle = props.generateTitle,
 						applyCaption = props.generateCaption,
@@ -1206,7 +1215,7 @@ LrTasks.startAsyncTask(function()
 
 							if result == "ok" and validatedData then
 								-- Apply validated metadata
-								MetadataManager.applyMetadata(photo, response, validatedData, {
+								collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, validatedData, {
 									applyKeywords = props.generateKeywords,
 									applyTitle = props.generateTitle,
 									applyCaption = props.generateCaption,
@@ -1216,7 +1225,7 @@ LrTasks.startAsyncTask(function()
 									generateAliases = props.keywordAliases,
 									appendMetadata = props.appendMetadata,
 									keywordSessionCache = keywordSessionCache,
-								})
+								}))
 
 								-- Overwrite with validated data
 								log:trace(
@@ -1245,7 +1254,7 @@ LrTasks.startAsyncTask(function()
 							end
 						else
 							-- Validation has been skipped from here on; apply metadata without showing dialog
-							MetadataManager.applyMetadata(photo, response, nil, {
+							collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, nil, {
 								applyKeywords = props.generateKeywords,
 								applyTitle = props.generateTitle,
 								applyCaption = props.generateCaption,
@@ -1255,7 +1264,7 @@ LrTasks.startAsyncTask(function()
 								generateAliases = props.keywordAliases,
 								appendMetadata = props.appendMetadata,
 								keywordSessionCache = keywordSessionCache,
-							})
+							}))
 
 							log:trace(
 								"Applied metadata without validation for photo (skipFromHere active): "
@@ -1276,7 +1285,7 @@ LrTasks.startAsyncTask(function()
 						end
 					elseif props.enableMetadata and response and response.metadata then
 						-- Directly save generated metadata without validation
-						MetadataManager.applyMetadata(photo, response, nil, {
+						collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, nil, {
 							applyKeywords = props.generateKeywords,
 							applyTitle = props.generateTitle,
 							applyCaption = props.generateCaption,
@@ -1286,7 +1295,7 @@ LrTasks.startAsyncTask(function()
 							generateAliases = props.keywordAliases,
 							appendMetadata = props.appendMetadata,
 							keywordSessionCache = keywordSessionCache,
-						})
+						}))
 						savedCount = savedCount + 1
 					end
 
@@ -1324,26 +1333,19 @@ LrTasks.startAsyncTask(function()
 			end
 		elseif status == "somefailed" then
 			local successCount = processed - failed
+			local summary = LOC(
+				"$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
+				successCount,
+				processed,
+				failed
+			)
+			if #metadataWarnings > 0 then
+				summary = summary .. "\n\nWarnings:\n" .. SearchIndexAPI.condenseMessages(metadataWarnings)
+			end
 			if not Util.nilOrEmpty(combinedError) then
-				ErrorHandler.handleError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
-						successCount,
-						processed,
-						failed
-					),
-					combinedError
-				)
+				ErrorHandler.handleError(summary, combinedError)
 			else
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"),
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/SomeFailedMessage=^1 of ^2 photos processed successfully. ^3 failed.",
-						successCount,
-						processed,
-						failed
-					)
-				)
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"), summary)
 			end
 		else -- success
 			local msg =
