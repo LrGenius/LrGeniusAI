@@ -220,6 +220,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskExportCullFixture", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end
@@ -406,5 +407,14 @@ LrTasks.startAsyncTask(function()
 				tostring(#photoIds)
 			)
 		)
+		if missingStored > 0 then
+			doneMessage = doneMessage
+				.. "\n\n"
+				.. string.format(
+					"%d photo(s) had no stored metrics (the backend is older than this flag), so the fixture cannot fully reproduce cull scores. Update the backend and re-export for a complete fixture.",
+					missingStored
+				)
+		end
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"), doneMessage)
 	end)
 end)

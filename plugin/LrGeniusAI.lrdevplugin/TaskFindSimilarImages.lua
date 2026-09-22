@@ -171,6 +171,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskFindSimilarImages", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end

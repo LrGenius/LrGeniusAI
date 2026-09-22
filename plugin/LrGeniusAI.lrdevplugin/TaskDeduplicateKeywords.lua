@@ -203,6 +203,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("DeduplicateKeywordsTask", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		local catalog = LrApplication.activeCatalog()
 		local f = LrView.osFactory()
 		local bind = LrView.bind
@@ -525,6 +526,7 @@ LrTasks.startAsyncTask(function()
 
 		for gi, group in ipairs(leafGroups) do
 			if scanScope:isCanceled() then
+				scanAborted = true
 				break
 			end
 			scanScope:setCaption(
@@ -633,10 +635,21 @@ LrTasks.startAsyncTask(function()
 				.. (scanAborted and " (scan stopped early)" or "")
 		)
 
+		-- A partial scan (canceled, stalled or timed out) still produces usable
+		-- results, but the user has to be told they are incomplete before they
+		-- act on them — reused by the no-duplicates and preview messages.
+		local scanStoppedNote
+		if scanAborted then
+			scanStoppedNote = "The scan was stopped before all branches were checked, so this list may be incomplete."
+		end
+
 		if #semanticPairs == 0 then
 			local msg = LOC(
 				"$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesMessage=No similar leaf keywords were found in the selected branches. Your catalog is already clean."
 			)
+			if scanStoppedNote then
+				msg = msg .. "\n\n" .. scanStoppedNote
+			end
 			if semanticWarning then
 				msg = msg .. "\n\n" .. semanticWarning
 			end
@@ -645,6 +658,15 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- ── Step 4: Preview with per-item checkboxes ──────────────────────
+		local previewWarningParts = {}
+		if scanStoppedNote then
+			table.insert(previewWarningParts, scanStoppedNote)
+		end
+		if semanticWarning then
+			table.insert(previewWarningParts, semanticWarning)
+		end
+		local previewWarning = table.concat(previewWarningParts, "\n\n")
+
 		local previewProps = LrBinding.makePropertyTable(context)
 		previewProps.syncBackend = true
 
@@ -720,8 +742,8 @@ LrTasks.startAsyncTask(function()
 			}),
 			-- A partial scan still produces usable suggestions, but the user has to
 			-- be told the list is incomplete before they act on it.
-			semanticWarning and f:static_text({
-				title = semanticWarning,
+			previewWarning ~= "" and f:static_text({
+				title = previewWarning,
 				fill_horizontal = 1,
 				wrap = true,
 				text_color = LrColor(0.5, 0.35, 0.0),
@@ -838,6 +860,9 @@ LrTasks.startAsyncTask(function()
 		mergeScope:done()
 
 		-- ── Results ────────────────────────────────────────────────────────
+		-- A cancel mid-merge stops the loop with pairs left over; report them
+		-- instead of letting a partial merge read as a clean run.
+		local unmergedCanceled = #finalPairs - (mergedCount + #skippedNames)
 		local resultMsg =
 			LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultSuccess=^1 keyword(s) merged successfully.", mergedCount)
 		if mergedCount > 0 then
@@ -855,6 +880,16 @@ LrTasks.startAsyncTask(function()
 					#skippedNames,
 					table.concat(skippedNames, "\n")
 				)
+		end
+		if unmergedCanceled > 0 then
+			resultMsg = resultMsg
+				.. "\n\n"
+				.. string.format("%d pair(s) were left unmerged because you canceled.", unmergedCanceled)
+		end
+		if scanAborted then
+			resultMsg = resultMsg
+				.. "\n\n"
+				.. "The scan was stopped before all branches were checked, so not every possible duplicate was found. Re-run the scan to check the remaining branches."
 		end
 		if backendUpdated == false then
 			resultMsg = resultMsg
