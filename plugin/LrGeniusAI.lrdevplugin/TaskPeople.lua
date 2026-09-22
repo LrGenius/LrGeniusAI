@@ -182,12 +182,14 @@ local function doShowInLibrary(entries, matchMode)
 	end
 
 	local nameParts = {}
+	local sawUnnamed = false
 	for _, ent in ipairs(entries) do
 		local n = ent and ent.person_name
 		if type(n) == "string" and n ~= "" then
 			nameParts[#nameParts + 1] = n
-		elseif ent and ent.person_id and ent.person_id ~= "" then
-			nameParts[#nameParts + 1] = ent.person_id
+		elseif ent and ent.person_id and ent.person_id ~= "" and not sawUnnamed then
+			nameParts[#nameParts + 1] = "Unnamed person"
+			sawUnnamed = true
 		end
 	end
 	local label = table.concat(nameParts, ", ")
@@ -279,7 +281,7 @@ local function pollForActions(scope, pageUrl)
 				ErrorHandler.handleError(
 					"Lost the connection to the LrGeniusAI backend",
 					"People is no longer listening for the browser page. Close the page and open People again. ("
-						.. tostring(err)
+						.. Util.userFacingError(tostring(err))
 						.. ")"
 				)
 				return
@@ -330,6 +332,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskPeople", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end

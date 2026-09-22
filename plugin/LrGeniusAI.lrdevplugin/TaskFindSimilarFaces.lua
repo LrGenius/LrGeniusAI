@@ -122,9 +122,16 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 	end
 
 	local collectionSet, collection
-	catalog:withWriteAccessDo("Create Collection Set", function()
-		collectionSet = catalog:createCollectionSet(LOC("$$$/LrGeniusAI/People/CollectionSetName=People"), nil, true)
-	end, Defaults.catalogWriteAccessOptions)
+	local okSet, setErr = LrTasks.pcall(function()
+		catalog:withWriteAccessDo("Create Collection Set", function()
+			collectionSet =
+				catalog:createCollectionSet(LOC("$$$/LrGeniusAI/People/CollectionSetName=People"), nil, true)
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not okSet then
+		ErrorHandler.handleError(LOC("$$$/LrGeniusAI/People/CollectionSetError=Collection set error"), tostring(setErr))
+		return
+	end
 	if not collectionSet then
 		ErrorHandler.handleError(
 			LOC("$$$/LrGeniusAI/People/CollectionSetError=Collection set error"),
@@ -133,9 +140,15 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 		return
 	end
 
-	catalog:withWriteAccessDo("Create Collection", function()
-		collection = catalog:createCollection(collectionName, collectionSet, false)
-	end, Defaults.catalogWriteAccessOptions)
+	local okCollection, collectionErr = LrTasks.pcall(function()
+		catalog:withWriteAccessDo("Create Collection", function()
+			collection = catalog:createCollection(collectionName, collectionSet, false)
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not okCollection then
+		ErrorHandler.handleError(LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"), tostring(collectionErr))
+		return
+	end
 	if not collection then
 		ErrorHandler.handleError(
 			LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"),
@@ -144,9 +157,15 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 		return
 	end
 
-	catalog:withWriteAccessDo("Add Photos to Collection", function()
-		collection:addPhotos(photos)
-	end, Defaults.catalogWriteAccessOptions)
+	local okAddPhotos, addPhotosErr = LrTasks.pcall(function()
+		catalog:withWriteAccessDo("Add Photos to Collection", function()
+			collection:addPhotos(photos)
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not okAddPhotos then
+		ErrorHandler.handleError(LOC("$$$/LrGeniusAI/People/CollectionError=Collection error"), tostring(addPhotosErr))
+		return
+	end
 
 	catalog:setActiveSources({ collection })
 	LrApplicationView.gridView()
@@ -162,6 +181,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskFindSimilarFaces", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end
@@ -232,9 +252,11 @@ LrTasks.startAsyncTask(function()
 		saveFaceThumbnails(faces)
 
 		-- Resolve person names for each face (quick query per face, then look up name)
+		local resolutionWarnings = {}
 		local personsResp, _ = SearchIndexAPI.getPersons()
 		if personsResp and personsResp.warning then
 			log:warn("getPersons warning during face resolution: " .. tostring(personsResp.warning))
+			table.insert(resolutionWarnings, tostring(personsResp.warning))
 		end
 		local persons = (personsResp and personsResp.persons) and personsResp.persons or {}
 		for i, face in ipairs(faces) do
@@ -246,6 +268,7 @@ LrTasks.startAsyncTask(function()
 						.. "): "
 						.. tostring(qResp.warning)
 				)
+				table.insert(resolutionWarnings, tostring(qResp.warning))
 			end
 			local qResults = (qResp and qResp.results) and qResp.results or {}
 			if qResults[1] and qResults[1].person_id then
@@ -291,8 +314,15 @@ LrTasks.startAsyncTask(function()
 		if personId and personId ~= "" then
 			local personResp, personErr = SearchIndexAPI.getPhotosForPerson(personId)
 
-			if personResp and personResp.warning then
+			if personErr then
+				log:warn("getPhotosForPerson failed: " .. tostring(personErr))
+				table.insert(
+					resolutionWarnings,
+					"The photos for the matched person could not be listed, so the collection may be missing some photos."
+				)
+			elseif personResp and personResp.warning then
 				log:warn("getPhotosForPerson warning: " .. tostring(personResp.warning))
+				table.insert(resolutionWarnings, tostring(personResp.warning))
 			end
 
 			if not personErr and personResp and (personResp.photo_ids or personResp.photo_uuids) then
@@ -329,6 +359,14 @@ LrTasks.startAsyncTask(function()
 			personDisplayName = LOC("$$$/LrGeniusAI/FindSimilarFaces/SimilarFaces=Similar Faces")
 		end
 		local collectionName = string.format("%s @ %s", personDisplayName, LrDate.timeToW3CDate(LrDate.currentTime()))
+		if #resolutionWarnings > 0 then
+			LrDialogs.message(
+				"Search completed with warnings",
+				"Some lookups failed, so the collection may be missing photos or use a generic name where a person name could not be resolved:\n\n"
+					.. tostring(SearchIndexAPI.condenseMessages(resolutionWarnings)),
+				"warning"
+			)
+		end
 		createCollectionFromPhotoIds(photoIds, collectionName)
 	end)
 end)

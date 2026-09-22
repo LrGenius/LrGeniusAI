@@ -107,6 +107,9 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 	log:trace("Applying metadata to photo: " .. photo:getFormattedMetadata("fileName"))
 	local catalog = LrApplication.activeCatalog()
 	options = options or {}
+	-- Keyword writes used to fail into log:error only. Collected here so the
+	-- caller can put them in front of the user; returned at the end of the call.
+	local warnings = {}
 
 	local title = response.metadata.title
 	local caption = response.metadata.caption
@@ -202,12 +205,13 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 		-- become one flat level of children here rather than moving to catalog root.
 		local topKeyword = nil
 		if options.useTopLevelKeyword then
+			local topKeywordName = options.topLevelKeyword or "LrGeniusAI"
 			catalog:withWriteAccessDo(
 				"$$$/lrc-ai-assistant/AnalyzeImageTask/saveTopKeyword=Save AI generated keywords",
 				function()
 					topKeyword = createKeywordSafely(
 						catalog,
-						options.topLevelKeyword or "LrGeniusAI",
+						topKeywordName,
 						{ Defaults.topLevelKeywordSynonym },
 						false,
 						nil,
@@ -217,12 +221,18 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 					-- matches a keyword that already exists, so a top-level keyword created
 					-- before this marker existed (or by hand) would never receive it.
 					mergeKeywordSynonyms(topKeyword, { Defaults.topLevelKeywordSynonym })
-					if topKeyword then
+					if not topKeyword then
+						table.insert(warnings, 'Could not create the top-level keyword "' .. topKeywordName .. '".')
+					else
 						local okAdd, errAdd = LrTasks.pcall(function()
 							photo:addKeyword(topKeyword) -- Add top-level keyword to photo. To see the number of tagged photos in keyword list (Gerald Uhl)
 						end)
 						if not okAdd then
 							log:error("Failed to add top-level keyword to photo: " .. tostring(errAdd))
+							table.insert(
+								warnings,
+								'Could not add the top-level keyword "' .. topKeywordName .. '" to the photo.'
+							)
 						end
 					end
 				end
@@ -247,7 +257,8 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 					topKeyword,
 					existingKeywordNames,
 					currentTopLevelKeyword,
-					keywordSessionCache
+					keywordSessionCache,
+					warnings
 				)
 			end,
 			Defaults.catalogWriteAccessOptions
@@ -261,6 +272,8 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 			photo:setPropertyForPlugin(_PLUGIN, "aiLastRun", tostring(response.ai_rundate or ""))
 		end, Defaults.catalogWriteAccessOptions)
 	end
+
+	return warnings
 end
 
 ---
@@ -633,8 +646,10 @@ function MetadataManager.addKeywordRecursively(
 	parent,
 	existingKeywordNames,
 	currentTopLevelKeyword,
-	sessionCache
+	sessionCache,
+	warnings
 )
+	warnings = warnings or {}
 	local function trimmedStringList(rawList)
 		if type(rawList) ~= "table" then
 			return {}
@@ -759,6 +774,8 @@ function MetadataManager.addKeywordRecursively(
 				createKeywordSafely(catalog, candidateName, filteredLrSynonyms, true, currentParent, sessionCache)
 			if resolved then
 				resolvedKey = nameLower
+			else
+				table.insert(warnings, 'Could not create the keyword "' .. candidateName .. '".')
 			end
 		end
 
@@ -795,6 +812,7 @@ function MetadataManager.addKeywordRecursively(
 			end)
 			if not okAdd then
 				log:error("Failed to add keyword '" .. tostring(candidateName) .. "' to photo: " .. tostring(errAdd))
+				table.insert(warnings, 'Could not add the keyword "' .. candidateName .. '" to the photo.')
 				return nil
 			end
 		end
@@ -807,6 +825,9 @@ function MetadataManager.addKeywordRecursively(
 		local keyword
 		if type(key) == "string" and key ~= "" and key ~= "None" and key ~= "none" and prefs.useKeywordHierarchy then
 			keyword = createKeywordSafely(catalog, key, {}, false, parent, sessionCache)
+			if not keyword then
+				table.insert(warnings, 'Could not create the keyword category "' .. key .. '".')
+			end
 		elseif type(key) == "number" and value then
 			local keywordName, keywordSynonyms, keywordAliases, keywordSynonymAliases = parseKeywordLeaf(value)
 			if keywordName and keywordName ~= "" and keywordName ~= "None" and keywordName ~= "none" then
@@ -858,7 +879,8 @@ function MetadataManager.addKeywordRecursively(
 				childParent,
 				existingKeywordNames,
 				currentTopLevelKeyword,
-				sessionCache
+				sessionCache,
+				warnings
 			)
 		end
 	end
@@ -1442,8 +1464,9 @@ end
 -- @param options table|nil `applySpeciesKeywords`, `keywordSessionCache`,
 --   `skipLinks`.
 function MetadataManager.applySpecies(photo, species, options)
+	local warnings = {}
 	if type(species) ~= "table" then
-		return
+		return warnings
 	end
 	options = options or {}
 	local catalog = LrApplication.activeCatalog()
@@ -1475,11 +1498,11 @@ function MetadataManager.applySpecies(photo, species, options)
 	end, Defaults.catalogWriteAccessOptions)
 
 	if not options.applySpeciesKeywords then
-		return
+		return warnings
 	end
 	local chain = MetadataManager.speciesKeywordChain(species)
 	if not chain then
-		return
+		return warnings
 	end
 
 	local sessionCache = options.keywordSessionCache
@@ -1487,6 +1510,10 @@ function MetadataManager.applySpecies(photo, species, options)
 		local parent = createKeywordSafely(catalog, Defaults.defaultSpeciesKeyword, {}, false, nil, sessionCache)
 		if not parent then
 			log:error("Could not create the species root keyword; skipping the taxonomy branch")
+			table.insert(
+				warnings,
+				'Could not create the species root keyword "' .. tostring(Defaults.defaultSpeciesKeyword) .. '".'
+			)
 			return
 		end
 		for i, entry in ipairs(chain) do
@@ -1497,6 +1524,7 @@ function MetadataManager.applySpecies(photo, species, options)
 			local keyword = createKeywordSafely(catalog, entry.name, entry.synonyms, isLeaf, parent, sessionCache)
 			if not keyword then
 				log:warn("Could not create species keyword '" .. tostring(entry.name) .. "'")
+				table.insert(warnings, 'Could not create the species keyword "' .. tostring(entry.name) .. '".')
 				return
 			end
 			-- createKeyword drops its synonyms argument when returnExisting
@@ -1511,9 +1539,15 @@ function MetadataManager.applySpecies(photo, species, options)
 				end)
 				if not okAdd then
 					log:error("Failed to add species keyword to photo: " .. tostring(errAdd))
+					table.insert(
+						warnings,
+						'Could not add the species keyword "' .. tostring(entry.name) .. '" to the photo.'
+					)
 				end
 			end
 			parent = keyword
 		end
 	end, Defaults.catalogWriteAccessOptions)
+
+	return warnings
 end
