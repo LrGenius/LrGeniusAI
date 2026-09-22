@@ -170,6 +170,7 @@ LrTasks.startAsyncTask(function()
 
 			-- Read current develop settings.
 			local developSettings
+			local developSettingsFailed = false
 			local okGet, devOrErr = LrTasks.pcall(function()
 				return photo:getDevelopSettings()
 			end)
@@ -178,6 +179,7 @@ LrTasks.startAsyncTask(function()
 			else
 				log:warn("Could not read develop settings for " .. fileName .. ": " .. tostring(devOrErr))
 				developSettings = {}
+				developSettingsFailed = true
 			end
 
 			-- Get a stable photo ID.
@@ -218,6 +220,12 @@ LrTasks.startAsyncTask(function()
 				if ok then
 					successCount = successCount + 1
 					log:info("Saved training example for " .. fileName)
+					if developSettingsFailed then
+						table.insert(
+							backendWarnings,
+							fileName .. ": develop settings could not be read, so this example was saved without them."
+						)
+					end
 					if resp and resp.warning then
 						table.insert(backendWarnings, fileName .. ": " .. tostring(resp.warning))
 					end
@@ -285,10 +293,18 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
-				combinedReport
-			)
+			if errorCount > 0 and successCount == 0 then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
+					combinedReport
+				)
+			else
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
+					combinedReport,
+					"warning"
+				)
+			end
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/Training/SuccessTitle=Training Examples Saved"),

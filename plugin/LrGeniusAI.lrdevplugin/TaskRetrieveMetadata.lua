@@ -279,7 +279,11 @@ LrTasks.startAsyncTask(function()
 
 					-- Apply metadata
 					if shouldApply then
-						MetadataManager.applyMetadata(photo, retrievedData, validatedData, options)
+						local metadataWarnings =
+							MetadataManager.applyMetadata(photo, retrievedData, validatedData, options)
+						for _, warning in ipairs(metadataWarnings or {}) do
+							table.insert(backendWarnings, fileName .. ": " .. warning)
+						end
 						-- Species rides along, but only into the metadata
 						-- fields: this is the path that backfills photos
 						-- identified before a field existed (the iNaturalist
@@ -291,14 +295,26 @@ LrTasks.startAsyncTask(function()
 						-- which is the case that must still write; when one
 						-- was shown, it carries the user's answer (#327).
 						if validatedData == nil or validatedData.saveSpecies then
-							MetadataManager.applySpecies(photo, retrievedData.species, { applySpeciesKeywords = false })
+							local speciesWarnings = MetadataManager.applySpecies(photo, retrievedData.species, {
+								applySpeciesKeywords = false,
+							})
+							for _, warning in ipairs(speciesWarnings or {}) do
+								table.insert(backendWarnings, fileName .. ": " .. warning)
+							end
 						end
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 
 						-- Overwrite with validated data if any
 						if result ~= nil and result == "ok" then
-							SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
+							local importFailed =
+								select(3, SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false))
+							if importFailed and importFailed > 0 then
+								table.insert(
+									backendWarnings,
+									fileName .. ": the search index could not be updated with the validated metadata."
+								)
+							end
 						end
 					end
 				else
@@ -376,10 +392,18 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
-				combinedReport
-			)
+			if errorCount > 0 and successCount == 0 then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
+					combinedReport
+				)
+			else
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
+					combinedReport,
+					"warning"
+				)
+			end
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/RetrieveMetadata/SuccessTitle=Metadata Retrieval"),

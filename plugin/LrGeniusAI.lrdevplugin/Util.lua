@@ -1626,6 +1626,16 @@ end
 
 function Util.waitForServerDialog(options)
 	options = options or {}
+
+	local function showVersionMismatchDialog(message)
+		-- The version numbers alone are not actionable; say what to do about them.
+		LrDialogs.message(
+			"Plugin/Backend version mismatch",
+			(message or "Version check failed.")
+				.. "\n\nUpdate the LrGeniusAI plugin and the server so both run the same version, then restart Lightroom.",
+			"critical"
+		)
+	end
 	if SearchIndexAPI.pingServer() then
 		local compatible, versionMessage = SearchIndexAPI.ensureVersionCompatibility()
 		if compatible then
@@ -1685,7 +1695,7 @@ function Util.waitForServerDialog(options)
 			end
 		end
 
-		LrDialogs.message("Plugin/Backend version mismatch", versionMessage or "Version check failed.", "critical")
+		showVersionMismatchDialog(versionMessage)
 		return false
 	end
 
@@ -1766,11 +1776,7 @@ function Util.waitForServerDialog(options)
 					end
 				end
 
-				LrDialogs.message(
-					"Plugin/Backend version mismatch",
-					versionMessage or "Version check failed.",
-					"critical"
-				)
+				showVersionMismatchDialog(versionMessage)
 				result = false
 				return
 			end

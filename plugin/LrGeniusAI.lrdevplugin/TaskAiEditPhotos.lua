@@ -494,6 +494,12 @@ LrTasks.startAsyncTask(function()
 					)
 					if applied then
 						successCount = successCount + 1
+						if warnings and #warnings > 0 then
+							table.insert(
+								backendWarnings,
+								fileName .. ": the edit applied, but " .. table.concat(warnings, "; ")
+							)
+						end
 					else
 						errorCount = errorCount + 1
 						table.insert(errorMessages, fileName .. ": failed to apply recipe")
@@ -563,7 +569,7 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if errorCount > 0 then
+			if errorCount > 0 and successCount == 0 then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompletionTitle=AI Edit Completed"),
 					combinedReport
