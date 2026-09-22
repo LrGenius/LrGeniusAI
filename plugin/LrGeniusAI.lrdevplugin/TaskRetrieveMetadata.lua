@@ -391,10 +391,18 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
-				combinedReport
-			)
+			if errorCount > 0 and successCount == 0 then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
+					combinedReport
+				)
+			else
+				LrDialogs.message(
+					LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
+					combinedReport,
+					"warning"
+				)
+			end
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/RetrieveMetadata/SuccessTitle=Metadata Retrieval"),
