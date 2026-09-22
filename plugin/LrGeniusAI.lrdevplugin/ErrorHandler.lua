@@ -61,10 +61,11 @@ function ErrorHandler.customErrorDialog(errorMessage, detailedInfo)
 	local result = LrDialogs.presentModalDialog({
 		title = LOC("$$$/LrGeniusAI/ErrorHandler/Error=Error"),
 		contents = dialogView,
-		cancelVerb = LOC("$$$/LrGeniusAI/ErrorHandler/gatherLogs=Generate report"),
+		actionVerb = LOC("$$$/LrGeniusAI/ErrorHandler/gatherLogs=Generate report"),
+		cancelVerb = LOC("$$$/LrGeniusAI/ErrorHandler/close=Close"),
 	})
 
-	if result == "cancel" then
+	if result == "ok" then
 		LrTasks.startAsyncTask(function()
 			Util.copyLogfilesToDesktop({ error = errorMessage, details = detailedInfo })
 		end)

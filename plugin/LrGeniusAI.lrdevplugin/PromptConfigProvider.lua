@@ -143,8 +143,10 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 				action = function(button)
 					local newName = PromptConfigProvider.addPrompt(propertyTable)
 					if newName ~= nil then
-						LrDialogs.stopModalWithResult(dropDown, "cancel")
-						PromptConfigProvider.showPromptConfigDialog(propertyTable)
+						-- Refresh the list in place. addPrompt already rebuilt
+						-- `promptTitles`; closing and reopening the dialog only
+						-- made the window flash.
+						dropDown.items = propertyTable.promptTitles
 					end
 				end,
 			}),
@@ -152,8 +154,7 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 				title = LOC("$$$/LrGeniusAI/PromptConfig/Delete=Delete"),
 				action = function(button)
 					PromptConfigProvider.deletePrompt(propertyTable)
-					LrDialogs.stopModalWithResult(dropDown, "cancel")
-					PromptConfigProvider.showPromptConfigDialog(propertyTable)
+					dropDown.items = propertyTable.promptTitles
 				end,
 			}),
 			-- f:push_button {
