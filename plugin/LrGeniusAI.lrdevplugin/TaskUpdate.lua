@@ -119,7 +119,7 @@ function TaskUpdate.runUpdate(releaseInfo)
 				LOC("$$$/LrGeniusAI/TaskUpdate/ErrorTitle=Update Error"),
 				LOC(
 					"$$$/LrGeniusAI/TaskUpdate/UpdateFailed=The update could not be started:\n\n^1",
-					tostring(result or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"))
+					Util.userFacingError(tostring(result or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error")))
 				),
 				"critical"
 			)

@@ -152,8 +152,11 @@ LrTasks.startAsyncTask(function()
 		local errorMessages = {}
 		local backendWarnings = {}
 
+		local canceled = false
+
 		for index, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
+				canceled = true
 				break
 			end
 
@@ -170,6 +173,7 @@ LrTasks.startAsyncTask(function()
 
 			-- Read current develop settings.
 			local developSettings
+			local developSettingsFailed = false
 			local okGet, devOrErr = LrTasks.pcall(function()
 				return photo:getDevelopSettings()
 			end)
@@ -178,6 +182,7 @@ LrTasks.startAsyncTask(function()
 			else
 				log:warn("Could not read develop settings for " .. fileName .. ": " .. tostring(devOrErr))
 				developSettings = {}
+				developSettingsFailed = true
 			end
 
 			-- Get a stable photo ID.
@@ -218,6 +223,12 @@ LrTasks.startAsyncTask(function()
 				if ok then
 					successCount = successCount + 1
 					log:info("Saved training example for " .. fileName)
+					if developSettingsFailed then
+						table.insert(
+							backendWarnings,
+							fileName .. ": develop settings could not be read, so this example was saved without them."
+						)
+					end
 					if resp and resp.warning then
 						table.insert(backendWarnings, fileName .. ": " .. tostring(resp.warning))
 					end
@@ -285,19 +296,23 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
+			if canceled then
+				combinedReport = combinedReport .. "\n\n" .. "Canceled before all photos were processed."
+			end
+
 			ErrorHandler.handleError(
 				LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
 				combinedReport
 			)
 		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/Training/SuccessTitle=Training Examples Saved"),
-				LOC(
-					"$$$/LrGeniusAI/Training/SuccessSummary=Successfully saved ^1 training example(s).\nAI Edit Photos will use your style when editing visually similar photos.",
-					tostring(successCount)
-				),
-				"info"
+			local summary = LOC(
+				"$$$/LrGeniusAI/Training/SuccessSummary=Successfully saved ^1 training example(s).\nAI Edit Photos will use your style when editing visually similar photos.",
+				tostring(successCount)
 			)
+			if canceled then
+				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/Training/SuccessTitle=Training Examples Saved"), summary, "info")
 		end
 	end)
 end)

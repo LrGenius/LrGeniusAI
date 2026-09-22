@@ -161,6 +161,7 @@ end
 --
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("retrieveMetadataTask", function(ctx)
+		LrDialogs.attachErrorDialogToFunctionContext(ctx)
 		-- Check server connection
 		if not Util.waitForServerDialog() then
 			return
@@ -202,10 +203,12 @@ LrTasks.startAsyncTask(function()
 		local errorMessages = {}
 		local backendWarnings = {}
 		local skipValidation = false
+		local canceled = false
 
 		for i, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
 				log:info("Retrieve metadata task canceled by user")
+				canceled = true
 				break
 			end
 
@@ -272,13 +275,18 @@ LrTasks.startAsyncTask(function()
 							Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
 						else
 							-- Validation canceled
+							canceled = true
 							break
 						end
 					end
 
 					-- Apply metadata
 					if shouldApply then
-						MetadataManager.applyMetadata(photo, retrievedData, validatedData, options)
+						local metadataWarnings =
+							MetadataManager.applyMetadata(photo, retrievedData, validatedData, options)
+						for _, warning in ipairs(metadataWarnings or {}) do
+							table.insert(backendWarnings, fileName .. ": " .. warning)
+						end
 						-- Species rides along, but only into the metadata
 						-- fields: this is the path that backfills photos
 						-- identified before a field existed (the iNaturalist
@@ -290,14 +298,26 @@ LrTasks.startAsyncTask(function()
 						-- which is the case that must still write; when one
 						-- was shown, it carries the user's answer (#327).
 						if validatedData == nil or validatedData.saveSpecies then
-							MetadataManager.applySpecies(photo, retrievedData.species, { applySpeciesKeywords = false })
+							local speciesWarnings = MetadataManager.applySpecies(photo, retrievedData.species, {
+								applySpeciesKeywords = false,
+							})
+							for _, warning in ipairs(speciesWarnings or {}) do
+								table.insert(backendWarnings, fileName .. ": " .. warning)
+							end
 						end
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 
 						-- Overwrite with validated data if any
 						if result ~= nil and result == "ok" then
-							SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false)
+							local importFailed =
+								select(3, SearchIndexAPI.importMetadataFromCatalog({ photo }, progressScope, false))
+							if importFailed and importFailed > 0 then
+								table.insert(
+									backendWarnings,
+									fileName .. ": the search index could not be updated with the validated metadata."
+								)
+							end
 						end
 					end
 				else
@@ -375,20 +395,24 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
+			if canceled then
+				combinedReport = combinedReport .. "\n\n" .. "Canceled before all photos were processed."
+			end
+
 			ErrorHandler.handleError(
 				LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
 				combinedReport
 			)
 		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/RetrieveMetadata/SuccessTitle=Metadata Retrieval"),
-				LOC(
-					"$$$/LrGeniusAI/RetrieveMetadata/SuccessSummary=Successfully retrieved metadata for ^1 photo(s).\nSkipped: ^2",
-					tostring(successCount),
-					tostring(skipCount)
-				),
-				"info"
+			local summary = LOC(
+				"$$$/LrGeniusAI/RetrieveMetadata/SuccessSummary=Successfully retrieved metadata for ^1 photo(s).\nSkipped: ^2",
+				tostring(successCount),
+				tostring(skipCount)
 			)
+			if canceled then
+				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/RetrieveMetadata/SuccessTitle=Metadata Retrieval"), summary, "info")
 		end
 
 		log:info(
