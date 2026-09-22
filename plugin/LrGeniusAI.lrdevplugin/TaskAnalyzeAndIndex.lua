@@ -1125,7 +1125,7 @@ LrTasks.startAsyncTask(function()
 						generateAliases = props.keywordAliases,
 						appendMetadata = props.appendMetadata,
 						keywordSessionCache = keywordSessionCache,
-					})
+					}))
 					local impFailed =
 						select(3, SearchIndexAPI.importMetadataFromCatalog({ photo }, scope, false, false))
 					if impFailed and impFailed > 0 then

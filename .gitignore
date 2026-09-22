@@ -51,3 +51,4 @@ native/mlx-sidecar/.build/
 # symlink to .repowise/mcp.json so Claude Code's project-root MCP
 # auto-discovery finds the repowise server; not a real file to track
 .mcp.json
+.codex/
