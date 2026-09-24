@@ -131,7 +131,11 @@ end
 function UpdateCheck.checkForNewVersion()
 	local info = UpdateCheck.getLatestReleaseInfo()
 	if not info then
-		LrDialogs.message(LOC("$$$/LrGeniusAI/UpdateCheck/Error=Could not check for updates."))
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/UpdateCheck/Error=Could not check for updates."),
+			"GitHub did not answer, or the response could not be read. Check your internet connection and try again; the logfile has the HTTP detail.",
+			"warning"
+		)
 		return nil
 	end
 

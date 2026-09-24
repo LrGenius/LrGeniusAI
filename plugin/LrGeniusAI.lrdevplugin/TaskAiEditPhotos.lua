@@ -324,8 +324,11 @@ LrTasks.startAsyncTask(function()
 		local errorMessages = {}
 		local backendWarnings = {}
 
+		local canceled = false
+
 		for index, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
+				canceled = true
 				break
 			end
 
@@ -386,7 +389,7 @@ LrTasks.startAsyncTask(function()
 					then
 						local errMsg = "Unknown error"
 						if not apiOk then
-							errMsg = tostring(apiResponse)
+							errMsg = Util.userFacingError(tostring(apiResponse))
 						elseif type(response) == "string" then
 							errMsg = response
 						elseif response and response.error then
@@ -494,6 +497,12 @@ LrTasks.startAsyncTask(function()
 					)
 					if applied then
 						successCount = successCount + 1
+						if warnings and #warnings > 0 then
+							table.insert(
+								backendWarnings,
+								fileName .. ": the edit applied, but " .. table.concat(warnings, "; ")
+							)
+						end
 					else
 						errorCount = errorCount + 1
 						table.insert(errorMessages, fileName .. ": failed to apply recipe")
@@ -563,7 +572,7 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if errorCount > 0 then
+			if errorCount > 0 and successCount == 0 then
 				ErrorHandler.handleError(
 					LOC("$$$/LrGeniusAI/TaskAiEditPhotos/CompletionTitle=AI Edit Completed"),
 					combinedReport
@@ -576,15 +585,15 @@ LrTasks.startAsyncTask(function()
 				)
 			end
 		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SuccessTitle=AI Lightroom Edit"),
-				LOC(
-					"$$$/LrGeniusAI/TaskAiEditPhotos/SuccessSummary=Applied edits to ^1 photo(s).\nSkipped: ^2",
-					tostring(successCount),
-					tostring(skippedCount)
-				),
-				"info"
+			local summary = LOC(
+				"$$$/LrGeniusAI/TaskAiEditPhotos/SuccessSummary=Applied edits to ^1 photo(s).\nSkipped: ^2",
+				tostring(successCount),
+				tostring(skippedCount)
 			)
+			if canceled then
+				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/TaskAiEditPhotos/SuccessTitle=AI Lightroom Edit"), summary, "info")
 		end
 		log:info(
 			"AI Edit task completed. success="

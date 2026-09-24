@@ -205,7 +205,18 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	local function checkUpdates()
 		LrTasks.startAsyncTask(function()
 			local info = UpdateCheck.getLatestReleaseInfo()
-			if info and info.is_newer then
+			if not info then
+				-- A failed reach is not "up to date". getLatestReleaseInfo
+				-- returns nil for any network or parse failure and only logs, so
+				-- claiming the plugin is current here would report a check that
+				-- never actually happened.
+				propertyTable.updateStatus = "Could not check for updates"
+				propertyTable.updateStatusColor = { 0.7, 0.4, 0.1 }
+				propertyTable.updateButtonTitle =
+					LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/UpdateCheck=Check for updates")
+				propertyTable.updateAvailable = false
+				propertyTable.latestReleaseInfo = nil
+			elseif info.is_newer then
 				propertyTable.latestReleaseInfo = info
 				propertyTable.updateAvailable = true
 				propertyTable.updateStatus =
@@ -1178,13 +1189,21 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 								local ok, err, result = SearchIndexAPI.claimPhotosForCatalog(progressScope)
 								progressScope:done()
 								if ok then
-									local msg = result
-											and (LOC("$$$/LrGeniusAI/PluginInfo/ClaimedPrefix=Claimed: ") .. tostring(
-												result.claimed
-											) .. (result.errors and result.errors > 0 and (LOC(
-												"$$$/LrGeniusAI/PluginInfo/ClaimedErrors=; errors: "
-											) .. tostring(result.errors)) or ""))
-										or LOC("$$$/LrGeniusAI/common/Done=Done.")
+									local msg = LOC("$$$/LrGeniusAI/common/Done=Done.")
+									if result then
+										msg = LOC(
+											"$$$/LrGeniusAI/PluginInfo/ClaimedPrefix=Claimed ^1 photo(s).",
+											tostring(result.claimed)
+										)
+										if result.errors and result.errors > 0 then
+											msg = msg
+												.. "\n"
+												.. LOC(
+													"$$$/LrGeniusAI/PluginInfo/ClaimedErrors=^1 photo(s) could not be claimed; run Analyze & Index on them again.",
+													tostring(result.errors)
+												)
+										end
+									end
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/ClaimPhotosTitle=Claim photos"),
 										msg
@@ -1233,7 +1252,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									LrShell.revealInShell(pathOrErr)
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/DbBackupDownloaded=Database backup downloaded."),
-										pathOrErr
+										LrPathUtils.leafName(pathOrErr)
 									)
 								elseif pathOrErr ~= "canceled" then
 									-- A user-canceled save panel is not an error; anything else is.
@@ -1308,8 +1327,10 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 												.. backendTag
 												.. "\n"
 												.. LOC("$$$/LrGeniusAI/PluginInfo/ReasonPrefix=Reason: ")
-												.. tostring(
-													result.reason or LOC("$$$/LrGeniusAI/common/Unknown=unknown")
+												.. Util.userFacingError(
+													tostring(
+														result.reason or LOC("$$$/LrGeniusAI/common/Unknown=unknown")
+													)
 												)
 												.. "\n\n"
 												.. buildInfo,
@@ -1319,7 +1340,9 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 								else
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/VersionCheckFailed=Version check failed"),
-										tostring(err or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error")),
+										Util.userFacingError(
+											tostring(err or LOC("$$$/LrGeniusAI/common/UnknownError=Unknown error"))
+										),
 										"critical"
 									)
 								end

@@ -4279,6 +4279,10 @@ function SearchIndexAPI.startAssetDownload()
 	if postErr then
 		log:error("startAssetDownload failed: " .. postErr)
 		progressScope:done()
+		-- Every caller ignored the returned error, so the POST failure was
+		-- invisible; report it here where the request was made. The download
+		-- loop reports its own errors the same way.
+		ErrorHandler.handleError("Could not start the AI model download", postErr)
 		return nil, postErr
 	end
 

@@ -363,6 +363,7 @@ end
 
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("TaskCullPhotos", function(context)
+		LrDialogs.attachErrorDialogToFunctionContext(context)
 		if not Util.waitForServerDialog() then
 			return
 		end
@@ -406,7 +407,7 @@ LrTasks.startAsyncTask(function()
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/CullTask/NoPhotoIdsTitle=No usable photos"),
 				LOC(
-					"$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=No usable photo IDs could be computed for the selected photos."
+					"$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=None of the selected photos could be prepared for culling."
 				)
 			)
 			return
@@ -491,7 +492,7 @@ LrTasks.startAsyncTask(function()
 
 		if cullResult and cullResult.warning then
 			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"),
+				LOC("$$$/LrGeniusAI/common/BackendWarning=Culling warning"),
 				cullResult.warning,
 				"warning"
 			)

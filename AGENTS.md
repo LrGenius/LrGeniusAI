@@ -1,0 +1,232 @@
+# AGENTS.md
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+
+---
+
+## Project Overview
+
+**LrGeniusAI** is an Adobe Lightroom Classic plugin that brings AI-powered photo analysis (tagging, descriptions, semantic search, develop edits, face recognition) into Lightroom. It consists of two main components:
+
+- **Plugin** (`plugin/LrGeniusAI.lrdevplugin/`) — Lua frontend using the Lightroom SDK
+- **Backend** (`server-rs/`) — a local background process the plugin talks to over HTTP on port 19819. Rust (axum + LanceDB + `ort`/ONNX Runtime), single binary `geniusai-server`. See [server-rs/README.md](server-rs/README.md).
+
+The backend was previously a Python/Flask server (`server/`); that implementation has been fully removed now that the Rust rewrite is the shipping backend. If you encounter references to a Python backend in older docs, git history, or memory files, treat them as historical.
+
+---
+
+## Development Environment Setup
+
+### Backend (Rust)
+
+Standard cargo workspace; the default build needs nothing beyond `rustup`/`cargo`.
+
+```bash
+cd server-rs
+cargo build --release -p lrg-server
+```
+
+**The in-process local LLM is behind the `llamacpp` cargo feature, off by default.** Without it the `llamacpp` provider reports "this backend build has no local-model support" and `/v1/llm/catalog` returns `supported: false` — which is the answer to "why doesn't the Local AI Model section do anything". It is off by default because it compiles llama.cpp from source, so it needs `cmake` and `libclang` (bindgen) and adds minutes to a cold build; anyone touching an unrelated crate should not pay that.
+
+**Which local engine ships is a per-platform decision.** Release builds enable `llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not compile the feature at all (see `cargo_features` in the release matrix, `.github/workflows/release.yml`). The plugin mirrors that: `sectionsForTopOfDialog` and the onboarding wizard build the MLX group box on macOS and the llama.cpp one elsewhere, and the provider dropdown needs no special-casing because `/models` reports `llamacpp: []` when the feature is absent. The feature still *builds* on macOS, so enabling it locally to compare the two engines is fine — just don't re-add it to the macOS release job.
+
+```bash
+# Needs cmake + libclang. macOS: libclang ships with the Xcode CLT, `brew install cmake`.
+# Linux: `apt install cmake libclang-dev`. Windows also builds Vulkan (not CUDA — see
+# lrg-llama/Cargo.toml) and additionally needs the Vulkan SDK with VULKAN_SDK set.
+cargo build --release -p lrg-server --features llamacpp
+cargo clippy --workspace --all-targets --features llamacpp   # must also be clean when you touch this path
+```
+
+**MLX (Apple silicon) is a second, separate local backend**, selected as the `mlx` provider. It is *not* behind a cargo feature — `lrg-mlx` only spawns and talks to a helper process, so it costs nothing to compile — but it needs that helper built, and the helper needs `xcodebuild` plus the Metal toolchain (`swift build` cannot compile MLX's Metal shaders):
+
+```bash
+xcodebuild -downloadComponent MetalToolchain          # once per machine
+cd native/mlx-sidecar
+xcodebuild build -scheme lrgenius-mlx -destination 'platform=macOS,arch=arm64' \
+  -configuration Release -derivedDataPath .build/xcode \
+  -skipPackagePluginValidation -skipMacroValidation
+export LRG_MLX_SIDECAR=$PWD/.build/xcode/Build/Products/Release/lrgenius-mlx
+```
+
+Without it, `/v1/llm/catalog` reports `mlx.supported: false` with a reason naming what is missing. See [native/mlx-sidecar/README.md](native/mlx-sidecar/README.md) for the protocol, the model layout (a directory, not a GGUF file), and why MLX has no pinned prompt prefix.
+
+Point llama.cpp at a model with `LRG_LLAMA_MODEL_GGUF` + `LRG_LLAMA_MMPROJ_GGUF` (a GGUF needs both the weights and an `mmproj` vision projector), or download one from the plugin's settings. Discovery also picks up GGUFs already under `~/.lmstudio/models`. The `lrg-llama` tests that exercise a real model are `#[ignore]`d and need `LRG_TEST_MODEL_GGUF`/`LRG_TEST_MMPROJ_GGUF`:
+
+```bash
+cargo test -p lrg-llama --test engine_smoke -- --ignored
+```
+
+When Lightroom is involved, note the plugin auto-launches the *installed* binary (`/Applications/LrGeniusAI/Server/lrgenius-server`), which is not your dev build. `startServer` pings port 19819 first and short-circuits if something already answers, so start your feature-enabled build by hand and the plugin will use it.
+
+`POST /v1/models/clip/downloads` fetches the SigLIP2 fp16 ONNX assets from the fixed `model-assets-v1` release tag (not the build's own version tag); that release exists with all three assets, so this works on any build. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers the face models — YuNet needs no export step, FaceNet does). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
+
+### Pre-commit hooks (formatting + linting)
+
+```bash
+uv tool install pre-commit   # installs pre-commit as a uv-managed tool
+pre-commit install           # registers the git hook in this repo
+```
+
+Hooks: StyLua for the plugin, and local `cargo fmt`/`cargo clippy` hooks for `server-rs/` (require a working `rustup`/`cargo` on PATH — see `.pre-commit-config.yaml`).
+
+---
+
+## Common Commands
+
+### Backend — lint, test, run
+
+```bash
+cd server-rs
+cargo fmt
+cargo clippy --workspace --all-targets   # must be clean, zero warnings
+cargo test --workspace
+cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
+```
+
+**The ML golden tests skip when their model files are absent, and a skip is
+reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
+are present (`face`, `siglip`, `bioclip`, or `all`) to turn that skip into a
+failure — this is what stops CI being green on numerical checks that never ran.
+PR CI provisions the face pair (89 MB) and requires it; the nightly
+`golden-tests-full.yml` fetches all three. If you add a golden test, gate it
+through `crates/lrg-ml/tests/common/assets_ready` rather than an early
+`return`.
+
+### Plugin — load into Lightroom
+
+Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua`.
+
+### Plugin — headless unit tests
+
+Pure Lua logic (string/table helpers, keyword and photo-id handling) is tested outside Lightroom with [busted]. The Lightroom SDK environment is stubbed in `plugin/spec/spec_helper.lua`.
+
+```bash
+busted                       # runs plugin/spec/*_spec.lua (config in /.busted)
+```
+
+Add tests when you touch pure helpers in `Util.lua` (or any logic that doesn't require live LR objects). CI runs this via `.github/workflows/lua-tests.yml`.
+
+---
+
+## Architecture
+
+### Plugin (Lua)
+
+Entry point: `Init.lua` — sets up globals, imports all Lightroom SDK modules, loads shared modules (`Util`, `Defaults`, `ErrorHandler`, `APISearchIndex`, etc.).
+
+**`Task*.lua` files** are the top-level actions triggered from *Library → Plug-in Extras*:
+- `TaskAnalyzeAndIndex.lua` — AI tagging & description
+- `TaskAiEditPhotos.lua` — generate & apply Lightroom develop edits
+- `TaskSemanticSearch.lua` — semantic free-text search
+- `TaskCullPhotos.lua` — burst/duplicate grouping
+- `TaskAutomatedTests.lua` — smoke tests (plugin ↔ backend connectivity)
+
+Not every task builds its interface out of LrView. `TaskPeople.lua` has no
+dialog of its own: the People UI is a page the backend serves at `/v1/ui/people`,
+which the task opens in the browser. Lightroom keeps only what a browser
+cannot do — the page queues actions through `/v1/ui/actions` and the task
+performs them against the catalog. Reach for this when a task is a grid of
+server-side data that LrView cannot re-render (see
+[Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);
+keep settings and short forms native.
+
+All long-running operations run inside `LrTasks.startAsyncTask`. Use `LrTasks.pcall` (never native `pcall`) so tasks can yield.
+
+Photo identity uses the stable `globalPhotoId` via `Util.getGlobalPhotoIdForPhoto` (metadata-based, cross-catalog consistent). Two globals are defined everywhere: `WIN_ENV` and `MAC_ENV`.
+
+### Backend (Rust) — `server-rs/`
+
+Cargo workspace, one binary (`geniusai-server`) across these crates:
+
+- `lrg-common` — config/CLI, error→envelope, version (baked in via `LRG_BACKEND_*` build-time env vars, `option_env!`), logging+rotation, PID/OK lifecycle handshake.
+- `lrg-store` — LanceDB wrapper, Arrow schemas, `db_path` bind state machine, backup, stats. `lrg-chroma-reader` is migration-only: reads an old ChromaDB directory (WAL + HNSW segment binaries) left over from the retired Python backend, to migrate its data into LanceDB — no Chroma dependency at runtime.
+- `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics.
+- `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
+- `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
+- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
+- `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
+- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
+- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
+
+`APISearchIndex.lua` on the plugin side defines the API contract; keep it in sync with any endpoint changes here.
+
+### Data & Identity
+
+- Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
+- Vector search: LanceDB tables `IMAGE_TABLE`/`VERTEX_TABLE`/`FACE_TABLE` in `lrg_store` (SigLIP2, Vertex AI, and face embeddings respectively). `VERTEX_TABLE` is legacy: the plugin stopped writing and querying it when Vertex AI was removed (August 2026), existing rows are kept.
+- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
+
+---
+
+## Key Rules
+
+### Lua / Plugin
+
+- Use `LrTasks.pcall` — never native `pcall`.
+- GUI strings are plain English. Translations were dropped, so new code writes the finished user-facing string directly. (`LOC(...)` survives in older files, where it just renders its inline default — leave it alone, but don't add more.)
+- Surface all errors to the user via `ErrorHandler.handleError`; no silent failures.
+- Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
+- New top-level actions must follow the `Task*.lua` naming convention.
+- `APISearchIndex.lua` must be kept in sync with any backend API changes.
+
+### Rust / Backend (`server-rs/`)
+
+- Routes in `lrg-api::routes` (one axum `Router` per domain, merged in `lrg_api::build_router`); business logic in `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`.
+- Always use the `log` facade (`log::info!`/`warn!`/`error!`).
+- Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
+- Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
+- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed.
+
+### Errors must surface
+
+**A log line is not a report.** Anything that goes wrong — a failure, or a
+success that quietly lost a signal — has to travel all the way to a dialog in
+Lightroom. `log::warn!`/`log:warn` is for the record; it is never the only
+place a problem lands.
+
+The chain is: backend detects → puts it in the HTTP response (`error` /
+`error_messages` for failures, `warnings` for degradations) → the API wrapper
+in `APISearchIndex.lua` returns it → the `Task*.lua` caller collects it →
+`ErrorHandler.handleError` or `LrDialogs.message(..., "warning")` shows it.
+Every link is load-bearing; a caller that drops the response's `warnings`
+breaks the chain just as thoroughly as a backend that never sends them.
+
+Concretely, when writing or reviewing this path:
+
+- **A degraded success is not a success.** A photo that indexed without face
+  detection, species, or an embedding must say so. `success_count` going up
+  while the run silently produced worse data is the bug this rule exists for.
+- **Never swallow a response you asked for.** If a wrapper returns
+  `(ok, response)`, the caller reads `response.warnings` even when `ok` is
+  true. Grep for existing callers when you add a warning — a new one is
+  useless if nothing consumes it.
+- **Say what to do, not what happened.** "model not loaded" describes an
+  internal state; "face model is not downloaded yet — run "Download AI
+  models" in Plug-in Manager" is something the user can act on.
+- **Deduplicate and cap, don't drop.** A run-wide cause warns once per photo.
+  Show a handful and count the rest; hiding the rest entirely is not an
+  option.
+- **A single slot loses reports.** Accumulate warnings in a list. One
+  `Option<String>`/variable means the second problem erases the first.
+
+Silence is only acceptable for something the user did not ask for and cannot
+act on (e.g. Vertex AI embeddings when no project is configured) — and that
+decision belongs in a comment at the point where it is made.
+
+### Docs
+
+- Backend port is 19819 by default
+- **Docs are part of the change, not a follow-up.** `docs/doc-sources.toml` maps each wiki page to the source files it describes; when you touch one of those files, update the page in the same change. If the page is still accurate, say so — either in the PR or with a `Docs-Reviewed: <Page-Name>.md` commit trailer, which is what clears the staleness warning.
+- `scripts/check-docs.py` enforces the parts that can be checked mechanically, and runs in pre-commit and CI (`lint-format.yml`):
+  - every axum route has a heading in `docs/wiki/Dev-Backend-API.md`, and every heading names a real route (method and path both) — **hard failure**
+  - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
+  - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
+- `scripts/check-docs.py --for <path>` prints the pages that document a file.
+
+### Editor automation (Codex)
+
+- A `PostToolUse` hook (`.Codex/hooks/lint-edited-file.py`, wired in `.Codex/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
+- The same hook names the wiki pages documenting the edited file (once per page per session). Treat that as part of the task: update the page now, or state that it is still correct.
+
+@.Codex/skills/lrc-plugin-dev.md

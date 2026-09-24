@@ -25,8 +25,9 @@ function ErrorHandler.customErrorDialog(errorMessage, detailedInfo)
 	-- Also normalised here: this is called directly as well as through
 	-- handleError, and `title = nil` on a static_text has no fallback at all.
 	errorMessage = Util.errorText(errorMessage, "Something went wrong, but the cause was not reported.")
-	detailedInfo =
+	detailedInfo = Util.userFacingError(
 		Util.errorText(detailedInfo, LOC("$$$/LrGeniusAI/ErrorHandler/noDetails=No additional details provided."))
+	)
 
 	local dialogView = f:column({
 		f:row({
@@ -60,10 +61,11 @@ function ErrorHandler.customErrorDialog(errorMessage, detailedInfo)
 	local result = LrDialogs.presentModalDialog({
 		title = LOC("$$$/LrGeniusAI/ErrorHandler/Error=Error"),
 		contents = dialogView,
-		cancelVerb = LOC("$$$/LrGeniusAI/ErrorHandler/gatherLogs=Generate report"),
+		actionVerb = LOC("$$$/LrGeniusAI/ErrorHandler/gatherLogs=Generate report"),
+		cancelVerb = LOC("$$$/LrGeniusAI/ErrorHandler/close=Close"),
 	})
 
-	if result == "cancel" then
+	if result == "ok" then
 		LrTasks.startAsyncTask(function()
 			Util.copyLogfilesToDesktop({ error = errorMessage, details = detailedInfo })
 		end)
