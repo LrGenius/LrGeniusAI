@@ -393,9 +393,19 @@ Access: `local LrFC = import 'LrFunctionContext'`
 
 | Function | Signature | Notes |
 |---|---|---|
-| callWithContext | `(name, func)` | synchronous; passes context to func |
+| callWithContext | `(name, func, ...)` | synchronous; passes context to func |
+| callWithContext_noyield | `(name, func, ...)` | same, but `LrTasks.yield` is disabled |
+| pcallWithContext | `(name, func, ...)` | protected variant; returns `ok, ...` |
 | postAsyncTaskWithContext | `(name, func)` | async; starts task with context |
-| atexit | `(context, func)` | register cleanup on context exit |
+
+Cleanup is registered **on the context instance**, not on the namespace — there
+is no `LrFunctionContext.atexit`:
+
+| Method | Signature | Notes |
+|---|---|---|
+| context:addCleanupHandler | `(func)` | runs on both success and failure |
+| context:addFailureHandler | `(func)` | runs only when the function errors |
+| context:addOperationTitleForError | `(title)` | title shown by `attachErrorDialogToFunctionContext` |
 
 ---
 
