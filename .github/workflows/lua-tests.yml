@@ -4,13 +4,21 @@ on:
     paths:
       - "plugin/**"
       - ".busted"
+      - ".luacheckrc"
       - ".github/workflows/lua-tests.yml"
   push:
     branches: [main]
     paths:
       - "plugin/**"
       - ".busted"
+      - ".luacheckrc"
       - ".github/workflows/lua-tests.yml"
+# A newer commit on the same ref makes the in-flight run obsolete; main is
+# exempt so each commit that lands keeps its own result.
+concurrency:
+  group: lua-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Only ever reads the checkout; nothing here writes back to the repository.
 permissions:
   contents: read
@@ -19,7 +27,7 @@ jobs:
   busted:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Lua 5.1 (matches the Lightroom runtime)
         uses: leafo/gh-actions-lua@6919171ccf181b826f44b9bca76307b577217377 # v13.0.0
         with:
@@ -27,6 +35,13 @@ jobs:
       - name: Set up LuaRocks
         uses: leafo/gh-actions-luarocks@35d062def313a7699a0d513e996bcf4352f05389 # v6.1.0
       - name: Install busted
-        run: luarocks install busted
+        # Pinned to the exact rockspec revision so an unrelated busted release
+        # cannot redden this job. 2.3.0-1 is what is installed locally, so local
+        # and CI agree. This pins busted only: its dependencies (luassert,
+        # penlight, luasystem, ...) are all declared `>=` and still float, so it
+        # is partial protection, not a lockfile. Bump deliberately in a PR --
+        # nothing updates it automatically, since .github/dependabot.yml covers
+        # only github-actions and cargo and Dependabot has no luarocks ecosystem.
+        run: luarocks install busted 2.3.0-1
       - name: Run headless unit tests
         run: busted

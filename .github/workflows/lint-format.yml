@@ -1,5 +1,25 @@
 name: "Lint/format check"
-on: [push, pull_request]
+on:
+  # `on: [push, pull_request]` fired this workflow twice for every PR commit:
+  # once for the branch push, once for the PR. Scoping push to main leaves one
+  # run per PR commit and one per merge. Two things are given up on purpose: a
+  # push to a branch with no PR open is no longer linted (pre-commit runs
+  # StyLua, cargo fmt, cargo clippy and check-docs locally), and `v*` tag
+  # pushes no longer trigger it -- release.yml's validate-tag job already
+  # requires the tag to sit on main, which has been linted.
+  push:
+    branches: [main]
+  # Deliberately unfiltered: PRs also target `testing`, and no `paths:` filter
+  # either -- format-lint is a required check, and a skipped required check
+  # blocks merges forever.
+  pull_request:
+
+# A newer commit on the same ref makes the in-flight run obsolete. Main is
+# exempt so every commit that lands keeps its own result. Safe to cancel here
+# because this workflow only ever reads the checkout.
+concurrency:
+  group: lint-format-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Only ever reads the checkout; nothing here writes back to the repository.
 permissions:
@@ -9,7 +29,7 @@ jobs:
   format-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Formatting (Lua)
         uses: JohnnyMorganz/stylua-action@76fd70c03e6340ceaf673366712db9b20560b402 # v5.0.0
         with:
@@ -24,7 +44,7 @@ jobs:
   docs-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The staleness heuristic compares commit dates of pages against
           # their sources, so it needs the history, not just the tip.
@@ -52,7 +72,7 @@ jobs:
   format-lint-rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
@@ -72,3 +92,18 @@ jobs:
       - name: Linting (Rust)
         working-directory: server-rs
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # `llamacpp` is off by default, but lrg-llama is a workspace member, so
+      # the step above already compiles llama.cpp from source and lints that
+      # crate. What it never compiles is the `#[cfg(feature = "llamacpp")]`
+      # glue in lrg-api (llm_engine.rs and the bench example), whose first
+      # compile used to be the Windows leg of release.yml -- i.e. after a `v*`
+      # tag had already been pushed. CLAUDE.md requires this invocation to be
+      # clean; nothing enforced it.
+      #
+      # Both invocations are kept on purpose: the one above lints the
+      # `cfg(not(feature = "llamacpp"))` arm that the macOS build ships, this
+      # one lints the arm Windows ships.
+      - name: Linting (Rust, llamacpp feature)
+        working-directory: server-rs
+        run: cargo clippy --workspace --all-targets --features llamacpp -- -D warnings

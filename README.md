@@ -106,6 +106,8 @@ Developed with a passion for photography and IT by:
 - **Community** – *Special thanks to all contributors and testers for your valuable input and support.*
 - **Various AI agents** - *For the great support in developing this project.*
 
-This project leverages many incredible open-source libraries and models, including **YuNet**, **FaceNet**, **BioCLIP 2 / TreeOfLife-200M**, **OpenCLIP**, **ONNX Runtime**, **LanceDB**, **llama.cpp**, and **MLX / mlx-swift-lm**. See the [Credits wiki page](https://github.com/LrGenius/LrGeniusAI/wiki/Credits) for the full list and licences. 
+This project leverages many incredible open-source libraries and models, including **YuNet**, **FaceNet**, **BioCLIP 2 / TreeOfLife-200M**, **OpenCLIP**, **ONNX Runtime**, **LanceDB**, **llama.cpp**, and **MLX / mlx-swift-lm**. See the [Credits wiki page](https://github.com/LrGenius/LrGeniusAI/wiki/Credits) for the full list, and [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licence texts of third-party source vendored here.
+
+Thanks also to **[Automaat/lightroom-mcp](https://github.com/Automaat/lightroom-mcp)** (MIT, by Marcin Skalski) — a fellow open-source Lightroom Classic plugin whose CI/CD setup this project's own build pipeline borrowed several good habits from.
 
 A huge thank you to the open-source community and the developers of the underlying AI frameworks that make this integration possible!

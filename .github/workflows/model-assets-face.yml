@@ -30,15 +30,32 @@ on:
       - 'server-rs/scripts/export_face_models.py'
       - '.github/workflows/model-assets-face.yml'
 
+# Publishes to a FIXED release tag with overwrite_files: true, so two runs are
+# delete-then-upload racing each other: the loser gets a 422 already_exists, or
+# the release ends up an asset short. Nothing verifies the bytes on the way
+# back out either -- the download route streams the asset with no digest or
+# size check -- so a bad publish only surfaces when a user's ONNX session fails
+# to load. Never cancelled: cancelling mid-upload is the one thing that could
+# actually truncate a published asset.
+concurrency:
+  group: model-assets-face
+  cancel-in-progress: false
+
+# Default for the workflow; the export job raises itself to contents: write to
+# publish the asset release.
+permissions:
+  contents: read
+
 jobs:
   export-face-assets:
     runs-on: macos-latest
+    timeout-minutes: 45
     name: Export YuNet detector + FaceNet recognizer
     permissions:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0

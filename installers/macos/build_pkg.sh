@@ -88,6 +88,10 @@ cp -a build/LrGeniusAI.lrplugin "$ROOT_DIR/Applications/LrGeniusAI/PluginInstall
 
 cp "$SCRIPT_DIR/com.lrgenius.server.plist" "$ROOT_DIR/Library/LaunchAgents/"
 
+# AGPL-3.0 §4: ship the licence text alongside the binary. $SCRIPT_DIR is
+# installers/macos, so this resolves to the repo-root LICENSE whatever the cwd.
+cp "$SCRIPT_DIR/../../LICENSE" "$ROOT_DIR/Applications/LrGeniusAI/LICENSE"
+
 # 3.5 Create Uninstaller app
 echo "Creating uninstaller..."
 UNINSTALL_APP_PATH="$ROOT_DIR/Applications/LrGeniusAI/Uninstall LrGeniusAI.app"

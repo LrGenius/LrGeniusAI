@@ -82,6 +82,36 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 
 ---
 
+## ⚖️ Adopting third-party code
+
+The project is AGPL-3.0. Code under **MIT, BSD-2/3-Clause, ISC or Apache-2.0**
+can be brought in; code under a source-available or non-commercial licence
+(SSPL, BUSL, CC-BY-NC, "free for personal use") cannot, whatever the README
+promises.
+
+Where the line falls:
+
+- **You copied a file, or a substantial part of one** — a data table, a curated
+  list, a routine — then the licence follows the code. Add a three-line header
+  at the top of the file naming the upstream project, its licence and its
+  copyright holder, add an entry to
+  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) with the full permission
+  notice, and mention it in `docs/wiki/Credits.md`. All three in the same
+  commit: a header pointing at an entry that does not exist does not discharge
+  the obligation.
+- **You reimplemented an idea** — a CI concurrency block, a path filter, an
+  approach to a problem — then nothing is owed. Functional idioms are not
+  copyrightable expression. Crediting the source anyway is good manners and
+  costs a line in `docs/wiki/Credits.md`; pretending you had the idea first is
+  not.
+
+When in doubt, write it down in the PR description and let a reviewer decide.
+`plugin/LrGeniusAI.lrdevplugin/JSON.lua` (CC-BY 3.0) is the documented legacy
+case: it predates this rule, is vendored verbatim, and its in-file attribution
+must survive every edit.
+
+---
+
 ## 📖 Documentation
 - Wiki pages are located in `docs/wiki/`.
 - Changes pushed to `main` automatically update the GitHub Wiki via `.github/workflows/publish-wiki.yml`.

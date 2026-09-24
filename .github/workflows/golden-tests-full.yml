@@ -22,6 +22,14 @@ on:
 permissions:
   contents: read
 
+# A nightly that overruns into the next night would otherwise race itself over
+# ~3 GB of downloads. Never cancelled: a manual dispatch is usually someone
+# checking a specific asset, and killing the scheduled run to serve it would
+# lose that night's only numerical check.
+concurrency:
+  group: golden-tests-full
+  cancel-in-progress: false
+
 jobs:
   golden-tests:
     name: Goldens with real model assets
@@ -30,7 +38,7 @@ jobs:
     # is far more than needed, but the fetch alone can be several minutes.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0

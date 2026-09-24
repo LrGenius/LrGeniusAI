@@ -14,6 +14,10 @@ SetupIconFile=plugin\LrGeniusAI.lrdevplugin\icon.ico
 SourceDir=..\..
 
 [Files]
+; AGPL-3.0 §4: ship the licence text alongside the binary. Deliberately not
+; a [Setup] LicenseFile= -- §4 requires handing the licence over, not
+; demanding the user click through an acceptance page.
+Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; Backend: a single native binary, no bundled Python runtime.
 Source: "build\lrgenius-server\lrgenius-server.exe"; DestDir: "{app}\backend"; Flags: ignoreversion
 ; llama.cpp ships as shared libraries: llama.dll plus the loadable ggml backend

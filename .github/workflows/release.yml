@@ -16,13 +16,27 @@ on:
 permissions:
   contents: read
 
+# Per-ref, so re-running a tag (or re-dispatching the same branch) cannot leave
+# two runs publishing the same assets. Deliberately NOT one shared group across
+# all tags: that would serialise different tags, and GitHub keeps only one
+# *pending* run per group, so pushing several release tags in one `git push
+# --tags` -- which has happened here -- would silently drop the displaced run.
+# The `:latest` race between two different tags is real but belongs in a
+# newest-tag check in publish-docker-manifest, not here.
+# Never cancelled: a run killed after the ~140-minute macOS build but before
+# create-release leaves artifacts uploaded and no draft release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate-tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     name: Validate tag is on main
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Ensure tag commit is on main
@@ -38,10 +52,53 @@ jobs:
             exit 1
           fi
 
+      # Assert the release's preconditions once, up front, on the free runner.
+      # Without this a tagged release silently produces an unsigned,
+      # un-notarized .pkg -- the macOS signing step only logs "building
+      # unsigned (dev) artifact." and exits 0, and the artifact ships anyway --
+      # while a missing SignPath token is not discovered until after the whole
+      # llama.cpp + Vulkan Windows build. That is the "a degraded success is
+      # not a success" rule in CLAUDE.md, applied to the release itself.
+      # Scoped to this repo so forks pushing their own tags, and
+      # workflow_dispatch dry runs off a branch, keep building unsigned as the
+      # comments on the signing steps promise.
+      - name: Require signing credentials for a tagged release
+        if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'LrGenius/LrGeniusAI'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_INSTALLER_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_P12_BASE64 }}
+          APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          set -uo pipefail
+          # The two p12 passwords are deliberately not checked: an export
+          # without a password is legitimate and would read as an empty secret.
+          missing=()
+          for s in MACOS_CERTIFICATE_P12_BASE64 MACOS_INSTALLER_CERTIFICATE_P12_BASE64 \
+                   APPLE_NOTARIZATION_KEY_P8_BASE64 APPLE_NOTARIZATION_KEY_ID \
+                   APPLE_NOTARIZATION_ISSUER_ID SIGNPATH_API_TOKEN; do
+            [ -n "${!s:-}" ] || missing+=("$s")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::tagged release is missing signing secrets: ${missing[*]}"
+            echo "::error::this run would ship unsigned / un-notarized installers - configure the secrets, or dry-run with workflow_dispatch off a branch"
+            exit 1
+          fi
+          echo "All signing credentials present."
+
   build-and-release:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: [validate-tag]
     runs-on: ${{ matrix.os }}
+    # Last green release: macos-arm64 ~141 min, windows-x64 ~175 min. 240 leaves
+    # real headroom and still cuts a hung job off at two thirds of GitHub's
+    # 360-minute default. The repo is public, so this is not about billed
+    # minutes -- it is about failing at 4h instead of 6h, and not parking a dead
+    # job on a scarce macOS/Windows runner slot.
+    timeout-minutes: 240
     permissions:
       contents: read
       # The SignPath action downloads the just-uploaded artifact through the
@@ -73,38 +130,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Update Info.lua with version and build date
         shell: bash
-        run: |
-          VERSION="${{ github.ref_name }}"
-          if [[ "$VERSION" == v[0-9]* ]]; then
-            VERSION="${VERSION#v}"
-          else
-            # workflow_dispatch dry runs off a branch (no version tag) — fall
-            # back to the same dev version the binary itself defaults to.
-            VERSION="0.0.0-dev"
-          fi
-          # Info.lua's MAJOR/MINOR/REVISION are plain Lua number literals, so
-          # drop any prerelease suffix (e.g. "3.0.0-pre3" -> "3.0.0") before
-          # splitting — they may only contain numbers.
-          VERSION_NUMERIC="${VERSION%%-*}"
-          MAJOR=$(echo "$VERSION_NUMERIC" | cut -d. -f1)
-          MINOR=$(echo "$VERSION_NUMERIC" | cut -d. -f2)
-          REVISION=$(echo "$VERSION_NUMERIC" | cut -d. -f3)
-          MAJOR=${MAJOR:-0}
-          MINOR=${MINOR:-0}
-          REVISION=${REVISION:-0}
-          BUILD_DATE=$(date +%Y%m%d)
-          INFO_LUA="plugin/LrGeniusAI.lrdevplugin/Info.lua"
-          sed 's/Info.MAJOR = .*/Info.MAJOR = '"$MAJOR"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          sed 's/Info.MINOR = .*/Info.MINOR = '"$MINOR"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          sed 's/Info.REVISION = .*/Info.REVISION = '"$REVISION"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          sed 's/Info.BUILD = [0-9]*/build = '"$BUILD_DATE"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          echo "Updated Info.lua: MAJOR=$MAJOR MINOR=$MINOR REVISION=$REVISION build=$BUILD_DATE"
+        # Stamps and then reads the stamp back. The four inline seds this
+        # replaces were duplicated across two jobs, and one of them rewrote
+        # the left-hand side too, so every release shipped Info.BUILD = nil.
+        run: bash scripts/set_plugin_version.sh "${{ github.ref_name }}" "$(date +%Y%m%d)"
 
       - name: Resolve backend version env vars from tag
         shell: bash
@@ -296,7 +331,11 @@ jobs:
         run: |
           cd server-rs
           cargo build --release --bin geniusai-server ${{ matrix.cargo_features }}
-          cargo clippy --workspace --tests ${{ matrix.cargo_features }} -- -D warnings
+          # --all-targets, not --tests: `--tests` skips examples, and
+          # lrg-api/examples/bench_local_backends.rs is gated on
+          # required-features = ["llamacpp"]. PR CI lints it, so this leg
+          # must not be the weaker of the two.
+          cargo clippy --workspace --all-targets ${{ matrix.cargo_features }} -- -D warnings
 
       # The MLX sidecar (Apple silicon only). Two things are non-obvious here:
       #
@@ -426,6 +465,8 @@ jobs:
           cp plugin/LrGeniusAI.lrdevplugin/*.lua $PLUGIN_DIR/
           cp plugin/LrGeniusAI.lrdevplugin/*.png $PLUGIN_DIR/
           cp plugin/LrGeniusAI.lrdevplugin/*.ico $PLUGIN_DIR/
+          # AGPL-3.0 §4: every conveyed copy carries the licence text.
+          cp LICENSE $PLUGIN_DIR/
 
       # macOS Developer ID codesigning + notarization. Skipped (with a
       # warning, not a failure) when the secrets aren't configured, so
@@ -529,7 +570,7 @@ jobs:
       - name: Upload unsigned backend binaries for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-exe
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-backend-exe-${{ matrix.arch }}
           path: build/lrgenius-server/
@@ -598,7 +639,7 @@ jobs:
       - name: Upload unsigned installer for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-installer-${{ matrix.arch }}
           path: ${{ steps.locate-installer.outputs.path }}
@@ -689,54 +730,41 @@ jobs:
           tar -C build -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
           path: |
             artifact-payload/lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}.tar
             *.pkg
             *.exe
-          retention-days: 1
+          # 7 days, not 1: create-release consumes these, and every consumer
+          # step there is existence-guarded (`if [ -d ]` / `[ -f ] &&`) while
+          # action-gh-release sets no fail_on_unmatched_files. So a re-run
+          # after these expire does not fail -- it publishes a draft missing a
+          # platform's installer, and an update manifest listing only the
+          # surviving platform, which the self-updater then serves.
+          retention-days: 7
           compression-level: 9
 
   build-plugin-only:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: [validate-tag]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     name: Build Plugin Only
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Update Info.lua with version and build date
         shell: bash
-        run: |
-          VERSION="${{ github.ref_name }}"
-          if [[ "$VERSION" == v[0-9]* ]]; then
-            VERSION="${VERSION#v}"
-          else
-            VERSION="0.0.0-dev"
-          fi
-          # Info.lua's MAJOR/MINOR/REVISION are plain Lua number literals, so
-          # drop any prerelease suffix (e.g. "3.0.0-pre3" -> "3.0.0") before
-          # splitting — they may only contain numbers.
-          VERSION_NUMERIC="${VERSION%%-*}"
-          MAJOR=$(echo "$VERSION_NUMERIC" | cut -d. -f1)
-          MINOR=$(echo "$VERSION_NUMERIC" | cut -d. -f2)
-          REVISION=$(echo "$VERSION_NUMERIC" | cut -d. -f3)
-          MAJOR=${MAJOR:-0}
-          MINOR=${MINOR:-0}
-          REVISION=${REVISION:-0}
-          BUILD_DATE=$(date +%Y%m%d)
-          INFO_LUA="plugin/LrGeniusAI.lrdevplugin/Info.lua"
-          sed 's/Info.MAJOR = .*/Info.MAJOR = '"$MAJOR"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          sed 's/Info.MINOR = .*/Info.MINOR = '"$MINOR"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          sed 's/Info.REVISION = .*/Info.REVISION = '"$REVISION"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          sed 's/Info.BUILD = [0-9]*/build = '"$BUILD_DATE"'/' "$INFO_LUA" > "$INFO_LUA.tmp" && mv "$INFO_LUA.tmp" "$INFO_LUA"
-          echo "Updated Info.lua: MAJOR=$MAJOR MINOR=$MINOR REVISION=$REVISION build=$BUILD_DATE"
+        # Stamps and then reads the stamp back. The four inline seds this
+        # replaces were duplicated across two jobs, and one of them rewrote
+        # the left-hand side too, so every release shipped Info.BUILD = nil.
+        run: bash scripts/set_plugin_version.sh "${{ github.ref_name }}" "$(date +%Y%m%d)"
 
       - name: Prepare plugin-only files
         shell: bash
@@ -744,6 +772,8 @@ jobs:
           BUILD_DIR="build-plugin-only"
           mkdir -p "$BUILD_DIR"
           cp -r plugin/LrGeniusAI.lrdevplugin "$BUILD_DIR/"
+          # AGPL-3.0 §4, as in the matrix build above.
+          cp LICENSE "$BUILD_DIR/LrGeniusAI.lrdevplugin/"
 
       - name: Pack plugin-only artifact payload
         shell: bash
@@ -755,16 +785,20 @@ jobs:
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload plugin-only artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lrgenius-ai-plugin-docker-backend
           path: artifact-payload/lrgenius-ai-plugin-docker-backend.tar
-          retention-days: 1
+          # 7 days, for the same reason as the matrix payload above.
+          retention-days: 7
 
   build-docker-images:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [validate-tag]
     runs-on: ubuntu-latest
+    # Observed 31-34 min. Revisit if the commented-out linux/arm64 matrix leg is
+    # ever re-enabled -- emulated builds are slower.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -780,7 +814,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve backend version build-args from tag
         id: backend-version
@@ -843,6 +877,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-docker-images, create-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -874,13 +909,14 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-and-release, build-plugin-only]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Create Release
     permissions:
       contents: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -888,7 +924,7 @@ jobs:
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: lrgenius-ai-*
           path: artifacts
