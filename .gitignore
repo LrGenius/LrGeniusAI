@@ -36,6 +36,9 @@ docker-compose.yml
 .claude/sessions/
 .claude/logs/
 .claude/mcp-settings.json
+# Codex CLI local config; machine-specific (absolute MCP server paths), the
+# same category as .claude/settings.local.json
+.codex/
 # MemPalace AI Context
 mempalace.yaml
 entities.json
