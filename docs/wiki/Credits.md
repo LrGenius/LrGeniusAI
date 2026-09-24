@@ -32,9 +32,16 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **LM Studio**: Discover, download, and run local LLMs. [Website](https://lmstudio.ai/)
 
 ## Utilities & SDKs
-- **JSON.lua**: A complete JSON encoder/decoder in Lua by Jeffrey Friedl.
+- **JSON.lua** (CC-BY 3.0): A complete JSON encoder/decoder in Lua by Jeffrey Friedl, vendored into the plugin. [Upstream](http://regex.info/blog/lua/json)
 - **Adobe Lightroom Classic SDK**: The Lua API the plugin frontend is built on.
 - **Hugging Face Hub**: Distribution for the downloadable local models.
+
+## Tooling & Project Infrastructure
+- **Automaat/lightroom-mcp** (MIT): A second open-source Lightroom Classic plugin, by Marcin Skalski, pairing an `.lrplugin` with an MCP server. Its CI/CD setup is where this project's workflow trigger scoping, per-workflow concurrency groups, commit-SHA pinning of *every* action (not just third-party ones), the pinned `busted` revision, and the "stamp the version, then read the stamp back" rule came from — the last of which turned up a bug that had shipped in every release. Its plugin also documents a couple of Lightroom SDK behaviours worth knowing. [GitHub](https://github.com/Automaat/lightroom-mcp)
+- **StyLua, luacheck, busted**: Formatting, linting and headless unit tests for the plugin's Lua.
+- **pre-commit**: Runs the formatters, linters and the docs checker before every commit.
+
+Full licence texts for the third-party source vendored into this repository are in [THIRD-PARTY-NOTICES.md](https://github.com/LrGenius/LrGeniusAI/blob/main/THIRD-PARTY-NOTICES.md).
 
 ---
 Developed by **Bastian Machek (LrGenius / Fokuspunk)** and **AI agents**.
