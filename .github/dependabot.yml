@@ -23,6 +23,12 @@ updates:
           - "patch"
     labels:
       - "dependencies"
+    ignore:
+      # v3 moves to SignPath's Pipeline Connector, which needs the SignPath
+      # GitHub App on this repository -- see the comment on the SignPath steps
+      # in release.yml. Lift this once the app is installed.
+      - dependency-name: "signpath/github-action-submit-signing-request"
+        update-types: ["version-update:semver-major"]
 
   # The Rust workspace. Grouped the same way: patch/minor churn from a tree this
   # size (axum, lancedb, ort, tokenizers, …) is not worth one PR per crate.
