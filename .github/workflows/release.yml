@@ -610,7 +610,14 @@ jobs:
 
       - name: Submit backend exe to SignPath
         if: matrix.os_name == 'windows'
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        # Held at v2.3 on purpose. v3.0 only swaps the default connector-url for
+        # SignPath's new "Pipeline Connector", which checks repository access
+        # through the SignPath GitHub App and rejected v3.1.0 with "User has no
+        # access to the requested GitHub resource". v2.3 (the old connector) is
+        # what signed v3.0.0. Move to v3 only together with installing/granting
+        # the SignPath GitHub App on this repository; dependabot.yml ignores the
+        # major until then.
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
@@ -679,7 +686,14 @@ jobs:
 
       - name: Submit installer to SignPath
         if: matrix.os_name == 'windows'
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        # Held at v2.3 on purpose. v3.0 only swaps the default connector-url for
+        # SignPath's new "Pipeline Connector", which checks repository access
+        # through the SignPath GitHub App and rejected v3.1.0 with "User has no
+        # access to the requested GitHub resource". v2.3 (the old connector) is
+        # what signed v3.0.0. Move to v3 only together with installing/granting
+        # the SignPath GitHub App on this repository; dependabot.yml ignores the
+        # major until then.
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2.3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: deae5ebd-e056-4961-9aed-a3a047da535d
