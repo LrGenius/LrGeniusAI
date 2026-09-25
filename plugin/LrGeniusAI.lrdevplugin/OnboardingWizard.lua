@@ -78,8 +78,8 @@ function OnboardingWizard.show(manualTrigger)
 			-- Tied to the context rather than only to the line after the dialog
 			-- returns: if anything between here and there throws, that line never
 			-- runs and the loop keeps polling the backend for the rest of the
-			-- Lightroom session. atexit fires on both paths.
-			LrFunctionContext.atexit(context, function()
+			-- Lightroom session. The cleanup handler fires on both paths.
+			context:addCleanupHandler(function()
 				propertyTable.keepChecksRunning = false
 			end)
 

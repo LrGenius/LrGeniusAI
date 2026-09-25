@@ -4,6 +4,16 @@ on:
     - cron: '0 0 * * *' # Runs every day at 00:00 UTC
   workflow_dispatch: # Allows you to run it manually for testing
 
+# Default for the workflow; the stale job raises itself to issues and
+# pull-requests write.
+permissions:
+  contents: read
+
+# Two overlapping runs would post the stale notice twice on the same issue.
+concurrency:
+  group: stale
+  cancel-in-progress: false
+
 jobs:
   stale:
     runs-on: ubuntu-latest
@@ -11,7 +21,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/stale@v11
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           # Number of days of inactivity before an issue/PR is marked stale
           days-before-stale: 14

@@ -9,6 +9,14 @@ on:
     paths:
       - 'server-rs/**'
       - '.github/workflows/server-rs-tests.yml'
+# The expensive one: cargo test --workspace plus an 89 MB face-asset fetch.
+# A force-push should not leave three of these racing on the same PR. Main
+# is exempt: dependency bumps land in bursts, and cancelling those would
+# leave main commits with no result.
+concurrency:
+  group: server-rs-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Only ever reads the checkout; nothing here writes back to the repository.
 permissions:
   contents: read
@@ -17,7 +25,7 @@ jobs:
   cargo-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
@@ -39,7 +47,7 @@ jobs:
       # rather than quietly going back to skipping.
       - name: Cache face model assets
         id: face-assets
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/lrgenius/models
           key: face-assets-v1

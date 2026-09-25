@@ -475,16 +475,9 @@ local function ensureDbMigrationsDone()
 				end
 				local ok, err, userMessage
 				if type(m.run) == "function" then
-					local status, a, b, c
-					if type(LrTasks) == "table" and type(LrTasks.pcall) == "function" then
-						status, a, b, c = LrTasks.pcall(function()
-							return m.run(progressScope)
-						end)
-					else
-						status, a, b, c = LrTasks.pcall(function()
-							return m.run(progressScope)
-						end)
-					end
+					local status, a, b, c = LrTasks.pcall(function()
+						return m.run(progressScope)
+					end)
 					if status then
 						ok, err, userMessage = a, b, c
 					else

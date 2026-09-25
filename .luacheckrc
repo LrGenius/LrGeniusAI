@@ -39,6 +39,7 @@ read_globals = {
     "LrDate",
     "LrDevelopController",
     "LrDialogs",
+    "LrErrors",
     "LrExportSession",
     "LrFileUtils",
     "LrFunctionContext",
@@ -46,9 +47,11 @@ read_globals = {
     "LrLocalization",
     "LrMD5",
     "LrPathUtils",
+    "LrPrefs",
     "LrProgressScope",
     "LrShell",
     "LrStringUtils",
+    "LrSystemInfo",
     "LrTasks",
     "LrView"
 }
