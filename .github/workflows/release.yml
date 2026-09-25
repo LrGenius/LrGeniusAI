@@ -53,12 +53,25 @@ jobs:
           fi
 
       # Assert the release's preconditions once, up front, on the free runner.
-      # Without this a tagged release silently produces an unsigned,
-      # un-notarized .pkg -- the macOS signing step only logs "building
-      # unsigned (dev) artifact." and exits 0, and the artifact ships anyway --
-      # while a missing SignPath token is not discovered until after the whole
-      # llama.cpp + Vulkan Windows build. That is the "a degraded success is
-      # not a success" rule in CLAUDE.md, applied to the release itself.
+      # Without this a missing SignPath token is not discovered until after
+      # the whole llama.cpp + Vulkan Windows build, and a half-configured
+      # Apple setup silently degrades to an unsigned .pkg -- the macOS signing
+      # step only logs "building unsigned (dev) artifact." and exits 0. That
+      # is the "a degraded success is not a success" rule in CLAUDE.md,
+      # applied to the release itself.
+      #
+      # Windows signing (SignPath Foundation, free for open source) is always
+      # required. macOS signing needs a paid Apple Developer Program
+      # membership, which the project does not currently have, so an unsigned
+      # .pkg is a deliberate, documented state rather than a mistake: the
+      # user docs (Getting-Started, FAQ, Troubleshooting) and the release
+      # notes' "If your computer warns about the download" section already
+      # walk people through Gatekeeper's "Open Anyway". Set
+      # MACOS_SIGNING_REQUIRED to "true" once a membership is back; until
+      # then this step still fails on a *partial* Apple setup (some secrets
+      # set, others not -- that is a misconfiguration, not a decision) and
+      # says in the run summary that the macOS installer ships unsigned.
+      #
       # Scoped to this repo so forks pushing their own tags, and
       # workflow_dispatch dry runs off a branch, keep building unsigned as the
       # comments on the signing steps promise.
@@ -66,6 +79,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'LrGenius/LrGeniusAI'
         shell: bash
         env:
+          MACOS_SIGNING_REQUIRED: "false"
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_INSTALLER_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_P12_BASE64 }}
           APPLE_NOTARIZATION_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARIZATION_KEY_P8_BASE64 }}
@@ -76,18 +90,36 @@ jobs:
           set -uo pipefail
           # The two p12 passwords are deliberately not checked: an export
           # without a password is legitimate and would read as an empty secret.
-          missing=()
-          for s in MACOS_CERTIFICATE_P12_BASE64 MACOS_INSTALLER_CERTIFICATE_P12_BASE64 \
-                   APPLE_NOTARIZATION_KEY_P8_BASE64 APPLE_NOTARIZATION_KEY_ID \
-                   APPLE_NOTARIZATION_ISSUER_ID SIGNPATH_API_TOKEN; do
-            [ -n "${!s:-}" ] || missing+=("$s")
+          apple_secrets=(MACOS_CERTIFICATE_P12_BASE64 MACOS_INSTALLER_CERTIFICATE_P12_BASE64
+                         APPLE_NOTARIZATION_KEY_P8_BASE64 APPLE_NOTARIZATION_KEY_ID
+                         APPLE_NOTARIZATION_ISSUER_ID)
+          apple_missing=()
+          for s in "${apple_secrets[@]}"; do
+            [ -n "${!s:-}" ] || apple_missing+=("$s")
           done
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::tagged release is missing signing secrets: ${missing[*]}"
-            echo "::error::this run would ship unsigned / un-notarized installers - configure the secrets, or dry-run with workflow_dispatch off a branch"
-            exit 1
+
+          failed=0
+          if [ -z "${SIGNPATH_API_TOKEN:-}" ]; then
+            echo "::error::tagged release is missing SIGNPATH_API_TOKEN - the Windows installer would ship unsigned. Configure the secret, or dry-run with workflow_dispatch off a branch."
+            failed=1
           fi
-          echo "All signing credentials present."
+
+          if [ ${#apple_missing[@]} -eq 0 ]; then
+            echo "macOS: signing + notarization credentials present."
+          elif [ "$MACOS_SIGNING_REQUIRED" = "true" ]; then
+            echo "::error::tagged release is missing macOS signing secrets: ${apple_missing[*]} (MACOS_SIGNING_REQUIRED is true)"
+            failed=1
+          elif [ ${#apple_missing[@]} -lt ${#apple_secrets[@]} ]; then
+            echo "::error::macOS signing is half configured - missing: ${apple_missing[*]}. Set all Apple secrets, or remove all of them to ship an unsigned .pkg on purpose."
+            failed=1
+          else
+            msg="macOS installer ships unsigned and un-notarized (no Apple Developer secrets configured; MACOS_SIGNING_REQUIRED is false). Users get Gatekeeper's 'Open Anyway' prompt, which the release notes explain."
+            echo "::warning::$msg"
+            echo "- :warning: $msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          [ "$failed" -eq 0 ] || exit 1
+          echo "Signing preconditions satisfied."
 
   build-and-release:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
