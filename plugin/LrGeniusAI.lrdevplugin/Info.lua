@@ -120,6 +120,10 @@ return {
 			title = LOC("$$$/LrGeniusAI/Menu/ExportCullFixture=Export Culling Fixture..."),
 			file = "TaskExportCullFixture.lua",
 		},
+		{
+			title = "Developer: Run Develop-Settings Experiments...",
+			file = "TaskDevelopExperiments.lua",
+		},
 	},
 
 	LrShutdownApp = "ShutdownApp.lua",
