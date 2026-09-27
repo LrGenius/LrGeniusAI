@@ -70,11 +70,19 @@ fn family_rank(model_id: &str) -> i32 {
 
 /// Thinking config for models that support/require it, REST-shaped
 /// (`thinkingBudget` or `thinkingLevel`), or `None` for everything else.
+///
+/// Every Gemini 3 model (`gemini-3-pro-preview`, `gemini-3.7-flash`, …) gets
+/// `thinkingLevel: low` rather than only the ids known when this was written:
+/// the API default thinks harder, and thought tokens are billed as output and
+/// count against `maxOutputTokens` — a description task has nothing to gain
+/// from them.
 fn thinking_config(model_name: &str) -> Option<Value> {
     match model_name {
         "gemini-2.5-pro" => Some(json!({"thinkingBudget": 128})),
         "gemini-2.5-flash" | "gemini-2.5-flash-lite" => Some(json!({"thinkingBudget": 0})),
-        "gemini-3-pro-preview" => Some(json!({"thinkingLevel": "low"})),
+        m if m.starts_with("gemini-3-") || m.starts_with("gemini-3.") => {
+            Some(json!({"thinkingLevel": "low"}))
+        }
         _ => None,
     }
 }
@@ -276,23 +284,28 @@ impl GeminiProvider {
             .get("finishReason")
             .and_then(Value::as_str)
             .unwrap_or("");
+        // The request was answered and billed from here on, so every failure
+        // below carries the token counts — otherwise the run's token summary
+        // reports `out=0` for exactly the photos that cost the most.
+        let fail_billed = |error: String| MetadataGenerationResponse {
+            input_tokens,
+            output_tokens,
+            ..fail(&request.uuid, error)
+        };
         if finish_reason.contains("MAX_TOKENS") {
-            return fail(&request.uuid, format!(
-                "Gemini stopped before finishing the response because the token limit was reached (max_output_tokens={max_tokens}). Please raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher. If you use hierarchical keywords, a large taxonomy increases token usage significantly."
-            ));
+            return fail_billed(max_tokens_message(max_tokens, output_tokens, Some(
+                "If you use hierarchical keywords, a large taxonomy increases token usage significantly.",
+            )));
         }
 
         let text = extract_text(candidate);
         let Some(text) = text else {
-            return fail(
-                &request.uuid,
-                "Gemini returned no usable text in response".to_string(),
-            );
+            return fail_billed("Gemini returned no usable text in response".to_string());
         };
         let cleaned = clean_gemini_response(&text);
         let parsed: Value = match serde_json::from_str(&cleaned) {
             Ok(v) => v,
-            Err(e) => return fail(&request.uuid, format!("JSON parsing error: {e}")),
+            Err(e) => return fail_billed(format!("JSON parsing error: {e}")),
         };
 
         let keywords = normalize_keywords(
@@ -385,23 +398,24 @@ impl GeminiProvider {
             .get("finishReason")
             .and_then(Value::as_str)
             .unwrap_or("");
+        // Billed from here on — see `generate_metadata`.
+        let fail_edit_billed = |error: String| EditGenerationResponse {
+            input_tokens,
+            output_tokens,
+            ..fail_edit(&request.uuid, error)
+        };
         if finish_reason.contains("MAX_TOKENS") {
-            return fail_edit(&request.uuid, format!(
-                "Gemini stopped before finishing the response because the token limit was reached (max_output_tokens={max_tokens}). Please raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher."
-            ));
+            return fail_edit_billed(max_tokens_message(max_tokens, output_tokens, None));
         }
 
         let text = extract_text(candidate);
         let Some(text) = text else {
-            return fail_edit(
-                &request.uuid,
-                "Gemini returned no usable text in response".to_string(),
-            );
+            return fail_edit_billed("Gemini returned no usable text in response".to_string());
         };
         let cleaned = clean_gemini_response(&text);
         let parsed: Value = match serde_json::from_str(&cleaned) {
             Ok(v) => v,
-            Err(e) => return fail_edit(&request.uuid, format!("JSON parsing error: {e}")),
+            Err(e) => return fail_edit_billed(format!("JSON parsing error: {e}")),
         };
 
         EditGenerationResponse {
@@ -526,17 +540,43 @@ fn extract_text(candidate: &Value) -> Option<String> {
     }
 }
 
+/// `(input, output)` token counts. Output includes `thoughtsTokenCount`:
+/// Gemini reports thinking separately from `candidatesTokenCount`, but bills
+/// it as output and counts it against `maxOutputTokens`, so leaving it out
+/// understates both the cost and how close a photo came to the limit.
 fn usage_tokens(result: &Value) -> (u32, u32) {
     let usage = result.get("usageMetadata");
-    let input_tokens = usage
-        .and_then(|u| u.get("promptTokenCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as u32;
-    let output_tokens = usage
-        .and_then(|u| u.get("candidatesTokenCount"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as u32;
-    (input_tokens, output_tokens)
+    let count = |key: &str| {
+        usage
+            .and_then(|u| u.get(key))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32
+    };
+    (
+        count("promptTokenCount"),
+        count("candidatesTokenCount").saturating_add(count("thoughtsTokenCount")),
+    )
+}
+
+/// The error for a response cut off at `maxOutputTokens`. Raising the limit
+/// is the fix only when the answer is genuinely long; a model that loops
+/// (repeating phrases until it is cut off) hits any limit, and a user told
+/// only to "raise Max Tokens" keeps raising it for nothing (issue #368).
+fn max_tokens_message(max_tokens: u32, output_tokens: u32, hint: Option<&str>) -> String {
+    let mut msg = format!(
+        "Gemini stopped before finishing the response because the token limit was reached \
+         (max_output_tokens={max_tokens}, {output_tokens} output tokens used). \
+         Raise the Max Tokens setting in the plugin (General tab → AI Model section) — try 4096 or higher."
+    );
+    if let Some(hint) = hint {
+        msg.push(' ');
+        msg.push_str(hint);
+    }
+    msg.push_str(
+        " If the same photo still fails at a higher limit, the model is repeating itself \
+         rather than running short of room: switch to a different Gemini model.",
+    );
+    msg
 }
 
 fn fail(uuid: &str, error: String) -> MetadataGenerationResponse {
@@ -589,11 +629,19 @@ mod tests {
             thinking_config("gemini-2.5-flash"),
             Some(json!({"thinkingBudget": 0}))
         );
-        assert_eq!(
-            thinking_config("gemini-3-pro-preview"),
-            Some(json!({"thinkingLevel": "low"}))
-        );
+        for gemini_3 in [
+            "gemini-3-pro-preview",
+            "gemini-3.7-flash",
+            "gemini-3.8-flash",
+        ] {
+            assert_eq!(
+                thinking_config(gemini_3),
+                Some(json!({"thinkingLevel": "low"})),
+                "{gemini_3}"
+            );
+        }
         assert_eq!(thinking_config("gemini-2.0-flash"), None);
+        assert_eq!(thinking_config("gemini-30-hypothetical"), None);
     }
 
     #[test]
@@ -608,5 +656,23 @@ mod tests {
         let result = json!({"usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 34}});
         assert_eq!(usage_tokens(&result), (12, 34));
         assert_eq!(usage_tokens(&json!({})), (0, 0));
+    }
+
+    #[test]
+    fn usage_tokens_counts_thinking_as_output() {
+        let result = json!({"usageMetadata": {
+            "promptTokenCount": 3834, "candidatesTokenCount": 7175, "thoughtsTokenCount": 1002
+        }});
+        assert_eq!(usage_tokens(&result), (3834, 8177));
+    }
+
+    #[test]
+    fn max_tokens_message_names_the_limit_usage_and_the_looping_case() {
+        let msg = max_tokens_message(8192, 8177, Some("Taxonomy hint."));
+        assert!(msg.contains("max_output_tokens=8192"));
+        assert!(msg.contains("8177 output tokens used"));
+        assert!(msg.contains("Taxonomy hint."));
+        assert!(msg.contains("repeating itself"));
+        assert!(!max_tokens_message(2048, 2048, None).contains("  "));
     }
 }

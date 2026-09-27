@@ -31,8 +31,15 @@ Configure in *Plug-in Manager → API Keys → Gemini API key*. Models exposed t
   `gemini-3.1-pro-preview` — latest preview tier. Expect higher quality and
   better instruction following, but preview pricing/quotas can change.
 
-The backend automatically tunes a thinking budget for `gemini-2.5-*` and
-`gemini-3-pro-preview`, so you don't need to configure that yourself.
+The backend automatically tunes a thinking budget for `gemini-2.5-*` and sets
+a low thinking level for every Gemini 3 model (`gemini-3-*`, `gemini-3.x-*`),
+so you don't need to configure that yourself. Thinking tokens count against
+**Max Tokens** and are included in the token totals the server logs.
+
+If a Gemini model reports that it stopped because the token limit was reached,
+raise Max Tokens to 4096 or higher. If the same photo keeps failing at a higher
+limit, the model is looping rather than running out of room; switch to a
+different Gemini model instead of raising the limit further.
 
 ### OpenAI / ChatGPT
 
