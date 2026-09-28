@@ -1,17 +1,26 @@
 --- Developer task: controlled develop-settings experiments.
 --
 -- The AI Edit XMP research (docs/wiki/Dev-AI-Edit-XMP-Findings.md) settled most
--- questions from files on disk, but four decide the architecture and can only be
--- answered by Lightroom itself:
+-- questions from files on disk, but these decide the architecture and can only
+-- be answered by Lightroom itself:
 --
 --   E13  In which orientation does the SDK report `dimensions` and
 --        `croppedDimensions`, and what does `orientation` look like at runtime?
---        (read-only)
+--        Also records every top-level develop key of each photo and whether
+--        the photo has develop edits; on an unedited raw and JPEG that is
+--        Lightroom's raw and non-raw default table. (read-only)
 --   E1   Does `applyDevelopSettings` accept the `Temp` key AI Edit writes today,
---        or only `Temperature` / `IncrementalTemperature`?
+--        or only `Temperature` / `IncrementalTemperature`? And does writing only
+--        a mode (`WhiteBalance="Daylight"` / `"Auto"`) make Lightroom recompute
+--        the temperature and tint, and how soon?
+--   E11  Does an Adobe Raw profile `Look` transfer through
+--        `applyDevelopSettings`: as a stub in the form presets carry it
+--        (`Stubbed = true`), as a bare stub, and as the full table with
+--        `Parameters` taken from a photo? Raw photos only.
 --   E2   Can `applyDevelopSettings` add a new AI mask (subject, sky, background,
 --        people part), and does Lightroom compute it - on its own or after
---        `updateAISettings()`?
+--        `updateAISettings()`? How long does the update call take, and how long
+--        until the mask is ready?
 --   E4   How do plugin presets behave: same-name re-adds, where the file lives
 --        and what it holds, merging with existing masks, re-applying, amount.
 --
@@ -38,6 +47,15 @@ local AI_POLL_SECONDS = 60
 local AVAILABLE_WAIT_SECONDS = 60
 local PRESET_NAME = "LrGenius Experiment E4"
 local AMOUNT_PRESET_NAME = "LrGenius Experiment E4 Amount"
+-- A white-balance mode may be resolved after `applyDevelopSettings` returns,
+-- and Auto on a raw needs the pixels decoded first. E1's mode-only variants
+-- read back right away, then every WB_POLL_INTERVAL seconds until the
+-- temperature or tint changes or WB_POLL_SECONDS pass.
+local WB_POLL_SECONDS = 15
+local WB_POLL_INTERVAL = 0.5
+-- E11b's preset fallback needs one full Look whose name differs from the
+-- photo's; two distinct names always leave one that does.
+local FULL_LOOKS_WANTED = 2
 
 local WB_KEYS = { "WhiteBalance", "Temperature", "Tint", "IncrementalTemperature", "IncrementalTint", "Temp" }
 
@@ -249,12 +267,13 @@ end
 -- `timeoutSeconds` pass. A missing correction is polled too: an applied preset
 -- may only show up later. The timeline records every change of mask state,
 -- `needsUpdateAISettings` and `isAvailableForEditing`, so a flip during the
--- wait is visible as evidence of an automatic computation.
+-- wait is visible as evidence of an automatic computation. `endedAt` is the
+-- absolute time of the last reading, for timings anchored elsewhere.
 local function pollCorrection(photo, syncId, timeoutSeconds, progress)
 	local started = LrDate.currentTime()
 	local timeline = {}
 	local last = {}
-	local state, matches, elapsed, readErr
+	local state, matches, elapsed, readErr, endedAt
 	while true do
 		local groups
 		groups, readErr = correctionsOf(photo)
@@ -262,7 +281,8 @@ local function pollCorrection(photo, syncId, timeoutSeconds, progress)
 		-- An unreadable state is terminal: polling on would report "still
 		-- missing" for a mask that may well be there.
 		state = readErr and "unreadable" or X.correctionState(matches[1])
-		elapsed = LrDate.currentTime() - started
+		endedAt = LrDate.currentTime()
+		elapsed = endedAt - started
 		local needs = needsUpdateAI(photo)
 		local available = isAvailableForEditing(photo)
 		if state ~= last.state or needs ~= last.needs or available ~= last.available then
@@ -292,6 +312,7 @@ local function pollCorrection(photo, syncId, timeoutSeconds, progress)
 	return {
 		state = state,
 		seconds = round(elapsed),
+		endedAt = endedAt,
 		budgetSeconds = timeoutSeconds,
 		timedOut = state ~= "computed"
 			and state ~= "failed"
@@ -374,7 +395,51 @@ local function metadataKeys(fn)
 	return ok and "(not a table)" or ("error: " .. tostring(all))
 end
 
-local function runE13(photos, sink)
+--- Whether the photo has develop edits, per Lightroom's own "Has
+-- Adjustments" search. The search is narrowed to the file name so it stays
+-- cheap in a large catalog, and is only trusted when the name search alone
+-- finds the photo.
+-- @return boolean|string true, false, or "unknown: ..."
+local function hasDevelopAdjustments(catalog, photo)
+	local ok, result = LrTasks.pcall(function()
+		local name = photo:getFormattedMetadata("fileName")
+		local byName = { criteria = "filename", operation = "all", value = name }
+		local function contains(found)
+			for _, candidate in ipairs(found or {}) do
+				if candidate == photo then
+					return true
+				end
+			end
+			return false
+		end
+		if not contains(catalog:findPhotos({ searchDesc = byName })) then
+			return "unknown: a file-name search does not find the photo"
+		end
+		return contains(catalog:findPhotos({
+			searchDesc = {
+				{ criteria = "hasAdjustments", operation = "isTrue", value = true },
+				byName,
+				combine = "intersect",
+			},
+		}))
+	end)
+	if ok then
+		return result
+	end
+	return "unknown: " .. tostring(result)
+end
+
+local function describeAdjustments(hasAdjustments)
+	if hasAdjustments == true then
+		return "has develop edits - not a default table"
+	end
+	if hasAdjustments == false then
+		return "no develop edits"
+	end
+	return "could not tell whether it has develop edits (" .. tostring(hasAdjustments) .. ")"
+end
+
+local function runE13(catalog, photos, sink)
 	local exp = newExperiment(
 		sink,
 		"E13",
@@ -394,6 +459,8 @@ local function runE13(photos, sink)
 			"height",
 			"aspectRatio",
 			"isVirtualCopy",
+			"editCount",
+			"lastEditTime",
 		}) do
 			raw[key] = readMetadataValue(function()
 				return photo:getRawMetadata(key)
@@ -455,10 +522,51 @@ local function runE13(photos, sink)
 			develop = develop,
 			cropModel = cropModel,
 		})
+
+		-- The complete top-level key set, for the raw and non-raw default
+		-- tables. It goes into the step data only: the JSON has it in full,
+		-- the verdict just says where to look.
+		if readErr == nil then
+			local full = X.summarizeSettings(settings)
+			local family = X.settingsFamily(settings)
+			local look = X.summarizeLook(settings.Look)
+			local keyCount = #X.sortedKeys(full)
+			local hasAdjustments = hasDevelopAdjustments(catalog, photo)
+			addStep(exp, label, "full develop-settings readback", true, nil, {
+				fileFormat = raw.fileFormat,
+				whiteBalanceFamily = family,
+				hasAdjustments = hasAdjustments,
+				editCount = raw.editCount,
+				lastEditTime = raw.lastEditTime,
+				keyCount = keyCount,
+				settings = full,
+			})
+			table.insert(
+				exp.verdicts,
+				string.format(
+					"%s: %s; full readback has %d top-level keys, white-balance family %s, %s (every key in the JSON, step 'full develop-settings readback')",
+					label,
+					describeAdjustments(hasAdjustments),
+					keyCount,
+					tostring(family or "unknown"),
+					look
+							and string.format(
+								"Look %s (Parameters: %s)",
+								tostring(look.Name),
+								look.hasParameters and "yes" or "no"
+							)
+						or "no Look"
+				)
+			)
+		end
 	end
 	table.insert(
 		exp.manualChecks,
 		"The frame verdict needs a portrait-orientation photo (rotated in camera) whose crop is straightened or changes the aspect ratio; otherwise it says 'ambiguous'."
+	)
+	table.insert(
+		exp.manualChecks,
+		"The full readback shows Lightroom's defaults only for a photo without develop edits (the verdict says which ones have edits) and only if Preferences > Presets > Raw Defaults is 'Adobe Default': use a freshly imported raw and JPEG for the default tables."
 	)
 	return exp
 end
@@ -467,15 +575,31 @@ end
 -- E1: white balance keys
 ---------------------------------------------------------------------------
 
+--- Raw or not, decided by the photo's white-balance key family where it has
+-- one (a DNG converted from a JPEG is non-raw to Lightroom), by the file
+-- format otherwise.
+-- @return boolean, string|nil, string|nil isRaw, file format, family
 local function isRawFile(photo)
 	local ok, format = LrTasks.pcall(function()
 		return photo:getRawMetadata("fileFormat")
 	end)
-	return ok and (format == "RAW" or format == "DNG"), ok and format or nil
+	format = ok and format or nil
+	local settings = readSettings(photo)
+	local family = X.settingsFamily(settings)
+	if family then
+		return family == "raw", format, family
+	end
+	return format == "RAW" or format == "DNG", format, nil
 end
 
 --- Every variant gets a fresh virtual copy, so each starts from the master's
 -- white balance instead of whatever the previous variant left behind.
+-- `modeOnly` variants write a mode without values and ask whether Lightroom
+-- recomputes the temperature and tint; they first put the copy on a
+-- distinctive Custom white balance (`X.wbPrecondition`) so a recomputation
+-- cannot hide behind values that happen to match. `flattenAuto` passes
+-- optFlattenAutoNow = true, which the SDK documents as resolving Auto
+-- settings synchronously.
 local function e1Variants(isRaw)
 	if isRaw then
 		return {
@@ -485,6 +609,9 @@ local function e1Variants(isRaw)
 			-- A no-op under "As Shot" must not be mistaken for the key being
 			-- rejected: try `Temp` again with the mode set in the same call.
 			{ id = "E1d", settings = { WhiteBalance = "Custom", Temp = 6500 }, probe = "Temperature", expect = 6500 },
+			{ id = "E1e", settings = { WhiteBalance = "Daylight" }, modeOnly = true },
+			{ id = "E1f", settings = { WhiteBalance = "Auto" }, modeOnly = true },
+			{ id = "E1g", settings = { WhiteBalance = "Auto" }, modeOnly = true, flattenAuto = true },
 		}
 	end
 	return {
@@ -497,15 +624,34 @@ local function e1Variants(isRaw)
 			probe = "IncrementalTemperature",
 			expect = 15,
 		},
+		-- Non-raw files have no named light sources, only As Shot, Auto and
+		-- Custom; E1e (Daylight) is raw-only.
+		{ id = "E1f", settings = { WhiteBalance = "Auto" }, modeOnly = true },
+		{ id = "E1g", settings = { WhiteBalance = "Auto" }, modeOnly = true, flattenAuto = true },
 	}
 end
 
-local function e1Outcome(variant, ok, err, readErr, after, changed)
+local function e1Outcome(variant, ok, err, readErr, after, changed, context)
 	if not ok then
 		return "raised an error: " .. tostring(err)
 	end
 	if readErr then
 		return "applied, but the result is unknown - " .. tostring(readErr)
+	end
+	if variant.modeOnly then
+		local text = X.describeWbModeOutcome(variant.settings.WhiteBalance, context.family, context.before, after, {
+			immediate = context.immediate,
+			settle = context.settle,
+			flatten = variant.flattenAuto == true,
+		})
+		if not context.preconditionHeld then
+			text = text
+				.. string.format(
+					" (the Custom precondition did not take%s, so the copy started from the master's white balance)",
+					context.preconditionError and (": " .. tostring(context.preconditionError)) or ""
+				)
+		end
+		return text
 	end
 	if variant.probe then
 		if after[variant.probe] == variant.expect then
@@ -524,16 +670,50 @@ local function e1Outcome(variant, ok, err, readErr, after, changed)
 	return "changed " .. X.inlineValue(X.plainValue(changed), 400)
 end
 
+--- Reads a mode-only copy back right away, then polls until its
+-- temperature or tint differs from `before` or WB_POLL_SECONDS pass.
+-- @return table, string|nil, table, table after, read error, the immediate
+--   readback, and `{ seconds, changed, canceled }` - `seconds` is when the
+--   pair changed (0 = already in the immediate readback) or how long it did not.
+local function waitForWbChange(copy, family, before, progress)
+	local started = LrDate.currentTime()
+	local settings, err = readSettings(copy)
+	local immediate = X.pick(settings, WB_KEYS)
+	if err then
+		return immediate, err, nil, nil
+	end
+	if X.wbPairChanged(family, before, immediate) then
+		return immediate, nil, immediate, { seconds = 0, changed = true }
+	end
+	local after = immediate
+	while true do
+		local elapsed = LrDate.currentTime() - started
+		local canceled = progress:isCanceled()
+		if elapsed >= WB_POLL_SECONDS or canceled then
+			return after, nil, immediate, { seconds = round(elapsed), changed = false, canceled = canceled or nil }
+		end
+		LrTasks.sleep(WB_POLL_INTERVAL)
+		settings, err = readSettings(copy)
+		if err then
+			return after, err, immediate, nil
+		end
+		after = X.pick(settings, WB_KEYS)
+		if X.wbPairChanged(family, before, after) then
+			return after, nil, immediate, { seconds = round(LrDate.currentTime() - started), changed = true }
+		end
+	end
+end
+
 local function runE1(catalog, photos, progress, sink)
 	local exp = newExperiment(
 		sink,
 		"E1",
 		"White balance keys via applyDevelopSettings",
-		"Does applyDevelopSettings accept the `Temp` key AI Edit writes today, or only `Temperature` (raw) / `IncrementalTemperature` (non-raw)?"
+		"Does applyDevelopSettings accept the `Temp` key AI Edit writes today, or only `Temperature` (raw) / `IncrementalTemperature` (non-raw)? And does writing only a mode (Daylight, Auto) make Lightroom recompute the temperature and tint?"
 	)
 	for _, photo in ipairs(photos) do
 		local label = photoLabel(photo)
-		local isRaw, format = isRawFile(photo)
+		local isRaw, format, family = isRawFile(photo)
 		for _, variant in ipairs(e1Variants(isRaw)) do
 			if progress:isCanceled() then
 				break
@@ -545,23 +725,73 @@ local function runE1(catalog, photos, progress, sink)
 				table.insert(exp.verdicts, string.format("%s %s: skipped - %s", label, variant.id, tostring(copyErr)))
 			else
 				local copyLabel = photoLabel(copy)
+				local startFamily = family or (isRaw and "raw" or "non-raw")
+				local precondition, preconditionOk, preconditionErr
+				if variant.modeOnly then
+					precondition = X.wbPrecondition(startFamily)
+					preconditionOk, preconditionErr = withWrite(
+						catalog,
+						"LrGenius experiment " .. variant.id .. " precondition",
+						function()
+							copy:applyDevelopSettings(precondition, "LrGenius " .. variant.id .. " precondition", false)
+						end
+					)
+				end
 				local beforeSettings, beforeErr = readSettings(copy)
 				local before = X.pick(beforeSettings, WB_KEYS)
+				local held = precondition ~= nil and preconditionOk and X.preconditionHeld(precondition, before)
+				if precondition ~= nil and preconditionOk and not held and not beforeErr then
+					preconditionErr = "it reads back as " .. X.inlineValue(before)
+				end
+				-- A mode-only write judges the family of the copy itself, not
+				-- of the file format.
+				local copyFamily = X.settingsFamily(beforeSettings) or startFamily
+				local flatten = variant.flattenAuto == true
 				local ok, err = withWrite(catalog, "LrGenius experiment " .. variant.id, function()
-					copy:applyDevelopSettings(variant.settings, "LrGenius " .. variant.id, false)
+					copy:applyDevelopSettings(variant.settings, "LrGenius " .. variant.id, flatten)
 				end)
-				local afterSettings, afterErr = readSettings(copy)
-				local after = X.pick(afterSettings, WB_KEYS)
+				local after, afterErr, immediate, settle
+				if variant.modeOnly and ok then
+					after, afterErr, immediate, settle = waitForWbChange(copy, copyFamily, before, progress)
+				else
+					local afterSettings
+					afterSettings, afterErr = readSettings(copy)
+					after = X.pick(afterSettings, WB_KEYS)
+				end
 				local readErr = beforeErr or afterErr
 				local changed = X.diff(before, after, WB_KEYS)
 				local applied = X.inlineValue(variant.settings)
-				addStep(exp, copyLabel, variant.id .. " apply " .. applied, ok and not readErr, err or readErr, {
-					fileFormat = format,
-					applied = variant.settings,
-					before = before,
-					after = after,
-					changed = changed,
-				})
+				if flatten then
+					applied = applied .. " with optFlattenAutoNow=true"
+				end
+				-- A precondition that could not be written is a failed step; one
+				-- that wrote but read back differently is only noted.
+				local preconditionFailed = precondition ~= nil and not preconditionOk
+				local stepErr = err
+					or readErr
+					or (preconditionFailed and ("precondition: " .. tostring(preconditionErr)))
+					or nil
+				addStep(
+					exp,
+					copyLabel,
+					variant.id .. " apply " .. applied,
+					ok and not readErr and not preconditionFailed,
+					stepErr,
+					{
+						fileFormat = format,
+						whiteBalanceFamily = copyFamily,
+						precondition = precondition,
+						preconditionHeld = precondition ~= nil and held or nil,
+						preconditionError = preconditionErr,
+						applied = variant.settings,
+						flattenAutoNow = flatten,
+						before = before,
+						afterImmediately = immediate,
+						settle = settle,
+						after = after,
+						changed = changed,
+					}
+				)
 				table.insert(
 					exp.verdicts,
 					string.format(
@@ -571,7 +801,14 @@ local function runE1(catalog, photos, progress, sink)
 						variant.id,
 						applied,
 						tostring(before.WhiteBalance),
-						e1Outcome(variant, ok, err, readErr, after, changed)
+						e1Outcome(variant, ok, err, readErr, after, changed, {
+							family = copyFamily,
+							before = before,
+							immediate = immediate,
+							settle = settle,
+							preconditionHeld = held,
+							preconditionError = preconditionErr,
+						})
 					)
 				)
 			end
@@ -579,9 +816,13 @@ local function runE1(catalog, photos, progress, sink)
 	end
 	table.insert(
 		exp.manualChecks,
-		"History panel of each 'LrG Exp E1a/E1b/E1c/E1d' copy: is its single step named 'LrGenius E1x' (optHistoryName honoured) or a generic 'Multiple Settings'?"
+		"History panel of each 'LrG Exp E1a' ... 'E1g' copy: is the variant's step named 'LrGenius E1x' (optHistoryName honoured) or a generic 'Multiple Settings'?"
 	)
 	table.insert(exp.manualChecks, "Basic panel of each 'LrG Exp E1x' copy: does it show that variant's white balance?")
+	table.insert(
+		exp.manualChecks,
+		"Basic panel of the 'LrG Exp E1e/E1f/E1g' copies: does the WB menu show Daylight/Auto, and do the Temp and Tint sliders show the values the report read back? Their history starts with an 'LrGenius E1x precondition' step (a Custom white balance) before the mode itself."
+	)
 	return exp
 end
 
@@ -605,10 +846,39 @@ local function applyCorrections(catalog, photo, additions, actionName, historyNa
 	return ok, err, #existing
 end
 
+--- Calls `updateAISettings()` in a write gate and times it.
+-- @return boolean, string|nil, table ok, error, and `{ updateSeconds,
+--   updateCallSeconds, gateWaitSeconds, callStartedAt }`: the time around the
+--   write gate, the call itself, the wait for write access before it, and the
+--   absolute time the call started (the last three nil when the gate never
+--   ran the function).
 local function updateAI(catalog, photo, actionName)
-	return withWrite(catalog, actionName, function()
+	local started = LrDate.currentTime()
+	local callStartedAt, callSeconds
+	local ok, err = withWrite(catalog, actionName, function()
+		callStartedAt = LrDate.currentTime()
 		photo:updateAISettings()
+		callSeconds = LrDate.currentTime() - callStartedAt
 	end)
+	return ok,
+		err,
+		{
+			updateSeconds = round(LrDate.currentTime() - started, 2),
+			updateCallSeconds = callSeconds and round(callSeconds, 2),
+			gateWaitSeconds = callStartedAt and round(callStartedAt - started, 2),
+			callStartedAt = callStartedAt,
+		}
+end
+
+--- True when any reading of an unasked-wait timeline found the photo locked:
+-- Lightroom was computing on its own.
+local function lockedDuringWait(poll)
+	for _, entry in ipairs(type(poll) == "table" and poll.timeline or {}) do
+		if entry.isAvailableForEditing == false then
+			return true
+		end
+	end
+	return false
 end
 
 local function runE2Extras(exp, catalog, copy, copyLabel, progress)
@@ -646,15 +916,18 @@ local function runE2Extras(exp, catalog, copy, copyLabel, progress)
 			"LrGenius E2d sky, background, hair masks"
 		)
 	end
-	local okUpdate, errUpdate = false, errExtra
+	local okUpdate, errUpdate, updateTiming = false, errExtra, nil
 	if okExtra then
-		okUpdate, errUpdate = updateAI(catalog, copy, "LrGenius experiment E2d update")
+		okUpdate, errUpdate, updateTiming = updateAI(catalog, copy, "LrGenius experiment E2d update")
 	end
 	addStep(exp, copyLabel, "E2d apply sky, background, hair and updateAISettings()", okExtra and okUpdate, errUpdate, {
 		applied = okExtra,
 		applyError = errExtra,
 		updated = okUpdate,
 		updateError = errUpdate,
+		updateSeconds = updateTiming and updateTiming.updateSeconds,
+		updateCallSeconds = updateTiming and updateTiming.updateCallSeconds,
+		gateWaitSeconds = updateTiming and updateTiming.gateWaitSeconds,
 	})
 
 	for _, extra in ipairs(extras) do
@@ -678,15 +951,21 @@ local function runE2Extras(exp, catalog, copy, copyLabel, progress)
 	end
 end
 
+--- Runs E2a-E2d on one photo.
+-- @return table The photo's timing entry for `X.describeTimings`: how long
+--   the subject mask took to be ready, and how long the update call took.
 local function runE2OnPhoto(exp, catalog, photo, progress)
 	local label = photoLabel(photo)
 	local copy, copyErr = createVirtualCopy(catalog, photo, "LrG Exp E2")
 	if not copy then
 		addStep(exp, label, "create virtual copy", false, copyErr, nil)
 		table.insert(exp.verdicts, label .. ": skipped - " .. tostring(copyErr))
-		return
+		return { photo = label, source = "none", reason = "no virtual copy" }
 	end
 	local copyLabel = photoLabel(copy)
+	local function notMeasured(reason)
+		return { photo = copyLabel, source = "none", reason = reason }
+	end
 	local module = currentModule()
 	noteIfOffline(exp, photo, copyLabel)
 	local needsBefore = needsUpdateAI(copy)
@@ -716,7 +995,7 @@ local function runE2OnPhoto(exp, catalog, photo, progress)
 	})
 	if not ok then
 		table.insert(exp.verdicts, copyLabel .. ": E2a not applied: " .. tostring(err))
-		return
+		return notMeasured(err == CANCELED_MESSAGE and "canceled" or "the subject mask was not applied")
 	end
 	if #found == 0 then
 		table.insert(
@@ -728,7 +1007,7 @@ local function runE2OnPhoto(exp, catalog, photo, progress)
 				#after
 			)
 		)
-		return
+		return notMeasured("Lightroom dropped the subject mask")
 	end
 	table.insert(
 		exp.verdicts,
@@ -754,30 +1033,72 @@ local function runE2OnPhoto(exp, catalog, photo, progress)
 			X.describePoll(auto)
 		)
 	)
+	local timing
+	if auto.state == "canceled" then
+		return notMeasured("canceled")
+	elseif auto.state == "unreadable" then
+		timing = notMeasured("the mask state could not be read back")
+	elseif not auto.timedOut then
+		-- Computed without being asked: the time from the apply to that.
+		timing = { photo = copyLabel, source = "auto", state = auto.state, readySeconds = auto.seconds }
+	end
 	if progress:isCanceled() then
-		return
+		return timing or notMeasured("canceled")
 	end
 
 	-- E2c: explicit update.
 	if auto.timedOut then
 		local available, waited, why = waitUntilAvailable(copy, progress)
-		local okUpdate, errUpdate = false, unavailableMessage(waited, why)
+		local okUpdate, errUpdate, updateTiming = false, unavailableMessage(waited, why), nil
 		if available then
-			okUpdate, errUpdate = updateAI(catalog, copy, "LrGenius experiment E2c")
+			okUpdate, errUpdate, updateTiming = updateAI(catalog, copy, "LrGenius experiment E2c")
 		end
 		local polled = okUpdate and pollCorrection(copy, subject.CorrectionSyncID, AI_POLL_SECONDS, progress) or nil
-		addStep(exp, copyLabel, "E2c photo:updateAISettings() then poll", okUpdate, errUpdate, polled)
+		if updateTiming and updateTiming.callStartedAt then
+			-- Anchored at the start of the call itself, so waiting for write
+			-- access is not counted as compute time.
+			timing = {
+				photo = copyLabel,
+				source = "update",
+				updateOk = okUpdate,
+				updateSeconds = updateTiming.updateSeconds,
+				updateCallSeconds = updateTiming.updateCallSeconds,
+				gateWaitSeconds = updateTiming.gateWaitSeconds,
+				waitedBeforeUpdate = waited,
+				lockedDuringAutoWait = lockedDuringWait(auto),
+				state = polled and polled.state,
+				readySeconds = polled and polled.endedAt and round(polled.endedAt - updateTiming.callStartedAt),
+			}
+		elseif updateTiming then
+			timing = notMeasured("write access was not granted: " .. tostring(errUpdate))
+		else
+			timing = notMeasured(errUpdate == CANCELED_MESSAGE and "canceled" or tostring(errUpdate))
+		end
+		addStep(exp, copyLabel, "E2c photo:updateAISettings() then poll", okUpdate, errUpdate, {
+			updateSeconds = updateTiming and updateTiming.updateSeconds,
+			updateCallSeconds = updateTiming and updateTiming.updateCallSeconds,
+			gateWaitSeconds = updateTiming and updateTiming.gateWaitSeconds,
+			waitedBeforeUpdate = waited,
+			lockedDuringAutoWait = lockedDuringWait(auto),
+			maskReadySeconds = X.timingIsTerminal(timing) and timing.readySeconds or nil,
+			timing = X.describeTiming(timing),
+			poll = polled,
+		})
 		local outcome = okUpdate and ("the subject mask is " .. X.describePoll(polled))
 			or ("the call failed: " .. tostring(errUpdate))
-		table.insert(exp.verdicts, copyLabel .. ": E2c after updateAISettings() " .. outcome)
+		table.insert(
+			exp.verdicts,
+			copyLabel .. ": E2c after updateAISettings() " .. outcome .. " (" .. X.describeTiming(timing) .. ")"
+		)
 	end
 	if progress:isCanceled() then
-		return
+		return timing
 	end
 
 	-- E2d: the other AI kinds, including a people-part category that
 	-- LrDevelopController.createNewMask cannot express.
 	runE2Extras(exp, catalog, copy, copyLabel, progress)
+	return timing
 end
 
 local function runE2(catalog, photos, progress, lrVersion, sink)
@@ -785,7 +1106,7 @@ local function runE2(catalog, photos, progress, lrVersion, sink)
 		sink,
 		"E2",
 		"New AI masks via applyDevelopSettings",
-		"Can applyDevelopSettings add a digest-less AI mask definition, and does Lightroom compute it on its own or only after photo:updateAISettings()?"
+		"Can applyDevelopSettings add a digest-less AI mask definition, and does Lightroom compute it on its own or only after photo:updateAISettings()? How long do the update call and the mask take?"
 	)
 	if not X.versionAtLeast(lrVersion, 15, 3) then
 		table.insert(
@@ -793,13 +1114,17 @@ local function runE2(catalog, photos, progress, lrVersion, sink)
 			"Lightroom is older than 15.3: needsUpdateAISettings/isAvailableForEditing are unavailable, so only the mask state is observed."
 		)
 	end
+	local timings = {}
 	for _, photo in ipairs(photos) do
 		if progress:isCanceled() then
 			break
 		end
 		progress:setCaption("E2: " .. photoLabel(photo))
-		runE2OnPhoto(exp, catalog, photo, progress)
+		table.insert(timings, runE2OnPhoto(exp, catalog, photo, progress))
 	end
+	-- One line with every photo's numbers: the basis for any runtime estimate
+	-- of AI masks in a batch.
+	table.insert(exp.verdicts, X.describeTimings(timings))
 	table.insert(
 		exp.manualChecks,
 		"Open an 'LrG Exp E2' copy in Develop > Masks: are the LrGenius masks listed, and does each cover what its name says (subject and hair brighter, sky and background darker)?"
@@ -1241,6 +1566,375 @@ local function runE4(catalog, photos, progress, lrVersion, presetFiles, sink)
 end
 
 ---------------------------------------------------------------------------
+-- E11: Look transfer
+---------------------------------------------------------------------------
+
+--- Last-resort source for E11b: complete Looks (with `Parameters`) among the
+-- installed develop presets. Lightroom's bundled presets carry Looks only as
+-- stubs, so this normally finds nothing; the photos are the real source.
+-- @return table `{ found, scanned, failedReads, firstError, stubKeys,
+--   canceled, error }`: up to FULL_LOOKS_WANTED entries `{ look, preset,
+--   folder }` with distinct names, how many presets were read and how many of
+--   those reads failed (with the first error), the key list of the first
+--   stubbed Look seen, whether the user canceled, and an error that stopped
+--   the scan.
+local function findFullLooks(progress)
+	local scan = { found = {}, scanned = 0, failedReads = 0, canceled = false }
+	local seen = {}
+	local ok, err = LrTasks.pcall(function()
+		for _, folder in ipairs(LrApplication.developPresetFolders() or {}) do
+			local folderName = presetCall(folder, "getName")
+			for _, preset in ipairs(folder:getDevelopPresets() or {}) do
+				if progress:isCanceled() then
+					scan.canceled = true
+					return
+				end
+				scan.scanned = scan.scanned + 1
+				local okSetting, setting = LrTasks.pcall(function()
+					return preset:getSetting()
+				end)
+				if not okSetting or type(setting) ~= "table" then
+					scan.failedReads = scan.failedReads + 1
+					scan.firstError = scan.firstError
+						or string.format("%s: %s", tostring(presetCall(preset, "getName")), tostring(setting))
+				else
+					local look = setting.Look
+					if scan.stubKeys == nil and type(look) == "table" and look.Stubbed ~= nil then
+						scan.stubKeys = X.summarizeLook(look).keys
+					end
+					if X.isFullLook(look) and not look.isAdobeAdaptive and not seen[look.Name] then
+						seen[look.Name] = true
+						table.insert(
+							scan.found,
+							{ look = look, preset = presetCall(preset, "getName"), folder = folderName }
+						)
+						if #scan.found >= FULL_LOOKS_WANTED then
+							return
+						end
+					end
+				end
+			end
+			LrTasks.yield()
+		end
+	end)
+	if not ok then
+		scan.error = tostring(err)
+	end
+	return scan
+end
+
+local function lookState(settings)
+	return { CameraProfile = settings.CameraProfile, look = X.summarizeLook(settings.Look) }
+end
+
+local function cameraModel(photo)
+	local ok, model = LrTasks.pcall(function()
+		return photo:getFormattedMetadata("cameraModel")
+	end)
+	return ok and model or nil
+end
+
+--- The E11 variants. E11a and E11c are stubs of the first Adobe Raw profile
+-- whose name differs from the photo's Look - in the preset form and bare;
+-- E11b is a complete Look, chosen at run time by `e11FullLook`.
+local E11_VARIANTS = {
+	{ id = "E11a", kind = "stubbed (preset form, Stubbed=true)" },
+	{ id = "E11b", kind = "full" },
+	{ id = "E11c", kind = "bare stub (no Stubbed flag)", bare = true },
+}
+
+--- Picks E11b's full Look, from the most to the least direct source:
+--   1. the Look of another selected photo (a complete Look as Lightroom
+--      stores it on a photo);
+--   2. the Look the E11a copy read back, if Lightroom filled in the stub;
+--   3. the photo's own Look, written onto a copy that was first switched to a
+--      stubbed different Look (see `prepareOwnLook`);
+--   4. a develop preset whose Look has `Parameters` (normally none).
+-- @param ctx table `{ photo, currentName, masterLook, camera, donors,
+--   e11aLook, getPresetScan }`.
+-- @return table|nil, table source description, string|nil skip reason
+local function e11FullLook(ctx)
+	local donor, rejected = X.pickDonorLook(ctx.donors, ctx.currentName, ctx.camera)
+	if donor then
+		return donor.look, { kind = "another selected photo", photo = donor.photo, passedOver = rejected }, nil
+	end
+	local fromE11a = ctx.e11aLook
+	if fromE11a and X.lookRejection(fromE11a, ctx.currentName, ctx.camera, ctx.camera) == nil then
+		return fromE11a,
+			{ kind = "the E11a copy's readback (Lightroom filled in the stub)", passedOver = rejected },
+			nil
+	end
+	local ownReason = X.lookRejection(ctx.masterLook, nil, ctx.camera, ctx.camera)
+	if ownReason == nil then
+		return ctx.masterLook,
+			{
+				kind = "the photo's own Look, after switching the copy away from it",
+				ownLook = true,
+				passedOver = rejected,
+			},
+			nil
+	end
+	local scan = ctx.getPresetScan()
+	if scan.canceled then
+		return nil, nil, CANCELED_MESSAGE
+	end
+	if scan.error then
+		return nil, nil, "no photo offers a full Look, and the develop-preset scan failed: " .. scan.error
+	end
+	local entry = X.pickLook(scan.found, ctx.currentName, function(candidate)
+		return candidate.look.Name
+	end)
+	if entry then
+		return entry.look, { kind = "develop preset", preset = entry.preset, folder = entry.folder }, nil
+	end
+	local reasons = { "the photo's own Look: " .. tostring(ownReason) }
+	for _, item in ipairs(rejected) do
+		table.insert(reasons, tostring(item.photo) .. ": " .. tostring(item.reason))
+	end
+	return nil,
+		nil,
+		"no source for a full Look (" .. table.concat(reasons, "; ") .. "), and " .. X.describePresetScan(scan)
+end
+
+--- Switches a fresh copy away from the photo's own Look, in history steps of
+-- their own, so writing that Look back afterwards has something to change.
+-- Tries the preset-form stub first, then the bare one, since either may be
+-- the form Lightroom ignores.
+-- @return boolean, table true once the copy's Look differs from the
+--   photo's, and the step data (every attempt).
+local function prepareOwnLook(catalog, copy, currentName, cameraProfile)
+	local candidate = X.pickLook(X.STUB_LOOKS, currentName)
+	if not candidate then
+		return false, { error = "every stub candidate is already the photo's Look", attempts = {} }
+	end
+	local data = { attempts = {} }
+	for _, bare in ipairs({ false, true }) do
+		local stub = X.stubLook(candidate, bare)
+		local ok, err = withWrite(catalog, "LrGenius experiment E11b prepare", function()
+			copy:applyDevelopSettings({ CameraProfile = cameraProfile, Look = stub }, "LrGenius E11b prepare", false)
+		end)
+		local settings, readErr = readSettings(copy)
+		local state = lookState(settings)
+		table.insert(data.attempts, { applied = X.summarizeLook(stub), ok = ok, error = err or readErr, after = state })
+		data.after, data.error = state, err or readErr
+		if ok and not readErr and state.look ~= nil and state.look.Name ~= currentName then
+			return true, data
+		end
+	end
+	return false, data
+end
+
+local function runE11Variant(exp, catalog, photo, variant, ctx, progress)
+	local label = photoLabel(photo)
+	progress:setCaption("E11: " .. label .. " " .. variant.id)
+	local look, source, skip
+	if variant.id == "E11b" then
+		look, source, skip = e11FullLook(ctx)
+	else
+		local candidate = X.pickLook(X.STUB_LOOKS, ctx.currentName)
+		if candidate then
+			look, source = X.stubLook(candidate, variant.bare), { kind = "stub", profile = candidate.Name }
+		else
+			skip = "every candidate profile is already the photo's Look"
+		end
+	end
+	if skip == CANCELED_MESSAGE or progress:isCanceled() then
+		-- A scan cut short proves nothing; say nothing.
+		return nil
+	end
+	if skip then
+		table.insert(exp.verdicts, string.format("%s %s: skipped - %s", label, variant.id, skip))
+		return nil
+	end
+
+	local copy, copyErr = createVirtualCopy(catalog, photo, "LrG Exp " .. variant.id)
+	if not copy then
+		addStep(exp, label, variant.id .. " create virtual copy", false, copyErr, nil)
+		table.insert(exp.verdicts, string.format("%s %s: skipped - %s", label, variant.id, tostring(copyErr)))
+		return nil
+	end
+	local copyLabel = photoLabel(copy)
+	if source.ownLook then
+		local switched, prepared = prepareOwnLook(catalog, copy, ctx.currentName, ctx.cameraProfile)
+		source.prepare = prepared
+		if not switched then
+			addStep(
+				exp,
+				copyLabel,
+				variant.id .. " prepare: switch away from the photo's Look",
+				false,
+				prepared.error,
+				prepared
+			)
+			table.insert(
+				exp.verdicts,
+				string.format(
+					"%s %s: inconclusive - the copy could not be switched away from %q first (%s), so writing that Look back cannot show an effect",
+					label,
+					variant.id,
+					tostring(ctx.currentName),
+					prepared.error and tostring(prepared.error) or X.describeLookState(prepared.after)
+				)
+			)
+			return nil
+		end
+	end
+
+	local beforeSettings, beforeErr = readSettings(copy)
+	local ok, err = withWrite(catalog, "LrGenius experiment " .. variant.id, function()
+		copy:applyDevelopSettings({ CameraProfile = ctx.cameraProfile, Look = look }, "LrGenius " .. variant.id, false)
+	end)
+	local afterSettings, afterErr = readSettings(copy)
+	local readErr = beforeErr or afterErr
+	-- Summaries only: `Parameters` is Adobe's profile definition and stays out
+	-- of the report.
+	local applied = { CameraProfile = ctx.cameraProfile, look = X.summarizeLook(look) }
+	local before, after = lookState(beforeSettings), lookState(afterSettings)
+	addStep(
+		exp,
+		copyLabel,
+		string.format("%s apply %s Look %q", variant.id, variant.kind, tostring(look.Name)),
+		ok and not readErr,
+		err or readErr,
+		{ applied = applied, source = source, before = before, after = after }
+	)
+	table.insert(
+		exp.verdicts,
+		string.format(
+			"%s %s %s Look %q (source: %s) on CameraProfile=%s, from %s: %s",
+			label,
+			variant.id,
+			variant.kind,
+			tostring(look.Name),
+			tostring(source.kind == "stub" and ("stub of " .. tostring(source.profile)) or source.kind),
+			tostring(ctx.cameraProfile),
+			X.describeLookState(before),
+			X.describeLookOutcome(applied, before, after, ok, err, readErr)
+		)
+	)
+	return ok and not readErr and afterSettings.Look or nil
+end
+
+local function runE11OnPhoto(exp, catalog, photo, masters, getPresetScan, progress)
+	local label = photoLabel(photo)
+	local isRaw, format, family = isRawFile(photo)
+	if not isRaw then
+		table.insert(
+			exp.verdicts,
+			string.format(
+				"%s (%s, white-balance family %s): E11 skipped - it tests Adobe Raw Looks only, which need a raw file; creative Looks on non-raw files are not tested",
+				label,
+				tostring(format),
+				tostring(family or "unknown")
+			)
+		)
+		return
+	end
+	-- The master decides which Look to write: every copy starts from it, and
+	-- a Look the photo already has would make "honoured" and "ignored" look
+	-- the same.
+	local masterSettings, masterErr = readSettings(photo)
+	if masterErr then
+		table.insert(exp.verdicts, label .. ": E11 skipped - " .. masterErr)
+		return
+	end
+	local ctx = {
+		currentName = type(masterSettings.Look) == "table" and masterSettings.Look.Name or nil,
+		masterLook = masterSettings.Look,
+		camera = cameraModel(photo),
+		cameraProfile = X.e11CameraProfile(masterSettings.CameraProfile),
+		donors = {},
+		getPresetScan = getPresetScan,
+	}
+	for _, other in ipairs(masters) do
+		if other.photo ~= photo then
+			table.insert(ctx.donors, other.donor)
+		end
+	end
+
+	for _, variant in ipairs(E11_VARIANTS) do
+		if progress:isCanceled() then
+			return
+		end
+		local readBack = runE11Variant(exp, catalog, photo, variant, ctx, progress)
+		if variant.id == "E11a" then
+			ctx.e11aLook = readBack
+		end
+	end
+end
+
+local function runE11(catalog, photos, progress, sink)
+	local exp = newExperiment(
+		sink,
+		"E11",
+		"Look transfer via applyDevelopSettings",
+		"Does applyDevelopSettings set an Adobe Raw profile Look - as a stub in the form presets carry it (E11a, Stubbed=true), as a complete Look with Parameters taken from a photo (E11b), and as a bare stub without the Stubbed flag (E11c) - and does Lightroom fill in a stub's Parameters?"
+	)
+	-- Every selected photo's Look, read once: the donors for E11b.
+	local masters = {}
+	for _, photo in ipairs(photos) do
+		local settings, err = readSettings(photo)
+		if not err then
+			table.insert(masters, {
+				photo = photo,
+				donor = { photo = photoLabel(photo), camera = cameraModel(photo), look = settings.Look },
+			})
+		end
+	end
+	-- The preset scan is a last resort: one scan for the whole run, and only
+	-- when no photo offers a full Look.
+	local scan
+	local function getPresetScan()
+		if scan == nil then
+			progress:setCaption("E11: reading develop presets for a full Look")
+			scan = findFullLooks(progress)
+			if not scan.canceled then
+				local found = {}
+				for _, entry in ipairs(scan.found) do
+					table.insert(
+						found,
+						{ preset = entry.preset, folder = entry.folder, look = X.summarizeLook(entry.look) }
+					)
+				end
+				-- Every read failing is a broken scan, not a finding.
+				local allFailed = scan.scanned > 0 and scan.failedReads == scan.scanned
+				addStep(
+					exp,
+					"(global)",
+					"E11b scan develop presets for a Look with Parameters",
+					scan.error == nil and not allFailed,
+					scan.error or (allFailed and ("every preset read failed: " .. tostring(scan.firstError))) or nil,
+					{
+						presetsRead = scan.scanned,
+						failedReads = scan.failedReads,
+						firstError = scan.firstError,
+						stubbedLookKeys = scan.stubKeys,
+						found = found,
+					}
+				)
+			end
+		end
+		return scan
+	end
+
+	for _, photo in ipairs(photos) do
+		if progress:isCanceled() then
+			break
+		end
+		runE11OnPhoto(exp, catalog, photo, masters, getPresetScan, progress)
+	end
+	table.insert(
+		exp.manualChecks,
+		"Profile browser of each 'LrG Exp E11a/E11b/E11c' copy: which profile is active, and does the photo look like it rather than plain Adobe Standard?"
+	)
+	table.insert(
+		exp.manualChecks,
+		"History panel of an 'LrG Exp E11' copy: is it one step named 'LrGenius E11a' / 'E11b' / 'E11c'? (An E11b copy that used the photo's own Look has an 'LrGenius E11b prepare' step before it.)"
+	)
+	return exp
+end
+
+---------------------------------------------------------------------------
 -- Dialog and report
 ---------------------------------------------------------------------------
 
@@ -1250,6 +1944,7 @@ local function optionsDialog(ctx, catalogPath, photoCount)
 	local props = LrBinding.makePropertyTable(ctx)
 	props.runE13 = true
 	props.runE1 = true
+	props.runE11 = true
 	props.runE2 = true
 	props.runE4 = true
 	props.testCatalog = false
@@ -1274,7 +1969,14 @@ local function optionsDialog(ctx, catalogPath, photoCount)
 				value = bind("runE13"),
 				title = "E13  Orientation, dimensions and crop at runtime (read-only)",
 			}),
-			f:checkbox({ value = bind("runE1"), title = "E1  White balance keys: Temp vs Temperature" }),
+			f:checkbox({
+				value = bind("runE1"),
+				title = "E1  White balance: Temp vs Temperature, mode without values",
+			}),
+			f:checkbox({
+				value = bind("runE11"),
+				title = "E11  Look transfer: stubs and a full Look via applyDevelopSettings (raw only)",
+			}),
 			f:checkbox({ value = bind("runE2"), title = "E2  Add AI masks via applyDevelopSettings" }),
 			f:checkbox({
 				value = bind("runE4"),
@@ -1282,7 +1984,7 @@ local function optionsDialog(ctx, catalogPath, photoCount)
 			}),
 		}),
 		f:static_text({
-			title = "E1, E2 and E4 write only to new virtual copies named 'LrG Exp ...'.\n"
+			title = "E1, E11, E2 and E4 write only to new virtual copies named 'LrG Exp ...'.\n"
 				.. "They switch Lightroom to the Library module and change the selection.\n"
 				.. "E4 leaves hidden plugin presets in Lightroom's preset folder. They are\n"
 				.. "shared by all catalogs, are not removed with the test catalog, and the\n"
@@ -1306,6 +2008,7 @@ local function optionsDialog(ctx, catalogPath, photoCount)
 	return {
 		E13 = props.runE13,
 		E1 = props.runE1,
+		E11 = props.runE11,
 		E2 = props.runE2,
 		E4 = props.runE4,
 		testCatalog = props.testCatalog,
@@ -1449,14 +2152,14 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		local writes = options.E1 or options.E2 or options.E4
+		local writes = options.E1 or options.E11 or options.E2 or options.E4
 		if not (writes or options.E13) then
 			return
 		end
 		if writes and not options.testCatalog then
 			LrDialogs.message(
 				"Confirm the test catalog",
-				"E1, E2 and E4 create virtual copies and plugin presets. Run them in a test catalog and tick the confirmation box, or run E13 on its own.",
+				"E1, E11, E2 and E4 create virtual copies, and E4 plugin presets. Run them in a test catalog and tick the confirmation box, or run E13 on its own.",
 				"warning"
 			)
 			return
@@ -1505,7 +2208,7 @@ LrTasks.startAsyncTask(function()
 		local runOk, runErr = LrTasks.pcall(function()
 			if options.E13 then
 				progress:setCaption("E13: reading runtime formats")
-				runE13(stills, report.experiments)
+				runE13(catalog, stills, report.experiments)
 			end
 			if writes then
 				-- E2 and E4 ask whether masks can be added *outside* Develop,
@@ -1518,6 +2221,9 @@ LrTasks.startAsyncTask(function()
 			end
 			if options.E1 and not progress:isCanceled() then
 				runE1(catalog, stills, progress, report.experiments)
+			end
+			if options.E11 and not progress:isCanceled() then
+				runE11(catalog, stills, progress, report.experiments)
 			end
 			if options.E2 and not progress:isCanceled() then
 				runE2(catalog, stills, progress, lrVersion, report.experiments)

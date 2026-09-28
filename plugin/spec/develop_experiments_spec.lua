@@ -355,3 +355,491 @@ describe("DevelopExperiments report details", function()
 		assert.is_truthy(text:find("could not be read back", 1, true))
 	end)
 end)
+
+describe("DevelopExperiments.settingsFamily", function()
+	it("reads the family from the white-balance keys, not the file format", function()
+		assert.are.equal("raw", X.settingsFamily({ Temperature = 5500, Tint = 0 }))
+		assert.are.equal("non-raw", X.settingsFamily({ IncrementalTemperature = 0, IncrementalTint = 0 }))
+		assert.is_nil(X.settingsFamily({ Exposure2012 = 0 }))
+		assert.is_nil(X.settingsFamily(nil))
+	end)
+end)
+
+describe("DevelopExperiments.describeWbModeOutcome", function()
+	it("reports a recomputed raw temperature and tint with before and after", function()
+		local text = X.describeWbModeOutcome(
+			"Daylight",
+			"raw",
+			{ WhiteBalance = "As Shot", Temperature = 4300, Tint = 2 },
+			{ WhiteBalance = "Daylight", Temperature = 5500, Tint = 10 }
+		)
+		assert.are.equal("WhiteBalance = Daylight; Lightroom recomputed Temperature 4300 -> 5500, Tint 2 -> 10", text)
+	end)
+
+	it("says so when the values stay put", function()
+		local text = X.describeWbModeOutcome(
+			"Auto",
+			"non-raw",
+			{ WhiteBalance = "As Shot", IncrementalTemperature = 0, IncrementalTint = 0 },
+			{ WhiteBalance = "Auto", IncrementalTemperature = 0, IncrementalTint = 0 }
+		)
+		assert.are.equal(
+			"WhiteBalance = Auto; IncrementalTemperature/IncrementalTint not recomputed (still 0 / 0)",
+			text
+		)
+	end)
+
+	it("flags a mode that was not taken and a copy already on that mode", function()
+		local text = X.describeWbModeOutcome(
+			"Auto",
+			"raw",
+			{ WhiteBalance = "Auto", Temperature = 5000, Tint = 0 },
+			{ WhiteBalance = "As Shot", Temperature = 5000, Tint = 0 }
+		)
+		assert.is_truthy(text:find("WhiteBalance was not taken (reads As Shot)", 1, true), text)
+		assert.is_truthy(text:find("so this proves nothing", 1, true), text)
+	end)
+
+	it("notices a value resolved only after the call returned", function()
+		local text = X.describeWbModeOutcome(
+			"Auto",
+			"raw",
+			{ WhiteBalance = "As Shot", Temperature = 4300, Tint = 2 },
+			{ WhiteBalance = "Auto", Temperature = 4800, Tint = 5 },
+			{
+				immediate = { WhiteBalance = "Auto", Temperature = 4300, Tint = 2 },
+				settle = { seconds = 3.5, changed = true },
+			}
+		)
+		assert.is_truthy(text:find("Tint 2 -> 5 after 3.5 s", 1, true), text)
+		assert.is_truthy(text:find("still showed Temperature = 4300", 1, true), text)
+		assert.is_truthy(text:find("asynchronously", 1, true), text)
+	end)
+
+	it("words a wait without a change as bounded, not final", function()
+		local text = X.describeWbModeOutcome(
+			"Auto",
+			"raw",
+			{ WhiteBalance = "Custom", Temperature = 3000, Tint = 40 },
+			{ WhiteBalance = "Auto", Temperature = 3000, Tint = 40 },
+			{ settle = { seconds = 15, changed = false } }
+		)
+		assert.are.equal("WhiteBalance = Auto; Temperature/Tint not recomputed within 15 s (still 3000 / 40)", text)
+		local canceled = X.describeWbModeOutcome(
+			"Auto",
+			"raw",
+			{ WhiteBalance = "Custom", Temperature = 3000, Tint = 40 },
+			{ WhiteBalance = "Auto", Temperature = 3000, Tint = 40 },
+			{ settle = { seconds = 2, changed = false, canceled = true } }
+		)
+		assert.is_truthy(canceled:find("within 2 s (run canceled)", 1, true), canceled)
+	end)
+
+	it("says when the values were already in the first readback", function()
+		local text = X.describeWbModeOutcome(
+			"Daylight",
+			"raw",
+			{ WhiteBalance = "Custom", Temperature = 3000, Tint = 40 },
+			{ WhiteBalance = "Daylight", Temperature = 5500, Tint = 10 },
+			{ settle = { seconds = 0, changed = true } }
+		)
+		assert.is_truthy(text:find("(already in the readback right after the call)", 1, true), text)
+	end)
+
+	it("calls a flattened Auto flattened, not rejected", function()
+		local before = { WhiteBalance = "Custom", Temperature = 3000, Tint = 40 }
+		local after = { WhiteBalance = "Custom", Temperature = 4850, Tint = 4 }
+		local text = X.describeWbModeOutcome("Auto", "raw", before, after, { flatten = true })
+		assert.are.equal(
+			"Auto was flattened to WhiteBalance = Custom; with Temperature 3000 -> 4850, Tint 40 -> 4",
+			text
+		)
+		-- Without the flag, or without a change, it is still "not taken".
+		assert.is_truthy(X.describeWbModeOutcome("Auto", "raw", before, after):find("was not taken", 1, true))
+		assert.is_truthy(
+			X.describeWbModeOutcome("Auto", "raw", before, before, { flatten = true }):find("was not taken", 1, true)
+		)
+	end)
+
+	it("reports the other family's keys appearing", function()
+		local text = X.describeWbModeOutcome(
+			"Auto",
+			"non-raw",
+			{ WhiteBalance = "As Shot", IncrementalTemperature = 0, IncrementalTint = 0 },
+			{ WhiteBalance = "Auto", IncrementalTemperature = 0, IncrementalTint = 0, Temperature = 5000 }
+		)
+		assert.is_truthy(text:find("Temperature appeared (5000)", 1, true), text)
+	end)
+end)
+
+describe("DevelopExperiments white-balance precondition", function()
+	it("is a distinctive Custom white balance in the photo's key family", function()
+		assert.are.same({ WhiteBalance = "Custom", Temperature = 3000, Tint = 40 }, X.wbPrecondition("raw"))
+		assert.are.same(
+			{ WhiteBalance = "Custom", IncrementalTemperature = -40, IncrementalTint = 40 },
+			X.wbPrecondition("non-raw")
+		)
+		-- A fresh table each time, so a caller cannot corrupt the next one.
+		local first = X.wbPrecondition("raw")
+		first.Temperature = 1
+		assert.are.equal(3000, X.wbPrecondition("raw").Temperature)
+	end)
+
+	it("checks the readback against what was written", function()
+		local pre = X.wbPrecondition("raw")
+		assert.is_true(X.preconditionHeld(pre, { WhiteBalance = "Custom", Temperature = 3000, Tint = 40, Temp = 1 }))
+		assert.is_false(X.preconditionHeld(pre, { WhiteBalance = "As Shot", Temperature = 3000, Tint = 40 }))
+		assert.is_false(X.preconditionHeld(pre, nil))
+	end)
+
+	it("detects a change of the family's temperature or tint only", function()
+		local before = { WhiteBalance = "Custom", Temperature = 3000, Tint = 40, IncrementalTemperature = 0 }
+		assert.is_false(X.wbPairChanged("raw", before, { WhiteBalance = "Auto", Temperature = 3000, Tint = 40 }))
+		assert.is_true(X.wbPairChanged("raw", before, { Temperature = 3000, Tint = 41 }))
+		assert.is_false(X.wbPairChanged("non-raw", { IncrementalTemperature = -40, IncrementalTint = 40 }, {
+			IncrementalTemperature = -40,
+			IncrementalTint = 40,
+			Temperature = 5000,
+		}))
+	end)
+end)
+
+describe("DevelopExperiments full readback", function()
+	local settings = {
+		Exposure2012 = 0,
+		CameraProfile = "Adobe Standard",
+		ConvertToGrayscale = false,
+		ToneCurvePV2012 = { 0, 0, 255, 255 },
+		LensBlur = {},
+		RetouchAreas = { { a = 1 }, { a = 2 } },
+		Look = {
+			Name = "Adobe Color",
+			UUID = "B952C231111CD8E0ECCF14B86BAA7077",
+			Amount = 1,
+			Parameters = { Version = "1", ToneCurve = { 1, 2 } },
+		},
+		MaskGroupBasedCorrections = {
+			{ CorrectionName = "Sky", CorrectionMasks = { { What = "Mask/Image", MaskDigest = "X" } } },
+		},
+	}
+
+	it("keeps scalars verbatim and describes tables by shape", function()
+		local summary = X.summarizeSettings(settings)
+		assert.are.equal(0, summary.Exposure2012)
+		assert.are.equal("Adobe Standard", summary.CameraProfile)
+		assert.are.equal(false, summary.ConvertToGrayscale)
+		assert.are.same(
+			{ type = "table", shape = "array", length = 4, keyCount = 4, values = { 0, 0, 255, 255 } },
+			summary.ToneCurvePV2012
+		)
+		assert.are.same({ type = "table", shape = "empty", length = 0, keyCount = 0 }, summary.LensBlur)
+		assert.are.equal(2, summary.RetouchAreas.length)
+		assert.is_nil(summary.RetouchAreas.values)
+	end)
+
+	it("summarises the Look without copying its Parameters", function()
+		local summary = X.summarizeSettings(settings)
+		local look = summary.Look
+		assert.are.equal("Look", look.type)
+		assert.are.equal("Adobe Color", look.Name)
+		assert.is_true(look.hasParameters)
+		assert.are.equal(2, look.parameterKeyCount)
+		assert.is_nil(look.Parameters)
+		assert.are.same({ "Amount", "Name", "Parameters", "UUID" }, look.keys)
+	end)
+
+	it("summarises the masks like the other experiments do", function()
+		local masks = X.summarizeSettings(settings).MaskGroupBasedCorrections
+		assert.are.equal(1, masks.length)
+		assert.are.equal("computed", masks.corrections[1].state)
+	end)
+
+	it("describes a missing Look as nil", function()
+		assert.is_nil(X.summarizeLook(nil))
+		assert.are.same({}, X.summarizeSettings(nil))
+	end)
+end)
+
+describe("DevelopExperiments Look helpers", function()
+	it("picks the first stub whose name differs from the photo's Look", function()
+		assert.are.equal("Adobe Vivid", X.pickLook(X.STUB_LOOKS, "Adobe Color").Name)
+		assert.are.equal("Adobe Landscape", X.pickLook(X.STUB_LOOKS, "Adobe Vivid").Name)
+		assert.are.equal("Adobe Vivid", X.pickLook(X.STUB_LOOKS, nil).Name)
+		assert.is_nil(X.pickLook({ { Name = "A" } }, "A"))
+	end)
+
+	it("reads names through an accessor for preset entries", function()
+		local entries = { { look = { Name = "A" } }, { look = { Name = "B" } } }
+		local picked = X.pickLook(entries, "A", function(entry)
+			return entry.look.Name
+		end)
+		assert.are.equal("B", picked.look.Name)
+	end)
+
+	it("builds a stub in the preset form, or bare on request", function()
+		local stub = X.stubLook(X.STUB_LOOKS[1])
+		assert.is_true(stub.Stubbed)
+		assert.are.same(
+			{ Name = "Adobe Vivid", UUID = "EA1DE074F188405965EF399C72C221D9", Amount = 1, Stubbed = true },
+			stub
+		)
+		assert.are.same(
+			{ Name = "Adobe Vivid", UUID = "EA1DE074F188405965EF399C72C221D9", Amount = 1 },
+			X.stubLook(X.STUB_LOOKS[1], true)
+		)
+		assert.is_false(X.isFullLook(stub))
+		assert.is_true(X.isFullLook({ Name = "X", Parameters = { Version = 1 } }))
+		assert.is_false(X.isFullLook({ Name = "X", Parameters = {} }))
+		assert.is_false(X.isFullLook({ Name = "", Parameters = { Version = 1 } }))
+	end)
+end)
+
+describe("DevelopExperiments E11 sources", function()
+	local full = { Name = "Adobe Landscape", UUID = "L", Amount = 1, Parameters = { Version = 1 } }
+
+	it("keeps an Adobe Standard base profile and replaces anything else", function()
+		assert.are.equal("Adobe Standard v2", X.e11CameraProfile("Adobe Standard v2"))
+		assert.are.equal("Adobe Standard", X.e11CameraProfile("Adobe Standard"))
+		assert.are.equal("Adobe Standard", X.e11CameraProfile("Camera Standard v2"))
+		assert.are.equal("Adobe Standard", X.e11CameraProfile(nil))
+	end)
+
+	it("rejects Looks that cannot serve as the full Look", function()
+		assert.is_nil(X.lookRejection(full, "Adobe Color", "R6", "R6"))
+		assert.is_truthy(X.lookRejection({ Name = "Adobe Vivid", UUID = "V" }, nil):find("no full Look", 1, true))
+		assert.is_truthy(X.lookRejection(full, "Adobe Landscape"):find("same Look", 1, true))
+		local adaptive = { Name = "Adaptive Color", Parameters = { Version = 1 }, isAdobeAdaptive = true }
+		assert.is_truthy(X.lookRejection(adaptive, nil):find("Adaptive", 1, true))
+	end)
+
+	it("accepts a camera-restricted Look only between photos of the same camera", function()
+		local restricted = {
+			Name = "R6M2 Standard V4",
+			Parameters = { Version = 1 },
+			CameraModelRestriction = "Canon EOS R6 Mark II",
+		}
+		-- The restriction uses Adobe's camera name, the photo its EXIF model.
+		assert.is_nil(X.lookRejection(restricted, "Adobe Color", "Canon EOS R6m2", "Canon EOS R6m2"))
+		assert.is_truthy(
+			X.lookRejection(restricted, "Adobe Color", "Canon EOS R6m2", "Canon EOS R5"):find("restricted to", 1, true)
+		)
+		assert.is_truthy(X.lookRejection(restricted, "Adobe Color", nil, nil):find("restricted to", 1, true))
+	end)
+
+	it("picks the first usable donor and lists the ones passed over", function()
+		local donors = {
+			{ photo = "a.jpg", camera = "X", look = { Name = "", Parameters = {} } },
+			{ photo = "b.cr3", camera = "X", look = { Name = "Adobe Color", Parameters = { Version = 1 } } },
+			{ photo = "c.cr3", camera = "X", look = full },
+		}
+		local donor, rejected = X.pickDonorLook(donors, "Adobe Color", "X")
+		assert.are.equal("c.cr3", donor.photo)
+		assert.are.equal(2, #rejected)
+		assert.are.equal("a.jpg", rejected[1].photo)
+		assert.is_nil((X.pickDonorLook({}, "Adobe Color", "X")))
+	end)
+
+	it("summarises the Look flags that decide whether it can be reused", function()
+		local summary = X.summarizeLook({
+			Name = "R6M2 Standard V4",
+			Stubbed = true,
+			isAdobeAdaptive = false,
+			CameraModelRestriction = "Canon EOS R6 Mark II",
+		})
+		assert.is_true(summary.Stubbed)
+		assert.is_false(summary.isAdobeAdaptive)
+		assert.are.equal("Canon EOS R6 Mark II", summary.CameraModelRestriction)
+	end)
+
+	it("reports unreadable presets instead of hiding them in the count", function()
+		assert.is_truthy(X.describePresetScan({ scanned = 446 }):find("none of the 446", 1, true))
+		local text = X.describePresetScan({ scanned = 10, failedReads = 10, firstError = "Foo: boom" })
+		assert.is_truthy(text:find("10 preset(s) could not be read, first error: Foo: boom", 1, true), text)
+	end)
+end)
+
+describe("DevelopExperiments.describeLookOutcome", function()
+	local before = {
+		CameraProfile = "Adobe Standard",
+		look = { Name = "Adobe Color", UUID = "C", hasParameters = true },
+	}
+	local stubApplied = {
+		CameraProfile = "Adobe Standard",
+		look = { Name = "Adobe Vivid", UUID = "V", hasParameters = false },
+	}
+
+	it("calls a stub honoured and says whether Lightroom filled in Parameters", function()
+		local after =
+			{ CameraProfile = "Adobe Standard", look = { Name = "Adobe Vivid", UUID = "V", hasParameters = true } }
+		local text = X.describeLookOutcome(stubApplied, before, after, true)
+		assert.is_truthy(text:find("^honoured; Lightroom filled in the profile's Parameters"), text)
+
+		local bare =
+			{ CameraProfile = "Adobe Standard", look = { Name = "Adobe Vivid", UUID = "V", hasParameters = false } }
+		assert.is_truthy(
+			X.describeLookOutcome(stubApplied, before, bare, true):find("still has no Parameters", 1, true)
+		)
+	end)
+
+	it("calls an unchanged Look ignored", function()
+		local text = X.describeLookOutcome(stubApplied, before, before, true)
+		assert.is_truthy(text:find("^ignored"), text)
+	end)
+
+	it("reports a different result, a wrong CameraProfile, errors and unreadable results", function()
+		local other = { CameraProfile = "Camera Standard", look = { Name = "Other", UUID = "O", hasParameters = true } }
+		local text = X.describeLookOutcome(stubApplied, before, other, true)
+		assert.is_truthy(text:find("^changed to something else"), text)
+		assert.is_truthy(text:find("CameraProfile reads Camera Standard", 1, true), text)
+
+		assert.are.equal("error: boom", X.describeLookOutcome(stubApplied, before, nil, false, "boom"))
+		assert.is_truthy(
+			X.describeLookOutcome(stubApplied, before, nil, true, nil, "no read"):find("result is unknown", 1, true)
+		)
+	end)
+
+	it("checks that a full Look kept its Parameters", function()
+		local applied =
+			{ CameraProfile = "Adobe Standard", look = { Name = "Vintage", UUID = "W", hasParameters = true } }
+		local dropped =
+			{ CameraProfile = "Adobe Standard", look = { Name = "Vintage", UUID = "W", hasParameters = false } }
+		assert.is_truthy(X.describeLookOutcome(applied, before, dropped, true):find("Parameters dropped", 1, true))
+	end)
+
+	it("renders a Look state", function()
+		assert.are.equal(
+			"CameraProfile Adobe Standard, Look Adobe Color (C, Parameters: yes)",
+			X.describeLookState(before)
+		)
+		assert.are.equal("CameraProfile nil, no Look", X.describeLookState({}))
+	end)
+end)
+
+describe("DevelopExperiments E2 timing", function()
+	it("words an update that led to a ready mask", function()
+		local text = X.describeTiming({
+			source = "update",
+			updateOk = true,
+			updateSeconds = 0.43,
+			updateCallSeconds = 0.41,
+			state = "computed",
+			readySeconds = 6.4,
+		})
+		assert.are.equal("update call 0.4 s, mask ready after 6.4 s", text)
+	end)
+
+	it("separates the write-gate wait from the call when they differ", function()
+		local text = X.describeTiming({
+			source = "update",
+			updateOk = true,
+			updateSeconds = 3.2,
+			updateCallSeconds = 0.4,
+			gateWaitSeconds = 2.8,
+			state = "failed",
+			readySeconds = 9,
+		})
+		assert.are.equal(
+			"update call 0.4 s (after 2.8 s waiting for write access), mask computed (nothing found) after 9.0 s",
+			text
+		)
+	end)
+
+	it("marks a time as a lower bound when Lightroom was already computing", function()
+		local base =
+			{ source = "update", updateOk = true, updateCallSeconds = 0.4, state = "computed", readySeconds = 0.4 }
+		local waited = {}
+		for k, v in pairs(base) do
+			waited[k] = v
+		end
+		waited.waitedBeforeUpdate = 12
+		assert.is_truthy(
+			X.describeTiming(waited):find(
+				"lower bound: Lightroom was already computing before the update (the photo was locked for 12.0 s",
+				1,
+				true
+			)
+		)
+		local locked = {}
+		for k, v in pairs(base) do
+			locked[k] = v
+		end
+		locked.lockedDuringAutoWait = true
+		assert.is_truthy(X.describeTiming(locked):find("locked during the unasked wait", 1, true))
+		assert.is_falsy(X.describeTiming(base):find("lower bound", 1, true))
+	end)
+
+	it("does not count a vanished AI tool as a ready mask", function()
+		local text = X.describeTiming({
+			source = "update",
+			updateOk = true,
+			updateCallSeconds = 0.4,
+			state = "no-ai-mask",
+			readySeconds = 3.4,
+		})
+		assert.are.equal("update call 0.4 s, the AI mask tool disappeared after 3.4 s", text)
+		assert.is_false(X.timingIsTerminal({ state = "no-ai-mask" }))
+		assert.is_truthy(
+			X.describeTiming({ source = "auto", state = "no-ai-mask", readySeconds = 2 }):find("disappeared", 1, true)
+		)
+		assert.is_truthy(X.describePoll({ state = "no-ai-mask", seconds = 3 }):find("no longer an AI mask", 1, true))
+	end)
+
+	it("covers timeouts, cancellations, failures and the automatic case", function()
+		assert.are.equal(
+			"update call 0.2 s, mask still pending after 60.2 s",
+			X.describeTiming({
+				source = "update",
+				updateOk = true,
+				updateSeconds = 0.2,
+				state = "pending",
+				readySeconds = 60.2,
+			})
+		)
+		assert.is_truthy(X.describeTiming({
+			source = "update",
+			updateOk = true,
+			updateSeconds = 0.2,
+			state = "canceled",
+			readySeconds = 3,
+		}):find("run canceled", 1, true))
+		assert.are.equal(
+			"update call 0.1 s, and it failed",
+			X.describeTiming({ source = "update", updateOk = false, updateSeconds = 0.1 })
+		)
+		assert.are.equal(
+			"without updateAISettings() the mask was ready after 12.0 s",
+			X.describeTiming({ source = "auto", state = "computed", readySeconds = 12 })
+		)
+		assert.are.equal("not measured (canceled)", X.describeTiming({ source = "none", reason = "canceled" }))
+	end)
+
+	it("puts every photo on one run-level line", function()
+		local line = X.describeTimings({
+			{
+				photo = "a.cr3",
+				source = "update",
+				updateOk = true,
+				updateSeconds = 0.4,
+				state = "computed",
+				readySeconds = 5,
+			},
+			{ photo = "b.jpg", source = "none", reason = "no virtual copy" },
+		})
+		assert.are.equal(
+			"E2 timing per photo - a.cr3: update call 0.4 s, mask ready after 5.0 s (includes loading the AI model if this was the first AI use this session); b.jpg: not measured (no virtual copy)",
+			line
+		)
+		-- The tag goes to the first photo that was measured at all.
+		local later = X.describeTimings({
+			{ photo = "a", source = "none", reason = "x" },
+			{ photo = "b", source = "auto", state = "computed", readySeconds = 1 },
+			{ photo = "c", source = "auto", state = "computed", readySeconds = 1 },
+		})
+		local _, tags = later:gsub("includes loading the AI model", "")
+		assert.are.equal(1, tags)
+		assert.is_truthy(later:find("b: without updateAISettings() the mask was ready after 1.0 s (includes", 1, true))
+		assert.is_truthy(X.describeTimings({}):find("no photo", 1, true))
+		assert.is_true(X.timingIsTerminal({ state = "failed" }))
+		assert.is_false(X.timingIsTerminal({ state = "pending" }))
+	end)
+end)

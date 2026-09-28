@@ -232,7 +232,8 @@ geometric masks should not be generated there.
   - The profile is written as `CameraProfile="Adobe Color"`. In current
     Lightroom that is a `Look` on top of `CameraProfile="Adobe Standard"`.
     Importing an `.xmp` preset silently drops that value (verified); that
-    `applyDevelopSettings` does the same is likely but unverified.
+    `applyDevelopSettings` does the same is likely but unverified. E11 tests
+    the correct form, a `Look` on top of an `Adobe Standard` base profile.
   - The crop maths assumes the export frame.
 - Reported by the research, not yet reproduced: the mask fallback in
   `DevelopEditManager` writes a `Correction` sub-table with `local_*` keys in UI
@@ -271,6 +272,14 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
     nothing on other photos;
   - optionally a raw with strong lens distortion;
   - a JPEG.
+
+  E13's full readback gives Lightroom's defaults only for photos without
+  develop edits (its verdict says which photos have edits), so leave at least
+  one raw and the JPEG untouched after import, with *Raw Defaults* set to
+  *Adobe Default*. E11 needs a raw. No develop preset is needed: E11b takes its
+  complete `Look` from a photo, best from a second raw with a different
+  profile. Lightroom's bundled presets carry Looks only as stubs
+  (`Stubbed="true"`, no `Parameters`), so they cannot supply one.
 - Turn *Automatically write changes into XMP* off in that catalog.
 - Select the photos, then run the task from any module. It switches to the
   Library module on purpose, because E2 asks whether masks can be added outside
@@ -278,9 +287,10 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
 
 | Id | Question | What it does |
 |---|---|---|
-| E13 | Which orientation do `getRawMetadata('dimensions')` / `'croppedDimensions'` use, and what does `orientation` look like? | Read-only. Logs metadata, the full list of raw-metadata keys, and the develop settings. Fits the crop model under every width/height interpretation, and says "ambiguous" when two interpretations fit equally. |
-| E1 | Does `applyDevelopSettings` accept `Temp`? | Uses a fresh virtual copy per variant (`LrG Exp E1a` … `E1d`), so each starts from the master's white balance, and diffs the white-balance keys. Raw: `{Temp}`, `{Temperature}`, `{WhiteBalance="Custom", Temperature, Tint}` and `{WhiteBalance="Custom", Temp}`. Non-raw: `{Temp}`, `{IncrementalTemperature/Tint}`, `{Temperature}` and `{WhiteBalance="Custom", Temp}`. The last variant keeps a no-op under "As Shot" from being read as a rejected key. |
-| E2 | Can `applyDevelopSettings` add a new AI mask, and when is it computed? | On an `LrG Exp E2` copy: adds a subject mask (+1 EV), then waits up to 30 s for Lightroom to compute it unasked. The first detection in a session loads the model, so a short wait would be misleading. If nothing happened, calls `photo:updateAISettings()` and polls for up to 60 s for `MaskDigest` / `ErrorReason`, recording `needsUpdateAISettings` and `isAvailableForEditing` along the way. Then adds sky, background and hair masks in one call, updates once and polls each. "Computed, nothing found" means the definition was accepted but the photo has no such content. |
+| E13 | Which orientation do `getRawMetadata('dimensions')` / `'croppedDimensions'` use, and what does `orientation` look like? What does a photo's full develop-settings table hold? | Read-only. Logs metadata, the full list of raw-metadata keys, and the develop settings. Fits the crop model under every width/height interpretation, and says "ambiguous" when two interpretations fit equally. Also records every top-level `getDevelopSettings()` key: scalars verbatim, tables by shape (small all-scalar tables such as tone curves with their values), `Look` as name/UUID/amount plus whether `Parameters` exist, masks as in E2. Whether the photo has develop edits comes from Lightroom's own *Has Adjustments* search (narrowed to the file name, and trusted only when the name search finds the photo), plus `editCount` and `lastEditTime`. On an unedited raw and JPEG this is Lightroom's raw and non-raw default table; the verdict says "has develop edits - not a default table" when it is not, and names the white-balance family. The full dump is in the JSON. |
+| E1 | Does `applyDevelopSettings` accept `Temp`? Does a white-balance mode on its own make Lightroom recompute temperature and tint? | Uses a fresh virtual copy per variant (`LrG Exp E1a` … `E1g`), so each starts from the master's white balance, and diffs the white-balance keys. Raw: `{Temp}`, `{Temperature}`, `{WhiteBalance="Custom", Temperature, Tint}`, `{WhiteBalance="Custom", Temp}`, then mode only: `{WhiteBalance="Daylight"}`, `{WhiteBalance="Auto"}` and `{WhiteBalance="Auto"}` with `optFlattenAutoNow=true`. Non-raw: `{Temp}`, `{IncrementalTemperature/Tint}`, `{Temperature}`, `{WhiteBalance="Custom", Temp}` and the two Auto variants (non-raw files have no Daylight). The `Custom`+`Temp` variant keeps a no-op under "As Shot" from being read as a rejected key. Each mode-only copy is first put on a distinctive Custom white balance in its own history step (raw `Temperature=3000, Tint=40`; non-raw `IncrementalTemperature=-40, IncrementalTint=40`), so a recomputation always shows as a change. After the mode is written, the copy is read back right away and then every 0.5 s for up to 15 s, stopping at the first change of `Temperature`/`Tint` (raw) or `IncrementalTemperature`/`IncrementalTint` (non-raw). The verdict says "recomputed ... after N s" or "not recomputed within N s". A flattened Auto that reads back as Custom with new values is reported as flattened, not as a rejected mode. Raw or not is decided by the photo's white-balance family, so a DNG converted from a JPEG counts as non-raw. |
+| E11 | Does an Adobe Raw profile `Look` transfer through `applyDevelopSettings`, and in which form? | Raw photos only. Non-raw photos get a "skipped" verdict: E11 tests Adobe Raw Looks, which need a raw file, and creative Looks on non-raw files are not tested. The base profile is the master's when it is an `Adobe Standard` variant (e.g. `Adobe Standard v2`), otherwise `Adobe Standard`, so only the Look changes. `LrG Exp E11a`: a stub in the form Lightroom's presets carry it, `{Name, UUID, Amount=1, Stubbed=true}`, using the first of Adobe Vivid, Adobe Landscape and Adobe Color whose name differs from the photo's current Look. `LrG Exp E11c`: the same stub without `Stubbed`, so the difference between the two forms is visible. `LrG Exp E11b`: a complete `Look` with `Parameters`, taken at run time from, in this order: another selected photo's Look (not an Adobe Adaptive Look, and a camera-restricted Look only from a photo of the same camera model); the Look the E11a copy read back, if Lightroom filled in the stub; the photo's own Look, written onto a copy that was first switched to a stubbed different Look in an `LrGenius E11b prepare` step (inconclusive if that switch did not take); and, as a last resort, an installed develop preset whose Look has `Parameters`. The source goes into the step data. Nothing of a Look is stored in the plugin or the report beyond name, UUID, flags and key counts. Reads back `CameraProfile`, `Look.Name`, `Look.UUID` and whether `Parameters` exist, and says honoured / ignored / changed / error. If the preset scan runs, presets it could not read are counted and named in the skip reason, and a scan in which every read failed is a failed step. |
+| E2 | Can `applyDevelopSettings` add a new AI mask, when is it computed, and how long does it take? | On an `LrG Exp E2` copy: adds a subject mask (+1 EV), then waits up to 30 s for Lightroom to compute it unasked. The first detection in a session loads the model, so a short wait would be misleading. If nothing happened, calls `photo:updateAISettings()` and polls for up to 60 s for `MaskDigest` / `ErrorReason`, recording `needsUpdateAISettings` and `isAvailableForEditing` along the way. The E2c verdict and step data carry how long the `updateAISettings()` call itself took, any wait for write access before it, and how long from the start of the call until the mask reached a final state. The time is marked as a lower bound when Lightroom was already computing: the photo was locked before the update could start, or at some point during the unasked wait. A correction whose AI tool disappears is reported as such and is not counted as a ready mask. A run-level line lists the timings per photo and marks the first measured photo, whose time may include loading the model. Then adds sky, background and hair masks in one call, updates once and polls each. "Computed, nothing found" means the definition was accepted but the photo has no such content. |
 | E4 | How do plugin presets behave, and are preset masks merged with or replacing the photo's? | Adds a preset twice under one name with different content, and records the uuid, file path, file contents and preset count. On an `LrG Exp E4` copy it first seeds a linear gradient via `applyDevelopSettings`, then applies the preset with `updateAI=true`; whether the gradient survives answers merge vs replace. It applies the preset again and counts the corrections carrying its sync id. Finally it applies two amount presets, one without and one with the `SupportsAmount` flags, at 50 and 200, and reads back the before and after values. |
 
 **Output.**
@@ -288,12 +298,14 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
   choose. If a `.json` of that name already exists, a numbered name is used
   instead; the final dialog shows both paths. The report holds the verdicts, a checklist of things the SDK cannot read back (history
   step names, what a mask covers, AI progress dialogs), and every step's raw
-  readback.
+  readback. Long step data (E13's full develop-settings readback) is cut off
+  in the Markdown; the JSON has it in full.
 - A failed step is recorded, not hidden. An error is often the answer itself
   (e.g. `Temp` rejected).
 
 **Cleanup.**
-- Delete the `LrG Exp …` virtual copies.
+- Delete the `LrG Exp …` virtual copies (E1a–E1g, E11a–E11c, E2, E4 and the
+  E4 amount copies).
 - E4's plugin presets ("LrGenius Experiment E4", "… E4 Amount", "… E4 Amount
   Flagged") cannot be deleted through the SDK. They are files in Lightroom's
   preset folder, outside the catalog and shared by every catalog, so deleting
@@ -301,7 +313,7 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
   and in the report header; delete those files by hand. A later run records how
   many presets of that name already existed.
 
-### Still open after these four
+### Still open after these experiments
 
 - `CircularGradient.Angle` convention and the direction of `Zero` vs `Full`.
 - Whether masks sit before or after lens correction and Upright.
@@ -310,5 +322,3 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
 - Whether LrC accepts a self-built Denoise `Table_` blob.
 - Import normalisation of generated `.xmp` presets.
 - Whether subtype-3 people parts apply to every person in the photo.
-- Whether a stubbed `Look` (name and UUID only) works through
-  `applyDevelopSettings`.
