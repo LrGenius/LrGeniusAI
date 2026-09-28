@@ -30,3 +30,12 @@ repos:
         # only inputs the exact checks read; staleness warnings surface in CI.
         files: ^(server-rs/crates/lrg-api/src/routes/|plugin/LrGeniusAI\.lrdevplugin/APISearchIndex\.lua|docs/)
         pass_filenames: false
+      - id: develop-fixture-hygiene
+        name: develop fixtures carry no private data
+        # The fixtures under server-rs/testdata/develop are derived from the
+        # maintainer's own edits and the repository is public. Stdlib-only, so
+        # plain python3 is enough (no uv).
+        entry: python3 server-rs/scripts/develop_registry/extract_fixtures.py --check-only --out-dir server-rs/testdata/develop/lua --root server-rs/testdata/develop
+        language: system
+        files: ^server-rs/(testdata/develop/|scripts/develop_registry/(extract_fixtures|outpath)\.py$)
+        pass_filenames: false
