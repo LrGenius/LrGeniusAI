@@ -1,14 +1,20 @@
 //! Gemini's dedicated response-schema builder. Kept separate from
 //! `schema.rs` (the OpenAI-flavor builder) because Gemini's structured-output
-//! schema uses uppercase type names and omits `additionalProperties`/
-//! top-level `required` — it is not simply a mechanical case change of the
-//! OpenAI shape, so it is built fresh rather than derived via `edit_recipe`'s
-//! generic OpenAI->Gemini converter.
+//! schema uses uppercase type names and has no `additionalProperties` — it is
+//! not simply a mechanical case change of the OpenAI shape, so it is built
+//! fresh rather than derived via `edit_recipe`'s generic OpenAI->Gemini
+//! converter.
 //!
 //! The response *shape* mirrors `schema.rs` exactly — flat `{category, items}`
 //! keyword groups, lean `required` — so a photo produces the same JSON
 //! whichever provider answered. See `schema.rs` for why the shape is what it
 //! is.
+//!
+//! The top-level `required` list is load-bearing, not cosmetic. Without it
+//! Gemini 3.x regularly never closes the `title` string: it keeps appending
+//! comma-separated keyword-like phrases until it hits `MAX_TOKENS`, whatever
+//! the token limit (issue #368 — ~7 in 10 photos without `required`, 0 in 14
+//! with it).
 
 use serde_json::{json, Map, Value};
 
@@ -54,16 +60,20 @@ fn gemini_keyword_groups_schema(labels: &CategoryLabels, encoding: KeywordLeafEn
 
 pub fn prepare_gemini_response_schema(request: &MetadataGenerationRequest) -> Value {
     let mut properties = Map::new();
+    let mut required = Vec::new();
 
     if request.generate_title {
         properties.insert("title".into(), json!({"type": "STRING"}));
+        required.push("title");
     }
     if request.generate_caption {
         properties.insert("caption".into(), json!({"type": "STRING"}));
+        required.push("caption");
     }
     // Derived from `caption` when both are requested — see `schema.rs`.
     if request.generate_alt_text && !request.generate_caption {
         properties.insert("alt_text".into(), json!({"type": "STRING"}));
+        required.push("alt_text");
     }
     if request.generate_keywords {
         let encoding =
@@ -82,9 +92,10 @@ pub fn prepare_gemini_response_schema(request: &MetadataGenerationRequest) -> Va
             None => flat_list(),
         };
         properties.insert("keywords".into(), keywords_schema);
+        required.push("keywords");
     }
 
-    json!({"type": "OBJECT", "properties": properties})
+    json!({"type": "OBJECT", "properties": properties, "required": required})
 }
 
 #[cfg(test)]
@@ -97,13 +108,38 @@ mod tests {
     }
 
     #[test]
-    fn top_level_has_no_required_array() {
+    fn top_level_requires_every_requested_field() {
         let mut req = base_request();
         req.generate_title = true;
+        req.generate_caption = true;
+        req.generate_keywords = true;
         let schema = prepare_gemini_response_schema(&req);
         assert_eq!(schema["type"], "OBJECT");
-        assert!(schema.get("required").is_none());
+        assert_eq!(schema["required"], json!(["title", "caption", "keywords"]));
         assert_eq!(schema["properties"]["title"]["type"], "STRING");
+    }
+
+    #[test]
+    fn required_matches_the_openai_flavor_builder() {
+        // The two builders promise the same response shape; `required` is
+        // part of it (see the module comment for why it matters on Gemini).
+        for (title, caption, alt_text, keywords) in [
+            (true, true, true, true),
+            (true, false, true, false),
+            (false, false, false, true),
+            (false, false, false, false),
+        ] {
+            let mut req = base_request();
+            req.generate_title = title;
+            req.generate_caption = caption;
+            req.generate_alt_text = alt_text;
+            req.generate_keywords = keywords;
+            assert_eq!(
+                prepare_gemini_response_schema(&req)["required"],
+                crate::schema::prepare_response_structure(&req)["required"],
+                "title={title} caption={caption} alt_text={alt_text} keywords={keywords}"
+            );
+        }
     }
 
     #[test]

@@ -283,11 +283,21 @@ pub fn prepare_user_prompt_split(request: &MetadataGenerationRequest) -> SplitPr
         Some(p) => p.clone(),
         None => {
             let mut p = "Analyze the uploaded photo and generate the following data:\n".to_string();
-            if request.generate_alt_text {
+            // With a caption requested, alt text has no field of its own: it
+            // is copied from the caption after parsing (see `schema.rs`).
+            // Asking for it as a separate item would ask for something the
+            // schema has no slot for, so fold it into the caption instead.
+            if request.generate_alt_text && !request.generate_caption {
                 p.push_str("* Alt text (with context for screen readers)\n");
             }
             if request.generate_caption {
-                p.push_str("* Image caption\n");
+                if request.generate_alt_text {
+                    p.push_str(
+                        "* Image caption (also used as alt text, so give screen readers enough context)\n",
+                    );
+                } else {
+                    p.push_str("* Image caption\n");
+                }
             }
             if request.generate_title {
                 p.push_str("* Image title\n");
@@ -779,14 +789,31 @@ mod tests {
         req.generate_title = true;
         req.generate_keywords = true;
         let prompt = prepare_user_prompt(&req);
-        assert!(prompt.contains("* Alt text"));
         assert!(prompt.contains("* Image caption"));
         assert!(prompt.contains("* Image title"));
         assert!(prompt.contains("* Keywords"));
         assert!(prompt.contains("All results should be generated in English."));
-        let alt_pos = prompt.find("Alt text").unwrap();
+        let caption_pos = prompt.find("Image caption").unwrap();
         let kw_pos = prompt.find("Keywords").unwrap();
-        assert!(alt_pos < kw_pos);
+        assert!(caption_pos < kw_pos);
+    }
+
+    #[test]
+    fn alt_text_is_not_asked_for_separately_when_derived_from_caption() {
+        let mut req = base_request();
+        req.generate_alt_text = true;
+        req.generate_caption = true;
+        let prompt = prepare_user_prompt(&req);
+        assert!(!prompt.contains("* Alt text"));
+        assert!(prompt.contains("* Image caption (also used as alt text"));
+    }
+
+    #[test]
+    fn alt_text_is_asked_for_when_it_has_its_own_field() {
+        let mut req = base_request();
+        req.generate_alt_text = true;
+        let prompt = prepare_user_prompt(&req);
+        assert!(prompt.contains("* Alt text (with context for screen readers)"));
     }
 
     #[test]
