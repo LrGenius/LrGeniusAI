@@ -1,0 +1,30 @@
+{
+  "AutoLateralCA": true,
+  "ConvertToGrayscale": 1,
+  "EnableDetail": 0,
+  "LensProfileEnable": false,
+  "MaskGroupBasedCorrections": [
+    {
+      "CorrectionActive": 1,
+      "CorrectionAmount": 1,
+      "CorrectionMasks": [
+        {
+          "MaskActive": 1,
+          "MaskBlendMode": 0,
+          "MaskInverted": 0,
+          "MaskName": "Mask 1",
+          "MaskSubType": 2,
+          "MaskValue": 1,
+          "What": "Mask/Image"
+        }
+      ],
+      "CorrectionName": "Correction 1",
+      "LocalExposure2012": 0.1,
+      "What": "Correction"
+    }
+  ],
+  "ProcessVersion": "15.4",
+  "Temperature": 5200,
+  "Tint": 4,
+  "WhiteBalance": "Custom"
+}

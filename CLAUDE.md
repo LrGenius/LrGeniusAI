@@ -91,7 +91,11 @@ failure — this is what stops CI being green on numerical checks that never ran
 PR CI provisions the face pair (89 MB) and requires it; the nightly
 `golden-tests-full.yml` fetches all three. If you add a golden test, gate it
 through `crates/lrg-ml/tests/common/assets_ready` rather than an early
-`return`.
+`return`. Families whose data can never be in CI (private or not
+redistributable, e.g. `training-dump`: `lrg-develop`'s sweep over the
+maintainer's training rows, path in `LRG_DEVELOP_TRAINING_DUMP`) are listed in
+the gate's `LOCAL_ONLY`: `all` leaves them out, only naming one explicitly
+makes its absence a failure.
 
 ### Plugin — load into Lightroom
 
@@ -145,6 +149,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
 - `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
+- `lrg-develop` — the native Lightroom develop model, a leaf crate (no image, network or async dependencies, so `cargo test -p lrg-develop` takes seconds): the key registry (`registry/table.rs`, one `KeySpec` per `crs:` key with type, stored range, UI scale, number format, defaults, policy class, frame scope, file kind), the typed model (`DevelopSettings`, corrections and masks, `Look`, white balance, the policy filter) and the Lua/JSON reader for `getDevelopSettings()` blobs. The LLM edit-recipe schema stays in `lrg-providers`, learning/blending in `lrg-analysis::style_engine`. See [Dev-Develop-Model.md](docs/wiki/Dev-Develop-Model.md).
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
 - `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
 - `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
@@ -172,7 +177,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 
 ### Rust / Backend (`server-rs/`)
 
-- Routes in `lrg-api::routes` (one axum `Router` per domain, merged in `lrg_api::build_router`); business logic in `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`.
+- Routes in `lrg-api::routes` (one axum `Router` per domain, merged in `lrg_api::build_router`); business logic in `lrg-analysis`/`lrg-imaging`/`lrg-ml`; LLM/cloud clients in `lrg-providers`; the native Lightroom develop model (key registry, typed model, readers and writers of the Lua and XMP forms) in `lrg-develop`, while the LLM edit-recipe schema stays in `lrg-providers` — a new develop key is a registry row in `lrg-develop`, not a field or a string literal elsewhere.
 - Always use the `log` facade (`log::info!`/`warn!`/`error!`).
 - Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
 - Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.

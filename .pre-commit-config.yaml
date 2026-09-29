@@ -39,3 +39,12 @@ repos:
         language: system
         files: ^server-rs/(testdata/develop/|scripts/develop_registry/(extract_fixtures|outpath)\.py$)
         pass_filenames: false
+      - id: develop-fixture-hygiene-self-test
+        name: develop fixture hygiene check flags what it should
+        # Crafted files on a copy of the tree; the same cases as
+        # crates/lrg-develop/tests/fixture_hygiene.rs, so the Python and Rust
+        # checks cannot drift apart unnoticed.
+        entry: python3 server-rs/scripts/develop_registry/extract_fixtures.py --self-test --out-dir server-rs/testdata/develop/lua --root server-rs/testdata/develop
+        language: system
+        files: ^server-rs/(testdata/develop/|scripts/develop_registry/(extract_fixtures|outpath)\.py$)
+        pass_filenames: false

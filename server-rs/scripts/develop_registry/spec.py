@@ -84,7 +84,9 @@ sec('Tone curve', [
     ('ParametricMidtoneSplit', 'int', '0..100', 'stored = UI', '50 / 50', '', 'LEARN', ''),
     ('ParametricHighlightSplit', 'int', '0..100, must stay > MidtoneSplit', 'stored = UI', '75 / 75', '', 'LEARN', ''),
     ('CurveRefineSaturation', 'int', '0..100', 'stored = UI', '100 / 100', 'written by recent LrC only (about a fifth of the sampled sidecars)', 'LEARN', 'Low priority.'),
-    ('ExtendedToneCurvePV2012, ExtendedToneCurveName2012', 'curve / string', '?', '?', '', 'known from Camera Raw; never observed in LrC output', 'UNKNOWN', 'Probably HDR-extended curves. Research: no XMP counterpart found.', ['ExtendedToneCurvePV2012', 'ExtendedToneCurveName2012']),
+    ('ExtendedToneCurvePV2012, ExtendedToneCurvePV2012Red, ExtendedToneCurvePV2012Green, ExtendedToneCurvePV2012Blue', 'curve', '?', 'Lua: flat number array like ToneCurvePV2012', '', 'in a few getDevelopSettings() tables (3 of 1,294 training rows); never observed in XMP', 'UNKNOWN', 'Probably HDR-extended curves. Research: no XMP counterpart found.',
+     ['ExtendedToneCurvePV2012', 'ExtendedToneCurvePV2012Red', 'ExtendedToneCurvePV2012Green', 'ExtendedToneCurvePV2012Blue']),
+    ('ExtendedToneCurveName2012', 'string', '?', '?', '', 'known from Camera Raw; never observed in LrC output', 'UNKNOWN', 'Name for the extended curves above.'),
     ('ToneCurve, ToneCurveRed, ToneCurveGreen, ToneCurveBlue, ToneCurveName', 'curve / string', '', '', '', 'legacy PV2003/2010 (11 Classic presets)', 'COMPUTED', 'Legacy. Never write; the parser keeps them for round-trip only.', ['ToneCurve', 'ToneCurveRed', 'ToneCurveGreen', 'ToneCurveBlue', 'ToneCurveName']),
 ])
 
@@ -99,17 +101,17 @@ sec('Colour mixer (HSL) and B&W', [
 ])
 
 sec('Colour grading (split toning keys are shared)', [
-    ('SplitToningShadowHue', 'int', '0..359 deg (Colour Grading "Shadows" hue)', 'stored = UI', '0 / 0', 'LrC 10+ reuses the split-toning keys', 'LEARN', 'Circular mean; weight by saturation.'),
+    ('SplitToningShadowHue', 'int', '0..360 deg (Colour Grading "Shadows" hue)', 'stored = UI', '0 / 0', 'LrC 10+ reuses the split-toning keys', 'LEARN', 'Circular mean; weight by saturation.'),
     ('SplitToningShadowSaturation', 'int', '0..100', 'stored = UI', '0 / 0', '', 'LEARN', ''),
-    ('SplitToningHighlightHue', 'int', '0..359 deg', 'stored = UI', '0 / 0', '', 'LEARN', 'Circular mean.'),
+    ('SplitToningHighlightHue', 'int', '0..360 deg', 'stored = UI', '0 / 0', '', 'LEARN', 'Circular mean.'),
     ('SplitToningHighlightSaturation', 'int', '0..100', 'stored = UI', '0 / 0', '', 'LEARN', ''),
     ('SplitToningBalance', 'int', '-100..+100', 'stored = UI', '0 / 0', '', 'LEARN', ''),
     ('ColorGradeShadowLum', 'int', '-100..+100', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', '**Bug (f): plugin warns "not supported by Lightroom" and drops it.**'),
     ('ColorGradeHighlightLum', 'int', '-100..+100', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', '**Bug (f): same false warning.**'),
-    ('ColorGradeMidtoneHue', 'int', '0..359 deg', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', 'Circular mean.'),
+    ('ColorGradeMidtoneHue', 'int', '0..360 deg', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', 'Circular mean.'),
     ('ColorGradeMidtoneSat', 'int', '0..100', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', ''),
     ('ColorGradeMidtoneLum', 'int', '-100..+100', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', ''),
-    ('ColorGradeGlobalHue', 'int', '0..359 deg', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', 'Circular mean.'),
+    ('ColorGradeGlobalHue', 'int', '0..360 deg', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', 'Circular mean.'),
     ('ColorGradeGlobalSat', 'int', '0..100', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', ''),
     ('ColorGradeGlobalLum', 'int', '-100..+100', 'stored = UI', '0 / 0', 'LrC 10+', 'LEARN', 'Missing from the LLM schema today.'),
     ('ColorGradeBlending', 'int', '0..100', 'stored = UI', '50 / 50', 'LrC 10+', 'LEARN', 'Non-zero default.'),
@@ -149,8 +151,9 @@ sec('Lens corrections', [
     ('DefringeGreenAmount', 'int', '0..20', 'stored = UI', '0 / 0', '', 'LEARN', ''),
     ('DefringeGreenHueLo', 'int', '0..100', 'stored = UI', '40 / 40', '', 'LEARN', ''),
     ('DefringeGreenHueHi', 'int', '0..100', 'stored = UI', '60 / 60', '', 'LEARN', ''),
-    ('Defringe, ChromaticAberrationR, ChromaticAberrationB, LensProfileChromaticAberrationScale', 'int', '', '', '', 'legacy (Zeroed template only; never observed in XMP)', 'COMPUTED', 'Legacy CA controls. Never write.',
-     ['Defringe', 'ChromaticAberrationR', 'ChromaticAberrationB', 'LensProfileChromaticAberrationScale']),
+    ('Defringe, ChromaticAberrationR, ChromaticAberrationB', 'int', '', '', '', 'legacy; in every getDevelopSettings() table (Lua) and the Zeroed template, never observed in XMP', 'COMPUTED', 'Legacy CA controls. Never write.',
+     ['Defringe', 'ChromaticAberrationR', 'ChromaticAberrationB']),
+    ('LensProfileChromaticAberrationScale', 'int', '', '', '', 'legacy (Zeroed template only; never observed in XMP or getDevelopSettings())', 'COMPUTED', 'Legacy CA control. Never write.'),
 ])
 
 sec('Transform / Upright', [
@@ -177,6 +180,7 @@ sec('Crop', [
     ('CropConstrainToWarp', 'int (0/1)', '0/1', 'integer', '0 / 0', '', 'PHOTO', ''),
     ('CropConstrainToUnitSquare', 'int', '1', 'integer', '1 / 1', '', 'PHOTO', 'Always 1 when written.'),
     ('HasCrop', 'bool', 'True', '"True"', 'absent', 'XMP only (not in the Lua table)', 'META', 'Derived: written iff the crop differs from the full frame.'),
+    ('CropConstrainAspectRatio', 'bool', 'true/false (Lua)', 'Lua boolean', 'absent', 'Lua only (getDevelopSettings(), 66 of 1,294 training rows); never observed in XMP', 'PHOTO', 'Aspect-ratio lock of the crop tool: per-photo UI state.'),
     ('CropWidth, CropHeight, CropUnit, CropUnits', 'real / enum', 'output size; units unknown', '', '', 'known from Camera Raw; never observed in LrC output', 'UNKNOWN', 'ACR crop-to-size settings; not an LrC feature as far as observed.', ['CropWidth', 'CropHeight', 'CropUnit', 'CropUnits']),
 ])
 
@@ -223,7 +227,7 @@ sec('Profile', [
 ])
 
 sec('Point colour', [
-    ('PointColors', 'string[]', 'Seq of swatches, 19 floats each "%.6f, ..."', 'sentinel swatch of 19 × -1.000000 = none', 'one sentinel swatch', 'LrC 13+', 'UNKNOWN',
+    ('PointColors', 'string[] (XMP) / struct[] (Lua)', 'XMP: Seq of swatches, 19 floats each "%.6f, ..."; Lua: one table per swatch (see PointColors items)', 'sentinel swatch of 19 × -1.000000 = none', 'one sentinel swatch', 'LrC 13+', 'UNKNOWN',
      'Layout only partly decoded; values are sampled from one photo. Round-trip only.'),
     ('ColorVariance', 'string[]', 'Seq of floats "%.6f"', '', '[-50.000000]', 'LrC 13+', 'UNKNOWN', 'Meaning of -50 unknown (research §8).'),
 ])
@@ -247,7 +251,7 @@ sec('Auto and style state', [
 sec('Retouch, remove, red eye, AI filters', [
     ('RetouchAreas', 'struct[]', 'see sub-table', '', 'absent', '', 'NEVER', 'Heal/clone/content-aware spots.'),
     ('RemoveAreas', 'struct[]', 'see sub-table', '', 'absent', 'LrC 13+', 'NEVER', 'Remove tool / generative remove.'),
-    ('RetouchInfo', 'string[]', '"centerX = ..., centerY = ..." items', '', 'absent', 'legacy spot removal', 'NEVER', ''),
+    ('RetouchInfo', 'string[] (XMP) / struct[] (Lua)', 'XMP: "centerX = ..., centerY = ..." items; Lua: one table per spot (see RetouchInfo items)', '', 'absent', 'legacy spot removal', 'NEVER', ''),
     ('RedEyeInfo', 'string[]', '', '', 'empty', 'legacy', 'NEVER', 'Present (empty) in the Zeroed Lua template.'),
     ('FilterList', 'struct', 'see sub-table', '', 'absent', 'LrC 12.3+ (Denoise, Raw Details, Super Resolution)', 'COMPUTED', 'Enhance/AI filter payloads; FilterIDs 3/4/6 are remove/heal/distraction removal (NEVER).'),
     ('AllowFilters', 'int', '1', '', 'absent', 'with FilterList', 'COMPUTED', ''),
@@ -271,6 +275,7 @@ sec('Versioning and bookkeeping', [
     ('AlreadyApplied', 'bool', 'False', '"False"', 'False', 'sidecars only', 'META', ''),
     ('RawFileName', 'string', 'file name of the raw', '', '', 'sidecars only', 'META', 'Photo identity; set from the target file.'),
     ('RenderVersion', 'uint', '', '', '', 'known from Camera Raw; never observed in LrC output', 'COMPUTED', ''),
+    ('Preset', 'struct', 'record of the last applied preset (see 7.10)', '', 'absent', 'sidecars only (about a tenth of them)', 'COMPUTED', 'Written by LrC; its Parameters subtree is a preset, not the photo\'s settings.'),
 ])
 
 sec('Lua-table-only keys (getDevelopSettings / applyDevelopSettings, never in XMP)', [
@@ -420,6 +425,7 @@ NESTED = [
         ('SortName', 'lang-alt', '', '', '', '', 'COMPUTED', ''),
         ('Cluster, Copyright', 'string', '', '', '', '', 'COMPUTED', '', ['Cluster', 'Copyright']),
         ('CameraModelRestriction', 'string', 'e.g. "Nikon Z 9" (bundled camera-matching profiles)', '', '', '', 'COMPUTED', 'Also the learning gate: never transfer such a Look to another camera.'),
+        ('isAdobeAdaptive', 'bool', 'true', 'Lua boolean', '', 'Lua only (getDevelopSettings() of adaptive profiles); never observed in XMP', 'COMPUTED', 'Marks an Adobe Adaptive profile (needs an AI update, see AILook).'),
         ('SupportsAmount, SupportsMonochrome, SupportsOutputReferred', 'bool', '', '', '', '', 'COMPUTED', '', ['SupportsAmount', 'SupportsMonochrome', 'SupportsOutputReferred']),
     ]),
     ('look-parameters', 'Look.Parameters (profile definition; also the top level of a profile .xmp)', [
@@ -462,6 +468,7 @@ NESTED = [
         ('X, Y', 'real', '', '', '', 'inside Points', 'PHOTO', '', ['X', 'Y']),
         ('Dabs, Radius, Flow, CenterWeight, BrushGestureInterpretation', 'mixed', '', '', '', 'paint-stroke gestures', 'NEVER', '', ['Dabs', 'Radius', 'Flow', 'CenterWeight', 'BrushGestureInterpretation']),
         ('MaskActive, MaskBlendMode, MaskInverted, MaskSyncID, MaskValue', 'mixed', 'as mask components', '', '', '', 'META', '', ['MaskActive', 'MaskBlendMode', 'MaskInverted', 'MaskSyncID', 'MaskValue']),
+        ('MaskID', 'runtime', '', '', '', 'Lua/catalog only', 'COMPUTED', 'Runtime id; never write.'),
     ]),
     ('nested:AILook', 'AILook (Adaptive Color state)', [
         ('Active, AILookData, InputDigest, InputDigestVersion, ModelVersion, Version', 'mixed', '', '', '', '', 'COMPUTED', 'Produced by the AI update.', ['Active', 'AILookData', 'InputDigest', 'InputDigestVersion', 'ModelVersion', 'Version']),
@@ -477,6 +484,7 @@ NESTED = [
         ('ISO, ColorNoiseReduction, LuminanceSmoothing', 'int', 'ISO breakpoint + NR values', '', '', 'presets only', 'UNKNOWN', 'Interpolated by ISO on apply (inferred). Not for v1.', ['ISO', 'ColorNoiseReduction', 'LuminanceSmoothing']),
     ]),
     ('nested:Preset', 'Preset (record of the last applied preset, sidecars only)', [
+        ('Parameters', 'struct', 'the applied preset\'s own settings (same keys as the top level)', '', '', 'sidecars only', 'COMPUTED', 'Kept opaque; never merged into the photo\'s settings.'),
         ('Name, UUID, Amount, LookAmount, Group, Cluster, Baseline, SupportsAmount, SupportsMonochrome, SupportsOutputReferred', 'mixed', '', '', '', 'about a tenth of the sidecars; Parameters subtree excluded from this inventory', 'COMPUTED',
          'Written by LrC. Useful as a learning signal ("which preset did the user start from"), never written by us.',
          ['Name', 'UUID', 'Amount', 'LookAmount', 'Group', 'Cluster', 'Baseline', 'SupportsAmount', 'SupportsMonochrome', 'SupportsOutputReferred']),
@@ -484,8 +492,22 @@ NESTED = [
     ('nested:RetouchArea', 'RetouchAreas / RemoveAreas items', [
         ('SpotType, Method, SourceState, Opacity, Feather, Seed, OffsetY, SourceX, HealVersion, IngestInfo, fill_method, Masks', 'mixed', '', '', '', '', 'NEVER', 'Heal/clone/remove spots (Masks = Mask/Ellipse or Mask/Paint).',
          ['SpotType', 'Method', 'SourceState', 'Opacity', 'Feather', 'Seed', 'OffsetY', 'SourceX', 'HealVersion', 'IngestInfo', 'fill_method', 'Masks']),
+        ('centerX, centerY, opacity, radius, seed, sourceState, sourceX, sourceY, spotType', 'mixed', '', '', '', 'Lua only: legacy spot fields next to the new ones in a few getDevelopSettings() retouch areas', 'NEVER', 'Same fields as a RetouchInfo item.',
+         ['centerX', 'centerY', 'opacity', 'radius', 'seed', 'sourceState', 'sourceX', 'sourceY', 'spotType']),
         ('pm_* (content-aware / generative patch state, 38 keys)', 'mixed', '', '', '', '', 'NEVER', 'pm_patch, pm_patch_mask, pm_patch_variations, pm_remap_info_*, pm_search_*, pm_target_*, pm_whole_image_*, pm_full_image_*, pm_input_digest, ...', ['pm_%d' % i for i in range(38)]),
         ('Mask/Ellipse: X, Y, SizeX, SizeY, Alpha, CenterValue, PerimeterValue', 'real', '', '', '', 'heal spot shape', 'NEVER', '', ['X', 'Y', 'SizeX', 'SizeY', 'Alpha', 'CenterValue', 'PerimeterValue']),
+    ]),
+    ('nested:RetouchInfo', 'RetouchInfo items (Lua table form of the legacy spot list)', [
+        ('Method, centerX, centerY, opacity, radius, sourceState, sourceX, sourceY, spotType', 'mixed', '', '', '', 'Lua only (the XMP form is one string per spot)', 'NEVER', 'Legacy heal/clone spot.',
+         ['Method', 'centerX', 'centerY', 'opacity', 'radius', 'sourceState', 'sourceX', 'sourceY', 'spotType']),
+    ]),
+    ('nested:PointColors', 'PointColors items (Lua table form of one swatch)', [
+        ('SrcHue, SrcSat, SrcLum, HueShift, SatScale, LumScale, RangeAmount, Variance', 'real', '', '', '', 'Lua only (the XMP form is one string of 19 floats per swatch)', 'UNKNOWN', 'Sampled colour and its shift; values come from one photo. Round-trip only.',
+         ['SrcHue', 'SrcSat', 'SrcLum', 'HueShift', 'SatScale', 'LumScale', 'RangeAmount', 'Variance']),
+        ('HueRange, SatRange, LumRange', 'struct', 'see PointColors ranges', '', '', 'Lua only', 'UNKNOWN', '', ['HueRange', 'SatRange', 'LumRange']),
+    ]),
+    ('nested:PointColorRange', 'HueRange / SatRange / LumRange inside a PointColors item', [
+        ('LowerNone, LowerFull, UpperFull, UpperNone', 'real', '', '', '', 'Lua only', 'UNKNOWN', 'Range with feathered edges.', ['LowerNone', 'LowerFull', 'UpperFull', 'UpperNone']),
     ]),
     ('nested:Filters', 'FilterList.Filters (Denoise / Raw Details / Super Resolution / generative)', [
         ('Filters payload (Filters, Images, ImageGroup, Alpha, ColorVariations, BlackLevels, Linearization, ...)', 'mixed', '', '', '', '', 'COMPUTED',

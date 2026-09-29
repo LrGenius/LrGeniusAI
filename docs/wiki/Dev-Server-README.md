@@ -12,9 +12,11 @@ endpoint reference.
 
 Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
-clients), `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
-`lrg-mlx` (supervises the Apple silicon MLX sidecar), `lrg-api` (axum
-routers), `lrg-server` (the binary).
+clients, edit-recipe schema), `lrg-develop` (the native Lightroom develop
+model: key registry, typed settings, Lua/JSON reader; a leaf crate),
+`lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature), `lrg-mlx`
+(supervises the Apple silicon MLX sidecar), `lrg-api` (axum routers),
+`lrg-server` (the binary).
 
 There are two *local* LLM backends, selected as the `llamacpp` and `mlx`
 providers. They are independent — a build can have either, both, or neither —
@@ -79,12 +81,18 @@ so a job that provisions assets can prove it used them:
 ```bash
 LRG_REQUIRE_GOLDENS=face          cargo test --workspace   # one family
 LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
-LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
+LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family except the local-only ones
 ```
 
 Family names are `face`, `siglip` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
 (89 MB, 2.2 GB and 834 MB respectively).
+
+Local-only families (currently `training-dump`, lrg-develop's sweep over the
+maintainer's private training dump, path in `LRG_DEVELOP_TRAINING_DUMP`) can
+never be provisioned in CI: `all` leaves them out, and only naming one makes
+its absence a failure. See
+[Dev-Develop-Model.md](../docs/wiki/Dev-Develop-Model.md).
 
 CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
 and sets `LRG_REQUIRE_GOLDENS=face`, while the nightly `golden-tests-full.yml`

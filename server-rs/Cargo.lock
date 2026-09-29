@@ -4381,6 +4381,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lrg-develop"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "lrg-imaging"
 version = "0.1.0"
 dependencies = [

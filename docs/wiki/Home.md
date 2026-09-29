@@ -48,6 +48,7 @@ Welcome to the project wiki.
 - [Dev: Image Culling Implementation Plan](Dev-Image-Culling-Implementation-Plan)
 - [Dev: Capture One Port — Findings and Plan](Dev-Capture-One-Port-Plan) — what Capture One can and cannot do; investigated 2026-09-10, not pursued
 - [Dev: AI Edit via XMP — Findings and Experiments](Dev-AI-Edit-XMP-Findings) — what `crs:` XMP can express, mask coordinate frames, SDK apply paths, and the in-Lightroom experiments that settle the rest; researched 2026-09-26
+- [Dev: Native Develop Model](Dev-Develop-Model) — `lrg-develop`: the key registry, the typed develop model, the policy filter and the Lua/JSON reader; how to add a key
 
 ### Auto-generated from README files
 

@@ -1,0 +1,6 @@
+{
+  "ProcessVersion": "15.4",
+  "RedEyeInfo": ["0.5 0.5", null],
+  "ToneCurvePV2012": [0, 0, null, 128, 255, 255],
+  "ToneCurvePV2012Blue": [0, 0, 255, 255]
+}

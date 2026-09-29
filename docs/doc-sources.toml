@@ -74,6 +74,9 @@ sources = [
   # check, which is exactly what this module has to stay in step with.
   "server-rs/crates/lrg-ml/src/bioclip_pre.rs",
   "server-rs/scripts/export_bioclip2_fp16.py",
+  # The README's golden-test section documents the shared gate, including
+  # which families are local-only and what `all` means.
+  "server-rs/crates/lrg-ml/tests/common/mod.rs",
 ]
 
 [page."Dev-Build-Environment-Setup.md"]
@@ -216,4 +219,17 @@ sources = ["server-rs/crates/lrg-providers/src/vertexai.rs"]
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopExperiments.lua",
+]
+
+# The native develop model. `*` in fnmatch also crosses `/`, so this covers
+# src/lib.rs and every module below it (`**/*.rs` would miss src/lib.rs).
+# The generator is listed because the page documents how to re-seed the table.
+[page."Dev-Develop-Model.md"]
+sources = [
+  "server-rs/crates/lrg-develop/src/*.rs",
+  "server-rs/crates/lrg-develop/tests/*.rs",
+  "server-rs/scripts/develop_registry/gen_table_rs.py",
+  # The page documents the fixture hygiene rules, which this script's
+  # --check-only/--self-test and tests/fixture_hygiene.rs implement together.
+  "server-rs/scripts/develop_registry/extract_fixtures.py",
 ]
