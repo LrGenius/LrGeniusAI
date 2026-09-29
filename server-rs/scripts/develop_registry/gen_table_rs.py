@@ -421,14 +421,16 @@ GATE = {
     ("Struct(StructKind::CorrectionRangeMask)", "Type"): "ByMaskType",
 }
 # LEARN keys the registry gates although spec.py lists them as plain LEARN:
-# hue angles are averaged on the circle, the vignette style is a
-# category (spec note "Categorical (majority)").
+# hue angles are averaged on the circle, weighted by the saturation of the
+# same zone (a hue at saturation 0 is invisible, spec note "weight by
+# saturation"); the vignette style is a category (spec note "Categorical
+# (majority)").
 EXTRA_GATE = {
-    "SplitToningShadowHue": "CircularHue",
-    "SplitToningHighlightHue": "CircularHue",
-    "ColorGradeMidtoneHue": "CircularHue",
-    "ColorGradeGlobalHue": "CircularHue",
-    ("Correction", "LocalToningHue"): "CircularHue",
+    "SplitToningShadowHue": 'CircularHue("SplitToningShadowSaturation")',
+    "SplitToningHighlightHue": 'CircularHue("SplitToningHighlightSaturation")',
+    "ColorGradeMidtoneHue": 'CircularHue("ColorGradeMidtoneSat")',
+    "ColorGradeGlobalHue": 'CircularHue("ColorGradeGlobalSat")',
+    ("Correction", "LocalToningHue"): 'CircularHue("LocalToningSaturation")',
     "PostCropVignetteStyle": "Categorical",
 }
 
@@ -556,9 +558,15 @@ NO_RANGE = {
 }
 UI_DIV = {("Struct(StructKind::CorrectionRangeMask)", "ColorAmount"): 100.0}
 
-# Recipe aliases: the recipe fields the style engine blends today
-# (lrg-analysis/src/training.rs LR_TO_CANONICAL). White balance is left out on
-# purpose: step 1d moves it out of the generic blend into its own policy.
+# Recipe aliases: the recipe fields the style engine blends and sends
+# (lrg-analysis/src/training.rs `canonical_keys`), each one a field the
+# installed plugin already applies (DevelopEditManager.lua: GLOBAL_KEY_MAP,
+# buildHslDevelopSettings, buildColorGradingDevelopSettings,
+# buildToneCurveSettings). White balance is left out on purpose: step 1d moves
+# it out of the generic blend into its own policy. Not aliased although the
+# plugin reads a recipe field for them: colour grading midtones/global/
+# luminance/blending (the installed plugin warns and drops them) and the point
+# curves (averaging curves is step 3).
 ALIAS = {
     "Exposure2012": "global.exposure",
     "Contrast2012": "global.contrast",
@@ -572,14 +580,38 @@ ALIAS = {
     "Vibrance": "global.vibrance",
     "Saturation": "global.saturation",
     "Sharpness": "global.sharpening",
+    "SharpenRadius": "global.sharpen_radius",
+    "SharpenDetail": "global.sharpen_detail",
+    "SharpenEdgeMasking": "global.sharpen_masking",
     "LuminanceSmoothing": "global.noise_reduction",
+    "LuminanceNoiseReductionDetail": "global.noise_reduction_detail",
+    "LuminanceNoiseReductionContrast": "global.noise_reduction_contrast",
     "ColorNoiseReduction": "global.color_noise_reduction",
+    "ColorNoiseReductionDetail": "global.color_noise_reduction_detail",
+    "ColorNoiseReductionSmoothness": "global.color_noise_reduction_smoothness",
     "PostCropVignetteAmount": "global.vignette",
+    "PostCropVignetteMidpoint": "global.vignette_midpoint",
+    "PostCropVignetteRoundness": "global.vignette_roundness",
+    "PostCropVignetteFeather": "global.vignette_feather",
+    "PostCropVignetteHighlightContrast": "global.vignette_highlights",
     "GrainAmount": "global.grain",
+    "GrainSize": "global.grain_size",
+    "GrainFrequency": "global.grain_roughness",
     "ParametricHighlights": "global.tone_curve.highlights",
     "ParametricLights": "global.tone_curve.lights",
     "ParametricDarks": "global.tone_curve.darks",
     "ParametricShadows": "global.tone_curve.shadows",
+    "ParametricShadowSplit": "global.tone_curve.shadow_split",
+    "ParametricMidtoneSplit": "global.tone_curve.midtone_split",
+    "ParametricHighlightSplit": "global.tone_curve.highlight_split",
+    **{f"{slider}Adjustment{c}": f"global.hsl.{c.lower()}.{field}"
+       for c in HSL
+       for slider, field in (("Hue", "hue"), ("Saturation", "saturation"), ("Luminance", "luminance"))},
+    "SplitToningShadowHue": "global.color_grading.shadows.hue",
+    "SplitToningShadowSaturation": "global.color_grading.shadows.saturation",
+    "SplitToningHighlightHue": "global.color_grading.highlights.hue",
+    "SplitToningHighlightSaturation": "global.color_grading.highlights.saturation",
+    "SplitToningBalance": "global.color_grading.balance",
 }
 
 # Default literals the free text does not give in parsable form.
