@@ -190,22 +190,35 @@ sources = [
 [page."Help-Local-AI-Models.md"]
 sources = [
   "server-rs/crates/lrg-api/src/routes/llm.rs",
+  "server-rs/crates/lrg-api/src/mlx_models.rs",
+  "server-rs/crates/lrg-api/src/llm_models.rs",
+  "server-rs/crates/lrg-api/src/hf_repo.rs",
   "server-rs/crates/lrg-providers/src/local_provider.rs",
   "server-rs/crates/lrg-mlx/src/lib.rs",
   "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",
+  "plugin/LrGeniusAI.lrdevplugin/LocalModelCatalog.lua",
 ]
 
 [page."Help-Choosing-AI-Model.md"]
 sources = [
   "server-rs/crates/lrg-providers/src/provider.rs",
   "server-rs/crates/lrg-api/src/routes/server.rs",
+  "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
 ]
 
 [page."Help-Ollama-Setup.md"]
 sources = ["server-rs/crates/lrg-providers/src/ollama.rs"]
 
 [page."Help-LM-Studio-Setup.md"]
-sources = ["server-rs/crates/lrg-providers/src/lmstudio.rs"]
+sources = ["server-rs/crates/lrg-providers/src/openai_compatible.rs"]
+
+[page."Help-Other-AI-Server.md"]
+sources = [
+  "server-rs/crates/lrg-providers/src/openai_compatible.rs",
+  "server-rs/crates/lrg-api/src/routes/server.rs",
+  "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
+  "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",
+]
 
 [page."Google-Vertex-AI-Login.md"]
 sources = ["server-rs/crates/lrg-providers/src/vertexai.rs"]

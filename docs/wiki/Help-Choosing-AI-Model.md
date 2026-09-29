@@ -21,7 +21,7 @@ Choose based on:
 
 ### Google Gemini
 
-Configure in *Plug-in Manager → API Keys → Gemini API key*. Models exposed today:
+Configure in *Plug-in Manager → Optional AI providers → Google Gemini key*. Models exposed today:
 
 - `gemini-2.5-flash-lite` — cheapest and fastest; good for bulk keywording.
 - `gemini-2.5-flash` — balanced default for analyze-and-index runs.
@@ -43,7 +43,7 @@ different Gemini model instead of raising the limit further.
 
 ### OpenAI / ChatGPT
 
-Configure in *Plug-in Manager → API Keys → OpenAI API key*. Models exposed:
+Configure in *Plug-in Manager → Optional AI providers → OpenAI key*. Models exposed:
 
 - `gpt-4.1` — proven vision quality; the safe baseline.
 - `gpt-5-nano`, `gpt-5-mini`, `gpt-5` — current GPT-5 tier; pick `nano`/`mini`
@@ -83,17 +83,17 @@ significantly, but cloud frontier models still lead on tricky scenes.
 
 There are two kinds of local option: the engines **built into the backend**
 (nothing else to install), and **external servers** you run yourself (Ollama,
-LM Studio).
+LM Studio, or any OpenAI-compatible server as the *Other AI server*).
 
 ### Built-in: llama.cpp and MLX (no external app)
 
 The backend runs vision models itself. Open *Plug-in Manager → LrGeniusAI*,
 find the **Local AI Model** sections, pick a model, and click **Download** —
-it then appears in the model dropdown as `llamacpp: <model>` or `mlx: <model>`.
+it then appears in the model dropdown as `On this Mac · <model>` or
+`On this PC · <model>`.
 
 - **`llamacpp`** — llama.cpp compiled into the backend, using GGUF models.
-  Available on macOS (Metal), Windows (Vulkan, any GPU vendor), and Linux
-  (CPU). Recommended entries: **Gemma 4 E4B** as the default, **Gemma 4 12B
+  Shipped in the Windows release (Vulkan, any GPU vendor). Recommended entries: **Gemma 4 E4B** as the default, **Gemma 4 12B
   (QAT)** if you have 24 GB of RAM, **Ministral 3 8B** or **Qwen3.5 9B** as
   alternatives, **Qwen2.5-VL 3B** on modest hardware.
 - **`mlx`** — Apple's MLX stack via a small Metal helper process, **Apple
@@ -101,10 +101,15 @@ it then appears in the model dropdown as `llamacpp: <model>` or `mlx: <model>`.
   **Gemma 4 E2B** for speed, **Ministral 3 8B** or **Qwen3-VL 4B** as
   alternatives.
 
-On an Apple silicon Mac both are available and worth a side-by-side run on the
-same 10–20 photos: MLX is Apple's native inference stack, while llama.cpp reuses
-the shared prompt prefix across the photos in a batch (MLX re-processes it per
-photo), which matters more the larger the batch.
+The macOS release ships MLX only. A backend built from source with the
+`llamacpp` feature offers both on a Mac, which is worth a side-by-side run on
+the same 10–20 photos: MLX is Apple's native inference stack, while llama.cpp
+reuses the shared prompt prefix across the photos in a batch (MLX re-processes
+it per photo), which matters more the larger the batch.
+
+Either engine can also download a model that is not in the list — pick
+**Other model from Hugging Face…**; it is checked before anything is
+downloaded. See [Local AI Models](Help-Local-AI-Models).
 
 Both reuse models you already have: llama.cpp picks up GGUFs under
 `~/.lmstudio/models`, and MLX picks up LM Studio's MLX models and the
@@ -128,7 +133,8 @@ ollama pull llava                            # legacy fallback
 ```
 
 Browse all vision models: [ollama.com/search?c=vision](https://ollama.com/search?c=vision).
-See [Ollama Setup](Help-Ollama-Setup).
+Nothing to configure in the plugin: Ollama on this computer is found
+automatically. See [Ollama Setup](Help-Ollama-Setup).
 
 ### LM Studio
 
@@ -144,7 +150,18 @@ and download one or more vision models from inside the app. Recommended:
 - `gemma-4-e4b` / `google/gemma3-12b` — strong general-purpose options.
 
 On Apple Silicon prefer the **MLX** variants of the same model — they run
-significantly faster than the GGUF builds. See [LM Studio Setup](Help-LM-Studio-Setup).
+significantly faster than the GGUF builds. Like Ollama, LM Studio on this
+computer is found automatically. See [LM Studio Setup](Help-LM-Studio-Setup).
+
+### Other AI server (OpenRouter, llama.cpp server, LiteLLM, vLLM)
+
+Any server that speaks the OpenAI chat API can be entered as the **Other AI
+server** in *Plug-in Manager → Optional AI providers*, with an API key if it
+needs one. That covers [OpenRouter](https://openrouter.ai) (hundreds of cloud
+models behind one key, some free), llama.cpp's `llama-server`, LiteLLM, vLLM,
+and Ollama or LM Studio running on another computer. Its models appear under
+the server's name, e.g. `OpenRouter · google/gemini-2.5-flash`. See
+[Other AI Server](Help-Other-AI-Server).
 
 ## Quick recommendations
 
@@ -158,15 +175,20 @@ significantly faster than the GGUF builds. See [LM Studio Setup](Help-LM-Studio-
 | Windows with any discrete GPU, local  | Built-in `llamacpp` (Vulkan) with Gemma 4 E4B    |
 | Modest hardware / 8 GB RAM            | `mlx` Gemma 4 E2B or `llamacpp` Qwen2.5-VL 3B    |
 | Already running Ollama / LM Studio    | Ollama `qwen3-vl:8b` or LM Studio `qwen3-vl-8b`  |
+| Many cloud models, one key            | Other AI server: OpenRouter                      |
+| A GPU server on your network          | Other AI server: `llama-server`, vLLM or LiteLLM |
 
 ## Practical recommendation
 
 The dropdown in *Analyze & Index* always reflects what the
 backend currently advertises — newer models that ship with future backend
 updates will appear automatically. If a model you expect is missing, check
-that the corresponding API key or local server is configured and reachable
-from the backend (the *Plugin Manager → Status* section reports availability
-per provider).
+that the corresponding API key or server is configured and reachable from the
+backend. The *Plug-in Manager → Status* section reports whether any provider is
+available, and the line under **Other AI server** whether that server answers.
+A saved model that is not offered right now stays selected, marked
+*(not available now)* — the task then tells you what to start or fix instead of
+quietly switching to another provider.
 
 When evaluating, run the same batch of 10–20 representative photos through
 two candidates and compare:
@@ -184,6 +206,7 @@ Cloud runs are dominated by network round trips, not by the model. The backend
 overlaps up to four requests at a time for OpenAI and Gemini, which hides most
 of that latency without looking like a burst to their rate limiters.
 
-Ollama and LM Studio deliberately stay at one request at a time: the server on
-the other end is a single local model that serialises the work anyway, and
-piling requests on it only competes with Lightroom for the same machine.
+Ollama, LM Studio and the Other AI server deliberately stay at one request at
+a time: the server on the other end is usually a single model that serialises
+the work anyway, and piling requests on it only competes with Lightroom for the
+same machine.

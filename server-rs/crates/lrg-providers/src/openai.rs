@@ -436,6 +436,9 @@ impl OpenAiProvider {
             .client
             .get("https://api.openai.com/v1/models")
             .bearer_auth(&self.api_key)
+            // Listing runs inside the plugin's model picker, alongside every
+            // other provider: a hanging network must not hold them all up.
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
         {

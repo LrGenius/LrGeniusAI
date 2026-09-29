@@ -28,7 +28,18 @@ The dialog has three tabs.
 Picks the provider and model, plus **Temperature**, **Max Tokens**, output
 **Language**, and **Replace ß with ss** for German output. Which providers
 appear depends on what is configured in the Plug-in Manager — see
-[Choosing an AI Model](Help-Choosing-AI-Model).
+[Choosing an AI Model](Help-Choosing-AI-Model). Entries read
+`<provider> · <model>`: *On this Mac* / *On this PC* for the built-in engine,
+then Ollama, LM Studio, your [Other AI server](Help-Other-AI-Server), OpenAI and
+Google Gemini.
+
+The model you used last stays selected even when it is not offered right now —
+Ollama not running, a key removed — marked *(not available now)*; starting the
+run then stops with a message saying what to start or fix, instead of quietly
+switching to another (possibly paid) provider. If a provider you set up could
+not be asked for its models (an Other AI server that cannot be reached, a
+rejected key), the reason is shown in red under the list. The model is only
+needed for metadata: embeddings, faces and species run without one.
 
 ### Primary Tasks
 

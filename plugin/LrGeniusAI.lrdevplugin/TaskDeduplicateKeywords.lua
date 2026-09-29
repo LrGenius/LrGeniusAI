@@ -208,37 +208,22 @@ LrTasks.startAsyncTask(function()
 		local f = LrView.osFactory()
 		local bind = LrView.bind
 
-		-- Load available LLM models from server
-		local modelItems = {}
-		do
-			local openaiKey = (prefs and not Util.nilOrEmpty(prefs.chatgptApiKey)) and prefs.chatgptApiKey or nil
-			local geminiKey = (prefs and not Util.nilOrEmpty(prefs.geminiApiKey)) and prefs.geminiApiKey or nil
-			local modelsResp = SearchIndexAPI.getModels(openaiKey, geminiKey)
-			if modelsResp and modelsResp.models then
-				for provider, list in pairs(modelsResp.models) do
-					for _, model in ipairs(list) do
-						table.insert(modelItems, {
-							title = provider .. ": " .. model,
-							value = provider .. "::" .. model,
-						})
-					end
-				end
-			end
-			table.sort(modelItems, function(a, b)
-				return a.title < b.title
-			end)
-			if #modelItems == 0 then
-				table.insert(modelItems, { title = "Default (built-in)", value = "qwen::" })
-			end
+		-- Load available LLM models from server. The model is optional here:
+		-- without one, similar keywords are grouped by embedding similarity
+		-- alone, which is what the empty choice says.
+		local modelsResp, modelsErr = SearchIndexAPI.getModels({ includeCloud = true })
+		local savedModelKey = AiProviders.resolveSavedKey(modelsResp, prefs.deduplicateModelKey or prefs.modelKey)
+		local modelItems = AiProviders.modelItems(modelsResp, savedModelKey, { emptyTitle = "None (similarity only)" })
+		-- Why a provider the user set up offers nothing, shown under the picker.
+		local modelWarnings = SearchIndexAPI.condenseMessages(modelsResp and modelsResp.warnings)
+		if not modelsResp then
+			modelWarnings = "The list of AI models could not be loaded: " .. tostring(modelsErr or "no answer")
 		end
 
 		-- ── Step 1: Warning + model selection + backup confirmation ──────────
 		local warnProps = LrBinding.makePropertyTable(context)
 		warnProps.hasBackup = false
-		warnProps.modelKey = prefs.deduplicateModelKey or prefs.modelKey or modelItems[1].value
-		if not warnProps.modelKey or warnProps.modelKey == "" then
-			warnProps.modelKey = modelItems[1].value
-		end
+		warnProps.modelKey = AiProviders.initialKey(modelItems, savedModelKey)
 		warnProps.threshold = prefs.deduplicateThreshold or 0.85
 
 		local warnView = f:column({
@@ -261,10 +246,21 @@ LrTasks.startAsyncTask(function()
 						title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/AIModelLabel=AI Model:"),
 						width = 120,
 					}),
-					f:popup_menu({
-						value = bind("modelKey"),
-						items = modelItems,
-						width = 290,
+					f:column({
+						f:popup_menu({
+							value = bind("modelKey"),
+							items = modelItems,
+							width = 290,
+						}),
+						-- Only there when there is something to say; an empty
+						-- text would still take up its row.
+						modelWarnings and f:static_text({
+							title = modelWarnings,
+							text_color = LrColor(0.8, 0, 0),
+							size = "small",
+							wrap = true,
+							width = 290,
+						}) or nil,
 					}),
 				}),
 				f:spacer({ height = 6 }),
@@ -312,9 +308,8 @@ LrTasks.startAsyncTask(function()
 				text_color = LrColor(0.8, 0.2, 0.0),
 			}),
 			f:static_text({
-				title = LOC(
-					"$$$/LrGeniusAI/DeduplicateKeywords/LLMCostNote=Note: When using ChatGPT or Gemini, AI analysis will incur API costs."
-				),
+				title = "Note: with a cloud service — OpenAI, Gemini, or a paid server such as OpenRouter — "
+					.. "the AI analysis costs API credits.",
 				fill_horizontal = 1,
 				wrap = true,
 				text_color = LrColor(0.5, 0.35, 0.0),
@@ -499,25 +494,29 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		-- Build provider options from model key selected in warning dialog
+		-- Build provider options from model key selected in warning dialog.
+		-- An empty choice means similarity only; a model that is not available
+		-- right now is refused rather than silently skipped, because the user
+		-- asked for its judgement.
 		local clusterOptions = {}
-		if warnProps.modelKey and warnProps.modelKey ~= "" then
-			local sep = string.find(warnProps.modelKey, "::", 1, true)
-			if sep then
-				local prov = string.sub(warnProps.modelKey, 1, sep - 1)
-				local mdl = string.sub(warnProps.modelKey, sep + 2)
-				clusterOptions.provider = prov
-				clusterOptions.model = (mdl ~= "") and mdl or nil
-				if prov == "chatgpt" and prefs.chatgptApiKey and prefs.chatgptApiKey ~= "" then
-					clusterOptions.api_key = prefs.chatgptApiKey
-				elseif prov == "gemini" and prefs.geminiApiKey and prefs.geminiApiKey ~= "" then
-					clusterOptions.api_key = prefs.geminiApiKey
-				elseif prov == "ollama" and prefs.ollamaBaseUrl and prefs.ollamaBaseUrl ~= "" then
-					clusterOptions.ollama_base_url = prefs.ollamaBaseUrl
-				elseif prov == "lmstudio" and prefs.lmstudioBaseUrl and prefs.lmstudioBaseUrl ~= "" then
-					clusterOptions.lmstudio_base_url = prefs.lmstudioBaseUrl
-				end
+		if not Util.nilOrEmpty(warnProps.modelKey) then
+			local unavailable = AiProviders.unavailableReason(modelsResp, warnProps.modelKey)
+			if unavailable then
+				scanScope:done()
+				LrDialogs.showError(unavailable)
+				return
 			end
+			local prov, mdl = AiProviders.splitModelKey(warnProps.modelKey)
+			local connection, connectionErr = AiProviders.connectionOptions(prov, prefs)
+			if not connection then
+				scanScope:done()
+				LrDialogs.showError(connectionErr)
+				return
+			end
+			clusterOptions.provider = prov
+			clusterOptions.model = mdl
+			clusterOptions.api_key = connection.api_key
+			clusterOptions.server_url = connection.server_url
 		end
 
 		local semanticPairs = {}

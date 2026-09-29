@@ -421,6 +421,29 @@ pub fn missing_field_warning(
     ))
 }
 
+/// Recover a JSON value from a model's free-text answer.
+///
+/// For output that nothing constrained to the schema: a server that ignored
+/// `response_format`, or the prompt-only fallback for one that rejects it.
+/// Drops a `<think>…</think>` preamble and markdown code fences, then parses
+/// the first complete JSON value that starts at the first `open` character,
+/// ignoring any prose after it. `None` when no such value can be read.
+pub fn extract_json_value(raw: &str, open: char) -> Option<Value> {
+    let mut text = raw.trim();
+    if let Some(end) = text.rfind("</think>") {
+        text = text[end + "</think>".len()..].trim();
+    }
+    if let Some(rest) = text.strip_prefix("```") {
+        text = rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(rest);
+    }
+    if let Some(idx) = text.rfind("```") {
+        text = text[..idx].trim();
+    }
+    let start = text.find(open)?;
+    let mut deserializer = serde_json::Deserializer::from_str(&text[start..]);
+    serde::Deserialize::deserialize(&mut deserializer).ok()
+}
+
 /// "a", "a and b", "a, b and c" — so the warning reads like a sentence.
 fn join_human(items: &[&str]) -> String {
     match items {
@@ -748,5 +771,24 @@ mod tests {
             got.contains("keywords, caption, title and alt text"),
             "{got}"
         );
+    }
+
+    #[test]
+    fn json_is_recovered_from_fences_prose_and_thinking() {
+        let expected = serde_json::json!({"title": "Harbour"});
+        for raw in [
+            r#"{"title": "Harbour"}"#,
+            "```json\n{\"title\": \"Harbour\"}\n```",
+            "Sure! Here it is: {\"title\": \"Harbour\"} Hope that helps.",
+            "<think>the photo shows boats</think>\n{\"title\": \"Harbour\"}",
+        ] {
+            assert_eq!(
+                extract_json_value(raw, '{'),
+                Some(expected.clone()),
+                "{raw}"
+            );
+        }
+        assert_eq!(extract_json_value("no json here", '{'), None);
+        assert_eq!(extract_json_value("{\"cut\": ", '{'), None);
     }
 }

@@ -92,8 +92,46 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
 	propertyTable.dbStoragePath = prefs.dbStoragePath or ""
 	propertyTable.backendServerUrl = prefs.backendServerUrl or Defaults.defaultBackendServerUrl
-	propertyTable.ollamaBaseUrl = prefs.ollamaBaseUrl or Defaults.defaultOllamaBaseUrl
-	propertyTable.lmstudioBaseUrl = prefs.lmstudioBaseUrl or Defaults.defaultLmStudioBaseUrl
+
+	-- The Other AI server. Its status line is checked when the dialog opens
+	-- and whenever the address or key changes — an edit field commits when
+	-- the user leaves it, not on every keystroke. The 10 s health loop below
+	-- never asks the server: a remote one must not be polled for that.
+	propertyTable.aiServerUrl = prefs.aiServerUrl or ""
+	propertyTable.aiServerApiKey = prefs.aiServerApiKey or ""
+	local statusColors = {
+		hint = { 0.5, 0.5, 0.5 },
+		ok = { 0, 0.6, 0 },
+		error = { 0.8, 0, 0 },
+	}
+	local serverCheck = 0
+	local function refreshServerStatus()
+		serverCheck = serverCheck + 1
+		local thisCheck = serverCheck
+		local url = propertyTable.aiServerUrl or ""
+		local key = propertyTable.aiServerApiKey or ""
+		if Util.nilOrEmpty(url) then
+			local text, state = AiProviders.describeServerStatus(url)
+			propertyTable.aiServerStatus = text
+			propertyTable.aiServerStatusColor = statusColors[state]
+			return
+		end
+		propertyTable.aiServerStatus = "Checking the server..."
+		propertyTable.aiServerStatusColor = statusColors.hint
+		LrTasks.startAsyncTask(function()
+			local resp, err = SearchIndexAPI.getModels({ serverUrl = url, serverApiKey = key })
+			if thisCheck ~= serverCheck then
+				-- The address changed again while this check was running.
+				return
+			end
+			local text, state = AiProviders.describeServerStatus(url, resp, err)
+			propertyTable.aiServerStatus = text
+			propertyTable.aiServerStatusColor = statusColors[state]
+		end)
+	end
+	propertyTable:addObserver("aiServerUrl", refreshServerStatus)
+	propertyTable:addObserver("aiServerApiKey", refreshServerStatus)
+	refreshServerStatus()
 
 	-- Local (in-process) model settings.
 	propertyTable.llmContextSize = prefs.llmContextSize or Defaults.defaultLlmContextSize
@@ -179,6 +217,16 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 					issues,
 					LOC("$$$/LrGeniusAI/Health/ApiKeysMissing=No AI providers configured for AI generation.")
 				)
+			end
+			-- Set once, by the move of an old Ollama / LM Studio address to the
+			-- Other AI server (AiProviders.migrateLegacyPrefs); cleared when
+			-- this dialog closes.
+			if not Util.nilOrEmpty(prefs.pendingProviderNotice) then
+				if status == "healthy" then
+					status = "warning"
+					color = { 0.8, 0.8, 0 }
+				end
+				table.insert(issues, prefs.pendingProviderNotice)
 			end
 
 			propertyTable.healthStatus = status
@@ -907,127 +955,95 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 		},
 		{
 			bind_to_object = propertyTable,
-			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionOptionalProviders=Optional AI providers"),
+			title = "Optional AI providers",
+			-- One row per provider, no group boxes. Ollama and LM Studio have no
+			-- rows: they are found at their default address on this computer, and
+			-- running elsewhere, they are the Other AI server.
 			f:static_text({
-				title = LOC(
-					"$$$/LrGeniusAI/PluginInfo/OptionalProvidersHint=None of this is required. Fill in a key or a URL only if you would\nrather have a cloud service, or a separate app you already run, do\nthe analysis instead of the local model above."
-				),
+				title = "Not needed if you use the AI model above. Ollama and LM Studio on this computer\n"
+					.. "are found automatically.",
 			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/ApiKeys=API keys"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/GoogleApiKey=Google API key"),
-						alignment = "right",
-						width = share("apiKeyLabelWidth"),
-					}),
-					f:edit_field({
-						value = bind("geminiApiKey"),
-						fill_horizontal = 1,
-					}),
-					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/GetAPIkey=Get API key"),
-						action = function(button)
-							LrHttp.openUrlInBrowser("https://aistudio.google.com/app/apikey")
-						end,
-						width = share("apiKeyButtonWidth"),
-					}),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "Google Gemini key",
+					alignment = "right",
+					width = share("apiKeyLabelWidth"),
 				}),
-				f:row({
+				f:edit_field({
+					value = bind("geminiApiKey"),
 					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/ChatGPTApiKey=ChatGPT API key"),
-						alignment = "right",
-						width = share("apiKeyLabelWidth"),
-					}),
-					f:edit_field({
-						value = bind("chatgptApiKey"),
-						fill_horizontal = 1,
-					}),
-					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/GetAPIkey=Get API key"),
-						action = function(button)
-							LrHttp.openUrlInBrowser("https://platform.openai.com/api-keys")
-						end,
-						width = share("apiKeyButtonWidth"),
-					}),
 				}),
-				-- Vertex AI is disabled in the GUI; the backend code is untouched.
-				-- f:row({
-				-- 	fill_horizontal = 1,
-				-- 	f:static_text({
-				-- 		title = LOC("$$$/LrGeniusAI/PluginInfo/VertexProjectId=Vertex AI Project ID"),
-				-- 		alignment = "right",
-				-- 		width = share("apiKeyLabelWidth"),
-				-- 	}),
-				-- 	f:edit_field({
-				-- 		value = bind("vertexProjectId"),
-				-- 		fill_horizontal = 1,
-				-- 	}),
-				-- }),
-				-- f:row({
-				-- 	fill_horizontal = 1,
-				-- 	f:static_text({
-				-- 		title = LOC("$$$/LrGeniusAI/PluginInfo/VertexLocation=Vertex AI Location"),
-				-- 		alignment = "right",
-				-- 		width = share("apiKeyLabelWidth"),
-				-- 	}),
-				-- 	f:edit_field({
-				-- 		value = bind("vertexLocation"),
-				-- 		width_in_chars = 20,
-				-- 	}),
-				-- }),
-			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/ollamaSettings=Ollama Settings"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaBaseUrl=Ollama Base URL"),
-						width = share("setupLabelWidth"),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:edit_field({
-						value = bind("ollamaBaseUrl"),
-						width_in_chars = 40,
-					}),
-					f:push_button({
-						title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/OllamaSetup=Setup Ollama"),
-						action = function(button)
-							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-Ollama-Setup")
-						end,
-						width = share("setupButtonWidth"),
-					}),
+				f:push_button({
+					title = "Get key",
+					action = function(button)
+						LrHttp.openUrlInBrowser("https://aistudio.google.com/app/apikey")
+					end,
+					width = share("apiKeyButtonWidth"),
 				}),
 			}),
-			f:group_box({
-				width = groupBoxWidth,
-				title = LOC("$$$/LrGeniusAI/PluginInfo/LmStudioSettings=LM Studio Settings"),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/LmStudioUrl=LM Studio Base URL (host:port)"),
-						width = share("setupLabelWidth"),
-					}),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "OpenAI key",
+					alignment = "right",
+					width = share("apiKeyLabelWidth"),
 				}),
-				f:row({
+				f:edit_field({
+					value = bind("chatgptApiKey"),
 					fill_horizontal = 1,
-					f:edit_field({
-						value = bind("lmstudioBaseUrl"),
-						width_in_chars = 40,
-					}),
-					f:push_button({
-						title = LOC("$$$/LrGeniusAI/PluginInfo/SetupLmStudio=Setup LM Studio"),
-						action = function(button)
-							LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-LM-Studio-Setup")
-						end,
-						width = share("setupButtonWidth"),
-					}),
+				}),
+				f:push_button({
+					title = "Get key",
+					action = function(button)
+						LrHttp.openUrlInBrowser("https://platform.openai.com/api-keys")
+					end,
+					width = share("apiKeyButtonWidth"),
+				}),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "Other AI server",
+					alignment = "right",
+					width = share("apiKeyLabelWidth"),
+				}),
+				f:edit_field({
+					value = bind("aiServerUrl"),
+					placeholder_string = "e.g. https://openrouter.ai/api/v1",
+					fill_horizontal = 1,
+				}),
+				f:push_button({
+					title = "Help",
+					action = function(button)
+						LrHttp.openUrlInBrowser("https://github.com/LrGenius/LrGeniusAI/wiki/Help-Other-AI-Server")
+					end,
+					width = share("apiKeyButtonWidth"),
+				}),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "API key",
+					alignment = "right",
+					width = share("apiKeyLabelWidth"),
+				}),
+				f:edit_field({
+					value = bind("aiServerApiKey"),
+					placeholder_string = "only if the server needs one",
+					fill_horizontal = 1,
+				}),
+				f:spacer({ width = share("apiKeyButtonWidth") }),
+			}),
+			f:row({
+				fill_horizontal = 1,
+				f:spacer({ width = share("apiKeyLabelWidth") }),
+				f:static_text({
+					title = bind("aiServerStatus"),
+					text_color = bind("aiServerStatusColor"),
+					size = "small",
+					wrap = true,
+					fill_horizontal = 1,
 				}),
 			}),
 		},
@@ -1390,8 +1406,15 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	-- throws, the polling loops must still stop.
 	propertyTable.keepChecksRunning = false
 
-	prefs.geminiApiKey = propertyTable.geminiApiKey
-	prefs.chatgptApiKey = propertyTable.chatgptApiKey
+	local function trimmed(value)
+		return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+	end
+	prefs.geminiApiKey = trimmed(propertyTable.geminiApiKey)
+	prefs.chatgptApiKey = trimmed(propertyTable.chatgptApiKey)
+	prefs.aiServerUrl = trimmed(propertyTable.aiServerUrl)
+	prefs.aiServerApiKey = trimmed(propertyTable.aiServerApiKey)
+	-- Shown for one opening of this dialog; see updateHealth.
+	prefs.pendingProviderNotice = nil
 	-- Vertex AI is disabled in the GUI; the backend code is untouched.
 	-- prefs.vertexProjectId = (propertyTable.vertexProjectId and propertyTable.vertexProjectId:gsub("^%s*(.-)%s*$", "%1"))
 	-- 	or ""
@@ -1440,18 +1463,6 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		prefs.backendServerUrl = propertyTable.backendServerUrl:gsub("^%s*(.-)%s*$", "%1")
 	else
 		prefs.backendServerUrl = Defaults.defaultBackendServerUrl
-	end
-
-	if propertyTable.ollamaBaseUrl and propertyTable.ollamaBaseUrl:gsub("^%s*(.-)%s*$", "%1") ~= "" then
-		prefs.ollamaBaseUrl = propertyTable.ollamaBaseUrl:gsub("^%s*(.-)%s*$", "%1")
-	else
-		prefs.ollamaBaseUrl = Defaults.defaultOllamaBaseUrl
-	end
-
-	if propertyTable.lmstudioBaseUrl and propertyTable.lmstudioBaseUrl:gsub("^%s*(.-)%s*$", "%1") ~= "" then
-		prefs.lmstudioBaseUrl = propertyTable.lmstudioBaseUrl:gsub("^%s*(.-)%s*$", "%1")
-	else
-		prefs.lmstudioBaseUrl = Defaults.defaultLmStudioBaseUrl
 	end
 
 	-- Local-model tuning. Clamped here rather than trusted: a context of zero

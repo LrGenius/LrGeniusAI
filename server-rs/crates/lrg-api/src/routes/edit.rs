@@ -71,6 +71,8 @@ pub(crate) struct EditOptions {
     composition_mode: String,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+    /// The "Other AI server" address, for provider `openai_compatible`.
+    server_url: Option<String>,
     /// Engine tuning from the plugin's advanced fields; see `ParsedOptions`.
     engine: crate::llm_engine::EngineOverrides,
     catalog_id: Option<String>,
@@ -121,6 +123,7 @@ impl Default for EditOptions {
             composition_mode: "subtle".to_string(),
             ollama_base_url: None,
             lmstudio_base_url: None,
+            server_url: None,
             catalog_id: None,
             use_training_style: true,
             is_raw: None,
@@ -204,6 +207,7 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         composition_mode,
         ollama_base_url: fields.get("ollama_base_url").cloned(),
         lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+        server_url: fields.get("server_url").cloned(),
         engine: crate::routes::llm::engine_overrides_from_fields(fields),
         catalog_id: fields
             .get("catalog_id")
@@ -291,6 +295,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         composition_mode,
         ollama_base_url: get_str("ollama_base_url"),
         lmstudio_base_url: get_str("lmstudio_base_url"),
+        server_url: get_str("server_url"),
         catalog_id: get_str("catalog_id")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
@@ -557,6 +562,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
         api_key: options.api_key.clone(),
         ollama_base_url: options.ollama_base_url.clone(),
         lmstudio_base_url: options.lmstudio_base_url.clone(),
+        server_url: options.server_url.clone(),
     }) {
         Ok(client) => client.generate_edit_recipe(&request).await,
         Err(e) => edit_fail(photo_id, e),
