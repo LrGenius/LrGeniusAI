@@ -70,8 +70,9 @@ pub(crate) struct ParsedOptions {
     exposure_bias: Option<f64>,
     /// Whether the original is a raw file, from the multipart path. Stored
     /// with the photo rather than used during indexing: style training has to
-    /// keep raw and rendered originals apart, because Lightroom's `Temp` is
-    /// Kelvin for one and a relative -100..100 for the other. Absent when the
+    /// keep raw and rendered originals apart, because Lightroom's white balance
+    /// is Kelvin (`Temperature`) for one and a relative -100..100 offset
+    /// (`IncrementalTemperature`) for the other. Absent when the
     /// plugin could not read the format.
     is_raw: Option<bool>,
     vertex_project_id: Option<String>,

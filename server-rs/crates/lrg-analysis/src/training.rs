@@ -4,6 +4,11 @@
 //! style-profile stats aggregation. I/O (the `edit_training` LanceDB
 //! table, CLIP embedding) lives in `lrg-api::routes::training`.
 
+use std::sync::LazyLock;
+
+use lrg_develop::model::{WbFamily, WbMode, WbSetting};
+use lrg_develop::registry::{self, round_half_even, KeySpec, Level, NumFmt};
+use lrg_develop::{FileKind, FileKindHint, Finite, ParseError, ParseWarning, WarningKind};
 use lrg_imaging::pil_resample::{resize_plane, Filter};
 use serde_json::{json, Map, Value};
 
@@ -69,45 +74,221 @@ pub fn time_of_day_bucket_for_hour(hour: Option<u32>) -> &'static str {
     }
 }
 
-const LR_TO_CANONICAL: &[(&str, &str)] = &[
-    ("Exposure2012", "exposure"),
-    ("Contrast2012", "contrast"),
-    ("Highlights2012", "highlights"),
-    ("Shadows2012", "shadows"),
-    ("Whites2012", "whites"),
-    ("Blacks2012", "blacks"),
-    ("Temp", "temperature"),
-    ("Tint", "tint"),
-    ("Texture", "texture"),
-    ("Clarity2012", "clarity"),
-    ("Dehaze", "dehaze"),
-    ("Vibrance", "vibrance"),
-    ("Saturation", "saturation"),
-    ("Sharpness", "sharpening"),
-    ("LuminanceSmoothing", "noise_reduction"),
-    ("ColorNoiseReduction", "color_noise_reduction"),
-    ("PostCropVignetteAmount", "vignette"),
-    ("GrainAmount", "grain"),
-    ("ParametricHighlights", "tone_curve_highlights"),
-    ("ParametricLights", "tone_curve_lights"),
-    ("ParametricDarks", "tone_curve_darks"),
-    ("ParametricShadows", "tone_curve_shadows"),
-];
+/// Version of the canonical form stored with each training example
+/// (`canonical_settings`, `white_balance`), written as `canonical_version`.
+///
+/// Rows without the field are version 1: the old alias table, which read a
+/// `Temp` key Lightroom never writes (so no example ever carried a white
+/// balance) and blended `Tint` without its file kind. Readers re-derive
+/// anything older than this from the stored `develop_settings` blob instead
+/// of trusting the frozen fields; bump it whenever [`canonical_keys`] or the
+/// white-balance extraction changes.
+pub const CANONICAL_VERSION: u64 = 2;
 
-/// Port of `normalize_develop_settings_for_style`.
-pub fn normalize_develop_settings_for_style(
-    develop_settings: &Map<String, Value>,
-) -> Map<String, Value> {
+/// One learnable global key: the canonical name the style engine blends
+/// under, where it goes in the edit recipe, and its registry row.
+#[derive(Debug, Clone, Copy)]
+pub struct CanonicalKey {
+    /// `"exposure"`, `"tone_curve_shadows"`: the recipe alias without the
+    /// `global.` prefix, dots as underscores (the names version 1 used).
+    pub name: &'static str,
+    /// The recipe path below `global` (`["tone_curve", "shadows"]`).
+    pub recipe_path: &'static [&'static str],
+    /// The registry row (range, value kind and number format decide the
+    /// blend's rounding).
+    pub spec: &'static KeySpec,
+}
+
+/// Every registry key with a `global.*` recipe alias, in registry order.
+///
+/// The registry is the only source: white balance has no alias on purpose
+/// (it is a mode plus a key family, not two numbers, see
+/// [`canonicalize_develop_settings`]).
+pub fn canonical_keys() -> &'static [CanonicalKey] {
+    static KEYS: LazyLock<Vec<CanonicalKey>> = LazyLock::new(|| {
+        registry::iter()
+            .filter(|(_, spec)| spec.level == Level::Global)
+            .filter_map(|(_, spec)| {
+                let path = spec.recipe_alias?.strip_prefix("global.")?;
+                let recipe_path: Vec<&'static str> = path.split('.').collect();
+                Some(CanonicalKey {
+                    name: Box::leak(path.replace('.', "_").into_boxed_str()),
+                    recipe_path: Box::leak(recipe_path.into_boxed_slice()),
+                    spec,
+                })
+            })
+            .collect()
+    });
+    &KEYS
+}
+
+/// Looks up a canonical key by its name.
+pub fn canonical_key(name: &str) -> Option<&'static CanonicalKey> {
+    canonical_keys().iter().find(|k| k.name == name)
+}
+
+/// A training example's develop settings in the form the style engine
+/// learns from.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CanonicalExample {
+    /// Canonical name → value in the key's stored unit (see
+    /// [`canonical_keys`]).
+    pub settings: Map<String, Value>,
+    /// The example's white balance, typed: mode, key family, numbers.
+    pub white_balance: Option<WbSetting>,
+    /// Raw or not, from the white-balance key family (a caller's `is_raw`
+    /// hint only where the settings carry no white-balance numbers).
+    pub file_kind: Option<FileKind>,
+    /// Everything the reader noticed, in reading order.
+    pub warnings: Vec<ParseWarning>,
+}
+
+/// Reads a `develop_settings` blob (the plugin's JSON.lua encoding of
+/// `photo:getDevelopSettings()`, `[]` for none) into the canonical form.
+///
+/// Settings older than PV2012 (`"6.7"`) are read but not learned: they come
+/// back empty, with the reader's `UnsupportedProcessVersion` warning.
+pub fn canonicalize_develop_settings(
+    develop_settings: &Value,
+    hint: FileKindHint,
+) -> Result<CanonicalExample, ParseError> {
+    let (settings, warnings) = lrg_develop::lua::from_lua_value(develop_settings, hint)?;
+    let file_kind = settings.file_kind;
+    let learnable = !warnings
+        .iter()
+        .any(|w| matches!(w.kind, WarningKind::UnsupportedProcessVersion { .. }));
+    if !learnable {
+        return Ok(CanonicalExample {
+            file_kind,
+            warnings,
+            ..CanonicalExample::default()
+        });
+    }
     let mut canonical = Map::new();
-    for &(lr_key, canon_key) in LR_TO_CANONICAL {
-        if let Some(raw) = develop_settings.get(lr_key).and_then(Value::as_f64) {
-            canonical.insert(
-                canon_key.to_string(),
-                json!((raw * 10000.0).round() / 10000.0),
-            );
+    for key in canonical_keys() {
+        let Some(id) = registry::lookup(Level::Global, key.spec.name) else {
+            continue;
+        };
+        let Some(value) = settings.get(id).and_then(|v| v.as_finite()) else {
+            continue;
+        };
+        canonical.insert(key.name.to_string(), number_json(key.spec, value.get()));
+    }
+    // Only Custom is a choice of numbers. As Shot, Auto and the named presets
+    // carry the Kelvin Lightroom resolved for *that* frame; keeping it would
+    // invite averaging one scene's light into another.
+    //
+    // With both key families present the family is ambiguous: the reader
+    // falls back to the caller's hint, but that hint (the plugin's own
+    // guess from the same keys) is no independent evidence, so a Kelvin
+    // could land on the offset scale or the other way round. Nothing is
+    // learned then, which is also what the training route tells the user.
+    let ambiguous_family = warnings
+        .iter()
+        .any(|w| matches!(w.kind, WarningKind::ConflictingFileKind));
+    let white_balance = settings
+        .wb()
+        .filter(|_| !ambiguous_family)
+        .map(|wb| match wb.mode {
+            WbMode::Custom => wb,
+            _ => WbSetting {
+                temperature: None,
+                tint: None,
+                ..wb
+            },
+        });
+    Ok(CanonicalExample {
+        settings: canonical,
+        white_balance,
+        file_kind,
+        warnings,
+    })
+}
+
+/// [`canonicalize_develop_settings`] on the stored text form.
+pub fn canonicalize_develop_settings_str(
+    develop_settings: &str,
+    hint: FileKindHint,
+) -> Result<CanonicalExample, ParseError> {
+    let max = lrg_develop::lua::MAX_LUA_JSON_BYTES;
+    if develop_settings.len() > max {
+        return Err(ParseError::TooLarge {
+            size: develop_settings.len(),
+            max,
+        });
+    }
+    let value: Value = serde_json::from_str(develop_settings)?;
+    canonicalize_develop_settings(&value, hint)
+}
+
+/// Port of `normalize_develop_settings_for_style`: the canonical settings
+/// of a blob, or none when it cannot be read.
+pub fn normalize_develop_settings_for_style(develop_settings: &Value) -> Map<String, Value> {
+    canonicalize_develop_settings(develop_settings, FileKindHint::Unknown)
+        .map(|c| c.settings)
+        .unwrap_or_default()
+}
+
+/// A number as JSON in the precision of `spec`: an integer for integer keys,
+/// otherwise rounded to the key's XMP decimals (4 when it has none).
+pub fn number_json(spec: &KeySpec, x: f64) -> Value {
+    if spec.kind.lua_form().is_integer() {
+        if let Some(i) = Finite::new(x).ok().and_then(round_half_even) {
+            return json!(i);
         }
     }
-    canonical
+    let decimals = match spec.fmt {
+        NumFmt::Fixed(d) => i32::from(d),
+        _ => 4,
+    };
+    let factor = 10f64.powi(decimals);
+    json!((x * factor).round() / factor)
+}
+
+/// A white balance as JSON: `{mode, family, temperature?, tint?}` with
+/// `family` `"raw"` or `"non_raw"` and the numbers in the family's own keys'
+/// precision. The same shape is stored with each training example and sent
+/// as the style recipe's `white_balance`.
+pub fn white_balance_json(wb: &WbSetting) -> Value {
+    let mut out = Map::new();
+    out.insert("mode".into(), json!(wb.mode.as_str()));
+    out.insert(
+        "family".into(),
+        json!(match wb.family {
+            WbFamily::Raw => "raw",
+            WbFamily::NonRaw => "non_raw",
+        }),
+    );
+    let spec = |name| registry::lookup(Level::Global, name).map(|id| id.spec());
+    if let (Some(t), Some(spec)) = (wb.temperature, spec(wb.family.temperature_key())) {
+        out.insert("temperature".into(), number_json(spec, t.get()));
+    }
+    if let (Some(t), Some(spec)) = (wb.tint, spec(wb.family.tint_key())) {
+        out.insert("tint".into(), number_json(spec, t.get()));
+    }
+    Value::Object(out)
+}
+
+/// Reads [`white_balance_json`] back; `None` for anything else.
+pub fn white_balance_from_json(value: &Value) -> Option<WbSetting> {
+    let mode = WbMode::parse(value.get("mode")?.as_str()?)?;
+    let family = match value.get("family")?.as_str()? {
+        "raw" => WbFamily::Raw,
+        "non_raw" => WbFamily::NonRaw,
+        _ => return None,
+    };
+    let number = |k: &str| {
+        value
+            .get(k)
+            .and_then(Value::as_f64)
+            .and_then(|x| Finite::new(x).ok())
+    };
+    Some(WbSetting {
+        mode,
+        family,
+        temperature: number("temperature"),
+        tint: number("tint"),
+    })
 }
 
 fn round4(x: f64) -> f64 {
@@ -457,16 +638,188 @@ mod tests {
         assert_eq!(time_of_day_bucket_for_hour(Some(23)), "night");
     }
 
+    fn fixture(name: &str) -> Value {
+        let path = format!(
+            "{}/../../testdata/develop/lua/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    }
+
     #[test]
-    fn normalize_develop_settings_maps_known_keys_only() {
-        let mut dev = Map::new();
-        dev.insert("Exposure2012".into(), json!(0.333333));
-        dev.insert("UnknownKey".into(), json!(42));
-        dev.insert("Temp".into(), json!(5600));
+    fn normalize_develop_settings_maps_registry_aliases_only() {
+        let dev = json!({
+            "Exposure2012": 0.333333,
+            "Contrast2012": 12,
+            "ParametricShadows": -8,
+            "UnknownKey": 42,
+            "WhiteBalance": "Custom",
+            "Temperature": 5600,
+            "Tint": 5,
+        });
         let canonical = normalize_develop_settings_for_style(&dev);
-        assert_eq!(canonical["exposure"], json!(0.3333));
-        assert_eq!(canonical["temperature"], json!(5600.0));
+        assert_eq!(
+            canonical["exposure"],
+            json!(0.33),
+            "Exposure2012 has 2 decimals"
+        );
+        assert_eq!(canonical["contrast"], json!(12));
+        assert_eq!(canonical["tone_curve_shadows"], json!(-8));
         assert!(canonical.get("UnknownKey").is_none());
+        assert!(
+            canonical.get("temperature").is_none() && canonical.get("tint").is_none(),
+            "white balance is typed, never a canonical number: {canonical:?}"
+        );
+    }
+
+    #[test]
+    fn canonical_keys_come_from_the_registry_aliases() {
+        let names: Vec<&str> = canonical_keys().iter().map(|k| k.name).collect();
+        assert!(names.contains(&"exposure"));
+        assert!(names.contains(&"tone_curve_highlights"));
+        assert!(!names.iter().any(|n| n.contains("temp") || *n == "tint"));
+        let tc = canonical_key("tone_curve_lights").unwrap();
+        assert_eq!(tc.recipe_path, ["tone_curve", "lights"]);
+        assert_eq!(tc.spec.name, "ParametricLights");
+    }
+
+    #[test]
+    fn a_custom_raw_example_carries_its_white_balance() {
+        let c =
+            canonicalize_develop_settings(&fixture("lensblur_object.json"), FileKindHint::Unknown)
+                .unwrap();
+        let wb = c.white_balance.expect("Custom with Temperature/Tint");
+        assert_eq!(wb.mode, WbMode::Custom);
+        assert_eq!(wb.family, WbFamily::Raw);
+        assert_eq!(wb.temperature.map(Finite::get), Some(5432.0));
+        assert_eq!(wb.tint.map(Finite::get), Some(23.0));
+        assert_eq!(c.file_kind, Some(FileKind::Raw));
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        assert_eq!(c.settings["exposure"], json!(0.15));
+    }
+
+    #[test]
+    fn an_as_shot_example_keeps_the_mode_without_numbers() {
+        // As Shot's Kelvin is the camera's reading for that frame, not a
+        // choice the photographer made.
+        let c =
+            canonicalize_develop_settings(&fixture("filterlist_filters.json"), FileKindHint::Raw)
+                .unwrap();
+        let wb = c.white_balance.unwrap();
+        assert_eq!((wb.mode, wb.family), (WbMode::AsShot, WbFamily::Raw));
+        assert_eq!((wb.temperature, wb.tint), (None, None));
+    }
+
+    #[test]
+    fn incremental_keys_make_a_non_raw_example() {
+        let c = canonicalize_develop_settings(
+            &fixture("hand_non_raw_white_balance.json"),
+            FileKindHint::Raw,
+        )
+        .unwrap();
+        let wb = c.white_balance.unwrap();
+        assert_eq!(wb.family, WbFamily::NonRaw);
+        assert_eq!(wb.temperature.map(Finite::get), Some(12.0));
+        assert_eq!(wb.tint.map(Finite::get), Some(-4.0));
+        assert_eq!(
+            c.file_kind,
+            Some(FileKind::NonRaw),
+            "the keys beat the hint"
+        );
+        let kinds: Vec<&str> = c.warnings.iter().map(|w| w.kind.name()).collect();
+        assert_eq!(kinds, ["FileKindMismatch"]);
+    }
+
+    #[test]
+    fn both_key_families_teach_no_white_balance_whatever_the_hint() {
+        for hint in [
+            FileKindHint::Raw,
+            FileKindHint::NonRaw,
+            FileKindHint::Unknown,
+        ] {
+            let c = canonicalize_develop_settings(&fixture("hand_wb_both_families.json"), hint)
+                .unwrap();
+            assert_eq!(c.white_balance, None, "hint {hint:?}");
+            assert!(
+                c.warnings
+                    .iter()
+                    .any(|w| matches!(w.kind, WarningKind::ConflictingFileKind)),
+                "hint {hint:?}: {:?}",
+                c.warnings
+            );
+        }
+        // The file kind still follows the hint; only white balance is dropped.
+        let c = canonicalize_develop_settings(
+            &fixture("hand_wb_both_families.json"),
+            FileKindHint::Raw,
+        )
+        .unwrap();
+        assert_eq!(c.file_kind, Some(FileKind::Raw));
+    }
+
+    #[test]
+    fn an_empty_blob_is_empty_without_an_error() {
+        let c = canonicalize_develop_settings(&json!([]), FileKindHint::Raw).unwrap();
+        assert!(c.settings.is_empty());
+        assert_eq!(c.white_balance, None);
+        assert_eq!(c.file_kind, Some(FileKind::Raw), "only the hint is left");
+        assert!(c.warnings.is_empty());
+        let c = canonicalize_develop_settings_str("[]", FileKindHint::Unknown).unwrap();
+        assert!(c.settings.is_empty());
+    }
+
+    #[test]
+    fn a_non_table_blob_is_an_error() {
+        assert!(canonicalize_develop_settings(&json!([1, 2]), FileKindHint::Unknown).is_err());
+        assert!(canonicalize_develop_settings_str("not json", FileKindHint::Unknown).is_err());
+    }
+
+    #[test]
+    fn settings_older_than_pv2012_are_not_learned() {
+        let c = canonicalize_develop_settings(&fixture("hand_pv_2010.json"), FileKindHint::Unknown)
+            .unwrap();
+        assert!(c.settings.is_empty());
+        assert_eq!(c.white_balance, None);
+        assert!(c
+            .warnings
+            .iter()
+            .any(|w| matches!(w.kind, WarningKind::UnsupportedProcessVersion { .. })));
+    }
+
+    #[test]
+    fn numbers_take_their_keys_precision() {
+        let spec = |n| registry::lookup(Level::Global, n).unwrap().spec();
+        assert_eq!(
+            number_json(spec("Contrast2012"), 12.5),
+            json!(12),
+            "half to even"
+        );
+        assert_eq!(number_json(spec("Contrast2012"), 13.5), json!(14));
+        assert_eq!(number_json(spec("Exposure2012"), 0.666666), json!(0.67));
+        assert_eq!(number_json(spec("Temperature"), 5350.67), json!(5351));
+    }
+
+    #[test]
+    fn white_balance_json_round_trips() {
+        let wb = WbSetting {
+            mode: WbMode::Custom,
+            family: WbFamily::Raw,
+            temperature: Some(Finite::new_const(5600.0)),
+            tint: Some(Finite::new_const(-5.0)),
+        };
+        let j = white_balance_json(&wb);
+        assert_eq!(
+            j,
+            json!({"mode": "Custom", "family": "raw", "temperature": 5600, "tint": -5})
+        );
+        assert_eq!(white_balance_from_json(&j), Some(wb));
+        let auto = json!({"mode": "Auto", "family": "non_raw"});
+        let wb = white_balance_from_json(&auto).unwrap();
+        assert_eq!(
+            (wb.mode, wb.family, wb.temperature),
+            (WbMode::Auto, WbFamily::NonRaw, None)
+        );
+        assert_eq!(white_balance_from_json(&json!({"mode": "Custom"})), None);
     }
 
     #[test]

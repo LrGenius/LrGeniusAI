@@ -245,9 +245,16 @@ local function enrichPhotoOptions(photo, baseOptions)
 	-- longer visible in the bytes it gets. Lightroom knows, and the edit
 	-- guardrails need it: blown highlights are recoverable on a raw file and
 	-- gone on a rendered one, which changes how far the white point may go. It
-	-- also decides whether a training example's Kelvin temperature may be
-	-- carried over at all.
-	photoOptions.is_raw = Util.isRawPhoto(photo)
+	-- also decides which training examples' white balance may be carried over.
+	--
+	-- Taken from the photo's develop settings, not only its file format, so it
+	-- matches the white-balance keys DevelopEditManager will write: a DNG
+	-- converted from a JPEG is a DNG, yet has a rendered file's white balance.
+	-- Left absent when neither source knows.
+	local wbFamily = DevelopEditManager.photoWhiteBalanceFamily(photo)
+	if wbFamily ~= nil then
+		photoOptions.is_raw = wbFamily == "raw"
+	end
 
 	return photoOptions
 end
@@ -322,7 +329,10 @@ LrTasks.startAsyncTask(function()
 		local skippedCount = 0
 		local errorCount = 0
 		local errorMessages = {}
-		local backendWarnings = {}
+		-- One entry per distinct text with a photo count: a cause that hits
+		-- every photo in the run (white balance on JPEGs, say) is reported
+		-- once, not once per photo.
+		local warningTally = Util.newWarningTally()
 
 		local canceled = false
 
@@ -379,8 +389,15 @@ LrTasks.startAsyncTask(function()
 						continueProcessing = false
 					else
 						response = apiResponse
-						if response and response.warning then
-							table.insert(backendWarnings, fileName .. ": " .. tostring(response.warning))
+						local responseWarnings = Util.responseWarnings(response)
+						if #responseWarnings > 0 then
+							log:warn(
+								"AI edit backend warnings for "
+									.. fileName
+									.. ": "
+									.. table.concat(responseWarnings, " | ")
+							)
+							Util.tallyWarnings(warningTally, responseWarnings, fileName, index)
 						end
 					end
 					if
@@ -497,16 +514,14 @@ LrTasks.startAsyncTask(function()
 					)
 					if applied then
 						successCount = successCount + 1
-						if warnings and #warnings > 0 then
-							table.insert(
-								backendWarnings,
-								fileName .. ": the edit applied, but " .. table.concat(warnings, "; ")
-							)
-						end
 					else
 						errorCount = errorCount + 1
 						table.insert(errorMessages, fileName .. ": failed to apply recipe")
 					end
+					-- For a failed apply too: its warnings carry the cause
+					-- ("Failed to apply global develop settings: ..."), and a
+					-- log line is not a report.
+					Util.tallyWarnings(warningTally, warnings, fileName, index)
 					if warnings and #warnings > 0 then
 						log:warn("AI edit warnings for " .. fileName .. ": " .. table.concat(warnings, " | "))
 					end
@@ -516,7 +531,8 @@ LrTasks.startAsyncTask(function()
 
 		progressScope:done()
 
-		if errorCount > 0 or #backendWarnings > 0 then
+		local warningCount = Util.warningTallySize(warningTally)
+		if errorCount > 0 or warningCount > 0 then
 			local uniqueErrors = {}
 			local errorList = {}
 			for _, msg in ipairs(errorMessages) do
@@ -555,21 +571,12 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if #backendWarnings > 0 then
+			if warningCount > 0 then
 				combinedReport = combinedReport
 					.. "\n\n"
-					.. LOC("$$$/LrGeniusAI/common/BackendWarnings=Backend Warnings:")
+					.. "Warnings:"
 					.. "\n"
-				for i = 1, math.min(5, #backendWarnings) do
-					combinedReport = combinedReport .. "- " .. backendWarnings[i] .. "\n"
-				end
-				if #backendWarnings > 5 then
-					combinedReport = combinedReport
-						.. LOC(
-							"$$$/LrGeniusAI/common/MoreWarnings=... and ^1 more warnings",
-							tostring(#backendWarnings - 5)
-						)
-				end
+					.. table.concat(Util.formatWarningTally(warningTally, 5), "\n")
 			end
 
 			if errorCount > 0 and successCount == 0 then

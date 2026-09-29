@@ -100,6 +100,13 @@ jobs:
       - name: Linting (Rust)
         working-directory: server-rs
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The invariant also guards plugin/LrGeniusAI.lrdevplugin/DevelopEditManager.lua,
+      # and server-rs-tests.yml runs only for `server-rs/**` changes, so a
+      # plugin-only PR that reintroduced a `Temp` key would pass there and
+      # fail on the next unrelated server-rs PR. This job is unfiltered.
+      - name: No Temp develop key (Rust + DevelopEditManager.lua)
+        working-directory: server-rs
+        run: cargo test -p lrg-develop --test no_temp_key
 
       # `llamacpp` is off by default, but lrg-llama is a workspace member, so
       # the step above already compiles llama.cpp from source and lints that

@@ -4320,6 +4320,8 @@ dependencies = [
 name = "lrg-analysis"
 version = "0.1.0"
 dependencies = [
+ "log",
+ "lrg-develop",
  "lrg-imaging",
  "rayon",
  "serde",
@@ -4340,6 +4342,7 @@ dependencies = [
  "log",
  "lrg-analysis",
  "lrg-common",
+ "lrg-develop",
  "lrg-imaging",
  "lrg-llama",
  "lrg-ml",
@@ -4457,6 +4460,7 @@ dependencies = [
  "gcp_auth",
  "image",
  "log",
+ "lrg-develop",
  "lrg-imaging",
  "regex",
  "reqwest",

@@ -60,6 +60,10 @@ sources = [
   # The page names the release tags the download routes pull assets from, so a
   # change to how a tag is published belongs in the same review.
   ".github/workflows/model-assets-bioclip.yml",
+  # The /v1/edit/style and /v1/edit/training sections state the white-balance
+  # thresholds and the canonical_version semantics defined in these files.
+  "server-rs/crates/lrg-analysis/src/style_engine.rs",
+  "server-rs/crates/lrg-analysis/src/training.rs",
 ]
 
 [page."Dev-Server-README.md"]

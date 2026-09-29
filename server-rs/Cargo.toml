@@ -31,6 +31,7 @@ lrg-providers = { path = "crates/lrg-providers" }
 lrg-llama = { path = "crates/lrg-llama" }
 lrg-mlx = { path = "crates/lrg-mlx" }
 lrg-api = { path = "crates/lrg-api" }
+lrg-develop = { path = "crates/lrg-develop" }
 
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs"] }
