@@ -191,6 +191,38 @@ function LocalModelCatalog.refresh(propertyTable)
 end
 
 ---
+-- What to do once a download has finished: show the new model in the calling
+-- dialog, and offer to make it the model the tasks use.
+--
+-- The settings dialog does not poll the catalog, so without the refresh here a
+-- finished model stayed listed as downloadable until the dialog was reopened.
+--
+-- @param propertyTable table The calling dialog's fields.
+-- @param provider string "mlx" or "llamacpp" — the provider the model runs under.
+--
+function LocalModelCatalog.onDownloaded(propertyTable, provider)
+	return function(name)
+		-- The dialog may have been closed during a long download; a refresh of
+		-- its fields must not turn a finished download into an error.
+		LrTasks.pcall(LocalModelCatalog.refresh, propertyTable)
+		if Util.nilOrEmpty(name) then
+			LrDialogs.message("Local AI Model", "Local AI model downloaded. Select it as the model for AI metadata.")
+			return
+		end
+		local answer = LrDialogs.confirm(
+			"Local AI model downloaded",
+			name .. " is ready. Use it for AI metadata from now on?",
+			"Use it",
+			"Later"
+		)
+		if answer == "ok" then
+			prefs.modelKey = provider .. "::" .. name
+			prefs.ai = provider
+		end
+	end
+end
+
+---
 -- Starts the download of the model currently picked in one of the two sections.
 --
 -- Both engines share one download endpoint and one progress bar: the catalog id
@@ -208,7 +240,10 @@ function LocalModelCatalog.startDownload(propertyTable, kind)
 	end
 
 	LrTasks.startAsyncTask(function()
-		local ok, err = SearchIndexAPI.startLlmDownload(choice)
+		local ok, err = SearchIndexAPI.startLlmDownload(
+			choice,
+			LocalModelCatalog.onDownloaded(propertyTable, isMlx and "mlx" or "llamacpp")
+		)
 		if not ok then
 			ErrorHandler.handleError(
 				isMlx and LOC("$$$/LrGeniusAI/MlxDownload/ErrorTitle=Error downloading MLX model")
@@ -217,8 +252,8 @@ function LocalModelCatalog.startDownload(propertyTable, kind)
 			)
 			return
 		end
-		-- Reflect the "downloading" state right away; the periodic refresh in
-		-- the calling dialog picks up completion.
+		-- Reflect the "downloading" state right away; onDownloaded refreshes
+		-- again once the model has arrived.
 		LocalModelCatalog.refresh(propertyTable)
 	end)
 end

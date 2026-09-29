@@ -4596,28 +4596,42 @@ function SearchIndexAPI.getLlmStatus()
 end
 
 ---
--- Downloads a catalog model, showing progress until it finishes.
+-- Downloads a local model, showing progress until it finishes.
 --
 -- Multi-gigabyte download, so it runs in its own async task with a progress
 -- scope and polls the server rather than blocking the dialog. Mirrors
--- startClipDownload; the difference is that the model is chosen by id.
+-- startClipDownload; the difference is that the model is chosen by the caller.
 --
--- @param modelId string Catalog entry id from getLlmCatalog().downloadable.
+-- @param spec string|table A catalog id from getLlmCatalog(), or
+--        { repo = "org/name", engine = "mlx"|"llamacpp", revision = sha } for a
+--        model checked with checkLlmRepo().
+-- @param onDone function|nil Called with the name the finished model is offered
+--        under. Without it, a generic "downloaded" message is shown.
 -- @return boolean started
 -- @return string|nil error
 --
-function SearchIndexAPI.startLlmDownload(modelId)
-	if not modelId or modelId == "" then
-		return false, "No model id provided"
+function SearchIndexAPI.startLlmDownload(spec, onDone)
+	-- Copied: _request adds db_path to the table it is given.
+	local body = {}
+	if type(spec) == "table" then
+		for k, v in pairs(spec) do
+			body[k] = v
+		end
+	else
+		body.id = spec
+	end
+	if Util.nilOrEmpty(body.id) and Util.nilOrEmpty(body.repo) then
+		return false, "No model was chosen to download."
 	end
 
 	local status = _request("GET", SearchIndexAPI.url("STATUS_LLM_DOWNLOAD"))
 	if status ~= nil and status.status == "downloading" then
-		log:trace("A local model download is already in progress")
-		return true
+		-- Only one model downloads at a time. This used to report success and
+		-- drop the request, so the user waited for a model that never came.
+		return false, "Another model download is still running. Wait for it to finish, then start this one."
 	end
 
-	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), { id = modelId })
+	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), body)
 	if postErr then
 		log:error("startLlmDownload failed: " .. tostring(postErr))
 		return false, postErr
@@ -4651,12 +4665,16 @@ function SearchIndexAPI.startLlmDownload(modelId)
 				elseif loopStatus.status == "completed" then
 					log:trace("Local model download completed")
 					progressScope:done()
-					LrDialogs.message(
-						LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
-						LOC(
-							"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+					if onDone then
+						onDone(loopStatus.installed_name)
+					else
+						LrDialogs.message(
+							LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
+							LOC(
+								"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+							)
 						)
-					)
+					end
 					break
 				elseif
 					loopStatus.status == "error"

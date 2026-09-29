@@ -79,9 +79,14 @@ elsewhere:
   `~/.lmstudio/models`.
 - **MLX** scans its own model directory, `~/.lmstudio/models` (LM Studio ships
   an MLX engine on Apple silicon), and the `huggingface-cli` cache at
-  `~/.cache/huggingface/hub`.
+  `~/.cache/huggingface/hub`. A model from that cache is listed under its repo
+  name (`gemma-3-12b-it-qat-4bit`), not under the snapshot hash the cache
+  stores it as; a model you had picked under the old hash name keeps working.
+- **llama.cpp** pairs a model with the vision projector (`mmproj`) in the
+  *same folder* only, so each LM Studio model folder is paired on its own.
 
 Anything found there shows up in the **Installed** list and the model dropdown.
+A download that is still in progress is never listed.
 
 ---
 

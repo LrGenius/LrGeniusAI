@@ -117,6 +117,12 @@ pub struct LocalModel {
     pub model_dir: PathBuf,
     /// Where it was found, for the UI.
     pub source: &'static str,
+    /// A name this model used to be offered under, still accepted by
+    /// [`resolve_model`] so a choice the plugin saved earlier keeps working.
+    /// Only the Hugging Face cache has one: its models used to be named after
+    /// the snapshot hash.
+    #[serde(skip)]
+    pub alias: Option<String>,
 }
 
 /// `true` if `dir` looks like an MLX model snapshot.
@@ -141,6 +147,18 @@ pub fn is_model_dir(dir: &Path) -> bool {
     })
 }
 
+/// `true` for a directory discovery must never offer: a download still being
+/// staged (`.<name>.part`, or `<name>.part` from before staging moved to a
+/// hidden name) or anything else hidden.
+///
+/// A staged snapshot satisfies [`is_model_dir`] as soon as `config.json` and
+/// the first shard have arrived, so without this check a half-finished
+/// download appeared as an installed model.
+fn is_staging_or_hidden(dir: &Path) -> bool {
+    let name = name_of(dir);
+    name.starts_with('.') || name.ends_with(".part")
+}
+
 fn model_dirs_in(root: &Path, max_depth: usize) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
@@ -150,7 +168,7 @@ fn model_dirs_in(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() {
+            if !path.is_dir() || is_staging_or_hidden(&path) {
                 continue;
             }
             if is_model_dir(&path) {
@@ -177,6 +195,78 @@ fn name_of(dir: &Path) -> String {
         .into_owned()
 }
 
+/// The repo a Hugging Face cache snapshot belongs to, as `(org, name)`.
+///
+/// The cache stores `org/name` as `models--org--name/snapshots/<sha>/`. Only
+/// the `--` after `models` and the first `--` after the org are separators:
+/// Hugging Face does not allow `--` inside an org name, but a repo name may
+/// contain it.
+fn hf_cache_repo(snapshot: &Path) -> Option<(String, String)> {
+    let snapshots = snapshot.parent()?;
+    if snapshots.file_name()? != "snapshots" {
+        return None;
+    }
+    let repo_dir = name_of(snapshots.parent()?);
+    let rest = repo_dir.strip_prefix("models--")?;
+    let (org, name) = rest.split_once("--")?;
+    (!org.is_empty() && !name.is_empty()).then(|| (org.to_string(), name.to_string()))
+}
+
+/// The snapshot `refs/main` points at, for a snapshot inside the cache.
+fn hf_cache_main_snapshot(snapshot: &Path) -> Option<String> {
+    let repo_dir = snapshot.parent()?.parent()?;
+    let sha = std::fs::read_to_string(repo_dir.join("refs").join("main")).ok()?;
+    Some(sha.trim().to_string())
+}
+
+/// Hugging Face cache snapshots, one per repo, named after the repo.
+///
+/// A snapshot directory is named after its commit hash, which is what the
+/// plugin used to show — `mlx: 4f1c…` tells nobody which model that is. The
+/// repo's name part is used instead, the same name a download of that repo
+/// gets, so the catalog's "installed" check recognises it too. When the cache
+/// holds several snapshots of one repo, the one `refs/main` points at wins;
+/// the others are older revisions of the same model.
+fn hf_cache_models(root: &Path) -> Vec<LocalModel> {
+    let mut by_repo: std::collections::BTreeMap<(String, String), PathBuf> =
+        std::collections::BTreeMap::new();
+    for dir in model_dirs_in(root, 3) {
+        let Some(repo) = hf_cache_repo(&dir) else {
+            // Something the user placed in the cache by hand; offer it under
+            // its own name.
+            by_repo.insert((String::new(), dir.display().to_string()), dir);
+            continue;
+        };
+        let is_main = hf_cache_main_snapshot(&dir).is_some_and(|sha| sha == name_of(&dir));
+        match by_repo.get(&repo) {
+            Some(_) if !is_main => {}
+            _ => {
+                by_repo.insert(repo, dir);
+            }
+        }
+    }
+    by_repo
+        .into_iter()
+        .map(|((org, name), dir)| {
+            if org.is_empty() {
+                LocalModel {
+                    name: name_of(&dir),
+                    model_dir: dir,
+                    source: "huggingface",
+                    alias: None,
+                }
+            } else {
+                LocalModel {
+                    name,
+                    alias: Some(name_of(&dir)),
+                    model_dir: dir,
+                    source: "huggingface",
+                }
+            }
+        })
+        .collect()
+}
+
 /// Every MLX model we can offer without downloading anything.
 ///
 /// LM Studio nests models as `<publisher>/<repo>/`, and it has shipped an MLX
@@ -197,6 +287,7 @@ pub fn discover_local_models() -> Vec<LocalModel> {
             name: name_of(&model_dir),
             model_dir,
             source: "env",
+            alias: None,
         });
     }
 
@@ -205,6 +296,7 @@ pub fn discover_local_models() -> Vec<LocalModel> {
             name: name_of(&dir),
             model_dir: dir,
             source: "downloaded",
+            alias: None,
         });
     }
 
@@ -216,24 +308,29 @@ pub fn discover_local_models() -> Vec<LocalModel> {
                     name: name_of(&dir),
                     model_dir: dir,
                     source: "lmstudio",
+                    alias: None,
                 });
             }
         }
         let hf = home.join(".cache").join("huggingface").join("hub");
         if hf.is_dir() {
-            for dir in model_dirs_in(&hf, 3) {
-                found.push(LocalModel {
-                    name: name_of(&dir),
-                    model_dir: dir,
-                    source: "huggingface",
-                });
-            }
+            found.extend(hf_cache_models(&hf));
         }
     }
 
-    // A model reachable by two routes should still appear once.
-    found.dedup_by(|a, b| a.model_dir == b.model_dir);
+    dedup_by_dir(found)
+}
+
+/// Drop every model whose directory was already found by an earlier, higher
+/// priority source — `Vec::dedup_by` only merges neighbours, and the same
+/// directory can be reached from sources that are not adjacent in the list
+/// (an `LRG_MLX_MODEL_DIR` pointing into the LM Studio folder, say).
+fn dedup_by_dir(found: Vec<LocalModel>) -> Vec<LocalModel> {
+    let mut seen = std::collections::HashSet::new();
     found
+        .into_iter()
+        .filter(|model| seen.insert(model.model_dir.clone()))
+        .collect()
 }
 
 /// Find the model the request asked for.
@@ -252,6 +349,7 @@ pub fn resolve_model(name: &str) -> Option<LocalModel> {
     available
         .iter()
         .find(|m| m.name == name)
+        .or_else(|| available.iter().find(|m| m.alias.as_deref() == Some(name)))
         .or_else(|| available.iter().find(|m| m.model_dir == Path::new(name)))
         .cloned()
 }
@@ -260,6 +358,18 @@ pub fn resolve_model(name: &str) -> Option<LocalModel> {
 #[must_use]
 pub fn destination_for(entry: &CatalogEntry) -> PathBuf {
     lrg_ml::model_paths::resolve_mlx().dir.join(entry.dir_name)
+}
+
+/// Where a snapshot bound for `destination` is assembled before it is moved
+/// into place: a hidden sibling, which discovery skips.
+///
+/// This used to be `destination.with_extension("part")`, which treats
+/// everything after the last dot as an extension — `Qwen2.5-VL-7B-Instruct-4bit`
+/// staged into `Qwen2.part`, so two such models collided, and the visible name
+/// let discovery offer the half-finished download as an installed model.
+#[must_use]
+pub fn staging_for(destination: &Path) -> PathBuf {
+    destination.with_file_name(format!(".{}.part", name_of(destination)))
 }
 
 #[cfg(test)]
@@ -350,5 +460,85 @@ mod tests {
         }
 
         assert_eq!(model_dirs_in(temp.path(), 3), vec![outer]);
+    }
+
+    fn write_model(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("config.json"), "{}").unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"w").unwrap();
+    }
+
+    /// A name with a dot in it used to stage into `<prefix>.part`, so two such
+    /// models collided and the staging directory showed up as installed.
+    #[test]
+    fn staging_keeps_the_whole_name_and_is_hidden() {
+        let destination = Path::new("/models/mlx/Qwen2.5-VL-7B-Instruct-4bit");
+        assert_eq!(
+            staging_for(destination),
+            Path::new("/models/mlx/.Qwen2.5-VL-7B-Instruct-4bit.part")
+        );
+    }
+
+    #[test]
+    fn discovery_skips_downloads_still_being_staged() {
+        let temp = tempfile::tempdir().unwrap();
+        let finished = temp.path().join("gemma-4-e4b-it-4bit");
+        write_model(&finished);
+        // Both the current hidden staging name and the old visible one.
+        write_model(&staging_for(
+            &temp.path().join("Qwen2.5-VL-7B-Instruct-4bit"),
+        ));
+        write_model(&temp.path().join("Qwen2.part"));
+
+        assert_eq!(model_dirs_in(temp.path(), 1), vec![finished]);
+    }
+
+    #[test]
+    fn hugging_face_cache_models_are_named_after_their_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp
+            .path()
+            .join("models--mlx-community--gemma-3-12b-it-qat-4bit");
+        let old = repo.join("snapshots").join("1111");
+        let main = repo.join("snapshots").join("2222");
+        write_model(&old);
+        write_model(&main);
+        std::fs::create_dir_all(repo.join("refs")).unwrap();
+        std::fs::write(repo.join("refs").join("main"), "2222\n").unwrap();
+
+        let found = hf_cache_models(temp.path());
+        assert_eq!(found.len(), 1, "one entry per repo, not per snapshot");
+        assert_eq!(found[0].name, "gemma-3-12b-it-qat-4bit");
+        assert_eq!(found[0].model_dir, main, "refs/main picks the snapshot");
+        assert_eq!(found[0].alias.as_deref(), Some("2222"));
+    }
+
+    #[test]
+    fn a_repo_name_may_contain_a_double_dash() {
+        let snapshot = Path::new("/hub/models--org--name--with--dashes/snapshots/abc");
+        assert_eq!(
+            hf_cache_repo(snapshot),
+            Some(("org".to_string(), "name--with--dashes".to_string()))
+        );
+        assert_eq!(hf_cache_repo(Path::new("/hub/plain/model")), None);
+    }
+
+    /// The same directory reached through two sources that are not neighbours
+    /// in the list must still be offered once, from the first source.
+    #[test]
+    fn duplicates_are_dropped_even_when_not_adjacent() {
+        let model = |name: &str, dir: &str, source| LocalModel {
+            name: name.to_string(),
+            model_dir: PathBuf::from(dir),
+            source,
+            alias: None,
+        };
+        let found = dedup_by_dir(vec![
+            model("a", "/x/a", "env"),
+            model("b", "/x/b", "downloaded"),
+            model("a", "/x/a", "lmstudio"),
+        ]);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].source, "env");
     }
 }

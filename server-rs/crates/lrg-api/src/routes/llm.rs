@@ -240,8 +240,9 @@ async fn download_start(State(state): State<Arc<AppState>>, body: Option<Json<Va
         }
     };
     if already_running {
-        log::warn!("A local-model download is already running.");
-        return Json(json!({"download": "started"})).into_response();
+        // This used to answer "started" and drop the request, so the user
+        // waited for a model that was never going to arrive.
+        return busy_response();
     }
 
     let downloads = state.model_download.clone();
@@ -250,6 +251,19 @@ async fn download_start(State(state): State<Arc<AppState>>, body: Option<Json<Va
         Wanted::Mlx(entry) => tokio::spawn(run_mlx_download(downloads, entry)),
     };
     Json(json!({"download": "started"})).into_response()
+}
+
+/// Only one local model downloads at a time; a second request is refused
+/// rather than queued, so the user knows to wait.
+fn busy_response() -> Response {
+    (
+        axum::http::StatusCode::CONFLICT,
+        Json(json!({
+            "error": "Another model download is still running. Wait for it to \
+                      finish, then start this one."
+        })),
+    )
+        .into_response()
 }
 
 async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -404,6 +418,7 @@ async fn run_download(downloads: Downloads, entry: &'static CatalogEntry) {
 
     let mut guard = downloads.lock().unwrap();
     let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+    status.installed_name = Some(entry.model_file.to_string());
     status.set_done();
     log::info!("Local model {} downloaded", entry.id);
 }
@@ -420,6 +435,20 @@ fn is_skippable_repo_file(path: &str) -> bool {
         || lower.starts_with("onnx/")
         || lower.starts_with(".git")
         || lower.ends_with(".md")
+}
+
+/// `true` if a path from a repo listing stays inside the directory it is
+/// joined onto: relative, plain names only, no `..`, and nothing Windows would
+/// read as a drive or a separator.
+///
+/// The listing comes from the network, and `Path::join` with an absolute path
+/// or a `..` would write outside the model folder.
+pub(crate) fn is_safe_repo_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains(['\\', ':', '\0'])
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 /// List a repo's files via the Hugging Face tree API.
@@ -451,6 +480,11 @@ async fn repo_files(
             (!is_skippable_repo_file(&path)).then_some((path, size))
         })
         .collect();
+    if let Some((unsafe_path, _)) = files.iter().find(|(path, _)| !is_safe_repo_path(path)) {
+        return Err(format!(
+            "{repo} lists a file at an unsafe path ({unsafe_path}); refusing to download it"
+        ));
+    }
 
     if files.is_empty() {
         return Err(format!("{repo} contains no downloadable model files"));
@@ -543,14 +577,13 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
     let destination = mlx_models::destination_for(entry);
     if destination.is_dir() {
         let mut guard = downloads.lock().unwrap();
-        guard
-            .entry(DOWNLOAD_KEY.to_string())
-            .or_default()
-            .set_done();
+        let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+        status.installed_name = Some(entry.dir_name.to_string());
+        status.set_done();
         log::info!("MLX model {} is already installed", entry.id);
         return;
     }
-    let staging = destination.with_extension("part");
+    let staging = mlx_models::staging_for(&destination);
     // A previous interrupted attempt leaves this behind; start clean rather
     // than resuming, since we cannot tell which files are complete.
     let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -673,10 +706,9 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
     }
 
     let mut guard = downloads.lock().unwrap();
-    guard
-        .entry(DOWNLOAD_KEY.to_string())
-        .or_default()
-        .set_done();
+    let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+    status.installed_name = Some(entry.dir_name.to_string());
+    status.set_done();
     log::info!(
         "MLX model {} downloaded to {}",
         entry.id,
@@ -766,6 +798,45 @@ mod tests {
             prune_stale_shard_index(dir.path()).await;
             assert_eq!(index_path.is_file(), stays);
         }
+    }
+
+    #[test]
+    fn repo_paths_must_stay_inside_the_model_folder() {
+        for ok in [
+            "config.json",
+            "sub/dir/model.safetensors",
+            "chat_template.jinja",
+        ] {
+            assert!(is_safe_repo_path(ok), "{ok} should be accepted");
+        }
+        for bad in [
+            "",
+            "../escape.json",
+            "a/../../b",
+            "/etc/passwd",
+            "C:\\Windows\\x",
+            "c:x",
+            "a\\b",
+            "./x",
+        ] {
+            assert!(!is_safe_repo_path(bad), "{bad:?} should be refused");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_download_is_refused_while_one_is_running() {
+        let state = Arc::new(AppState::new(None, false));
+        state
+            .model_download
+            .lock()
+            .unwrap()
+            .insert(DOWNLOAD_KEY.to_string(), ModelDownloadStatus::downloading());
+        let response = download_start(
+            State(state),
+            Some(Json(json!({"id": llm_models::CATALOG[0].id}))),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
     }
 
     #[test]
