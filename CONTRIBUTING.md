@@ -57,18 +57,24 @@ To ensure code consistency, we use `pre-commit` for automatic formatting and lin
 
 ## 🛠️ Development Guidelines
 
+This is the short version. [`CLAUDE.md`](CLAUDE.md) (mirrored in
+[`AGENTS.md`](AGENTS.md) for other coding agents) is the full, authoritative set
+of project rules — architecture, the error-surfacing chain, and the details
+behind every point below. If the two ever disagree, `CLAUDE.md` wins; please
+open an issue so this file can be fixed.
+
 ### General Rules
 - **Error Handling**: All user-facing errors must be surfaced in the Lightroom GUI using `ErrorHandler.handleError`. Avoid silent failures.
 - **Logging**:
     - **Plugin**: Use `log:error`, `log:warn`, `log:info`, and `log:trace`.
     - **Backend**: Use the `log` facade (`log::info!`/`warn!`/`error!`).
-- **Infrastructure**: Update `Dockerfile` and `docker-compose-*.yml` when changing dependencies or environment requirements.
+- **Infrastructure**: Update `server-rs/Dockerfile` and `docker-compose-*.yml` when changing dependencies or environment requirements.
 
 ### Plugin Development (Lua)
 - **Asynchronicity**: Long-running operations **must** run in `LrTasks.startAsyncTask`.
 - **Yielding**: Use `LrTasks.pcall` instead of native `pcall` to allow for yielding during asynchronous operations.
 - **Naming Conventions**: Top-level plugin actions should follow the `Task*.lua` naming convention.
-- **Localization**: All GUI strings **must** go through the `LOC` function. The plugin ships no translation files, so the default string inside the `LOC()` call is what users read — write it as finished English.
+- **GUI strings**: Write user-facing strings as plain, finished English. Translations were dropped, so new code does not use `LOC`. Existing `LOC(...)` calls in older files just render their inline default — leave them alone, but don't add more.
 - **Utilities**: Use `Util.lua` for common logic.
 - **Photo Identity**: Use `Util.getGlobalPhotoIdForPhoto` (metadata-based) for cross-catalog consistency.
 
@@ -116,12 +122,17 @@ must survive every edit.
 - Wiki pages are located in `docs/wiki/`.
 - Changes pushed to `main` automatically update the GitHub Wiki via `.github/workflows/publish-wiki.yml`.
 - You can build wiki pages locally using `bash scripts/build-wiki-pages.sh`.
+- **Docs are part of the change.** [`docs/doc-sources.toml`](docs/doc-sources.toml) maps each wiki page to the source files it describes; when you touch one of those files, update the page in the same PR. `scripts/check-docs.py --for <path>` prints the pages that document a file.
+- `scripts/check-docs.py` runs as a pre-commit hook and in CI (`lint-format.yml`). It **fails** when an axum route has no heading in `docs/wiki/Dev-Backend-API.md` (or a heading names no real route), and when an endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table does not exist on the backend — unless it is listed under `[[contract.known_gap]]` in `doc-sources.toml` with a written reason.
+- It only **warns** about pages whose sources have newer commits than the page, so the warning is easy to miss (it shows up in the CI job summary). If a flagged page is still accurate, add a `Docs-Reviewed: <Page-Name>.md` trailer to your commit message — that is what clears the warning.
 
 ---
 
 ## ✅ Testing
 - **Smoke Tests**: Run `TaskAutomatedTests.lua` within Lightroom to verify plugin-backend connectivity.
+- **Plugin Unit Tests**: Pure Lua logic (helpers in `Util.lua`, keyword and photo-id handling) is tested headlessly with [busted](https://lunarmodules.github.io/busted/): run `busted` from the repo root (`luarocks install busted`). Specs live in `plugin/spec/`, `.busted` configures them, and `plugin/spec/spec_helper.lua` stubs the Lightroom SDK. CI runs them via `lua-tests.yml`. Add specs when you touch pure helpers.
 - **Backend Tests**: `cd server-rs && cargo test --workspace`.
+  - The ML golden tests **skip when their model files are absent, and a skip is reported as a pass** — so a green run on a machine without the model assets has not checked the model numerics. Set `LRG_REQUIRE_GOLDENS` to the families whose assets you have (`face`, `siglip`, `bioclip`, or `all`) to turn that skip into a failure. PR CI requires `face`; the nightly `golden-tests-full.yml` runs `all`. See [`server-rs/README.md`](server-rs/README.md#golden-tests-and-lrg_require_goldens) for fetching the assets.
 
 ---
 
