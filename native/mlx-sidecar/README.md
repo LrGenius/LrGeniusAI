@@ -146,6 +146,22 @@ export LRG_TEST_MLX_MODEL_DIR=/path/to/gemma-4-e2b-it-4bit
 cd server-rs && cargo test -p lrg-mlx --test sidecar_smoke -- --ignored
 ```
 
+## Loading: vision first, text-only only for an unknown architecture
+
+`Engine.load` tries `VLMModelFactory` first. It falls back to `LLMModelFactory`
+(text-only, `supports_vision: false`) **only** when the vision factory reports
+`ModelFactoryError.unsupportedModelType` — a genuinely text-only architecture.
+Any other vision failure (no `preprocessor_config.json`, an unregistered
+`processor_class`, mismatched weights) is reported as the load error: the text
+factory would load most of those by dropping the vision tower, and every photo
+would then fail with "this model is text-only" instead of the real cause.
+
+The backend refuses, before download, a Hugging Face repo whose `model_type` or
+`processor_class` this pin does not register (`hf_repo.rs` in `lrg-api`).
+`MLX_VISION_MODEL_TYPES` and `MLX_VISION_PROCESSORS` there are copies of
+mlx-swift-lm's `VLMTypeRegistry` and `VLMProcessorTypeRegistry` at the pinned
+commit — **update them whenever the pin in `Package.swift` moves**.
+
 ## Known model incompatibilities
 
 Not every MLX repo loads. `mlx-community/SmolVLM-256M-Instruct-8bit` fails with
