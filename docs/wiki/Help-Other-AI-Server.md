@@ -77,10 +77,11 @@ Examples:
   which cannot set the context size per request. If long prompts get cut off,
   raise it on that computer, e.g. `OLLAMA_CONTEXT_LENGTH=8192 ollama serve`.
 - **Answer format.** LrGeniusAI asks the server to hold the model to a JSON
-  schema. A server that cannot do that is asked again with a looser format,
-  once per model, and you get one warning saying so. The answers are still
-  checked, but a weaker model may leave a field out more often — that shows up
-  as a warning on the photo, as with any other provider.
+  schema. A server that cannot do that is asked again with a looser format
+  (it remembers this per model, so only the first photo pays for the extra
+  request), and the photos answered that way carry a warning saying so. The
+  answers are still checked, but a weaker model may leave a field out more
+  often — that shows up as a warning on the photo, as with any other provider.
 
 ## When it does not work
 

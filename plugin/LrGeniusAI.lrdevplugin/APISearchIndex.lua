@@ -4670,7 +4670,9 @@ function SearchIndexAPI.startLlmDownload(spec, onDone)
 		return false, "Another model download is still running. Wait for it to finish, then start this one."
 	end
 
-	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), body)
+	-- A model from Hugging Face is checked again before the download starts,
+	-- which takes a few requests; give it the same time as checkLlmRepo.
+	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), body, 60)
 	if postErr then
 		log:error("startLlmDownload failed: " .. tostring(postErr))
 		return false, postErr

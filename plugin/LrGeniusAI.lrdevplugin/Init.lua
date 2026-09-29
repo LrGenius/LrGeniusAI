@@ -72,8 +72,14 @@ end
 -- default address. A changed address moves to the Other AI server, once; the
 -- notice is shown the next time the Plug-in Manager opens.
 do
-	local notice = AiProviders.migrateLegacyPrefs(_G.prefs, Defaults)
-	if notice then
+	-- Guarded: nothing in a one-time settings move may stop the plug-in from
+	-- loading. A failure is logged and shown the next time Plug-in Manager opens.
+	local ok, notice = LrTasks.pcall(AiProviders.migrateLegacyPrefs, _G.prefs, Defaults)
+	if not ok then
+		_G.log:error("Moving the old Ollama / LM Studio settings failed: " .. tostring(notice))
+		_G.prefs.pendingProviderNotice = "Your old Ollama / LM Studio address could not be moved to the Other AI "
+			.. "server. If you used one on another computer, enter it there."
+	elseif notice then
 		_G.prefs.pendingProviderNotice = notice
 	end
 end

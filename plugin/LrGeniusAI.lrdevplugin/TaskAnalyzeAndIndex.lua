@@ -80,12 +80,17 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- The model picker: every provider's models in AiProviders' order. A saved
 	-- choice that is not offered right now stays selected, marked as such, so
 	-- opening this dialog never quietly moves a run to another provider.
-	local modelsResp = SearchIndexAPI.getModels({ includeCloud = true })
-	local modelItems = AiProviders.modelItems(modelsResp, prefs.modelKey)
-	props.modelKey = AiProviders.initialKey(modelItems, prefs.modelKey)
+	local modelsResp, modelsErr = SearchIndexAPI.getModels({ includeCloud = true })
+	local savedModelKey = AiProviders.resolveSavedKey(modelsResp, prefs.modelKey)
+	local modelItems = AiProviders.modelItems(modelsResp, savedModelKey)
+	props.modelKey = AiProviders.initialKey(modelItems, savedModelKey)
 	-- Problems listing a provider the user set up (an Other AI server that
-	-- cannot be reached, a rejected key) are shown right under the picker.
+	-- cannot be reached, a rejected key) are shown right under the picker, as
+	-- is a backend that did not answer at all.
 	local modelWarnings = SearchIndexAPI.condenseMessages(modelsResp and modelsResp.warnings)
+	if not modelsResp then
+		modelWarnings = "The list of AI models could not be loaded: " .. tostring(modelsErr or "no answer")
+	end
 
 	-- Context options
 	props.submitKeywords = prefs.submitKeywords or false

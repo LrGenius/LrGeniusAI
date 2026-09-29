@@ -640,20 +640,39 @@ fn marker_repo(dir: &Path) -> Option<String> {
 
 /// The folder a repo goes into under `root`: its name, or `org--name` when a
 /// different model already has that name. `bool` is "already installed".
+///
+/// A folder whose source marker names this repo is reused whether or not the
+/// model in it is complete: that is a download of the same repo that was
+/// interrupted, and retrying into a second folder would leave the first one
+/// behind — for a GGUF whose model file arrived but whose projector did not,
+/// as a text-only copy of the model under the same name.
 fn folder_for(root: &Path, repo: &str, installed: impl Fn(&Path) -> bool) -> (String, bool) {
     let (org, name) = repo.split_once('/').unwrap_or(("", repo));
-    let plain = root.join(name);
-    if !plain.exists() {
-        return (name.to_string(), false);
-    }
-    if installed(&plain)
-        && marker_repo(&plain).is_none_or(|marked| marked.eq_ignore_ascii_case(repo))
-    {
-        return (name.to_string(), true);
+    // Whether `dir` can hold this repo, and if so whether it already does.
+    let usable = |dir: &Path| -> Option<bool> {
+        if !dir.exists() {
+            return Some(false);
+        }
+        match marker_repo(dir) {
+            Some(marked) if marked.eq_ignore_ascii_case(repo) => Some(installed(dir)),
+            Some(_) => None,
+            // Unmarked: placed by hand or by an older version. Only a complete
+            // model is taken to be this one; anything else is left alone.
+            None => installed(dir).then_some(true),
+        }
+    };
+    if let Some(done) = usable(&root.join(name)) {
+        return (name.to_string(), done);
     }
     let qualified = format!("{org}--{name}");
-    let taken = root.join(&qualified);
-    (qualified, taken.exists() && installed(&taken))
+    let done = usable(&root.join(&qualified)).unwrap_or(false);
+    (qualified, done)
+}
+
+/// Record which repo a model folder holds; see [`folder_for`].
+pub fn write_source_marker(dir: &Path, repo: &str, revision: &str) -> std::io::Result<()> {
+    let marker = serde_json::json!({ "repo": repo, "revision": revision });
+    std::fs::write(dir.join(SOURCE_MARKER), marker.to_string())
 }
 
 async fn get_json(client: &reqwest::Client, url: &str) -> Result<(u16, Value), CheckError> {
@@ -1212,6 +1231,27 @@ mod tests {
         assert_eq!(
             folder_for(root.path(), "other/model", is_dir),
             ("model".to_string(), true)
+        );
+    }
+
+    /// A retry after an interrupted download goes back into the same folder.
+    #[test]
+    fn an_interrupted_download_of_the_same_repo_is_resumed_in_its_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("gemma-3-12b-it-GGUF");
+        std::fs::create_dir_all(&folder).unwrap();
+        write_source_marker(&folder, "ggml-org/gemma-3-12b-it-GGUF", "abc").unwrap();
+        let complete = |_: &Path| false;
+        assert_eq!(
+            folder_for(root.path(), "ggml-org/gemma-3-12b-it-GGUF", complete),
+            ("gemma-3-12b-it-GGUF".to_string(), false)
+        );
+        // An unmarked, incomplete folder is someone else's: not reused.
+        let other = root.path().join("model");
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(
+            folder_for(root.path(), "org/model", complete),
+            ("org--model".to_string(), false)
         );
     }
 }

@@ -157,6 +157,30 @@ function AiProviders.modelItems(resp, savedKey, options)
 end
 
 ---
+-- Maps a saved choice onto the name its model is offered under now.
+--
+-- MLX models from the Hugging Face cache used to be listed under their
+-- snapshot hash; the backend reports those old names in `aliases`. Without
+-- this, a model that is installed and works would read "(not available now)".
+--
+-- @param resp table|nil The /v1/llm/providers/models response.
+-- @param key string|nil The saved "provider::model".
+-- @return string|nil The key to use.
+--
+function AiProviders.resolveSavedKey(resp, key)
+	local provider, model = AiProviders.splitModelKey(key)
+	if not provider or not model or type(resp) ~= "table" or type(resp.aliases) ~= "table" then
+		return key
+	end
+	local aliases = resp.aliases[provider]
+	local current = type(aliases) == "table" and aliases[model]
+	if type(current) == "string" and current ~= "" then
+		return provider .. "::" .. current
+	end
+	return key
+end
+
+---
 -- The choice a picker should start on: the saved one, else the first item.
 --
 function AiProviders.initialKey(items, savedKey)
@@ -169,6 +193,12 @@ end
 ---
 -- Why a chosen model cannot be used right now, or nil when it can.
 --
+-- Only as sure as the model list it is given. With no list at all (the
+-- backend did not answer in time), nothing is refused here: the run itself
+-- reports what is wrong. OpenAI and Gemini are not gated on their list
+-- either — a brief hiccup there empties it, and refusing a paid run the user
+-- set up on that basis would be wrong; their key is still required.
+--
 -- @param resp table|nil The /models response the picker was built from.
 -- @param key string|nil The chosen "provider::model".
 -- @return string|nil A message for the user.
@@ -179,8 +209,13 @@ function AiProviders.unavailableReason(resp, key)
 			.. "server under Plug-in Manager → Optional AI providers."
 	end
 	local provider, model = AiProviders.splitModelKey(key)
-	local models = type(resp) == "table" and type(resp.models) == "table" and resp.models or {}
-	for _, offered in ipairs(models[provider] or {}) do
+	if type(resp) ~= "table" or type(resp.models) ~= "table" then
+		return nil
+	end
+	if provider == "chatgpt" or provider == "gemini" then
+		return nil
+	end
+	for _, offered in ipairs(resp.models[provider] or {}) do
 		if offered == model then
 			return nil
 		end
@@ -191,8 +226,13 @@ function AiProviders.unavailableReason(resp, key)
 		fix = "Start " .. AiProviders.label(provider) .. " and try again, or pick another model."
 	elseif provider == "openai_compatible" then
 		fix = "Check the Other AI server under Plug-in Manager → Optional AI providers, or pick another model."
-	elseif provider == "chatgpt" or provider == "gemini" then
-		fix = "Check the " .. AiProviders.label(provider) .. " key in Plug-in Manager, or pick another model."
+		-- The backend says why the server could not be asked, when it knows.
+		for _, warning in ipairs(resp.warnings or {}) do
+			if tostring(warning):find("^Other AI server") then
+				fix = tostring(warning)
+				break
+			end
+		end
 	else
 		fix = "Download it again in Plug-in Manager, or pick another model."
 	end
@@ -305,6 +345,15 @@ function AiProviders.migrateLegacyPrefs(p, defaults)
 	end
 	p.providerPrefsVersion = 2
 
+	-- The old pickers stored "qwen::" when nothing was available — a provider
+	-- the backend never had. For keyword dedup it meant "similarity only",
+	-- which is what an empty choice means now.
+	for _, field in ipairs({ "modelKey", "deduplicateModelKey" }) do
+		if AiProviders.splitModelKey(p[field]) == "qwen" then
+			p[field] = ""
+		end
+	end
+
 	local custom = {}
 	if isCustomAddress(p.ollamaBaseUrl, defaults.defaultOllamaBaseUrl) then
 		custom.ollama = trim(p.ollamaBaseUrl)
@@ -320,16 +369,21 @@ function AiProviders.migrateLegacyPrefs(p, defaults)
 		return nil
 	end
 
-	-- The app the user actually runs with wins.
+	-- The app the user actually runs with wins; otherwise LM Studio. Built
+	-- without nil holes: `ipairs` stops at the first nil, and an unset model
+	-- choice must not hide the fallbacks behind it.
 	local chosen
-	local candidates = {
-		(AiProviders.splitModelKey(p.modelKey)),
-		(AiProviders.splitModelKey(p.deduplicateModelKey)),
-		"lmstudio",
-		"ollama",
-	}
+	local candidates = {}
+	for _, key in ipairs({ "modelKey", "deduplicateModelKey" }) do
+		local provider = AiProviders.splitModelKey(p[key])
+		if provider then
+			table.insert(candidates, provider)
+		end
+	end
+	table.insert(candidates, "lmstudio")
+	table.insert(candidates, "ollama")
 	for _, candidate in ipairs(candidates) do
-		if candidate and custom[candidate] then
+		if custom[candidate] then
 			chosen = candidate
 			break
 		end

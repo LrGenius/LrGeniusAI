@@ -211,9 +211,14 @@ LrTasks.startAsyncTask(function()
 		-- Load available LLM models from server. The model is optional here:
 		-- without one, similar keywords are grouped by embedding similarity
 		-- alone, which is what the empty choice says.
-		local modelsResp = SearchIndexAPI.getModels({ includeCloud = true })
-		local savedModelKey = prefs.deduplicateModelKey or prefs.modelKey
+		local modelsResp, modelsErr = SearchIndexAPI.getModels({ includeCloud = true })
+		local savedModelKey = AiProviders.resolveSavedKey(modelsResp, prefs.deduplicateModelKey or prefs.modelKey)
 		local modelItems = AiProviders.modelItems(modelsResp, savedModelKey, { emptyTitle = "None (similarity only)" })
+		-- Why a provider the user set up offers nothing, shown under the picker.
+		local modelWarnings = SearchIndexAPI.condenseMessages(modelsResp and modelsResp.warnings)
+		if not modelsResp then
+			modelWarnings = "The list of AI models could not be loaded: " .. tostring(modelsErr or "no answer")
+		end
 
 		-- ── Step 1: Warning + model selection + backup confirmation ──────────
 		local warnProps = LrBinding.makePropertyTable(context)
@@ -241,10 +246,21 @@ LrTasks.startAsyncTask(function()
 						title = LOC("$$$/LrGeniusAI/DeduplicateKeywords/AIModelLabel=AI Model:"),
 						width = 120,
 					}),
-					f:popup_menu({
-						value = bind("modelKey"),
-						items = modelItems,
-						width = 290,
+					f:column({
+						f:popup_menu({
+							value = bind("modelKey"),
+							items = modelItems,
+							width = 290,
+						}),
+						-- Only there when there is something to say; an empty
+						-- text would still take up its row.
+						modelWarnings and f:static_text({
+							title = modelWarnings,
+							text_color = LrColor(0.8, 0, 0),
+							size = "small",
+							wrap = true,
+							width = 290,
+						}) or nil,
 					}),
 				}),
 				f:spacer({ height = 6 }),

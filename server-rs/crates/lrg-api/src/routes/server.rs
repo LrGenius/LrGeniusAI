@@ -165,10 +165,19 @@ pub(super) async fn list_models(
 
     // Same rule for MLX, except that "supported" is a runtime question — Apple
     // silicon plus an installed sidecar — rather than a build-time one.
+    // Old names that still resolve, so the plugin can map a saved choice onto
+    // the name offered now: MLX models from the Hugging Face cache used to be
+    // listed under their snapshot hash.
+    let mut mlx_aliases = serde_json::Map::new();
     let mlx_models: Vec<String> = if state.mlx.is_supported() {
         crate::mlx_models::discover_local_models()
             .into_iter()
-            .map(|m| m.name)
+            .map(|m| {
+                if let Some(alias) = m.alias {
+                    mlx_aliases.insert(alias, json!(m.name));
+                }
+                m.name
+            })
             .collect()
     } else {
         Vec::new()
@@ -185,6 +194,7 @@ pub(super) async fn list_models(
             "gemini": gemini_models,
         },
         "servers": servers,
+        "aliases": { "mlx": mlx_aliases },
         "warnings": warnings,
     }))
 }

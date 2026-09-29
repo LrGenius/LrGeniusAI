@@ -191,7 +191,12 @@ async fn a_rejected_schema_falls_back_once_and_is_remembered() {
         .generate_metadata(&photo_request("m-fallback"))
         .await;
     assert!(second.success, "{:?}", second.error);
-    assert!(second.warning.is_none(), "reported once, not per photo");
+    // Every photo answered in the looser format says so: a later run must be
+    // told too, and the plugin deduplicates and caps repeated warnings.
+    assert!(second
+        .warning
+        .unwrap_or_default()
+        .contains("cannot constrain"));
     let requests = fake.requests();
     assert_eq!(requests.len(), 3, "the second photo needs one request");
     assert_eq!(requests[2].1["response_format"]["type"], "json_object");

@@ -314,7 +314,8 @@ pub fn build_provider(selection: &ProviderSelection) -> Result<Arc<dyn LlmProvid
                 .map(str::trim)
                 .filter(|u| !u.is_empty())
             else {
-                return Err("No AI server address is set. Enter it in Plug-in Manager →                             Optional AI providers → Other AI server."
+                return Err("No AI server address is set. Enter it in Plug-in Manager → Optional AI providers → \
+                 Other AI server."
                     .to_string());
             };
             Ok(Arc::new(OpenAiCompatibleProvider::custom(
@@ -462,7 +463,7 @@ mod tests {
         let err = build_provider(&ProviderSelection::new("openai_compatible")).err();
         assert!(
             err.as_deref()
-                .is_some_and(|e| e.contains("Other AI server")),
+                .is_some_and(|e| e.contains("Other AI server") && !e.contains("  ")),
             "{err:?}"
         );
 

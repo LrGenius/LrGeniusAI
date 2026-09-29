@@ -111,7 +111,43 @@ describe("AiProviders.unavailableReason", function()
 	it("tells the user what to do for each kind of provider", function()
 		assert.truthy(AiProviders.unavailableReason(resp, "lmstudio::qwen"):find("Start LM Studio", 1, true))
 		assert.truthy(AiProviders.unavailableReason(resp, "openai_compatible::x"):find("Other AI server", 1, true))
-		assert.truthy(AiProviders.unavailableReason(resp, "chatgpt::gpt-5-mini"):find("OpenAI key", 1, true))
+	end)
+
+	it("does not refuse what it cannot judge", function()
+		-- No list at all: the backend did not answer; the run will say why.
+		assert.is_nil(AiProviders.unavailableReason(nil, "mlx::gemma-4-e4b-it-4bit"))
+		-- A cloud list is empty on any hiccup; the key is checked instead.
+		assert.is_nil(AiProviders.unavailableReason(resp, "chatgpt::gpt-5-mini"))
+		assert.is_nil(AiProviders.unavailableReason(resp, "gemini::gemini-2.5-flash"))
+	end)
+
+	it("passes on why the Other AI server could not be asked", function()
+		local reason = AiProviders.unavailableReason({
+			models = { openai_compatible = {} },
+			warnings = { "Other AI server: OpenRouter rejected the API key." },
+		}, "openai_compatible::google/gemini-2.5-flash")
+		assert.truthy(reason:find("rejected the API key", 1, true))
+	end)
+end)
+
+describe("AiProviders.resolveSavedKey", function()
+	local resp = {
+		models = { mlx = { "gemma-3-12b-it-qat-4bit" } },
+		aliases = { mlx = { ["4f1c9e"] = "gemma-3-12b-it-qat-4bit" } },
+	}
+
+	it("maps an old Hugging Face cache hash onto the model's name", function()
+		local key = AiProviders.resolveSavedKey(resp, "mlx::4f1c9e")
+		assert.are.equal("mlx::gemma-3-12b-it-qat-4bit", key)
+		assert.is_nil(AiProviders.unavailableReason(resp, key))
+		assert.are.equal(1, #AiProviders.modelItems(resp, key))
+	end)
+
+	it("leaves every other choice alone", function()
+		assert.are.equal("mlx::other", AiProviders.resolveSavedKey(resp, "mlx::other"))
+		assert.are.equal("ollama::x", AiProviders.resolveSavedKey(resp, "ollama::x"))
+		assert.is_nil(AiProviders.resolveSavedKey(resp, nil))
+		assert.are.equal("mlx::4f1c9e", AiProviders.resolveSavedKey(nil, "mlx::4f1c9e"))
 	end)
 end)
 
@@ -231,6 +267,33 @@ describe("AiProviders.migrateLegacyPrefs", function()
 		assert.are.equal("http://nas.local:11434", p.aiServerUrl)
 		assert.truthy(notice:find("192.168.1.5:1234", 1, true))
 		assert.truthy(notice:find("could not be kept", 1, true))
+	end)
+
+	-- The case that crashed plug-in start-up: a changed Ollama address, a
+	-- cloud model in use, and no keyword-dedup choice. An unset choice left a
+	-- nil hole that hid the fallbacks from ipairs.
+	it("moves the address when the model in use is another provider's", function()
+		local p = { ollamaBaseUrl = "http://192.168.1.10:11434", modelKey = "chatgpt::gpt-4o" }
+		local notice = AiProviders.migrateLegacyPrefs(p, DEFAULTS)
+		assert.are.equal("http://192.168.1.10:11434", p.aiServerUrl)
+		assert.are.equal("chatgpt::gpt-4o", p.modelKey)
+		assert.is_nil(p.deduplicateModelKey)
+		assert.truthy(notice:find("Ollama address", 1, true))
+	end)
+
+	it("moves the address when no model was ever chosen", function()
+		for _, modelKey in ipairs({ false, "" }) do
+			local p = { lmstudioBaseUrl = "192.168.1.5:1234", modelKey = modelKey or nil }
+			AiProviders.migrateLegacyPrefs(p, DEFAULTS)
+			assert.are.equal("192.168.1.5:1234", p.aiServerUrl)
+		end
+	end)
+
+	it("clears the old qwen:: placeholder choice", function()
+		local p = { modelKey = "qwen::", deduplicateModelKey = "qwen::" }
+		assert.is_nil(AiProviders.migrateLegacyPrefs(p, DEFAULTS))
+		assert.are.equal("", p.modelKey)
+		assert.are.equal("", p.deduplicateModelKey)
 	end)
 
 	it("never overwrites an Other AI server that is already set", function()

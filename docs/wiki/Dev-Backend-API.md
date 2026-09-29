@@ -46,11 +46,14 @@ Body (all optional; POST so that no key ends up in a URL):
 {
   "models":   { "openai_compatible": ["google/gemini-2.5-flash", "…"], "lmstudio": [], "…": [] },
   "servers":  { "openai_compatible": { "label": "OpenRouter" } },
+  "aliases":  { "mlx": { "<old name>": "<name offered now>" } },
   "warnings": ["Other AI server: OpenRouter rejected the API key. …"]
 }
 ```
 
-A provider that is only probed and not running (Ollama, LM Studio) is simply empty. The user's own server is different: they entered it, so any failure to list it — unreachable, rejected key, malformed address — is reported in `warnings` in words the user can act on. `servers.openai_compatible.label` (`OpenRouter`, or host and port) is what the plugin shows in front of that server's models. Only models that can take a photo are listed: entries a server marks as text-only (OpenRouter's `architecture.input_modalities`) and embedding models are dropped. An LM Studio entered as the user's server is not also listed under `lmstudio`.
+`aliases` maps names a model used to be offered under, and that the backend still accepts as `model`, onto its current name: MLX models from the Hugging Face cache were listed under their snapshot hash before they were listed under their repo name. The plugin uses it to keep a saved choice selected.
+
+A provider that is only probed and not running (Ollama, LM Studio) is simply empty. The user's own server is different: they entered it, so any failure to list it — unreachable, rejected key, malformed address — is reported in `warnings` in words the user can act on. OpenAI and Gemini listings time out after 10 s so that a hanging network cannot hold up the whole list. `servers.openai_compatible.label` (`OpenRouter`, or host and port) is what the plugin shows in front of that server's models. Only models that can take a photo are listed: entries a server marks as text-only (OpenRouter's `architecture.input_modalities`) and embedding models are dropped. An LM Studio entered as the user's server is not also listed under `lmstudio`.
 
 ### `GET /v1/server/logs`
 Returns recent log lines from the server log.

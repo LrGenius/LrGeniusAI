@@ -424,6 +424,9 @@ struct GgufDownloadSpec {
     /// and nothing else (see `llm_models::pair_models_per_dir`).
     dir: PathBuf,
     installed_name: String,
+    /// Mark the folder as this repo's before the first byte arrives, so a
+    /// retry after an interruption resumes in it (see `hf_repo::folder_for`).
+    write_source_marker: bool,
 }
 
 impl From<&'static CatalogEntry> for GgufDownloadSpec {
@@ -438,6 +441,7 @@ impl From<&'static CatalogEntry> for GgufDownloadSpec {
                 .collect(),
             dir: lrg_ml::model_paths::resolve_llm().dir,
             installed_name: entry.model_file.to_string(),
+            write_source_marker: false,
         }
     }
 }
@@ -455,6 +459,7 @@ impl From<&RepoCheck> for GgufDownloadSpec {
                 .collect(),
             dir: hf_repo::destination_of(check),
             installed_name: check.installed_name.clone(),
+            write_source_marker: true,
         }
     }
 }
@@ -466,6 +471,12 @@ async fn run_download(downloads: Downloads, spec: GgufDownloadSpec) {
             &downloads,
             format!("failed to create model directory {}: {e}", dir.display()),
         );
+    }
+    if spec.write_source_marker {
+        if let Err(e) = hf_repo::write_source_marker(&dir, &spec.repo, &spec.revision) {
+            // Only costs a retry its reuse of this folder.
+            log::warn!("could not record where the model came from: {e}");
+        }
     }
 
     let client = reqwest::Client::new();
@@ -929,10 +940,7 @@ async fn run_mlx_download(downloads: Downloads, spec: MlxDownloadSpec) {
 
     prune_stale_shard_index(&staging).await;
     if spec.write_source_marker {
-        let marker = json!({"repo": spec.repo, "revision": spec.revision});
-        if let Err(e) =
-            tokio::fs::write(staging.join(hf_repo::SOURCE_MARKER), marker.to_string()).await
-        {
+        if let Err(e) = hf_repo::write_source_marker(&staging, &spec.repo, &spec.revision) {
             // Only costs a later check its "already installed" answer.
             log::warn!("could not record where the model came from: {e}");
         }

@@ -1991,6 +1991,7 @@ async fn provider_models_list_every_provider_and_no_warnings_by_default() {
     }
     assert_eq!(json["warnings"], serde_json::json!([]));
     assert_eq!(json["servers"], serde_json::json!({}));
+    assert!(json["aliases"]["mlx"].is_object(), "{json}");
 }
 
 /// Only probed providers stay quiet when they are not there. The user's own

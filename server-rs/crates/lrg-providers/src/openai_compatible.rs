@@ -244,13 +244,12 @@ fn schema_mode_for(api_base: &str, model: &str) -> SchemaMode {
         .unwrap_or(SchemaMode::JsonSchema)
 }
 
-/// Record a downgrade. `true` if this call is the one that made it, so the
-/// warning about it is reported once rather than on every photo.
-fn remember_schema_mode(api_base: &str, model: &str, mode: SchemaMode) -> bool {
-    let mut modes = schema_modes().lock().unwrap();
-    let key = (api_base.to_string(), model.to_string());
-    let previous = modes.insert(key, mode);
-    previous != Some(mode)
+/// Record a downgrade for this server and model.
+fn remember_schema_mode(api_base: &str, model: &str, mode: SchemaMode) {
+    schema_modes()
+        .lock()
+        .unwrap()
+        .insert((api_base.to_string(), model.to_string()), mode);
 }
 
 /// `true` when an error response says the server cannot do the structured
@@ -314,6 +313,16 @@ fn error_detail(body: &str) -> String {
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     text.chars().take(200).collect()
+}
+
+/// `true` for a 404 body that says nothing beyond "not found".
+fn is_generic_not_found(detail: &str) -> bool {
+    let detail = detail.trim().trim_end_matches('.').to_ascii_lowercase();
+    detail.is_empty()
+        || detail == "not found"
+        || detail == "404 not found"
+        || detail == "404 page not found"
+        || detail == "file not found"
 }
 
 /// `true` when an error says the model could not take the photo — a text-only
@@ -539,6 +548,13 @@ impl OpenAiCompatibleProvider {
                 "{name} does not know the model \"{model}\". Pick another one in the model \
                  list.{detail_suffix}"
             ),
+            // A bare "Not Found" is a wrong address; anything more specific is
+            // the server explaining itself (OpenRouter: "No endpoints found
+            // matching your data policy"), and blaming the address would send
+            // the user looking in the wrong place.
+            404 if !is_generic_not_found(detail) => {
+                format!("{name} could not serve the request: {detail}")
+            }
             404 => format!(
                 "{name} has no OpenAI-compatible API at this address. The address usually ends \
                  in /v1.{detail_suffix}"
@@ -597,18 +613,33 @@ impl OpenAiCompatibleProvider {
     /// Send a structured request, stepping down through [`SchemaMode`]s while
     /// the server rejects the one asked for.
     ///
-    /// Returns the answer and, the first time this server and model are
-    /// downgraded, a warning saying so.
+    /// Returns the answer and, whenever it was produced in a looser mode than
+    /// a JSON schema, a warning saying so. That is every photo on such a server,
+    /// not only the one that found out: the plugin deduplicates and caps
+    /// repeated warnings, and a run that starts after the downgrade was
+    /// remembered must still be told why fields may go missing.
     async fn chat_structured(
         &self,
         model: &str,
         build: impl Fn(SchemaMode) -> Value,
     ) -> Result<(Value, Option<String>), String> {
         let mut mode = schema_mode_for(&self.url.api_base, model);
-        let mut warning = None;
         loop {
             match self.post_chat(&build(mode), GENERATION_TIMEOUT).await {
-                Ok(result) => return Ok((result, warning)),
+                Ok(result) => {
+                    // The answer is still parsed and checked, and a field that
+                    // really goes missing produces its own warning — but the
+                    // user should know why that may happen more often here.
+                    let warning = (mode != SchemaMode::JsonSchema).then(|| {
+                        format!(
+                            "{} cannot constrain \"{model}\" to the answer format, so the format \
+                             is only described in the prompt. Answers are still checked, but \
+                             fields may be missing more often.",
+                            self.display_name()
+                        )
+                    });
+                    return Ok((result, warning));
+                }
                 Err(PostError::Status { status, detail })
                     if rejects_structured_output(status, &detail) =>
                 {
@@ -619,18 +650,7 @@ impl OpenAiCompatibleProvider {
                         "{} rejected {mode:?} output for {model} ({detail}); retrying with {next:?}",
                         self.display_name()
                     );
-                    // The answer is still parsed and checked, and a field that
-                    // really goes missing produces its own warning — but the
-                    // user should know why that may now happen more often.
-                    // Once per server and model, not on every photo.
-                    if remember_schema_mode(&self.url.api_base, model, next) {
-                        warning = Some(format!(
-                            "{} cannot constrain \"{model}\" to the answer format, so the format is \
-                             now only described in the prompt. Answers are still checked, but \
-                             fields may be missing more often.",
-                            self.display_name()
-                        ));
-                    }
+                    remember_schema_mode(&self.url.api_base, model, next);
                     mode = next;
                 }
                 Err(PostError::Status { status, detail }) => {
@@ -1160,6 +1180,13 @@ mod tests {
                 "does not know the model",
             ),
             (&with_key, 404, "Not Found", "m", "usually ends in /v1"),
+            (
+                &with_key,
+                404,
+                "No endpoints found matching your data policy",
+                "google/gemma-3-27b-it",
+                "could not serve the request: No endpoints found",
+            ),
             (&with_key, 429, "", "m", "rate limiting"),
             (
                 &with_key,
@@ -1212,11 +1239,10 @@ mod tests {
     }
 
     #[test]
-    fn a_downgrade_is_reported_once_per_server_and_model() {
+    fn a_downgrade_is_remembered_per_server_and_model() {
         let base = "http://unit-test.invalid/v1";
         assert_eq!(schema_mode_for(base, "m"), SchemaMode::JsonSchema);
-        assert!(remember_schema_mode(base, "m", SchemaMode::JsonObject));
-        assert!(!remember_schema_mode(base, "m", SchemaMode::JsonObject));
+        remember_schema_mode(base, "m", SchemaMode::JsonObject);
         assert_eq!(schema_mode_for(base, "m"), SchemaMode::JsonObject);
         assert_eq!(schema_mode_for(base, "other"), SchemaMode::JsonSchema);
     }
