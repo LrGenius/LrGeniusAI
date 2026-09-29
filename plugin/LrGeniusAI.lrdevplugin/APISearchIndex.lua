@@ -872,8 +872,9 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		location_country_code = options.location_country_code,
 		gps_latitude = options.gps_latitude and tostring(options.gps_latitude) or nil,
 		gps_longitude = options.gps_longitude and tostring(options.gps_longitude) or nil,
-		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
-		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		-- The Other AI server, for provider openai_compatible (see AiProviders.connectionOptions).
+		-- Ollama and LM Studio are always reached at their default address.
+		server_url = options.server_url,
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
@@ -1005,8 +1006,9 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			or "English",
 		generate_aliases = tostring(options.generate_aliases or false),
 		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
-		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
-		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		-- The Other AI server, for provider openai_compatible (see AiProviders.connectionOptions).
+		-- Ollama and LM Studio are always reached at their default address.
+		server_url = options.server_url,
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
@@ -1329,14 +1331,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
 	end
 	appendLocationChunks(mimeChunks, options)
-	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
-		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
-	end
-	if options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl) then
-		table.insert(
-			mimeChunks,
-			{ name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl }
-		)
+	if options.server_url then
+		table.insert(mimeChunks, { name = "server_url", value = options.server_url })
 	end
 
 	table.insert(mimeChunks, {
@@ -1456,14 +1452,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if type(options.is_raw) == "boolean" then
 		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end
-	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
-		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
-	end
-	if options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl) then
-		table.insert(
-			mimeChunks,
-			{ name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl }
-		)
+	if options.server_url then
+		table.insert(mimeChunks, { name = "server_url", value = options.server_url })
 	end
 	if options.vertex_project_id and options.vertex_project_id ~= "" then
 		table.insert(mimeChunks, { name = "vertex_project_id", value = options.vertex_project_id })
@@ -3757,7 +3747,7 @@ local CLUSTER_MAX_TOTAL = 3600
 -- Uses an async job so the HTTP request never times out on large keyword sets.
 -- @param keywordNames table Flat list of keyword name strings
 -- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
--- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
+-- @param options table|nil { provider, model, api_key, server_url }
 -- @param cancelScope table|nil LrProgressScope; polling stops early when isCanceled() returns true
 -- @param onProgress function|nil Called on every poll with
 --        { elapsed = seconds, stage = str|nil, done = n|nil, total = n|nil }
@@ -3781,11 +3771,8 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 		if options.api_key then
 			body.api_key = options.api_key
 		end
-		if options.ollama_base_url then
-			body.ollama_base_url = options.ollama_base_url
-		end
-		if options.lmstudio_base_url then
-			body.lmstudio_base_url = options.lmstudio_base_url
+		if options.server_url then
+			body.server_url = options.server_url
 		end
 	end
 
@@ -4075,22 +4062,51 @@ function SearchIndexAPI.saveThumbnail(uuid, faceIndex, base64Data)
 end
 
 ---
--- Retrieves all available multimodal models from all providers.
--- Always filters to vision-capable models only.
--- Dynamically checks Ollama and LM Studio availability on each call.
--- @param openaiApiKey string|nil OpenAI API key for listing ChatGPT models
--- @param geminiApiKey string|nil Gemini API key for listing Gemini models
--- @return table|nil Response from server with format: { models = { qwen = {...}, ollama = {...}, ... } }
-function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
-	local url = SearchIndexAPI.url("MODELS")
-	local body = {
-		openai_apikey = openaiApiKey,
-		gemini_apikey = geminiApiKey,
-		ollama_base_url = (prefs and prefs.ollamaBaseUrl) or nil,
-		lmstudio_base_url = (prefs and prefs.lmstudioBaseUrl) or nil,
-	}
-	local result = _request("POST", url, body, 15)
-	return result
+-- Lists the models every provider offers (POST /v1/llm/providers/models).
+--
+-- Ollama and LM Studio are probed at their default address on this computer.
+-- The cloud keys are only sent when asked for, so a health check never costs a
+-- cloud round-trip, and the Other AI server is only asked when one is set.
+--
+-- @param opts table|nil
+--        includeCloud: boolean — also list OpenAI and Gemini (sends the keys).
+--        serverUrl, serverApiKey: string|nil — check this address instead of the
+--          saved one (the settings dialog, before it is saved). "" means none.
+--        skipServer: boolean — do not ask the Other AI server at all.
+-- @return table|nil { models = { provider = { model, ... } }, servers, warnings }
+-- @return string|nil error
+--
+function SearchIndexAPI.getModels(opts)
+	opts = opts or {}
+	local function nonEmpty(value)
+		if type(value) ~= "string" then
+			return nil
+		end
+		local trimmed = value:gsub("^%s+", ""):gsub("%s+$", "")
+		return trimmed ~= "" and trimmed or nil
+	end
+	local body = {}
+	if opts.includeCloud then
+		body.openai_apikey = nonEmpty(prefs and prefs.chatgptApiKey)
+		body.gemini_apikey = nonEmpty(prefs and prefs.geminiApiKey)
+	end
+	if not opts.skipServer then
+		local serverUrl = opts.serverUrl
+		local serverApiKey = opts.serverApiKey
+		if serverUrl == nil then
+			serverUrl = prefs and prefs.aiServerUrl
+			serverApiKey = prefs and prefs.aiServerApiKey
+		end
+		body.server_url = nonEmpty(serverUrl)
+		if body.server_url then
+			body.server_apikey = nonEmpty(serverApiKey)
+		end
+	end
+	local result, err = _request("POST", SearchIndexAPI.url("MODELS"), body, 30)
+	if err then
+		log:error("getModels failed: " .. tostring(err))
+	end
+	return result, err
 end
 
 ---
@@ -4833,6 +4849,11 @@ function SearchIndexAPI.getDetailedHealth()
 		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
 		ollama = false,
 		lmstudio = false,
+		-- The Other AI server counts once an address is set. It is not asked
+		-- here: this runs every few seconds while the settings are open, and a
+		-- remote server must not be polled for that. Whether it answers is
+		-- shown in the settings' own status line and in the task dialogs.
+		server = not Util.nilOrEmpty(prefs.aiServerUrl),
 		-- The engine built into the backend — MLX on macOS, llama.cpp on
 		-- Windows. Counted as a configured provider like any other: it is the
 		-- default way to run this plug-in, and leaving it out told every user
@@ -4841,44 +4862,21 @@ function SearchIndexAPI.getDetailedHealth()
 		localEngine = false,
 	}
 
-	-- `/models` already reports both built-in engines, and reports them empty
-	-- when the platform does not ship one or no model has been downloaded yet,
-	-- which is exactly the distinction this needs. No API keys are passed: a
-	-- health check must not depend on a cloud round-trip.
+	-- `/models` reports both built-in engines, and Ollama and LM Studio as
+	-- found at their default address — each empty when there is nothing to
+	-- use, which is exactly the distinction this needs. No API keys are passed:
+	-- a health check must not depend on a cloud round-trip.
 	if health.backend then
-		local modelsResp = SearchIndexAPI.getModels()
+		local modelsResp = SearchIndexAPI.getModels({ skipServer = true })
 		local models = modelsResp and modelsResp.models
 		if type(models) == "table" then
-			for _, engine in ipairs({ "mlx", "llamacpp" }) do
-				local list = models[engine]
-				if type(list) == "table" and #list > 0 then
-					health.localEngine = true
-					break
-				end
+			local function offers(provider)
+				local list = models[provider]
+				return type(list) == "table" and #list > 0
 			end
-		end
-	end
-
-	-- Try to ping local LLMs if they are not default localhost but maybe they are
-	if not Util.nilOrEmpty(prefs.ollamaBaseUrl) then
-		local url = prefs.ollamaBaseUrl .. "/api/tags"
-		local _, hdrs = LrHttp.get(url, nil, 500)
-		local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
-		if status == 200 then
-			health.ollama = true
-		end
-	end
-
-	if not Util.nilOrEmpty(prefs.lmstudioBaseUrl) then
-		local baseUrl = prefs.lmstudioBaseUrl
-		if not baseUrl:match("^https?://") then
-			baseUrl = "http://" .. baseUrl
-		end
-		local url = baseUrl .. "/v1/models"
-		local _, hdrs = LrHttp.get(url, nil, 500)
-		local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
-		if status == 200 then
-			health.lmstudio = true
+			health.localEngine = offers("mlx") or offers("llamacpp")
+			health.ollama = offers("ollama")
+			health.lmstudio = offers("lmstudio")
 		end
 	end
 
@@ -4887,8 +4885,8 @@ end
 
 ---
 -- True when at least one LLM provider is usable: a cloud API key, a reachable
--- local app (Ollama / LM Studio), or the engine built into the backend (MLX on
--- macOS, llama.cpp on Windows).
+-- local app (Ollama / LM Studio), an Other AI server, or the engine built into
+-- the backend (MLX on macOS, llama.cpp on Windows).
 --
 -- This lives here, next to the health table it reads, because two callers used
 -- to spell the same condition out by hand and drifted apart: the Plug-in
@@ -4909,6 +4907,7 @@ function SearchIndexAPI.hasAnyLlmProvider(health)
 		or health.chatgpt == true
 		or health.ollama == true
 		or health.lmstudio == true
+		or health.server == true
 end
 
 -- ---------------------------------------------------------------------------
@@ -5171,8 +5170,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	-- the photo has been exported to JPEG, and the edit guardrails need it to
 	-- know whether blown highlights still have anything behind them.
 	addEditOpt("is_raw", options.is_raw)
-	addEditOpt("ollama_base_url", options.ollama_base_url or (prefs and prefs.ollamaBaseUrl))
-	addEditOpt("lmstudio_base_url", options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl))
+	addEditOpt("server_url", options.server_url)
 
 	local styleCatalogId = getCatalogId()
 	if styleCatalogId then

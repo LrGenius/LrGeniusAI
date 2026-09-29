@@ -68,9 +68,8 @@ end
 -- The llama.cpp half of /v1/llm/catalog + /v1/llm/status.
 local function updateLlamaCppFields(propertyTable, catalog, status)
 	if catalog.supported == false then
-		propertyTable.llmStatusText = LOC(
-			"$$$/LrGeniusAI/LocalModel/Unsupported=This backend build has no local-model support; use Ollama or LM Studio."
-		)
+		propertyTable.llmStatusText =
+			"This backend build has no local-model support; use Ollama, LM Studio or another AI server."
 		propertyTable.llmDownloadChoices = {}
 		-- Also clear the selection, not just the list: the Download button is
 		-- gated on it, and a choice left over from an earlier refresh would

@@ -77,35 +77,15 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.maxTokens = prefs.maxTokens or Defaults.defaultMaxTokens
 	props.replaceSS = prefs.replaceSS or false
 
-	-- Build model list from server (local providers first)
-	local modelItems = {}
-
-	-- Fetch all models with API keys if configured
-	-- Server will check all providers and filter to multimodal only
-	local openaiKey = (prefs and not Util.nilOrEmpty(prefs.chatgptApiKey)) and prefs.chatgptApiKey or nil
-	local geminiKey = (prefs and not Util.nilOrEmpty(prefs.geminiApiKey)) and prefs.geminiApiKey or nil
-
-	local modelsResp = SearchIndexAPI.getModels(openaiKey, geminiKey)
-	if modelsResp and modelsResp.models then
-		for provider, list in pairs(modelsResp.models) do
-			for _, model in ipairs(list) do
-				local title = provider .. ": " .. model
-				local value = provider .. "::" .. model
-				table.insert(modelItems, { title = title, value = value })
-			end
-		end
-	end
-
-	table.sort(modelItems, function(a, b)
-		return a.title < b.title
-	end)
-	if not modelItems or #modelItems == 0 then
-		-- Fallback option if nothing matched filters
-		table.insert(modelItems, { title = "Default (built-in)", value = "qwen::" })
-	end
-	if not props.modelKey or props.modelKey == "" then
-		props.modelKey = modelItems[1].value
-	end
+	-- The model picker: every provider's models in AiProviders' order. A saved
+	-- choice that is not offered right now stays selected, marked as such, so
+	-- opening this dialog never quietly moves a run to another provider.
+	local modelsResp = SearchIndexAPI.getModels({ includeCloud = true })
+	local modelItems = AiProviders.modelItems(modelsResp, prefs.modelKey)
+	props.modelKey = AiProviders.initialKey(modelItems, prefs.modelKey)
+	-- Problems listing a provider the user set up (an Other AI server that
+	-- cannot be reached, a rejected key) are shown right under the picker.
+	local modelWarnings = SearchIndexAPI.condenseMessages(modelsResp and modelsResp.warnings)
 
 	-- Context options
 	props.submitKeywords = prefs.submitKeywords or false
@@ -302,10 +282,21 @@ local function showAnalyzeAndIndexDialog(ctx)
 							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/aiModel=AI Model:"),
 							width = share("labelWidth"),
 						}),
-						f:popup_menu({
-							value = bind("modelKey"),
-							items = modelItems,
-							width = 300,
+						f:column({
+							f:popup_menu({
+								value = bind("modelKey"),
+								items = modelItems,
+								width = 300,
+							}),
+							-- Only there when there is something to say; an
+							-- empty text would still take up its row.
+							modelWarnings and f:static_text({
+								title = modelWarnings,
+								text_color = LrColor(0.8, 0, 0),
+								size = "small",
+								wrap = true,
+								width = 300,
+							}) or nil,
 						}),
 					}),
 					f:row({
@@ -677,13 +668,13 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.generateAltText = props.generateAltText
 		-- Persist selected model key and provider for backwards compatibility
 		prefs.modelKey = props.modelKey
-		if props.modelKey then
-			local sep = string.find(props.modelKey, "::", 1, true)
-			if sep then
-				local prov = string.sub(props.modelKey, 1, sep - 1)
-				prefs.ai = prov
-			end
+		local chosenProvider = AiProviders.splitModelKey(props.modelKey)
+		if chosenProvider then
+			prefs.ai = chosenProvider
 		end
+		-- Checked here, against the list the picker showed, and reported by the
+		-- run before any photo is exported.
+		props.modelUnavailableReason = AiProviders.unavailableReason(modelsResp, props.modelKey)
 		prefs.generateLanguage = props.language
 		prefs.temperature = props.temperature
 		prefs.maxTokens = props.maxTokens
@@ -867,17 +858,21 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- Parse provider and model from unified modelKey (format: provider::model)
-		local providerFromKey, modelFromKey = nil, nil
-		if props.modelKey then
-			local sep = string.find(props.modelKey, "::", 1, true)
-			if sep then
-				providerFromKey = string.sub(props.modelKey, 1, sep - 1)
-				modelFromKey = string.sub(props.modelKey, sep + 2)
-				if modelFromKey == "" then
-					modelFromKey = nil
-				end
-			else
-				providerFromKey = props.modelKey -- fallback
+		local providerFromKey, modelFromKey = AiProviders.splitModelKey(props.modelKey)
+
+		-- The language model only matters for metadata; embeddings, faces and
+		-- species run without one.
+		local connection = {}
+		if props.enableMetadata then
+			if props.modelUnavailableReason then
+				LrDialogs.showError(props.modelUnavailableReason)
+				return
+			end
+			local connectionErr
+			connection, connectionErr = AiProviders.connectionOptions(providerFromKey, prefs)
+			if not connection then
+				LrDialogs.showError(connectionErr)
+				return
 			end
 		end
 
@@ -917,30 +912,9 @@ LrTasks.startAsyncTask(function()
 			options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
 				or "us-central1"
 		end
-		-- Add API key for cloud providers if configured
-		if providerFromKey == "chatgpt" and prefs then
-			log:trace("Added ChatGPT API key to options")
-			if prefs.chatgptApiKey == nil or prefs.chatgptApiKey == "" then
-				LrDialogs.showError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences."
-					)
-				)
-				return
-			end
-			options.api_key = prefs.chatgptApiKey
-		elseif providerFromKey == "gemini" and prefs then
-			if prefs.geminiApiKey == nil or prefs.geminiApiKey == "" then
-				LrDialogs.showError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences."
-					)
-				)
-				return
-			end
-			log:trace("Added Gemini API key to options")
-			options.api_key = prefs.geminiApiKey
-		end
+		-- The key and server address the chosen provider needs, if any.
+		options.api_key = connection.api_key
+		options.server_url = connection.server_url
 
 		if props.enableVertexAI and prefs then
 			local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
@@ -1318,6 +1292,25 @@ LrTasks.startAsyncTask(function()
 
 		progressScope:done()
 
+		-- Every warning of the run, whatever the outcome: the backend's (per
+		-- photo), the run's own, and failed keyword writes. The success and
+		-- partial-failure summaries each used to drop a different one of these.
+		local function collectWarnings()
+			local parts = {}
+			-- A numeric loop, not ipairs: any of the three may be nil.
+			local sources = {
+				combinedWarnings,
+				SearchIndexAPI.condenseMessages(runWarnings),
+				SearchIndexAPI.condenseMessages(metadataWarnings),
+			}
+			for i = 1, 3 do
+				if not Util.nilOrEmpty(sources[i]) then
+					table.insert(parts, sources[i])
+				end
+			end
+			return #parts > 0 and table.concat(parts, "\n") or nil
+		end
+
 		-- Show completion message based on status
 		if status == "canceled" then
 			LrDialogs.message(
@@ -1344,8 +1337,9 @@ LrTasks.startAsyncTask(function()
 				processed,
 				failed
 			)
-			if #metadataWarnings > 0 then
-				summary = summary .. "\n\nWarnings:\n" .. SearchIndexAPI.condenseMessages(metadataWarnings)
+			local warningText = collectWarnings()
+			if warningText then
+				summary = summary .. "\n\nWarnings:\n" .. warningText
 			end
 			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(summary, combinedError)
@@ -1355,18 +1349,9 @@ LrTasks.startAsyncTask(function()
 		else -- success
 			local msg =
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
-			local allWarnings = {}
-			if combinedWarnings then
-				table.insert(allWarnings, combinedWarnings)
-			end
-			if #runWarnings > 0 then
-				local condensed = SearchIndexAPI.condenseMessages(runWarnings)
-				if condensed then
-					table.insert(allWarnings, condensed)
-				end
-			end
-			if #allWarnings > 0 then
-				msg = msg .. "\n\nWarnings:\n" .. table.concat(allWarnings, "\n")
+			local warningText = collectWarnings()
+			if warningText then
+				msg = msg .. "\n\nWarnings:\n" .. warningText
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)

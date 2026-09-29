@@ -82,10 +82,10 @@ function Util.dumpTable(t)
 	-- Redact base64 data for security
 	local result = s:gsub('(data = )"([A-Za-z0-9+/=]+)"', '%1"base64 removed"')
 	result = result:gsub('(url = "data:image/jpeg;base64,)([A-Za-z0-9+/]+=?=?)"', '%1base64 removed"')
-	-- Redact common API key fields by name (prefs / options)
-	result = result:gsub('(api_key%s*=%s*)"([^"]*)"', '%1"<redacted>"')
-	result = result:gsub('(chatgptApiKey%s*=%s*)"([^"]*)"', '%1"<redacted>"')
-	result = result:gsub('(geminiApiKey%s*=%s*)"([^"]*)"', '%1"<redacted>"')
+	-- Redact every API key field by name — prefs (chatgptApiKey, geminiApiKey,
+	-- aiServerApiKey) and request bodies (api_key, openai_apikey,
+	-- server_apikey) alike — so a new key field is covered without a new line.
+	result = result:gsub('([%w_]*[Aa][Pp][Ii]_?[Kk][Ee][Yy]%s*=%s*)"([^"]*)"', '%1"<redacted>"')
 	return result
 end
 
@@ -1942,9 +1942,8 @@ function Util.checkPluginHealth(options)
 		report.healthy = false
 		table.insert(report.issues, {
 			title = LOC("$$$/LrGeniusAI/Health/ApiKeysMissing=No AI providers configured for AI generation."),
-			hint = LOC(
-				"$$$/LrGeniusAI/Health/ApiKeysMissingHint=You need to configure Gemini or ChatGPT API keys (or a local provider) to generate keywords and descriptions."
-			),
+			hint = "Download a local AI model, start Ollama or LM Studio, or add a key or your own AI server "
+				.. "under Plug-in Manager → Optional AI providers to generate keywords and descriptions.",
 			critical = options.requireProviders == true,
 		})
 		if options.requireProviders then

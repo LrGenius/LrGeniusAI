@@ -405,8 +405,11 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
 
 The image is built **without** the `llamacpp` feature and has no MLX sidecar, so
-neither local backend is available in a container — point the containerized
-server at Ollama or LM Studio, or use a cloud provider. Add
+neither local backend is available in a container. Inside the container,
+`localhost` is not the host, so Ollama and LM Studio are not found
+automatically either: enter the one on the host as the plug-in's **Other AI
+server** (e.g. `http://host.docker.internal:1234` for LM Studio), or use a cloud
+provider. Add
 `--features llamacpp` to the Dockerfile's `cargo build` (plus `cmake` and
 `libclang-dev` in the builder stage) if you want in-process inference there.
 

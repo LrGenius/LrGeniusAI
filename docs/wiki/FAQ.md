@@ -8,7 +8,7 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 ### Does it send my photos to the cloud?
 
-Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini; Vertex AI was removed in August 2026). With a local provider — the built-in llama.cpp and MLX engines, or an external Ollama / LM Studio server — your photos never leave your machine. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
+Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, or a cloud service such as OpenRouter as the *Other AI server*; Vertex AI was removed in August 2026). With a local provider — the built-in llama.cpp and MLX engines, Ollama / LM Studio, or a server on your own network — your photos never leave your machines. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
 ### Which Lightroom version is supported?
 
@@ -68,8 +68,8 @@ Yes. The backend has two built-in engines — **llama.cpp** (GGUF; macOS, Window
 
 The model list is loaded from the backend at runtime. If it's empty:
 1. Make sure the backend server is running and reachable (*Plugin Manager → Status*).
-2. Check that the relevant API key or local server URL is configured.
-3. For Ollama/LM Studio: the local server must be started before Lightroom is opened (or before running a task).
+2. Check that the relevant API key or Other AI server is configured — the line under **Other AI server** in the Plug-in Manager says whether that server answers.
+3. For Ollama/LM Studio: they must be running (LM Studio with its local server switched on) when the task dialog opens. They are found at their default address on this computer; one running elsewhere is the *Other AI server*.
 4. For the built-in local engines: a model must be downloaded first — the **Installed** line in the Plug-in Manager tells you whether one is present.
 
 ### Why is the MLX section greyed out?
@@ -80,7 +80,11 @@ the status line names the exact reason. On Windows the section is llama.cpp rath
 
 ### Where do I enter my API key?
 
-*File → Plug-in Manager → LrGeniusAI* → scroll to the **API Keys** section. Enter your Gemini or OpenAI key there.
+*File → Plug-in Manager → LrGeniusAI* → scroll to **Optional AI providers**. Enter your Gemini or OpenAI key there, or the address and key of an **Other AI server** such as OpenRouter ([Other AI Server](Help-Other-AI-Server)).
+
+### Can I use OpenRouter, a llama.cpp server, LiteLLM or vLLM?
+
+Yes — any server that speaks the OpenAI chat API. Enter it as the **Other AI server** under *Optional AI providers*, with an API key if it needs one. See [Other AI Server](Help-Other-AI-Server).
 
 ---
 

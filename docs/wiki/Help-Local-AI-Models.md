@@ -34,7 +34,9 @@ not arise.
    while on a slow connection.
 4. When the download finishes, the **Installed** line lists the model.
 5. In *Analyze & Index Photos*, choose the model from the **AI Model**
-   dropdown — it appears as `mlx: <model>` or `llamacpp: <model>`.
+   dropdown — it appears as `On this Mac · <model>` (MLX) or
+   `On this PC · <model>` (llama.cpp). When the download finishes, the
+   plug-in also offers to make it the model for AI metadata right away.
 
 The curated lists are short on purpose: every entry is an ungated repository
 (no Hugging Face token needed) and a **vision** model, since a text-only model

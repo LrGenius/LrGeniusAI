@@ -16,8 +16,9 @@ Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
 `face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
 `"failed"`. It does **not** report cloud/local LLM provider availability —
 the backend has no stored API keys or base URLs to probe on a bare GET. The
-plugin checks provider availability itself (stored keys plus a direct ping to
-Ollama/LM Studio); see `SearchIndexAPI.getDetailedHealth()` in
+plugin checks provider availability itself (stored keys, an Other AI server
+address, and whether `POST /v1/llm/providers/models` lists anything for the
+built-in engines, Ollama and LM Studio); see `SearchIndexAPI.getDetailedHealth()` in
 `APISearchIndex.lua`, which backs the Plugin Manager's "System Health" panel
 and the Setup Wizard.
 

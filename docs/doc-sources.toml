@@ -202,6 +202,7 @@ sources = [
 sources = [
   "server-rs/crates/lrg-providers/src/provider.rs",
   "server-rs/crates/lrg-api/src/routes/server.rs",
+  "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
 ]
 
 [page."Help-Ollama-Setup.md"]
@@ -209,6 +210,14 @@ sources = ["server-rs/crates/lrg-providers/src/ollama.rs"]
 
 [page."Help-LM-Studio-Setup.md"]
 sources = ["server-rs/crates/lrg-providers/src/openai_compatible.rs"]
+
+[page."Help-Other-AI-Server.md"]
+sources = [
+  "server-rs/crates/lrg-providers/src/openai_compatible.rs",
+  "server-rs/crates/lrg-api/src/routes/server.rs",
+  "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
+  "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",
+]
 
 [page."Google-Vertex-AI-Login.md"]
 sources = ["server-rs/crates/lrg-providers/src/vertexai.rs"]
