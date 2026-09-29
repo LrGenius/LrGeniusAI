@@ -43,6 +43,7 @@ require("APISearchIndex")
 require("SpeciesLinks")
 require("PhotoSelector")
 require("LocalModelCatalog")
+require("AiProviders")
 require("OnboardingWizard")
 
 if _G.prefs.ai == nil then
@@ -55,6 +56,32 @@ end
 
 if _G.prefs.chatgptApiKey == nil then
 	_G.prefs.chatgptApiKey = ""
+end
+
+-- The "Other AI server": any OpenAI-compatible server (OpenRouter, a llama.cpp
+-- server, LiteLLM, or LM Studio / Ollama on another computer).
+if _G.prefs.aiServerUrl == nil then
+	_G.prefs.aiServerUrl = ""
+end
+
+if _G.prefs.aiServerApiKey == nil then
+	_G.prefs.aiServerApiKey = ""
+end
+
+-- Ollama and LM Studio no longer have address fields: they are found at their
+-- default address. A changed address moves to the Other AI server, once; the
+-- notice is shown the next time the Plug-in Manager opens.
+do
+	-- Guarded: nothing in a one-time settings move may stop the plug-in from
+	-- loading. A failure is logged and shown the next time Plug-in Manager opens.
+	local ok, notice = LrTasks.pcall(AiProviders.migrateLegacyPrefs, _G.prefs, Defaults)
+	if not ok then
+		_G.log:error("Moving the old Ollama / LM Studio settings failed: " .. tostring(notice))
+		_G.prefs.pendingProviderNotice = "Your old Ollama / LM Studio address could not be moved to the Other AI "
+			.. "server. If you used one on another computer, enter it there."
+	elseif notice then
+		_G.prefs.pendingProviderNotice = notice
+	end
 end
 
 if _G.prefs.vertexProjectId == nil then
@@ -191,14 +218,6 @@ end
 
 if _G.prefs.editPrompt == nil then
 	_G.prefs.editPrompt = Defaults.defaultEditPromptName
-end
-
-if _G.prefs.ollamaBaseUrl == nil then
-	_G.prefs.ollamaBaseUrl = Defaults.defaultOllamaBaseUrl
-end
-
-if _G.prefs.lmstudioBaseUrl == nil then
-	_G.prefs.lmstudioBaseUrl = Defaults.defaultLmStudioBaseUrl
 end
 
 if _G.prefs.backendServerUrl == nil or _G.prefs.backendServerUrl == "" then

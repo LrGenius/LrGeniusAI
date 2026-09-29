@@ -457,6 +457,8 @@ impl GeminiProvider {
                 .client
                 .get(&url)
                 .header(API_KEY_HEADER, &self.api_key)
+                // See OpenAiProvider::list_available_models.
+                .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
             else {
