@@ -170,6 +170,8 @@ struct MetadataOptions {
     catalog_keywords: Option<Vec<String>>,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+    /// The "Other AI server" address, for provider `openai_compatible`.
+    server_url: Option<String>,
 }
 
 /// Reads the catalog's location fields out of a request.
@@ -443,6 +445,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
                 .and_then(|s| parse_string_list(s)),
             ollama_base_url: fields.get("ollama_base_url").cloned(),
             lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+            server_url: fields.get("server_url").cloned(),
         },
     }
 }
@@ -2204,6 +2207,7 @@ async fn provider_for_batch(
         api_key: options.api_key.clone(),
         ollama_base_url: mo.ollama_base_url.clone(),
         lmstudio_base_url: mo.lmstudio_base_url.clone(),
+        server_url: mo.server_url.clone(),
     })
 }
 

@@ -1947,3 +1947,97 @@ async fn db_backup_is_post_only_and_streams_a_zip() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+/// Addresses nothing listens on, so the probes answer the same on every
+/// machine.
+fn models_body(extra: serde_json::Value) -> Body {
+    let mut body = serde_json::json!({
+        "ollama_base_url": "http://127.0.0.1:1",
+        "lmstudio_base_url": "127.0.0.1:1",
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        body[k] = v.clone();
+    }
+    Body::from(body.to_string())
+}
+
+#[tokio::test]
+async fn provider_models_list_every_provider_and_no_warnings_by_default() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/v1/llm/providers/models")
+                .header("content-type", "application/json")
+                .body(models_body(serde_json::json!({})))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    for provider in [
+        "llamacpp",
+        "mlx",
+        "ollama",
+        "lmstudio",
+        "openai_compatible",
+        "chatgpt",
+        "gemini",
+    ] {
+        assert!(
+            json["models"][provider].is_array(),
+            "{provider} missing: {json}"
+        );
+    }
+    assert_eq!(json["warnings"], serde_json::json!([]));
+    assert_eq!(json["servers"], serde_json::json!({}));
+}
+
+/// Only probed providers stay quiet when they are not there. The user's own
+/// server is one they entered, so failing to reach it has to be reported.
+#[tokio::test]
+async fn an_unreachable_server_the_user_entered_is_a_warning() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/v1/llm/providers/models")
+                .header("content-type", "application/json")
+                .body(models_body(
+                    serde_json::json!({"server_url": "127.0.0.1:1", "server_apikey": "sk-x"}),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["models"]["openai_compatible"], serde_json::json!([]));
+    assert_eq!(json["servers"]["openai_compatible"]["label"], "127.0.0.1:1");
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("Other AI server") && warning.contains("Could not reach"),
+        "{warning}"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_server_address_is_a_warning_not_a_failure() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::post("/v1/llm/providers/models")
+                .header("content-type", "application/json")
+                .body(models_body(
+                    serde_json::json!({"server_url": "ftp://example.com"}),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let warning = json["warnings"][0].as_str().unwrap_or_default();
+    assert!(warning.contains("http:// or https://"), "{json}");
+}

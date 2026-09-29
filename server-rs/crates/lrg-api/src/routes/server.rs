@@ -15,6 +15,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use lrg_common::{lifecycle, logging, version};
+use lrg_providers::openai_compatible::OpenAiCompatibleProvider;
 use lrg_providers::provider::{build_provider, ProviderSelection};
 
 use crate::state::AppState;
@@ -32,53 +33,44 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/server/logs/{log_type}/raw", get(get_raw_log))
 }
 
-#[derive(serde::Deserialize, Default)]
-pub(super) struct ModelsQuery {
-    openai_apikey: Option<String>,
-    gemini_apikey: Option<String>,
-    ollama_base_url: Option<String>,
-    lmstudio_base_url: Option<String>,
-}
-
 /// Port of `list_models` / `AnalysisService.get_available_models`. Every
 /// provider is probed concurrently — an offline Ollama or LM Studio must not
 /// block the others.
 ///
 /// The response keys are what the plugin builds its model dropdown from
-/// (`TaskAnalyzeAndIndex.lua`), so a provider absent here is unreachable from
-/// the UI. The long-dead `"qwen"` key, which was always `[]`, is no longer
-/// emitted: the plugin's inner loop produced no entries for it anyway.
+/// (`AiProviders.lua`), so a provider absent here is unreachable from the UI.
+///
+/// Body fields, all optional: `openai_apikey`, `gemini_apikey`,
+/// `ollama_base_url`, `lmstudio_base_url` (probed at their defaults when
+/// absent), and `server_url` + `server_apikey` for the user's own
+/// OpenAI-compatible server. POST only, so no key ever lands in a URL.
+///
+/// A provider that is only probed and not there is simply left empty. The
+/// user's own server is different: they entered it, so a failure to list it
+/// comes back in `warnings` with the reason, and the plugin shows it.
 pub(super) async fn list_models(
     State(state): State<Arc<AppState>>,
-    axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
     body: Option<Json<Value>>,
 ) -> Json<Value> {
     log::info!("Models request received - checking all providers");
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    let field = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
 
-    let openai_key = data
-        .get("openai_apikey")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or(q.openai_apikey);
-    let ollama_base_url = data
-        .get("ollama_base_url")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or(q.ollama_base_url);
-    let gemini_key = data
-        .get("gemini_apikey")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or(q.gemini_apikey);
-    let lmstudio_base_url = data
-        .get("lmstudio_base_url")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or(q.lmstudio_base_url);
+    let openai_key = field("openai_apikey");
+    let gemini_key = field("gemini_apikey");
+    let ollama_base_url = field("ollama_base_url");
+    let lmstudio_base_url = field("lmstudio_base_url");
+    let server_url = field("server_url");
+    let server_key = field("server_apikey");
 
     // `build_provider` returns Err for a cloud provider whose key is missing,
-    // which is exactly the "offer no models" case — hence `unwrap_or_default`
+    // which is exactly the "offer no models" case — hence the empty list
     // rather than surfacing the error.
     let models_for = |selection: ProviderSelection| async move {
         match build_provider(&selection) {
@@ -87,19 +79,51 @@ pub(super) async fn list_models(
         }
     };
 
+    // The user's own server. Built first so that an LM Studio entered there
+    // is not also probed, and listed twice, as the automatic one.
+    let custom = server_url.as_deref().map(|url| {
+        OpenAiCompatibleProvider::custom(url, server_key.clone())
+            .map_err(|e| format!("Other AI server: {e}"))
+    });
+    let custom_root = custom
+        .as_ref()
+        .and_then(|c| c.as_ref().ok())
+        .map(|c| c.url().root.clone());
+    let lmstudio_is_custom = custom_root.is_some_and(|root| {
+        OpenAiCompatibleProvider::lm_studio(lmstudio_base_url.clone())
+            .is_ok_and(|lm| lm.url().root == root)
+    });
+    let custom_models = async {
+        match &custom {
+            None => Ok(Vec::new()),
+            Some(Err(e)) => Err(e.clone()),
+            Some(Ok(provider)) => provider
+                .list_models_checked()
+                .await
+                .map_err(|e| format!("Other AI server: {e}")),
+        }
+    };
+
     // Local providers are probed concurrently: an offline Ollama or LM Studio
     // must not delay the others.
-    let (ollama_models, lmstudio_models, openai_models, gemini_models) = tokio::join!(
+    let (ollama_models, lmstudio_models, openai_models, gemini_models, custom_models) = tokio::join!(
         models_for(ProviderSelection {
             name: "ollama".to_string(),
             ollama_base_url,
             ..Default::default()
         }),
-        models_for(ProviderSelection {
-            name: "lmstudio".to_string(),
-            lmstudio_base_url,
-            ..Default::default()
-        }),
+        async {
+            if lmstudio_is_custom {
+                Vec::new()
+            } else {
+                models_for(ProviderSelection {
+                    name: "lmstudio".to_string(),
+                    lmstudio_base_url,
+                    ..Default::default()
+                })
+                .await
+            }
+        },
         models_for(ProviderSelection {
             name: "chatgpt".to_string(),
             api_key: openai_key,
@@ -110,7 +134,21 @@ pub(super) async fn list_models(
             api_key: gemini_key,
             ..Default::default()
         }),
+        custom_models,
     );
+
+    let mut warnings: Vec<String> = Vec::new();
+    let custom_models = custom_models.unwrap_or_else(|e| {
+        warnings.push(e);
+        Vec::new()
+    });
+    let mut servers = serde_json::Map::new();
+    if let Some(Ok(provider)) = &custom {
+        servers.insert(
+            "openai_compatible".to_string(),
+            json!({ "label": provider.url().label }),
+        );
+    }
 
     // Listing must never trigger a multi-gigabyte load, so this reports what is
     // on disk rather than what is loaded. A build without the `llamacpp`
@@ -142,9 +180,12 @@ pub(super) async fn list_models(
             "mlx": mlx_models,
             "ollama": ollama_models,
             "lmstudio": lmstudio_models,
+            "openai_compatible": custom_models,
             "chatgpt": openai_models,
             "gemini": gemini_models,
-        }
+        },
+        "servers": servers,
+        "warnings": warnings,
     }))
 }
 

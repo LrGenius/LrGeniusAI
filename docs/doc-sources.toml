@@ -208,7 +208,7 @@ sources = [
 sources = ["server-rs/crates/lrg-providers/src/ollama.rs"]
 
 [page."Help-LM-Studio-Setup.md"]
-sources = ["server-rs/crates/lrg-providers/src/lmstudio.rs"]
+sources = ["server-rs/crates/lrg-providers/src/openai_compatible.rs"]
 
 [page."Google-Vertex-AI-Login.md"]
 sources = ["server-rs/crates/lrg-providers/src/vertexai.rs"]

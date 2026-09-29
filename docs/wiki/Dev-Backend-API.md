@@ -31,7 +31,25 @@ Checks whether the backend version is compatible with the plugin version passed 
 Called by the Lightroom plugin on first connect. Accepts catalog/configuration parameters and initializes per-catalog state.
 
 ### `POST /v1/llm/providers/models`
-Returns the list of available AI models grouped by provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`). Filters out providers that are not configured or not reachable; the two local backends report what is installed on disk, so they are empty when no local model has been downloaded.
+Returns the list of available AI models grouped by provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `openai_compatible`, `llamacpp`, `mlx`). The two local backends report what is installed on disk, so they are empty when no local model has been downloaded.
+
+Body (all optional; POST so that no key ends up in a URL):
+
+| Field | Description |
+|---|---|
+| `openai_apikey`, `gemini_apikey` | Cloud keys. Without one, that provider's list is empty. |
+| `ollama_base_url`, `lmstudio_base_url` | Where to probe Ollama and LM Studio. Absent means their default address on this computer — which is all the current plugin sends. |
+| `server_url`, `server_apikey` | The user's own OpenAI-compatible server ("Other AI server" in the plugin): OpenRouter, llama.cpp `llama-server`, LiteLLM, vLLM, or LM Studio/Ollama on another machine. The address is normalised — no scheme means `http://` for local-network hosts and `https://` otherwise, a pasted `…/chat/completions` is cut back, and no path means `/v1`. The key is optional. |
+
+```json
+{
+  "models":   { "openai_compatible": ["google/gemini-2.5-flash", "…"], "lmstudio": [], "…": [] },
+  "servers":  { "openai_compatible": { "label": "OpenRouter" } },
+  "warnings": ["Other AI server: OpenRouter rejected the API key. …"]
+}
+```
+
+A provider that is only probed and not running (Ollama, LM Studio) is simply empty. The user's own server is different: they entered it, so any failure to list it — unreachable, rejected key, malformed address — is reported in `warnings` in words the user can act on. `servers.openai_compatible.label` (`OpenRouter`, or host and port) is what the plugin shows in front of that server's models. Only models that can take a photo are listed: entries a server marks as text-only (OpenRouter's `architecture.input_modalities`) and embedding models are dropped. An LM Studio entered as the user's server is not also listed under `lmstudio`.
 
 ### `GET /v1/server/logs`
 Returns recent log lines from the server log.
@@ -64,8 +82,10 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 |---|---|---|
 | `photo_id` | string | Stable file-based photo identifier |
 | `catalog_id` | string | Lightroom catalog identifier |
-| `provider` | string | LLM provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`) |
+| `provider` | string | LLM provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `openai_compatible`, `llamacpp`, `mlx`) |
 | `model` | string | Model name within the provider (for `llamacpp` the GGUF file name, for `mlx` the model directory name) |
+| `api_key` | string | Key for `chatgpt`/`gemini` (required) or `openai_compatible` (optional) |
+| `server_url` | string | `openai_compatible` only: the server address, normalised as for `/v1/llm/providers/models` |
 | `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = default) |
 | `llm_n_parallel` | int | `llamacpp` only: photos decoded concurrently |
 | `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
@@ -240,6 +260,7 @@ LLM.
 | `photo_id` | string | Photo identifier |
 | `provider` | string | LLM provider |
 | `model` | string | Model name |
+| `api_key`, `server_url` | string | Connection fields, as for `/v1/index/photos` |
 | `intent` | string | Style preset key (e.g. `natural_pro`, `moody_dramatic`) |
 | `style_strength` | float | 0.0–1.0, how aggressively to apply the style |
 | `composition_mode` | string | `none`, `subtle`, or `aggressive` |

@@ -12,11 +12,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::gemini::GeminiProvider;
-use crate::lmstudio::LmStudioProvider;
 use crate::local::SharedLocalEngine;
 use crate::local_provider::LocalProvider;
 use crate::ollama::OllamaProvider;
 use crate::openai::OpenAiProvider;
+use crate::openai_compatible::OpenAiCompatibleProvider;
 use crate::types::{
     EditGenerationRequest, EditGenerationResponse, MetadataGenerationRequest,
     MetadataGenerationResponse,
@@ -48,6 +48,17 @@ pub trait LlmProvider: Send + Sync {
     ) -> Option<String>;
 
     async fn list_available_models(&self) -> Vec<String>;
+
+    /// The model list, or a message saying why it could not be fetched.
+    ///
+    /// [`list_available_models`](Self::list_available_models) turns every
+    /// failure into an empty list, which is right for a provider that was only
+    /// probed and wrong for one the user configured: a server they entered
+    /// that cannot be reached has to say so. Providers that can tell the two
+    /// apart override this.
+    async fn list_models_checked(&self) -> Result<Vec<String>, String> {
+        Ok(self.list_available_models().await)
+    }
 
     /// Cheap reachability probe. Locally hosted backends override this so an
     /// offline host fails in milliseconds instead of on the request timeout;
@@ -169,7 +180,53 @@ impl_llm_provider!(GeminiProvider, "gemini", batch = MAX_CONCURRENT_REQUESTS);
 // needs OLLAMA_NUM_PARALLEL raised to do otherwise), so overlapping requests
 // buys nothing and risks thrashing a machine that is also running Lightroom.
 impl_llm_provider!(OllamaProvider, "ollama", batch = 1, is_available);
-impl_llm_provider!(LmStudioProvider, "lmstudio", batch = 1, is_available);
+
+// Written out rather than generated: one client serves two wire names (LM
+// Studio found on this computer, and the user's own server), so the name comes
+// from the instance. One request at a time for both — LM Studio for the reason
+// above, and a server the user entered may just as well be a single local model
+// on another machine.
+#[async_trait]
+impl LlmProvider for OpenAiCompatibleProvider {
+    fn name(&self) -> &'static str {
+        self.provider_name()
+    }
+
+    async fn generate_metadata(
+        &self,
+        request: &MetadataGenerationRequest,
+    ) -> MetadataGenerationResponse {
+        OpenAiCompatibleProvider::generate_metadata(self, request).await
+    }
+
+    async fn generate_edit_recipe(
+        &self,
+        request: &EditGenerationRequest,
+    ) -> EditGenerationResponse {
+        OpenAiCompatibleProvider::generate_edit_recipe(self, request).await
+    }
+
+    async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        OpenAiCompatibleProvider::generate_text(self, model, system_prompt, user_prompt).await
+    }
+
+    async fn list_available_models(&self) -> Vec<String> {
+        OpenAiCompatibleProvider::list_available_models(self).await
+    }
+
+    async fn list_models_checked(&self) -> Result<Vec<String>, String> {
+        OpenAiCompatibleProvider::list_models_checked(self).await
+    }
+
+    async fn is_available(&self) -> bool {
+        OpenAiCompatibleProvider::is_available(self).await
+    }
+}
 
 /// Everything needed to pick and construct a provider. Credentials and base
 /// URLs live here rather than on the individual requests because they are
@@ -180,6 +237,9 @@ pub struct ProviderSelection {
     pub api_key: Option<String>,
     pub ollama_base_url: Option<String>,
     pub lmstudio_base_url: Option<String>,
+    /// The "Other AI server" address, for `openai_compatible`. `api_key` is
+    /// its optional key.
+    pub server_url: Option<String>,
     /// The local engine, when one is loaded. Supplied by `lrg-api`, the only
     /// crate that knows `lrg-llama` and `lrg-mlx` exist; `None` here is why
     /// `"llamacpp"` and `"mlx"` report "no local model loaded" rather than
@@ -194,6 +254,7 @@ impl std::fmt::Debug for ProviderSelection {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("ollama_base_url", &self.ollama_base_url)
             .field("lmstudio_base_url", &self.lmstudio_base_url)
+            .field("server_url", &self.server_url)
             .field("local_engine", &self.local_engine.is_some())
             .finish()
     }
@@ -209,8 +270,18 @@ impl ProviderSelection {
 }
 
 /// Provider names accepted on the wire, canonical form first.
-pub const KNOWN_PROVIDERS: &[&str] =
-    &["chatgpt", "gemini", "ollama", "lmstudio", "llamacpp", "mlx"];
+pub const KNOWN_PROVIDERS: &[&str] = &[
+    "chatgpt",
+    "gemini",
+    "ollama",
+    "lmstudio",
+    "openai_compatible",
+    "llamacpp",
+    "mlx",
+];
+
+/// Other spellings [`build_provider`] accepts for a known provider.
+const PROVIDER_ALIASES: &[&str] = &["openai"];
 
 /// Resolve a wire provider name to a live client.
 ///
@@ -231,9 +302,26 @@ pub fn build_provider(selection: &ProviderSelection) -> Result<Arc<dyn LlmProvid
         "ollama" => Ok(Arc::new(OllamaProvider::new(
             selection.ollama_base_url.clone(),
         ))),
-        "lmstudio" => Ok(Arc::new(LmStudioProvider::new(
+        "lmstudio" => Ok(Arc::new(OpenAiCompatibleProvider::lm_studio(
             selection.lmstudio_base_url.clone(),
-        ))),
+        )?)),
+        // The user's own server. The key is optional: a llama-server or LM
+        // Studio on the local network usually has none.
+        "openai_compatible" => {
+            let Some(url) = selection
+                .server_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+            else {
+                return Err("No AI server address is set. Enter it in Plug-in Manager →                             Optional AI providers → Other AI server."
+                    .to_string());
+            };
+            Ok(Arc::new(OpenAiCompatibleProvider::custom(
+                url,
+                non_empty_key(),
+            )?))
+        }
         // `openai` has always been accepted as an alias by the index and edit
         // routes; honouring it everywhere is strictly less surprising.
         "chatgpt" | "openai" => match non_empty_key() {
@@ -269,10 +357,11 @@ pub fn build_provider(selection: &ProviderSelection) -> Result<Arc<dyn LlmProvid
 /// Whether `name` is a provider we know how to build at all, ignoring whether
 /// its credentials happen to be configured.
 pub fn is_known_provider(name: &str) -> bool {
-    matches!(
-        name.trim().to_lowercase().as_str(),
-        "chatgpt" | "openai" | "gemini" | "ollama" | "lmstudio" | "llamacpp" | "mlx"
-    )
+    let name = name.trim().to_lowercase();
+    KNOWN_PROVIDERS
+        .iter()
+        .chain(PROVIDER_ALIASES)
+        .any(|known| *known == name)
 }
 
 #[cfg(test)]
@@ -366,6 +455,35 @@ mod tests {
             let provider = build_provider(&ProviderSelection::new(name)).expect("should build");
             assert_eq!(provider.name(), name);
         }
+    }
+
+    #[test]
+    fn the_users_server_needs_an_address_but_no_key() {
+        let err = build_provider(&ProviderSelection::new("openai_compatible")).err();
+        assert!(
+            err.as_deref()
+                .is_some_and(|e| e.contains("Other AI server")),
+            "{err:?}"
+        );
+
+        let selection = ProviderSelection {
+            name: "openai_compatible".to_string(),
+            server_url: Some("localhost:8080".to_string()),
+            ..Default::default()
+        };
+        let provider = build_provider(&selection).expect("a key is optional");
+        assert_eq!(provider.name(), "openai_compatible");
+        assert_eq!(provider.preferred_batch_size(), 1);
+    }
+
+    #[test]
+    fn a_bad_server_address_is_reported_not_guessed() {
+        let selection = ProviderSelection {
+            name: "openai_compatible".to_string(),
+            server_url: Some("ftp://example.com".to_string()),
+            ..Default::default()
+        };
+        assert!(build_provider(&selection).is_err());
     }
 
     #[test]
