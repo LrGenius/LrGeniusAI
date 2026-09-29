@@ -221,13 +221,15 @@ decision belongs in a comment at the point where it is made.
 - `scripts/check-docs.py` enforces the parts that can be checked mechanically, and runs in pre-commit and CI (`lint-format.yml`):
   - every axum route has a heading in `docs/wiki/Dev-Backend-API.md`, and every heading names a real route (method and path both) — **hard failure**
   - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
+  - `AGENTS.md` matches `CLAUDE.md` line for line, apart from the agent-specific lines in `AGENTS_ONLY_LINES` — **hard failure**
   - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
 - `scripts/check-docs.py --for <path>` prints the pages that document a file.
-- **The rule files must not disagree.** Three files state this project's rules: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`. `CLAUDE.md` is authoritative. `AGENTS.md` is its copy for other coding agents and stays identical apart from the agent's name. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts the other two. Adding, changing or dropping a rule in any of them means updating the others in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
+- **The rule files must not disagree.** Three files state this project's rules: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`. `CLAUDE.md` is authoritative. `AGENTS.md` is its copy for other coding agents and stays identical line for line, apart from the few agent-specific lines listed in `AGENTS_ONLY_LINES` in `scripts/check-docs.py` — which fails when the two drift, so edit both in the same change. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts the other two. Adding, changing or dropping a rule in any of them means updating the others in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
 
 ### Editor automation (Claude Code)
 
 - A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
 - The same hook names the wiki pages documenting the edited file (once per page per session). Treat that as part of the task: update the page now, or state that it is still correct.
+- Other coding agents don't get this hook. Do its job by hand after editing a file: `pre-commit run --files <path>` for the linters, and `scripts/check-docs.py --for <path>` for the pages to update.
 
 @.claude/skills/lrc-plugin-dev.md

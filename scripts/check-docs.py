@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Keeps the docs honest about the code.
 
-Three checks, two of them exact and one advisory:
+Four checks, three of them exact and one advisory:
 
 1. Every axum route in `server-rs/crates/lrg-api/src/routes/` has a heading in
    `docs/wiki/Dev-Backend-API.md`, and every heading in that page names a route
@@ -10,12 +10,14 @@ Three checks, two of them exact and one advisory:
    `APISearchIndex.lua`) exists on the backend. This one is not really a docs
    check — it is the plugin/backend contract `CLAUDE.md` asks to keep in sync —
    but it lives here because it is the same kind of drift.
-3. Doc pages whose sources have moved on since the page was last touched. This
+3. `AGENTS.md` matches `CLAUDE.md` line for line, apart from the few
+   agent-specific lines in `AGENTS_ONLY_LINES`.
+4. Doc pages whose sources have moved on since the page was last touched. This
    is a heuristic, so it only warns. Silence it by updating the page, or, when
    the page really is still correct, with a `Docs-Reviewed: <Page-Name>.md`
    trailer in the commit message.
 
-Exit code is 1 when check 1 or 2 fails, or when check 3 fails under --strict.
+Exit code is 1 when check 1, 2 or 3 fails, or when check 4 fails under --strict.
 
     scripts/check-docs.py                 # run everything
     scripts/check-docs.py --strict        # stale pages fail too
@@ -25,6 +27,7 @@ Exit code is 1 when check 1 or 2 fails, or when check 3 fails under --strict.
 from __future__ import annotations
 
 import argparse
+import difflib
 import fnmatch
 import os
 import re
@@ -51,6 +54,22 @@ API_PREFIX = "/v1"
 # bootstrap contract a new plug-in uses to talk to an old backend, so they are
 # spelled exactly as served. Keep in step with `build_router`.
 UNVERSIONED_ROUTE_FILES = frozenset({"bootstrap.rs", "update.rs"})
+
+# The only lines where `AGENTS.md` may differ from `CLAUDE.md`: the CLAUDE.md
+# line on the left, its AGENTS.md counterpart on the right. Keep this list
+# short — every entry is a place the two files are allowed to say different
+# things.
+AGENTS_ONLY_LINES = {
+    "# CLAUDE.md": "# AGENTS.md",
+    "This file provides guidance to Claude Code (claude.ai/code) when working "
+    "with code in this repository.": "This file provides guidance to Codex and "
+    "other coding agents when working with code in this repository. It mirrors "
+    "`CLAUDE.md` line for line; `scripts/check-docs.py` fails when the two drift "
+    "apart.",
+    # `@path` is Claude Code's include syntax; other agents need to be told.
+    "@.claude/skills/lrc-plugin-dev.md": "Lightroom Classic SDK reference: read "
+    "`.claude/skills/lrc-plugin-dev.md` before working on plugin Lua.",
+}
 
 
 # --------------------------------------------------------------------------
@@ -240,6 +259,47 @@ def check_generated_pages() -> list[str]:
         return problems
 
 
+def check_agents_mirror() -> list[str]:
+    """`AGENTS.md` is `CLAUDE.md` for every other coding agent; they must agree.
+
+    Only the lines in `AGENTS_ONLY_LINES` may differ. Everything else is
+    compared verbatim, so a rule added to one file and not the other fails here
+    instead of turning into two contradicting instructions.
+    """
+    claude_path, agents_path = REPO / "CLAUDE.md", REPO / "AGENTS.md"
+    if not claude_path.exists() or not agents_path.exists():
+        return []
+    claude = claude_path.read_text(encoding="utf-8").splitlines()
+    agents = agents_path.read_text(encoding="utf-8").splitlines()
+
+    problems = [
+        f"scripts/check-docs.py: AGENTS_ONLY_LINES entry {line!r} is no longer "
+        "in CLAUDE.md — update the entry to match"
+        for line in AGENTS_ONLY_LINES
+        if line not in claude
+    ]
+    expected = [AGENTS_ONLY_LINES.get(line, line) for line in claude]
+    if expected != agents:
+        diff = list(
+            difflib.unified_diff(
+                expected,
+                agents,
+                "CLAUDE.md (as AGENTS.md)",
+                "AGENTS.md",
+                n=0,
+                lineterm="",
+            )
+        )
+        shown = "\n    ".join(diff[:12])
+        more = f"\n    ... {len(diff) - 12} more diff lines" if len(diff) > 12 else ""
+        problems.append(
+            "AGENTS.md has drifted from CLAUDE.md. Make the same change in both "
+            "files (agent-specific lines are listed in AGENTS_ONLY_LINES in "
+            f"scripts/check-docs.py):\n    {shown}{more}"
+        )
+    return problems
+
+
 def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=REPO, capture_output=True, text=True, check=False
@@ -350,7 +410,9 @@ def main() -> int:
         return 0
 
     contract_errors, gap_notes = check_plugin_contract()
-    errors = check_api_doc() + contract_errors + check_generated_pages()
+    page_errors = check_api_doc() + contract_errors + check_generated_pages()
+    mirror_errors = check_agents_mirror()
+    errors = page_errors + mirror_errors
     warnings = check_freshness()
 
     for problem in errors:
@@ -361,11 +423,13 @@ def main() -> int:
         print(f"note: {note}", file=sys.stderr)
 
     if errors or (warnings and args.strict):
-        print(
-            "\nUpdate the affected page under docs/wiki/, or record that you "
-            "checked it with a `Docs-Reviewed: <Page>.md` commit trailer.",
-            file=sys.stderr,
-        )
+        # The mirror errors carry their own fix; this hint is for the pages.
+        if page_errors or (warnings and args.strict):
+            print(
+                "\nUpdate the affected page under docs/wiki/, or record that you "
+                "checked it with a `Docs-Reviewed: <Page>.md` commit trailer.",
+                file=sys.stderr,
+            )
         return 1
 
     if not warnings:
