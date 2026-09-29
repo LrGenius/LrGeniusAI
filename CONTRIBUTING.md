@@ -61,7 +61,8 @@ This is the short version. [`CLAUDE.md`](CLAUDE.md) (mirrored in
 [`AGENTS.md`](AGENTS.md) for other coding agents) is the full, authoritative set
 of project rules — architecture, the error-surfacing chain, and the details
 behind every point below. If the two ever disagree, `CLAUDE.md` wins; please
-open an issue so this file can be fixed.
+open an issue so this file can be fixed. Changing a rule here means changing it
+there too, in the same PR.
 
 ### General Rules
 - **Error Handling**: All user-facing errors must be surfaced in the Lightroom GUI using `ErrorHandler.handleError`. Avoid silent failures.

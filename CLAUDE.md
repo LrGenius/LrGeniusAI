@@ -223,6 +223,7 @@ decision belongs in a comment at the point where it is made.
   - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
   - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
 - `scripts/check-docs.py --for <path>` prints the pages that document a file.
+- **The rule files must not disagree.** Three files state this project's rules: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`. `CLAUDE.md` is authoritative. `AGENTS.md` is its copy for other coding agents and stays identical apart from the agent's name. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts the other two. Adding, changing or dropping a rule in any of them means updating the others in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
 
 ### Editor automation (Claude Code)
 
