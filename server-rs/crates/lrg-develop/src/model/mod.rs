@@ -11,6 +11,7 @@ pub mod correction;
 pub mod policy;
 pub mod value;
 pub mod whitebalance;
+pub mod xmp_node;
 
 use std::collections::BTreeMap;
 
@@ -19,8 +20,9 @@ pub use correction::{
     Semantic, SensorPoint,
 };
 pub use policy::{FrameSplit, SkipReason, Skipped, Target, PORTABLE_PROFILES};
-pub use value::{Fields, Finite, Hex32, Opaque, OpaqueEntry, Struct, Value, XmpNode};
+pub use value::{Fields, Finite, Hex32, Opaque, OpaqueEntry, Struct, Value};
 pub use whitebalance::{NamedWb, WbFamily, WbMode, WbSetting};
+pub use xmp_node::{XmpArrayKind, XmpField, XmpNode, XmpValue};
 
 use crate::registry::{self, KeyId, Level, ProcessVersion, StructKind};
 

@@ -1,0 +1,27 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:PresetType="Look"
+   crs:Cluster=""
+   crs:UUID="00000000000000000000000000001501"
+   crs:SupportsAmount="True"
+   crs:SupportsMonochrome="True"
+   crs:SupportsOutputReferred="False"
+   crs:Copyright=""
+   crs:Version="18.5"
+   crs:ProcessVersion="15.4"
+   crs:ConvertToGrayscale="True">
+   <crs:Name>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Synthetic Profile</rdf:li>
+    </rdf:Alt>
+   </crs:Name>
+   <crs:Group>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Synthetic Group</rdf:li>
+    </rdf:Alt>
+   </crs:Group>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

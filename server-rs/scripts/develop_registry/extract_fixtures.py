@@ -73,7 +73,12 @@ under ``Group``/``SortName``); ``Look.Parameters`` is the stub; ``Look.UUID``/
 ``Name`` are an ``ADOBE_LOOKS`` pair or synthetic; every 32-hex value and GUID is
 synthetic; no dates; no number or numeric string >= 1e9 except version keys
 and the synthetic ``GrainSeed``. Generated files additionally require every
-string to satisfy its key's rule. ``--check-only`` runs just the check; with
+string to satisfy its key's rule. An XMP file must be well-formed XML with an
+``rdf:RDF``; its data model (``xmp_as_tree``: every ``rdf:Description`` as an
+object, properties by local name, ``rdf:Seq``/``rdf:Bag``/``rdf:Alt`` as lists,
+``True``/``False`` as booleans, other values as text) gets the same structural
+rules as a hand-written JSON file, and every ``rdf:Alt`` item needs a valid
+``xml:lang``. ``--check-only`` runs just the check; with
 ``--root`` it also walks every ``*.json``/``*.xmp`` below that folder.
 
 Example (``$OUT`` is a folder outside the repository)::
@@ -90,6 +95,7 @@ import re
 import shutil
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -824,7 +830,10 @@ def check_json_tree(data, name: str, strict: bool) -> list[str]:
                 problems.append(f"{name}: GUID {g[:8]}... at {path} is not synthetic")
         if DATE_RE.search(v) and v != SYNTHETIC_DATE:
             problems.append(f"{name}: date-like text at {path}")
-        if NUMERIC_TEXT_RE.match(v) and not numeric_text_ok(v):
+        # Numbers are text in XMP, so the version keys and the synthetic
+        # GrainSeed are exempt as numeric strings too.
+        big_ok = key in BIG_NUMBER_KEYS or (key == "GrainSeed" and v == SYNTHETIC_GRAIN_SEED)
+        if NUMERIC_TEXT_RE.match(v) and not numeric_text_ok(v) and not big_ok:
             problems.append(f"{name}: numeric string >= 1e9 at {path}")
         if value_rule and not string_ok(v, key, parent):
             problems.append(f"{name}: unexplained string at {path}: {v[:30]!r}")
@@ -884,6 +893,82 @@ def check_json_tree(data, name: str, strict: bool) -> list[str]:
 
     walk(data, "", "", "")
     return problems
+
+
+RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+XML_NS = "http://www.w3.org/XML/1998/namespace"
+XMP_BOOLS = {"True": True, "true": True, "False": False, "false": False}
+
+
+def _split_tag(tag: str) -> tuple[str, str]:
+    """``'{ns}local'`` -> ``('ns', 'local')``."""
+    if tag.startswith("{"):
+        ns, local = tag[1:].split("}", 1)
+        return ns, local
+    return "", tag
+
+
+def xmp_as_tree(data: bytes, name: str) -> tuple[object, list[str]]:
+    """An XMP file's data model as a JSON-like tree for ``check_json_tree``.
+
+    Every ``rdf:Description`` under ``rdf:RDF`` becomes an object (the tree is
+    the list of them); properties are keyed by local name whatever their
+    namespace; attributes in ``rdf:``/``xml:`` are skipped. A property element
+    whose first container child is ``rdf:Seq``/``rdf:Bag``/``rdf:Alt`` is a
+    list of its ``rdf:li`` items; else one with an ``rdf:Description`` child
+    is that object; else one with ``rdf:parseType="Resource"``, child elements
+    or field attributes is an object of those; else its text. ``True``/
+    ``False`` (either case) become booleans. Every ``rdf:Alt`` item needs a
+    valid ``xml:lang``. Mirrored by ``xmp_as_tree`` in
+    ``crates/lrg-develop/tests/fixture_hygiene.rs``.
+    """
+    problems: list[str] = []
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as e:
+        return None, [f"{name}: not well-formed XML ({e})"]
+    rdf_tag = f"{{{RDF_NS}}}RDF"
+    rdf = root if root.tag == rdf_tag else next(root.iter(rdf_tag), None)
+    if rdf is None:
+        return None, [f"{name}: no rdf:RDF element"]
+
+    def scalar(v: str):
+        return XMP_BOOLS.get(v, v)
+
+    def is_field_attr(k: str) -> bool:
+        return _split_tag(k)[0] not in (RDF_NS, XML_NS)
+
+    def fields(node: ET.Element, path: str) -> dict:
+        d: dict = {}
+        for k, v in node.attrib.items():
+            if is_field_attr(k):
+                d[_split_tag(k)[1]] = scalar(v)
+        for c in node:
+            local = _split_tag(c.tag)[1]
+            d[local] = value(c, f"{path}.{local}" if path else local)
+        return d
+
+    def value(el: ET.Element, path: str):
+        kids = list(el)
+        for c in kids:
+            ns, local = _split_tag(c.tag)
+            if ns == RDF_NS and local in ("Seq", "Bag", "Alt"):
+                items = [li for li in c if _split_tag(li.tag) == (RDF_NS, "li")]
+                if local == "Alt":
+                    for li in items:
+                        lang = li.get(f"{{{XML_NS}}}lang")
+                        if lang is None or not LANG_RE.match(lang):
+                            problems.append(f"{name}: bad language tag at {path}")
+                return [value(li, f"{path}[]") for li in items]
+        for c in kids:
+            if _split_tag(c.tag) == (RDF_NS, "Description"):
+                return fields(c, path)
+        if el.get(f"{{{RDF_NS}}}parseType") == "Resource" or kids or any(is_field_attr(k) for k in el.attrib):
+            return fields(el, path)
+        return scalar(el.text or "")
+
+    tree = [fields(d, "") for d in rdf if _split_tag(d.tag) == (RDF_NS, "Description")]
+    return tree, problems
 
 
 def check_manifest(data, name: str) -> list[str]:
@@ -952,6 +1037,10 @@ def hygiene_check(out_dir: Path, root: Path | None = None) -> list[str]:
             for h in HEX32_ANY_RE.findall(text):
                 if not SYNTH_HEX_RE.match(h) and h.upper() not in ADOBE_LOOKS:
                     problems.append(f"{name}: 32-hex value {h[:6]}... is not synthetic")
+            tree, xml_problems = xmp_as_tree(f.read_bytes(), name)
+            problems += xml_problems
+            if tree is not None:
+                problems += check_json_tree(tree, name, strict=False)
             continue
         try:
             data = json.loads(text)
@@ -980,6 +1069,15 @@ def report_hygiene(problems: list[str]) -> int:
     return 0
 
 
+def crafted_xmp(attrs: str, body: str = "") -> str:
+    """A minimal well-formed XMP file for the self-test (same text as ``crafted_xmp`` in the Rust test)."""
+    return (
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        f'<rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {attrs}>{body}'
+        "</rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+
+
 def self_test(out_dir: Path, root: Path) -> int:
     """Runs ``hygiene_check`` on a copy of ``root`` with one crafted file per rule.
 
@@ -995,8 +1093,27 @@ def self_test(out_dir: Path, root: Path) -> int:
         # (file relative to root, content, flagged)
         ("lua/unlisted.json", '{"Exposure2012": 0.5}', True),
         ("lua/registry_snapshot.json", '{"rows": ["LookTable"]}', True),
-        ("xmp/foreign_id.xmp", f'<x crs:MaskDigest="{foreign_hex}"/>', True),
-        ("xmp/adobe_look.xmp", '<x crs:UUID="B952C231111CD8E0ECCF14B86BAA7077"/>', False),
+        ("xmp/foreign_id.xmp", crafted_xmp(f'crs:MaskDigest="{foreign_hex}"'), True),
+        (
+            "xmp/adobe_look.xmp",
+            crafted_xmp("", '<crs:Look crs:Name="Adobe Color" crs:UUID="B952C231111CD8E0ECCF14B86BAA7077"/>'),
+            False,
+        ),
+        (
+            "xmp/look_parameters.xmp",
+            crafted_xmp(
+                "", '<crs:Look><rdf:Description><crs:Parameters crs:Exposure2012="+0.50"/></rdf:Description></crs:Look>'
+            ),
+            True,
+        ),
+        ("xmp/not_xml.xmp", "<x:xmpmeta", True),
+        ("xmp/serial_number.xmp", crafted_xmp('crs:Serial="1234567890"'), True),
+        ("xmp/version_number.xmp", crafted_xmp('crs:ModelVersion="3000000000"'), False),
+        (
+            "xmp/bad_language.xmp",
+            crafted_xmp("", '<crs:Name><rdf:Alt><rdf:li xml:lang="1 2">Synthetic Text</rdf:li></rdf:Alt></crs:Name>'),
+            True,
+        ),
         ("lua/owned_crafted.json", masked, True),
         ("lua/hand_localised.json", masked, False),
         ("lua/stray.xmp", '<x id="md5p:0"/>', True),

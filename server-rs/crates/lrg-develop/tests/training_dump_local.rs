@@ -29,108 +29,17 @@
 
 #[path = "../../lrg-ml/tests/common/mod.rs"]
 mod common;
+mod support;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use lrg_develop::lua::from_lua_str;
-use lrg_develop::model::{
-    Combine, Correction, DevelopSettings, Fields, Finite, MaskTool, Semantic, Value,
-};
-use lrg_develop::registry::{lookup, KeySpec, Level, StructKind};
 use lrg_develop::FileKindHint;
 use serde_json::Value as J;
+use support::{generic_path, MaskCounts, RangeCheck};
 
 const VAR: &str = "LRG_DEVELOP_TRAINING_DUMP";
-
-fn tool_name(tool: &MaskTool) -> String {
-    match tool {
-        MaskTool::Semantic(Semantic::Subject) => "semantic:subject".into(),
-        MaskTool::Semantic(Semantic::Sky) => "semantic:sky".into(),
-        MaskTool::Semantic(Semantic::Background) => "semantic:background".into(),
-        MaskTool::Semantic(Semantic::PeoplePart(_)) => "semantic:people-part".into(),
-        MaskTool::Semantic(Semantic::Landscape(_)) => "semantic:landscape".into(),
-        MaskTool::Semantic(Semantic::PersonPartAt { .. }) => "semantic:person-part-at".into(),
-        MaskTool::Linear(_) => "linear".into(),
-        MaskTool::Radial(_) => "radial".into(),
-        MaskTool::LuminanceRange(_) => "luminance-range".into(),
-        MaskTool::Opaque { what } => format!("opaque:{}", what.as_deref().unwrap_or("?")),
-    }
-}
-
-/// Counts, per key (`level/name`), the numbers outside the key's registry
-/// range. Keys and counts only.
-#[derive(Default)]
-struct RangeCheck {
-    outside: BTreeMap<String, usize>,
-}
-
-impl RangeCheck {
-    fn number(&mut self, spec: &KeySpec, x: Finite) {
-        if let Some((min, max)) = spec.range {
-            if x < min || x > max {
-                *self
-                    .outside
-                    .entry(format!("{}/{}", spec.level, spec.name))
-                    .or_default() += 1;
-            }
-        }
-    }
-
-    fn value(&mut self, spec: &KeySpec, v: &Value) {
-        match v {
-            Value::Int(_) | Value::Real(_) => self.number(spec, v.as_finite().unwrap()),
-            Value::Struct(s) => self.fields(&s.fields),
-            Value::StructList(items) => items.iter().for_each(|s| self.fields(&s.fields)),
-            Value::Tools(items) => items.iter().for_each(|f| self.fields(f)),
-            Value::Corrections(cs) => cs.iter().for_each(|c| self.correction(c)),
-            _ => {}
-        }
-    }
-
-    fn fields(&mut self, f: &Fields) {
-        for (id, v) in &f.values {
-            self.value(id.spec(), v);
-        }
-    }
-
-    fn correction(&mut self, c: &Correction) {
-        if let Some(a) = c.amount {
-            self.number(
-                lookup(Level::Correction, "CorrectionAmount")
-                    .unwrap()
-                    .spec(),
-                a,
-            );
-        }
-        for (id, v) in &c.local {
-            self.value(id.spec(), v);
-        }
-        self.fields(&c.extra);
-        for m in &c.masks {
-            self.fields(&m.extra);
-            if let MaskTool::LuminanceRange(lr) = &m.tool {
-                self.fields(&lr.rest.fields);
-            }
-        }
-    }
-
-    fn settings(&mut self, s: &DevelopSettings) {
-        for (id, v) in s.values() {
-            self.value(id.spec(), v);
-        }
-        for c in &s.corrections {
-            self.correction(c);
-        }
-        if let Some(look) = &s.look {
-            if let Some(a) = look.amount {
-                let spec = lookup(Level::Struct(StructKind::Look), "Amount").unwrap();
-                self.number(spec.spec(), a);
-            }
-            self.fields(&look.rest.fields);
-        }
-    }
-}
 
 #[test]
 fn every_training_row_parses_without_errors_or_unknown_keys() {
@@ -156,10 +65,8 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
     // Key paths with indices removed, so one key counts once however often
     // it appears; values are never printed.
     let mut unexpected: BTreeMap<String, usize> = BTreeMap::new();
-    let mut tools: BTreeMap<String, usize> = BTreeMap::new();
-    let mut combines: BTreeMap<String, usize> = BTreeMap::new();
+    let mut masks = MaskCounts::default();
     let mut process_versions: BTreeMap<String, usize> = BTreeMap::new();
-    let mut corrections = 0usize;
     let mut ranges = RangeCheck::default();
 
     // Rows are named by their position only: their ids are private photo ids.
@@ -186,14 +93,8 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
         ranges.settings(&settings);
         for w in &warnings {
             *per_kind.entry(w.kind.name()).or_default() += 1;
-            let generic: String = w
-                .path
-                .split('[')
-                .map(|part| part.split_once(']').map_or(part, |(_, rest)| rest))
-                .collect::<Vec<_>>()
-                .join("[]");
             *unexpected
-                .entry(format!("{} {generic}", w.kind.name()))
+                .entry(format!("{} {}", w.kind.name(), generic_path(&w.path)))
                 .or_default() += 1;
         }
         *process_versions
@@ -203,18 +104,7 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
                     .map_or_else(|| "none".into(), |pv| pv.to_string()),
             )
             .or_default() += 1;
-        corrections += settings.corrections.len();
-        for m in settings.corrections.iter().flat_map(|c| &c.masks) {
-            *tools.entry(tool_name(&m.tool)).or_default() += 1;
-            let c = match m.combine {
-                Combine::Add { inverted: false } => "add",
-                Combine::Add { inverted: true } => "add-inverted",
-                Combine::Subtract => "subtract",
-                Combine::Intersect => "intersect",
-                Combine::Unrecognised => "unrecognised",
-            };
-            *combines.entry(c.into()).or_default() += 1;
-        }
+        masks.add(&settings);
     }
 
     eprintln!(
@@ -224,8 +114,11 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
     );
     eprintln!("warnings per kind: {per_kind:?}");
     eprintln!("process versions: {process_versions:?}");
-    eprintln!("corrections: {corrections}; mask tools: {tools:?}");
-    eprintln!("combinations: {combines:?}");
+    eprintln!(
+        "corrections: {}; mask tools: {:?}",
+        masks.corrections, masks.tools
+    );
+    eprintln!("combinations: {:?}", masks.combines);
     eprintln!("values outside their registry range: {:?}", ranges.outside);
     for (what, n) in &unexpected {
         eprintln!("  {n:>5}  {what}");
@@ -240,10 +133,10 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
         per_kind.is_empty(),
         "warnings (extend the registry or fix the reader): {unexpected:#?}"
     );
-    assert_eq!(combines.get("unrecognised"), None);
+    assert_eq!(masks.combines.get("unrecognised"), None);
     assert!(
         ranges.outside.is_empty(),
-        "values outside the registry range (widen the range in spec.py): {:#?}",
+        "values outside the registry range (widen the range in registry/table.rs): {:#?}",
         ranges.outside
     );
 }

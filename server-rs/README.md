@@ -9,7 +9,8 @@ endpoint reference.
 Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
 clients, edit-recipe schema), `lrg-develop` (the native Lightroom develop
-model: key registry, typed settings, Lua/JSON reader; a leaf crate),
+model: key registry, typed settings, Lua/JSON and XMP readers; a leaf
+crate),
 `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature), `lrg-mlx`
 (supervises the Apple silicon MLX sidecar), `lrg-api` (axum routers),
 `lrg-server` (the binary).
@@ -84,10 +85,14 @@ Family names are `face`, `siglip` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
 (89 MB, 2.2 GB and 834 MB respectively).
 
-Local-only families (currently `training-dump`, lrg-develop's sweep over the
-maintainer's private training dump, path in `LRG_DEVELOP_TRAINING_DUMP`) can
-never be provisioned in CI: `all` leaves them out, and only naming one makes
-its absence a failure. See
+Local-only families can never be provisioned in CI, because their data is
+private or not redistributable: `all` leaves them out, and only naming one
+makes its absence a failure. They are lrg-develop's local sweeps, each reading
+a path from an environment variable: `training-dump`
+(`LRG_DEVELOP_TRAINING_DUMP`, the maintainer's training dump), `lrc-presets`
+(`LRG_LRC_PRESETS_DIR`, Lightroom Classic's bundled presets and profiles),
+`acr-presets` (`LRG_ACR_PRESETS_DIR`, Camera Raw's user folder: its presets and
+profiles) and `xmp-corpus` (`LRG_XMP_CORPUS_DIR`, a private sidecar corpus). See
 [Dev-Develop-Model.md](../docs/wiki/Dev-Develop-Model.md).
 
 CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
