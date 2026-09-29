@@ -107,6 +107,10 @@ the same 10–20 photos: MLX is Apple's native inference stack, while llama.cpp
 reuses the shared prompt prefix across the photos in a batch (MLX re-processes
 it per photo), which matters more the larger the batch.
 
+Either engine can also download a model that is not in the list — pick
+**Other model from Hugging Face…**; it is checked before anything is
+downloaded. See [Local AI Models](Help-Local-AI-Models).
+
 Both reuse models you already have: llama.cpp picks up GGUFs under
 `~/.lmstudio/models`, and MLX picks up LM Studio's MLX models and the
 `huggingface-cli` cache. Full guide: [Local AI Models](Help-Local-AI-Models).

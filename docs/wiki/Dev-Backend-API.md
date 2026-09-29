@@ -750,6 +750,30 @@ Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with
 ### `POST /v1/llm/downloads`
 Starts a background download of a catalog entry. Body: `{ "id": "gemma4-e4b" }`. The id space is shared across both catalogs and the id alone selects the backend, so there is a single download queue: a GGUF pair is fetched as two files, an MLX entry as a repo snapshot staged into a hidden `.<name>.part` directory (which discovery skips) and renamed on success.
 
+Or a model from Hugging Face that is not in a catalog: `{ "repo": "mlx-community/gemma-3-12b-it-qat-4bit", "engine": "mlx", "revision": "<sha from the check>" }`. The repo is checked again exactly as by `/v1/llm/downloads/check`, at that revision, and refused with the same 400/502 if it does not pass — so what is fetched is what was checked. A GGUF goes into a folder of its own under the llama.cpp model directory; an MLX model gets a `.lrgenius-source.json` naming its repo. When the model is already installed, the download completes at once with its `installed_name`.
+
+### `POST /v1/llm/downloads/check`
+Checks a Hugging Face model before anything is downloaded ("Other model from Hugging Face…" in the plugin). Body: `{ "repo": "<org/name, org/name:QUANT, or a huggingface.co address>", "engine": "mlx" | "llamacpp" }`.
+
+- **400** `{ "error": … }` — the model cannot be used, with the reason and what to do instead: not a model name, no such public repo, gated, text-only, not an MLX conversion (or not a GGUF), an MLX `model_type` or `processor_class` the pinned mlx-swift-lm does not register (`hf_repo::MLX_VISION_MODEL_TYPES` / `MLX_VISION_PROCESSORS`), no tokenizer or chat template, no GGUF vision projector, a split GGUF, an unknown quantization. Also when the engine is not available on this machine.
+- **502** `{ "error": … }` — Hugging Face could not be reached.
+- **200** — what a download would fetch:
+
+```json
+{
+  "engine": "mlx", "repo": "mlx-community/gemma-3-12b-it-qat-4bit",
+  "revision": "<commit sha>", "dir_name": "gemma-3-12b-it-qat-4bit",
+  "installed_name": "gemma-3-12b-it-qat-4bit",
+  "files": [{ "path": "config.json", "size": 5000 }, "…"],
+  "approx_bytes": 8031095500, "est_ram_gb": 11.1,
+  "model_type": "gemma3", "quant": null,
+  "already_installed": false,
+  "warnings": ["This model is not in LrGeniusAI's tested list. …"]
+}
+```
+
+For `llamacpp`, `files` is the model file then its projector (`Q4_K_M` and an `f16` projector unless a quantization follows a colon), `quant` is set and `model_type` is null. `installed_name` is the `model` to send once it is downloaded. The Hugging Face address can be overridden with `HF_ENDPOINT`.
+
 Only one local model downloads at a time. While one is running, a second request gets **409** with `{ "error": "Another model download is still running. …" }` — it is refused, not queued.
 
 ### `GET /v1/llm/downloads`

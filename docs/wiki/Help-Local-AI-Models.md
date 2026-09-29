@@ -70,6 +70,44 @@ both.
 An MLX model is a **directory** (config, safetensors shards, tokenizer), not a
 single file — that difference is only visible if you go looking on disk.
 
+### A model that is not in the list
+
+The last entry of the dropdown, **Other model from Hugging Face…**, downloads
+any other model. Pick it, click **Download**, and paste the model's name or the
+address of its Hugging Face page:
+
+- **MLX:** an MLX conversion of a vision model, e.g.
+  `mlx-community/gemma-3-12b-it-qat-4bit`. The quantization is part of the name
+  (`…-4bit`, `…-8bit`).
+- **llama.cpp:** a GGUF repo that includes the vision projector, e.g.
+  `ggml-org/gemma-3-12b-it-GGUF`. `Q4_K_M` is taken unless you name another
+  quantization after a colon: `ggml-org/gemma-3-12b-it-GGUF:Q8_0`.
+
+**Check** looks at the model *before* anything is downloaded, and refuses one
+that cannot work, saying why:
+
+| Refused because | What to do |
+|---|---|
+| It does not exist, or is private | Check the name; paste the page's address instead. |
+| It is gated (licence to accept, sign-in needed) | Use an ungated copy — mlx-community, lmstudio-community and ggml-org publish most models without a gate. |
+| It is text-only | Pick a vision model: Gemma 3/4, Qwen2.5-VL, Qwen3-VL, Mistral 3, SmolVLM. |
+| MLX: not an MLX conversion, or a GGUF | Use the model's MLX version, usually `mlx-community/<name>-4bit`. |
+| MLX: an architecture or image processor the built-in engine cannot run | Pick another model; the message lists the supported types. |
+| MLX: no chat template or tokenizer | Pick another conversion of the model. |
+| GGUF: no vision projector (`mmproj`) | Use a repo that includes one (ggml-org and lmstudio-community usually do). |
+| GGUF: the quantization is split into several files | Pick a smaller one, e.g. `:Q4_K_M`. |
+
+A model that passes is shown with its download size and the memory it needs
+next to what the computer has — with a warning when that is more than it can
+comfortably spare — before you confirm the download. It is not in the tested
+list, so try it on a few photos before a big run: how well a model follows the
+answer format only shows in use.
+
+The files are pinned to the revision that was checked. An MLX model goes into
+a folder named after it in the MLX model directory (`org--name` if a different
+model already has that name); a GGUF model into its own folder in the
+llama.cpp model directory. It then shows up like any other installed model.
+
 ---
 
 ## 2. Reusing models you already have

@@ -192,6 +192,7 @@ sources = [
   "server-rs/crates/lrg-api/src/routes/llm.rs",
   "server-rs/crates/lrg-api/src/mlx_models.rs",
   "server-rs/crates/lrg-api/src/llm_models.rs",
+  "server-rs/crates/lrg-api/src/hf_repo.rs",
   "server-rs/crates/lrg-providers/src/local_provider.rs",
   "server-rs/crates/lrg-mlx/src/lib.rs",
   "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",

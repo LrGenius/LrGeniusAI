@@ -133,7 +133,13 @@ pub fn catalog_entry(id: &str) -> Option<&'static CatalogEntry> {
 
 #[must_use]
 pub fn hf_url(repo: &str, revision: &str, file: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/{revision}/{file}?download=true")
+    hf_url_at(&crate::hf_repo::hf_endpoint(), repo, revision, file)
+}
+
+/// [`hf_url`] against a given Hugging Face server.
+#[must_use]
+pub fn hf_url_at(endpoint: &str, repo: &str, revision: &str, file: &str) -> String {
+    format!("{endpoint}/{repo}/resolve/{revision}/{file}?download=true")
 }
 
 /// A usable model found on disk.
@@ -162,7 +168,7 @@ fn is_mmproj(file_name: &str) -> bool {
 ///
 /// Covers the two shapes publishers use: a K-quant or legacy quant (`q4_k_m`,
 /// `q8_0`, `iq3_xs`) and a float format (`bf16`, `f16`).
-fn is_quant_tag(segment: &str) -> bool {
+pub(crate) fn is_quant_tag(segment: &str) -> bool {
     matches!(segment, "f16" | "f32" | "bf16" | "fp16" | "fp8" | "mxfp4")
         || segment
             .trim_start_matches('i')
@@ -542,7 +548,12 @@ mod tests {
 
     #[test]
     fn hf_url_points_at_the_resolve_endpoint() {
-        let url = hf_url("org/repo", "main", "model.gguf");
+        let url = hf_url_at(
+            crate::hf_repo::DEFAULT_HF_ENDPOINT,
+            "org/repo",
+            "main",
+            "model.gguf",
+        );
         assert!(url.starts_with("https://huggingface.co/org/repo/resolve/main/model.gguf"));
     }
 }

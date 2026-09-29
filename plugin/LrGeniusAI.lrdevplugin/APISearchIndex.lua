@@ -134,6 +134,7 @@ local ENDPOINTS = {
 	LLM_STATUS = "/v1/llm/status",
 	START_LLM_DOWNLOAD = "/v1/llm/downloads",
 	STATUS_LLM_DOWNLOAD = "/v1/llm/downloads",
+	CHECK_LLM_DOWNLOAD = "/v1/llm/downloads/check",
 
 	-- Species links
 	SPECIES_LINKS = "/v1/species/links",
@@ -4607,6 +4608,28 @@ function SearchIndexAPI.getLlmStatus()
 	if err then
 		log:error("getLlmStatus failed: " .. tostring(err))
 		return nil, err
+	end
+	return res
+end
+
+---
+-- Checks a Hugging Face model the user typed in, before anything is downloaded.
+--
+-- @param repo string A model name ("org/name", optionally ":QUANT" for GGUF) or
+--        the model page's address.
+-- @param engine string "mlx" or "llamacpp".
+-- @return table|nil check { repo, revision, installed_name, approx_bytes,
+--         est_ram_gb, model_type, quant, files, already_installed, warnings }
+-- @return string|nil error Why the model cannot be used, in words for the user.
+--
+function SearchIndexAPI.checkLlmRepo(repo, engine)
+	-- The check makes a few requests to Hugging Face.
+	local res, err = _request("POST", SearchIndexAPI.url("CHECK_LLM_DOWNLOAD"), { repo = repo, engine = engine }, 60)
+	if err then
+		-- _request prefixes the backend's message with the HTTP status; the
+		-- message itself is what the user needs.
+		local message = tostring(err):match("HTTP status: [^%-]+%- (.+)$") or tostring(err)
+		return nil, message
 	end
 	return res
 end

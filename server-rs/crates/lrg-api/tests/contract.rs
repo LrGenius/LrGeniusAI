@@ -2041,3 +2041,46 @@ async fn a_malformed_server_address_is_a_warning_not_a_failure() {
     let warning = json["warnings"][0].as_str().unwrap_or_default();
     assert!(warning.contains("http:// or https://"), "{json}");
 }
+
+/// A fresh app per request, for the download routes below.
+async fn post_fresh(path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    let (app, _) = fresh_app();
+    post_json(&app, path, body).await
+}
+
+/// A typo is reported before anything else — even on a machine that could not
+/// run the model — and never reaches Hugging Face.
+#[tokio::test]
+async fn a_model_name_that_is_not_one_is_refused_up_front() {
+    for path in ["/v1/llm/downloads/check", "/v1/llm/downloads"] {
+        let (status, json) =
+            post_fresh(path, serde_json::json!({"repo": "gemma3", "engine": "mlx"})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {json}");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not a Hugging Face model name"),
+            "{path}: {json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_check_needs_a_repo_and_a_known_engine() {
+    let (status, json) = post_fresh(
+        "/v1/llm/downloads/check",
+        serde_json::json!({"engine": "mlx"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "repo is required.");
+
+    let (status, json) = post_fresh(
+        "/v1/llm/downloads/check",
+        serde_json::json!({"repo": "org/model", "engine": "onnx"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(json["error"].as_str().unwrap().contains("engine must be"));
+}
