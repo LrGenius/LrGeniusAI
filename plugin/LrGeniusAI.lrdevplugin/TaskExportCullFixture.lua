@@ -157,7 +157,7 @@ end
 -- backend's own order, which is arbitrary but stable — and a tie in the labels
 -- genuinely means the photographer expressed no preference, so any order is as
 -- correct as another.
-local function labelledPhotos(groupPhotos, photoById, metricsById)
+local function labelledPhotos(groupPhotos, photoById, metricsById, dropped)
 	local entries = {}
 	for _, photoResult in ipairs(groupPhotos) do
 		local photoId = photoResult["photo_id"]
@@ -171,6 +171,11 @@ local function labelledPhotos(groupPhotos, photoById, metricsById)
 				rating = rating,
 				metrics = metricsById[photoId] or {},
 			})
+		elseif dropped then
+			-- A group entry with no photo ID, or with one this catalog has no
+			-- photo for. Counted so the export can say the fixture is short of
+			-- what the run covered, instead of only logging it (#375).
+			dropped.photos = dropped.photos + 1
 		end
 	end
 
@@ -245,11 +250,16 @@ LrTasks.startAsyncTask(function()
 
 		local photoIds = {}
 		local photoById = {}
+		local photosWithoutId = 0
+		-- Group entries the fixture cannot write, filled in by labelledPhotos.
+		local dropped = { photos = 0 }
 		for _, photo in ipairs(photosToProcess) do
 			local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 			if photoId then
 				table.insert(photoIds, photoId)
 				photoById[photoId] = photo
+			else
+				photosWithoutId = photosWithoutId + 1
 			end
 		end
 		if #photoIds == 0 then
@@ -322,7 +332,7 @@ LrTasks.startAsyncTask(function()
 		local fixtureGroups = {}
 		local labelledGroupCount = 0
 		for _, group in ipairs(groups) do
-			local photos, anyLabel = labelledPhotos(group["photos"] or {}, photoById, metricsById)
+			local photos, anyLabel = labelledPhotos(group["photos"] or {}, photoById, metricsById, dropped)
 			if #photos > 0 then
 				local entry = {
 					group_id = tostring(group["group_id"] or ""),
@@ -410,6 +420,20 @@ LrTasks.startAsyncTask(function()
 				.. string.format(
 					"%d photo(s) had no stored metrics (the backend is older than this flag), so the fixture cannot fully reproduce cull scores. Update the backend and re-export for a complete fixture.",
 					missingStored
+				)
+		end
+		-- "covering ^3 photo(s)" counts the selection that had an ID, not what
+		-- the fixture actually holds, so the difference is spelled out here
+		-- rather than left for the reader to work out (#375).
+		local leftOut = photosWithoutId + dropped.photos
+		if leftOut > 0 then
+			doneMessage = doneMessage
+				.. "\n\n"
+				.. string.format(
+					"%d photo(s) were left out of the fixture: %d had no usable photo ID and %d are not in the current catalog. The fixture describes the rest.",
+					leftOut,
+					photosWithoutId,
+					dropped.photos
 				)
 		end
 		LrDialogs.message(LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"), doneMessage)

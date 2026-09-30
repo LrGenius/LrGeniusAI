@@ -111,7 +111,10 @@ local function phashMaxHammingFromStrictness(strictness)
 	return 10
 end
 
-local function createCollectionFromPhotoIds(photoIds, collectionName)
+-- Builds the collection and says how complete it is. `skipped` carries the
+-- reasons the collection is smaller than the search result, so the "N photo(s)
+-- added" line is not the only number the user has to reconcile (#375).
+local function createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 	local catalog = LrApplication.activeCatalog()
 	local photos = SearchIndexAPI.findPhotosByPhotoIds(photoIds)
 	if #photos == 0 then
@@ -122,6 +125,21 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 			)
 		)
 		return
+	end
+
+	-- photoIds are the IDs the search returned; findPhotosByPhotoIds logs and
+	-- drops the ones the catalog has no photo for. Counted here so the shortfall
+	-- is reported rather than showing up as an unexplained smaller number.
+	local notes = skipped or {}
+	local missingFromCatalog = #photoIds - #photos
+	if missingFromCatalog > 0 then
+		table.insert(
+			notes,
+			tostring(missingFromCatalog)
+				.. " of the "
+				.. tostring(#photoIds)
+				.. " matched photo(s) are not in the current catalog"
+		)
 	end
 
 	local collectionSet, collection
@@ -159,14 +177,15 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 
 	catalog:setActiveSources({ collection })
 	LrApplicationView.gridView()
-	LrDialogs.message(
-		LOC("$$$/LrGeniusAI/FindSimilarImages/Done=Done"),
-		LOC(
-			'$$$/LrGeniusAI/People/CollectionCreated=^1 photo(s) added to collection "^2".',
-			tostring(#photos),
-			collectionName
-		)
+	local doneMessage = LOC(
+		'$$$/LrGeniusAI/People/CollectionCreated=^1 photo(s) added to collection "^2".',
+		tostring(#photos),
+		collectionName
 	)
+	if #notes > 0 then
+		doneMessage = doneMessage .. "\n\nNot in the collection: " .. table.concat(notes, "; ") .. "."
+	end
+	LrDialogs.message(LOC("$$$/LrGeniusAI/FindSimilarImages/Done=Done"), doneMessage)
 end
 
 LrTasks.startAsyncTask(function()
@@ -211,6 +230,7 @@ LrTasks.startAsyncTask(function()
 		end
 
 		local scopePhotoIds = nil
+		local scopePhotosWithoutId = 0
 		if options.searchScope == "view" then
 			local scopePhotos = PhotoSelector.getPhotosInScope("view")
 			if not scopePhotos or #scopePhotos == 0 then
@@ -227,6 +247,11 @@ LrTasks.startAsyncTask(function()
 				local id = SearchIndexAPI.getPhotoIdForPhoto(p)
 				if id and id ~= "" and id ~= photoId then
 					scopePhotoIds[#scopePhotoIds + 1] = id
+				elseif not (id and id ~= "") then
+					-- No usable ID means the search cannot be limited to this
+					-- photo; it is left out of the scope rather than silently
+					-- shrinking it (#375).
+					scopePhotosWithoutId = scopePhotosWithoutId + 1
 				end
 			end
 		end
@@ -284,17 +309,40 @@ LrTasks.startAsyncTask(function()
 		end
 
 		local photoIds = {}
+		local seenIds = {}
+		local rowsWithoutId = 0
 		for _, r in ipairs(results) do
 			local pid = r.photo_id or r.photo_uuid
 			if pid and pid ~= photoId then
-				photoIds[#photoIds + 1] = pid
+				-- The backend may return the same photo twice; adding it twice
+				-- would inflate the "added" count below and hide the drops.
+				if not seenIds[pid] then
+					seenIds[pid] = true
+					photoIds[#photoIds + 1] = pid
+				end
+			elseif not pid then
+				-- A row with no ID cannot be resolved to a photo at all, so it
+				-- is reported rather than only logged (#375).
+				rowsWithoutId = rowsWithoutId + 1
 			end
+		end
+
+		local skipped = {}
+		if scopePhotosWithoutId > 0 then
+			table.insert(
+				skipped,
+				tostring(scopePhotosWithoutId)
+					.. " photo(s) in the current view have no usable ID and were not searched"
+			)
+		end
+		if rowsWithoutId > 0 then
+			table.insert(skipped, tostring(rowsWithoutId) .. " result row(s) carried no photo ID")
 		end
 
 		local collectionName = LOC(
 			"$$$/LrGeniusAI/FindSimilarImages/CollectionName=Similar images @ ^1",
 			LrDate.timeToW3CDate(LrDate.currentTime())
 		)
-		createCollectionFromPhotoIds(photoIds, collectionName)
+		createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 	end)
 end)

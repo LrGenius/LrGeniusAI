@@ -121,7 +121,10 @@ local PHOTOS_PER_WRITE_CHUNK = 200
 -- @param pair table { canonical, canonicalName, duplicate, duplicateName }
 -- @param onProgress function|nil Called with (photosDone, photosTotal) before
 --        each chunk so the caller can update its progress scope and yield
--- Returns true on success, or nil + reason string on failure/skip.
+-- Returns true on success, or nil + reason string on failure/skip. A run that
+-- merged the keyword but could not re-tag every photo returns the number of
+-- those photos as a third value: the merge did happen, and saying so plainly
+-- beats reporting it as a clean one (#375).
 local function executeMerge(catalog, pair, onProgress)
 	local okChildren, children = LrTasks.pcall(function()
 		return pair.duplicate:getChildren() or {}
@@ -140,6 +143,10 @@ local function executeMerge(catalog, pair, onProgress)
 	end
 
 	local total = #photos
+	-- Photos the catalog refused to re-tag. Counted per photo, not per call:
+	-- a photo whose add succeeded and whose remove failed is one photo that
+	-- still carries the duplicate keyword, not two problems.
+	local failedPhotos = 0
 	local ok, err = LrTasks.pcall(function()
 		local firstIndex = 1
 		while firstIndex <= total do
@@ -152,10 +159,12 @@ local function executeMerge(catalog, pair, onProgress)
 				function()
 					for i = firstIndex, lastIndex do
 						local photo = photos[i]
+						local photoFailed = false
 						local addOk, addErr = LrTasks.pcall(function()
 							photo:addKeyword(pair.canonical)
 						end)
 						if not addOk then
+							photoFailed = true
 							log:error(
 								"DeduplicateKeywords: addKeyword failed for '"
 									.. pair.duplicateName
@@ -167,12 +176,16 @@ local function executeMerge(catalog, pair, onProgress)
 							photo:removeKeyword(pair.duplicate)
 						end)
 						if not rmOk then
+							photoFailed = true
 							log:error(
 								"DeduplicateKeywords: removeKeyword failed for '"
 									.. pair.duplicateName
 									.. "': "
 									.. tostring(rmErr)
 							)
+						end
+						if photoFailed then
+							failedPhotos = failedPhotos + 1
 						end
 					end
 				end,
@@ -192,9 +205,11 @@ local function executeMerge(catalog, pair, onProgress)
 				.. pair.canonicalName
 				.. "' ("
 				.. #photos
-				.. " photo(s) re-tagged, keyword entry remains — purge via Metadata > Purge Unused Keywords)"
+				.. " photo(s) re-tagged"
+				.. (failedPhotos > 0 and (", " .. failedPhotos .. " failed") or "")
+				.. "; keyword entry remains — purge via Metadata > Purge Unused Keywords)"
 		)
-		return true
+		return true, nil, failedPhotos
 	else
 		log:error("DeduplicateKeywords: merge failed for '" .. pair.duplicateName .. "': " .. tostring(err))
 		return nil, pair.duplicateName .. " (merge failed)"
@@ -797,6 +812,10 @@ LrTasks.startAsyncTask(function()
 		local mergedCount = 0
 		local skippedNames = {}
 		local successfulPairs = {}
+		-- Merges that re-tagged the keyword but left photos behind. Kept apart
+		-- from mergedCount: the merge counts as done, the report still says
+		-- which photos did not move (#375).
+		local partialMerges = {}
 
 		mergeScope:setPortionComplete(0, #finalPairs)
 
@@ -818,7 +837,7 @@ LrTasks.startAsyncTask(function()
 
 			-- Re-tagging a keyword that sits on thousands of photos is the other
 			-- place this task can look stalled; show the photo count as it goes.
-			local ok, reason = executeMerge(catalog, pair, function(photosDone, photosTotal)
+			local ok, reason, failedPhotos = executeMerge(catalog, pair, function(photosDone, photosTotal)
 				if photosTotal > PHOTOS_PER_WRITE_CHUNK then
 					mergeScope:setCaption(
 						LOC(
@@ -835,6 +854,9 @@ LrTasks.startAsyncTask(function()
 			if ok then
 				mergedCount = mergedCount + 1
 				table.insert(successfulPairs, pair)
+				if failedPhotos and failedPhotos > 0 then
+					table.insert(partialMerges, { name = pair.duplicateName, photos = failedPhotos })
+				end
 			else
 				table.insert(skippedNames, reason)
 			end
@@ -885,6 +907,23 @@ LrTasks.startAsyncTask(function()
 				.. "\n\n"
 				.. string.format("%d pair(s) were left unmerged because you canceled.", unmergedCanceled)
 		end
+		if #partialMerges > 0 then
+			local leftBehind = 0
+			local names = {}
+			for _, entry in ipairs(partialMerges) do
+				leftBehind = leftBehind + entry.photos
+				table.insert(names, entry.name)
+			end
+			resultMsg = resultMsg
+				.. "\n\n"
+				.. "Not every photo moved: "
+				.. tostring(leftBehind)
+				.. " photo(s) across "
+				.. tostring(#partialMerges)
+				.. " merge(s) could not be re-tagged and still carry the duplicate keyword ("
+				.. table.concat(names, ", ")
+				.. ")."
+		end
 		if scanAborted then
 			resultMsg = resultMsg
 				.. "\n\n"
@@ -907,6 +946,13 @@ LrTasks.startAsyncTask(function()
 
 		LrDialogs.message(LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultTitle=Deduplication Complete"), resultMsg)
 
-		log:info("DeduplicateKeywords complete: merged=" .. mergedCount .. " skipped=" .. #skippedNames)
+		log:info(
+			"DeduplicateKeywords complete: merged="
+				.. mergedCount
+				.. " skipped="
+				.. #skippedNames
+				.. " partial="
+				.. #partialMerges
+		)
 	end)
 end)
