@@ -385,7 +385,7 @@ function OnboardingWizard.show(manualTrigger)
 									alignment = "right",
 									width = share("providerLabel"),
 								}),
-								f:edit_field({ value = bind("geminiApiKey"), width_in_chars = 36 }),
+								f:password_field({ value = bind("geminiApiKey"), width_in_chars = 36 }),
 								f:push_button({
 									title = "Get key",
 									action = function()
@@ -399,7 +399,7 @@ function OnboardingWizard.show(manualTrigger)
 									alignment = "right",
 									width = share("providerLabel"),
 								}),
-								f:edit_field({ value = bind("chatgptApiKey"), width_in_chars = 36 }),
+								f:password_field({ value = bind("chatgptApiKey"), width_in_chars = 36 }),
 								f:push_button({
 									title = "Get key",
 									action = function()

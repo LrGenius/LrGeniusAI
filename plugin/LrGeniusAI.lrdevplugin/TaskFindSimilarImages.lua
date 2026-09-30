@@ -283,11 +283,7 @@ LrTasks.startAsyncTask(function()
 
 		-- If the server returned a warning (e.g. reference photo not indexed), show it and stop.
 		if result and result.warning then
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/common/BackendWarning=Find similar images"),
-				result.warning,
-				"warning"
-			)
+			LrDialogs.message("Backend Warning", result.warning, "warning")
 			return
 		end
 
