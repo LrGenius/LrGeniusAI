@@ -1151,6 +1151,11 @@ LrTasks.startAsyncTask(function()
 			log:trace("Saved species data for " .. speciesCount .. " photo(s)")
 		end
 
+		-- Set when the review dialog stops the save pass below: photos already
+		-- written stay written, the rest were never looked at. The run still
+		-- ends with the backend's status, so this has to be said separately.
+		local reviewCanceledAt = nil
+
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
 			log:trace("Saving metadata for processed photos...")
 			local savedCount = 0
@@ -1158,7 +1163,7 @@ LrTasks.startAsyncTask(function()
 
 			local skipFromHere = false
 
-			for _, photo in ipairs(processedPhotos) do
+			for photoIndex, photo in ipairs(processedPhotos) do
 				-- Process responses if validation is enabled or just save metadata
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
@@ -1234,6 +1239,10 @@ LrTasks.startAsyncTask(function()
 								SearchIndexAPI.removePhotoMetadata(photoId)
 								Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
 							elseif result == "cancel" then
+								-- Cancel during the review stops the save pass
+								-- from here on (#375); the remaining photos are
+								-- reported after the loop, not just logged.
+								reviewCanceledAt = photoIndex
 								break
 							end
 						else
@@ -1316,6 +1325,23 @@ LrTasks.startAsyncTask(function()
 			return #parts > 0 and table.concat(parts, "\n") or nil
 		end
 
+		-- Say how much the review cancel above left untouched. Only the log
+		-- knows about it otherwise: the backend status the run reports is
+		-- unaffected by a user stopping the save pass (#375).
+		local function collectCancelNote()
+			if not reviewCanceledAt then
+				return nil
+			end
+			local remaining = #processedPhotos - reviewCanceledAt
+			return "The review was cancelled at photo "
+				.. tostring(reviewCanceledAt)
+				.. " of "
+				.. tostring(#processedPhotos)
+				.. ", so the last "
+				.. tostring(remaining)
+				.. " photo(s) were left as they were."
+		end
+
 		-- Show completion message based on status
 		if status == "canceled" then
 			LrDialogs.message(
@@ -1346,8 +1372,14 @@ LrTasks.startAsyncTask(function()
 			if warningText then
 				summary = summary .. "\n\nWarnings:\n" .. warningText
 			end
+			local cancelNote = collectCancelNote()
+			if cancelNote then
+				summary = summary .. "\n\n" .. cancelNote
+			end
 			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(summary, combinedError)
+			elseif cancelNote then
+				LrDialogs.message("Task Canceled", summary)
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"), summary)
 			end
@@ -1355,8 +1387,16 @@ LrTasks.startAsyncTask(function()
 			local msg =
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
 			local warningText = collectWarnings()
+			local cancelNote = collectCancelNote()
+			if cancelNote then
+				msg = msg .. "\n\n" .. cancelNote
+			end
 			if warningText then
 				msg = msg .. "\n\nWarnings:\n" .. warningText
+			end
+			if cancelNote then
+				LrDialogs.message("Task Canceled", msg)
+			elseif warningText then
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)

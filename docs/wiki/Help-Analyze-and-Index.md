@@ -373,7 +373,8 @@ Extra information sent alongside the photo to improve accuracy:
   nothing to reword in a taxonomic name) with its own *Save species* tickbox.
   **Discard** and **Cancel** now drop the species along with everything else —
   before, the species fields, the look-up links and the species keywords were
-  written whichever button you pressed.
+  written whichever button you pressed. Cancel stops the review there, and the
+  completion dialog says how many photos were left untouched.
 - **Import metadata from catalog before indexing** — pushes the metadata you
   already have into the backend first, so the AI does not overwrite it blindly.
 

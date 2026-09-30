@@ -411,12 +411,7 @@ LrTasks.startAsyncTask(function()
 				if resultPhotoId then
 					table.insert(photoIds, resultPhotoId)
 				else
-					log:warn(
-						LOC(
-							"$$$/LrGeniusAI/AdvancedSearchTask/photoNotFound=Photo with ID ^1 not found in catalog.",
-							"nil"
-						)
-					)
+					log:warn("Semantic search: result row without a photo ID; skipping it.")
 				end
 			end
 		end
