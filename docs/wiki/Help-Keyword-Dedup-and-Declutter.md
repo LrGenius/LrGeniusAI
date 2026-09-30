@@ -23,7 +23,7 @@ The workflow has five steps:
 
 #### Step 1 — Configuration
 
-- **AI Model** — choose which LLM validates the similarity clusters. Options: the built-in local engine (*On this Mac* / *On this PC* — see [Local AI Models](Help-Local-AI-Models)), Ollama, LM Studio, your [Other AI server](Help-Other-AI-Server), OpenAI and Gemini. If none is set up, the list offers *None (similarity only)* and the task groups keywords by similarity alone (no LLM validation). A saved model that is not available right now is shown as *(not available now)*; running with it stops with a message saying what to start or fix.
+- **AI Model** — choose which LLM validates the similarity clusters. Options: the built-in local engine (*On this Mac* / *On this PC* — see [Local AI Models](Help-Local-AI-Models)), Ollama, LM Studio, your [Other AI server](Help-Other-AI-Server), OpenAI, Gemini and Anthropic. If none is set up, the list offers *None (similarity only)* and the task groups keywords by similarity alone (no LLM validation). A saved model that is not available right now is shown as *(not available now)*; running with it stops with a message saying what to start or fix.
 - **Matching Strictness** — slider from 0.70 to 0.98.
   - Lower values (0.70) produce more suggestions and may include false positives.
   - Higher values (0.98) are conservative; fewer but more certain matches.

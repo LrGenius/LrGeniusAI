@@ -29,7 +29,7 @@ When you try to open the `.pkg` installer or the backend binary:
 
 Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:
 - **Set the Backend Server URL:** This defaults to `http://127.0.0.1:19819` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
-- **Optional AI providers:** Only if you want a cloud service or a server of your own to do the analysis: enter your OpenAI or Google Gemini key, or the address of an **Other AI server** (OpenRouter, a llama.cpp server, LiteLLM, or LM Studio/Ollama on another computer — see [Other AI Server](Help-Other-AI-Server)). Ollama and LM Studio running on this computer need no setup; they are found automatically.
+- **Optional AI providers:** Only if you want a cloud service or a server of your own to do the analysis: enter your OpenAI, Google Gemini or Anthropic key, or the address of an **Other AI server** (OpenRouter, a llama.cpp server, LiteLLM, or LM Studio/Ollama on another computer — see [Other AI Server](Help-Other-AI-Server)). Ollama and LM Studio running on this computer need no setup; they are found automatically.
 - ~~**Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.~~ **Removed** — the Vertex AI fields no longer exist in the Plug-in Manager (see [section 7](#7-vertex-ai-login--removed)).
 
 *Having trouble? Refer to the [Troubleshooting](Troubleshooting) guide for connectivity and API issues.*

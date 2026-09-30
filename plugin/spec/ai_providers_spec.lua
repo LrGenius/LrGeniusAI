@@ -48,6 +48,7 @@ describe("AiProviders.modelItems", function()
 		models = {
 			gemini = { "gemini-2.5-flash" },
 			chatgpt = { "gpt-5-mini" },
+			anthropic = { "claude-opus-5-5" },
 			openai_compatible = { "z-model", "a-model" },
 			mlx = { "gemma-4-e4b-it-4bit" },
 			ollama = {},
@@ -64,6 +65,7 @@ describe("AiProviders.modelItems", function()
 			"OpenRouter · z-model",
 			"OpenAI · gpt-5-mini",
 			"Google Gemini · gemini-2.5-flash",
+			"Anthropic · claude-opus-5-5",
 		}, titles(AiProviders.modelItems(resp)))
 	end)
 
@@ -84,11 +86,11 @@ describe("AiProviders.modelItems", function()
 		local items = AiProviders.modelItems(resp, "ollama::llava:13b")
 		assert.are.equal("ollama::llava:13b", items[1].value)
 		assert.are.equal("Ollama · llava:13b (not available now)", items[1].title)
-		assert.are.equal(7, #items)
+		assert.are.equal(8, #items)
 	end)
 
 	it("does not duplicate a saved choice that is offered", function()
-		assert.are.equal(6, #AiProviders.modelItems(resp, "chatgpt::gpt-5-mini"))
+		assert.are.equal(7, #AiProviders.modelItems(resp, "chatgpt::gpt-5-mini"))
 	end)
 
 	it("lists providers it does not know yet instead of hiding them", function()
@@ -119,6 +121,7 @@ describe("AiProviders.unavailableReason", function()
 		-- A cloud list is empty on any hiccup; the key is checked instead.
 		assert.is_nil(AiProviders.unavailableReason(resp, "chatgpt::gpt-5-mini"))
 		assert.is_nil(AiProviders.unavailableReason(resp, "gemini::gemini-2.5-flash"))
+		assert.is_nil(AiProviders.unavailableReason(resp, "anthropic::claude-opus-5-5"))
 	end)
 
 	it("passes on why the Other AI server could not be asked", function()
@@ -156,12 +159,19 @@ describe("AiProviders.connectionOptions", function()
 		local opts = AiProviders.connectionOptions("chatgpt", { chatgptApiKey = " sk-1 ", geminiApiKey = "g" })
 		assert.are.same({ api_key = "sk-1" }, opts)
 		assert.are.same({ api_key = "g" }, AiProviders.connectionOptions("gemini", { geminiApiKey = "g" }))
+		assert.are.same(
+			{ api_key = "sk-ant" },
+			AiProviders.connectionOptions("anthropic", { anthropicApiKey = " sk-ant ", chatgptApiKey = "sk-1" })
+		)
 	end)
 
 	it("refuses a cloud provider without a key, with a reason", function()
 		local opts, err = AiProviders.connectionOptions("gemini", { geminiApiKey = "  " })
 		assert.is_nil(opts)
 		assert.truthy(err:find("Gemini API key is not set", 1, true))
+		opts, err = AiProviders.connectionOptions("anthropic", {})
+		assert.is_nil(opts)
+		assert.truthy(err:find("Anthropic API key is not set", 1, true))
 	end)
 
 	it("sends the Other AI server address, and its key only when there is one", function()

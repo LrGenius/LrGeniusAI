@@ -308,8 +308,8 @@ LrTasks.startAsyncTask(function()
 				text_color = LrColor(0.8, 0.2, 0.0),
 			}),
 			f:static_text({
-				title = "Note: with a cloud service — OpenAI, Gemini, or a paid server such as OpenRouter — "
-					.. "the AI analysis costs API credits.",
+				title = "Note: with a cloud service — OpenAI, Gemini, Anthropic, or a paid server such as "
+					.. "OpenRouter — the AI analysis costs API credits.",
 				fill_horizontal = 1,
 				wrap = true,
 				text_color = LrColor(0.5, 0.35, 0.0),

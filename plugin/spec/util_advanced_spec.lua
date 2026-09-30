@@ -107,7 +107,14 @@ describe("Util.dumpTable", function()
 	end)
 
 	it("redacts the Other AI server key and request-body key fields", function()
-		for _, field in ipairs({ "aiServerApiKey", "server_apikey", "openai_apikey", "gemini_apikey" }) do
+		for _, field in ipairs({
+			"aiServerApiKey",
+			"server_apikey",
+			"openai_apikey",
+			"gemini_apikey",
+			"anthropicApiKey",
+			"anthropic_apikey",
+		}) do
 			local s = Util.dumpTable({ [field] = "sk-or-secret" })
 			assert.is_nil(s:find("sk-or-secret", 1, true), field)
 			assert.truthy(s:find("<redacted>", 1, true), field)

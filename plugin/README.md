@@ -98,6 +98,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Optional API keys depending on provider:
   - Gemini
   - OpenAI / ChatGPT
+  - Anthropic (Claude)
   - an OpenAI-compatible server (OpenRouter, llama.cpp server, LiteLLM, …), if it needs one
   - ~~Vertex AI (project + location)~~ — **removed**, the plugin no longer offers Vertex AI
 
@@ -169,7 +170,7 @@ If strict cross-catalog identity is important for your workflow, plan for re-ind
 In the plugin settings dialog you can configure:
 
 - Backend server URL
-- Optional AI providers: the OpenAI and Gemini keys, and an **Other AI server**
+- Optional AI providers: the OpenAI, Gemini and Anthropic keys, and an **Other AI server**
   (any OpenAI-compatible server) with an optional key. Ollama and LM Studio have
   no settings: they are found at their default address on this computer, and
   one running elsewhere is the Other AI server. (The Vertex AI

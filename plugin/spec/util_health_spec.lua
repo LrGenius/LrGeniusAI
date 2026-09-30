@@ -22,6 +22,7 @@ local function health(available)
 		clip = true,
 		gemini = false,
 		chatgpt = false,
+		anthropic = false,
 		ollama = false,
 		lmstudio = false,
 		server = false,
@@ -43,6 +44,7 @@ describe("SearchIndexAPI.hasAnyLlmProvider", function()
 	it("counts each cloud or local-app provider on its own", function()
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "gemini" })))
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "chatgpt" })))
+		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "anthropic" })))
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "ollama" })))
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "lmstudio" })))
 	end)

@@ -1983,6 +1983,7 @@ async fn provider_models_list_every_provider_and_no_warnings_by_default() {
         "openai_compatible",
         "chatgpt",
         "gemini",
+        "anthropic",
     ] {
         assert!(
             json["models"][provider].is_array(),

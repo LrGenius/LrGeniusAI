@@ -63,6 +63,7 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.logging = prefs.logging
 	propertyTable.geminiApiKey = prefs.geminiApiKey
 	propertyTable.chatgptApiKey = prefs.chatgptApiKey
+	propertyTable.anthropicApiKey = prefs.anthropicApiKey
 	-- Vertex AI is disabled in the GUI; the backend code is untouched.
 	-- propertyTable.vertexProjectId = prefs.vertexProjectId
 	-- propertyTable.vertexLocation = prefs.vertexLocation or "us-central1"
@@ -1001,6 +1002,27 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					width = share("apiKeyButtonWidth"),
 				}),
 			}),
+			-- Claude through Anthropic's own API. Not the Other AI server: Anthropic's
+			-- OpenAI-compatible endpoint lists no models and ignores the answer format.
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "Anthropic key",
+					alignment = "right",
+					width = share("apiKeyLabelWidth"),
+				}),
+				f:edit_field({
+					value = bind("anthropicApiKey"),
+					fill_horizontal = 1,
+				}),
+				f:push_button({
+					title = "Get key",
+					action = function(button)
+						LrHttp.openUrlInBrowser("https://platform.claude.com/settings/keys")
+					end,
+					width = share("apiKeyButtonWidth"),
+				}),
+			}),
 			f:row({
 				fill_horizontal = 1,
 				f:static_text({
@@ -1411,6 +1433,7 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	end
 	prefs.geminiApiKey = trimmed(propertyTable.geminiApiKey)
 	prefs.chatgptApiKey = trimmed(propertyTable.chatgptApiKey)
+	prefs.anthropicApiKey = trimmed(propertyTable.anthropicApiKey)
 	prefs.aiServerUrl = trimmed(propertyTable.aiServerUrl)
 	prefs.aiServerApiKey = trimmed(propertyTable.aiServerApiKey)
 	-- Shown for one opening of this dialog; see updateHealth.

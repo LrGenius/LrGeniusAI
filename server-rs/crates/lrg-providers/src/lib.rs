@@ -3,6 +3,7 @@
 //! providers. Gemini, LM Studio, and Vertex AI providers land in M8
 //! alongside the `/v1/edit/recipe` endpoint.
 
+pub mod anthropic;
 pub mod edit_recipe;
 pub mod gemini;
 pub mod gemini_schema;
