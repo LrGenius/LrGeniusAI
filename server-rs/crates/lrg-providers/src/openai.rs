@@ -21,7 +21,7 @@ use crate::schema::prepare_response_structure;
 use crate::schema_strict::make_schema_strict;
 use crate::types::{
     EditGenerationRequest, EditGenerationResponse, MetadataGenerationRequest,
-    MetadataGenerationResponse, ProviderError,
+    MetadataGenerationResponse, ProviderError, ReasoningEffort,
 };
 
 const DEFAULT_MAX_TOKENS: u32 = 2048;
@@ -46,14 +46,28 @@ fn is_reasoning_model(model: &str) -> bool {
 /// Fill in the tuning knobs every chat call shares: the completion-token
 /// cap (under the name the model accepts — see [`TOKEN_LIMIT_FIELD`]), a
 /// temperature the model will not reject, and reasoning effort.
-fn apply_model_tuning(body: &mut Value, model: &str, temperature: f64, max_tokens: u32) {
-    body[TOKEN_LIMIT_FIELD] = json!(max_tokens);
-    if is_reasoning_model(model) {
+///
+/// A reasoning model gets the plug-in's Analysis depth as its
+/// `reasoning_effort`, and room for that reasoning on top of the user's Max
+/// Tokens: the hidden reasoning tokens come out of the same budget as the
+/// answer. Returns the limit actually sent.
+fn apply_model_tuning(
+    body: &mut Value,
+    model: &str,
+    temperature: f64,
+    effort: ReasoningEffort,
+    max_tokens: u32,
+) -> u32 {
+    let limit = if is_reasoning_model(model) {
         body["temperature"] = json!(1.0);
-        body["reasoning_effort"] = json!("low");
+        body["reasoning_effort"] = json!(effort.as_str());
+        max_tokens.saturating_add(effort.thinking_headroom())
     } else {
         body["temperature"] = json!(temperature);
-    }
+        max_tokens
+    };
+    body[TOKEN_LIMIT_FIELD] = json!(limit);
+    limit
 }
 
 /// The user-facing explanation for `finish_reason == "length"`.
@@ -63,7 +77,7 @@ fn length_error(model: &str, max_tokens: u32) -> String {
     );
     if is_reasoning_model(model) {
         msg.push_str(
-            " GPT-5 and o-series models also spend part of that budget on internal reasoning, so they need a higher limit than other models do.",
+            " GPT-5 and o-series models also spend part of that budget on internal reasoning (the limit above already includes extra room for it); a lower Analysis depth leaves more of it for the answer.",
         );
     }
     msg
@@ -147,7 +161,7 @@ impl OpenAiProvider {
                 {"role": "user", "content": user_prompt},
             ],
         });
-        apply_model_tuning(&mut body, model, 0.1, 4096);
+        apply_model_tuning(&mut body, model, 0.1, ReasoningEffort::Low, 4096);
         let resp = self
             .client
             .post("https://api.openai.com/v1/chat/completions")
@@ -190,7 +204,13 @@ impl OpenAiProvider {
             ],
             "response_format": response_format,
         });
-        apply_model_tuning(&mut body, &request.model, request.temperature, max_tokens);
+        let max_tokens = apply_model_tuning(
+            &mut body,
+            &request.model,
+            request.temperature,
+            request.reasoning_effort,
+            max_tokens,
+        );
 
         let resp = match self
             .client
@@ -336,7 +356,13 @@ impl OpenAiProvider {
             ],
             "response_format": response_format,
         });
-        apply_model_tuning(&mut body, &request.model, request.temperature, max_tokens);
+        let max_tokens = apply_model_tuning(
+            &mut body,
+            &request.model,
+            request.temperature,
+            request.reasoning_effort,
+            max_tokens,
+        );
 
         let resp = match self
             .client
@@ -436,6 +462,9 @@ impl OpenAiProvider {
             .client
             .get("https://api.openai.com/v1/models")
             .bearer_auth(&self.api_key)
+            // Listing runs inside the plugin's model picker, alongside every
+            // other provider: a hanging network must not hold them all up.
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
         {
@@ -526,23 +555,36 @@ mod tests {
         // parameter ... Use 'max_completion_tokens' instead".
         for model in ["gpt-5-mini", "gpt-4.1", "o3"] {
             let mut body = json!({"model": model});
-            apply_model_tuning(&mut body, model, 0.2, 1234);
-            assert_eq!(body["max_completion_tokens"], json!(1234), "{model}");
+            let sent = apply_model_tuning(&mut body, model, 0.2, ReasoningEffort::Low, 1234);
+            assert_eq!(body["max_completion_tokens"], json!(sent), "{model}");
             assert!(body.get("max_tokens").is_none(), "{model}");
         }
     }
 
     #[test]
-    fn reasoning_models_get_default_temperature_and_effort() {
-        let mut body = json!({});
-        apply_model_tuning(&mut body, "gpt-5.6-luna", 0.2, 2048);
-        assert_eq!(body["temperature"], json!(1.0));
-        assert_eq!(body["reasoning_effort"], json!("low"));
+    fn reasoning_models_get_default_temperature_and_the_chosen_effort() {
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ] {
+            let mut body = json!({});
+            let sent = apply_model_tuning(&mut body, "gpt-5.6-luna", 0.2, effort, 2048);
+            assert_eq!(body["temperature"], json!(1.0));
+            assert_eq!(body["reasoning_effort"], json!(effort.as_str()));
+            // The reasoning comes out of the same budget as the answer.
+            assert_eq!(sent, 2048 + effort.thinking_headroom());
+            assert_eq!(body["max_completion_tokens"], json!(sent));
+        }
 
+        // A model that does not reason keeps the user's temperature and
+        // limit, whatever the Analysis depth says.
         let mut body = json!({});
-        apply_model_tuning(&mut body, "gpt-4.1-mini", 0.2, 2048);
+        let sent = apply_model_tuning(&mut body, "gpt-4.1-mini", 0.2, ReasoningEffort::High, 2048);
         assert_eq!(body["temperature"], json!(0.2));
         assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(sent, 2048);
+        assert_eq!(body["max_completion_tokens"], json!(2048));
     }
 
     #[test]

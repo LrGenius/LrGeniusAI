@@ -253,14 +253,30 @@ LrTasks.startAsyncTask(function()
 
 		-- Resolve person names for each face (quick query per face, then look up name)
 		local resolutionWarnings = {}
-		local personsResp, _ = SearchIndexAPI.getPersons()
+		local personsResp, personsErr = SearchIndexAPI.getPersons()
+		if personsErr then
+			log:warn("getPersons failed during face resolution: " .. tostring(personsErr))
+			table.insert(
+				resolutionWarnings,
+				"The list of people could not be read, so matched faces are named generically."
+			)
+		end
 		if personsResp and personsResp.warning then
 			log:warn("getPersons warning during face resolution: " .. tostring(personsResp.warning))
 			table.insert(resolutionWarnings, tostring(personsResp.warning))
 		end
 		local persons = (personsResp and personsResp.persons) and personsResp.persons or {}
 		for i, face in ipairs(faces) do
-			local qResp, _ = SearchIndexAPI.queryFacesByImage(imageBase64, i - 1, 1)
+			local qResp, qErr = SearchIndexAPI.queryFacesByImage(imageBase64, i - 1, 1)
+			if qErr then
+				log:warn(
+					"queryFacesByImage failed during face resolution (idx "
+						.. tostring(i - 1)
+						.. "): "
+						.. tostring(qErr)
+				)
+				table.insert(resolutionWarnings, "One of the faces could not be looked up, so it is not named.")
+			end
 			if qResp and qResp.warning then
 				log:warn(
 					"queryFacesByImage warning during face resolution (idx "

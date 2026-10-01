@@ -16,6 +16,8 @@ pub struct TextLlmConfig {
     pub api_key: Option<String>,
     pub ollama_base_url: Option<String>,
     pub lmstudio_base_url: Option<String>,
+    /// The "Other AI server" address, for provider `openai_compatible`.
+    pub server_url: Option<String>,
     /// Present only when an in-process model is loaded; see
     /// [`crate::provider::ProviderSelection::local_engine`].
     pub local_engine: Option<crate::local::SharedLocalEngine>,
@@ -34,6 +36,7 @@ pub async fn call_llm_text(
         api_key: config.api_key.clone(),
         ollama_base_url: config.ollama_base_url.clone(),
         lmstudio_base_url: config.lmstudio_base_url.clone(),
+        server_url: config.server_url.clone(),
         local_engine: config.local_engine.clone(),
     })
     .ok()?;
@@ -81,17 +84,7 @@ Return only the JSON array, no other text."
 /// length with `expected_len`, and keep only groups with >=2 clean
 /// members. Returns `None` if no JSON array could be recovered at all.
 fn parse_validation_response(raw: &str, expected_len: usize) -> Option<Vec<Vec<String>>> {
-    let mut text = raw.trim();
-    if let Some(rest) = text.strip_prefix("```") {
-        text = rest.split_once('\n').map(|(_, rest)| rest).unwrap_or(rest);
-    }
-    if let Some(idx) = text.rfind("```") {
-        text = text[..idx].trim();
-    }
-
-    let bracket = text.find('[')?;
-    let mut deserializer = serde_json::Deserializer::from_str(&text[bracket..]);
-    let parsed: Value = serde::de::Deserialize::deserialize(&mut deserializer).ok()?;
+    let parsed = crate::normalize::extract_json_value(raw, '[')?;
     let Value::Array(items) = parsed else {
         return None;
     };
@@ -209,6 +202,7 @@ mod tests {
             api_key: None,
             ollama_base_url: None,
             lmstudio_base_url: None,
+            server_url: None,
             local_engine: None,
         }
     }

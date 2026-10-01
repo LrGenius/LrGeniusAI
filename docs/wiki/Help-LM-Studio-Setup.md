@@ -30,7 +30,17 @@ hardware.
 - For batch indexing on a laptop, a smaller/faster model usually beats waiting
   on a thrashing large one.
 
-## 5. Configure plugin/backend
+## 5. Nothing to configure in the plugin
 
-- Point backend/plugin to the LM Studio server endpoint
-- Verify model availability from plugin model list
+LrGeniusAI finds LM Studio on this computer by itself, at its default address
+(`localhost:1234`). Once the server is running, its models appear in every
+task's **AI Model** list as `LM Studio · <model>`. With LM Studio's
+just-in-time model loading (on by default), every downloaded model is listed,
+not only the loaded ones.
+
+- **LM Studio on another computer** (or on a changed port): enter its address,
+  e.g. `http://192.168.1.20:1234`, as the **Other AI server** — see
+  [Other AI Server](Help-Other-AI-Server).
+- **LM Studio's "Require API token" setting** is not supported for the
+  automatic connection. Either leave it off, or enter `localhost:1234` as the
+  Other AI server with the token as its API key.

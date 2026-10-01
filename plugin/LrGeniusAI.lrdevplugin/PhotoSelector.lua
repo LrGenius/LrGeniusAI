@@ -67,6 +67,21 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 		end
 		local addedPhotos = {}
 
+		-- Sources Lightroom can be showing but nothing here can read: a
+		-- collection set, or a view with no photo list behind it. They are
+		-- collected as they turn up and reported once after the loop, because
+		-- the user picked the thing that got skipped — a log line is not a
+		-- report (#375).
+		local unsupported = {}
+		local seenUnsupported = {}
+		local function noteUnsupported(label)
+			log:warn("PhotoSelector: skipping unsupported source: " .. label)
+			if not seenUnsupported[label] then
+				seenUnsupported[label] = true
+				table.insert(unsupported, label)
+			end
+		end
+
 		for _, source in ipairs(sources) do
 			if type(source) == "string" then
 				if source == "kAllPhotos" then
@@ -84,7 +99,7 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 						end
 					end
 				else
-					log:warn("Unsupported string source type: " .. source)
+					noteUnsupported(source)
 				end
 			elseif
 				source
@@ -103,22 +118,26 @@ function PhotoSelector.getPhotosInScope(scope, taskOptions, lookupProgressScope)
 					end
 				end
 			elseif source and (source:type() == "LrCollectionSet" or source:type() == "LrPublishedCollectionSet") then
-				log:warn("Collection sets are not supported as a source; select individual collections instead.")
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedTitle=Collection Sets Not Supported"),
-					LOC(
-						"$$$/LrGeniusAI/PhotoSelector/CollectionSetNotSupportedMessage=Collection sets cannot be used as a source. Please select individual collections instead."
-					),
-					"warning"
-				)
+				noteUnsupported("Collection Sets")
 			else
 				if source and source.type then
-					log:warn("Unsupported source type for grouping similar photos: " .. source:type())
+					noteUnsupported(source:type())
 				else
-					log:warn("Unsupported source type for grouping similar photos: " .. type(source))
+					noteUnsupported(type(source))
 				end
 			end
 		end
+
+		if #unsupported > 0 then
+			LrDialogs.message(
+				"Some Sources Were Skipped",
+				"These cannot be used as a source, so nothing was taken from them:\n\n"
+					.. table.concat(unsupported, "\n")
+					.. "\n\nPlease select individual collections instead.",
+				"warning"
+			)
+		end
+
 		if #photosToProcess == 0 then
 			return nil, "Invalid view"
 		end

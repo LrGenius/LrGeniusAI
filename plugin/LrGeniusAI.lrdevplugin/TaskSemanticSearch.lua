@@ -405,18 +405,21 @@ LrTasks.startAsyncTask(function()
 		-- Build a list of photo IDs once and resolve them in batch for better performance.
 		local resolveStartedAt = LrDate.currentTime()
 		local photoIds = {}
+		local seenIds = {}
+		local rowsWithoutId = 0
 		for _, result in ipairs(finalResults) do
 			if type(result) == "table" then
 				local resultPhotoId = result.photo_id or result.uuid
 				if resultPhotoId then
-					table.insert(photoIds, resultPhotoId)
+					-- The same photo can come back more than once; counting it
+					-- twice would hide the rows that were really dropped.
+					if not seenIds[resultPhotoId] then
+						seenIds[resultPhotoId] = true
+						table.insert(photoIds, resultPhotoId)
+					end
 				else
-					log:warn(
-						LOC(
-							"$$$/LrGeniusAI/AdvancedSearchTask/photoNotFound=Photo with ID ^1 not found in catalog.",
-							"nil"
-						)
-					)
+					rowsWithoutId = rowsWithoutId + 1
+					log:warn("Semantic search: result row without a photo ID; skipping it.")
 				end
 			end
 		end
@@ -439,6 +442,29 @@ LrTasks.startAsyncTask(function()
 				.. " elapsedMs="
 				.. tostring(resolveElapsedMs)
 		)
+
+		-- What the finished collection will be missing. "Search Completed" on
+		-- its own left the rows dropped here to the log (#375).
+		local missingFromResults = {}
+		if rowsWithoutId > 0 then
+			table.insert(missingFromResults, tostring(rowsWithoutId) .. " result row(s) carried no photo ID")
+		end
+		local missingFromCatalog = #photoIds - (photos and #photos or 0)
+		if missingFromCatalog > 0 then
+			table.insert(
+				missingFromResults,
+				tostring(missingFromCatalog) .. " matched photo(s) are not in the current catalog"
+			)
+		end
+		if #missingFromResults > 0 then
+			LrDialogs.message(
+				"Search Results Are Incomplete",
+				"The collection does not hold every photo the search matched: "
+					.. table.concat(missingFromResults, "; ")
+					.. ".",
+				"warning"
+			)
+		end
 
 		if photos and #photos > 0 then
 			local collectionSet = nil

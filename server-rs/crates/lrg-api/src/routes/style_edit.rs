@@ -29,7 +29,9 @@ use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
     success_payload,
 };
-use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart, SinglePhotoForm};
+use crate::routes::route_util::{
+    compute_scene_tags, local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
+};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -207,6 +209,10 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         return Json(json!({"error": "Mismatch between number of images and photo IDs, or no images provided"})).into_response();
     };
     let photo_id = photo_ids[0].clone();
+
+    if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+    }
 
     let Some(store) = state.store() else {
         return (

@@ -39,7 +39,14 @@ function LocalModelCatalog.initFields(propertyTable)
 	propertyTable.mlxSupported = false
 end
 
--- Formats a catalog entry as a picker item, appending the download size.
+--- The picker value of "Other model from Hugging Face…".
+LocalModelCatalog.CUSTOM_CHOICE = "hf:other"
+
+-- Formats the catalog entries as picker items, appending the download size,
+-- and ends the list with "Other model from Hugging Face…": the curated list
+-- covers what has been tested, not everything a user may want to run (#341).
+-- It is an item rather than a field of its own so the section does not grow;
+-- the field only appears, in a dialog, once it is picked.
 local function toDownloadChoices(entries)
 	local choices = {}
 	for _, entry in ipairs(entries or {}) do
@@ -48,6 +55,7 @@ local function toDownloadChoices(entries)
 			table.insert(choices, { title = (entry.label or entry.id) .. gb, value = entry.id })
 		end
 	end
+	table.insert(choices, { title = "Other model from Hugging Face…", value = LocalModelCatalog.CUSTOM_CHOICE })
 	return choices
 end
 
@@ -68,9 +76,8 @@ end
 -- The llama.cpp half of /v1/llm/catalog + /v1/llm/status.
 local function updateLlamaCppFields(propertyTable, catalog, status)
 	if catalog.supported == false then
-		propertyTable.llmStatusText = LOC(
-			"$$$/LrGeniusAI/LocalModel/Unsupported=This backend build has no local-model support; use Ollama or LM Studio."
-		)
+		propertyTable.llmStatusText =
+			"This backend build has no local-model support; use Ollama, LM Studio or another AI server."
 		propertyTable.llmDownloadChoices = {}
 		-- Also clear the selection, not just the list: the Download button is
 		-- gated on it, and a choice left over from an earlier refresh would
@@ -191,6 +198,157 @@ function LocalModelCatalog.refresh(propertyTable)
 end
 
 ---
+-- What to do once a download has finished: show the new model in the calling
+-- dialog, and offer to make it the model the tasks use.
+--
+-- The settings dialog does not poll the catalog, so without the refresh here a
+-- finished model stayed listed as downloadable until the dialog was reopened.
+--
+-- @param propertyTable table The calling dialog's fields.
+-- @param provider string "mlx" or "llamacpp" — the provider the model runs under.
+--
+function LocalModelCatalog.onDownloaded(propertyTable, provider)
+	return function(name)
+		-- The dialog may have been closed during a long download; a refresh of
+		-- its fields must not turn a finished download into an error.
+		LrTasks.pcall(LocalModelCatalog.refresh, propertyTable)
+		if Util.nilOrEmpty(name) then
+			LrDialogs.message("Local AI Model", "Local AI model downloaded. Select it as the model for AI metadata.")
+			return
+		end
+		local answer = LrDialogs.confirm(
+			"Local AI model downloaded",
+			name .. " is ready. Use it for AI metadata from now on?",
+			"Use it",
+			"Later"
+		)
+		if answer == "ok" then
+			prefs.modelKey = provider .. "::" .. name
+			prefs.ai = provider
+		end
+	end
+end
+
+---
+-- The text of the confirmation shown before a model from Hugging Face is
+-- downloaded: what it is, how big, how much memory it needs against what the
+-- computer has, and the check's warnings.
+--
+-- @param check table The /v1/llm/downloads/check response.
+-- @param memBytes number|nil This computer's memory, when known.
+-- @return string
+--
+function LocalModelCatalog.customDownloadSummary(check, memBytes)
+	local lines = {}
+	local kind = check.model_type or check.quant
+	table.insert(lines, check.repo .. (kind and (" (" .. kind .. ")") or ""))
+
+	local size = string.format("%.1f GB to download", (tonumber(check.approx_bytes) or 0) / 1e9)
+	local ram = tonumber(check.est_ram_gb)
+	local memGb = tonumber(memBytes) and memBytes / (1024 * 1024 * 1024) or nil
+	local need = ""
+	if ram then
+		need = string.format(", needs about %.0f GB of memory", ram)
+		if memGb then
+			need = need .. string.format(" — this computer has %.0f GB", memGb)
+		end
+	end
+	table.insert(lines, size .. need .. ".")
+	-- Lightroom and the system need their share of the same memory: a 16 GB
+	-- Mac swapped hard on a model that needs about 11 GB (#341), so anything
+	-- above 60% of the total is worth a warning.
+	if ram and memGb and ram > memGb * 0.6 then
+		table.insert(
+			lines,
+			"That is more than this computer can comfortably spare: expect it to be very slow, or to fail. "
+				.. "A smaller or more strongly quantized version will run better."
+		)
+	end
+	for _, warning in ipairs(check.warnings or {}) do
+		table.insert(lines, warning)
+	end
+	return table.concat(lines, "\n\n")
+end
+
+---
+-- Asks for a Hugging Face model, checks it, and downloads it once the user
+-- has seen what it costs.
+--
+-- The field lives in a dialog that only opens when "Other model from Hugging
+-- Face…" is picked, so the settings section and the setup wizard stay as they
+-- are for everyone who uses the curated list.
+--
+local function downloadCustom(propertyTable, isMlx)
+	local provider = isMlx and "mlx" or "llamacpp"
+	local prefKey = isMlx and "customMlxRepo" or "customGgufRepo"
+	LrFunctionContext.callWithContext("CustomModelDownload", function(context)
+		local props = LrBinding.makePropertyTable(context)
+		props.repo = prefs[prefKey] or ""
+		local f = LrView.osFactory()
+		local hint = isMlx
+				and "Paste the name or the page address of an MLX vision model on Hugging Face.\n" .. "It is checked before anything is downloaded."
+			or "Paste the name or the page address of a GGUF vision model on Hugging Face.\n"
+				.. "Add :Q5_K_M or similar to pick a quantization (default Q4_K_M).\n"
+				.. "It is checked before anything is downloaded."
+		local contents = f:column({
+			bind_to_object = props,
+			spacing = f:control_spacing(),
+			f:row({
+				f:static_text({ title = "Hugging Face model" }),
+				f:edit_field({
+					value = LrView.bind("repo"),
+					placeholder_string = isMlx and "mlx-community/gemma-3-12b-it-qat-4bit"
+						or "ggml-org/gemma-3-12b-it-GGUF",
+					width_in_chars = 42,
+				}),
+			}),
+			f:static_text({ title = hint }),
+		})
+		local result = LrDialogs.presentModalDialog({
+			title = isMlx and "Download another MLX model" or "Download another model",
+			contents = contents,
+			actionVerb = "Check",
+		})
+		local repo = tostring(props.repo or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if result ~= "ok" or repo == "" then
+			return
+		end
+		prefs[prefKey] = repo
+
+		local check, checkErr = SearchIndexAPI.checkLlmRepo(repo, provider)
+		if not check then
+			ErrorHandler.handleError("This model cannot be used", checkErr)
+			return
+		end
+		local onDone = LocalModelCatalog.onDownloaded(propertyTable, provider)
+		if check.already_installed then
+			onDone(check.installed_name)
+			return
+		end
+
+		local okMem, memBytes = LrTasks.pcall(function()
+			return LrSystemInfo.memSize()
+		end)
+		local answer = LrDialogs.confirm(
+			"Download " .. tostring(check.installed_name) .. "?",
+			LocalModelCatalog.customDownloadSummary(check, okMem and memBytes or nil),
+			"Download",
+			"Cancel"
+		)
+		if answer ~= "ok" then
+			return
+		end
+		local started, startErr =
+			SearchIndexAPI.startLlmDownload({ repo = repo, engine = provider, revision = check.revision }, onDone)
+		if not started then
+			ErrorHandler.handleError("Error downloading the model", startErr)
+			return
+		end
+		LocalModelCatalog.refresh(propertyTable)
+	end)
+end
+
+---
 -- Starts the download of the model currently picked in one of the two sections.
 --
 -- Both engines share one download endpoint and one progress bar: the catalog id
@@ -208,7 +366,14 @@ function LocalModelCatalog.startDownload(propertyTable, kind)
 	end
 
 	LrTasks.startAsyncTask(function()
-		local ok, err = SearchIndexAPI.startLlmDownload(choice)
+		if choice == LocalModelCatalog.CUSTOM_CHOICE then
+			downloadCustom(propertyTable, isMlx)
+			return
+		end
+		local ok, err = SearchIndexAPI.startLlmDownload(
+			choice,
+			LocalModelCatalog.onDownloaded(propertyTable, isMlx and "mlx" or "llamacpp")
+		)
 		if not ok then
 			ErrorHandler.handleError(
 				isMlx and LOC("$$$/LrGeniusAI/MlxDownload/ErrorTitle=Error downloading MLX model")
@@ -217,8 +382,8 @@ function LocalModelCatalog.startDownload(propertyTable, kind)
 			)
 			return
 		end
-		-- Reflect the "downloading" state right away; the periodic refresh in
-		-- the calling dialog picks up completion.
+		-- Reflect the "downloading" state right away; onDownloaded refreshes
+		-- again once the model has arrived.
 		LocalModelCatalog.refresh(propertyTable)
 	end)
 end
