@@ -61,6 +61,49 @@ single word of the answer. If a GPT-5 model reports that it stopped because
 the token limit was reached, raise Max Tokens to 4096 or higher — the same
 value that is comfortable for `gpt-4.1` can be too tight here.
 
+### Anthropic Claude
+
+Configure in *Plug-in Manager → Optional AI providers → Anthropic key* (create
+one at [platform.claude.com](https://platform.claude.com/settings/keys)). The
+list is not curated: it shows every Claude model your key can use that reads
+photos and supports structured outputs, as Anthropic's own model list reports
+them, so new Claude models appear without a plugin update. As a starting point:
+
+- `claude-haiku-4-5` — fastest and cheapest; good for bulk keywording.
+- `claude-sonnet-5-5` — balanced default for analyze-and-index runs.
+- `claude-opus-5-5` — highest description quality of the three.
+
+This uses Anthropic's own API, not its OpenAI-compatible endpoint. Entering
+`https://api.anthropic.com/v1` as the *Other AI server* does not work: that
+endpoint cannot list models (it answers *"anthropic-version: header is
+required"*) and ignores the answer format. Use the Anthropic key field instead.
+
+What the backend does for you:
+
+- **Answer format.** Every answer is held to the requested fields by
+  Anthropic's structured outputs, so keywords, caption and title arrive in the
+  expected shape.
+- **Thinking.** Newer Claude models think before answering, and some cannot
+  turn it off. The backend asks for a low effort where the model supports it
+  and adds 4096 tokens to **Max Tokens** for that thinking, so a photo is not
+  cut off by reasoning you never see. Thinking tokens are billed as output.
+- **Temperature.** Current Claude models reject a temperature setting, so the
+  plugin's temperature slider does not apply to them.
+- **Prompt caching.** The part of the prompt that is the same for every photo of
+  a run (instructions, keyword vocabulary, taxonomy) is cached on Anthropic's
+  side, so from the second photo on it costs a fraction of the normal input
+  price. This only kicks in once that part is long enough (roughly 500–4,000
+  tokens, depending on the model).
+- **Safety filter.** If a model declines a photo, the task reports it with
+  Anthropic's reason. For the newest models (Opus 5.5, Opus 5, Sonnet 5.5,
+  Fable 5/5.1) the request lets Anthropic retry a declined photo on the model
+  it recommends; the photo is then indexed and the task tells you which model
+  answered.
+
+If Claude reports that it stopped because the token limit was reached, raise
+Max Tokens to 4096 or higher. If the same photo keeps failing, the model is
+repeating itself; pick a different Claude model.
+
 ### ~~Vertex AI (embeddings only)~~ — REMOVED
 
 > **⚠️ Removed in August 2026.** The plugin no longer offers Vertex AI anywhere: no
@@ -167,9 +210,9 @@ the server's name, e.g. `OpenRouter · google/gemini-2.5-flash`. See
 
 | Workflow                              | Suggested first try                              |
 | ------------------------------------- | ------------------------------------------------ |
-| Cheap bulk keywording (cloud)         | `gemini-2.5-flash-lite` or `gpt-5-nano`          |
-| Balanced default (cloud)              | `gemini-2.5-flash` or `gpt-5-mini`               |
-| Best description quality (cloud)      | `gemini-2.5-pro`, `gpt-5.4`, or `gpt-5.4-pro`    |
+| Cheap bulk keywording (cloud)         | `gemini-2.5-flash-lite`, `gpt-5-nano` or `claude-haiku-4-5` |
+| Balanced default (cloud)              | `gemini-2.5-flash`, `gpt-5-mini` or `claude-sonnet-5-5`     |
+| Best description quality (cloud)      | `gemini-2.5-pro`, `gpt-5.4`, `gpt-5.4-pro` or `claude-opus-5-5` |
 | Privacy-first, simplest setup         | Built-in `llamacpp` with Gemma 4 E4B             |
 | Apple Silicon, local                  | Built-in `mlx` with Gemma 4 E4B (E2B if 8–16 GB) |
 | Windows with any discrete GPU, local  | Built-in `llamacpp` (Vulkan) with Gemma 4 E4B    |
@@ -203,7 +246,7 @@ two candidates and compare:
 ## Throughput on cloud providers
 
 Cloud runs are dominated by network round trips, not by the model. The backend
-overlaps up to four requests at a time for OpenAI and Gemini, which hides most
+overlaps up to four requests at a time for OpenAI, Gemini and Anthropic, which hides most
 of that latency without looking like a burst to their rate limiters.
 
 Ollama, LM Studio and the Other AI server deliberately stay at one request at

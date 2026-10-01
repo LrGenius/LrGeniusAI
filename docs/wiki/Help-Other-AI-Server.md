@@ -17,7 +17,15 @@ You do **not** need it for:
   see [Local AI Models](Help-Local-AI-Models));
 - Ollama or LM Studio running on **this** computer — LrGeniusAI finds them
   automatically at their default address;
-- OpenAI and Google Gemini — they have their own key fields.
+- OpenAI, Google Gemini and Anthropic (Claude) — they have their own key
+  fields.
+
+**Anthropic does not work here.** Anthropic offers an OpenAI-compatible
+address (`https://api.anthropic.com/v1`), but it only answers chat requests:
+the model list behind it is Anthropic's own and fails with *"HTTP 400
+(anthropic-version: header is required)"*, and it ignores the answer format
+LrGeniusAI asks for. Enter your key in the **Anthropic key** field instead —
+or, if you want Claude through OpenRouter, use OpenRouter here.
 
 ## Setting it up
 

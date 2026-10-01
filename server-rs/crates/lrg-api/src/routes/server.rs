@@ -41,13 +41,14 @@ pub fn router() -> Router<Arc<AppState>> {
 /// (`AiProviders.lua`), so a provider absent here is unreachable from the UI.
 ///
 /// Body fields, all optional: `openai_apikey`, `gemini_apikey`,
-/// `ollama_base_url`, `lmstudio_base_url` (probed at their defaults when
-/// absent), and `server_url` + `server_apikey` for the user's own
+/// `anthropic_apikey`, `ollama_base_url`, `lmstudio_base_url` (probed at their
+/// defaults when absent), and `server_url` + `server_apikey` for the user's own
 /// OpenAI-compatible server. POST only, so no key ever lands in a URL.
 ///
 /// A provider that is only probed and not there is simply left empty. The
 /// user's own server is different: they entered it, so a failure to list it
-/// comes back in `warnings` with the reason, and the plugin shows it.
+/// comes back in `warnings` with the reason, and the plugin shows it. So does
+/// an Anthropic key that is set but does not work.
 pub(super) async fn list_models(
     State(state): State<Arc<AppState>>,
     body: Option<Json<Value>>,
@@ -64,6 +65,7 @@ pub(super) async fn list_models(
 
     let openai_key = field("openai_apikey");
     let gemini_key = field("gemini_apikey");
+    let anthropic_key = field("anthropic_apikey");
     let ollama_base_url = field("ollama_base_url");
     let lmstudio_base_url = field("lmstudio_base_url");
     let server_url = field("server_url");
@@ -104,9 +106,29 @@ pub(super) async fn list_models(
         }
     };
 
+    // A key that is set is checked, not just probed: a rejected one comes
+    // back as a warning. `build_provider` only fails for a missing key.
+    let anthropic_models = async {
+        match build_provider(&ProviderSelection {
+            name: "anthropic".to_string(),
+            api_key: anthropic_key,
+            ..Default::default()
+        }) {
+            Ok(provider) => provider.list_models_checked().await,
+            Err(_) => Ok(Vec::new()),
+        }
+    };
+
     // Local providers are probed concurrently: an offline Ollama or LM Studio
     // must not delay the others.
-    let (ollama_models, lmstudio_models, openai_models, gemini_models, custom_models) = tokio::join!(
+    let (
+        ollama_models,
+        lmstudio_models,
+        openai_models,
+        gemini_models,
+        anthropic_models,
+        custom_models,
+    ) = tokio::join!(
         models_for(ProviderSelection {
             name: "ollama".to_string(),
             ollama_base_url,
@@ -134,11 +156,16 @@ pub(super) async fn list_models(
             api_key: gemini_key,
             ..Default::default()
         }),
+        anthropic_models,
         custom_models,
     );
 
     let mut warnings: Vec<String> = Vec::new();
     let custom_models = custom_models.unwrap_or_else(|e| {
+        warnings.push(e);
+        Vec::new()
+    });
+    let anthropic_models = anthropic_models.unwrap_or_else(|e| {
         warnings.push(e);
         Vec::new()
     });
@@ -192,6 +219,7 @@ pub(super) async fn list_models(
             "openai_compatible": custom_models,
             "chatgpt": openai_models,
             "gemini": gemini_models,
+            "anthropic": anthropic_models,
         },
         "servers": servers,
         "aliases": { "mlx": mlx_aliases },

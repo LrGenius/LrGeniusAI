@@ -8,7 +8,7 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 ### Does it send my photos to the cloud?
 
-Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, or a cloud service such as OpenRouter as the *Other AI server*; Vertex AI was removed in August 2026). With a local provider — the built-in llama.cpp and MLX engines, Ollama / LM Studio, or a server on your own network — your photos never leave your machines. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
+Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Anthropic Claude, or a cloud service such as OpenRouter as the *Other AI server*; Vertex AI was removed in August 2026). With a local provider — the built-in llama.cpp and MLX engines, Ollama / LM Studio, or a server on your own network — your photos never leave your machines. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
 ### Which Lightroom version is supported?
 
@@ -16,7 +16,7 @@ Adobe **Lightroom Classic** only. Lightroom CC (cloud) and other Lightroom versi
 
 ### Is it free?
 
-Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI) incurs costs at the respective provider's standard rates. Local models are completely free to run — including the ones the backend downloads and runs itself, see [Local AI Models](Help-Local-AI-Models).
+Yes, LrGeniusAI is open source (AGPL-3.0). Cloud API usage (Gemini, OpenAI, Anthropic) incurs costs at the respective provider's standard rates. Local models are completely free to run — including the ones the backend downloads and runs itself, see [Local AI Models](Help-Local-AI-Models).
 
 ### Is there a more minimalist version?
 
@@ -80,7 +80,7 @@ the status line names the exact reason. On Windows the section is llama.cpp rath
 
 ### Where do I enter my API key?
 
-*File → Plug-in Manager → LrGeniusAI* → scroll to **Optional AI providers**. Enter your Gemini or OpenAI key there, or the address and key of an **Other AI server** such as OpenRouter ([Other AI Server](Help-Other-AI-Server)).
+*File → Plug-in Manager → LrGeniusAI* → scroll to **Optional AI providers**. Enter your Gemini, OpenAI or Anthropic key there, or the address and key of an **Other AI server** such as OpenRouter ([Other AI Server](Help-Other-AI-Server)).
 
 ### Can I use OpenRouter, a llama.cpp server, LiteLLM or vLLM?
 

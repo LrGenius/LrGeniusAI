@@ -12,7 +12,7 @@ AiProviders = {}
 
 -- Order of the model picker: this computer first, then apps running on it,
 -- then the user's own server, then the paid cloud services.
-local ORDER = { "mlx", "llamacpp", "ollama", "lmstudio", "openai_compatible", "chatgpt", "gemini" }
+local ORDER = { "mlx", "llamacpp", "ollama", "lmstudio", "openai_compatible", "chatgpt", "gemini", "anthropic" }
 
 local LABELS = {
 	mlx = "On this Mac",
@@ -21,6 +21,7 @@ local LABELS = {
 	openai_compatible = "Other AI server",
 	chatgpt = "OpenAI",
 	gemini = "Google Gemini",
+	anthropic = "Anthropic",
 }
 
 --- Shown as the only picker item when no provider offers a model.
@@ -195,9 +196,9 @@ end
 --
 -- Only as sure as the model list it is given. With no list at all (the
 -- backend did not answer in time), nothing is refused here: the run itself
--- reports what is wrong. OpenAI and Gemini are not gated on their list
--- either — a brief hiccup there empties it, and refusing a paid run the user
--- set up on that basis would be wrong; their key is still required.
+-- reports what is wrong. OpenAI, Gemini and Anthropic are not gated on their
+-- list either — a brief hiccup there empties it, and refusing a paid run the
+-- user set up on that basis would be wrong; their key is still required.
 --
 -- @param resp table|nil The /models response the picker was built from.
 -- @param key string|nil The chosen "provider::model".
@@ -212,7 +213,7 @@ function AiProviders.unavailableReason(resp, key)
 	if type(resp) ~= "table" or type(resp.models) ~= "table" then
 		return nil
 	end
-	if provider == "chatgpt" or provider == "gemini" then
+	if provider == "chatgpt" or provider == "gemini" or provider == "anthropic" then
 		return nil
 	end
 	for _, offered in ipairs(resp.models[provider] or {}) do
@@ -264,6 +265,11 @@ function AiProviders.connectionOptions(provider, p)
 				"The Google Gemini API key is not set. Enter it under Plug-in Manager → Optional AI providers."
 		end
 		opts.api_key = trim(p.geminiApiKey)
+	elseif provider == "anthropic" then
+		if blank(p.anthropicApiKey) then
+			return nil, "The Anthropic API key is not set. Enter it under Plug-in Manager → Optional AI providers."
+		end
+		opts.api_key = trim(p.anthropicApiKey)
 	elseif provider == "openai_compatible" then
 		if blank(p.aiServerUrl) then
 			return nil,

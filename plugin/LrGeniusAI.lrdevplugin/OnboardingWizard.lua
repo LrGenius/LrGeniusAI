@@ -25,6 +25,7 @@ function OnboardingWizard.show(manualTrigger)
 			propertyTable.useClip = prefs.useClip or false
 			propertyTable.geminiApiKey = prefs.geminiApiKey or ""
 			propertyTable.chatgptApiKey = prefs.chatgptApiKey or ""
+			propertyTable.anthropicApiKey = prefs.anthropicApiKey or ""
 			LocalModelCatalog.initFields(propertyTable)
 
 			local f = LrView.osFactory()
@@ -407,6 +408,20 @@ function OnboardingWizard.show(manualTrigger)
 									end,
 								}),
 							}),
+							f:row({
+								f:static_text({
+									title = "Anthropic key",
+									alignment = "right",
+									width = share("providerLabel"),
+								}),
+								f:edit_field({ value = bind("anthropicApiKey"), width_in_chars = 36 }),
+								f:push_button({
+									title = "Get key",
+									action = function()
+										LrHttp.openUrlInBrowser("https://platform.claude.com/settings/keys")
+									end,
+								}),
+							}),
 						}),
 					}),
 				}),
@@ -436,6 +451,7 @@ function OnboardingWizard.show(manualTrigger)
 					-- Save settings
 					prefs.geminiApiKey = propertyTable.geminiApiKey
 					prefs.chatgptApiKey = propertyTable.chatgptApiKey
+					prefs.anthropicApiKey = propertyTable.anthropicApiKey
 					prefs.useClip = propertyTable.useClip
 					log:info("Onboarding wizard completed with OK.")
 				else

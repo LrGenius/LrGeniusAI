@@ -58,6 +58,10 @@ if _G.prefs.chatgptApiKey == nil then
 	_G.prefs.chatgptApiKey = ""
 end
 
+if _G.prefs.anthropicApiKey == nil then
+	_G.prefs.anthropicApiKey = ""
+end
+
 -- The "Other AI server": any OpenAI-compatible server (OpenRouter, a llama.cpp
 -- server, LiteLLM, or LM Studio / Ollama on another computer).
 if _G.prefs.aiServerUrl == nil then

@@ -4070,7 +4070,8 @@ end
 -- cloud round-trip, and the Other AI server is only asked when one is set.
 --
 -- @param opts table|nil
---        includeCloud: boolean — also list OpenAI and Gemini (sends the keys).
+--        includeCloud: boolean — also list OpenAI, Gemini and Anthropic (sends
+--          the keys).
 --        serverUrl, serverApiKey: string|nil — check this address instead of the
 --          saved one (the settings dialog, before it is saved). "" means none.
 --        skipServer: boolean — do not ask the Other AI server at all.
@@ -4090,6 +4091,7 @@ function SearchIndexAPI.getModels(opts)
 	if opts.includeCloud then
 		body.openai_apikey = nonEmpty(prefs and prefs.chatgptApiKey)
 		body.gemini_apikey = nonEmpty(prefs and prefs.geminiApiKey)
+		body.anthropic_apikey = nonEmpty(prefs and prefs.anthropicApiKey)
 	end
 	if not opts.skipServer then
 		local serverUrl = opts.serverUrl
@@ -4872,6 +4874,7 @@ function SearchIndexAPI.getDetailedHealth()
 		clip = SearchIndexAPI.isClipReady() == true,
 		gemini = not Util.nilOrEmpty(prefs.geminiApiKey),
 		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
+		anthropic = not Util.nilOrEmpty(prefs.anthropicApiKey),
 		ollama = false,
 		lmstudio = false,
 		-- The Other AI server counts once an address is set. It is not asked
@@ -4930,6 +4933,7 @@ function SearchIndexAPI.hasAnyLlmProvider(health)
 	return health.localEngine == true
 		or health.gemini == true
 		or health.chatgpt == true
+		or health.anthropic == true
 		or health.ollama == true
 		or health.lmstudio == true
 		or health.server == true

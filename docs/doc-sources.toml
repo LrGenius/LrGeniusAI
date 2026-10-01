@@ -202,6 +202,7 @@ sources = [
 [page."Help-Choosing-AI-Model.md"]
 sources = [
   "server-rs/crates/lrg-providers/src/provider.rs",
+  "server-rs/crates/lrg-providers/src/anthropic.rs",
   "server-rs/crates/lrg-api/src/routes/server.rs",
   "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
 ]

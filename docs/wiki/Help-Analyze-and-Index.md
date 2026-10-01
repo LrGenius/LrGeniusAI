@@ -30,8 +30,8 @@ Picks the provider and model, plus **Temperature**, **Max Tokens**, output
 appear depends on what is configured in the Plug-in Manager — see
 [Choosing an AI Model](Help-Choosing-AI-Model). Entries read
 `<provider> · <model>`: *On this Mac* / *On this PC* for the built-in engine,
-then Ollama, LM Studio, your [Other AI server](Help-Other-AI-Server), OpenAI and
-Google Gemini.
+then Ollama, LM Studio, your [Other AI server](Help-Other-AI-Server), OpenAI,
+Google Gemini and Anthropic.
 
 The model you used last stays selected even when it is not offered right now —
 Ollama not running, a key removed — marked *(not available now)*; starting the

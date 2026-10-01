@@ -451,6 +451,7 @@ Defaults.credits = {
 		items = {
 			{ name = "OpenAI API", author = "OpenAI", url = "https://platform.openai.com/" },
 			{ name = "Google Gemini API", author = "Google", url = "https://ai.google.dev/" },
+			{ name = "Claude API", author = "Anthropic", url = "https://platform.claude.com/" },
 			{ name = "Ollama", author = "Ollama", url = "https://ollama.com/" },
 			{ name = "LM Studio", author = "LM Studio", url = "https://lmstudio.ai/" },
 			{ name = "gcp_auth", author = "gcp_auth contributors", url = "https://crates.io/crates/gcp_auth" },

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::anthropic::AnthropicProvider;
 use crate::gemini::GeminiProvider;
 use crate::local::SharedLocalEngine;
 use crate::local_provider::LocalProvider;
@@ -171,8 +172,8 @@ macro_rules! impl_llm_provider {
     };
 }
 
-// The two cloud providers overlap requests: their latency is network round
-// trips, and four in flight hides most of it.
+// The cloud providers overlap requests (Anthropic too, below): their latency
+// is network round trips, and four in flight hides most of it.
 impl_llm_provider!(OpenAiProvider, "chatgpt", batch = MAX_CONCURRENT_REQUESTS);
 impl_llm_provider!(GeminiProvider, "gemini", batch = MAX_CONCURRENT_REQUESTS);
 // Ollama and LM Studio stay at one. They are REST clients, but the server on
@@ -180,6 +181,52 @@ impl_llm_provider!(GeminiProvider, "gemini", batch = MAX_CONCURRENT_REQUESTS);
 // needs OLLAMA_NUM_PARALLEL raised to do otherwise), so overlapping requests
 // buys nothing and risks thrashing a machine that is also running Lightroom.
 impl_llm_provider!(OllamaProvider, "ollama", batch = 1, is_available);
+
+// Written out rather than generated: unlike the other two cloud providers it
+// reports why its model list could not be fetched (`list_models_checked`), so
+// a key the user entered that does not work says so instead of listing
+// nothing.
+#[async_trait]
+impl LlmProvider for AnthropicProvider {
+    fn name(&self) -> &'static str {
+        "anthropic"
+    }
+
+    fn preferred_batch_size(&self) -> usize {
+        MAX_CONCURRENT_REQUESTS
+    }
+
+    async fn generate_metadata(
+        &self,
+        request: &MetadataGenerationRequest,
+    ) -> MetadataGenerationResponse {
+        AnthropicProvider::generate_metadata(self, request).await
+    }
+
+    async fn generate_edit_recipe(
+        &self,
+        request: &EditGenerationRequest,
+    ) -> EditGenerationResponse {
+        AnthropicProvider::generate_edit_recipe(self, request).await
+    }
+
+    async fn generate_text(
+        &self,
+        model: Option<&str>,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Option<String> {
+        AnthropicProvider::generate_text(self, model, system_prompt, user_prompt).await
+    }
+
+    async fn list_available_models(&self) -> Vec<String> {
+        AnthropicProvider::list_available_models(self).await
+    }
+
+    async fn list_models_checked(&self) -> Result<Vec<String>, String> {
+        AnthropicProvider::list_models_checked(self).await
+    }
+}
 
 // Written out rather than generated: one client serves two wire names (LM
 // Studio found on this computer, and the user's own server), so the name comes
@@ -273,6 +320,7 @@ impl ProviderSelection {
 pub const KNOWN_PROVIDERS: &[&str] = &[
     "chatgpt",
     "gemini",
+    "anthropic",
     "ollama",
     "lmstudio",
     "openai_compatible",
@@ -333,6 +381,10 @@ pub fn build_provider(selection: &ProviderSelection) -> Result<Arc<dyn LlmProvid
             Some(key) => Ok(Arc::new(GeminiProvider::new(key))),
             None => Err("Gemini API not configured".to_string()),
         },
+        "anthropic" => match non_empty_key() {
+            Some(key) => Ok(Arc::new(AnthropicProvider::new(key))),
+            None => Err("Anthropic API not configured".to_string()),
+        },
         "llamacpp" => match &selection.local_engine {
             Some(engine) => Ok(Arc::new(LocalProvider::llamacpp(engine.clone()))),
             None => Err(
@@ -383,7 +435,7 @@ mod tests {
     /// 10,000 sequential round trips.
     #[test]
     fn cloud_providers_overlap_requests() {
-        for name in ["chatgpt", "gemini"] {
+        for name in ["chatgpt", "gemini", "anthropic"] {
             assert_eq!(
                 provider_named(name).preferred_batch_size(),
                 MAX_CONCURRENT_REQUESTS,
@@ -438,6 +490,7 @@ mod tests {
         for (name, expected) in [
             ("chatgpt", "OpenAI API not configured"),
             ("gemini", "Gemini API not configured"),
+            ("anthropic", "Anthropic API not configured"),
         ] {
             for key in [None, Some(String::new()), Some("   ".to_string())] {
                 let selection = ProviderSelection {
