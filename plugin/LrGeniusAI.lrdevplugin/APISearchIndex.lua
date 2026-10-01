@@ -162,6 +162,18 @@ local EXPORT_SETTINGS = {
 	LR_embeddedMetadataOption = "all",
 }
 
+--- The two generation settings for a request: the caller's value, else the
+--- saved setting, else the default. Each provider uses only one of them (see
+--- AiProviders.appliesTemperature); both are always sent and the backend
+--- picks, so a request never depends on the plug-in knowing every model.
+local function temperatureFor(options)
+	return tostring(options.temperature or (prefs and prefs.temperature) or Defaults.defaultTemperature)
+end
+
+local function reasoningEffortFor(options)
+	return options.reasoning_effort or (prefs and prefs.reasoningEffort) or Defaults.defaultReasoningEffort
+end
+
 --- Appends the catalog's location fields to a multipart request.
 ---
 --- Shared by both upload transports, and skipped field by field: a photo the
@@ -835,7 +847,8 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		model = options.model,
 		api_key = options.api_key,
 		language = options.language or (prefs and prefs.generateLanguage) or "English",
-		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		temperature = temperatureFor(options),
+		reasoning_effort = reasoningEffortFor(options),
 		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
 		replace_ss = tostring(options.replace_ss or false),
 		generate_keywords = tostring(options.generate_keywords or false),
@@ -984,7 +997,8 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		model = options.model,
 		api_key = options.api_key,
 		language = options.language or (prefs and prefs.generateLanguage) or "English",
-		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		temperature = temperatureFor(options),
+		reasoning_effort = reasoningEffortFor(options),
 		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
 		replace_ss = tostring(options.replace_ss or false),
 		generate_keywords = tostring(options.generate_keywords or false),
@@ -1068,7 +1082,8 @@ end
 --   - tasks table: Array of tasks to perform (default: {"embeddings", "metadata", "quality"})
 --   - provider string: AI provider to use (default: "qwen")
 --   - language string: Language for generated content (default: "English")
---   - temperature number: Temperature for AI generation (default: 0.2)
+--   - temperature number: Temperature for local models (default: Defaults.defaultTemperature)
+--   - reasoning_effort string: Analysis depth for cloud models, "low"/"medium"/"high" (default: "low")
 --   - generate_keywords boolean: Generate keywords (default: true)
 --   - generate_caption boolean: Generate caption (default: true)
 --   - generate_title boolean: Generate title (default: true)
@@ -1259,10 +1274,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	end
 
 	table.insert(mimeChunks, { name = "language", value = options.language or prefs.generateLanguage or "English" })
-	table.insert(
-		mimeChunks,
-		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
-	)
+	table.insert(mimeChunks, { name = "temperature", value = temperatureFor(options) })
+	table.insert(mimeChunks, { name = "reasoning_effort", value = reasoningEffortFor(options) })
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	-- Unlike the indexing path, the edit endpoint never builds location context
 	-- at all (see the module comment in `routes/edit.rs`), so this stays off.
@@ -1386,10 +1399,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	end
 
 	table.insert(mimeChunks, { name = "language", value = options.language or prefs.generateLanguage or "English" })
-	table.insert(
-		mimeChunks,
-		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
-	)
+	table.insert(mimeChunks, { name = "temperature", value = temperatureFor(options) })
+	table.insert(mimeChunks, { name = "reasoning_effort", value = reasoningEffortFor(options) })
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	table.insert(mimeChunks, { name = "replace_ss", value = tostring(options.replace_ss or false) })
 
@@ -5172,6 +5183,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("api_key", options.api_key)
 	addEditOpt("language", options.language)
 	addEditOpt("temperature", options.temperature)
+	addEditOpt("reasoning_effort", options.reasoning_effort)
 	addEditOpt("max_tokens", options.max_tokens)
 	addEditOpt("prompt", Util.promptForRequest(options.prompt))
 	addEditOpt("edit_intent", options.edit_intent)

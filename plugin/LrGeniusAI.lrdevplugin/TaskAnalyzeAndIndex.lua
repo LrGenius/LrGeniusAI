@@ -39,7 +39,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.regenerateMetadata = prefs.regenerateMetadata or false
 
 	-- Metadata generation options
-	props.temperature = prefs.temperature or 0.1
 	props.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
 	props.prompts = prefs.prompts
@@ -73,7 +72,8 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- AI Model selection (unified across providers)
 	props.modelKey = prefs.modelKey -- format: "provider::model"
 	props.language = prefs.generateLanguage or "English"
-	props.temperature = prefs.temperature or 0.1
+	props.temperature = prefs.temperature or Defaults.defaultTemperature
+	props.reasoningEffort = prefs.reasoningEffort or Defaults.defaultReasoningEffort
 	props.maxTokens = prefs.maxTokens or Defaults.defaultMaxTokens
 	props.replaceSS = prefs.replaceSS or false
 
@@ -304,6 +304,8 @@ local function showAnalyzeAndIndexDialog(ctx)
 							}) or nil,
 						}),
 					}),
+					-- Which of the two settings below reaches the model
+					-- depends on the provider: see AiProviders.appliesTemperature.
 					f:row({
 						f:static_text({
 							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Temperature=Temperature:"),
@@ -311,14 +313,62 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:slider({
 							value = bind("temperature"),
+							enabled = bind({
+								key = "modelKey",
+								transform = function(v)
+									return AiProviders.appliesTemperature(v)
+								end,
+							}),
 							min = 0.0,
 							max = 0.5,
 							integral = false,
 							width = 300,
 						}),
 						f:static_text({
-							title = bind("temperature"),
+							title = bind({
+								key = "temperature",
+								transform = function(v)
+									return string.format("%.2f", tonumber(v) or 0)
+								end,
+							}),
 							width = 40,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = "Analysis depth:",
+							width = share("labelWidth"),
+						}),
+						f:popup_menu({
+							value = bind("reasoningEffort"),
+							items = Defaults.reasoningEffortItems,
+							enabled = bind({
+								key = "modelKey",
+								transform = function(v)
+									return AiProviders.appliesReasoningEffort(v)
+								end,
+							}),
+							width = 300,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = "",
+							width = share("labelWidth"),
+						}),
+						f:static_text({
+							title = bind({
+								key = "modelKey",
+								transform = function(v)
+									return AiProviders.generationSettingsHint(v)
+								end,
+							}),
+							size = "small",
+							wrap = true,
+							-- Sized for the longest hint up front: the view is laid
+							-- out once, and the hint changes with the model.
+							height_in_lines = 2,
+							width = 300,
 						}),
 					}),
 					f:row({
@@ -682,6 +732,7 @@ local function showAnalyzeAndIndexDialog(ctx)
 		props.modelUnavailableReason = AiProviders.unavailableReason(modelsResp, props.modelKey)
 		prefs.generateLanguage = props.language
 		prefs.temperature = props.temperature
+		prefs.reasoningEffort = props.reasoningEffort
 		prefs.maxTokens = props.maxTokens
 		prefs.submitKeywords = props.submitKeywords
 		prefs.submitFaceNames = props.submitFaceNames
@@ -888,6 +939,7 @@ LrTasks.startAsyncTask(function()
 			model = modelFromKey,
 			language = props.language,
 			temperature = props.temperature,
+			reasoning_effort = props.reasoningEffort,
 			max_tokens = props.maxTokens,
 			generate_keywords = props.generateKeywords,
 			generate_caption = props.generateCaption,

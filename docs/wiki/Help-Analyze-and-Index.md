@@ -25,8 +25,28 @@ The dialog has three tabs.
 
 ### AI Model
 
-Picks the provider and model, plus **Temperature**, **Max Tokens**, output
-**Language**, and **Replace ß with ss** for German output. Which providers
+Picks the provider and model, plus **Temperature**, **Analysis depth**, **Max
+Tokens**, output **Language**, and **Replace ß with ss** for German output.
+
+Which of the two generation settings applies depends on the model; one that
+does not is greyed out, and a line under them says why:
+
+- **Analysis depth** (*Fast* / *Balanced* / *Thorough*) applies to the cloud
+  models that think before they answer — GPT-5 and the o-series, Gemini 2.5
+  and 3, and Claude — and sets how long they think. *Fast* is the default and
+  is enough for most photos; *Thorough* can help with hard cases (naming a bird
+  or a plant, reading a sign, a busy scene) but is slower and uses more tokens,
+  which the cloud providers bill. The plug-in raises the token limit for
+  thinking on its own, so a higher depth usually does not need a higher **Max
+  Tokens**.
+- **Temperature** applies to the local models — the built-in llama.cpp engine,
+  Ollama, LM Studio and an Other AI server — and to the cloud models that do
+  not reason (`gpt-4.1`, Gemini 2.x). Lower values give more consistent
+  wording. Models that reason set their own temperature (several refuse any
+  other value); Gemini 2.5 takes both settings. The models *On this Mac* (MLX)
+  use their own sampling settings, so neither setting applies to those.
+
+Which providers
 appear depends on what is configured in the Plug-in Manager — see
 [Choosing an AI Model](Help-Choosing-AI-Model). Entries read
 `<provider> · <model>`: *On this Mac* / *On this PC* for the built-in engine,

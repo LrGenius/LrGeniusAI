@@ -62,6 +62,96 @@ function AiProviders.splitModelKey(key)
 	return provider, model
 end
 
+-- Which generation setting reaches which model. Models that reason fix their
+-- own temperature (or refuse one outright), so for them the Temperature
+-- setting has no effect and Analysis depth is the one that does. The local
+-- providers sample with the user's temperature and have no reasoning level to
+-- set. MLX takes neither: its photo requests run guided generation, which
+-- samples on its own settings.
+--
+-- The model checks mirror the backend's (`is_reasoning_model` in openai.rs,
+-- `thinking_config` and `is_gemini_3` in gemini.rs), so a model the backend
+-- does not recognise is treated the same way on both sides.
+local LOCAL_SAMPLING = { llamacpp = true, ollama = true, lmstudio = true, openai_compatible = true }
+local CLOUD = { chatgpt = true, gemini = true, anthropic = true }
+
+local function startsWith(text, prefix)
+	return string.sub(text, 1, #prefix) == prefix
+end
+
+local function openAiReasons(model)
+	for _, prefix in ipairs({ "gpt-5", "o1", "o3", "o4" }) do
+		if startsWith(model, prefix) then
+			return true
+		end
+	end
+	return false
+end
+
+local function isGemini3(model)
+	return startsWith(model, "gemini-3-") or startsWith(model, "gemini-3.")
+end
+
+local GEMINI_25_THINKING = { ["gemini-2.5-pro"] = true, ["gemini-2.5-flash"] = true, ["gemini-2.5-flash-lite"] = true }
+
+---
+-- Whether the Temperature setting reaches the model a key names.
+--
+-- @param key string|nil A stored model choice ("provider::model").
+--
+function AiProviders.appliesTemperature(key)
+	local provider, model = AiProviders.splitModelKey(key)
+	if LOCAL_SAMPLING[provider] then
+		return true
+	elseif provider == "chatgpt" then
+		return not openAiReasons(model or "")
+	elseif provider == "gemini" then
+		return not isGemini3(model or "")
+	end
+	return false
+end
+
+---
+-- Whether the Analysis depth setting reaches the model a key names.
+--
+-- @param key string|nil A stored model choice ("provider::model").
+--
+function AiProviders.appliesReasoningEffort(key)
+	local provider, model = AiProviders.splitModelKey(key)
+	if provider == "anthropic" then
+		return true
+	elseif provider == "chatgpt" then
+		return openAiReasons(model or "")
+	elseif provider == "gemini" then
+		return isGemini3(model or "") or GEMINI_25_THINKING[model] == true
+	end
+	return false
+end
+
+---
+-- One line under the two settings saying which of them the chosen model
+-- uses, so a greyed-out control does not read as a fault.
+--
+-- @param key string|nil A stored model choice ("provider::model").
+-- @return string Empty when no model is chosen.
+--
+function AiProviders.generationSettingsHint(key)
+	local provider = AiProviders.splitModelKey(key)
+	local temperature = AiProviders.appliesTemperature(key)
+	if AiProviders.appliesReasoningEffort(key) then
+		return (temperature and "" or "This model sets its own temperature. ")
+			.. "Analysis depth decides how long it thinks: Thorough is slower and uses more tokens."
+	elseif temperature then
+		if CLOUD[provider] then
+			return "This model does not think before it answers, so Analysis depth does not apply."
+		end
+		return "Analysis depth applies to cloud models only."
+	elseif provider == "mlx" then
+		return "Models on this Mac use their own sampling settings."
+	end
+	return ""
+end
+
 ---
 -- The name a provider is shown under.
 --

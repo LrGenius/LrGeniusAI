@@ -82,8 +82,20 @@ Defaults.defaultKeywordAliases = false
 -- models.
 Defaults.catalogKeywordLimit = 500
 
+-- Sampling temperature. Only models that do not reason use it — the local
+-- ones, gpt-4.1 and Gemini 2.x; a reasoning model fixes its own (see
+-- AiProviders.appliesTemperature).
 Defaults.defaultTemperature = 0.1
 Defaults.defaultMaxTokens = 2048
+
+-- "Analysis depth": how long a cloud model may think before it answers. "low"
+-- is what every request asked for before the setting existed.
+Defaults.defaultReasoningEffort = "low"
+Defaults.reasoningEffortItems = {
+	{ title = "Fast", value = "low" },
+	{ title = "Balanced", value = "medium" },
+	{ title = "Thorough", value = "high" },
+}
 
 Defaults.defaultKeywordCategories = {
 	LOC("$$$/lrc-ai-assistant/Defaults/ResponseStructure/keywords/Activities=Activities"),

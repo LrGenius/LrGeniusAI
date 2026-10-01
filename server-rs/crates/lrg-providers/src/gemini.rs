@@ -16,14 +16,14 @@ use crate::edit_recipe::{gemini_edit_recipe_schema, normalize_edit_recipe};
 use crate::gemini_schema::prepare_gemini_response_schema;
 use crate::image_encode::image_to_base64;
 use crate::keyword_taxonomy::KeywordLeafEncoding;
-use crate::normalize::{alt_text_from, missing_field_warning, normalize_keywords};
+use crate::normalize::{alt_text_from, join_warnings, missing_field_warning, normalize_keywords};
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
     prepare_user_prompt,
 };
 use crate::types::{
     EditGenerationRequest, EditGenerationResponse, MetadataGenerationRequest,
-    MetadataGenerationResponse, ProviderError,
+    MetadataGenerationResponse, ProviderError, ReasoningEffort,
 };
 
 const DEFAULT_MAX_TOKENS: u32 = 2048;
@@ -68,23 +68,48 @@ fn family_rank(model_id: &str) -> i32 {
     99
 }
 
+/// Every Gemini 3 model (`gemini-3-pro-preview`, `gemini-3.7-flash`, …), not
+/// only the ids known when this was written.
+fn is_gemini_3(model_name: &str) -> bool {
+    model_name.starts_with("gemini-3-") || model_name.starts_with("gemini-3.")
+}
+
 /// Thinking config for models that support/require it, REST-shaped
 /// (`thinkingBudget` or `thinkingLevel`), or `None` for everything else.
 ///
-/// Every Gemini 3 model (`gemini-3-pro-preview`, `gemini-3.7-flash`, …) gets
-/// `thinkingLevel: low` rather than only the ids known when this was written:
-/// the API default thinks harder, and thought tokens are billed as output and
-/// count against `maxOutputTokens` — a description task has nothing to gain
-/// from them.
-fn thinking_config(model_name: &str) -> Option<Value> {
+/// It follows the plug-in's Analysis depth. At `Low` — the default — a
+/// Gemini 3 model gets `thinkingLevel: low` and a 2.5 model the smallest
+/// budget it takes: the API default thinks harder, and thought tokens are
+/// billed as output, while a plain description has little to gain from
+/// them. `High` lets a 2.5 model decide for itself (`-1`, dynamic).
+fn thinking_config(model_name: &str, effort: ReasoningEffort) -> Option<Value> {
+    let budget = |low: i64| match effort {
+        ReasoningEffort::Low => low,
+        ReasoningEffort::Medium => 2048,
+        ReasoningEffort::High => -1,
+    };
     match model_name {
-        "gemini-2.5-pro" => Some(json!({"thinkingBudget": 128})),
-        "gemini-2.5-flash" | "gemini-2.5-flash-lite" => Some(json!({"thinkingBudget": 0})),
-        m if m.starts_with("gemini-3-") || m.starts_with("gemini-3.") => {
-            Some(json!({"thinkingLevel": "low"}))
-        }
+        // 2.5 Pro cannot stop thinking; 128 is the smallest budget it takes.
+        "gemini-2.5-pro" => Some(json!({"thinkingBudget": budget(128)})),
+        "gemini-2.5-flash" | "gemini-2.5-flash-lite" => Some(json!({"thinkingBudget": budget(0)})),
+        m if is_gemini_3(m) => Some(json!({"thinkingLevel": effort.as_str()})),
         _ => None,
     }
+}
+
+/// Whether a thinking config lets the model think at all.
+fn thinks(thinking: Option<&Value>) -> bool {
+    thinking.is_some_and(|tc| tc.get("thinkingBudget") != Some(&json!(0)))
+}
+
+/// Gemini 3 models that predate the `medium` thinking level reject it with a
+/// 400 (`gemini-3-pro-preview` knew only `low` and `high`).
+fn rejects_medium_thinking_level(generation_config: &Value, error: &str) -> bool {
+    generation_config
+        .pointer("/thinkingConfig/thinkingLevel")
+        .and_then(Value::as_str)
+        == Some("medium")
+        && error.to_ascii_lowercase().contains("thinking")
 }
 
 /// Port of `_clean_gemini_response`: strips markdown code-fence artifacts
@@ -125,23 +150,83 @@ impl GeminiProvider {
         !self.api_key.is_empty()
     }
 
+    /// The `generationConfig` for one photo, and the token limit it sets.
+    ///
+    /// A model that thinks gets room for it on top of the user's Max Tokens:
+    /// thought tokens count against `maxOutputTokens`. Gemini 3 gets no
+    /// `temperature` — Google asks for its default of 1.0 there, and lower
+    /// values make it loop.
     fn generation_config(
         &self,
         response_schema: Value,
         temperature: f64,
+        effort: ReasoningEffort,
         max_output_tokens: u32,
         model_name: &str,
-    ) -> Value {
+    ) -> (Value, u32) {
+        let thinking = thinking_config(model_name, effort);
+        let limit = if thinks(thinking.as_ref()) {
+            max_output_tokens.saturating_add(effort.thinking_headroom())
+        } else {
+            max_output_tokens
+        };
         let mut config = json!({
             "responseMimeType": "application/json",
             "responseSchema": response_schema,
-            "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
+            "maxOutputTokens": limit,
         });
-        if let Some(tc) = thinking_config(model_name) {
+        if !is_gemini_3(model_name) {
+            config["temperature"] = json!(temperature);
+        }
+        if let Some(tc) = thinking {
             config["thinkingConfig"] = tc;
         }
-        config
+        (config, limit)
+    }
+
+    /// [`Self::call_generate_content`], once more at `thinkingLevel: high`
+    /// when the model turns down `medium` — see
+    /// [`rejects_medium_thinking_level`]. The warning says it happened, since
+    /// the photo was then analyzed at a higher, costlier level than asked.
+    async fn generate_with_thinking_fallback(
+        &self,
+        model_name: &str,
+        system_instruction: &str,
+        user_prompt: &str,
+        image_data: &[u8],
+        mut generation_config: Value,
+    ) -> Result<(Value, Option<String>), String> {
+        match self
+            .call_generate_content(
+                model_name,
+                system_instruction,
+                user_prompt,
+                image_data,
+                generation_config.clone(),
+            )
+            .await
+        {
+            Ok(result) => Ok((result, None)),
+            Err(e) if rejects_medium_thinking_level(&generation_config, &e) => {
+                generation_config["thinkingConfig"]["thinkingLevel"] = json!("high");
+                let result = self
+                    .call_generate_content(
+                        model_name,
+                        system_instruction,
+                        user_prompt,
+                        image_data,
+                        generation_config,
+                    )
+                    .await?;
+                Ok((
+                    result,
+                    Some(format!(
+                        "{model_name} does not offer the Balanced analysis depth, so the photo was analyzed at Thorough instead. Choose Fast or Thorough in the Analyze & Index dialog for this model."
+                    )),
+                ))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn call_generate_content(
@@ -199,10 +284,14 @@ impl GeminiProvider {
     ) -> Option<String> {
         let model = model.unwrap_or("gemini-2.0-flash");
         let url = format!("{API_BASE}/models/{model}:generateContent");
+        let mut generation_config = json!({"maxOutputTokens": 4096});
+        if !is_gemini_3(model) {
+            generation_config["temperature"] = json!(0.1);
+        }
         let body = json!({
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
+            "generationConfig": generation_config,
         });
         let resp = self
             .client
@@ -240,16 +329,16 @@ impl GeminiProvider {
         let system_instruction = prepare_system_prompt(request);
         let user_prompt = prepare_user_prompt(request);
         let response_schema = prepare_gemini_response_schema(request);
-        let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        let generation_config = effective.generation_config(
+        let (generation_config, max_tokens) = effective.generation_config(
             response_schema,
             request.temperature,
-            max_tokens,
+            request.reasoning_effort,
+            request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             &request.model,
         );
 
-        let result = match effective
-            .call_generate_content(
+        let (result, fallback_warning) = match effective
+            .generate_with_thinking_fallback(
                 &request.model,
                 &system_instruction,
                 &user_prompt,
@@ -332,12 +421,15 @@ impl GeminiProvider {
         };
         // A requested field the model did not return is a degraded
         // success, not a success: see `missing_field_warning`.
-        let warning = missing_field_warning(
-            request,
-            Some(&keywords),
-            caption.as_ref(),
-            title.as_ref(),
-            alt_text.as_ref(),
+        let warning = join_warnings(
+            fallback_warning,
+            missing_field_warning(
+                request,
+                Some(&keywords),
+                caption.as_ref(),
+                title.as_ref(),
+                alt_text.as_ref(),
+            ),
         );
         MetadataGenerationResponse {
             uuid: request.uuid.clone(),
@@ -369,16 +461,16 @@ impl GeminiProvider {
 
         let system_instruction = prepare_edit_system_prompt(request);
         let user_prompt = prepare_edit_user_prompt(request);
-        let max_tokens = request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        let generation_config = effective.generation_config(
+        let (generation_config, max_tokens) = effective.generation_config(
             gemini_edit_recipe_schema(request.is_raw).clone(),
             request.temperature,
-            max_tokens,
+            request.reasoning_effort,
+            request.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             &request.model,
         );
 
-        let result = match effective
-            .call_generate_content(
+        let (result, fallback_warning) = match effective
+            .generate_with_thinking_fallback(
                 &request.model,
                 &system_instruction,
                 &user_prompt,
@@ -425,7 +517,7 @@ impl GeminiProvider {
             input_tokens,
             output_tokens,
             error: None,
-            warning: None,
+            warning: fallback_warning,
             guardrail_reasons: Vec::new(),
         }
     }
@@ -623,27 +715,92 @@ mod tests {
 
     #[test]
     fn thinking_config_matches_model_specific_shape() {
+        use ReasoningEffort::{High, Low, Medium};
+        // Low is what every request asked for before Analysis depth existed.
         assert_eq!(
-            thinking_config("gemini-2.5-pro"),
+            thinking_config("gemini-2.5-pro", Low),
             Some(json!({"thinkingBudget": 128}))
         );
         assert_eq!(
-            thinking_config("gemini-2.5-flash"),
+            thinking_config("gemini-2.5-flash", Low),
             Some(json!({"thinkingBudget": 0}))
+        );
+        assert_eq!(
+            thinking_config("gemini-2.5-flash-lite", Medium),
+            Some(json!({"thinkingBudget": 2048}))
+        );
+        assert_eq!(
+            thinking_config("gemini-2.5-pro", High),
+            Some(json!({"thinkingBudget": -1}))
         );
         for gemini_3 in [
             "gemini-3-pro-preview",
             "gemini-3.7-flash",
             "gemini-3.8-flash",
         ] {
-            assert_eq!(
-                thinking_config(gemini_3),
-                Some(json!({"thinkingLevel": "low"})),
-                "{gemini_3}"
-            );
+            for effort in [Low, Medium, High] {
+                assert_eq!(
+                    thinking_config(gemini_3, effort),
+                    Some(json!({"thinkingLevel": effort.as_str()})),
+                    "{gemini_3}"
+                );
+            }
         }
-        assert_eq!(thinking_config("gemini-2.0-flash"), None);
-        assert_eq!(thinking_config("gemini-30-hypothetical"), None);
+        assert_eq!(thinking_config("gemini-2.0-flash", High), None);
+        assert_eq!(thinking_config("gemini-30-hypothetical", High), None);
+    }
+
+    #[test]
+    fn gemini_3_gets_no_temperature_and_thinking_gets_headroom() {
+        let provider = GeminiProvider::new(String::new());
+        // Google asks for Gemini 3's default temperature; lower values loop.
+        let (config, limit) = provider.generation_config(
+            json!({}),
+            0.1,
+            ReasoningEffort::Medium,
+            2048,
+            "gemini-3.1-pro-preview",
+        );
+        assert!(config.get("temperature").is_none(), "{config}");
+        assert_eq!(limit, 2048 + ReasoningEffort::Medium.thinking_headroom());
+        assert_eq!(config["maxOutputTokens"], json!(limit));
+        assert_eq!(config["thinkingConfig"], json!({"thinkingLevel": "medium"}));
+
+        // 2.5 keeps the user's temperature; with a zero budget it does not
+        // think, so it needs no room for it.
+        let (config, limit) = provider.generation_config(
+            json!({}),
+            0.1,
+            ReasoningEffort::Low,
+            2048,
+            "gemini-2.5-flash",
+        );
+        assert_eq!(config["temperature"], json!(0.1));
+        assert_eq!(limit, 2048);
+
+        let (config, limit) = provider.generation_config(
+            json!({}),
+            0.3,
+            ReasoningEffort::High,
+            2048,
+            "gemini-2.0-flash",
+        );
+        assert_eq!(config["temperature"], json!(0.3));
+        assert!(config.get("thinkingConfig").is_none());
+        assert_eq!(limit, 2048);
+    }
+
+    #[test]
+    fn only_a_rejected_medium_level_is_retried() {
+        let medium = json!({"thinkingConfig": {"thinkingLevel": "medium"}});
+        let low = json!({"thinkingConfig": {"thinkingLevel": "low"}});
+        let error = "Thinking level MEDIUM is not supported for this model.";
+        assert!(rejects_medium_thinking_level(&medium, error));
+        assert!(!rejects_medium_thinking_level(&low, error));
+        assert!(!rejects_medium_thinking_level(
+            &medium,
+            "API key not valid."
+        ));
     }
 
     #[test]

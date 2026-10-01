@@ -21,10 +21,12 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use lrg_providers::provider::{build_provider, ProviderSelection};
-use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse};
+use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse, ReasoningEffort};
 use lrg_store::{meta, Store, StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
-use crate::routes::route_util::{parse_multipart, SinglePhotoForm};
+use crate::routes::route_util::{
+    parse_multipart, reasoning_effort_field, reasoning_effort_json, SinglePhotoForm,
+};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -39,6 +41,8 @@ pub(crate) struct EditOptions {
     api_key: Option<String>,
     language: String,
     temperature: f64,
+    /// An invalid value is answered with a 400 by the handlers, before parsing.
+    reasoning_effort: ReasoningEffort,
     max_tokens: Option<u32>,
     prompt: Option<String>,
     submit_keywords: bool,
@@ -95,7 +99,8 @@ impl Default for EditOptions {
             model: None,
             api_key: None,
             language: "German".to_string(),
-            temperature: 0.2,
+            temperature: 0.1,
+            reasoning_effort: ReasoningEffort::default(),
             max_tokens: None,
             prompt: None,
             submit_keywords: false,
@@ -173,6 +178,10 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
             .get("temperature")
             .and_then(|s| s.parse().ok())
             .unwrap_or(defaults.temperature),
+        reasoning_effort: reasoning_effort_field(
+            fields.get("reasoning_effort").map(String::as_str),
+        )
+        .unwrap_or_default(),
         max_tokens: fields.get("max_tokens").and_then(|s| s.parse().ok()),
         // Trimmed and dropped when blank, matching `/v1/index/photos`: a
         // prompt field the user emptied means "no persona of my own", and the
@@ -265,6 +274,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
             .get("temperature")
             .and_then(Value::as_f64)
             .unwrap_or(defaults.temperature),
+        reasoning_effort: reasoning_effort_json(data).unwrap_or_default(),
         max_tokens: data
             .get("max_tokens")
             .and_then(Value::as_u64)
@@ -501,6 +511,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     request.api_key = options.api_key.clone();
     request.language = options.language.clone();
     request.temperature = options.temperature;
+    request.reasoning_effort = options.reasoning_effort;
     request.max_tokens = options.max_tokens;
     request.system_prompt = options.prompt.clone();
     request.submit_keywords = options.submit_keywords;
@@ -830,6 +841,13 @@ async fn edit_multipart(State(state): State<Arc<AppState>>, mut multipart: Multi
     }
     let photo_id = &photo_ids[0];
 
+    if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response();
+    }
     let options = parse_edit_options_form(&fields);
     finish_edit(
         &state,
@@ -861,6 +879,13 @@ async fn edit_base64(State(state): State<Arc<AppState>>, body: Option<Json<Value
             .into_response();
     };
 
+    if let Err(e) = reasoning_effort_json(&data) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response();
+    }
     let options = parse_edit_options_json(&data);
     finish_edit(&state, &options, &image_bytes, photo_id, filename).await
 }
@@ -996,6 +1021,25 @@ mod tests {
         // guardrails need to know whether clipped highlights are recoverable,
         // and the exported JPEG no longer carries that.
         assert_eq!(opts.is_raw, Some(true));
+    }
+
+    #[test]
+    fn analysis_depth_is_read_from_the_form_and_from_json() {
+        let mut fields = plugin_fields();
+        fields.insert("reasoning_effort".to_string(), "medium".to_string());
+        assert_eq!(
+            parse_edit_options_form(&fields).reasoning_effort,
+            ReasoningEffort::Medium
+        );
+        assert_eq!(
+            parse_edit_options_form(&HashMap::new()).reasoning_effort,
+            ReasoningEffort::Low
+        );
+        let data = json!({"reasoning_effort": "high"});
+        assert_eq!(
+            parse_edit_options_json(&data).reasoning_effort,
+            ReasoningEffort::High
+        );
     }
 
     #[test]

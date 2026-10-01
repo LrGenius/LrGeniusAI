@@ -35,7 +35,7 @@ use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
 use crate::keyword_taxonomy::KeywordLeafEncoding;
 use crate::normalize::{
-    alt_text_from, extract_json_value, missing_field_warning, normalize_keywords,
+    alt_text_from, extract_json_value, join_warnings, missing_field_warning, normalize_keywords,
 };
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt, prepare_system_prompt,
@@ -996,13 +996,6 @@ fn parse_openai_models(body: &Value) -> Vec<String> {
     ids.sort();
     ids.dedup();
     ids
-}
-
-fn join_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
-    match (first, second) {
-        (Some(a), Some(b)) => Some(format!("{a} {b}")),
-        (a, b) => a.or(b),
-    }
 }
 
 fn usage_tokens(result: &Value) -> (u32, u32) {
