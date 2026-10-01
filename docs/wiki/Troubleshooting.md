@@ -72,14 +72,15 @@ re-detection proceeds.
 
 ### 5. Invalid or Missing API Keys
 
-If you are using cloud providers (Gemini, ChatGPT), authentication failures block all analysis.
+If you are using cloud providers (Gemini, ChatGPT, Anthropic) or an Other AI server that needs a key, authentication failures block all analysis.
 
 - **Symptom:** "Unauthorized", 401/403 HTTP errors, or "Gemini API not configured" despite entering a key.
 - **Resolution:**
-  1. Double-check the key in *Plug-in Manager → API Keys*. Copy-paste directly from the provider dashboard to avoid whitespace.
+  1. Double-check the key in *Plug-in Manager → Optional AI providers*. Copy-paste directly from the provider dashboard; surrounding spaces are removed when you save.
   2. Ensure the key has not expired and has sufficient billing quota attached.
   3. For Gemini: make sure the Gemini API is enabled in your Google Cloud project.
-  4. After saving a new key, restart the backend (the backend reads keys from configuration at startup).
+  4. For Anthropic: the task's model list shows why the key was not accepted (rejected, no credit left) right under the picker. Anthropic keys go in the **Anthropic key** field — not the Other AI server, where `https://api.anthropic.com/v1` fails with *"HTTP 400 (anthropic-version: header is required)"*.
+  5. For an Other AI server, the line under its fields says whether the key was accepted as soon as you leave the field. See [Other AI Server](Help-Other-AI-Server).
 
 ---
 
@@ -117,10 +118,9 @@ llama.cpp on Windows — so you only ever see the section that applies. See
 - **Symptom:** Analysis runs but Ollama shows no activity (`ollama ps` is empty), or connection errors to `localhost:11434`.
 - **Resolution:**
   1. Make sure Ollama is running before starting the task. Start it with `ollama serve` if needed.
-  2. Verify the Ollama Base URL in *Plug-in Manager* matches where Ollama is listening (default: `http://localhost:11434`).
+  2. The plug-in looks for Ollama at its default address, `http://localhost:11434`. If Ollama listens elsewhere on this computer, or runs on a different machine, enter its address as the **Other AI server** — see [Other AI Server](Help-Other-AI-Server).
   3. Make sure at least one vision-capable model is pulled: `ollama pull qwen3-vl:4b-instruct-q4_K_M`.
-  4. If Ollama runs on a different machine, use its network address instead of `localhost`.
-  5. Check that no firewall or VPN is blocking the connection between the backend and Ollama.
+  4. Check that no firewall or VPN is blocking the connection between the backend and Ollama.
 
 ---
 
@@ -130,7 +130,7 @@ llama.cpp on Windows — so you only ever see the section that applies. See
 - **Resolution:**
   1. Open LM Studio and confirm the **local server is running** (green status in the "Local Server" tab).
   2. Ensure a vision model is loaded (or enable "on-demand model loading").
-  3. Verify the LM Studio Base URL in *Plug-in Manager* (default: `http://localhost:1234`).
+  3. The plug-in looks for LM Studio at its default address, `localhost:1234`. On another port or another machine, enter its address as the **Other AI server**. If LM Studio's "Require API token" setting is on, turn it off or enter `localhost:1234` as the Other AI server with the token as its key.
   4. On Apple Silicon, the MLX variants of models perform significantly better than GGUF builds — try the MLX version if performance is poor.
 
 ---

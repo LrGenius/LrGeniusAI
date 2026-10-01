@@ -6,6 +6,58 @@
 use lrg_imaging::location::LocationTags;
 use serde::Serialize;
 
+/// How much a cloud model may think before it answers — the plug-in's
+/// "Analysis depth" setting.
+///
+/// Every current cloud model reasons, and this is the knob all three cloud
+/// providers offer for it (OpenAI `reasoning_effort`, Gemini `thinkingLevel`
+/// / `thinkingBudget`, Anthropic `output_config.effort`), where sampling
+/// temperature is fixed or rejected outright. Local providers ignore it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    /// What every cloud request asked for before this setting existed: a
+    /// photo description gains little from long deliberation.
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// The wire value the plug-in sends, which is also the level name all
+    /// three cloud APIs use.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "low" => Some(ReasoningEffort::Low),
+            "medium" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+        }
+    }
+
+    /// Tokens added to the user's Max Tokens for a model that thinks.
+    ///
+    /// Thinking is billed as output and counts against the same limit as the
+    /// answer, so without room for it a model that thinks harder is cut off
+    /// before it writes a word. The limit is a cap, not a charge: only the
+    /// tokens actually produced are billed.
+    pub fn thinking_headroom(self) -> u32 {
+        match self {
+            ReasoningEffort::Low => 4096,
+            ReasoningEffort::Medium => 8192,
+            ReasoningEffort::High => 16384,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MetadataGenerationRequest {
     pub image_data: Vec<u8>,
@@ -21,7 +73,10 @@ pub struct MetadataGenerationRequest {
     pub generate_alt_text: bool,
 
     pub language: String,
+    /// Sampling temperature. Only the local providers use it; see
+    /// [`ReasoningEffort`] for what the cloud providers take instead.
     pub temperature: f64,
+    pub reasoning_effort: ReasoningEffort,
     pub max_tokens: Option<u32>,
 
     pub system_prompt: Option<String>,
@@ -146,6 +201,7 @@ pub struct EditGenerationRequest {
 
     pub language: String,
     pub temperature: f64,
+    pub reasoning_effort: ReasoningEffort,
     pub max_tokens: Option<u32>,
 
     pub system_prompt: Option<String>,
@@ -209,7 +265,8 @@ impl EditGenerationRequest {
             model,
             api_key: None,
             language: "English".to_string(),
-            temperature: 0.2,
+            temperature: 0.1,
+            reasoning_effort: ReasoningEffort::Low,
             max_tokens: None,
             system_prompt: None,
             user_prompt: None,

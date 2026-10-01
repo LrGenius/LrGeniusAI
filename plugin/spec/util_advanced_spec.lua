@@ -106,6 +106,26 @@ describe("Util.dumpTable", function()
 		assert.truthy(s:find("<redacted>", 1, true))
 	end)
 
+	it("redacts the Other AI server key and request-body key fields", function()
+		for _, field in ipairs({
+			"aiServerApiKey",
+			"server_apikey",
+			"openai_apikey",
+			"gemini_apikey",
+			"anthropicApiKey",
+			"anthropic_apikey",
+		}) do
+			local s = Util.dumpTable({ [field] = "sk-or-secret" })
+			assert.is_nil(s:find("sk-or-secret", 1, true), field)
+			assert.truthy(s:find("<redacted>", 1, true), field)
+		end
+	end)
+
+	it("keeps fields that only look similar", function()
+		local s = Util.dumpTable({ keywords = "berg" })
+		assert.truthy(s:find("berg", 1, true))
+	end)
+
 	it("replaces a base64 payload in the 'data' field", function()
 		-- "SGVsbG8gV29ybGQ=" is base64("Hello World")
 		local s = Util.dumpTable({ data = "SGVsbG8gV29ybGQ=" })

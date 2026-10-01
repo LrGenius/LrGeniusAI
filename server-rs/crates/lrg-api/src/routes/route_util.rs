@@ -1,8 +1,8 @@
 //! Small helpers shared by `training.rs`, `style_edit.rs`, `group_similar.rs`,
-//! `index_upload.rs` and `faces.rs`: multipart request parsing, local-hour
-//! resolution for time-of-day bucketing, CLIP zero-shot scene-tag probing, the
-//! CLIP-IQA prompt-set cache, and sanitising request-supplied text for the
-//! log.
+//! `index_upload.rs`, `edit.rs` and `faces.rs`: multipart request parsing, the
+//! `reasoning_effort` request field, local-hour resolution for time-of-day
+//! bucketing, CLIP zero-shot scene-tag probing, the CLIP-IQA prompt-set cache,
+//! and sanitising request-supplied text for the log.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use chrono::{Local, TimeZone, Timelike};
 use lrg_analysis::training::{scene_tags_from_similarities, SCENE_PROBES};
 use lrg_ml::clip_iqa::{IqaPrompts, PromptSet};
 use lrg_ml::siglip::{l2_normalize, SiglipModel};
+use lrg_providers::types::ReasoningEffort;
 
 use crate::state::AppState;
 
@@ -36,6 +37,33 @@ pub(crate) fn log_safe(value: &str) -> Cow<'_, str> {
         )
     } else {
         Cow::Borrowed(value)
+    }
+}
+
+/// The plug-in's Analysis depth, from the `reasoning_effort` request field.
+///
+/// Absent or blank means the default (`low`). Anything else that is not a
+/// level is the caller's mistake and is answered as one, rather than quietly
+/// analyzed — and billed — at a level nobody asked for.
+pub(crate) fn reasoning_effort_field(value: Option<&str>) -> Result<ReasoningEffort, String> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(ReasoningEffort::default()),
+        Some(v) => ReasoningEffort::parse(v).ok_or_else(|| {
+            format!(
+                "Invalid reasoning_effort {:?}: expected \"low\", \"medium\" or \"high\"",
+                log_safe(v)
+            )
+        }),
+    }
+}
+
+/// [`reasoning_effort_field`] for a JSON body, where the field may also be
+/// `null` (absent) or a non-string (invalid).
+pub(crate) fn reasoning_effort_json(data: &serde_json::Value) -> Result<ReasoningEffort, String> {
+    match data.get("reasoning_effort") {
+        None | Some(serde_json::Value::Null) => Ok(ReasoningEffort::default()),
+        Some(serde_json::Value::String(s)) => reasoning_effort_field(Some(s)),
+        Some(other) => reasoning_effort_field(Some(&other.to_string())),
     }
 }
 
@@ -253,6 +281,46 @@ pub(crate) async fn parse_multipart(multipart: &mut Multipart) -> Result<Multipa
         }
     }
     Ok(form)
+}
+
+#[cfg(test)]
+mod reasoning_effort_tests {
+    use super::{reasoning_effort_field, reasoning_effort_json};
+    use lrg_providers::types::ReasoningEffort;
+    use serde_json::json;
+
+    #[test]
+    fn absent_or_blank_is_the_default() {
+        assert_eq!(reasoning_effort_field(None), Ok(ReasoningEffort::Low));
+        assert_eq!(reasoning_effort_field(Some(" ")), Ok(ReasoningEffort::Low));
+        assert_eq!(reasoning_effort_json(&json!({})), Ok(ReasoningEffort::Low));
+        assert_eq!(
+            reasoning_effort_json(&json!({"reasoning_effort": null})),
+            Ok(ReasoningEffort::Low)
+        );
+    }
+
+    #[test]
+    fn every_level_is_read() {
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ] {
+            assert_eq!(reasoning_effort_field(Some(effort.as_str())), Ok(effort));
+            assert_eq!(
+                reasoning_effort_json(&json!({"reasoning_effort": effort.as_str()})),
+                Ok(effort)
+            );
+        }
+    }
+
+    #[test]
+    fn anything_else_is_refused_by_name() {
+        let err = reasoning_effort_field(Some("max")).unwrap_err();
+        assert!(err.contains("\"max\""), "{err}");
+        assert!(reasoning_effort_json(&json!({"reasoning_effort": 2})).is_err());
+    }
 }
 
 #[cfg(test)]

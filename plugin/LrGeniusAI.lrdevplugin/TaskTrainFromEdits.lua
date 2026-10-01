@@ -300,10 +300,15 @@ LrTasks.startAsyncTask(function()
 				combinedReport = combinedReport .. "\n\n" .. "Canceled before all photos were processed."
 			end
 
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved"),
-				combinedReport
-			)
+			local completionTitle = LOC("$$$/LrGeniusAI/Training/CompletionTitle=Training Examples Saved")
+			if errorCount > 0 then
+				ErrorHandler.handleError(completionTitle, combinedReport)
+			else
+				-- Warnings only: the examples were saved. The error modal is
+				-- titled "Error" and offers "Generate report", which is the wrong
+				-- thing to hand someone whose run worked (#375).
+				LrDialogs.message(completionTitle, combinedReport, "warning")
+			end
 		else
 			local summary = LOC(
 				"$$$/LrGeniusAI/Training/SuccessSummary=Successfully saved ^1 training example(s).\nAI Edit Photos will use your style when editing visually similar photos.",

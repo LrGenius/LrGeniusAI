@@ -22,8 +22,10 @@ local function health(available)
 		clip = true,
 		gemini = false,
 		chatgpt = false,
+		anthropic = false,
 		ollama = false,
 		lmstudio = false,
+		server = false,
 		localEngine = false,
 	}
 	for _, name in ipairs(available or {}) do
@@ -42,8 +44,15 @@ describe("SearchIndexAPI.hasAnyLlmProvider", function()
 	it("counts each cloud or local-app provider on its own", function()
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "gemini" })))
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "chatgpt" })))
+		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "anthropic" })))
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "ollama" })))
 		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "lmstudio" })))
+	end)
+
+	it("counts an Other AI server as a provider", function()
+		-- OpenRouter, a llama.cpp server or LiteLLM may be all a user has:
+		-- no local model, no Ollama, no LM Studio, no cloud key.
+		assert.is_true(SearchIndexAPI.hasAnyLlmProvider(health({ "server" })))
 	end)
 
 	it("reports no provider only when every one of them is off", function()

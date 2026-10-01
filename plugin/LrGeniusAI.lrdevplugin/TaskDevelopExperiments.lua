@@ -23,11 +23,16 @@
 --        until the mask is ready?
 --   E4   How do plugin presets behave: same-name re-adds, where the file lives
 --        and what it holds, merging with existing masks, re-applying, amount.
+--        E4f: can a preset be applied and its file deleted right after, and
+--        what does Lightroom still report about it until a restart?
 --
 -- Everything that writes goes to virtual copies named "LrG Exp ...", never to
 -- the selected photos themselves. E4 additionally leaves hidden plugin presets
 -- behind: they are files in Lightroom's preset folder, shared by every catalog,
--- and the SDK has no call to delete them. The final dialog lists their paths.
+-- and the SDK has no call to delete a preset. E4f deletes its own preset files
+-- with LrFileUtils.delete - only paths that pass
+-- `DevelopExperiments.presetFileDeletable` - and the final dialog lists every
+-- preset file that still exists.
 --
 -- The result is a Markdown report plus the same data as JSON next to it (a
 -- numbered name if a .json of that name already exists). Nothing is judged
@@ -47,6 +52,9 @@ local AI_POLL_SECONDS = 60
 local AVAILABLE_WAIT_SECONDS = 60
 local PRESET_NAME = "LrGenius Experiment E4"
 local AMOUNT_PRESET_NAME = "LrGenius Experiment E4 Amount"
+local DELETE_PRESET_NAME = "LrGenius Experiment E4f"
+local DELETE_PRESET_CONTRAST = 25
+local READD_PRESET_CONTRAST = 15
 -- A white-balance mode may be resolved after `applyDevelopSettings` returns,
 -- and Auto on a raw needs the pixels decoded first. E1's mode-only variants
 -- read back right away, then every WB_POLL_INTERVAL seconds until the
@@ -1202,6 +1210,7 @@ local function describePreset(preset)
 			info.fileSize = #content
 			info.fileHead = content:sub(1, 3000)
 			info.fileMentionsSupportsAmount = content:find("SupportsAmount", 1, true) ~= nil
+			info.fileContrast2012 = X.presetFileSetting(content, "Contrast2012")
 		end
 	end
 	return info
@@ -1455,6 +1464,352 @@ local function runE4Amount(exp, catalog, photo, progress)
 	end
 end
 
+local function pathExists(path)
+	if type(path) ~= "string" then
+		return false
+	end
+	local kind = LrFileUtils.exists(path)
+	return kind == "file" or kind == "directory"
+end
+
+--- Takes `file` off the cleanup list once it no longer exists on disk, so the
+-- final dialog only names files the user still has to delete.
+local function forgetDeletedPresetFile(exp, file)
+	if type(file) ~= "string" or pathExists(file) then
+		return
+	end
+	for index = #exp.presetFiles, 1, -1 do
+		if exp.presetFiles[index] == file then
+			table.remove(exp.presetFiles, index)
+		end
+	end
+end
+
+--- Deletes one E4f preset file - only a path `X.presetFileDeletable` accepts,
+-- and only when it is a file: `LrFileUtils.delete` would remove a directory
+-- with everything in it.
+-- @param knownFiles table The preset files of the other E4 steps.
+-- @return table `{ skipped, ok, error, existsAfter, returned }` for `X.describeE4f`.
+local function deletePresetFile(file, knownFiles)
+	local allowed, why = X.presetFileDeletable(file, DELETE_PRESET_NAME, knownFiles)
+	if not allowed then
+		return { skipped = why }
+	end
+	local kind = LrFileUtils.exists(file)
+	if kind ~= "file" then
+		return { skipped = "there is no file at " .. file .. " (LrFileUtils.exists: " .. tostring(kind) .. ")" }
+	end
+	local deleted, reason
+	local ok, err = LrTasks.pcall(function()
+		deleted, reason = LrFileUtils.delete(file)
+	end)
+	local result = { existsAfter = pathExists(file), returned = tostring(deleted) }
+	if not ok then
+		result.ok = false
+		result.error = tostring(err)
+	elseif deleted ~= true and result.existsAfter then
+		result.ok = false
+		result.error = tostring(reason or ("LrFileUtils.delete returned " .. tostring(deleted)))
+	else
+		-- The file is gone even if the return value was not `true`, or the
+		-- call claimed success; `existsAfter` tells the two cases apart.
+		result.ok = true
+	end
+	return result
+end
+
+local function deleteStepError(result)
+	return result.skipped or result.error or (result.existsAfter and "the file is still there" or nil)
+end
+
+-- E4f, steps; `r` collects what `X.describeE4f` turns into verdicts and is
+-- filled step by step, so a stop halfway leaves the later parts nil.
+local function runE4DeleteSteps(exp, catalog, photo, progress, r)
+	progress:setCaption("E4f: apply a preset, then delete its file")
+	-- A snapshot taken before E4f records its own file: the path check
+	-- compares against the files the other E4 steps created.
+	local knownFiles = {}
+	for _, known in ipairs(exp.presetFiles) do
+		table.insert(knownFiles, known)
+	end
+	-- The presets of this name that are already listed, each with whether its
+	-- file exists: the only programmatic trace of an earlier run after a
+	-- restart, recorded before this run's add can overwrite that file.
+	r.before = {}
+	for _, listed in ipairs(pluginPresets()) do
+		if presetCall(listed, "getName") == DELETE_PRESET_NAME then
+			local listedFile = presetCall(listed, "getFile")
+			table.insert(r.before, {
+				uuid = presetCall(listed, "getUuid"),
+				file = listedFile,
+				fileExists = pathExists(listedFile),
+			})
+		end
+	end
+
+	local subject = X.aiMaskCorrection({ name = "LrGenius E4f Subject", mask = X.MASKS.subject, exposureStops = 0.5 })
+	local preset, how = addPluginPreset(catalog, DELETE_PRESET_NAME, {
+		Contrast2012 = DELETE_PRESET_CONTRAST,
+		EnableMaskGroupBasedCorrections = true,
+		MaskGroupBasedCorrections = { subject },
+	})
+	local info = describePreset(preset)
+	-- Listed right away, so a run that stops before the delete still names
+	-- the file in the cleanup list.
+	recordPresetFile(exp, info)
+	r.create = { ok = preset ~= nil, error = preset == nil and how or nil }
+	addStep(exp, "(global)", "E4f addDevelopPresetForPlugin", preset ~= nil, preset == nil and how or nil, {
+		how = how,
+		preset = info,
+		before = r.before,
+	})
+	if preset == nil then
+		return
+	end
+	local file = info.file
+
+	-- Plugin presets never appear in Develop > Presets (SDK reference,
+	-- addDevelopPresetForPlugin), so the check looks at the folder itself.
+	local presetFolder = type(file) == "string" and not file:find("^error:") and X.splitPath(file) or nil
+	table.insert(
+		exp.manualChecks,
+		"Quit and restart Lightroom, then open the 'Plugin Develop Presets' folder "
+			.. (presetFolder and ("(" .. presetFolder .. ")") or "(the folder of the E4f preset path in the report)")
+			.. " in Finder or Explorer: is a file named '"
+			.. DELETE_PRESET_NAME
+			.. "' back? Plugin presets never show in Develop > Presets, so that panel tells nothing either way."
+	)
+	table.insert(
+		exp.manualChecks,
+		"After that restart, run E4 again: its first E4f verdict then says whether presets named '"
+			.. DELETE_PRESET_NAME
+			.. "' are still listed, and for each whether its file is missing (kept somewhere else) or present (left over or written back at quit)."
+	)
+	table.insert(
+		exp.manualChecks,
+		"After the restart, on the 'LrG Exp E4f' copy in Develop: does it still show the preset's contrast and subject mask, and how is the preset step named in the History panel?"
+	)
+
+	local function stopIfCanceled(label)
+		if progress:isCanceled() then
+			addStep(exp, "(global)", label, false, CANCELED_MESSAGE, { file = file })
+			r.canceled = true
+			return true
+		end
+		return false
+	end
+
+	-- Apply to a fresh copy and read it back.
+	local label = photoLabel(photo)
+	local copy, copyErr = createVirtualCopy(catalog, photo, "LrG Exp E4f")
+	if not copy then
+		addStep(exp, label, "E4f create virtual copy", false, copyErr, nil)
+		r.apply = { ok = false, error = "no virtual copy: " .. tostring(copyErr) }
+		return
+	end
+	local copyLabel = photoLabel(copy)
+	noteIfOffline(exp, photo, copyLabel)
+	local applyLabel = "E4f applyDevelopPreset(amount 100, updateAI true)"
+	local available, waited, why = waitUntilAvailable(copy, progress)
+	if not available and why == "canceled" then
+		addStep(exp, copyLabel, applyLabel, false, CANCELED_MESSAGE, { file = file })
+		r.canceled = true
+		return
+	end
+	local ok, err = false, unavailableMessage(waited, why)
+	if available then
+		ok, err = applyPreset(catalog, copy, preset, 100, true, "LrGenius experiment E4f")
+	end
+	local polled = ok and pollCorrection(copy, subject.CorrectionSyncID, AI_POLL_SECONDS, progress) or nil
+	local settings, readErr = readSettings(copy)
+	r.apply = {
+		ok = ok,
+		error = err,
+		readError = ok and readErr or nil,
+		contrast = settings.Contrast2012,
+		maskFound = #X.findCorrections(settings.MaskGroupBasedCorrections, subject.CorrectionSyncID) > 0,
+		maskState = polled and X.describePoll(polled) or nil,
+		maskPollState = polled and polled.state or nil,
+	}
+	addStep(exp, copyLabel, applyLabel, ok and not readErr, err or readErr, {
+		Contrast2012 = settings.Contrast2012,
+		presetContrast2012 = DELETE_PRESET_CONTRAST,
+		subjectMaskFound = r.apply.maskFound,
+		subject = polled,
+		file = file,
+	})
+	if not ok or readErr then
+		return
+	end
+
+	-- Delete the preset's file.
+	if stopIfCanceled("E4f delete the preset file") then
+		return
+	end
+	r.delete = deletePresetFile(file, knownFiles)
+	forgetDeletedPresetFile(exp, file)
+	local deleteErr = deleteStepError(r.delete)
+	addStep(exp, "(global)", "E4f delete the preset file with LrFileUtils.delete", deleteErr == nil, deleteErr, {
+		file = file,
+		result = r.delete,
+	})
+	if deleteErr ~= nil then
+		return
+	end
+
+	-- What Lightroom still reports about the deleted preset.
+	local namedAfter, listedByUuid = 0, false
+	for _, listed in ipairs(pluginPresets()) do
+		if presetCall(listed, "getName") == DELETE_PRESET_NAME then
+			namedAfter = namedAfter + 1
+		end
+		if info.uuid ~= nil and presetCall(listed, "getUuid") == info.uuid then
+			listedByUuid = true
+		end
+	end
+	local okLookup, found = LrTasks.pcall(function()
+		return LrApplication.getDevelopPresetsForPlugin(_PLUGIN, info.uuid)
+	end)
+	local lookup
+	if not okLookup then
+		lookup = "error: " .. tostring(found)
+	elseif found == nil then
+		lookup = "nothing"
+	else
+		lookup = "found " .. tostring(presetCall(found, "getName"))
+	end
+	local okSetting, setting = LrTasks.pcall(function()
+		return preset:getSetting()
+	end)
+	local settingResult = { ok = okSetting and type(setting) == "table" }
+	if settingResult.ok then
+		settingResult.contrast = setting.Contrast2012
+	else
+		settingResult.error = okSetting and ("returned " .. type(setting)) or tostring(setting)
+	end
+	-- Deleting a preset must not undo an edit it made.
+	local firstSettings, firstErr = readSettings(copy)
+	r.after = {
+		namedCount = namedAfter,
+		listedByUuid = listedByUuid,
+		lookup = lookup,
+		setting = settingResult,
+		first = {
+			readError = firstErr,
+			contrast = firstSettings.Contrast2012,
+			maskFound = #X.findCorrections(firstSettings.MaskGroupBasedCorrections, subject.CorrectionSyncID) > 0,
+			-- Found only proves the definition is there; the state says
+			-- whether the computed mask is too.
+			maskState = X.correctionState(
+				X.findCorrections(firstSettings.MaskGroupBasedCorrections, subject.CorrectionSyncID)[1]
+			),
+		},
+	}
+	addStep(exp, copyLabel, "E4f what Lightroom reports after the delete", firstErr == nil, firstErr, r.after)
+
+	-- Apply the preset object whose file is gone to a second fresh copy.
+	if stopIfCanceled("E4f apply the deleted preset to a second copy") then
+		return
+	end
+	local secondLabel = "E4f apply the deleted preset to a second copy"
+	local copy2, copy2Err = createVirtualCopy(catalog, photo, "LrG Exp E4f after delete")
+	if not copy2 then
+		addStep(exp, label, secondLabel, false, copy2Err, nil)
+		r.second = { copyError = copy2Err }
+	else
+		local copy2Label = photoLabel(copy2)
+		local available2, waited2, why2 = waitUntilAvailable(copy2, progress)
+		if not available2 and why2 == "canceled" then
+			addStep(exp, copy2Label, secondLabel, false, CANCELED_MESSAGE, { file = file })
+			r.canceled = true
+			return
+		end
+		local ok2, err2 = false, unavailableMessage(waited2, why2)
+		if available2 then
+			ok2, err2 = applyPreset(catalog, copy2, preset, 100, true, "LrGenius experiment E4f after delete")
+		end
+		local settings2, readErr2 = readSettings(copy2)
+		r.second = {
+			ok = ok2,
+			error = err2,
+			readError = ok2 and readErr2 or nil,
+			contrast = settings2.Contrast2012,
+			maskFound = #X.findCorrections(settings2.MaskGroupBasedCorrections, subject.CorrectionSyncID) > 0,
+			fileBack = pathExists(file),
+		}
+		if r.second.fileBack then
+			-- Applying brought the file back: it is a file to clean up again.
+			recordPresetFile(exp, info)
+		end
+		-- Failing is a possible answer here, not a broken step: the step is
+		-- only failed when the copy could not be read back.
+		addStep(exp, copy2Label, secondLabel, readErr2 == nil, readErr2, r.second)
+	end
+
+	-- Re-add the same name: does Lightroom write a file again, and where?
+	if stopIfCanceled("E4f re-add the same name") then
+		return
+	end
+	local readdPreset, readdHow = addPluginPreset(catalog, DELETE_PRESET_NAME, {
+		Contrast2012 = READD_PRESET_CONTRAST,
+	})
+	local readdInfo = describePreset(readdPreset)
+	local readd = {
+		ok = readdPreset ~= nil,
+		error = readdPreset == nil and readdHow or nil,
+		expectedContrast = READD_PRESET_CONTRAST,
+	}
+	if readdInfo then
+		readd.file = readdInfo.file
+		readd.fileExists = pathExists(readdInfo.file)
+		readd.samePath = readdInfo.file == file
+		readd.sameUuid = readdInfo.uuid == info.uuid
+		-- New settings, or stale ones from the deleted preset of that name?
+		readd.contrast = readdInfo.Contrast2012
+		if readd.fileExists then
+			readd.fileContrast = readdInfo.fileContrast2012
+			if readd.fileContrast ~= nil then
+				readd.fileHasNewContrast = readd.fileContrast == READD_PRESET_CONTRAST
+			end
+		end
+		recordPresetFile(exp, readdInfo)
+		forgetDeletedPresetFile(exp, readdInfo.file)
+	end
+	-- Does every add-then-delete cycle grow the list until a restart? AI Edit
+	-- would run one per photo.
+	if readd.ok then
+		readd.namedCount = select(2, countPresetsNamed(DELETE_PRESET_NAME))
+	end
+	r.readd = readd
+	addStep(exp, "(global)", "E4f re-add the same name", readd.ok, readd.error, {
+		how = readdHow,
+		preset = readdInfo,
+		result = readd,
+	})
+	-- Clean up the re-added file too, so the restart check above looks at a
+	-- preset with no file left at all.
+	if readd.fileExists and not stopIfCanceled("E4f delete the re-added preset file") then
+		readd.cleanup = deletePresetFile(readdInfo.file, knownFiles)
+		forgetDeletedPresetFile(exp, readdInfo.file)
+		local cleanupErr = deleteStepError(readd.cleanup)
+		addStep(exp, "(global)", "E4f delete the re-added preset file", cleanupErr == nil, cleanupErr, {
+			file = readdInfo.file,
+			result = readd.cleanup,
+		})
+	end
+end
+
+-- E4f: the SDK has no call to delete a preset, so AI Edit could only clean up
+-- a per-edit preset by deleting its file. Applies a preset, deletes the file,
+-- and records what Lightroom still reports until it restarts.
+local function runE4Delete(exp, catalog, photo, progress)
+	local r = { name = DELETE_PRESET_NAME, expectedContrast = DELETE_PRESET_CONTRAST }
+	runE4DeleteSteps(exp, catalog, photo, progress, r)
+	for _, line in ipairs(X.describeE4f(r)) do
+		table.insert(exp.verdicts, line)
+	end
+end
+
 -- `presetFiles` is owned by the caller, so the cleanup list survives even if
 -- the experiment throws halfway through.
 local function runE4(catalog, photos, progress, lrVersion, presetFiles, sink)
@@ -1462,7 +1817,7 @@ local function runE4(catalog, photos, progress, lrVersion, presetFiles, sink)
 		sink,
 		"E4",
 		"Plugin preset lifecycle",
-		"Where do plugin presets live and what do they hold, does a same-name add overwrite, are preset masks added to or replacing the photo's masks, is a re-apply idempotent, and what does the amount do?"
+		"Where do plugin presets live and what do they hold, does a same-name add overwrite, are preset masks added to or replacing the photo's masks, is a re-apply idempotent, what does the amount do, and can a preset's file be deleted right after applying it?"
 	)
 	exp.presetFiles = presetFiles
 	if not X.versionAtLeast(lrVersion, 15, 3) then
@@ -1548,6 +1903,11 @@ local function runE4(catalog, photos, progress, lrVersion, presetFiles, sink)
 			runE4Amount(exp, catalog, photo, progress)
 		end
 	end
+	-- Last, so the other steps have recorded the preset files whose folder the
+	-- delete is checked against.
+	if photos[1] and not progress:isCanceled() then
+		runE4Delete(exp, catalog, photos[1], progress)
+	end
 
 	table.insert(
 		exp.manualChecks,
@@ -1560,7 +1920,7 @@ local function runE4(catalog, photos, progress, lrVersion, presetFiles, sink)
 	)
 	table.insert(
 		exp.manualChecks,
-		"Delete the plugin preset files listed in the report header by hand. They live in Lightroom's preset folder, outside the catalog, and are shared by every catalog; deleting the test catalog does not remove them."
+		"Delete the plugin preset files listed in the report header by hand (E4f deletes its own; any it could not are listed too). They live in Lightroom's preset folder, outside the catalog, and are shared by every catalog; deleting the test catalog does not remove them."
 	)
 	return exp
 end
@@ -1980,7 +2340,7 @@ local function optionsDialog(ctx, catalogPath, photoCount)
 			f:checkbox({ value = bind("runE2"), title = "E2  Add AI masks via applyDevelopSettings" }),
 			f:checkbox({
 				value = bind("runE4"),
-				title = "E4  Plugin presets: overwrite, merge, re-apply, amount",
+				title = "E4  Plugin presets: overwrite, merge, re-apply, amount, delete after apply",
 			}),
 		}),
 		f:static_text({
@@ -1988,7 +2348,8 @@ local function optionsDialog(ctx, catalogPath, photoCount)
 				.. "They switch Lightroom to the Library module and change the selection.\n"
 				.. "E4 leaves hidden plugin presets in Lightroom's preset folder. They are\n"
 				.. "shared by all catalogs, are not removed with the test catalog, and the\n"
-				.. "SDK cannot delete them; the report lists their files.",
+				.. "SDK cannot delete them. E4f deletes the files of its own preset to test\n"
+				.. "exactly that; the report lists every preset file that is left.",
 		}),
 		f:checkbox({
 			value = bind("testCatalog"),
@@ -2036,15 +2397,13 @@ local function summaryText(experiments, failedSteps)
 	local lines = {}
 	for _, experiment in ipairs(experiments) do
 		table.insert(lines, experiment.id .. " - " .. experiment.title)
-		local shown = 0
-		for _, verdict in ipairs(experiment.verdicts) do
-			if shown < 4 then
-				table.insert(lines, "  " .. verdict)
-				shown = shown + 1
-			end
+		-- The first few, plus a headline (the E4f answer) wherever it is.
+		local shown, hidden = X.summaryVerdicts(experiment.verdicts, 4)
+		for _, verdict in ipairs(shown) do
+			table.insert(lines, "  " .. verdict)
 		end
-		if #experiment.verdicts > shown then
-			table.insert(lines, string.format("  ... and %d more in the report", #experiment.verdicts - shown))
+		if hidden > 0 then
+			table.insert(lines, string.format("  ... and %d more in the report", hidden))
 		end
 	end
 	if failedSteps > 0 then
