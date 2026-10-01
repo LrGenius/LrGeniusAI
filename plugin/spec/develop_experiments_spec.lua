@@ -843,3 +843,359 @@ describe("DevelopExperiments E2 timing", function()
 		assert.is_false(X.timingIsTerminal({ state = "pending" }))
 	end)
 end)
+
+describe("DevelopExperiments.presetFileDeletable", function()
+	local NAME = "LrGenius Experiment E4f"
+	local DIR = "/Users/me/Library/Application Support/Adobe/CameraRaw/Settings/Plugin Develop Presets"
+	local known = { "/Users/me/presets/LrGenius Experiment E4.xmp" }
+
+	it("accepts the preset's own file next to the other experiment files", function()
+		assert.is_true((X.presetFileDeletable("/Users/me/presets/" .. NAME .. ".xmp", NAME, known)))
+		-- A numbered or uuid-suffixed name is still this preset.
+		assert.is_true((X.presetFileDeletable("/Users/me/presets/" .. NAME .. " 2.xmp", NAME, known)))
+		assert.is_true((X.presetFileDeletable("/Users/me/presets/" .. NAME .. "-ABC.lrtemplate", NAME, known)))
+	end)
+
+	it("accepts a file inside the documented plugin-preset folder without known files", function()
+		assert.is_true((X.presetFileDeletable(DIR .. "/" .. NAME .. ".xmp", NAME, {})))
+		assert.is_true((X.presetFileDeletable(DIR .. "/com.lrgeniusai/" .. NAME .. ".xmp", NAME, nil)))
+	end)
+
+	it("compares Windows paths without regard to case or separator", function()
+		local winKnown = { "C:\\Users\\Me\\Presets\\LrGenius Experiment E4.xmp" }
+		assert.is_true((X.presetFileDeletable("c:/users/me/presets/" .. NAME .. ".xmp", NAME, winKnown)))
+		assert.is_true((X.presetFileDeletable("C:\\Users\\Me\\Presets\\" .. NAME .. ".xmp", NAME, winKnown)))
+	end)
+
+	it("refuses anything that is not clearly this preset's file", function()
+		local cases = {
+			{ nil, "no preset file path" },
+			{ "", "no preset file path" },
+			{ "error: attempt to call", "no preset file path" },
+			{ "presets/" .. NAME .. ".xmp", "not absolute" },
+			{ "/Users/me/presets/../presets/" .. NAME .. ".xmp", "relative component" },
+			{ "/Users/me/presets/./" .. NAME .. ".xmp", "relative component" },
+			{ "/Users/me/presets/" .. NAME, "not a preset file" },
+			{ "/Users/me/presets/" .. NAME .. ".lrcat", "not a preset file" },
+			{ "/Users/me/presets/" .. NAME .. "x.xmp", "does not match" },
+			{ "/Users/me/presets/LrGenius Experiment E4.xmp", "does not match" },
+			{ "/Users/me/presets/Other.xmp", "does not match" },
+			{ "/Users/me/elsewhere/" .. NAME .. ".xmp", "neither next to" },
+			{ "/" .. NAME .. ".xmp", "neither next to" },
+		}
+		for _, case in ipairs(cases) do
+			local ok, why = X.presetFileDeletable(case[1], NAME, known)
+			assert.is_false(ok, tostring(case[1]))
+			assert.is_truthy(why:find(case[2], 1, true), tostring(case[1]) .. " -> " .. why)
+		end
+	end)
+
+	it("refuses a path that belongs to another experiment step", function()
+		local other = "/Users/me/presets/" .. NAME .. ".xmp"
+		local ok, why = X.presetFileDeletable(other, NAME, { other })
+		assert.is_false(ok)
+		assert.is_truthy(why:find("another experiment step", 1, true))
+	end)
+
+	it("refuses without a name to match", function()
+		assert.is_false((X.presetFileDeletable("/Users/me/presets/x.xmp", "", known)))
+		assert.is_false((X.presetFileDeletable("/Users/me/presets/x.xmp", nil, known)))
+	end)
+
+	it("splits both separators", function()
+		assert.are.same({ "/a/b", "c.xmp" }, { X.splitPath("/a/b/c.xmp") })
+		assert.are.same({ "C:\\a", "c.xmp" }, { X.splitPath("C:\\a\\c.xmp") })
+		assert.are.same({ nil, "c.xmp" }, { X.splitPath("c.xmp") })
+	end)
+end)
+
+describe("DevelopExperiments.describeE4f", function()
+	local function base()
+		return {
+			name = "LrGenius Experiment E4f",
+			expectedContrast = 25,
+			before = {},
+			create = { ok = true },
+			apply = {
+				ok = true,
+				contrast = 25,
+				maskFound = true,
+				maskState = "computed after 3 s",
+				maskPollState = "computed",
+			},
+			delete = { ok = true, existsAfter = false },
+			after = {
+				namedCount = 1,
+				listedByUuid = true,
+				lookup = "found LrGenius Experiment E4f",
+				setting = { ok = true, contrast = 25 },
+				first = { contrast = 25, maskFound = true, maskState = "computed" },
+			},
+			second = { ok = true, contrast = 25, maskFound = true, fileBack = false },
+			readd = {
+				ok = true,
+				file = "/p/LrGenius Experiment E4f.xmp",
+				fileExists = true,
+				samePath = true,
+				sameUuid = false,
+				contrast = 15,
+				expectedContrast = 15,
+				fileContrast = 15,
+				fileHasNewContrast = true,
+				namedCount = 2,
+				cleanup = { ok = true, existsAfter = false },
+			},
+		}
+	end
+
+	local function joined(r)
+		return table.concat(X.describeE4f(r), "\n")
+	end
+
+	it("calls apply-then-delete viable within the session and says what Lightroom still shows", function()
+		local lines = X.describeE4f(base())
+		assert.are.equal(4, #lines)
+		assert.is_truthy(lines[1]:find("no preset named", 1, true))
+		assert.is_truthy(lines[2]:find("E4f apply then delete is VIABLE within this session", 1, true))
+		assert.is_truthy(lines[2]:find("restart behaviour is a manual check", 1, true))
+		assert.is_truthy(lines[2]:find("mask state before the delete: computed after 3 s, after: computed", 1, true))
+		assert.is_falsy(lines[2]:find("still pending", 1, true))
+		assert.is_truthy(lines[3]:find("getDevelopPresetsForPlugin still lists it: yes", 1, true))
+		assert.is_truthy(lines[3]:find("preset:getSetting(): works (Contrast2012 25)", 1, true))
+		assert.is_truthy(lines[3]:find("second copy: still works", 1, true))
+		assert.is_truthy(lines[3]:find("'Plugin Develop Presets' folder", 1, true))
+		assert.is_truthy(lines[4]:find("created a file again", 1, true))
+		assert.is_truthy(
+			lines[4]:find("holds the new settings (Contrast2012 15, the deleted preset held 25): yes", 1, true)
+		)
+		assert.is_truthy(lines[4]:find("(getSetting reads 15, the file holds 15)", 1, true))
+		assert.is_truthy(lines[4]:find("presets of that name now listed: 2", 1, true))
+		assert.is_truthy(lines[4]:find("the re-added file was deleted.", 1, true))
+	end)
+
+	it("calls it not viable when the delete changed the applied edit", function()
+		local r = base()
+		r.after.first = { contrast = 0, maskFound = false, maskState = "missing" }
+		local line = X.describeE4f(r)[2]
+		assert.is_truthy(line:find("NOT viable", 1, true))
+		assert.is_truthy(line:find("Contrast2012 25 -> 0, subject mask present -> missing", 1, true))
+		assert.is_truthy(line:find("after: missing", 1, true))
+	end)
+
+	it("calls it not viable when a computed mask lost its computation", function()
+		local r = base()
+		r.after.first.maskState = "pending"
+		assert.is_truthy(X.describeE4f(r)[2]:find("NOT viable", 1, true))
+	end)
+
+	it("qualifies the verdict when the mask was still pending at the delete", function()
+		local r = base()
+		r.apply.maskState = "still pending after 60 s"
+		r.apply.maskPollState = "pending"
+		r.after.first.maskState = "pending"
+		local line = X.describeE4f(r)[2]
+		assert.is_truthy(line:find("VIABLE within this session", 1, true))
+		assert.is_truthy(line:find("still pending, not computed, when the file was deleted", 1, true))
+		assert.is_truthy(line:find("covers the settings only", 1, true))
+		-- A mask computed with nothing found is computed too.
+		r.apply.maskPollState, r.after.first.maskState = "failed", "failed"
+		assert.is_falsy(X.describeE4f(r)[2]:find("covers the settings only", 1, true))
+	end)
+
+	it("is inconclusive, not viable, when the preset had no visible effect", function()
+		local r = base()
+		r.apply = { ok = true, contrast = 0, maskFound = false, maskPollState = "missing" }
+		r.after.first = { contrast = 0, maskFound = false, maskState = "missing" }
+		local text = joined(r)
+		assert.is_truthy(
+			text:find(
+				"E4f inconclusive: the preset had no visible effect on the first copy (Contrast2012 0, subject mask missing), so there was no edit for the delete to preserve.",
+				1,
+				true
+			)
+		)
+		assert.is_falsy(text:find("VIABLE", 1, true))
+		assert.is_falsy(text:find("NOT viable", 1, true))
+		assert.is_falsy(text:find("did not arrive", 1, true))
+
+		-- Without a delete to judge, the no-effect note still stands on its own.
+		r.delete = { ok = false, error = "permission denied", existsAfter = true }
+		r.after, r.second, r.readd = nil, nil, nil
+		text = joined(r)
+		assert.is_truthy(text:find("E4f the preset had no visible effect on the first copy", 1, true))
+		assert.is_falsy(text:find("VIABLE", 1, true))
+	end)
+
+	it("judges on the mask alone when only the mask arrived", function()
+		local r = base()
+		r.apply.contrast = 0
+		r.after.first.contrast = 0
+		local lines = X.describeE4f(r)
+		assert.is_truthy(lines[2]:find("did not arrive on the first copy", 1, true))
+		assert.is_truthy(lines[2]:find("rests on the mask alone", 1, true))
+		assert.is_truthy(lines[3]:find("VIABLE", 1, true))
+		r.after.first.maskFound, r.after.first.maskState = false, "missing"
+		assert.is_truthy(X.describeE4f(r)[3]:find("NOT viable", 1, true))
+	end)
+
+	it("reports a delete that failed or was refused as inconclusive and stops there", function()
+		local r = base()
+		r.delete = { ok = false, error = "permission denied", existsAfter = true }
+		r.after, r.second, r.readd = nil, nil, nil
+		local lines = X.describeE4f(r)
+		assert.are.equal(2, #lines)
+		assert.is_truthy(
+			lines[2]:find("inconclusive: the preset file could not be deleted - permission denied", 1, true)
+		)
+		assert.is_truthy(lines[2]:find("stays in the list", 1, true))
+
+		r.delete = { skipped = "the path is not absolute: x" }
+		assert.is_truthy(X.describeE4f(r)[2]:find("was not deleted - the path is not absolute", 1, true))
+		r.delete = { ok = true, existsAfter = true }
+		assert.is_truthy(X.describeE4f(r)[2]:find("still there, although LrFileUtils.delete", 1, true))
+	end)
+
+	it("describes the deleted preset failing, doing nothing or working partially on a second copy", function()
+		local r = base()
+		r.second = { ok = false, error = "preset not found" }
+		r.after.setting = { ok = false, error = "file missing" }
+		r.after.namedCount, r.after.listedByUuid = 0, false
+		local line = X.describeE4f(r)[3]
+		assert.is_truthy(line:find("still lists it: no (0 preset(s)", 1, true))
+		assert.is_truthy(line:find("preset:getSetting(): fails - file missing", 1, true))
+		assert.is_truthy(line:find("second copy: fails - preset not found", 1, true))
+
+		r.second = { ok = true, contrast = 0, maskFound = false, fileBack = true }
+		line = X.describeE4f(r)[3]
+		assert.is_truthy(line:find("has no effect (Contrast2012 0, the preset holds 25", 1, true))
+		assert.is_truthy(line:find("wrote the preset file again", 1, true))
+
+		r.second = { ok = true, contrast = 25, maskFound = false }
+		line = X.describeE4f(r)[3]
+		assert.is_truthy(
+			line:find("second copy: works partially (Contrast2012 yes (25), subject mask missing)", 1, true)
+		)
+		assert.is_falsy(line:find("still works", 1, true))
+	end)
+
+	it("sorts the presets listed before the run by whether their file exists", function()
+		local r = base()
+		r.before = {
+			{ uuid = "a", file = "/p/LrGenius Experiment E4f.xmp", fileExists = false },
+			{ uuid = "b", file = "/p/LrGenius Experiment E4f.xmp", fileExists = false },
+		}
+		local lines = X.describeE4f(r)
+		assert.is_truthy(lines[1]:find("2 preset(s) named", 1, true))
+		assert.is_truthy(
+			lines[1]:find("although no file exists at their path (/p/LrGenius Experiment E4f.xmp)", 1, true)
+		)
+		assert.is_truthy(lines[1]:find("somewhere other than the file", 1, true))
+		assert.is_truthy(lines[2]:find("VIABLE", 1, true))
+
+		r.before = { { uuid = "c", file = "/p/LrGenius Experiment E4f.xmp", fileExists = true } }
+		local text = joined(r)
+		assert.is_truthy(
+			text:find(
+				'1 preset(s) named "LrGenius Experiment E4f" were listed before this run with their file present',
+				1,
+				true
+			)
+		)
+		assert.is_truthy(text:find("written back by Lightroom at quit", 1, true))
+		assert.is_falsy(text:find("somewhere other than the file", 1, true))
+
+		r.before = { { uuid = "d", file = "error: boom" } }
+		assert.is_truthy(X.describeE4f(r)[1]:find("without a readable file path", 1, true))
+
+		r.before = {}
+		assert.is_truthy(X.describeE4f(r)[1]:find("forgot the deleted preset at the restart", 1, true))
+		r.before = nil
+		assert.is_truthy(X.describeE4f(r)[1]:find("VIABLE", 1, true))
+	end)
+
+	it("says nothing beyond the point where the run stopped", function()
+		local r = base()
+		r.before = nil
+		r.apply, r.delete, r.after, r.second, r.readd = nil, nil, nil, nil, nil
+		assert.are.same({}, X.describeE4f(r))
+		r.create = { ok = false, error = "boom" }
+		assert.are.same({ "E4f not run: the preset could not be created - boom" }, X.describeE4f(r))
+		assert.are.same({}, X.describeE4f(nil))
+	end)
+
+	it("notes a canceled run after whatever it got through", function()
+		local r = base()
+		r.before = nil
+		r.delete, r.after, r.second, r.readd = nil, nil, nil, nil
+		r.canceled = true
+		local lines = X.describeE4f(r)
+		assert.are.equal(1, #lines)
+		assert.is_truthy(lines[1]:find("E4f not finished: the run was canceled", 1, true))
+	end)
+
+	it("says whether the re-added preset holds the new or the stale settings", function()
+		local r = base()
+		r.readd.contrast, r.readd.fileContrast, r.readd.fileHasNewContrast = 25, 25, false
+		local line = X.describeE4f(r)[4]
+		assert.is_truthy(line:find("holds the new settings (Contrast2012 15, the deleted preset held 25): no", 1, true))
+		assert.is_truthy(line:find("(getSetting reads 25, the file holds 25)", 1, true))
+
+		r.readd.contrast, r.readd.fileContrast, r.readd.fileHasNewContrast = 15, nil, nil
+		line = X.describeE4f(r)[4]
+		assert.is_truthy(line:find("): yes (getSetting reads 15, no Contrast2012 found in the file)", 1, true))
+	end)
+
+	it("keeps a re-added file that could not be deleted in the cleanup list", function()
+		local r = base()
+		r.readd.cleanup = { skipped = "no match" }
+		local line = X.describeE4f(r)[4]
+		assert.is_truthy(line:find("was not deleted - no match and stays in the list", 1, true))
+		r.readd = { ok = true, file = "/p/x.xmp", fileExists = false, sameUuid = true }
+		assert.is_truthy(X.describeE4f(r)[4]:find("but no file exists at its path /p/x.xmp (same uuid: yes)", 1, true))
+		r.readd = { ok = false, error = "nope" }
+		assert.are.equal("E4f re-adding the same name after the delete failed - nope.", X.describeE4f(r)[4])
+	end)
+end)
+
+describe("DevelopExperiments.presetFileSetting", function()
+	it("reads the XMP attribute, the XMP element and the lrtemplate field", function()
+		assert.are.equal(15, X.presetFileSetting('<rdf:Description crs:Contrast2012="+15"', "Contrast2012"))
+		assert.are.equal(-8, X.presetFileSetting("<crs:Contrast2012>-8</crs:Contrast2012>", "Contrast2012"))
+		assert.are.equal(25, X.presetFileSetting("s = {\n\tContrast2012 = 25,\n}", "Contrast2012"))
+	end)
+
+	it("does not match a longer key or a missing one", function()
+		assert.is_nil(X.presetFileSetting('crs:LocalContrast2012="+40"', "Contrast2012"))
+		assert.are.equal(15, X.presetFileSetting('crs:LocalContrast2012="+40" crs:Contrast2012="+15"', "Contrast2012"))
+		assert.is_nil(X.presetFileSetting("", "Contrast2012"))
+		assert.is_nil(X.presetFileSetting(nil, "Contrast2012"))
+	end)
+end)
+
+describe("DevelopExperiments.summaryVerdicts", function()
+	it("keeps the E4f answer past the cap and counts only the rest", function()
+		local verdicts = {
+			"a",
+			"b",
+			"c",
+			"d",
+			"e",
+			"E4f until Lightroom restarts ...",
+			"E4f apply then delete is VIABLE within this session",
+			"f",
+		}
+		local shown, hidden = X.summaryVerdicts(verdicts, 4)
+		assert.are.same({ "a", "b", "c", "d", "E4f apply then delete is VIABLE within this session" }, shown)
+		assert.are.equal(3, hidden)
+	end)
+
+	it("recognises every E4f outcome and nothing else", function()
+		assert.is_true(X.isHeadlineVerdict("E4f apply then delete is NOT viable: x"))
+		assert.is_true(X.isHeadlineVerdict("E4f inconclusive: x"))
+		assert.is_true(X.isHeadlineVerdict("E4f not run: x"))
+		assert.is_true(X.isHeadlineVerdict("E4f not finished: the run was canceled."))
+		assert.is_false(X.isHeadlineVerdict('E4f no preset named "x" was listed before this run.'))
+		assert.is_false(X.isHeadlineVerdict("E4c inconclusive"))
+		assert.is_false(X.isHeadlineVerdict(nil))
+	end)
+end)

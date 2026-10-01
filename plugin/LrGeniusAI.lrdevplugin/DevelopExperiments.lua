@@ -1214,6 +1214,532 @@ function DevelopExperiments.describeTimings(timings)
 	return "E2 timing per photo - " .. table.concat(parts, "; ")
 end
 
+---------------------------------------------------------------------------
+-- E4f: deleting a plugin preset file after applying it
+---------------------------------------------------------------------------
+
+local PRESET_FILE_EXTENSIONS = { xmp = true, lrtemplate = true }
+
+--- Splits a path at its last "/" or "\".
+-- @return string|nil, string the directory (nil when there is no separator)
+--   and the leaf name.
+function DevelopExperiments.splitPath(path)
+	local dir, leaf = path:match("^(.*)[/\\]([^/\\]*)$")
+	if dir == nil then
+		return nil, path
+	end
+	return dir, leaf
+end
+
+local function isWindowsAbsolute(path)
+	return path:match("^%a:[/\\]") ~= nil or path:match("^\\\\") ~= nil
+end
+
+--- The form paths are compared in: "/" separators, no trailing separator, and
+-- lower case for Windows paths, whose file system ignores case.
+local function comparablePath(path)
+	local out = path:gsub("\\", "/"):gsub("/+$", "")
+	if isWindowsAbsolute(path) then
+		out = out:lower()
+	end
+	return out
+end
+
+--- Decides whether E4f may delete `path`, the file Lightroom reported for the
+-- preset it just created. E4f deletes a file in a folder Lightroom shares with
+-- every catalog, so the rule is narrow on purpose:
+--   * an absolute path without "." or ".." components;
+--   * a preset file (.xmp or .lrtemplate) whose name is `presetName`, alone
+--     or followed by a suffix that starts with a non-alphanumeric character
+--     ("E4f 2" matches "E4f", "E4fx" does not);
+--   * not one of `knownFiles`, the preset files the other E4 steps created;
+--   * in the same directory as one of `knownFiles`, or inside a folder named
+--     "Plugin Develop Presets", where the SDK documents plugin presets live.
+-- The caller still has to check that the path is a file, not a directory:
+-- `LrFileUtils.delete` removes a directory with everything in it.
+-- @return boolean, string|nil true, or false and why not.
+function DevelopExperiments.presetFileDeletable(path, presetName, knownFiles)
+	if type(path) ~= "string" or path == "" or path:find("^error:") then
+		return false, "Lightroom reported no preset file path (" .. tostring(path) .. ")"
+	end
+	if type(presetName) ~= "string" or presetName == "" then
+		return false, "there is no preset name to match the file against"
+	end
+	if path:sub(1, 1) ~= "/" and not isWindowsAbsolute(path) then
+		return false, "the preset file path is not absolute: " .. path
+	end
+	local slashed = path:gsub("\\", "/")
+	for component in slashed:gmatch("[^/]+") do
+		if component == "." or component == ".." then
+			return false, "the preset file path contains a relative component: " .. path
+		end
+	end
+
+	local dir, leaf = DevelopExperiments.splitPath(path)
+	local base, extension = leaf:match("^(.+)%.([^.]+)$")
+	if base == nil or not PRESET_FILE_EXTENSIONS[extension:lower()] then
+		return false, "the file is not a preset file (.xmp or .lrtemplate): " .. leaf
+	end
+	local rest = base:sub(#presetName + 1)
+	if base:sub(1, #presetName) ~= presetName or (rest ~= "" and rest:match("^%w")) then
+		return false, string.format("the file name %q does not match the preset name %q", leaf, presetName)
+	end
+
+	local target = comparablePath(path)
+	local targetDir = comparablePath(dir)
+	local nextToKnown = false
+	for _, known in ipairs(knownFiles or {}) do
+		if type(known) == "string" and known ~= "" then
+			if comparablePath(known) == target then
+				return false, "the path is the preset file of another experiment step: " .. path
+			end
+			local knownDir = DevelopExperiments.splitPath(known)
+			if knownDir ~= nil and comparablePath(knownDir) == targetDir then
+				nextToKnown = true
+			end
+		end
+	end
+	local inPluginFolder = false
+	for component in dir:gsub("\\", "/"):gmatch("[^/]+") do
+		if component:lower() == "plugin develop presets" then
+			inPluginFolder = true
+		end
+	end
+	if not nextToKnown and not inPluginFolder then
+		return false,
+			"the file is neither next to the other experiment preset files nor inside a 'Plugin Develop Presets' folder: "
+				.. path
+	end
+	return true, nil
+end
+
+local function yesNo(value)
+	return value and "yes" or "no"
+end
+
+--- Reads one numeric develop setting out of a preset file's text: the XMP
+-- attribute (`crs:Contrast2012="+15"`), the XMP element
+-- (`<crs:Contrast2012>+15</crs:Contrast2012>`) or the `.lrtemplate` field
+-- (`Contrast2012 = 15,`). The key must stand on its own, so `Contrast2012`
+-- does not match `crs:LocalContrast2012`.
+-- @return number|nil nil when the key is not in the text.
+function DevelopExperiments.presetFileSetting(content, key)
+	if type(content) ~= "string" or type(key) ~= "string" or key == "" then
+		return nil
+	end
+	local text = " " .. content
+	local value = text:match("[:%s]" .. key .. '%s*=%s*"?%s*([%+%-]?[%d%.]+)')
+		or text:match("<crs:" .. key .. ">%s*([%+%-]?[%d%.]+)%s*</crs:" .. key .. ">")
+	return value and tonumber(value) or nil
+end
+
+--- Whether a mask state counts as computed: "computed", or "failed", which is
+-- how Lightroom marks a mask it computed and found nothing for.
+local function isComputedState(state)
+	return state == "computed" or state == "failed"
+end
+
+local function maskWord(found)
+	return found and "present" or "missing"
+end
+
+--- Joins paths for a verdict line, without repeats and at most three of them.
+local function listPaths(paths)
+	local unique, seen = {}, {}
+	for _, path in ipairs(paths) do
+		if not seen[path] then
+			seen[path] = true
+			table.insert(unique, path)
+		end
+	end
+	local shown = {}
+	for index = 1, math.min(#unique, 3) do
+		table.insert(shown, unique[index])
+	end
+	local text = table.concat(shown, ", ")
+	if #unique > 3 then
+		text = text .. string.format(" and %d more", #unique - 3)
+	end
+	return text
+end
+
+local function describeDelete(d)
+	if d.skipped then
+		return "was not deleted - " .. tostring(d.skipped)
+	end
+	if not d.ok then
+		return "could not be deleted - " .. tostring(d.error)
+	end
+	if d.existsAfter then
+		return "is still there, although LrFileUtils.delete reported success"
+	end
+	return "was deleted"
+end
+
+local function describeSecondApply(s)
+	if s.copyError then
+		return "not tested (no second virtual copy: " .. tostring(s.copyError) .. ")"
+	end
+	if not s.ok then
+		return "fails - " .. tostring(s.error)
+	end
+	if s.readError then
+		return "no error, but the result is unknown - " .. tostring(s.readError)
+	end
+	local text
+	if s.contrast == s.expectedContrast and s.maskFound then
+		text = string.format("still works (Contrast2012 %s, subject mask present)", tostring(s.contrast))
+	elseif s.contrast == s.expectedContrast then
+		text = string.format("works partially (Contrast2012 yes (%s), subject mask missing)", tostring(s.contrast))
+	else
+		text = string.format(
+			"has no effect (Contrast2012 %s, the preset holds %s; subject mask %s)",
+			tostring(s.contrast),
+			tostring(s.expectedContrast),
+			maskWord(s.maskFound)
+		)
+	end
+	if s.fileBack then
+		text = text .. ", and it wrote the preset file again"
+	end
+	return text
+end
+
+--- What the presets of the E4f name listed before this run say. The three
+-- cases answer different questions: a listed preset without its file is the
+-- evidence that Lightroom keeps a deleted plugin preset somewhere else (when it
+-- was restarted since the delete); one with its file is a leftover or a file
+-- written back at quit; none at all after a restart means Lightroom forgot it.
+local function describeBefore(r, add)
+	local before = r.before
+	if type(before) ~= "table" then
+		return
+	end
+	local name = tostring(r.name)
+	local missing, present, noPath = {}, {}, 0
+	for _, entry in ipairs(before) do
+		local file = type(entry) == "table" and entry.file or nil
+		if type(file) ~= "string" or file == "" or file:find("^error:") then
+			noPath = noPath + 1
+		elseif entry.fileExists then
+			table.insert(present, file)
+		else
+			table.insert(missing, file)
+		end
+	end
+	if #missing + #present + noPath == 0 then
+		add(
+			string.format(
+				"E4f no preset named %q was listed before this run. If an earlier E4f run deleted its file and Lightroom was restarted since, Lightroom forgot the deleted preset at the restart.",
+				name
+			)
+		)
+		return
+	end
+	if #missing > 0 then
+		add(
+			string.format(
+				"E4f %d preset(s) named %q were listed before this run although no file exists at their path (%s). If an earlier E4f run deleted that file and Lightroom was restarted since, Lightroom keeps deleted plugin presets somewhere other than the file; without a restart in between it is only the list Lightroom holds in memory.",
+				#missing,
+				name,
+				listPaths(missing)
+			)
+		)
+	end
+	if #present > 0 then
+		add(
+			string.format(
+				"E4f %d preset(s) named %q were listed before this run with their file present (%s): left over from an earlier run that stopped before its delete, or written back by Lightroom at quit. This run writes and deletes a file of the same name, so that file may be gone afterwards; the paths are recorded here and in the report.",
+				#present,
+				name,
+				listPaths(present)
+			)
+		)
+	end
+	if noPath > 0 then
+		add(
+			string.format(
+				"E4f %d preset(s) named %q were listed before this run without a readable file path (preset:getFile() failed).",
+				noPath,
+				name
+			)
+		)
+	end
+end
+
+--- The VIABLE / NOT viable line, judged on what actually arrived: the
+-- contrast when it arrived, the subject mask when it arrived.
+local function describeViability(r, a, first)
+	local contrastArrived = a.contrast == r.expectedContrast
+	local maskComputedBefore = isComputedState(a.maskPollState)
+	local contrastKept = not contrastArrived or first.contrast == a.contrast
+	-- A mask that was computed before the delete and is only a definition
+	-- (or gone) after it lost its computation.
+	local maskKept = not a.maskFound
+		or (
+			first.maskFound
+			and not (maskComputedBefore and first.maskState ~= nil and not isComputedState(first.maskState))
+		)
+	local states = string.format(
+		"mask state before the delete: %s, after: %s",
+		tostring(a.maskState or "not polled"),
+		tostring(first.maskState or "not read")
+	)
+	if contrastKept and maskKept then
+		local text = string.format(
+			"E4f apply then delete is VIABLE within this session (restart behaviour is a manual check): the preset file is gone and the first copy kept its edit (Contrast2012 %s, subject mask %s; %s).",
+			tostring(first.contrast),
+			maskWord(first.maskFound),
+			states
+		)
+		if a.maskFound and not maskComputedBefore then
+			text = text
+				.. string.format(
+					" The subject mask was still pending, not computed, when the file was deleted (%s), so the verdict covers the settings only; it does not show that a computed mask survives the delete.",
+					tostring(a.maskState or "not polled")
+				)
+		end
+		return text
+	end
+	return string.format(
+		"E4f apply then delete is NOT viable: deleting the preset file changed the copy it was applied to (Contrast2012 %s -> %s, subject mask %s -> %s, %s).",
+		tostring(a.contrast),
+		tostring(first.contrast),
+		maskWord(a.maskFound),
+		maskWord(first.maskFound),
+		states
+	)
+end
+
+local function describeReadd(r, readd)
+	local text
+	if not readd.ok then
+		return "E4f re-adding the same name after the delete failed - " .. tostring(readd.error) .. "."
+	end
+	local expected = readd.expectedContrast
+	local fileText
+	if readd.fileExists then
+		text = string.format(
+			"E4f re-adding the same name created a file again at %s (same path as the deleted file: %s; same uuid: %s)",
+			tostring(readd.file),
+			yesNo(readd.samePath),
+			yesNo(readd.sameUuid)
+		)
+		if readd.fileContrast ~= nil then
+			fileText = "the file holds " .. tostring(readd.fileContrast)
+		else
+			fileText = "no Contrast2012 found in the file"
+		end
+	else
+		text = string.format(
+			"E4f re-adding the same name returned a preset, but no file exists at its path %s (same uuid: %s)",
+			tostring(readd.file),
+			yesNo(readd.sameUuid)
+		)
+	end
+	if expected ~= nil then
+		local holdsNew = readd.contrast == expected and readd.fileHasNewContrast ~= false
+		text = text
+			.. string.format(
+				"; holds the new settings (Contrast2012 %s, the deleted preset held %s): %s (getSetting reads %s%s)",
+				tostring(expected),
+				tostring(r.expectedContrast),
+				yesNo(holdsNew),
+				tostring(readd.contrast),
+				fileText and (", " .. fileText) or ""
+			)
+	end
+	if readd.namedCount ~= nil then
+		text = text .. string.format("; presets of that name now listed: %s", tostring(readd.namedCount))
+	end
+	if readd.fileExists and type(readd.cleanup) == "table" then
+		local cleanup = readd.cleanup
+		local deletedAgain = not cleanup.skipped and cleanup.ok and not cleanup.existsAfter
+		text = text .. "; the re-added file " .. describeDelete(cleanup)
+		if not deletedAgain then
+			text = text .. " and stays in the list of preset files to delete by hand"
+		end
+	end
+	return text .. "."
+end
+
+--- Everything `describeE4f` says except the note on a canceled run.
+local function describeE4fParts(r)
+	local lines = {}
+	local function add(line)
+		table.insert(lines, line)
+	end
+	describeBefore(r, add)
+	if type(r.create) ~= "table" then
+		return lines
+	end
+	if not r.create.ok then
+		add("E4f not run: the preset could not be created - " .. tostring(r.create.error))
+		return lines
+	end
+	local a = r.apply
+	if type(a) ~= "table" then
+		return lines
+	end
+	if not a.ok then
+		add("E4f not run: applying the preset to the first copy failed - " .. tostring(a.error))
+		return lines
+	end
+	if a.readError then
+		add("E4f inconclusive: the first copy could not be read back after the apply - " .. tostring(a.readError))
+		return lines
+	end
+
+	local d = r.delete
+	local deleted = type(d) == "table" and not d.skipped and d.ok and not d.existsAfter
+	local after = r.after
+	local first = deleted and type(after) == "table" and type(after.first) == "table" and after.first or nil
+	local judged = first ~= nil and not first.readError
+
+	-- A preset that changed nothing leaves no edit for the delete to keep, so
+	-- an unchanged copy afterwards proves nothing.
+	local contrastArrived = a.contrast == r.expectedContrast
+	local applied = contrastArrived or a.maskFound
+	local noEffect = string.format(
+		"the preset had no visible effect on the first copy (Contrast2012 %s, subject mask missing)",
+		tostring(a.contrast)
+	)
+	if not applied and not judged then
+		add("E4f " .. noEffect .. ".")
+	elseif applied and not contrastArrived then
+		add(
+			string.format(
+				"E4f the preset's Contrast2012 did not arrive on the first copy (read back %s, the preset holds %s); the subject mask did, so the verdict rests on the mask alone.",
+				tostring(a.contrast),
+				tostring(r.expectedContrast)
+			)
+		)
+	end
+
+	if type(d) ~= "table" then
+		return lines
+	end
+	if not deleted then
+		add(
+			"E4f inconclusive: the preset file "
+				.. describeDelete(d)
+				.. ". It stays in the list of preset files to delete by hand."
+		)
+	end
+
+	if first ~= nil then
+		if first.readError then
+			add(
+				"E4f inconclusive: the first copy could not be read back after the delete - "
+					.. tostring(first.readError)
+			)
+		elseif not applied then
+			add("E4f inconclusive: " .. noEffect .. ", so there was no edit for the delete to preserve.")
+		else
+			add(describeViability(r, a, first))
+		end
+	end
+
+	if deleted and type(after) == "table" then
+		local setting = after.setting or {}
+		local settingText
+		if setting.ok then
+			settingText = "works (Contrast2012 " .. tostring(setting.contrast) .. ")"
+		else
+			settingText = "fails - " .. tostring(setting.error)
+		end
+		local secondText = "not tested (run stopped)"
+		if type(r.second) == "table" then
+			local second = {}
+			for key, value in pairs(r.second) do
+				second[key] = value
+			end
+			second.expectedContrast = r.expectedContrast
+			secondText = describeSecondApply(second)
+		end
+		add(
+			string.format(
+				"E4f until Lightroom restarts, after the file was deleted: getDevelopPresetsForPlugin still lists it: %s (%s preset(s) of that name, same uuid listed: %s); lookup by uuid: %s; preset:getSetting(): %s; applying the deleted preset to a second copy: %s. What a restart changes is a manual check: the 'Plugin Develop Presets' folder, and E4 run again.",
+				yesNo(after.listedByUuid or (tonumber(after.namedCount) or 0) > 0),
+				tostring(after.namedCount),
+				yesNo(after.listedByUuid),
+				tostring(after.lookup),
+				settingText,
+				secondText
+			)
+		)
+	end
+
+	if type(r.readd) == "table" then
+		add(describeReadd(r, r.readd))
+	end
+	return lines
+end
+
+--- Turns what E4f observed into verdict lines.
+--
+-- @param r table Built by the task step by step; a part is nil when the run
+--   stopped (canceled or failed) before it:
+--   `{ name, expectedContrast,
+--      before = { { uuid, file, fileExists } },   -- presets of that name listed first
+--      create = { ok, error },
+--      apply = { ok, error, readError, contrast, maskFound, maskState,
+--        maskPollState },                        -- maskPollState: the raw poll state
+--      delete = { skipped, ok, error, existsAfter },
+--      after = { namedCount, listedByUuid, lookup, setting = { ok, error,
+--        contrast }, first = { readError, contrast, maskFound, maskState } },
+--      second = { copyError, ok, error, readError, contrast, maskFound, fileBack },
+--      readd = { ok, error, file, fileExists, samePath, sameUuid, contrast,
+--        expectedContrast, fileContrast, fileHasNewContrast, namedCount,
+--        cleanup = { skipped, ok, error, existsAfter } },
+--      canceled }`
+-- @return table Array of verdict strings.
+function DevelopExperiments.describeE4f(r)
+	if type(r) ~= "table" then
+		return {}
+	end
+	local lines = describeE4fParts(r)
+	if r.canceled then
+		table.insert(
+			lines,
+			"E4f not finished: the run was canceled. A preset file it created and did not delete is in the list of files to delete by hand."
+		)
+	end
+	return lines
+end
+
+local HEADLINE_WORDS = { "VIABLE", "NOT viable", "inconclusive", "not run", "not finished" }
+
+--- Whether a verdict is an experiment's answer that the final dialog must
+-- show even past its cap: today the E4f outcome, which E4 always produces
+-- after a dozen other verdicts.
+function DevelopExperiments.isHeadlineVerdict(verdict)
+	if type(verdict) ~= "string" or verdict:sub(1, 4) ~= "E4f " then
+		return false
+	end
+	for _, word in ipairs(HEADLINE_WORDS) do
+		if verdict:find(word, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+--- Picks the verdicts the final dialog shows: the first `cap`, plus every
+-- headline verdict after them.
+-- @return table, number The verdicts to show and how many are left out.
+function DevelopExperiments.summaryVerdicts(verdicts, cap)
+	local shown, hidden = {}, 0
+	for index, verdict in ipairs(verdicts or {}) do
+		if index <= cap or DevelopExperiments.isHeadlineVerdict(verdict) then
+			table.insert(shown, verdict)
+		else
+			hidden = hidden + 1
+		end
+	end
+	return shown, hidden
+end
+
 --- Renders the collected results as Markdown.
 --
 -- @param report table `{ meta = {...}, experiments = { { id, title, question,

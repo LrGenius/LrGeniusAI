@@ -25,10 +25,41 @@ The dialog has three tabs.
 
 ### AI Model
 
-Picks the provider and model, plus **Temperature**, **Max Tokens**, output
-**Language**, and **Replace ß with ss** for German output. Which providers
+Picks the provider and model, plus **Temperature**, **Analysis depth**, **Max
+Tokens**, output **Language**, and **Replace ß with ss** for German output.
+
+Which of the two generation settings applies depends on the model; one that
+does not is greyed out, and a line under them says why:
+
+- **Analysis depth** (*Fast* / *Balanced* / *Thorough*) applies to the cloud
+  models that think before they answer — GPT-5 and the o-series, Gemini 2.5
+  and 3, and Claude — and sets how long they think. *Fast* is the default and
+  is enough for most photos; *Thorough* can help with hard cases (naming a bird
+  or a plant, reading a sign, a busy scene) but is slower and uses more tokens,
+  which the cloud providers bill. The plug-in raises the token limit for
+  thinking on its own, so a higher depth usually does not need a higher **Max
+  Tokens**.
+- **Temperature** applies to the local models — the built-in llama.cpp engine,
+  Ollama, LM Studio and an Other AI server — and to the cloud models that do
+  not reason (`gpt-4.1`, Gemini 2.x). Lower values give more consistent
+  wording. Models that reason set their own temperature (several refuse any
+  other value); Gemini 2.5 takes both settings. The models *On this Mac* (MLX)
+  use their own sampling settings, so neither setting applies to those.
+
+Which providers
 appear depends on what is configured in the Plug-in Manager — see
-[Choosing an AI Model](Help-Choosing-AI-Model).
+[Choosing an AI Model](Help-Choosing-AI-Model). Entries read
+`<provider> · <model>`: *On this Mac* / *On this PC* for the built-in engine,
+then Ollama, LM Studio, your [Other AI server](Help-Other-AI-Server), OpenAI,
+Google Gemini and Anthropic.
+
+The model you used last stays selected even when it is not offered right now —
+Ollama not running, a key removed — marked *(not available now)*; starting the
+run then stops with a message saying what to start or fix, instead of quietly
+switching to another (possibly paid) provider. If a provider you set up could
+not be asked for its models (an Other AI server that cannot be reached, a
+rejected key), the reason is shown in red under the list. The model is only
+needed for metadata: embeddings, faces and species run without one.
 
 ### Primary Tasks
 
@@ -362,7 +393,8 @@ Extra information sent alongside the photo to improve accuracy:
   nothing to reword in a taxonomic name) with its own *Save species* tickbox.
   **Discard** and **Cancel** now drop the species along with everything else —
   before, the species fields, the look-up links and the species keywords were
-  written whichever button you pressed.
+  written whichever button you pressed. Cancel stops the review there, and the
+  completion dialog says how many photos were left untouched.
 - **Import metadata from catalog before indexing** — pushes the metadata you
   already have into the backend first, so the AI does not overwrite it blindly.
 

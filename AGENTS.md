@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex and other coding agents when working with code in this repository. It mirrors `CLAUDE.md` line for line; `scripts/check-docs.py` fails when the two drift apart.
 
 ---
 
@@ -152,7 +152,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics.
 - `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
-- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Ollama, LM Studio, and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
+- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs` — and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-develop` — the native Lightroom develop model, a leaf crate (no image, network or async dependencies, so `cargo test -p lrg-develop` takes seconds): the key registry (`registry/table.rs`, one `KeySpec` per `crs:` key with type, stored range, UI scale, number format, defaults, policy class, frame scope, file kind), the typed model (`DevelopSettings`, corrections and masks, `Look`, white balance, the policy filter) and the readers for `getDevelopSettings()` blobs (`lua::read`) and XMP sidecars, presets and profiles (`xmp::read`, on `roxmltree`), which share their typing and classification rules so both land in the same model. The LLM edit-recipe schema stays in `lrg-providers`, learning/blending in `lrg-analysis::style_engine`. See [Dev-Develop-Model.md](docs/wiki/Dev-Develop-Model.md).
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
 - `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
@@ -230,12 +230,15 @@ decision belongs in a comment at the point where it is made.
 - `scripts/check-docs.py` enforces the parts that can be checked mechanically, and runs in pre-commit and CI (`lint-format.yml`):
   - every axum route has a heading in `docs/wiki/Dev-Backend-API.md`, and every heading names a real route (method and path both) — **hard failure**
   - every endpoint in `APISearchIndex.lua`'s `ENDPOINTS` table exists on the backend — **hard failure**, unless it is listed under `[[contract.known_gap]]` in `docs/doc-sources.toml` with a written reason
+  - `AGENTS.md` matches `CLAUDE.md` line for line, apart from the agent-specific lines in `AGENTS_ONLY_LINES` — **hard failure**
   - pages whose sources have newer commits than the page — **warning**, reported in the CI job summary
 - `scripts/check-docs.py --for <path>` prints the pages that document a file.
+- **The rule files must not disagree.** Three files state this project's rules: `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md`. `CLAUDE.md` is authoritative. `AGENTS.md` is its copy for other coding agents and stays identical line for line, apart from the few agent-specific lines listed in `AGENTS_ONLY_LINES` in `scripts/check-docs.py` — which fails when the two drift, so edit both in the same change. `CONTRIBUTING.md` is the short version for human contributors: it may leave details out, but it never contradicts the other two. Adding, changing or dropping a rule in any of them means updating the others in the same change. If you find them contradicting each other, don't silently follow one — fix the drift, or raise it if the right answer isn't clear.
 
-### Editor automation (Codex)
+### Editor automation (Claude Code)
 
-- A `PostToolUse` hook (`.Codex/hooks/lint-edited-file.py`, wired in `.Codex/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
+- A `PostToolUse` hook (`.claude/hooks/lint-edited-file.py`, wired in `.claude/settings.json`) lints every file right after it is edited: `luacheck` + `stylua` for plugin Lua, and `cargo fmt`/`cargo clippy` for `server-rs/` Rust. Fix anything it reports before moving on — don't disable it to get past a warning.
 - The same hook names the wiki pages documenting the edited file (once per page per session). Treat that as part of the task: update the page now, or state that it is still correct.
+- Other coding agents don't get this hook. Do its job by hand after editing a file: `pre-commit run --files <path>` for the linters, and `scripts/check-docs.py --for <path>` for the pages to update.
 
-@.Codex/skills/lrc-plugin-dev.md
+Lightroom Classic SDK reference: read `.claude/skills/lrc-plugin-dev.md` before working on plugin Lua.

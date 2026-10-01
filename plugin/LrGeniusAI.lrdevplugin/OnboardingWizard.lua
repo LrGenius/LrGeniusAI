@@ -25,6 +25,7 @@ function OnboardingWizard.show(manualTrigger)
 			propertyTable.useClip = prefs.useClip or false
 			propertyTable.geminiApiKey = prefs.geminiApiKey or ""
 			propertyTable.chatgptApiKey = prefs.chatgptApiKey or ""
+			propertyTable.anthropicApiKey = prefs.anthropicApiKey or ""
 			LocalModelCatalog.initFields(propertyTable)
 
 			local f = LrView.osFactory()
@@ -365,59 +366,59 @@ function OnboardingWizard.show(manualTrigger)
 						title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=Optional AI Providers"),
 						identifier = "providers",
 
+						-- One box: nothing here is needed to get started. Ollama and LM
+						-- Studio need no setup (they are found automatically), and the
+						-- Other AI server is left to the Plug-in Manager rather than
+						-- adding a third kind of field to a first-run screen.
 						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/ProvidersTitle=AI Providers"),
+							title = "Cloud AI (optional)",
 							fill_horizontal = 1,
 							f:static_text({
-								title = LOC(
-									"$$$/LrGeniusAI/Onboarding/ProvidersDesc=Choose which AI models you want to use for metadata generation\nand edits. Prefer to keep your photos on this machine? Skip the\nkeys and set up a local model under AI Models instead."
-								),
-								width_in_chars = 60,
+								title = "Not needed: the model on the AI Models tab runs on this computer, and Ollama\n"
+									.. "or LM Studio are found automatically. For a cloud service, enter its key.\n"
+									.. "Your own AI server (OpenRouter, llama.cpp, LiteLLM) can be added later\n"
+									.. "under Plug-in Manager → Optional AI providers.",
 							}),
-						}),
-
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/GeminiTitle=Google Gemini"),
-							fill_horizontal = 1,
+							f:spacer({ height = 5 }),
 							f:row({
 								f:static_text({
-									title = LOC("$$$/LrGeniusAI/Onboarding/ApiKeyLabel=API Key:"),
-									width = share("label"),
+									title = "Google Gemini key",
+									alignment = "right",
+									width = share("providerLabel"),
 								}),
-								f:edit_field({ value = bind("geminiApiKey"), width_in_chars = 40 }),
+								f:password_field({ value = bind("geminiApiKey"), width_in_chars = 36 }),
 								f:push_button({
-									title = "?",
+									title = "Get key",
 									action = function()
 										LrHttp.openUrlInBrowser("https://aistudio.google.com/app/apikey")
 									end,
 								}),
 							}),
-						}),
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/ChatGPTTitle=OpenAI ChatGPT"),
-							fill_horizontal = 1,
 							f:row({
 								f:static_text({
-									title = LOC("$$$/LrGeniusAI/Onboarding/ApiKeyLabel=API Key:"),
-									width = share("label"),
+									title = "OpenAI key",
+									alignment = "right",
+									width = share("providerLabel"),
 								}),
-								f:edit_field({ value = bind("chatgptApiKey"), width_in_chars = 40 }),
+								f:password_field({ value = bind("chatgptApiKey"), width_in_chars = 36 }),
 								f:push_button({
-									title = "?",
+									title = "Get key",
 									action = function()
 										LrHttp.openUrlInBrowser("https://platform.openai.com/api-keys")
 									end,
 								}),
 							}),
-						}),
-						f:group_box({
-							title = LOC("$$$/LrGeniusAI/Onboarding/LocalTitle=Local AI (Ollama / LM Studio)"),
-							fill_horizontal = 1,
 							f:row({
+								f:static_text({
+									title = "Anthropic key",
+									alignment = "right",
+									width = share("providerLabel"),
+								}),
+								f:edit_field({ value = bind("anthropicApiKey"), width_in_chars = 36 }),
 								f:push_button({
-									title = LOC("$$$/LrGeniusAI/Onboarding/LocalTitle=Local AI (Ollama / LM Studio)"),
+									title = "Get key",
 									action = function()
-										LrHttp.openUrlInBrowser("https://lrgenius.com/help/ollama-setup/")
+										LrHttp.openUrlInBrowser("https://platform.claude.com/settings/keys")
 									end,
 								}),
 							}),
@@ -450,6 +451,7 @@ function OnboardingWizard.show(manualTrigger)
 					-- Save settings
 					prefs.geminiApiKey = propertyTable.geminiApiKey
 					prefs.chatgptApiKey = propertyTable.chatgptApiKey
+					prefs.anthropicApiKey = propertyTable.anthropicApiKey
 					prefs.useClip = propertyTable.useClip
 					log:info("Onboarding wizard completed with OK.")
 				else

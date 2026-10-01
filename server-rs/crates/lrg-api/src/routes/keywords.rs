@@ -104,6 +104,10 @@ fn parse_cluster_request(
                 .get("lmstudio_base_url")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            server_url: data
+                .get("server_url")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             local_engine,
         },
     })

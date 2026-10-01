@@ -27,9 +27,11 @@ use lrg_store::{StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
 use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
-    success_payload,
+    success_payload, warning_entries,
 };
-use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart, SinglePhotoForm};
+use crate::routes::route_util::{
+    compute_scene_tags, local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
+};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -208,6 +210,10 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     };
     let photo_id = photo_ids[0].clone();
 
+    if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response();
+    }
+
     let Some(store) = state.store() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -320,7 +326,7 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         {
             log::error!("Failed to persist style_edit LLM-fallback recipe for {photo_id}: {e}");
         }
-        let llm_warnings: Vec<String> = llm_response.warning.into_iter().collect();
+        let llm_warnings = warning_entries(llm_response.warning);
         let mut payload = success_payload(
             &photo_id,
             &recipe,

@@ -20,4 +20,5 @@ async-trait = "0.1.91"
 futures = "0.3.34"
 
 [dev-dependencies]
+axum.workspace = true
 lrg-develop.workspace = true

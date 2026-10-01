@@ -16,8 +16,9 @@ Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
 `face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
 `"failed"`. It does **not** report cloud/local LLM provider availability —
 the backend has no stored API keys or base URLs to probe on a bare GET. The
-plugin checks provider availability itself (stored keys plus a direct ping to
-Ollama/LM Studio); see `SearchIndexAPI.getDetailedHealth()` in
+plugin checks provider availability itself (stored keys, an Other AI server
+address, and whether `POST /v1/llm/providers/models` lists anything for the
+built-in engines, Ollama and LM Studio); see `SearchIndexAPI.getDetailedHealth()` in
 `APISearchIndex.lua`, which backs the Plugin Manager's "System Health" panel
 and the Setup Wizard.
 
@@ -31,7 +32,28 @@ Checks whether the backend version is compatible with the plugin version passed 
 Called by the Lightroom plugin on first connect. Accepts catalog/configuration parameters and initializes per-catalog state.
 
 ### `POST /v1/llm/providers/models`
-Returns the list of available AI models grouped by provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`). Filters out providers that are not configured or not reachable; the two local backends report what is installed on disk, so they are empty when no local model has been downloaded.
+Returns the list of available AI models grouped by provider (`gemini`, `chatgpt`, `anthropic`, `ollama`, `lmstudio`, `openai_compatible`, `llamacpp`, `mlx`). The two local backends report what is installed on disk, so they are empty when no local model has been downloaded.
+
+Body (all optional; POST so that no key ends up in a URL):
+
+| Field | Description |
+|---|---|
+| `openai_apikey`, `gemini_apikey`, `anthropic_apikey` | Cloud keys. Without one, that provider's list is empty. |
+| `ollama_base_url`, `lmstudio_base_url` | Where to probe Ollama and LM Studio. Absent means their default address on this computer — which is all the current plugin sends. |
+| `server_url`, `server_apikey` | The user's own OpenAI-compatible server ("Other AI server" in the plugin): OpenRouter, llama.cpp `llama-server`, LiteLLM, vLLM, or LM Studio/Ollama on another machine. The address is normalised — no scheme means `http://` for local-network hosts and `https://` otherwise, a pasted `…/chat/completions` is cut back, and no path means `/v1`. The key is optional. |
+
+```json
+{
+  "models":   { "openai_compatible": ["google/gemini-2.5-flash", "…"], "lmstudio": [], "…": [] },
+  "servers":  { "openai_compatible": { "label": "OpenRouter" } },
+  "aliases":  { "mlx": { "<old name>": "<name offered now>" } },
+  "warnings": ["Other AI server: OpenRouter rejected the API key. …"]
+}
+```
+
+`aliases` maps names a model used to be offered under, and that the backend still accepts as `model`, onto its current name: MLX models from the Hugging Face cache were listed under their snapshot hash before they were listed under their repo name. The plugin uses it to keep a saved choice selected.
+
+A provider that is only probed and not running (Ollama, LM Studio) is simply empty. The user's own server is different: they entered it, so any failure to list it — unreachable, rejected key, malformed address — is reported in `warnings` in words the user can act on. So is an Anthropic key that is set but does not work (rejected, no credit, unreachable API): its listing failure comes back in `warnings` too. OpenAI, Gemini and Anthropic listings time out after 10 s so that a hanging network cannot hold up the whole list. The `anthropic` list is Anthropic's own `/v1/models`, filtered on each model's published capabilities: a model that cannot take images or structured outputs is left out. `servers.openai_compatible.label` (`OpenRouter`, or host and port) is what the plugin shows in front of that server's models. Only models that can take a photo are listed: entries a server marks as text-only (OpenRouter's `architecture.input_modalities`) and embedding models are dropped. An LM Studio entered as the user's server is not also listed under `lmstudio`.
 
 ### `GET /v1/server/logs`
 Returns recent log lines from the server log.
@@ -64,11 +86,15 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 |---|---|---|
 | `photo_id` | string | Stable file-based photo identifier |
 | `catalog_id` | string | Lightroom catalog identifier |
-| `provider` | string | LLM provider (`gemini`, `chatgpt`, `ollama`, `lmstudio`, `llamacpp`, `mlx`) |
+| `provider` | string | LLM provider (`gemini`, `chatgpt`, `anthropic`, `ollama`, `lmstudio`, `openai_compatible`, `llamacpp`, `mlx`) |
 | `model` | string | Model name within the provider (for `llamacpp` the GGUF file name, for `mlx` the model directory name) |
+| `api_key` | string | Key for `chatgpt`/`gemini`/`anthropic` (required) or `openai_compatible` (optional) |
+| `server_url` | string | `openai_compatible` only: the server address, normalised as for `/v1/llm/providers/models` |
 | `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = default) |
 | `llm_n_parallel` | int | `llamacpp` only: photos decoded concurrently |
 | `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
+| `temperature` | float | Sampling temperature, default `0.1`. Only the local providers (`llamacpp`, `ollama`, `lmstudio`, `openai_compatible`) use it: OpenAI reasoning models get a fixed `1.0`, Anthropic and Gemini 3 are sent none, and MLX's guided generation samples on its own settings |
+| `reasoning_effort` | string | The plug-in's *Analysis depth*: `low` (default), `medium` or `high`. Sent as OpenAI `reasoning_effort`, Gemini `thinkingLevel` (3.x) or `thinkingBudget` (2.5), and Anthropic `output_config.effort` where the model lists that level; room for thinking (4096 / 8192 / 16384 tokens) is added to `max_tokens` for a model that thinks. Local providers ignore it. Any other value is a **400** naming it, not a silent fallback |
 | `generate_metadata` | bool | Generate keywords/title/caption/alt_text |
 | `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
 | `detect_faces` | bool | Run face detection on the photo |
@@ -240,6 +266,8 @@ LLM.
 | `photo_id` | string | Photo identifier |
 | `provider` | string | LLM provider |
 | `model` | string | Model name |
+| `api_key`, `server_url` | string | Connection fields, as for `/v1/index/photos` |
+| `temperature`, `reasoning_effort` | float, string | As for `/v1/index/photos`, including the 400 for an unknown `reasoning_effort`. `/v1/edit/style` reads both for its LLM fallback |
 | `intent` | string | Style preset key (e.g. `natural_pro`, `moody_dramatic`) |
 | `style_strength` | float | 0.0–1.0, how aggressively to apply the style |
 | `composition_mode` | string | `none`, `subtle`, or `aggressive` |
@@ -871,10 +899,36 @@ Lists local models that are installed and those offered for download.
 Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with the MLX engine's equivalent nested under `mlx`. `n_ctx` is the whole KV cache; `n_ctx_seq` is the share one photo gets, which is what a prompt plus its `max_tokens` has to fit inside. They differ whenever `n_parallel > 1`, because llama.cpp splits the cache per sequence. `n_parallel` is the effective value: the engine lowers a requested count that would leave each photo too little.
 
 ### `POST /v1/llm/downloads`
-Starts a background download of a catalog entry. Body: `{ "id": "gemma4-e4b" }`. The id space is shared across both catalogs and the id alone selects the backend, so there is a single download queue: a GGUF pair is fetched as two files, an MLX entry as a repo snapshot staged into a `.part` directory and renamed on success.
+Starts a background download of a catalog entry. Body: `{ "id": "gemma4-e4b" }`. The id space is shared across both catalogs and the id alone selects the backend, so there is a single download queue: a GGUF pair is fetched as two files, an MLX entry as a repo snapshot staged into a hidden `.<name>.part` directory (which discovery skips) and renamed on success.
+
+Or a model from Hugging Face that is not in a catalog: `{ "repo": "mlx-community/gemma-3-12b-it-qat-4bit", "engine": "mlx", "revision": "<sha from the check>" }`. The repo is checked again exactly as by `/v1/llm/downloads/check`, at that revision, and refused with the same 400/502 if it does not pass — so what is fetched is what was checked. A GGUF goes into a folder of its own under the llama.cpp model directory; an MLX model gets a `.lrgenius-source.json` naming its repo. When the model is already installed, the download completes at once with its `installed_name`.
+
+### `POST /v1/llm/downloads/check`
+Checks a Hugging Face model before anything is downloaded ("Other model from Hugging Face…" in the plugin). Body: `{ "repo": "<org/name, org/name:QUANT, or a huggingface.co address>", "engine": "mlx" | "llamacpp" }`.
+
+- **400** `{ "error": … }` — the model cannot be used, with the reason and what to do instead: not a model name, no such public repo, gated, text-only, not an MLX conversion (or not a GGUF), an MLX `model_type` or `processor_class` the pinned mlx-swift-lm does not register (`hf_repo::MLX_VISION_MODEL_TYPES` / `MLX_VISION_PROCESSORS`), no tokenizer or chat template, no GGUF vision projector, a split GGUF, an unknown quantization. Also when the engine is not available on this machine.
+- **502** `{ "error": … }` — Hugging Face could not be reached.
+- **200** — what a download would fetch:
+
+```json
+{
+  "engine": "mlx", "repo": "mlx-community/gemma-3-12b-it-qat-4bit",
+  "revision": "<commit sha>", "dir_name": "gemma-3-12b-it-qat-4bit",
+  "installed_name": "gemma-3-12b-it-qat-4bit",
+  "files": [{ "path": "config.json", "size": 5000 }, "…"],
+  "approx_bytes": 8031095500, "est_ram_gb": 11.1,
+  "model_type": "gemma3", "quant": null,
+  "already_installed": false,
+  "warnings": ["This model is not in LrGeniusAI's tested list. …"]
+}
+```
+
+For `llamacpp`, `files` is the model file then its projector (`Q4_K_M` and an `f16` projector unless a quantization follows a colon), `quant` is set and `model_type` is null. `installed_name` is the `model` to send once it is downloaded. The Hugging Face address can be overridden with `HF_ENDPOINT`.
+
+Only one local model downloads at a time. While one is running, a second request gets **409** with `{ "error": "Another model download is still running. …" }` — it is refused, not queued.
 
 ### `GET /v1/llm/downloads`
-Progress of the current local-model download (same shape as the CLIP download status).
+Progress of the current local-model download (same shape as the CLIP download status). Once `status` is `"completed"`, `installed_name` is the name the model is now offered under — the `model` to send with provider `llamacpp` or `mlx`.
 
 ---
 
