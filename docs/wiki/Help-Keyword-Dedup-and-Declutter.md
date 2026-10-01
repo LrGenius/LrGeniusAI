@@ -71,7 +71,7 @@ For each approved pair:
 2. The duplicate keyword tag is removed from those photos.
 3. The now-empty duplicate keyword remains in the catalog keyword list with 0 photos. To purge it, use Lightroom's built-in `Metadata → Purge Unused Keywords`.
 
-A summary is shown at the end: how many keywords were merged, how many pairs were skipped, and how many backend records were updated.
+A summary is shown at the end: how many keywords were merged, how many pairs were skipped, how many photos could not be re-tagged and still carry the duplicate keyword, and how many backend records were updated.
 
 ---
 
