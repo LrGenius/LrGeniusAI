@@ -18,12 +18,30 @@ thiserror = "2"
 serde = { workspace = true, features = ["derive"] }
 llguidance = "1.7"
 toktrie = "1.7"
+# Not used directly: listed only to pin it, because llama-cpp-2 asks for
+# `^0.1.156` of its -sys crate and would otherwise pull 0.1.157 back in.
+#
+# 0.1.157 breaks the Windows build. Its build.rs picks the DLLs to copy next to
+# the binaries with the pattern it uses for *import* libraries, so on MSVC it
+# globs `bin/*.lib` instead of `bin/*.dll`, finds nothing, and copies no DLL
+# into target/release or target/release/deps. Every test binary that links
+# llama.cpp then dies at load with STATUS_DLL_NOT_FOUND (0xc0000135) -- that is
+# how the v3.2.0 release failed -- and "Stage backend binary" in the release
+# workflow would find no llama.dll to ship. 0.1.157 also builds mtmd through
+# CMake, which makes it a separate mtmd.dll on Windows instead of a static lib.
+#
+# Before unpinning (this line and both llama-cpp-2 entries below): check that
+# the new version's `extract_lib_assets` in llama-cpp-sys-2/build.rs globs
+# `*.dll` on Windows again, add mtmd.dll to what the release workflow stages
+# next to the exe, and drop the matching ignore in .github/dependabot.yml.
+llama-cpp-sys-2 = "=0.1.156"
 
 # `mtmd` is llama.cpp's multimodal library (vision/audio projectors) and is
 # what lets us feed photos in; `llguidance` turns the JSON Schemas in
 # `lrg-providers` into decode-time constraints without hand-writing GBNF.
+# Pinned together with llama-cpp-sys-2 above.
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-llama-cpp-2 = { version = "0.1.154", features = ["mtmd", "llguidance"] }
+llama-cpp-2 = { version = "=0.1.156", features = ["mtmd", "llguidance"] }
 
 # Vulkan is built as a loadable ggml backend (`dynamic-backends`) so one Windows
 # binary starts on any GPU vendor and falls back to CPU when there is none. See
@@ -54,7 +72,8 @@ llama-cpp-2 = { version = "0.1.154", features = ["mtmd", "llguidance"] }
 # then registers twice, once as CUDA0 and once as Vulkan0, and llama.cpp does not
 # deduplicate that on its own.
 [target.'cfg(target_os = "windows")'.dependencies]
-llama-cpp-2 = { version = "0.1.154", features = [
+# Pinned; see llama-cpp-sys-2 under [dependencies].
+llama-cpp-2 = { version = "=0.1.156", features = [
     "mtmd",
     "llguidance",
     "vulkan",

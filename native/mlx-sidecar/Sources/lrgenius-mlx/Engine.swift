@@ -170,6 +170,13 @@ final class Engine {
         // does not know the text-only architectures. A text model is still
         // useful here — keyword clustering (`generate_text`) needs no vision —
         // so falling back is better than refusing to load.
+        //
+        // But only for that one reason. Any other vision failure — a repo
+        // missing its preprocessor config, a processor the registry lacks, a
+        // weight that does not match — is a broken *vision* model. The text
+        // factory loads most of those happily (it drops the vision tower), and
+        // the user then saw "this model is text-only" on every photo instead
+        // of what was actually wrong.
         let container: ModelContainer
         var supportsVision = true
         do {
@@ -177,6 +184,11 @@ final class Engine {
                 from: directory, using: tokenizerLoader)
         } catch {
             let visionError = error
+            guard let factoryError = visionError as? ModelFactoryError,
+                case .unsupportedModelType = factoryError
+            else {
+                throw EngineError.unsupportedModel(describe(visionError))
+            }
             do {
                 container = try await LLMModelFactory.shared.loadContainer(
                     from: directory, using: tokenizerLoader)
@@ -185,7 +197,7 @@ final class Engine {
                 // Report the vision failure: for a model the user picked
                 // expecting photo analysis, "unsupported VLM architecture" is
                 // the actionable message, not "also not a text model".
-                throw EngineError.unsupportedModel(visionError.localizedDescription)
+                throw EngineError.unsupportedModel(describe(visionError))
             }
         }
 

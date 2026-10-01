@@ -134,6 +134,7 @@ local ENDPOINTS = {
 	LLM_STATUS = "/v1/llm/status",
 	START_LLM_DOWNLOAD = "/v1/llm/downloads",
 	STATUS_LLM_DOWNLOAD = "/v1/llm/downloads",
+	CHECK_LLM_DOWNLOAD = "/v1/llm/downloads/check",
 
 	-- Species links
 	SPECIES_LINKS = "/v1/species/links",
@@ -160,6 +161,18 @@ local EXPORT_SETTINGS = {
 	LR_removeLocationMetadata = false,
 	LR_embeddedMetadataOption = "all",
 }
+
+--- The two generation settings for a request: the caller's value, else the
+--- saved setting, else the default. Each provider uses only one of them (see
+--- AiProviders.appliesTemperature); both are always sent and the backend
+--- picks, so a request never depends on the plug-in knowing every model.
+local function temperatureFor(options)
+	return tostring(options.temperature or (prefs and prefs.temperature) or Defaults.defaultTemperature)
+end
+
+local function reasoningEffortFor(options)
+	return options.reasoning_effort or (prefs and prefs.reasoningEffort) or Defaults.defaultReasoningEffort
+end
 
 --- Appends the catalog's location fields to a multipart request.
 ---
@@ -834,7 +847,8 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		model = options.model,
 		api_key = options.api_key,
 		language = options.language or (prefs and prefs.generateLanguage) or "English",
-		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		temperature = temperatureFor(options),
+		reasoning_effort = reasoningEffortFor(options),
 		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
 		replace_ss = tostring(options.replace_ss or false),
 		generate_keywords = tostring(options.generate_keywords or false),
@@ -872,8 +886,9 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		location_country_code = options.location_country_code,
 		gps_latitude = options.gps_latitude and tostring(options.gps_latitude) or nil,
 		gps_longitude = options.gps_longitude and tostring(options.gps_longitude) or nil,
-		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
-		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		-- The Other AI server, for provider openai_compatible (see AiProviders.connectionOptions).
+		-- Ollama and LM Studio are always reached at their default address.
+		server_url = options.server_url,
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
@@ -982,7 +997,8 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		model = options.model,
 		api_key = options.api_key,
 		language = options.language or (prefs and prefs.generateLanguage) or "English",
-		temperature = tostring(options.temperature or (prefs and prefs.temperature) or 0.2),
+		temperature = temperatureFor(options),
+		reasoning_effort = reasoningEffortFor(options),
 		max_tokens = options.max_tokens or (prefs and prefs.maxTokens) or 2048,
 		replace_ss = tostring(options.replace_ss or false),
 		generate_keywords = tostring(options.generate_keywords or false),
@@ -1005,8 +1021,9 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 			or "English",
 		generate_aliases = tostring(options.generate_aliases or false),
 		catalog_keywords = options.catalog_keywords and JSON:encode(options.catalog_keywords) or nil,
-		ollama_base_url = options.ollama_base_url or (prefs and prefs.ollamaBaseUrl),
-		lmstudio_base_url = options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl),
+		-- The Other AI server, for provider openai_compatible (see AiProviders.connectionOptions).
+		-- Ollama and LM Studio are always reached at their default address.
+		server_url = options.server_url,
 		vertex_project_id = options.vertex_project_id,
 		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
@@ -1065,7 +1082,8 @@ end
 --   - tasks table: Array of tasks to perform (default: {"embeddings", "metadata", "quality"})
 --   - provider string: AI provider to use (default: "qwen")
 --   - language string: Language for generated content (default: "English")
---   - temperature number: Temperature for AI generation (default: 0.2)
+--   - temperature number: Temperature for local models (default: Defaults.defaultTemperature)
+--   - reasoning_effort string: Analysis depth for cloud models, "low"/"medium"/"high" (default: "low")
 --   - generate_keywords boolean: Generate keywords (default: true)
 --   - generate_caption boolean: Generate caption (default: true)
 --   - generate_title boolean: Generate title (default: true)
@@ -1256,10 +1274,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 	end
 
 	table.insert(mimeChunks, { name = "language", value = options.language or prefs.generateLanguage or "English" })
-	table.insert(
-		mimeChunks,
-		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
-	)
+	table.insert(mimeChunks, { name = "temperature", value = temperatureFor(options) })
+	table.insert(mimeChunks, { name = "reasoning_effort", value = reasoningEffortFor(options) })
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	-- Unlike the indexing path, the edit endpoint never builds location context
 	-- at all (see the module comment in `routes/edit.rs`), so this stays off.
@@ -1329,14 +1345,8 @@ function SearchIndexAPI.generateEditRecipePhoto(photoId, filepath, options)
 		table.insert(mimeChunks, { name = "date_time", value = options.date_time })
 	end
 	appendLocationChunks(mimeChunks, options)
-	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
-		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
-	end
-	if options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl) then
-		table.insert(
-			mimeChunks,
-			{ name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl }
-		)
+	if options.server_url then
+		table.insert(mimeChunks, { name = "server_url", value = options.server_url })
 	end
 
 	table.insert(mimeChunks, {
@@ -1389,10 +1399,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	end
 
 	table.insert(mimeChunks, { name = "language", value = options.language or prefs.generateLanguage or "English" })
-	table.insert(
-		mimeChunks,
-		{ name = "temperature", value = tostring(options.temperature or prefs.temperature or 0.2) }
-	)
+	table.insert(mimeChunks, { name = "temperature", value = temperatureFor(options) })
+	table.insert(mimeChunks, { name = "reasoning_effort", value = reasoningEffortFor(options) })
 	table.insert(mimeChunks, { name = "max_tokens", value = tostring(options.max_tokens or prefs.maxTokens or 2048) })
 	table.insert(mimeChunks, { name = "replace_ss", value = tostring(options.replace_ss or false) })
 
@@ -1456,14 +1464,8 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if type(options.is_raw) == "boolean" then
 		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end
-	if options.ollama_base_url or (prefs and prefs.ollamaBaseUrl) then
-		table.insert(mimeChunks, { name = "ollama_base_url", value = options.ollama_base_url or prefs.ollamaBaseUrl })
-	end
-	if options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl) then
-		table.insert(
-			mimeChunks,
-			{ name = "lmstudio_base_url", value = options.lmstudio_base_url or prefs.lmstudioBaseUrl }
-		)
+	if options.server_url then
+		table.insert(mimeChunks, { name = "server_url", value = options.server_url })
 	end
 	if options.vertex_project_id and options.vertex_project_id ~= "" then
 		table.insert(mimeChunks, { name = "vertex_project_id", value = options.vertex_project_id })
@@ -3757,7 +3759,7 @@ local CLUSTER_MAX_TOTAL = 3600
 -- Uses an async job so the HTTP request never times out on large keyword sets.
 -- @param keywordNames table Flat list of keyword name strings
 -- @param threshold number|nil Cosine similarity threshold (backend default: 0.85 with LLM, 0.88 without)
--- @param options table|nil { provider, model, api_key, ollama_base_url, lmstudio_base_url }
+-- @param options table|nil { provider, model, api_key, server_url }
 -- @param cancelScope table|nil LrProgressScope; polling stops early when isCanceled() returns true
 -- @param onProgress function|nil Called on every poll with
 --        { elapsed = seconds, stage = str|nil, done = n|nil, total = n|nil }
@@ -3781,11 +3783,8 @@ function SearchIndexAPI.clusterKeywords(keywordNames, threshold, options, cancel
 		if options.api_key then
 			body.api_key = options.api_key
 		end
-		if options.ollama_base_url then
-			body.ollama_base_url = options.ollama_base_url
-		end
-		if options.lmstudio_base_url then
-			body.lmstudio_base_url = options.lmstudio_base_url
+		if options.server_url then
+			body.server_url = options.server_url
 		end
 	end
 
@@ -4075,22 +4074,53 @@ function SearchIndexAPI.saveThumbnail(uuid, faceIndex, base64Data)
 end
 
 ---
--- Retrieves all available multimodal models from all providers.
--- Always filters to vision-capable models only.
--- Dynamically checks Ollama and LM Studio availability on each call.
--- @param openaiApiKey string|nil OpenAI API key for listing ChatGPT models
--- @param geminiApiKey string|nil Gemini API key for listing Gemini models
--- @return table|nil Response from server with format: { models = { qwen = {...}, ollama = {...}, ... } }
-function SearchIndexAPI.getModels(openaiApiKey, geminiApiKey)
-	local url = SearchIndexAPI.url("MODELS")
-	local body = {
-		openai_apikey = openaiApiKey,
-		gemini_apikey = geminiApiKey,
-		ollama_base_url = (prefs and prefs.ollamaBaseUrl) or nil,
-		lmstudio_base_url = (prefs and prefs.lmstudioBaseUrl) or nil,
-	}
-	local result = _request("POST", url, body, 15)
-	return result
+-- Lists the models every provider offers (POST /v1/llm/providers/models).
+--
+-- Ollama and LM Studio are probed at their default address on this computer.
+-- The cloud keys are only sent when asked for, so a health check never costs a
+-- cloud round-trip, and the Other AI server is only asked when one is set.
+--
+-- @param opts table|nil
+--        includeCloud: boolean — also list OpenAI, Gemini and Anthropic (sends
+--          the keys).
+--        serverUrl, serverApiKey: string|nil — check this address instead of the
+--          saved one (the settings dialog, before it is saved). "" means none.
+--        skipServer: boolean — do not ask the Other AI server at all.
+-- @return table|nil { models = { provider = { model, ... } }, servers, warnings }
+-- @return string|nil error
+--
+function SearchIndexAPI.getModels(opts)
+	opts = opts or {}
+	local function nonEmpty(value)
+		if type(value) ~= "string" then
+			return nil
+		end
+		local trimmed = value:gsub("^%s+", ""):gsub("%s+$", "")
+		return trimmed ~= "" and trimmed or nil
+	end
+	local body = {}
+	if opts.includeCloud then
+		body.openai_apikey = nonEmpty(prefs and prefs.chatgptApiKey)
+		body.gemini_apikey = nonEmpty(prefs and prefs.geminiApiKey)
+		body.anthropic_apikey = nonEmpty(prefs and prefs.anthropicApiKey)
+	end
+	if not opts.skipServer then
+		local serverUrl = opts.serverUrl
+		local serverApiKey = opts.serverApiKey
+		if serverUrl == nil then
+			serverUrl = prefs and prefs.aiServerUrl
+			serverApiKey = prefs and prefs.aiServerApiKey
+		end
+		body.server_url = nonEmpty(serverUrl)
+		if body.server_url then
+			body.server_apikey = nonEmpty(serverApiKey)
+		end
+	end
+	local result, err = _request("POST", SearchIndexAPI.url("MODELS"), body, 30)
+	if err then
+		log:error("getModels failed: " .. tostring(err))
+	end
+	return result, err
 end
 
 ---
@@ -4596,28 +4626,66 @@ function SearchIndexAPI.getLlmStatus()
 end
 
 ---
--- Downloads a catalog model, showing progress until it finishes.
+-- Checks a Hugging Face model the user typed in, before anything is downloaded.
+--
+-- @param repo string A model name ("org/name", optionally ":QUANT" for GGUF) or
+--        the model page's address.
+-- @param engine string "mlx" or "llamacpp".
+-- @return table|nil check { repo, revision, installed_name, approx_bytes,
+--         est_ram_gb, model_type, quant, files, already_installed, warnings }
+-- @return string|nil error Why the model cannot be used, in words for the user.
+--
+function SearchIndexAPI.checkLlmRepo(repo, engine)
+	-- The check makes a few requests to Hugging Face.
+	local res, err = _request("POST", SearchIndexAPI.url("CHECK_LLM_DOWNLOAD"), { repo = repo, engine = engine }, 60)
+	if err then
+		-- _request prefixes the backend's message with the HTTP status; the
+		-- message itself is what the user needs.
+		local message = tostring(err):match("HTTP status: [^%-]+%- (.+)$") or tostring(err)
+		return nil, message
+	end
+	return res
+end
+
+---
+-- Downloads a local model, showing progress until it finishes.
 --
 -- Multi-gigabyte download, so it runs in its own async task with a progress
 -- scope and polls the server rather than blocking the dialog. Mirrors
--- startClipDownload; the difference is that the model is chosen by id.
+-- startClipDownload; the difference is that the model is chosen by the caller.
 --
--- @param modelId string Catalog entry id from getLlmCatalog().downloadable.
+-- @param spec string|table A catalog id from getLlmCatalog(), or
+--        { repo = "org/name", engine = "mlx"|"llamacpp", revision = sha } for a
+--        model checked with checkLlmRepo().
+-- @param onDone function|nil Called with the name the finished model is offered
+--        under. Without it, a generic "downloaded" message is shown.
 -- @return boolean started
 -- @return string|nil error
 --
-function SearchIndexAPI.startLlmDownload(modelId)
-	if not modelId or modelId == "" then
-		return false, "No model id provided"
+function SearchIndexAPI.startLlmDownload(spec, onDone)
+	-- Copied: _request adds db_path to the table it is given.
+	local body = {}
+	if type(spec) == "table" then
+		for k, v in pairs(spec) do
+			body[k] = v
+		end
+	else
+		body.id = spec
+	end
+	if Util.nilOrEmpty(body.id) and Util.nilOrEmpty(body.repo) then
+		return false, "No model was chosen to download."
 	end
 
 	local status = _request("GET", SearchIndexAPI.url("STATUS_LLM_DOWNLOAD"))
 	if status ~= nil and status.status == "downloading" then
-		log:trace("A local model download is already in progress")
-		return true
+		-- Only one model downloads at a time. This used to report success and
+		-- drop the request, so the user waited for a model that never came.
+		return false, "Another model download is still running. Wait for it to finish, then start this one."
 	end
 
-	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), { id = modelId })
+	-- A model from Hugging Face is checked again before the download starts,
+	-- which takes a few requests; give it the same time as checkLlmRepo.
+	local _, postErr = _request("POST", SearchIndexAPI.url("START_LLM_DOWNLOAD"), body, 60)
 	if postErr then
 		log:error("startLlmDownload failed: " .. tostring(postErr))
 		return false, postErr
@@ -4651,12 +4719,16 @@ function SearchIndexAPI.startLlmDownload(modelId)
 				elseif loopStatus.status == "completed" then
 					log:trace("Local model download completed")
 					progressScope:done()
-					LrDialogs.message(
-						LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
-						LOC(
-							"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+					if onDone then
+						onDone(loopStatus.installed_name)
+					else
+						LrDialogs.message(
+							LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
+							LOC(
+								"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
+							)
 						)
-					)
+					end
 					break
 				elseif
 					loopStatus.status == "error"
@@ -4813,8 +4885,14 @@ function SearchIndexAPI.getDetailedHealth()
 		clip = SearchIndexAPI.isClipReady() == true,
 		gemini = not Util.nilOrEmpty(prefs.geminiApiKey),
 		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
+		anthropic = not Util.nilOrEmpty(prefs.anthropicApiKey),
 		ollama = false,
 		lmstudio = false,
+		-- The Other AI server counts once an address is set. It is not asked
+		-- here: this runs every few seconds while the settings are open, and a
+		-- remote server must not be polled for that. Whether it answers is
+		-- shown in the settings' own status line and in the task dialogs.
+		server = not Util.nilOrEmpty(prefs.aiServerUrl),
 		-- The engine built into the backend — MLX on macOS, llama.cpp on
 		-- Windows. Counted as a configured provider like any other: it is the
 		-- default way to run this plug-in, and leaving it out told every user
@@ -4823,44 +4901,21 @@ function SearchIndexAPI.getDetailedHealth()
 		localEngine = false,
 	}
 
-	-- `/models` already reports both built-in engines, and reports them empty
-	-- when the platform does not ship one or no model has been downloaded yet,
-	-- which is exactly the distinction this needs. No API keys are passed: a
-	-- health check must not depend on a cloud round-trip.
+	-- `/models` reports both built-in engines, and Ollama and LM Studio as
+	-- found at their default address — each empty when there is nothing to
+	-- use, which is exactly the distinction this needs. No API keys are passed:
+	-- a health check must not depend on a cloud round-trip.
 	if health.backend then
-		local modelsResp = SearchIndexAPI.getModels()
+		local modelsResp = SearchIndexAPI.getModels({ skipServer = true })
 		local models = modelsResp and modelsResp.models
 		if type(models) == "table" then
-			for _, engine in ipairs({ "mlx", "llamacpp" }) do
-				local list = models[engine]
-				if type(list) == "table" and #list > 0 then
-					health.localEngine = true
-					break
-				end
+			local function offers(provider)
+				local list = models[provider]
+				return type(list) == "table" and #list > 0
 			end
-		end
-	end
-
-	-- Try to ping local LLMs if they are not default localhost but maybe they are
-	if not Util.nilOrEmpty(prefs.ollamaBaseUrl) then
-		local url = prefs.ollamaBaseUrl .. "/api/tags"
-		local _, hdrs = LrHttp.get(url, nil, 500)
-		local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
-		if status == 200 then
-			health.ollama = true
-		end
-	end
-
-	if not Util.nilOrEmpty(prefs.lmstudioBaseUrl) then
-		local baseUrl = prefs.lmstudioBaseUrl
-		if not baseUrl:match("^https?://") then
-			baseUrl = "http://" .. baseUrl
-		end
-		local url = baseUrl .. "/v1/models"
-		local _, hdrs = LrHttp.get(url, nil, 500)
-		local status = (type(hdrs) == "number") and hdrs or (type(hdrs) == "table" and hdrs.status)
-		if status == 200 then
-			health.lmstudio = true
+			health.localEngine = offers("mlx") or offers("llamacpp")
+			health.ollama = offers("ollama")
+			health.lmstudio = offers("lmstudio")
 		end
 	end
 
@@ -4869,8 +4924,8 @@ end
 
 ---
 -- True when at least one LLM provider is usable: a cloud API key, a reachable
--- local app (Ollama / LM Studio), or the engine built into the backend (MLX on
--- macOS, llama.cpp on Windows).
+-- local app (Ollama / LM Studio), an Other AI server, or the engine built into
+-- the backend (MLX on macOS, llama.cpp on Windows).
 --
 -- This lives here, next to the health table it reads, because two callers used
 -- to spell the same condition out by hand and drifted apart: the Plug-in
@@ -4889,8 +4944,10 @@ function SearchIndexAPI.hasAnyLlmProvider(health)
 	return health.localEngine == true
 		or health.gemini == true
 		or health.chatgpt == true
+		or health.anthropic == true
 		or health.ollama == true
 		or health.lmstudio == true
+		or health.server == true
 end
 
 -- ---------------------------------------------------------------------------
@@ -5126,6 +5183,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	addEditOpt("api_key", options.api_key)
 	addEditOpt("language", options.language)
 	addEditOpt("temperature", options.temperature)
+	addEditOpt("reasoning_effort", options.reasoning_effort)
 	addEditOpt("max_tokens", options.max_tokens)
 	addEditOpt("prompt", Util.promptForRequest(options.prompt))
 	addEditOpt("edit_intent", options.edit_intent)
@@ -5153,8 +5211,7 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	-- the photo has been exported to JPEG, and the edit guardrails need it to
 	-- know whether blown highlights still have anything behind them.
 	addEditOpt("is_raw", options.is_raw)
-	addEditOpt("ollama_base_url", options.ollama_base_url or (prefs and prefs.ollamaBaseUrl))
-	addEditOpt("lmstudio_base_url", options.lmstudio_base_url or (prefs and prefs.lmstudioBaseUrl))
+	addEditOpt("server_url", options.server_url)
 
 	local styleCatalogId = getCatalogId()
 	if styleCatalogId then
