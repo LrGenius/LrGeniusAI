@@ -762,6 +762,23 @@ pub(crate) async fn persist_edit_recipe(
         .map_err(|e| e.to_string())
 }
 
+/// The provider's warning slot as one list entry per note.
+///
+/// `generate_edit_recipe_for_photo` appends the style-training note to
+/// whatever the provider already put in `warning`, one note per line. Collected
+/// as a single entry, a provider note and a training note would reach the plugin
+/// as one combined text, which it counts as its own cause instead of grouping it
+/// with the same note on other photos.
+pub(crate) fn warning_entries(warning: Option<String>) -> Vec<String> {
+    warning
+        .iter()
+        .flat_map(|w| w.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn success_payload(
     photo_id: &str,
     recipe: &Value,
@@ -941,7 +958,7 @@ async fn finish_edit(
         }
     }
 
-    let warnings: Vec<String> = response.warning.into_iter().collect();
+    let warnings = warning_entries(response.warning);
     let mut payload = success_payload(
         photo_id,
         &recipe,
@@ -1161,6 +1178,19 @@ mod tests {
                 "{example:?} vs {target:?}"
             );
         }
+    }
+
+    #[test]
+    fn warning_entries_keeps_a_provider_note_and_a_training_note_apart() {
+        assert_eq!(
+            warning_entries(Some(
+                "Gemini fell back to high.\nStyle training skipped.".into()
+            )),
+            vec!["Gemini fell back to high.", "Style training skipped."]
+        );
+        assert_eq!(warning_entries(Some("only one".into())), vec!["only one"]);
+        assert!(warning_entries(Some(" \n".into())).is_empty());
+        assert!(warning_entries(None).is_empty());
     }
 
     #[test]

@@ -27,7 +27,7 @@ use lrg_store::{StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
 use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
-    success_payload,
+    success_payload, warning_entries,
 };
 use crate::routes::route_util::{
     compute_scene_tags, local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
@@ -326,7 +326,7 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         {
             log::error!("Failed to persist style_edit LLM-fallback recipe for {photo_id}: {e}");
         }
-        let llm_warnings: Vec<String> = llm_response.warning.into_iter().collect();
+        let llm_warnings = warning_entries(llm_response.warning);
         let mut payload = success_payload(
             &photo_id,
             &recipe,
