@@ -373,6 +373,23 @@ export LRG_MLX_MODEL_ROOT=~/.cache/lrgenius/models/mlx
 Discovery also picks up `~/.lmstudio/models` (LM Studio has shipped an MLX
 engine for a long time) and the `huggingface-cli` cache at
 `~/.cache/huggingface/hub`, so a model pulled by hand needs no second copy.
+Models from that cache are listed under their repo's name, not the snapshot
+hash.
+
+A model outside both catalogs can be downloaded by repo — "Other model from
+Hugging Face…" in the plugin, `POST /v1/llm/downloads/check` then
+`POST /v1/llm/downloads` with `repo` (see `crates/lrg-api/src/hf_repo.rs`). The
+check refuses, before any download, a repo whose `model_type` or
+`processor_class` the pinned mlx-swift-lm does not register:
+`hf_repo::MLX_VISION_MODEL_TYPES` and `MLX_VISION_PROCESSORS` copy its
+registries and must be updated with every bump of the pin in
+`native/mlx-sidecar/Package.swift`.
+
+```bash
+# Hugging Face server for catalog downloads and repo checks (a mirror, or a
+# fake in tests). Default: https://huggingface.co
+export HF_ENDPOINT=https://huggingface.co
+```
 
 There are no tuning knobs to match llama.cpp's `n_ctx`/`n_parallel`/GPU layers,
 and that is not an oversight: `GuidedGenerationLoop.run` in mlx-swift-lm
@@ -414,8 +431,11 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
 
 The image is built **without** the `llamacpp` feature and has no MLX sidecar, so
-neither local backend is available in a container — point the containerized
-server at Ollama or LM Studio, or use a cloud provider. Add
+neither local backend is available in a container. Inside the container,
+`localhost` is not the host, so Ollama and LM Studio are not found
+automatically either: enter the one on the host as the plug-in's **Other AI
+server** (e.g. `http://host.docker.internal:1234` for LM Studio), or use a cloud
+provider. Add
 `--features llamacpp` to the Dockerfile's `cargo build` (plus `cmake` and
 `libclang-dev` in the builder stage) if you want in-process inference there.
 

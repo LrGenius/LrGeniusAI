@@ -399,10 +399,15 @@ LrTasks.startAsyncTask(function()
 				combinedReport = combinedReport .. "\n\n" .. "Canceled before all photos were processed."
 			end
 
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed"),
-				combinedReport
-			)
+			local completionTitle = LOC("$$$/LrGeniusAI/RetrieveMetadata/CompletionTitle=Metadata Retrieval Completed")
+			if errorCount > 0 then
+				ErrorHandler.handleError(completionTitle, combinedReport)
+			else
+				-- Warnings only: the metadata was retrieved. The error modal is
+				-- titled "Error" and offers "Generate report", which is the wrong
+				-- thing to hand someone whose run worked (#375).
+				LrDialogs.message(completionTitle, combinedReport, "warning")
+			end
 		else
 			local summary = LOC(
 				"$$$/LrGeniusAI/RetrieveMetadata/SuccessSummary=Successfully retrieved metadata for ^1 photo(s).\nSkipped: ^2",

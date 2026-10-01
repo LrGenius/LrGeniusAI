@@ -29,7 +29,7 @@ When you try to open the `.pkg` installer or the backend binary:
 
 Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:
 - **Set the Backend Server URL:** This defaults to `http://127.0.0.1:19819` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
-- **Configure Provider/API Keys:** If you plan to use cloud providers like OpenAI or Google Gemini, enter your API keys. For external local servers like Ollama or LM Studio, ensure their respective base URLs are correctly configured.
+- **Optional AI providers:** Only if you want a cloud service or a server of your own to do the analysis: enter your OpenAI, Google Gemini or Anthropic key, or the address of an **Other AI server** (OpenRouter, a llama.cpp server, LiteLLM, or LM Studio/Ollama on another computer — see [Other AI Server](Help-Other-AI-Server)). Ollama and LM Studio running on this computer need no setup; they are found automatically.
 - ~~**Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.~~ **Removed** — the Vertex AI fields no longer exist in the Plug-in Manager (see [section 7](#7-vertex-ai-login--removed)).
 
 *Having trouble? Refer to the [Troubleshooting](Troubleshooting) guide for connectivity and API issues.*
@@ -60,15 +60,14 @@ The backend can run vision models itself. In the same settings dialog, scroll to
 the **Local AI Model** sections:
 
 - **Local AI Model — MLX** on macOS.
-- **Local AI Model (no external app)** — the built-in llama.cpp engine — on
-  Windows.
+- **Local AI Model — llama.cpp** on Windows.
 
 Each platform ships exactly one of them, so you will only ever see the section
 that applies to your machine.
 
 Pick a model (start with **Gemma 4 E4B**), click **Download**, and wait for the
 **Installed** line to list it. It then appears in the **AI Model** dropdown of
-every task as `mlx: …` or `llamacpp: …`. Full guide:
+every task as `On this Mac · …` or `On this PC · …`. Full guide:
 [Local AI Models](Help-Local-AI-Models).
 
 ## 3. Index Photos
@@ -156,4 +155,5 @@ The `./gcloud:/root/.config/gcloud` bind mount keeps your ADC credentials intact
 - [Help: Local AI Models](Help-Local-AI-Models) — built-in llama.cpp and MLX engines
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
+- [Help: Other AI Server](Help-Other-AI-Server)
 - [Troubleshooting](Troubleshooting)

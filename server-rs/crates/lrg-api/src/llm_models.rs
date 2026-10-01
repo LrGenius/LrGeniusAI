@@ -133,7 +133,13 @@ pub fn catalog_entry(id: &str) -> Option<&'static CatalogEntry> {
 
 #[must_use]
 pub fn hf_url(repo: &str, revision: &str, file: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/{revision}/{file}?download=true")
+    hf_url_at(&crate::hf_repo::hf_endpoint(), repo, revision, file)
+}
+
+/// [`hf_url`] against a given Hugging Face server.
+#[must_use]
+pub fn hf_url_at(endpoint: &str, repo: &str, revision: &str, file: &str) -> String {
+    format!("{endpoint}/{repo}/resolve/{revision}/{file}?download=true")
 }
 
 /// A usable model found on disk.
@@ -162,7 +168,7 @@ fn is_mmproj(file_name: &str) -> bool {
 ///
 /// Covers the two shapes publishers use: a K-quant or legacy quant (`q4_k_m`,
 /// `q8_0`, `iq3_xs`) and a float format (`bf16`, `f16`).
-fn is_quant_tag(segment: &str) -> bool {
+pub(crate) fn is_quant_tag(segment: &str) -> bool {
     matches!(segment, "f16" | "f32" | "bf16" | "fp16" | "fp8" | "mxfp4")
         || segment
             .trim_start_matches('i')
@@ -246,6 +252,51 @@ fn pair_models(files: &[PathBuf], source: &'static str) -> Vec<LocalModel> {
         .collect()
 }
 
+/// `true` for the second and later files of a split GGUF
+/// (`name-00002-of-00003.gguf`).
+///
+/// llama.cpp loads a split model from its first file and finds the rest by
+/// name, so only that first file is a model the user can pick; offering every
+/// part would list one model three times, two of them unloadable.
+fn is_later_split_part(file_name: &str) -> bool {
+    let stem = file_name.strip_suffix(".gguf").unwrap_or(file_name);
+    let Some((head, total)) = stem.rsplit_once("-of-") else {
+        return false;
+    };
+    let Some((_, part)) = head.rsplit_once('-') else {
+        return false;
+    };
+    let is_counter = |s: &str| s.len() == 5 && s.bytes().all(|b| b.is_ascii_digit());
+    is_counter(part) && is_counter(total) && part != "00001"
+}
+
+/// [`pair_models`] run separately for each directory.
+///
+/// A projector only ever belongs to a model beside it. Models downloaded from
+/// an arbitrary Hugging Face repo land in a folder of their own, and many
+/// publishers give the projector a generic name (`mmproj-F16.gguf`) that says
+/// nothing about the model — pairing per directory is what lets the
+/// single-projector fallback pick it up, without ever handing one repo's
+/// projector to another repo's model.
+fn pair_models_per_dir(files: &[PathBuf], source: &'static str) -> Vec<LocalModel> {
+    let mut by_dir: std::collections::BTreeMap<&Path, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for file in files {
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        if is_later_split_part(&name) {
+            continue;
+        }
+        by_dir
+            .entry(file.parent().unwrap_or(Path::new("")))
+            .or_default()
+            .push(file.clone());
+    }
+    by_dir
+        .values()
+        .flat_map(|group| pair_models(group, source))
+        .collect()
+}
+
 fn gguf_files_in(dir: &Path, max_depth: usize) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
@@ -301,17 +352,25 @@ pub fn discover_local_models() -> Vec<LocalModel> {
         });
     }
 
-    found.extend(pair_models(&gguf_files_in(&paths.dir, 1), "downloaded"));
+    found.extend(pair_models_per_dir(
+        &gguf_files_in(&paths.dir, 1),
+        "downloaded",
+    ));
 
     if let Some(home) = home() {
         let lmstudio = home.join(".lmstudio").join("models");
         if lmstudio.is_dir() {
-            found.extend(pair_models(&gguf_files_in(&lmstudio, 3), "lmstudio"));
+            found.extend(pair_models_per_dir(
+                &gguf_files_in(&lmstudio, 3),
+                "lmstudio",
+            ));
         }
     }
 
-    // A model reachable by two routes should still appear once.
-    found.dedup_by(|a, b| a.model_path == b.model_path);
+    // A model reachable by two routes should still appear once, from the
+    // higher-priority source. `Vec::dedup_by` would only merge neighbours.
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|model| seen.insert(model.model_path.clone()));
     found
 }
 
@@ -430,6 +489,41 @@ mod tests {
         }
     }
 
+    /// A repo downloaded into its own folder often names its projector
+    /// generically; per-directory pairing must still find it, and must not
+    /// lend it to a model in another folder.
+    #[test]
+    fn a_generic_projector_pairs_only_within_its_own_folder() {
+        let files = vec![
+            PathBuf::from("/m/gemma-3-12b-it-GGUF/gemma-3-12b-it-Q4_K_M.gguf"),
+            PathBuf::from("/m/gemma-3-12b-it-GGUF/mmproj-F16.gguf"),
+            PathBuf::from("/m/other/text-only-Q4_K_M.gguf"),
+        ];
+        let mut paired = pair_models_per_dir(&files, "downloaded");
+        paired.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(paired.len(), 2);
+        assert_eq!(
+            paired[0].mmproj_path,
+            Some(PathBuf::from("/m/gemma-3-12b-it-GGUF/mmproj-F16.gguf"))
+        );
+        assert!(paired[1].mmproj_path.is_none());
+    }
+
+    #[test]
+    fn only_the_first_part_of_a_split_model_is_offered() {
+        assert!(!is_later_split_part("big-Q4_K_M-00001-of-00003.gguf"));
+        assert!(is_later_split_part("big-Q4_K_M-00002-of-00003.gguf"));
+        assert!(!is_later_split_part("gemma-3-12b-it-Q4_K_M.gguf"));
+
+        let files = vec![
+            PathBuf::from("/m/big/big-Q4_K_M-00001-of-00002.gguf"),
+            PathBuf::from("/m/big/big-Q4_K_M-00002-of-00002.gguf"),
+        ];
+        let paired = pair_models_per_dir(&files, "downloaded");
+        assert_eq!(paired.len(), 1);
+        assert_eq!(paired[0].name, "big-Q4_K_M-00001-of-00002.gguf");
+    }
+
     #[test]
     fn a_model_with_no_projector_is_offered_as_text_only() {
         let files = vec![PathBuf::from("/m/text-only-Q4.gguf")];
@@ -454,7 +548,12 @@ mod tests {
 
     #[test]
     fn hf_url_points_at_the_resolve_endpoint() {
-        let url = hf_url("org/repo", "main", "model.gguf");
+        let url = hf_url_at(
+            crate::hf_repo::DEFAULT_HF_ENDPOINT,
+            "org/repo",
+            "main",
+            "model.gguf",
+        );
         assert!(url.starts_with("https://huggingface.co/org/repo/resolve/main/model.gguf"));
     }
 }
