@@ -65,6 +65,10 @@ pub struct ModelDownloadStatus {
     pub(crate) total: u64,
     pub(crate) current_file: Option<String>,
     pub(crate) error: Option<String>,
+    /// The name the finished model is offered under (`model` in a request),
+    /// so the plugin can offer to select it. Local LLM downloads only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) installed_name: Option<String>,
 }
 
 impl ModelDownloadStatus {
@@ -104,6 +108,7 @@ impl Default for ModelDownloadStatus {
             total: 0,
             current_file: None,
             error: None,
+            installed_name: None,
         }
     }
 }

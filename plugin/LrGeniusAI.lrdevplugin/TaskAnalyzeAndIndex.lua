@@ -39,7 +39,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.regenerateMetadata = prefs.regenerateMetadata or false
 
 	-- Metadata generation options
-	props.temperature = prefs.temperature or 0.1
 	props.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
 	props.prompts = prefs.prompts
@@ -73,38 +72,24 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- AI Model selection (unified across providers)
 	props.modelKey = prefs.modelKey -- format: "provider::model"
 	props.language = prefs.generateLanguage or "English"
-	props.temperature = prefs.temperature or 0.1
+	props.temperature = prefs.temperature or Defaults.defaultTemperature
+	props.reasoningEffort = prefs.reasoningEffort or Defaults.defaultReasoningEffort
 	props.maxTokens = prefs.maxTokens or Defaults.defaultMaxTokens
 	props.replaceSS = prefs.replaceSS or false
 
-	-- Build model list from server (local providers first)
-	local modelItems = {}
-
-	-- Fetch all models with API keys if configured
-	-- Server will check all providers and filter to multimodal only
-	local openaiKey = (prefs and not Util.nilOrEmpty(prefs.chatgptApiKey)) and prefs.chatgptApiKey or nil
-	local geminiKey = (prefs and not Util.nilOrEmpty(prefs.geminiApiKey)) and prefs.geminiApiKey or nil
-
-	local modelsResp = SearchIndexAPI.getModels(openaiKey, geminiKey)
-	if modelsResp and modelsResp.models then
-		for provider, list in pairs(modelsResp.models) do
-			for _, model in ipairs(list) do
-				local title = provider .. ": " .. model
-				local value = provider .. "::" .. model
-				table.insert(modelItems, { title = title, value = value })
-			end
-		end
-	end
-
-	table.sort(modelItems, function(a, b)
-		return a.title < b.title
-	end)
-	if not modelItems or #modelItems == 0 then
-		-- Fallback option if nothing matched filters
-		table.insert(modelItems, { title = "Default (built-in)", value = "qwen::" })
-	end
-	if not props.modelKey or props.modelKey == "" then
-		props.modelKey = modelItems[1].value
+	-- The model picker: every provider's models in AiProviders' order. A saved
+	-- choice that is not offered right now stays selected, marked as such, so
+	-- opening this dialog never quietly moves a run to another provider.
+	local modelsResp, modelsErr = SearchIndexAPI.getModels({ includeCloud = true })
+	local savedModelKey = AiProviders.resolveSavedKey(modelsResp, prefs.modelKey)
+	local modelItems = AiProviders.modelItems(modelsResp, savedModelKey)
+	props.modelKey = AiProviders.initialKey(modelItems, savedModelKey)
+	-- Problems listing a provider the user set up (an Other AI server that
+	-- cannot be reached, a rejected key) are shown right under the picker, as
+	-- is a backend that did not answer at all.
+	local modelWarnings = SearchIndexAPI.condenseMessages(modelsResp and modelsResp.warnings)
+	if not modelsResp then
+		modelWarnings = "The list of AI models could not be loaded: " .. tostring(modelsErr or "no answer")
 	end
 
 	-- Context options
@@ -302,12 +287,25 @@ local function showAnalyzeAndIndexDialog(ctx)
 							title = LOC("$$$/lrc-ai-assistant/PluginInfoDialogSections/aiModel=AI Model:"),
 							width = share("labelWidth"),
 						}),
-						f:popup_menu({
-							value = bind("modelKey"),
-							items = modelItems,
-							width = 300,
+						f:column({
+							f:popup_menu({
+								value = bind("modelKey"),
+								items = modelItems,
+								width = 300,
+							}),
+							-- Only there when there is something to say; an
+							-- empty text would still take up its row.
+							modelWarnings and f:static_text({
+								title = modelWarnings,
+								text_color = LrColor(0.8, 0, 0),
+								size = "small",
+								wrap = true,
+								width = 300,
+							}) or nil,
 						}),
 					}),
+					-- Which of the two settings below reaches the model
+					-- depends on the provider: see AiProviders.appliesTemperature.
 					f:row({
 						f:static_text({
 							title = LOC("$$$/LrGeniusAI/AnalyzeAndIndex/Temperature=Temperature:"),
@@ -315,14 +313,62 @@ local function showAnalyzeAndIndexDialog(ctx)
 						}),
 						f:slider({
 							value = bind("temperature"),
+							enabled = bind({
+								key = "modelKey",
+								transform = function(v)
+									return AiProviders.appliesTemperature(v)
+								end,
+							}),
 							min = 0.0,
 							max = 0.5,
 							integral = false,
 							width = 300,
 						}),
 						f:static_text({
-							title = bind("temperature"),
+							title = bind({
+								key = "temperature",
+								transform = function(v)
+									return string.format("%.2f", tonumber(v) or 0)
+								end,
+							}),
 							width = 40,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = "Analysis depth:",
+							width = share("labelWidth"),
+						}),
+						f:popup_menu({
+							value = bind("reasoningEffort"),
+							items = Defaults.reasoningEffortItems,
+							enabled = bind({
+								key = "modelKey",
+								transform = function(v)
+									return AiProviders.appliesReasoningEffort(v)
+								end,
+							}),
+							width = 300,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = "",
+							width = share("labelWidth"),
+						}),
+						f:static_text({
+							title = bind({
+								key = "modelKey",
+								transform = function(v)
+									return AiProviders.generationSettingsHint(v)
+								end,
+							}),
+							size = "small",
+							wrap = true,
+							-- Sized for the longest hint up front: the view is laid
+							-- out once, and the hint changes with the model.
+							height_in_lines = 2,
+							width = 300,
 						}),
 					}),
 					f:row({
@@ -677,15 +723,16 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.generateAltText = props.generateAltText
 		-- Persist selected model key and provider for backwards compatibility
 		prefs.modelKey = props.modelKey
-		if props.modelKey then
-			local sep = string.find(props.modelKey, "::", 1, true)
-			if sep then
-				local prov = string.sub(props.modelKey, 1, sep - 1)
-				prefs.ai = prov
-			end
+		local chosenProvider = AiProviders.splitModelKey(props.modelKey)
+		if chosenProvider then
+			prefs.ai = chosenProvider
 		end
+		-- Checked here, against the list the picker showed, and reported by the
+		-- run before any photo is exported.
+		props.modelUnavailableReason = AiProviders.unavailableReason(modelsResp, props.modelKey)
 		prefs.generateLanguage = props.language
 		prefs.temperature = props.temperature
+		prefs.reasoningEffort = props.reasoningEffort
 		prefs.maxTokens = props.maxTokens
 		prefs.submitKeywords = props.submitKeywords
 		prefs.submitFaceNames = props.submitFaceNames
@@ -867,17 +914,21 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- Parse provider and model from unified modelKey (format: provider::model)
-		local providerFromKey, modelFromKey = nil, nil
-		if props.modelKey then
-			local sep = string.find(props.modelKey, "::", 1, true)
-			if sep then
-				providerFromKey = string.sub(props.modelKey, 1, sep - 1)
-				modelFromKey = string.sub(props.modelKey, sep + 2)
-				if modelFromKey == "" then
-					modelFromKey = nil
-				end
-			else
-				providerFromKey = props.modelKey -- fallback
+		local providerFromKey, modelFromKey = AiProviders.splitModelKey(props.modelKey)
+
+		-- The language model only matters for metadata; embeddings, faces and
+		-- species run without one.
+		local connection = {}
+		if props.enableMetadata then
+			if props.modelUnavailableReason then
+				LrDialogs.showError(props.modelUnavailableReason)
+				return
+			end
+			local connectionErr
+			connection, connectionErr = AiProviders.connectionOptions(providerFromKey, prefs)
+			if not connection then
+				LrDialogs.showError(connectionErr)
+				return
 			end
 		end
 
@@ -888,6 +939,7 @@ LrTasks.startAsyncTask(function()
 			model = modelFromKey,
 			language = props.language,
 			temperature = props.temperature,
+			reasoning_effort = props.reasoningEffort,
 			max_tokens = props.maxTokens,
 			generate_keywords = props.generateKeywords,
 			generate_caption = props.generateCaption,
@@ -917,30 +969,9 @@ LrTasks.startAsyncTask(function()
 			options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
 				or "us-central1"
 		end
-		-- Add API key for cloud providers if configured
-		if providerFromKey == "chatgpt" and prefs then
-			log:trace("Added ChatGPT API key to options")
-			if prefs.chatgptApiKey == nil or prefs.chatgptApiKey == "" then
-				LrDialogs.showError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingChatGPTAPIKey=ChatGPT API key is not configured. Please set it in the plugin preferences."
-					)
-				)
-				return
-			end
-			options.api_key = prefs.chatgptApiKey
-		elseif providerFromKey == "gemini" and prefs then
-			if prefs.geminiApiKey == nil or prefs.geminiApiKey == "" then
-				LrDialogs.showError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingGeminiAPIKey=Gemini API key is not configured. Please set it in the plugin preferences."
-					)
-				)
-				return
-			end
-			log:trace("Added Gemini API key to options")
-			options.api_key = prefs.geminiApiKey
-		end
+		-- The key and server address the chosen provider needs, if any.
+		options.api_key = connection.api_key
+		options.server_url = connection.server_url
 
 		if props.enableVertexAI and prefs then
 			local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
@@ -1172,6 +1203,11 @@ LrTasks.startAsyncTask(function()
 			log:trace("Saved species data for " .. speciesCount .. " photo(s)")
 		end
 
+		-- Set when the review dialog stops the save pass below: photos already
+		-- written stay written, the rest were never looked at. The run still
+		-- ends with the backend's status, so this has to be said separately.
+		local reviewCanceledAt = nil
+
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
 			log:trace("Saving metadata for processed photos...")
 			local savedCount = 0
@@ -1179,7 +1215,7 @@ LrTasks.startAsyncTask(function()
 
 			local skipFromHere = false
 
-			for _, photo in ipairs(processedPhotos) do
+			for photoIndex, photo in ipairs(processedPhotos) do
 				-- Process responses if validation is enabled or just save metadata
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
@@ -1255,6 +1291,10 @@ LrTasks.startAsyncTask(function()
 								SearchIndexAPI.removePhotoMetadata(photoId)
 								Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
 							elseif result == "cancel" then
+								-- Cancel during the review stops the save pass
+								-- from here on (#375); the remaining photos are
+								-- reported after the loop, not just logged.
+								reviewCanceledAt = photoIndex
 								break
 							end
 						else
@@ -1318,6 +1358,42 @@ LrTasks.startAsyncTask(function()
 
 		progressScope:done()
 
+		-- Every warning of the run, whatever the outcome: the backend's (per
+		-- photo), the run's own, and failed keyword writes. The success and
+		-- partial-failure summaries each used to drop a different one of these.
+		local function collectWarnings()
+			local parts = {}
+			-- A numeric loop, not ipairs: any of the three may be nil.
+			local sources = {
+				combinedWarnings,
+				SearchIndexAPI.condenseMessages(runWarnings),
+				SearchIndexAPI.condenseMessages(metadataWarnings),
+			}
+			for i = 1, 3 do
+				if not Util.nilOrEmpty(sources[i]) then
+					table.insert(parts, sources[i])
+				end
+			end
+			return #parts > 0 and table.concat(parts, "\n") or nil
+		end
+
+		-- Say how much the review cancel above left untouched. Only the log
+		-- knows about it otherwise: the backend status the run reports is
+		-- unaffected by a user stopping the save pass (#375).
+		local function collectCancelNote()
+			if not reviewCanceledAt then
+				return nil
+			end
+			local remaining = #processedPhotos - reviewCanceledAt
+			return "The review was cancelled at photo "
+				.. tostring(reviewCanceledAt)
+				.. " of "
+				.. tostring(#processedPhotos)
+				.. ", so the last "
+				.. tostring(remaining)
+				.. " photo(s) were left as they were."
+		end
+
 		-- Show completion message based on status
 		if status == "canceled" then
 			LrDialogs.message(
@@ -1344,29 +1420,35 @@ LrTasks.startAsyncTask(function()
 				processed,
 				failed
 			)
-			if #metadataWarnings > 0 then
-				summary = summary .. "\n\nWarnings:\n" .. SearchIndexAPI.condenseMessages(metadataWarnings)
+			local warningText = collectWarnings()
+			if warningText then
+				summary = summary .. "\n\nWarnings:\n" .. warningText
+			end
+			local cancelNote = collectCancelNote()
+			if cancelNote then
+				summary = summary .. "\n\n" .. cancelNote
 			end
 			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(summary, combinedError)
+			elseif cancelNote then
+				LrDialogs.message("Task Canceled", summary)
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"), summary)
 			end
 		else -- success
 			local msg =
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
-			local allWarnings = {}
-			if combinedWarnings then
-				table.insert(allWarnings, combinedWarnings)
+			local warningText = collectWarnings()
+			local cancelNote = collectCancelNote()
+			if cancelNote then
+				msg = msg .. "\n\n" .. cancelNote
 			end
-			if #runWarnings > 0 then
-				local condensed = SearchIndexAPI.condenseMessages(runWarnings)
-				if condensed then
-					table.insert(allWarnings, condensed)
-				end
+			if warningText then
+				msg = msg .. "\n\nWarnings:\n" .. warningText
 			end
-			if #allWarnings > 0 then
-				msg = msg .. "\n\nWarnings:\n" .. table.concat(allWarnings, "\n")
+			if cancelNote then
+				LrDialogs.message("Task Canceled", msg)
+			elseif warningText then
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)

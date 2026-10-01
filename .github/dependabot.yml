@@ -47,3 +47,15 @@ updates:
           - "patch"
     labels:
       - "dependencies"
+    ignore:
+      # llama-cpp-sys-2 0.1.157 copies no DLLs next to the binaries on Windows,
+      # so every test binary that links llama.cpp fails to load, and only the
+      # Windows release leg runs those tests -- the bump went green in PR CI
+      # and failed the v3.2.0 release two hours in. Both crates are pinned to
+      # 0.1.156 in server-rs/crates/lrg-llama/Cargo.toml, which says what to
+      # check before lifting this. Open-ended because upstream main still has
+      # the bug; a later release has to be tried by hand.
+      - dependency-name: "llama-cpp-2"
+        versions: [">= 0.1.157"]
+      - dependency-name: "llama-cpp-sys-2"
+        versions: [">= 0.1.157"]

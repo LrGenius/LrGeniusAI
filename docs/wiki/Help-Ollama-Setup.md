@@ -18,11 +18,18 @@ You can browse all available vision models here:
 - [https://ollama.com/search?c=vision](https://ollama.com/search?c=vision)
   — each model page shows the required VRAM per quantisation variant.
 
-## 3. Configure plugin/backend
+## 3. Nothing to configure in the plugin
 
-- Set `Ollama Base URL` in plugin settings
-- Keep default when Ollama runs locally
-- Use explicit host URL when Ollama runs on another machine
+LrGeniusAI finds Ollama on this computer by itself, at its default address
+(`http://localhost:11434`). Once Ollama is running, its models appear in every
+task's **AI Model** list as `Ollama · <model>`.
+
+**Ollama on another computer** (or on a changed port): enter its address, e.g.
+`http://nas.local:11434`, as the **Other AI server** — see
+[Other AI Server](Help-Other-AI-Server). That connection goes through Ollama's
+OpenAI-compatible API, which cannot set the context size per request; raise it
+on that computer if long prompts get cut off
+(`OLLAMA_CONTEXT_LENGTH=8192 ollama serve`).
 
 ## Notes
 

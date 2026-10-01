@@ -31,6 +31,7 @@ Welcome to the project wiki.
 - [Help: Local AI Models](Help-Local-AI-Models) — built-in llama.cpp & MLX engines, no external app
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
+- [Help: Other AI Server](Help-Other-AI-Server) — OpenRouter, llama.cpp server, LiteLLM, vLLM
 - [Google Vertex AI Login](Google-Vertex-AI-Login) — *removed, kept for reference*
 
 ### Other
