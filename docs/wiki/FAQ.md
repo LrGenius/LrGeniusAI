@@ -118,7 +118,8 @@ Yes. Advanced Search only works on photos that have been indexed (embeddings cre
 - With a local model, turn **off** keyword aliases and bilingual keywords — both make the model emit structured keyword objects, which small models handle badly (often returning no keywords at all).
 - Add **Photo Context** (folder names, capture date, GPS coordinates) to give the AI more information.
 - Write a custom **System Prompt** in *Plug-in Manager → Prompts* to guide the output style.
-- Adjust the **Temperature** slider — lower values produce more consistent output.
+- With a cloud model that reasons (GPT-5, Gemini 2.5/3, Claude), raise **Analysis depth** to *Balanced* or *Thorough* — the model thinks longer before it answers, at the cost of time and tokens.
+- With a local model, lower the **Temperature** slider — lower values produce more consistent output. Models that reason ignore it; the dialog greys out whichever setting the chosen model does not use.
 
 ### How do I re-index photos that have already been indexed?
 

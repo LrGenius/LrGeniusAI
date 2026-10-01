@@ -24,10 +24,10 @@ use lrg_imaging::location::LocationTags;
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
-use lrg_providers::types::{KeywordCategories, KeywordTree};
+use lrg_providers::types::{KeywordCategories, KeywordTree, ReasoningEffort};
 use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE, VERTEX_TABLE};
 
-use crate::routes::route_util::parse_multipart;
+use crate::routes::route_util::{parse_multipart, reasoning_effort_field};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -127,7 +127,9 @@ pub(crate) struct PhotoOverrides {
 /// separate since it's only consulted when `compute_metadata` is set.
 struct MetadataOptions {
     language: String,
+    /// Only the local providers use it; the cloud ones take `reasoning_effort`.
     temperature: f64,
+    reasoning_effort: ReasoningEffort,
     max_tokens: Option<u32>,
     generate_keywords: bool,
     generate_caption: bool,
@@ -408,7 +410,12 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             temperature: fields
                 .get("temperature")
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(0.2),
+                .unwrap_or(0.1),
+            // An invalid value is answered with a 400 in `process_batch`.
+            reasoning_effort: reasoning_effort_field(
+                fields.get("reasoning_effort").map(String::as_str),
+            )
+            .unwrap_or_default(),
             max_tokens: fields.get("max_tokens").and_then(|s| s.parse().ok()),
             generate_keywords: bool_field(fields, "generate_keywords", true),
             generate_caption: bool_field(fields, "generate_caption", true),
@@ -713,6 +720,13 @@ pub(crate) async fn process_batch(
     reject_empty_batch: bool,
 ) -> Response {
     let options = parse_options(&fields);
+    if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response();
+    }
 
     // The generic auto-bind middleware only peeks JSON bodies and query
     // strings (a multipart body can't be cheaply peeked and replayed), so
@@ -2308,6 +2322,7 @@ fn build_metadata_request(
         generate_alt_text: mo.generate_alt_text,
         language: mo.language.clone(),
         temperature: mo.temperature,
+        reasoning_effort: mo.reasoning_effort,
         max_tokens: mo.max_tokens,
         system_prompt: mo.system_prompt.clone(),
         user_prompt: None,
@@ -2495,6 +2510,21 @@ mod keyword_option_tests {
         assert_eq!(req.existing_keywords, Some(vec!["mine".to_string()]));
         assert_eq!(req.existing_face_tags, Some(vec!["Ivo".to_string()]));
         assert_eq!(req.folder_names.as_deref(), Some("MyFolder"));
+    }
+
+    /// Analysis depth reaches the provider request; an absent one is the
+    /// `low` every request asked for before the setting existed.
+    #[test]
+    fn analysis_depth_reaches_the_request() {
+        let opts = parse_options(&fields(&[("reasoning_effort", "high")]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
+        assert_eq!(req.reasoning_effort, ReasoningEffort::High);
+
+        let opts = parse_options(&fields(&[]));
+        let req = build_metadata_request(&opts, &PhotoOverrides::default(), &[], "p1", None, None);
+        assert_eq!(req.reasoning_effort, ReasoningEffort::Low);
+        // The plug-in's own default, not a second one of the backend's.
+        assert_eq!(req.temperature, 0.1);
     }
 
     /// The single-photo path sends no per-image context, so it must keep

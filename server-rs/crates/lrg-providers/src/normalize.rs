@@ -360,6 +360,14 @@ pub fn normalize_keywords(
     }
 }
 
+/// Two warnings in one slot, neither lost.
+pub fn join_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(a), Some(b)) => Some(format!("{a} {b}")),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Names the fields the caller asked for that the model did not deliver.
 ///
 /// This is the metadata path's "degraded success": `success: true` with a

@@ -25,10 +25,11 @@
 //!   with a 400, so the plug-in's temperature setting does not apply here.
 //! * **Thinking.** Newer models think by default, and some cannot be told not
 //!   to. Thinking is billed as output and counts against `max_tokens`, so a
-//!   request asks for `effort: low` where the model takes it — describing a
-//!   photo gains nothing from long deliberation — and adds
-//!   [`THINKING_HEADROOM`] to the token limit, so thinking the user never sees
-//!   does not cut the answer off.
+//!   request sends the plug-in's Analysis depth as `effort` where the model
+//!   takes that level — `low` by default, since describing a photo rarely
+//!   gains from long deliberation — and adds
+//!   [`ReasoningEffort::thinking_headroom`] to the token limit, so thinking
+//!   the user never sees does not cut the answer off.
 //! * **Refusals.** A model's safety classifier can decline with a 200 and
 //!   `stop_reason: "refusal"`. Where Anthropic offers it, the request opts
 //!   into server-side fallback, and a photo another model answered says so.
@@ -45,7 +46,7 @@ use crate::edit_recipe::{normalize_edit_recipe, openai_edit_recipe_schema};
 use crate::image_encode::image_to_base64;
 use crate::keyword_taxonomy::KeywordLeafEncoding;
 use crate::normalize::{
-    alt_text_from, extract_json_value, missing_field_warning, normalize_keywords,
+    alt_text_from, extract_json_value, join_warnings, missing_field_warning, normalize_keywords,
 };
 use crate::prompts::{
     prepare_edit_system_prompt, prepare_edit_user_prompt_split, prepare_system_prompt,
@@ -54,7 +55,7 @@ use crate::prompts::{
 use crate::schema::prepare_response_structure;
 use crate::types::{
     EditGenerationRequest, EditGenerationResponse, MetadataGenerationRequest,
-    MetadataGenerationResponse,
+    MetadataGenerationResponse, ReasoningEffort,
 };
 
 const API_BASE: &str = "https://api.anthropic.com/v1";
@@ -62,8 +63,6 @@ const API_BASE: &str = "https://api.anthropic.com/v1";
 /// header is required" — what the Other AI server ran into when pointed here.
 const API_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 2048;
-/// Added to the user's Max Tokens for a model that thinks. See the module docs.
-const THINKING_HEADROOM: u32 = 4096;
 /// The default for [`AnthropicProvider::generate_text`] when the caller names
 /// no model.
 const DEFAULT_TEXT_MODEL: &str = "claude-opus-5-5";
@@ -91,14 +90,31 @@ const FALLBACK_MODELS: [&str; 5] = [
     "claude-sonnet-5-5",
 ];
 
+/// Which `output_config.effort` levels a model accepts, one answer per level.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct EffortLevels {
+    low: Option<bool>,
+    medium: Option<bool>,
+    high: Option<bool>,
+}
+
+impl EffortLevels {
+    fn accepts(&self, effort: ReasoningEffort) -> Option<bool> {
+        match effort {
+            ReasoningEffort::Low => self.low,
+            ReasoningEffort::Medium => self.medium,
+            ReasoningEffort::High => self.high,
+        }
+    }
+}
+
 /// What `/v1/models` says about one model. `None` wherever it did not say —
 /// every decision below then takes the choice that cannot cause a 400.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ModelInfo {
     image_input: Option<bool>,
     structured_outputs: Option<bool>,
-    /// Whether `output_config.effort: "low"` is accepted.
-    low_effort: Option<bool>,
+    effort: EffortLevels,
     thinking: Option<bool>,
     /// The model's own output cap.
     max_output: Option<u32>,
@@ -112,12 +128,18 @@ impl ModelInfo {
                 .and_then(|c| c.get("supported"))
                 .and_then(Value::as_bool)
         };
+        // No effort at all means no level of it either, whatever the leaf says.
+        let effort_level = |level: &str| match supported("/effort") {
+            Some(false) => Some(false),
+            _ => supported(&format!("/effort/{level}")),
+        };
         ModelInfo {
             image_input: supported("/image_input"),
             structured_outputs: supported("/structured_outputs"),
-            low_effort: match supported("/effort") {
-                Some(false) => Some(false),
-                _ => supported("/effort/low"),
+            effort: EffortLevels {
+                low: effort_level("low"),
+                medium: effort_level("medium"),
+                high: effort_level("high"),
             },
             thinking: supported("/thinking"),
             max_output: entry
@@ -133,12 +155,13 @@ impl ModelInfo {
         self.image_input != Some(false) && self.structured_outputs != Some(false)
     }
 
-    /// `max_tokens` for a request whose answer may take `requested` tokens.
-    fn token_limit(&self, requested: u32) -> u32 {
+    /// `max_tokens` for a request whose answer may take `requested` tokens,
+    /// thinking at `effort`.
+    fn token_limit(&self, requested: u32, effort: ReasoningEffort) -> u32 {
         let limit = if self.thinking == Some(false) {
             requested
         } else {
-            requested.saturating_add(THINKING_HEADROOM)
+            requested.saturating_add(effort.thinking_headroom())
         };
         self.max_output.map_or(limit, |cap| limit.min(cap))
     }
@@ -378,6 +401,8 @@ struct MessageRequest<'a> {
     /// Already passed through [`anthropic_schema`].
     schema: Option<Value>,
     max_tokens: u32,
+    /// Sent only where `info` says the model takes this level.
+    effort: ReasoningEffort,
     info: ModelInfo,
 }
 
@@ -418,8 +443,8 @@ impl MessageRequest<'_> {
             body["system"] = json!([{"type": "text", "text": self.system}]);
         }
         let mut output_config = Map::new();
-        if self.info.low_effort == Some(true) {
-            output_config.insert("effort".into(), json!("low"));
+        if self.info.effort.accepts(self.effort) == Some(true) {
+            output_config.insert("effort".into(), json!(self.effort.as_str()));
         }
         if let Some(schema) = &self.schema {
             output_config.insert(
@@ -623,14 +648,6 @@ fn parse_answer(text: &str) -> Result<Value, String> {
         })
 }
 
-/// Two warnings in one slot, neither lost.
-fn join_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
-    match (first, second) {
-        (Some(a), Some(b)) => Some(format!("{a} {b}")),
-        (a, b) => a.or(b),
-    }
-}
-
 pub struct AnthropicProvider {
     client: reqwest::Client,
     api_key: String,
@@ -828,7 +845,8 @@ impl AnthropicProvider {
             prompt: &prompt,
             image_b64: None,
             schema: None,
-            max_tokens: info.token_limit(4096),
+            max_tokens: info.token_limit(4096, ReasoningEffort::Low),
+            effort: ReasoningEffort::Low,
             info,
         };
         let result = match self.create_message(&request, TEXT_TIMEOUT).await {
@@ -865,7 +883,8 @@ impl AnthropicProvider {
             prompt: &prompt,
             image_b64: Some(&image_b64),
             schema: Some(anthropic_schema(&prepare_response_structure(request))),
-            max_tokens: info.token_limit(requested),
+            max_tokens: info.token_limit(requested, request.reasoning_effort),
+            effort: request.reasoning_effort,
             info,
         };
         let result = match provider.create_message(&call, GENERATION_TIMEOUT).await {
@@ -954,7 +973,8 @@ impl AnthropicProvider {
             prompt: &prompt,
             image_b64: Some(&image_b64),
             schema: Some(anthropic_schema(openai_edit_recipe_schema(request.is_raw))),
-            max_tokens: info.token_limit(requested),
+            max_tokens: info.token_limit(requested, request.reasoning_effort),
+            effort: request.reasoning_effort,
             info,
         };
         let result = match provider.create_message(&call, GENERATION_TIMEOUT).await {
@@ -1122,7 +1142,10 @@ mod tests {
     fn info(thinking: Option<bool>, low_effort: Option<bool>) -> ModelInfo {
         ModelInfo {
             thinking,
-            low_effort,
+            effort: EffortLevels {
+                low: low_effort,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -1226,7 +1249,12 @@ mod tests {
                 "image_input": {"supported": true},
                 "structured_outputs": {"supported": true},
                 "thinking": {"supported": true, "types": {"adaptive": {"supported": true}}},
-                "effort": {"supported": true, "low": {"supported": true}},
+                "effort": {
+                    "supported": true,
+                    "low": {"supported": true},
+                    "medium": {"supported": true},
+                    "high": {"supported": false},
+                },
             }
         });
         assert_eq!(
@@ -1234,15 +1262,21 @@ mod tests {
             ModelInfo {
                 image_input: Some(true),
                 structured_outputs: Some(true),
-                low_effort: Some(true),
+                effort: EffortLevels {
+                    low: Some(true),
+                    medium: Some(true),
+                    high: Some(false),
+                },
                 thinking: Some(true),
                 max_output: Some(128000),
             }
         );
-        // No effort at all means no low effort either, whatever the leaf says.
+        // No effort at all means no level of it either, whatever the leaf says.
         let no_effort =
             json!({"capabilities": {"effort": {"supported": false, "low": {"supported": true}}}});
-        assert_eq!(ModelInfo::from_entry(&no_effort).low_effort, Some(false));
+        let levels = ModelInfo::from_entry(&no_effort).effort;
+        assert_eq!(levels.low, Some(false));
+        assert_eq!(levels.high, Some(false));
         assert_eq!(ModelInfo::from_entry(&json!({})), ModelInfo::default());
     }
 
@@ -1270,18 +1304,21 @@ mod tests {
 
     #[test]
     fn thinking_models_get_headroom_within_the_models_cap() {
+        use ReasoningEffort::{High, Low};
+        // Low keeps the 4096 every request had before Analysis depth existed.
+        assert_eq!(info(Some(true), None).token_limit(2048, Low), 2048 + 4096);
         assert_eq!(
-            info(Some(true), None).token_limit(2048),
-            2048 + THINKING_HEADROOM
+            info(Some(true), None).token_limit(2048, High),
+            2048 + High.thinking_headroom()
         );
         // Unknown is treated as thinking: headroom costs nothing unless used.
-        assert_eq!(info(None, None).token_limit(2048), 2048 + THINKING_HEADROOM);
-        assert_eq!(info(Some(false), None).token_limit(2048), 2048);
+        assert_eq!(info(None, None).token_limit(2048, Low), 2048 + 4096);
+        assert_eq!(info(Some(false), None).token_limit(2048, High), 2048);
         let capped = ModelInfo {
             max_output: Some(3000),
             ..Default::default()
         };
-        assert_eq!(capped.token_limit(2048), 3000);
+        assert_eq!(capped.token_limit(2048, High), 3000);
     }
 
     fn prompt() -> SplitPrompt {
@@ -1301,6 +1338,7 @@ mod tests {
             image_b64: Some("AAAA"),
             schema: Some(json!({"type": "object"})),
             max_tokens: 6144,
+            effort: ReasoningEffort::Low,
             info: ModelInfo::default(),
         };
         let body = request.body(false);
@@ -1322,7 +1360,7 @@ mod tests {
     #[test]
     fn effort_is_sent_only_to_models_that_take_it() {
         let prompt = prompt();
-        let body = |info: ModelInfo| {
+        let body_at = |info: ModelInfo, effort: ReasoningEffort| {
             MessageRequest {
                 model: "m",
                 system: "",
@@ -1330,10 +1368,12 @@ mod tests {
                 image_b64: None,
                 schema: None,
                 max_tokens: 100,
+                effort,
                 info,
             }
             .body(false)
         };
+        let body = |info: ModelInfo| body_at(info, ReasoningEffort::Low);
         assert_eq!(
             body(info(None, Some(true)))["output_config"]["effort"],
             "low"
@@ -1343,6 +1383,25 @@ mod tests {
                 .get("output_config")
                 .is_none());
         }
+        // The level asked for, where the model lists that level...
+        let all_levels = ModelInfo {
+            effort: EffortLevels {
+                low: Some(true),
+                medium: Some(true),
+                high: Some(true),
+            },
+            ..Default::default()
+        };
+        for effort in [ReasoningEffort::Medium, ReasoningEffort::High] {
+            assert_eq!(
+                body_at(all_levels, effort)["output_config"]["effort"],
+                effort.as_str()
+            );
+        }
+        // ...and nothing where it does not: low support says nothing about high.
+        assert!(body_at(info(None, Some(true)), ReasoningEffort::High)
+            .get("output_config")
+            .is_none());
         // An empty system prompt is left out, not sent as an empty block.
         assert!(body(ModelInfo::default()).get("system").is_none());
     }
@@ -1362,6 +1421,7 @@ mod tests {
             image_b64: None,
             schema: None,
             max_tokens: 100,
+            effort: ReasoningEffort::Low,
             info: ModelInfo::default(),
         };
         assert_eq!(request.body(true)["fallbacks"], "default");

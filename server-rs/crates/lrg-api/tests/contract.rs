@@ -1000,6 +1000,77 @@ async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
 }
 
 // ---------------------------------------------------------------------------
+// Analysis depth (`reasoning_effort`): a value that is not a level is refused
+// by name rather than quietly run — and billed — at another level.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn index_by_path_refuses_an_unknown_analysis_depth() {
+    let (app, _) = fresh_app();
+    let body = serde_json::json!({
+        "images": [{"path": "/nonexistent/photo1.jpg", "photo_id": "photo1"}],
+        "tasks": ["metadata"],
+        "reasoning_effort": "max",
+    });
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/photos/by-path")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("reasoning_effort") && error.contains("max"),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn edit_routes_refuse_an_unknown_analysis_depth() {
+    let (app, _) = fresh_app();
+    let fields = [("photo_id", "photo1"), ("reasoning_effort", "extreme")];
+    let image = Some(("photo1.jpg", b"not-a-real-jpeg".as_slice()));
+
+    let (status, json) = style_edit_request(app.clone(), &fields, image).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+
+    let (content_type, body) = multipart_body(&fields, image);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/edit/recipe")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = serde_json::json!({
+        "image": "AAAA",
+        "photo_id": "photo1",
+        "filename": "photo1.jpg",
+        "reasoning_effort": "extreme",
+    });
+    let response = app
+        .oneshot(
+            Request::post("/v1/edit/recipe/base64")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
 // Path layout: the `/v1` prefix and the unversioned bootstrap contract
 // ---------------------------------------------------------------------------
 

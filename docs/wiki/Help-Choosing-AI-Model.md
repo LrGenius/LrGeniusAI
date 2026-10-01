@@ -31,10 +31,20 @@ Configure in *Plug-in Manager → Optional AI providers → Google Gemini key*. 
   `gemini-3.1-pro-preview` — latest preview tier. Expect higher quality and
   better instruction following, but preview pricing/quotas can change.
 
-The backend automatically tunes a thinking budget for `gemini-2.5-*` and sets
-a low thinking level for every Gemini 3 model (`gemini-3-*`, `gemini-3.x-*`),
-so you don't need to configure that yourself. Thinking tokens count against
-**Max Tokens** and are included in the token totals the server logs.
+How much a Gemini model thinks follows **Analysis depth** in the Analyze &
+Index dialog: every Gemini 3 model (`gemini-3-*`, `gemini-3.x-*`) gets the
+matching thinking level (*Fast* = `low`, *Balanced* = `medium`, *Thorough* =
+`high`), and `gemini-2.5-*` a thinking budget (the smallest the model takes at
+*Fast*, 2048 tokens at *Balanced*, the model's own choice at *Thorough*).
+Thinking tokens count against the token limit, so the backend adds room for
+them on top of **Max Tokens** (4096 / 8192 / 16384 tokens by depth) whenever
+the model thinks; they are billed as output and included in the token totals
+the server logs. A Gemini 3 model that does not offer *Balanced* is asked again
+at *Thorough*, and the run says so.
+
+Gemini 3 is sent no temperature: Google asks for its default there, and lower
+values can make it repeat itself. The **Temperature** slider still applies to
+`gemini-2.5-*`.
 
 If a Gemini model reports that it stopped because the token limit was reached,
 raise Max Tokens to 4096 or higher. If the same photo keeps failing at a higher
@@ -51,15 +61,16 @@ Configure in *Plug-in Manager → Optional AI providers → OpenAI key*. Models 
 - `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.4-pro` — newest GPT-5.4
   tier; `gpt-5.4-pro` is the highest-quality option but the most expensive.
 
-Note: GPT-5 and GPT-5.4 models ignore the `temperature` slider and use a
-fixed reasoning effort — small differences in plugin temperature settings
-will not affect output for these models.
+Note: GPT-5 and GPT-5.4 models ignore the **Temperature** slider. Their
+`reasoning_effort` follows **Analysis depth** instead (*Fast* = `low`,
+*Balanced* = `medium`, *Thorough* = `high`). `gpt-4.1` does not reason: it
+uses the temperature and ignores Analysis depth.
 
-They do use the **Max Tokens** setting (*General tab → AI Model section*),
-and they spend part of that budget on internal reasoning before writing a
-single word of the answer. If a GPT-5 model reports that it stopped because
-the token limit was reached, raise Max Tokens to 4096 or higher — the same
-value that is comfortable for `gpt-4.1` can be too tight here.
+GPT-5 models spend part of the token limit on internal reasoning before
+writing a single word of the answer, so the backend adds room for it on top of
+**Max Tokens** (4096 / 8192 / 16384 tokens by depth). If a GPT-5 model still
+reports that it stopped because the token limit was reached, lower Analysis
+depth or raise Max Tokens.
 
 ### Anthropic Claude
 
@@ -84,9 +95,12 @@ What the backend does for you:
   Anthropic's structured outputs, so keywords, caption and title arrive in the
   expected shape.
 - **Thinking.** Newer Claude models think before answering, and some cannot
-  turn it off. The backend asks for a low effort where the model supports it
-  and adds 4096 tokens to **Max Tokens** for that thinking, so a photo is not
-  cut off by reasoning you never see. Thinking tokens are billed as output.
+  turn it off. The backend sends **Analysis depth** as the model's `effort`
+  (*Fast* = `low`, *Balanced* = `medium`, *Thorough* = `high`) where the model
+  lists that level, and otherwise leaves the model at its own default. It adds
+  room for thinking on top of **Max Tokens** (4096 / 8192 / 16384 tokens by
+  depth), so a photo is not cut off by reasoning you never see. Thinking
+  tokens are billed as output.
 - **Temperature.** Current Claude models reject a temperature setting, so the
   plugin's temperature slider does not apply to them.
 - **Prompt caching.** The part of the prompt that is the same for every photo of

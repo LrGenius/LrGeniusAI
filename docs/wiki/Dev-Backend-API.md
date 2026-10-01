@@ -93,6 +93,8 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `llm_n_ctx` | int | `llamacpp` only: context window override (0/absent = default) |
 | `llm_n_parallel` | int | `llamacpp` only: photos decoded concurrently |
 | `llm_gpu_layers` | int | `llamacpp` only: layers offloaded to the GPU (`0` = CPU only) |
+| `temperature` | float | Sampling temperature, default `0.1`. Only the local providers (`llamacpp`, `ollama`, `lmstudio`, `openai_compatible`) use it: OpenAI reasoning models get a fixed `1.0`, Anthropic and Gemini 3 are sent none, and MLX's guided generation samples on its own settings |
+| `reasoning_effort` | string | The plug-in's *Analysis depth*: `low` (default), `medium` or `high`. Sent as OpenAI `reasoning_effort`, Gemini `thinkingLevel` (3.x) or `thinkingBudget` (2.5), and Anthropic `output_config.effort` where the model lists that level; room for thinking (4096 / 8192 / 16384 tokens) is added to `max_tokens` for a model that thinks. Local providers ignore it. Any other value is a **400** naming it, not a silent fallback |
 | `generate_metadata` | bool | Generate keywords/title/caption/alt_text |
 | `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
 | `detect_faces` | bool | Run face detection on the photo |
@@ -265,6 +267,7 @@ LLM.
 | `provider` | string | LLM provider |
 | `model` | string | Model name |
 | `api_key`, `server_url` | string | Connection fields, as for `/v1/index/photos` |
+| `temperature`, `reasoning_effort` | float, string | As for `/v1/index/photos`, including the 400 for an unknown `reasoning_effort`. `/v1/edit/style` reads both for its LLM fallback |
 | `intent` | string | Style preset key (e.g. `natural_pro`, `moody_dramatic`) |
 | `style_strength` | float | 0.0–1.0, how aggressively to apply the style |
 | `composition_mode` | string | `none`, `subtle`, or `aggressive` |

@@ -43,6 +43,65 @@ describe("AiProviders.splitModelKey", function()
 	end)
 end)
 
+describe("AiProviders generation settings", function()
+	local REASONING = {
+		"chatgpt::gpt-5-mini",
+		"chatgpt::o3",
+		"gemini::gemini-3.1-pro-preview",
+		"gemini::gemini-3-flash-preview",
+		"anthropic::claude-opus-5-5",
+	}
+	local LOCAL = { "llamacpp::gemma-4-e4b.gguf", "ollama::qwen2.5vl", "lmstudio::x", "openai_compatible::m" }
+
+	it("lets temperature reach only the models that sample with it", function()
+		for _, key in ipairs(LOCAL) do
+			assert.is_true(AiProviders.appliesTemperature(key), key)
+			assert.is_false(AiProviders.appliesReasoningEffort(key), key)
+		end
+		-- Cloud models that do not reason still take a temperature.
+		for _, key in ipairs({ "chatgpt::gpt-4.1", "gemini::gemini-2.0-flash" }) do
+			assert.is_true(AiProviders.appliesTemperature(key), key)
+			assert.is_false(AiProviders.appliesReasoningEffort(key), key)
+			assert.matches("does not think", AiProviders.generationSettingsHint(key))
+		end
+	end)
+
+	it("lets analysis depth reach the models that reason", function()
+		for _, key in ipairs(REASONING) do
+			assert.is_true(AiProviders.appliesReasoningEffort(key), key)
+			assert.is_false(AiProviders.appliesTemperature(key), key)
+			assert.matches("sets its own temperature", AiProviders.generationSettingsHint(key))
+		end
+	end)
+
+	it("gives Gemini 2.5 both: it takes a temperature and a thinking budget", function()
+		assert.is_true(AiProviders.appliesTemperature("gemini::gemini-2.5-flash"))
+		assert.is_true(AiProviders.appliesReasoningEffort("gemini::gemini-2.5-flash"))
+		assert.matches("^Analysis depth", AiProviders.generationSettingsHint("gemini::gemini-2.5-flash"))
+	end)
+
+	it("gives MLX neither, and says why", function()
+		assert.is_false(AiProviders.appliesTemperature("mlx::gemma-4-e4b-it-4bit"))
+		assert.is_false(AiProviders.appliesReasoningEffort("mlx::gemma-4-e4b-it-4bit"))
+		assert.matches("this Mac", AiProviders.generationSettingsHint("mlx::gemma-4-e4b-it-4bit"))
+	end)
+
+	it("points local models at the setting they do use", function()
+		assert.matches("cloud models only", AiProviders.generationSettingsHint(LOCAL[1]))
+	end)
+
+	it("treats no choice or an unknown provider as using neither", function()
+		assert.is_false(AiProviders.appliesTemperature(nil))
+		assert.is_false(AiProviders.appliesReasoningEffort(nil))
+		assert.are.equal("", AiProviders.generationSettingsHint(nil))
+		for _, key in ipairs({ "", "someday::model" }) do
+			assert.is_false(AiProviders.appliesTemperature(key), key)
+			assert.is_false(AiProviders.appliesReasoningEffort(key), key)
+			assert.are.equal("", AiProviders.generationSettingsHint(key))
+		end
+	end)
+end)
+
 describe("AiProviders.modelItems", function()
 	local resp = {
 		models = {
