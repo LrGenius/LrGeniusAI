@@ -130,11 +130,12 @@ pub struct RankingConfig {
     /// which this crate cannot depend on. The API layer resolves the name and
     /// logs an unknown one rather than failing the request.
     ///
-    /// **One axis per preset, deliberately.** Blending two doubles the
-    /// text-tower work, dilutes both, and — with no validated fixture to check
-    /// against — is exactly the sort of plausible-sounding over-reach that put
-    /// a contrast heuristic in charge of "aesthetics" for a year. If a genre
-    /// genuinely needs two, that should be demonstrated on a fixture first.
+    /// **One axis per preset, never averaged with another.** Blending two
+    /// dilutes both. The one exception is [`Self::emotion_prompt_set`], and it
+    /// is not a blend: it is combined by max, so either question being answered
+    /// "yes" makes the moment, and neither can water the other down. The text
+    /// tower runs once per server lifetime per set, so the cost is a second set
+    /// of dot products per photo.
     pub semantic_prompt_set: Option<&'static str>,
     /// How much that axis moves the rank, as a convex blend over the quality
     /// score. Zero for presets with no axis.
@@ -148,18 +149,73 @@ pub struct RankingConfig {
     /// wedding, where the deciding factor is the moment, and to a portrait,
     /// where it is the expression.
     ///
-    /// Applies only where a SigLIP2 embedding exists, so the fast `tasks=cull`
-    /// ingest never sees it. Weighted rather than decisive: these models read
-    /// coarse content and affect well and fine detail poorly, so the axis
-    /// should be able to break a near-tie, not overrule a clear technical
-    /// verdict. Values are conservative and **unvalidated** — score them on a
+    /// Applies only where a SigLIP2 embedding exists. A bare `tasks=cull`
+    /// ingest has none; the plugin adds `embeddings` to it for every preset
+    /// that judges the moment. Values are **unvalidated** — score them on a
     /// real fixture before trusting them.
+    ///
+    /// Despite the name, this weights the frame's whole *moment*: the stronger
+    /// of this axis and [`Self::emotion_prompt_set`]. Where
+    /// [`Self::usable_gate`] is on, the moment may lead — the gate, not a small
+    /// weight, is what keeps a ruined frame from being promoted — so `sports`
+    /// and `event` weight it above the quality score. The name stays because
+    /// `/cull/grade` accepts it as an override and the plugin and fixtures
+    /// already send it.
     pub semantic_weight: f64,
+    /// A second zero-shot question for the moment, about *emotion*:
+    /// `"sport_emotion"` or `"event_emotion"`. `None` asks nothing.
+    ///
+    /// Asked separately from [`Self::semantic_prompt_set`] rather than mixed
+    /// into it, and combined by **max**, not by average. The goal celebration
+    /// has no ball in it and the frame of the shot has nobody cheering yet;
+    /// averaging the two questions would score both as half a moment. Either
+    /// one happening is the moment.
+    pub emotion_prompt_set: Option<&'static str>,
+    /// Above this score on the "eyes closed on purpose" gate — a kiss, a laugh
+    /// that squeezes the eyes shut — closed eyes stop counting as a blink: no
+    /// blink penalty in the score, no blink-based reject. 0 switches the gate
+    /// off and skips its prompt pass.
+    ///
+    /// Exists because the blink proxy sees closed eyes and nothing else, so the
+    /// kiss is the wedding frame it most reliably nominates for deletion. Only
+    /// the stored `cull_blink_penalty` is lifted; the eye-openness share inside
+    /// the stored `cull_face_score` was baked in at index time and stays.
+    pub eyes_closed_intent_threshold: f64,
+    /// Rank every usable frame above every frame with a clear defect (blurred,
+    /// eyes shut, face obstructed) whenever the group is judged on its moment.
+    /// Within each half the score decides as usual. Exposure is deliberately
+    /// not a defect here: it is judged relative to the group, and Lightroom
+    /// lifts a stop without a trace.
+    ///
+    /// This is "first usable, then the moment" — how a photographer culls. It
+    /// is what lets [`Self::semantic_weight`] lead: without it a strong moment
+    /// could lift a frame nobody can use above a clean one. Only engages when
+    /// every frame of the group carries a moment score; without one the
+    /// ranking is exactly what it was.
+    pub usable_gate: bool,
+    /// Let a noticeably blurred frame be a reject candidate even when nothing
+    /// better exists to compare it with: a single frame, or the best of a burst
+    /// that is blurred throughout.
+    ///
+    /// Before this, every single landed in Picks unconditionally, and so did
+    /// the top frame of any group however unusable. Only blur counts here,
+    /// deliberately: exposure is scored against a mid-grey target that marks a
+    /// correctly dark concert frame as underexposed once there is no group to
+    /// judge it against, and the blink proxy is too weak to reject a frame
+    /// without a better sibling.
+    pub reject_blurred_without_alternative: bool,
     /// Above this gradient-direction coherence, a soft frame is reported as
     /// `motion_blur` rather than `blurred`. Purely a labelling threshold — the
     /// score does not read it, because directional *content* raises the same
     /// measure.
     pub reason_motion_anisotropy_threshold: f64,
+    /// How far a reject candidate's moment must beat the pick's before it is
+    /// reported as `strong_moment_but_unusable`. Measured live on SigLIP2: a
+    /// blurred copy of the same frame scored up to 0.09 *higher* on the action
+    /// question than the sharp original, so without a margin every blurred
+    /// near-copy would claim the stronger moment. A real difference — the
+    /// celebration against the empty frame — is several times this.
+    pub reason_moment_margin: f64,
 }
 
 /// Which deliberately-captured multi-frame set a group is, if any.
@@ -254,6 +310,9 @@ impl CullingConfig {
     ///   muted and low-key work (item 4)
     /// - `sets.enabled` and `grouping.bracket_edges` — brackets and stacks were
     ///   being culled, and could not even be grouped (item 2)
+    /// - `usable_gate` and `reject_blurred_without_alternative` — a strong
+    ///   moment could otherwise lift an unusable frame, and a blurred single or
+    ///   the best of a blurred burst was always a pick
     pub fn python_parity() -> Self {
         let mut cfg = BASE;
         cfg.ranking.sharpness_peak_weight = 0.0;
@@ -262,6 +321,8 @@ impl CullingConfig {
         cfg.ranking.aesthetic_iqa_weight = 0.0;
         cfg.sets.enabled = false;
         cfg.grouping.bracket_edges = false;
+        cfg.ranking.usable_gate = false;
+        cfg.ranking.reject_blurred_without_alternative = false;
         cfg
     }
 }
@@ -313,7 +374,12 @@ const BASE: CullingConfig = CullingConfig {
         // question that is right for all of them.
         semantic_prompt_set: None,
         semantic_weight: 0.0,
+        emotion_prompt_set: None,
+        eyes_closed_intent_threshold: 0.0,
+        usable_gate: true,
+        reject_blurred_without_alternative: true,
         reason_motion_anisotropy_threshold: 0.55,
+        reason_moment_margin: 0.15,
     },
     sets: SetDetectionConfig {
         enabled: true,
@@ -355,6 +421,9 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // ties rather than leading.
             cfg.ranking.semantic_prompt_set = Some("expression");
             cfg.ranking.semantic_weight = 0.20;
+            // A couple's portrait has a kiss in it, and a good laugh shuts the
+            // eyes; neither is a blink.
+            cfg.ranking.eyes_closed_intent_threshold = 0.7;
         }
         "street" => {
             cfg.ranking.face_group_weight_technical = 0.70;
@@ -396,11 +465,16 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // mid-grey exposure target reads every frame as underexposed.
             cfg.ranking.relative_normalization_weight = 0.65;
             // The kiss, the ring, the reaction — the genre table gives "the
-            // moment" as what decides an event pick. Below street's weight
-            // because event work still has to be technically deliverable, and
-            // the face signals are already carrying real information here.
+            // moment" as what decides an event pick, and at an event the
+            // moment is mostly emotion: laughter, happy tears, a hug. The
+            // moment leads among usable frames (`usable_gate` keeps a ruined
+            // one out of the lead), below sports' weight because the face
+            // signals carry real information here too.
             cfg.ranking.semantic_prompt_set = Some("candid");
-            cfg.ranking.semantic_weight = 0.22;
+            cfg.ranking.emotion_prompt_set = Some("event_emotion");
+            cfg.ranking.semantic_weight = 0.45;
+            // The kiss is the frame the blink proxy is surest about, and wrong.
+            cfg.ranking.eyes_closed_intent_threshold = 0.7;
         }
         "sports" => {
             cfg.grouping.time_window_default_seconds = 3;
@@ -423,9 +497,13 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.relative_normalization_weight = 0.65;
             // The whole point of the preset. Sharpness alone cannot tell the
             // frame with the ball from the frame just after it, and inside one
-            // burst it is the only signal with any range left.
+            // burst it is the only signal with any range left. Emotion is the
+            // other half of a sports moment — the celebration, the despair —
+            // and intensity counts, not whether it is happy. The moment leads
+            // among usable frames; technique decides near-ties.
             cfg.ranking.semantic_prompt_set = Some("action");
-            cfg.ranking.semantic_weight = 0.30;
+            cfg.ranking.emotion_prompt_set = Some("sport_emotion");
+            cfg.ranking.semantic_weight = 0.55;
         }
         _ => {}
     }

@@ -2513,4 +2513,89 @@ function Util.formatDownloadSize(bytes)
 	return string.format("%.0f MB", n / 1e6)
 end
 
+---
+-- Whether a culling preset judges the moment: emotion, expression, action.
+--
+-- Mirrors the backend presets, where every one but `default` gives the moment
+-- weight. `default` spans every genre and has no moment question that is right
+-- for all of them. The moment is read from the SigLIP2 embedding, which is
+-- why this decides what the cull prep pass computes.
+--
+-- @param preset string|nil Culling preset name.
+-- @return boolean
+--
+function Util.cullPresetJudgesMoment(preset)
+	return type(preset) == "string" and preset ~= "" and preset ~= "default"
+end
+
+---
+-- The index tasks the cull prep pass sends for a preset.
+--
+-- `cull` alone is the fast path: pHash, image metrics, face quality, no
+-- embedding. A preset that judges the moment adds `embeddings`, because
+-- without one the backend has nothing to judge it from and quietly ranks on
+-- sharpness alone — the very gap the moment exists to close.
+--
+-- @param preset string|nil Culling preset name.
+-- @return table Task names.
+--
+function Util.cullPrepTasks(preset)
+	if Util.cullPresetJudgesMoment(preset) then
+		return { "cull", "embeddings" }
+	end
+	return { "cull" }
+end
+
+---
+-- A backend response's warnings as a list of distinct messages.
+--
+-- Prefers the `warnings` list. Falls back to the single `warning` string an
+-- older backend sends, so a plugin newer than its backend still reports.
+--
+-- @param response table|nil Decoded response.
+-- @return table List of strings, possibly empty.
+--
+function Util.responseWarnings(response)
+	if type(response) ~= "table" then
+		return {}
+	end
+	local source = response.warnings
+	if type(source) ~= "table" then
+		source = { response.warning }
+	end
+	local list, seen = {}, {}
+	for _, w in ipairs(source) do
+		if type(w) == "string" and w ~= "" and not seen[w] then
+			seen[w] = true
+			table.insert(list, w)
+		end
+	end
+	return list
+end
+
+---
+-- Joins warnings for one dialog: the first `maxShown`, then a count of the
+-- rest. A wall of lines is as unreadable as none, and dropping the rest
+-- silently would hide problems.
+--
+-- @param list table List of strings.
+-- @param maxShown number|nil Defaults to 5.
+-- @return string|nil nil when the list is empty.
+--
+function Util.formatWarningList(list, maxShown)
+	if type(list) ~= "table" or #list == 0 then
+		return nil
+	end
+	maxShown = maxShown or 5
+	local shown = {}
+	for i = 1, math.min(maxShown, #list) do
+		table.insert(shown, list[i])
+	end
+	local text = table.concat(shown, "\n\n")
+	if #list > #shown then
+		text = text .. "\n\n... and " .. tostring(#list - #shown) .. " more warnings"
+	end
+	return text
+end
+
 return Util

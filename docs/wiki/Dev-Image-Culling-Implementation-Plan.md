@@ -705,11 +705,14 @@ The same mechanism now covers three axes, one per preset, selected by
 
 | preset | axis | weight | what it asks |
 |---|---|---|---|
-| `sports` | `action` | 0.30 | ball visible, feet off the ground, mid-play vs between plays |
+| `sports` | `action` (+ `sport_emotion`) | 0.55 (was 0.30) | ball visible, feet off the ground, mid-play vs between plays |
 | `street` | `candid` | 0.32 | unposed vs posed, people reacting to each other |
-| `event` | `candid` | 0.22 | the same, weighted lower — event work still has to be deliverable |
+| `event` | `candid` (+ `event_emotion`) | 0.45 (was 0.22) | the same — event work still has to be deliverable, which the usable gate now guarantees |
 | `portrait` | `expression` | 0.20 | warm genuine smile vs flat awkward expression |
 | `default` | — | 0 | spans every genre; no one question is right for all of them |
+
+The emotion sets and the new weights are from
+[Emotion and the usable gate](#emotion-and-the-usable-gate) below.
 
 `street` carries the highest weight because it is the one genre the analysis is
 explicit about: grain and motion blur are legitimate there, and ranking frames
@@ -730,7 +733,9 @@ spot); animal eye sharpness (needs detection, not a scene judgement).
 ### Tuning it from outside
 
 `/cull` accepts `semantic_weight` to override the preset's own, and the plugin
-passes it through. `0.0` switches the axis off, `0.5` lets it lead. The shipped
+passes it through. (Until the emotion work it only decided whether the prompts
+were scored; the ranking itself still used the preset's weight, so a sweep
+changed nothing. It now reaches the ranking.) `0.0` switches the axis off, `0.5` lets it lead. The shipped
 weights are a guess; this is the fastest way to find out whether the signal
 suits a particular photographer's eye without a rebuild. `--ablate semantic` in
 `cull_eval` does the same against a fixture.
@@ -744,12 +749,108 @@ peak frame out of five adjacent ones at 20fps. The expression axis is a
 *whole-frame* judgement, so on a group shot it reports the mood of the picture
 rather than of any one face. All of them need embeddings, so every axis is inert
 on the fast `tasks=cull` path — a catalog prepared that way ranks exactly as it
-did before.
+did before. (Since the emotion work the plugin adds `embeddings` to the prep pass
+for every preset that judges the moment, and the backend warns when the moment
+could not be judged.)
 
 **It has not been validated on real photographs.** That is not an oversight: the
 prompts are a hypothesis, and this repository has now twice shipped a
 plausible-sounding signal that was wrong. Which is why the other half of this
 work is the fixture exporter.
+
+## Emotion and the usable gate
+
+Prompted by the next complaint: the biggest missing factor is **emotion**, at
+sports and at events alike. The concept (four failure modes, phases, open
+decisions) lives outside the repository; this is what Phase 1 built. No new
+model: everything is answered from the stored SigLIP2 embedding.
+
+### What shipped
+
+- **Two emotion prompt sets**, `SPORT_EMOTION_PROMPT_PAIRS` (celebrating,
+  protesting, despair vs calm and neutral) and `EVENT_EMOTION_PROMPT_PAIRS`
+  (laughing, crying with joy, hugging, guests reacting vs blank faces), selected
+  by `ranking.emotion_prompt_set`. Each pair is a complete question with the
+  same subject on both sides, after the organism-set lesson that a partial pair
+  only adds noise to the average.
+- **The moment is the max, not the mean**, of the genre axis and the emotion
+  question. The goal celebration has no ball in it and the shot on goal has
+  nobody cheering yet; averaging would score both as half a moment. This is why
+  it does not contradict "one axis per preset" above: nothing is diluted, the
+  stronger answer stands.
+- **All or nothing per group.** A frame without an embedding carries no moment,
+  and comparing it with frames that do would rank it on a different question
+  from its neighbours. Such a group ranks without the moment, and the response
+  says so.
+- **The usable gate** (`ranking.usable_gate`): once the moment is deciding,
+  every frame without a clear defect ranks above every frame with one — first
+  usable, then the moment. A clear defect is one no edit repairs: blur,
+  unintended closed eyes, occlusion. Exposure is deliberately excluded (group-
+  relative, and Lightroom lifts a stop without a trace), and so is the
+  composite face score, which also falls for a face that is merely small. The
+  gate is what lets the moment lead: `sports` now weights it 0.55 and `event`
+  0.45, where the old convex blend had to stay small because it was the only
+  thing stopping a ruined frame from winning.
+- **Emotion beats the blink.** `EYES_CLOSED_INTENT_PROMPT_PAIRS` is a gate, not a
+  grading axis: above `ranking.eyes_closed_intent_threshold` (0.7 at `event` and
+  `portrait`) closed eyes stop counting as a blink — no blink penalty, no blink
+  reject. It asks about the scene (a kiss, a burst of laughter), which is coarse
+  affect and well within what these models read; it does not try to judge eye
+  openness, which the section above rules out for good reason. The eye share
+  baked into the stored `cull_face_score` stays.
+- **Singles and whole bad series can be rejected**
+  (`ranking.reject_blurred_without_alternative`). A single used to be a pick
+  unconditionally, and so was rank 1 of any group. Now the pick is the
+  best-ranked frame that is not a reject candidate, and at rank 1 (or for a
+  single) only blur makes one: exposure is scored against a mid-grey target
+  that marks a correctly dark concert frame as underexposed once there is no
+  group to compare with, and the blink proxy is too weak to reject a frame
+  without a better sibling. `winner_photo_id` is therefore nullable.
+- **Reasons in plain language**: `strongest_emotion` when emotion carried the
+  pick, `eyes_closed_intentional`, and `strong_moment_but_unusable` on a reject
+  candidate that had its group's strongest moment ("look before deleting"),
+  by at least `ranking.reason_moment_margin` (0.15) over the pick. The plugin
+  counts the last one in its completion message.
+- **Warnings that reach the dialog.** `/cull/grade` and `/cull/groups` return a
+  `warnings` list (and the joined `warning` for older plugins): photos whose
+  moment was not judged, or an image model that would not load.
+  `apply_prompt_scores` reports why it scored nothing instead of returning 0.
+- **The plugin prepares what the preset needs**: `Util.cullPrepTasks` adds
+  `embeddings` to the prep pass for every preset but `default`, and the model
+  check asks for the image model as well as the face model.
+
+`python_parity()` switches the gate and the single/rank-1 rejects off, so the
+Python goldens still pin the port.
+
+### Live check (not a validation)
+
+Run against the real SigLIP2 fp16 towers on six public photos, to catch
+prompts that are plainly broken, not to tune anything:
+
+| photo | `sport_emotion` | `action` | `event_emotion` | kiss gate |
+|---|---|---|---|---|
+| coach screaming on the touchline | **0.72** | 0.42 | 0.42 | 0.60 |
+| player mid-shot, calm face | 0.31 | **0.87** | 0.23 | 0.59 |
+| couple on a red carpet, neutral | 0.12 | 0.34 | 0.28 | 0.35 |
+| studio portrait | 0.37 | 0.42 | 0.45 | 0.59 |
+
+The sport emotion question separates the screaming coach from everything else,
+and the max picks the action question for the shot instead: both frames won
+their group with the right reason (`strongest_emotion`, sharpest). No photo
+here contains a kiss or a laugh, so the gate's 0.35–0.60 only shows it does
+not fire on neutral faces; 0.6 to 0.7 is a thin margin. One finding changed the
+code: a Gaussian-blurred copy of the player scored 0.95 on action against the
+original's 0.87, which would have marked the blurred copy as "strongest moment,
+look before deleting". Hence the margin above.
+
+### Not validated yet
+
+Same caveat as the moment axes, and the same remedy: the prompts, the 0.7
+threshold and the 0.55/0.45 weights are hypotheses. The next step is a sports
+and an event shoot culled by hand, exported with *Export Culling Fixture*, and
+scored with `cull_eval` with and without `--ablate semantic`. Phase 2 of the
+concept (per-face expression, an eyes-closed classifier, focus on the eye, main
+subjects) waits on what that measurement shows.
 
 ### Export Culling Fixture
 

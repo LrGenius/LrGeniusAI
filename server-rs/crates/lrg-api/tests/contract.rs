@@ -465,6 +465,9 @@ async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
     assert_eq!(group["winner_photo_id"], "burst0", "sharpest must win");
     assert!(group["photo_ids"].as_array().unwrap().len() == 3);
 
+    // TaskCullPhotos.lua reads the list; `warning` stays for older plugins.
+    assert!(json["warnings"].is_array(), "{json}");
+
     // Per-photo fields the plugin writes into catalog metadata.
     let winner = &group["photos"][0];
     assert_eq!(winner["winner"], true);
@@ -548,11 +551,97 @@ async fn cull_warning_tracks_stored_embeddings_not_model_residency() {
     )
     .await;
 
+    // The hermetic model directory means the text tower cannot load here,
+    // which is its own, separate warning (see
+    // `cull_says_when_the_image_model_cannot_load`). What must not appear is a
+    // claim that *grouping* fell back.
+    let warnings = json["warnings"].as_array().unwrap();
     assert!(
-        json["warning"].is_null(),
-        "an idle-unloaded model must not be reported as broken grouping, got {:?}",
-        json["warning"]
+        warnings.iter().all(|w| {
+            let w = w.as_str().unwrap();
+            !w.contains("perceptual hashes") && !w.contains("not been analyzed")
+        }),
+        "an idle-unloaded model must not be reported as broken grouping, got {warnings:?}"
     );
+}
+
+/// The moment presets read the moment from the embedding through the text
+/// tower. When that cannot load, the run still succeeds, ranked on sharpness,
+/// exposure and faces — and has to say so, naming the fix.
+#[tokio::test]
+async fn cull_says_when_the_image_model_cannot_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "culling_preset": "sports",
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    assert_eq!(json["status"], "success");
+    assert_eq!(json["groups"][0]["winner_photo_id"], "burst0");
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("moment") && warning.contains("Download AI models"),
+        "{warning}"
+    );
+    assert_eq!(json["warning"], warnings[0], "legacy field carries it too");
+}
+
+/// A single that is clearly blurred is a reject candidate with no pick, and
+/// `winner_photo_id` is `null` rather than naming it. The plugin decodes JSON
+/// null to nil, which its `if winnerPhotoId` already handles.
+#[tokio::test]
+async fn a_blurred_single_has_no_winner() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+    let mut meta = serde_json::Map::new();
+    meta.insert("filename".into(), serde_json::json!("soft.jpg"));
+    meta.insert("capture_time".into(), serde_json::json!(1_700_000_000));
+    meta.insert("cull_phash".into(), serde_json::json!("0f0f0f0f0f0f0f0f"));
+    meta.insert("cull_sharpness".into(), serde_json::json!(0.04));
+    meta.insert("cull_exposure".into(), serde_json::json!(0.7));
+    meta.insert("cull_noise".into(), serde_json::json!(0.1));
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[lrg_store::StoreRecord {
+                id: "soft".into(),
+                vector: None,
+                metadata: meta,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["soft"], "db_path": db_path_str}),
+    )
+    .await;
+
+    let group = &json["groups"][0];
+    assert_eq!(group["group_type"], "single");
+    assert!(group["winner_photo_id"].is_null(), "{group}");
+    assert_eq!(
+        group["reject_candidate_photo_ids"],
+        serde_json::json!(["soft"])
+    );
+    assert_eq!(json["summary"]["pick_count"], 0);
+    assert_eq!(json["summary"]["reject_candidate_count"], 1);
 }
 
 #[tokio::test]

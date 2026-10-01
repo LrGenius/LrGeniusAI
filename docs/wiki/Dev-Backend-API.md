@@ -241,9 +241,45 @@ Finds photos similar to a reference photo using perceptual hash (phash) or CLIP 
 
 ### `POST /v1/cull/groups`
 Groups a set of photos into similarity clusters (used internally by the culling workflow).
+Takes the same request fields as `/v1/cull/grade` and returns its `groups`,
+plus `warning`/`warnings` when there is something to say; no `summary`.
 
 ### `POST /v1/cull/grade`
 Runs the full culling pipeline on a set of photos: grouping, scoring, and classification into picks/alternates/rejects.
+
+**Key request fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `photo_ids` | array | Photos to cull. Ids with no stored record are skipped and counted in `summary.unindexed_count` |
+| `culling_preset` | string | `default`, `portrait`, `street`, `event` or `sports`. 400 with `available_presets` for anything else |
+| `time_delta_seconds` | int | Burst window. Absent means the preset's own |
+| `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
+| `use_iqa` | bool | Score the CLIP-IQA signals (aesthetic, moment, kiss gate) over the stored SigLIP2 embeddings. Default true |
+| `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
+| `include_debug` | bool | Per-group thresholds and pairwise distances |
+
+Every preset except `default` judges the **moment**: the stronger of the
+preset's axis (`cull_semantic_iqa`: action, expression or candid) and, for
+`sports` and `event`, an emotion question (`cull_emotion_iqa`). `event` and
+`portrait` also ask whether closed eyes are a kiss or a laugh
+(`cull_eyes_closed_intent_iqa`), which lifts the blink penalty. All three are
+computed per request from the stored embedding and never stored. Within a
+group the moment applies only when every frame has it, and frames with a
+defect no edit repairs (blur, unintended closed eyes, occlusion) always rank
+below usable ones.
+
+**Response:**
+
+| Field | Type | Description |
+|---|---|---|
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
+| `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
+| `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eyes_closed_intended` when true, and always `clear_defect` |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, an image model that would not load, photos whose moment was not judged. Empty when there is nothing to say |
+| `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
 ---
 

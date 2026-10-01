@@ -6,7 +6,8 @@
 
 The **Cull Photos** workflow groups similar photos (bursts and near-duplicates), ranks them using technical and face-aware metrics, and creates Lightroom collections so you can quickly review:
 
-- `Picks` – best candidates per group
+- `Picks` – the best usable photo per group (a group where nothing is usable,
+  such as a single blurred frame, has no pick)
 - `Alternates` – reasonable alternatives you might still keep
 - `Reject Candidates` – clearly weaker shots
 - optional `Duplicates / Near Duplicates`
@@ -43,9 +44,10 @@ photos, so it works best on frames shot with AEB.
    - **Burst time window (seconds)** – how far apart two frames may be and
      still count as the same burst.
    - **Culling preset** – tunes thresholds and weights:
-     `Default (balanced)`, `Portrait (face-focused)`,
-     `Street (technical-focused)`, `Event (people + moments)`,
-     `Sports (motion-tolerant)`.
+     `Default (sharpness, exposure, faces)`, `Portrait (faces and expression)`,
+     `Street (candid moments)`, `Event (people, emotion, moments)`,
+     `Sports (action and emotion)`. Every preset except Default also judges
+     the moment; see below.
    - **Create 'Duplicates / Near Duplicates' collection** – on by default.
 4. Start the task and wait until the progress dialog completes.
 
@@ -55,6 +57,54 @@ The plugin calls the backend culling endpoint, which:
   and the keep-all types `bracket`, `focus_stack`, `panorama`)
 - scores each image per group
 - selects winners, alternates, and reject candidates — except in keep-all groups
+
+## Emotion and the moment
+
+Sharpness alone picks the wrong frame from a burst surprisingly often: the
+sharpest frame is the one before the goal, the kiss with the eyes shut looks
+like a blink, the laugh is a little soft. So every preset except Default also
+asks what the photo shows:
+
+- **Sports** asks about action (is the ball at the foot, is someone in the air)
+  and about emotion (celebrating, protesting, despair).
+- **Event** asks about candid moments and about emotion (laughing, crying with
+  joy, hugging, guests reacting).
+- **Portrait** asks about expression, **Street** about candid, unposed moments.
+
+The stronger of the two answers counts, not their average: the goal
+celebration has no ball in it, and the shot on goal has nobody cheering yet.
+
+The decision then works the way a photographer culls: **first usable, then the
+moment.** Among the frames that are sharp enough, have the eyes open and the
+face clear, the strongest moment wins, even over a slightly sharper frame where
+nothing happens. A frame with a flaw no edit can repair (blur, unintended
+closed eyes, a blocked face) never beats a usable one, however strong its
+moment. Exposure is not on that list, because Lightroom lifts a stop without a
+trace.
+
+**Emotion beats the blink.** At Event and Portrait, closed eyes in a kiss or a
+burst of laughter are recognised and not treated as a blink.
+
+**Singles and whole bursts can be rejected.** A single photo used to be a pick
+whatever its quality. Now a clearly blurred single is a reject candidate, and
+so is every frame of a burst that is blurred throughout. Exposure alone never
+rejects a single, since a dark concert photo is often meant to be dark.
+
+**A blurred strong moment is never deleted unseen.** When the frame with the
+strongest moment of its group is a reject candidate for a technical flaw, and
+its moment is clearly stronger than the pick's, its explanation says so ("strongest moment in the group, but it has a technical
+flaw — look before deleting"), and the completion message counts these photos.
+
+The moment is read from the image analysis (the SigLIP2 embedding). When you
+cull with a moment preset, the preparation step therefore computes it for any
+photo that does not have it yet. That takes longer than the culling signals
+alone, but no AI descriptions are generated. If the moment could not be judged,
+for some photos or for all of them, the plugin tells you why and what to do.
+
+> The emotion questions and weights are a first version and are still being
+> measured against hand-culled shoots. If a preset keeps picking the wrong
+> frame, export a culling fixture (`Library → Plug-in Extras → Export Culling
+> Fixture...`) from a shoot you culled by hand and share it.
 
 ## Result collections in Lightroom
 
@@ -85,7 +135,12 @@ For each photo, the backend stores culling-related fields such as:
 - face scores: `cull_face_score`, `cull_face_count`, `cull_face_sharpness`,
   `cull_face_prominence`, `cull_face_visibility`, `cull_eye_openness`,
   `cull_blink_penalty`, `cull_occlusion`
-- aesthetic scores: `cull_aesthetic`, `cull_aesthetic_iqa`, `cull_semantic_iqa`
+- aesthetic scores: `cull_aesthetic`, and, computed at cull time from the
+  image analysis, `cull_aesthetic_iqa`
+- moment scores, also computed at cull time: `cull_semantic_iqa` (action,
+  expression or candid moment, depending on the preset), `cull_emotion_iqa`
+  (Sports and Event) and `cull_eyes_closed_intent_iqa` (kiss or laugh, Event
+  and Portrait)
 - explanations: `cull_reason_codes`, `cull_explanation`
 
 The plugin writes a subset of these values into plugin-specific metadata fields on each photo so they can be inspected or used for diagnostics.
@@ -101,6 +156,12 @@ Typical reason codes include:
 - `possible_occlusion`
 - `no_face_detected_in_group`
 - `near_duplicate_weaker`
+- `peak_action` / `best_expression` / `strongest_moment` / `strongest_emotion`
+  – the moment decided the pick
+- `eyes_closed_intentional` – eyes closed in a kiss or a laugh, not counted as a
+  blink
+- `strong_moment_but_unusable` – the group's strongest moment, but a technical
+  flaw put it among the reject candidates; look before deleting
 - `bracket_frame_kept` / `focus_stack_frame_kept` / `panorama_frame_kept`
 
 These help explain why a specific frame was chosen as a pick or flagged as a reject candidate.
@@ -115,7 +176,15 @@ than one after another. If a signal could not be computed, the plugin says so
 before the culling run starts instead of quietly grading photos without it. The usual cause is that the on-device models are not
 downloaded yet: open **File → Plug-in Manager → LrGeniusAI** and press
 **Download AI models**, then run culling again. Culling still works in the
-meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive.
+meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive,
+and with a moment preset the moment is not judged either.
+
+The same applies after the run: when the moment could not be judged for some
+photos, because they have no image analysis yet or the image model could not
+be loaded, the culling warning names how many and what to do. Photos without
+it are ranked on sharpness, exposure and faces only, and so is every photo in
+the same group, so that the frames of one burst are always compared on the
+same terms.
 
 ## Tips for best results
 
