@@ -889,8 +889,6 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 		-- The Other AI server, for provider openai_compatible (see AiProviders.connectionOptions).
 		-- Ollama and LM Studio are always reached at their default address.
 		server_url = options.server_url,
-		vertex_project_id = options.vertex_project_id,
-		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
 		-- Local-engine tuning. Ignored by every remote provider; changing one
 		-- makes the server reload the local model, so these are settings the
@@ -1024,8 +1022,6 @@ function SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, options)
 		-- The Other AI server, for provider openai_compatible (see AiProviders.connectionOptions).
 		-- Ollama and LM Studio are always reached at their default address.
 		server_url = options.server_url,
-		vertex_project_id = options.vertex_project_id,
-		vertex_location = options.vertex_location,
 		regenerate_metadata = tostring(options.regenerate_metadata ~= false),
 		-- Only meaningful when the LLM runs, and only correct when the group
 		-- exists *because* of the LLM. A non-LLM group is sized for decode
@@ -1467,12 +1463,6 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if options.server_url then
 		table.insert(mimeChunks, { name = "server_url", value = options.server_url })
 	end
-	if options.vertex_project_id and options.vertex_project_id ~= "" then
-		table.insert(mimeChunks, { name = "vertex_project_id", value = options.vertex_project_id })
-	end
-	if options.vertex_location and options.vertex_location ~= "" then
-		table.insert(mimeChunks, { name = "vertex_location", value = options.vertex_location })
-	end
 
 	-- Regeneration control: if false, server will only fill missing fields
 	table.insert(mimeChunks, { name = "regenerate_metadata", value = tostring(options.regenerate_metadata ~= false) })
@@ -1546,7 +1536,6 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 	if searchOptions then
 		search_sources = {
 			semantic_siglip = searchOptions.semanticSiglip ~= false,
-			semantic_vertex = searchOptions.semanticVertex ~= false,
 			metadata = searchOptions.metadata ~= false,
 			metadata_fields = searchOptions.metadataFields or { "flattened_keywords", "alt_text", "caption", "title" },
 		}
@@ -1673,8 +1662,6 @@ function SearchIndexAPI.formatStats(stats)
 		"Photos with title: " .. tostring(photos.with_title or 0),
 		"Photos with caption: " .. tostring(photos.with_caption or 0),
 		"Photos with keywords: " .. tostring(photos.with_keywords or 0),
-		-- Vertex AI is disabled in the GUI; the backend code is untouched.
-		-- "Photos with Vertex AI: " .. tostring(photos.with_vertexai or 0),
 		"Faces total: " .. tostring(faces.total or 0),
 		"Persons total: " .. tostring(persons.total or 0),
 	}, "\n")
@@ -3597,7 +3584,7 @@ end
 -- Gets photos that need processing for "New or unprocessed photos" scope.
 -- When taskOptions is provided, uses backend to check which photos lack the selected tasks' data.
 -- When taskOptions is nil, falls back to legacy behavior: photos not in index (with embeddings).
--- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableFaces, enableVertexAI, regenerateMetadata }
+-- @param taskOptions table|nil { enableEmbeddings, enableMetadata, enableFaces, regenerateMetadata }
 -- @param lookupProgressScope LrProgressScope|nil Optional progress for "looking up which photos need processing".
 -- @return boolean success, table photosToProcess
 --
@@ -3666,9 +3653,6 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 		end
 		if taskOptions.enableFaces then
 			table.insert(tasks, "faces")
-		end
-		if taskOptions.enableVertexAI then
-			table.insert(tasks, "vertexai")
 		end
 
 		local body = {
