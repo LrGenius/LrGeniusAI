@@ -1,6 +1,7 @@
 # AI Edit via XMP — Findings and Experiments
 
-> **Status: research done 2026-09-26, nothing in AI Edit has changed yet.**
+> **Status: research done 2026-09-26; step 1 in progress (1d/1f changed AI
+> Edit's style path).**
 > The page records what Camera Raw's XMP (`crs:`) can express, how that maps
 > onto the Lightroom SDK, and which questions only Lightroom itself can answer.
 > Those questions are what *Help → Plug-in Extras → Developer: Run
@@ -13,8 +14,18 @@
 > for XMP), are the `lrg-develop` crate. The XMP reader parses Lightroom's
 > bundled presets and the current state of that sidecar corpus with no
 > unknown key (counts and method in
-> [Native Develop Model](Dev-Develop-Model#checked-against-real-files)). AI
-> Edit's behaviour is unchanged so far.
+> [Native Develop Model](Dev-Develop-Model#checked-against-real-files)). The
+> crate also writes develop presets and builds semantic, gradient and
+> luminance-range corrections
+> ([Writing XMP presets](Dev-Develop-Model#writing-xmp-presets),
+> [Building corrections](Dev-Develop-Model#building-corrections)). Rebuilt
+> with those builders, Adobe's adaptive presets match Adobe's corrections
+> field for field once both go through the preset writer (names and sync ids
+> apart); see Native Develop Model for the fields the writer holds back
+> (LocalHue, LocalGrain, point colour, digests) and the lower
+> `CompatibleVersion` in 10 of 38. Nothing calls the preset writer yet; AI
+> Edit's style path already uses the crate (white balance in 1d, more
+> sliders in 1f — see [Native Develop Model](Dev-Develop-Model)).
 
 ## The question
 
@@ -87,7 +98,11 @@ crs:MaskGroupBasedCorrections   rdf:Seq — one entry per mask in the Masks pane
 | `MaskBlendMode=1` + `MaskValue=0` | subtract |
 | `MaskBlendMode=1` + `MaskInverted=true` | intersect (A ∩ B = A − ¬B; 105 corpus cases) |
 
-For a radial gradient, `Flipped` is always `!MaskInverted`.
+For a radial gradient, `Flipped` is always `!MaskInverted`. For a range mask,
+`CorrectionRangeMask.Invert` is always equal to `MaskInverted` (every range
+mask in the sidecar corpus, luminance and colour, intersections included), so
+an intersected luminance range carries `Invert="true"`; the builders set both
+mirrors themselves.
 
 ### Mask types by robustness
 

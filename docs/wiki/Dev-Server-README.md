@@ -13,8 +13,8 @@ endpoint reference.
 Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
 clients, edit-recipe schema), `lrg-develop` (the native Lightroom develop
-model: key registry, typed settings, Lua/JSON and XMP readers; a leaf
-crate),
+model: key registry, typed settings, Lua/JSON and XMP readers, the
+develop-preset writer and correction builders; a leaf crate),
 `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature), `lrg-mlx`
 (supervises the Apple silicon MLX sidecar), `lrg-api` (axum routers),
 `lrg-server` (the binary).

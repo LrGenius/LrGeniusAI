@@ -19,7 +19,7 @@ pub use correction::{
     Combine, Correction, LinearGradient, LuminanceRange, MaskComponent, MaskTool, RadialGradient,
     Semantic, SensorPoint,
 };
-pub use policy::{FrameSplit, SkipReason, Skipped, Target, PORTABLE_PROFILES};
+pub use policy::{FrameSplit, SkipReason, Skipped, Target, PORTABLE_PROFILES, WB_NUMBERS};
 pub use value::{Fields, Finite, Hex32, Opaque, OpaqueEntry, Struct, Value};
 pub use whitebalance::{NamedWb, WbFamily, WbMode, WbSetting};
 pub use xmp_node::{XmpArrayKind, XmpField, XmpNode, XmpValue};

@@ -219,6 +219,10 @@ fn preset_header_with_empty_alternatives() {
         h.rest.get(Level::Header, "ShowInQuickActions"),
         Some(&Value::Bool(false))
     );
+    assert_eq!(
+        h.rest.get(Level::Header, "RequiresRGBTables"),
+        Some(&Value::Bool(false))
+    );
     let s = &d.develop;
     assert_eq!(s.get_by_name("Exposure2012"), Some(&real(0.5)));
     assert_eq!(s.get_by_name("Contrast2012"), Some(&Value::Int(10)));

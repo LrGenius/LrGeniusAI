@@ -11,14 +11,18 @@
 //!   balance) and the policy filter ([`model::policy`]);
 //! - [`lua`]: the `getDevelopSettings()` table form as the plugin's JSON.lua
 //!   encodes it (reader);
-//! - [`xmp`]: sidecars, develop presets and profiles in XMP (reader). Both
-//!   readers share their typing and classification rules, so the same
-//!   settings land in the same model from either form;
+//! - [`xmp`]: sidecars, develop presets and profiles in XMP (reader), and
+//!   the deterministic develop-preset writer. Both readers share their typing
+//!   and classification rules, so the same settings land in the same model
+//!   from either form;
+//! - [`build`]: builders for local corrections (semantic, gradient and
+//!   luminance-range masks) with deterministic sync ids;
 //! - [`parse`]: the readers' errors and warnings.
 //!
 //! Learning and blending logic stays in `lrg-analysis::style_engine`; the LLM
 //! recipe schema stays in `lrg-providers::edit_recipe`.
 
+pub mod build;
 pub mod lua;
 pub mod model;
 pub mod parse;

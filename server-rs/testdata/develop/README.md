@@ -99,8 +99,8 @@ newline is not ignored) with ASCII digits, and both run the same crafted
 files through the file-level rules (`extract_fixtures.py --self-test`, in
 pre-commit and CI, and a test in `fixture_hygiene.rs`):
 
-- Scope: `lua/*.json` and `xmp/*.xmp` (plus any other `*.json`/`*.xmp` here,
-  `lua/*.xmp` included);
+- Scope: `lua/*.json`, `xmp/*.xmp` and `written/*.xmp` (plus any other
+  `*.json`/`*.xmp` here, `lua/*.xmp` included);
   never this README. `registry_snapshot.json` (directly in this folder) is
   the registry's own description: it gets the hard text rules except the
   table-key names (which are registry keys there) and the 32-hex/GUID rule,
@@ -131,9 +131,12 @@ pre-commit and CI, and a test in `fixture_hygiene.rs`):
   same rules as a hand-written JSON file — so `Look.Parameters` is the stub,
   `Look.UUID`/`Name` are an Adobe pair or synthetic, no dates, no 32-hex id
   or GUID that is not synthetic. Numbers are text in XMP, so the version-key
-  and `GrainSeed` exemptions apply to numeric strings as well. A header key
-  whose name contains a dropped table-key name (`RequiresRGBTables`) cannot
-  appear in a fixture: the text rule forbids the substring.
+  and `GrainSeed` exemptions apply to numeric strings as well.
+- One exception to the table-key substrings: the preset-header key
+  `RequiresRGBTables` (a preset-header key Adobe's newer presets — the 163 of
+  446 bundled ones that carry `SupportsAmount2`, every adaptive preset
+  included — and every preset the writer produces carry) is removed as a whole ASCII word before the text rules
+  run, so `RGBTable_<md5>` or `RequiresRGBTablesX` still fail.
 
 Run it by hand with:
 
@@ -193,7 +196,7 @@ Each file uses only keys Lightroom writes to XMP (no Lua-only key; checked).
 
 | File | Form |
 |---|---|
-| `preset_header.xmp` | develop preset: full header, empty `rdf:Alt` items, empty `Cluster`/`CameraModelRestriction` |
+| `preset_header.xmp` | develop preset: full header (`RequiresRGBTables` included, as Adobe's newer presets have it), empty `rdf:Alt` items, empty `Cluster`/`CameraModelRestriction` |
 | `number_formats.xmp` | `+1.35`, `+0.50`, signed integers (`+6`, `-12`, `+35`), `-1.5`, `0`, `+1.0`, `0.012345`, `True`/`False`, 0/1 flags, a packed version (`CompatibleVersion`), a struct boolean `true` |
 | `curves.xmp` | global curves (`"x, y"`) and local curves (`"x,y"`) |
 | `masks_ai.xmp` | subject, sky, background, people part (preset form), landscape class, person part at a reference point |
@@ -217,4 +220,26 @@ Each file uses only keys Lightroom writes to XMP (no Lua-only key; checked).
 | `not_develop.xmp` | no develop settings at all (not an error) |
 
 A new file needs an entry in `FIXTURES` in `tests/xmp_fixtures.rs` and a test
-of its own.
+of its own. Every file here is also written back by the XMP writer and must
+read into the same model (`tests/xmp_roundtrip.rs`).
+
+## `written/` — the XMP writer's byte goldens
+
+Output of the develop-preset writer (`lrg_develop::xmp::write`, preset mode),
+compared byte for byte by `crates/lrg-develop/tests/builder_presets.rs`:
+the two hand-test presets built with `lrg_develop::build`, with two changes
+that keep them within the hygiene rules — synthetic ids (twenty zeros and
+twelve hex digits) in place of the derived sync ids and preset UUID (a
+SHA-256 id cannot be told from a catalog's), and the development toolkit
+string `LrGeniusAI 0.0.0-dev` in place of a release version. Nothing in them
+comes from Adobe or a photo. They are also round-tripped with the fixtures in
+`tests/xmp_roundtrip.rs`.
+
+| File | Content |
+|---|---|
+| `handtest_subject_sky.xmp` | Contrast +15; a Subject correction (Exposure +0.30 EV); a Sky correction (Highlights −40, Dehaze +15) |
+| `handtest_landscape_people.xmp` | a Vegetation correction (Saturation +20); an Iris and Pupil correction for all people (Saturation +30) |
+
+Do not edit them; after an intended change to the writer, regenerate with
+`LRG_BLESS=1 cargo test -p lrg-develop --test builder_presets` and review the
+diff.
