@@ -65,10 +65,6 @@ At least one of these has to be on:
 Semantic matches are ranked by similarity and come first; metadata matches fill
 whatever is left of **Max results**.
 
-> Semantic search over Vertex AI embeddings still exists in the backend but was
-> removed from the plugin UI in August 2026. Existing `VERTEX_TABLE` rows are
-> kept and no longer queried.
-
 ## Results
 
 The plugin creates a collection under the **Search Results** collection set,

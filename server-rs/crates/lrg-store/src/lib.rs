@@ -36,7 +36,6 @@ pub mod migrate;
 /// the service layer share vocabulary.
 pub const IMAGE_TABLE: &str = "image_embeddings";
 pub const FACE_TABLE: &str = "face_embeddings";
-pub const VERTEX_TABLE: &str = "image_embeddings_vertex";
 pub const TRAINING_TABLE: &str = "edit_training";
 /// BioCLIP 2 image embeddings, one row per photo keyed by `photo_id`.
 ///
@@ -47,10 +46,9 @@ pub const TRAINING_TABLE: &str = "edit_training";
 /// ViT-L/14 over every photo again.
 pub const SPECIES_TABLE: &str = "species_embeddings";
 
-pub const TABLES: [(&str, i32); 5] = [
+pub const TABLES: [(&str, i32); 4] = [
     (IMAGE_TABLE, 1152),
     (FACE_TABLE, 512),
-    (VERTEX_TABLE, 1408),
     (TRAINING_TABLE, 1152),
     (SPECIES_TABLE, 768),
 ];
