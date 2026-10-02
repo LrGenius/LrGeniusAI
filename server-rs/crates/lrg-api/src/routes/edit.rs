@@ -21,10 +21,12 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use lrg_providers::provider::{build_provider, ProviderSelection};
-use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse};
+use lrg_providers::types::{EditGenerationRequest, EditGenerationResponse, ReasoningEffort};
 use lrg_store::{meta, Store, StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
-use crate::routes::route_util::{parse_multipart, SinglePhotoForm};
+use crate::routes::route_util::{
+    parse_multipart, reasoning_effort_field, reasoning_effort_json, SinglePhotoForm,
+};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -39,6 +41,8 @@ pub(crate) struct EditOptions {
     api_key: Option<String>,
     language: String,
     temperature: f64,
+    /// An invalid value is answered with a 400 by the handlers, before parsing.
+    reasoning_effort: ReasoningEffort,
     max_tokens: Option<u32>,
     prompt: Option<String>,
     submit_keywords: bool,
@@ -71,6 +75,8 @@ pub(crate) struct EditOptions {
     composition_mode: String,
     ollama_base_url: Option<String>,
     lmstudio_base_url: Option<String>,
+    /// The "Other AI server" address, for provider `openai_compatible`.
+    server_url: Option<String>,
     /// Engine tuning from the plugin's advanced fields; see `ParsedOptions`.
     engine: crate::llm_engine::EngineOverrides,
     catalog_id: Option<String>,
@@ -93,7 +99,8 @@ impl Default for EditOptions {
             model: None,
             api_key: None,
             language: "German".to_string(),
-            temperature: 0.2,
+            temperature: 0.1,
+            reasoning_effort: ReasoningEffort::default(),
             max_tokens: None,
             prompt: None,
             submit_keywords: false,
@@ -121,6 +128,7 @@ impl Default for EditOptions {
             composition_mode: "subtle".to_string(),
             ollama_base_url: None,
             lmstudio_base_url: None,
+            server_url: None,
             catalog_id: None,
             use_training_style: true,
             is_raw: None,
@@ -170,6 +178,10 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
             .get("temperature")
             .and_then(|s| s.parse().ok())
             .unwrap_or(defaults.temperature),
+        reasoning_effort: reasoning_effort_field(
+            fields.get("reasoning_effort").map(String::as_str),
+        )
+        .unwrap_or_default(),
         max_tokens: fields.get("max_tokens").and_then(|s| s.parse().ok()),
         // Trimmed and dropped when blank, matching `/v1/index/photos`: a
         // prompt field the user emptied means "no persona of my own", and the
@@ -204,6 +216,7 @@ pub(crate) fn parse_edit_options_form(fields: &HashMap<String, String>) -> EditO
         composition_mode,
         ollama_base_url: fields.get("ollama_base_url").cloned(),
         lmstudio_base_url: fields.get("lmstudio_base_url").cloned(),
+        server_url: fields.get("server_url").cloned(),
         engine: crate::routes::llm::engine_overrides_from_fields(fields),
         catalog_id: fields
             .get("catalog_id")
@@ -261,6 +274,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
             .get("temperature")
             .and_then(Value::as_f64)
             .unwrap_or(defaults.temperature),
+        reasoning_effort: reasoning_effort_json(data).unwrap_or_default(),
         max_tokens: data
             .get("max_tokens")
             .and_then(Value::as_u64)
@@ -291,6 +305,7 @@ fn parse_edit_options_json(data: &Value) -> EditOptions {
         composition_mode,
         ollama_base_url: get_str("ollama_base_url"),
         lmstudio_base_url: get_str("lmstudio_base_url"),
+        server_url: get_str("server_url"),
         catalog_id: get_str("catalog_id")
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
@@ -509,6 +524,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
     request.api_key = options.api_key.clone();
     request.language = options.language.clone();
     request.temperature = options.temperature;
+    request.reasoning_effort = options.reasoning_effort;
     request.max_tokens = options.max_tokens;
     request.system_prompt = options.prompt.clone();
     request.submit_keywords = options.submit_keywords;
@@ -570,6 +586,7 @@ pub(crate) async fn generate_edit_recipe_for_photo(
         api_key: options.api_key.clone(),
         ollama_base_url: options.ollama_base_url.clone(),
         lmstudio_base_url: options.lmstudio_base_url.clone(),
+        server_url: options.server_url.clone(),
     }) {
         Ok(client) => client.generate_edit_recipe(&request).await,
         Err(e) => edit_fail(photo_id, e),
@@ -745,6 +762,23 @@ pub(crate) async fn persist_edit_recipe(
         .map_err(|e| e.to_string())
 }
 
+/// The provider's warning slot as one list entry per note.
+///
+/// `generate_edit_recipe_for_photo` appends the style-training note to
+/// whatever the provider already put in `warning`, one note per line. Collected
+/// as a single entry, a provider note and a training note would reach the plugin
+/// as one combined text, which it counts as its own cause instead of grouping it
+/// with the same note on other photos.
+pub(crate) fn warning_entries(warning: Option<String>) -> Vec<String> {
+    warning
+        .iter()
+        .flat_map(|w| w.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn success_payload(
     photo_id: &str,
     recipe: &Value,
@@ -843,6 +877,13 @@ async fn edit_multipart(State(state): State<Arc<AppState>>, mut multipart: Multi
     }
     let photo_id = &photo_ids[0];
 
+    if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response();
+    }
     let options = parse_edit_options_form(&fields);
     finish_edit(
         &state,
@@ -874,6 +915,13 @@ async fn edit_base64(State(state): State<Arc<AppState>>, body: Option<Json<Value
             .into_response();
     };
 
+    if let Err(e) = reasoning_effort_json(&data) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": e})),
+        )
+            .into_response();
+    }
     let options = parse_edit_options_json(&data);
     finish_edit(&state, &options, &image_bytes, photo_id, filename).await
 }
@@ -910,7 +958,7 @@ async fn finish_edit(
         }
     }
 
-    let warnings: Vec<String> = response.warning.into_iter().collect();
+    let warnings = warning_entries(response.warning);
     let mut payload = success_payload(
         photo_id,
         &recipe,
@@ -1013,6 +1061,25 @@ mod tests {
     }
 
     #[test]
+    fn analysis_depth_is_read_from_the_form_and_from_json() {
+        let mut fields = plugin_fields();
+        fields.insert("reasoning_effort".to_string(), "medium".to_string());
+        assert_eq!(
+            parse_edit_options_form(&fields).reasoning_effort,
+            ReasoningEffort::Medium
+        );
+        assert_eq!(
+            parse_edit_options_form(&HashMap::new()).reasoning_effort,
+            ReasoningEffort::Low
+        );
+        let data = json!({"reasoning_effort": "high"});
+        assert_eq!(
+            parse_edit_options_json(&data).reasoning_effort,
+            ReasoningEffort::High
+        );
+    }
+
+    #[test]
     fn api_key_survives_the_style_edit_fallback_path() {
         // The style-engine fallback used to omit `api_key`, and there is no
         // environment-variable fallback further down, so the first run of a new
@@ -1111,6 +1178,19 @@ mod tests {
                 "{example:?} vs {target:?}"
             );
         }
+    }
+
+    #[test]
+    fn warning_entries_keeps_a_provider_note_and_a_training_note_apart() {
+        assert_eq!(
+            warning_entries(Some(
+                "Gemini fell back to high.\nStyle training skipped.".into()
+            )),
+            vec!["Gemini fell back to high.", "Style training skipped."]
+        );
+        assert_eq!(warning_entries(Some("only one".into())), vec!["only one"]);
+        assert!(warning_entries(Some(" \n".into())).is_empty());
+        assert!(warning_entries(None).is_empty());
     }
 
     #[test]

@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 
 use lrg_providers::local::SharedLocalEngine;
 
+use crate::hf_repo::{self, CheckError, Engine, RepoCheck};
 use crate::llm_engine::{settings_for, EngineOverrides};
 use crate::llm_models::{self, CatalogEntry};
 use crate::mlx_engine::MlxEngineSettings;
@@ -42,6 +43,9 @@ pub fn router() -> Router<Arc<AppState>> {
         // POST starts a download, GET reports its progress — the verb is the
         // method's job, so both share one path.
         .route("/llm/downloads", post(download_start).get(download_status))
+        // Checks a Hugging Face repo the user typed in, before anything is
+        // downloaded — see `crate::hf_repo`.
+        .route("/llm/downloads/check", post(download_check))
         // Probing the cloud providers means sending their API keys. POST only:
         // the old `GET /models` accepted them as query parameters, which land
         // in access logs and process listings.
@@ -210,6 +214,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
 
 async fn download_start(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    if let Some(repo) = data.get("repo").and_then(Value::as_str) {
+        return custom_download_start(&state, repo, &data).await;
+    }
     let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
 
     // One id space across both catalogs (enforced by a test in `mlx_models`),
@@ -222,34 +229,166 @@ async fn download_start(State(state): State<Arc<AppState>>, body: Option<Json<Va
         .map(Wanted::Gguf)
         .or_else(|| mlx_models::catalog_entry(id).map(Wanted::Mlx));
     let Some(wanted) = wanted else {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("Unknown model id '{id}'.")})),
-        )
-            .into_response();
+        return bad_request(format!("Unknown model id '{id}'."));
     };
 
-    let already_running = {
-        let mut downloads = state.model_download.lock().unwrap();
-        let status = downloads.entry(DOWNLOAD_KEY.to_string()).or_default();
-        if status.status == "downloading" {
-            true
-        } else {
-            *status = ModelDownloadStatus::downloading();
-            false
-        }
-    };
-    if already_running {
-        log::warn!("A local-model download is already running.");
-        return Json(json!({"download": "started"})).into_response();
+    if !claim_download_slot(&state) {
+        // This used to answer "started" and drop the request, so the user
+        // waited for a model that was never going to arrive.
+        return busy_response();
     }
 
     let downloads = state.model_download.clone();
     match wanted {
-        Wanted::Gguf(entry) => tokio::spawn(run_download(downloads, entry)),
-        Wanted::Mlx(entry) => tokio::spawn(run_mlx_download(downloads, entry)),
+        Wanted::Gguf(entry) => tokio::spawn(run_download(downloads, GgufDownloadSpec::from(entry))),
+        Wanted::Mlx(entry) => {
+            tokio::spawn(run_mlx_download(downloads, MlxDownloadSpec::from(entry)))
+        }
     };
     Json(json!({"download": "started"})).into_response()
+}
+
+fn bad_request(message: impl Into<String>) -> Response {
+    (
+        axum::http::StatusCode::BAD_REQUEST,
+        Json(json!({"error": message.into()})),
+    )
+        .into_response()
+}
+
+/// Mark the single download slot as taken. `false` if a download is running.
+fn claim_download_slot(state: &AppState) -> bool {
+    let mut downloads = state.model_download.lock().unwrap();
+    let status = downloads.entry(DOWNLOAD_KEY.to_string()).or_default();
+    if status.status == "downloading" {
+        false
+    } else {
+        *status = ModelDownloadStatus::downloading();
+        true
+    }
+}
+
+fn download_running(state: &AppState) -> bool {
+    state
+        .model_download
+        .lock()
+        .unwrap()
+        .get(DOWNLOAD_KEY)
+        .is_some_and(|s| s.status == "downloading")
+}
+
+/// Read the `engine` of a check or custom download, and refuse one this
+/// machine cannot run — no point downloading gigabytes for it.
+fn requested_engine(state: &AppState, data: &Value) -> Result<Engine, String> {
+    let engine = match data.get("engine").and_then(Value::as_str) {
+        Some("mlx") => Engine::Mlx,
+        Some("llamacpp") => Engine::Llamacpp,
+        _ => return Err("engine must be \"mlx\" or \"llamacpp\".".to_string()),
+    };
+    match engine {
+        Engine::Mlx => {
+            let availability = state.mlx.availability();
+            if !availability.supported {
+                return Err(availability
+                    .reason
+                    .unwrap_or_else(|| "MLX is not available on this system.".to_string()));
+            }
+        }
+        Engine::Llamacpp => {
+            if !state.llm.is_supported() {
+                return Err(
+                    "This backend build has no llama.cpp support, so it cannot run a GGUF model."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(engine)
+}
+
+fn check_error_response(error: CheckError) -> Response {
+    let status = match error {
+        CheckError::Unusable(_) => axum::http::StatusCode::BAD_REQUEST,
+        CheckError::Unreachable(_) => axum::http::StatusCode::BAD_GATEWAY,
+    };
+    (status, Json(json!({"error": error.message()}))).into_response()
+}
+
+/// `POST /v1/llm/downloads/check {repo, engine}`: whether a Hugging Face repo
+/// can be used, and what downloading it would mean.
+async fn download_check(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
+    let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    let Some(repo) = data.get("repo").and_then(Value::as_str) else {
+        return bad_request("repo is required.");
+    };
+    // The name is checked first: a typo is worth reporting even on a machine
+    // that could not run the model anyway.
+    if let Err(e) = hf_repo::parse_repo_input(repo) {
+        return bad_request(e);
+    }
+    let engine = match requested_engine(&state, &data) {
+        Ok(engine) => engine,
+        Err(e) => return bad_request(e),
+    };
+    let client = reqwest::Client::new();
+    match hf_repo::check_repo(&client, &hf_repo::hf_endpoint(), repo, engine, None).await {
+        Ok(check) => Json(json!(check)).into_response(),
+        Err(e) => check_error_response(e),
+    }
+}
+
+/// `POST /v1/llm/downloads {repo, engine, revision}`: download a repo the
+/// plugin checked first. It is checked again here, at the revision that
+/// check returned: the request may not come from that check at all, and what
+/// is fetched must be what passed.
+async fn custom_download_start(state: &Arc<AppState>, repo: &str, data: &Value) -> Response {
+    if let Err(e) = hf_repo::parse_repo_input(repo) {
+        return bad_request(e);
+    }
+    let engine = match requested_engine(state, data) {
+        Ok(engine) => engine,
+        Err(e) => return bad_request(e),
+    };
+    // Refused before the check, which costs a few requests to Hugging Face.
+    if download_running(state) {
+        return busy_response();
+    }
+    let revision = data.get("revision").and_then(Value::as_str);
+    let client = reqwest::Client::new();
+    let check =
+        match hf_repo::check_repo(&client, &hf_repo::hf_endpoint(), repo, engine, revision).await {
+            Ok(check) => check,
+            Err(e) => return check_error_response(e),
+        };
+    if !claim_download_slot(state) {
+        return busy_response();
+    }
+    let downloads = state.model_download.clone();
+    if check.already_installed {
+        let mut guard = downloads.lock().unwrap();
+        let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+        status.installed_name = Some(check.installed_name.clone());
+        status.set_done();
+        return Json(json!({"download": "started"})).into_response();
+    }
+    match engine {
+        Engine::Mlx => tokio::spawn(run_mlx_download(downloads, MlxDownloadSpec::from(&check))),
+        Engine::Llamacpp => tokio::spawn(run_download(downloads, GgufDownloadSpec::from(&check))),
+    };
+    Json(json!({"download": "started"})).into_response()
+}
+
+/// Only one local model downloads at a time; a second request is refused
+/// rather than queued, so the user knows to wait.
+fn busy_response() -> Response {
+    (
+        axum::http::StatusCode::CONFLICT,
+        Json(json!({
+            "error": "Another model download is still running. Wait for it to \
+                      finish, then start this one."
+        })),
+    )
+        .into_response()
 }
 
 async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -272,24 +411,82 @@ fn set_error(downloads: &Downloads, msg: String) {
     status.set_error(msg);
 }
 
-async fn run_download(downloads: Downloads, entry: &'static CatalogEntry) {
-    let dir = lrg_ml::model_paths::resolve_llm().dir;
+/// What to fetch for a GGUF model: a catalog entry, or a repo the user picked.
+struct GgufDownloadSpec {
+    /// For the log.
+    label: String,
+    repo: String,
+    revision: String,
+    /// `(path in the repo, file name on disk)`: the model, then the projector.
+    files: Vec<(String, String)>,
+    /// Catalog models share the model directory; a picked repo gets a folder
+    /// of its own, so that a generically named projector is paired with it
+    /// and nothing else (see `llm_models::pair_models_per_dir`).
+    dir: PathBuf,
+    installed_name: String,
+    /// Mark the folder as this repo's before the first byte arrives, so a
+    /// retry after an interruption resumes in it (see `hf_repo::folder_for`).
+    write_source_marker: bool,
+}
+
+impl From<&'static CatalogEntry> for GgufDownloadSpec {
+    fn from(entry: &'static CatalogEntry) -> Self {
+        GgufDownloadSpec {
+            label: entry.id.to_string(),
+            repo: entry.repo.to_string(),
+            revision: entry.revision.to_string(),
+            files: [entry.model_file, entry.mmproj_file]
+                .iter()
+                .map(|f| ((*f).to_string(), (*f).to_string()))
+                .collect(),
+            dir: lrg_ml::model_paths::resolve_llm().dir,
+            installed_name: entry.model_file.to_string(),
+            write_source_marker: false,
+        }
+    }
+}
+
+impl From<&RepoCheck> for GgufDownloadSpec {
+    fn from(check: &RepoCheck) -> Self {
+        GgufDownloadSpec {
+            label: check.repo.clone(),
+            repo: check.repo.clone(),
+            revision: check.revision.clone(),
+            files: check
+                .files
+                .iter()
+                .map(|f| (f.path.clone(), hf_repo::file_name(&f.path)))
+                .collect(),
+            dir: hf_repo::destination_of(check),
+            installed_name: check.installed_name.clone(),
+            write_source_marker: true,
+        }
+    }
+}
+
+async fn run_download(downloads: Downloads, spec: GgufDownloadSpec) {
+    let dir = spec.dir.clone();
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         return set_error(
             &downloads,
             format!("failed to create model directory {}: {e}", dir.display()),
         );
     }
+    if spec.write_source_marker {
+        if let Err(e) = hf_repo::write_source_marker(&dir, &spec.repo, &spec.revision) {
+            // Only costs a retry its reuse of this folder.
+            log::warn!("could not record where the model came from: {e}");
+        }
+    }
 
     let client = reqwest::Client::new();
-    let files = [entry.model_file, entry.mmproj_file];
 
     // Resolve sizes first so the progress bar has a denominator from step 0.
     // Hugging Face redirects `resolve` to a CDN, which reqwest follows.
     let mut total: u64 = 0;
-    let mut sizes = Vec::with_capacity(files.len());
-    for file in files {
-        let url = llm_models::hf_url(entry.repo, entry.revision, file);
+    let mut sizes = Vec::with_capacity(spec.files.len());
+    for (file, _) in &spec.files {
+        let url = llm_models::hf_url(&spec.repo, &spec.revision, file);
         let resp = match client.head(&url).send().await {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
@@ -312,8 +509,8 @@ async fn run_download(downloads: Downloads, entry: &'static CatalogEntry) {
         .total = total;
 
     let mut downloaded: u64 = 0;
-    for (file, expected) in files.iter().zip(sizes) {
-        let dest = dir.join(file);
+    for ((file, local_name), expected) in spec.files.iter().zip(sizes) {
+        let dest = dir.join(local_name);
         if dest.is_file() {
             // Already present from an earlier run; count it and move on.
             downloaded += expected;
@@ -324,9 +521,9 @@ async fn run_download(downloads: Downloads, entry: &'static CatalogEntry) {
             .unwrap()
             .entry(DOWNLOAD_KEY.to_string())
             .or_default()
-            .current_file = Some((*file).to_string());
+            .current_file = Some(file.clone());
 
-        let url = llm_models::hf_url(entry.repo, entry.revision, file);
+        let url = llm_models::hf_url(&spec.repo, &spec.revision, file);
         log::info!("Downloading local model asset {file} from {url}");
         let resp = match client.get(&url).send().await {
             Ok(r) if r.status().is_success() => r,
@@ -404,8 +601,9 @@ async fn run_download(downloads: Downloads, entry: &'static CatalogEntry) {
 
     let mut guard = downloads.lock().unwrap();
     let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+    status.installed_name = Some(spec.installed_name.clone());
     status.set_done();
-    log::info!("Local model {} downloaded", entry.id);
+    log::info!("Local model {} downloaded", spec.label);
 }
 
 /// Files in a repo snapshot that are never worth downloading.
@@ -422,13 +620,30 @@ fn is_skippable_repo_file(path: &str) -> bool {
         || lower.ends_with(".md")
 }
 
+/// `true` if a path from a repo listing stays inside the directory it is
+/// joined onto: relative, plain names only, no `..`, and nothing Windows would
+/// read as a drive or a separator.
+///
+/// The listing comes from the network, and `Path::join` with an absolute path
+/// or a `..` would write outside the model folder.
+pub(crate) fn is_safe_repo_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains(['\\', ':', '\0'])
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// List a repo's files via the Hugging Face tree API.
 async fn repo_files(
     client: &reqwest::Client,
     repo: &str,
     revision: &str,
 ) -> Result<Vec<(String, u64)>, String> {
-    let url = format!("https://huggingface.co/api/models/{repo}/tree/{revision}?recursive=true");
+    let url = format!(
+        "{}/api/models/{repo}/tree/{revision}?recursive=true",
+        hf_repo::hf_endpoint()
+    );
     let response = client
         .get(&url)
         .send()
@@ -451,6 +666,11 @@ async fn repo_files(
             (!is_skippable_repo_file(&path)).then_some((path, size))
         })
         .collect();
+    if let Some((unsafe_path, _)) = files.iter().find(|(path, _)| !is_safe_repo_path(path)) {
+        return Err(format!(
+            "{repo} lists a file at an unsafe path ({unsafe_path}); refusing to download it"
+        ));
+    }
 
     if files.is_empty() {
         return Err(format!("{repo} contains no downloadable model files"));
@@ -539,18 +759,67 @@ async fn prune_stale_shard_index(dir: &Path) {
 /// holding both a `config.json` and safetensors shards, and a partial download
 /// can satisfy that check partway through — staging elsewhere means a
 /// half-finished model is never offered as loadable.
-async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::CatalogEntry) {
-    let destination = mlx_models::destination_for(entry);
+/// What to fetch for an MLX model: a catalog entry, or a repo the user picked.
+struct MlxDownloadSpec {
+    /// For the log.
+    label: String,
+    repo: String,
+    revision: String,
+    destination: PathBuf,
+    installed_name: String,
+    /// The files to fetch, as the check chose them; `None` lists the repo
+    /// (catalog entries, whose `approx_bytes` were measured that way).
+    files: Option<Vec<(String, u64)>>,
+    /// Record where the model came from, so a later check can tell "already
+    /// installed" from "another model with the same folder name".
+    write_source_marker: bool,
+}
+
+impl From<&'static mlx_models::CatalogEntry> for MlxDownloadSpec {
+    fn from(entry: &'static mlx_models::CatalogEntry) -> Self {
+        MlxDownloadSpec {
+            label: entry.id.to_string(),
+            repo: entry.repo.to_string(),
+            revision: entry.revision.to_string(),
+            destination: mlx_models::destination_for(entry),
+            installed_name: entry.dir_name.to_string(),
+            files: None,
+            write_source_marker: false,
+        }
+    }
+}
+
+impl From<&RepoCheck> for MlxDownloadSpec {
+    fn from(check: &RepoCheck) -> Self {
+        MlxDownloadSpec {
+            label: check.repo.clone(),
+            repo: check.repo.clone(),
+            revision: check.revision.clone(),
+            destination: hf_repo::destination_of(check),
+            installed_name: check.installed_name.clone(),
+            files: Some(
+                check
+                    .files
+                    .iter()
+                    .map(|f| (f.path.clone(), f.size))
+                    .collect(),
+            ),
+            write_source_marker: true,
+        }
+    }
+}
+
+async fn run_mlx_download(downloads: Downloads, spec: MlxDownloadSpec) {
+    let destination = spec.destination.clone();
     if destination.is_dir() {
         let mut guard = downloads.lock().unwrap();
-        guard
-            .entry(DOWNLOAD_KEY.to_string())
-            .or_default()
-            .set_done();
-        log::info!("MLX model {} is already installed", entry.id);
+        let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+        status.installed_name = Some(spec.installed_name.clone());
+        status.set_done();
+        log::info!("MLX model {} is already installed", spec.label);
         return;
     }
-    let staging = destination.with_extension("part");
+    let staging = mlx_models::staging_for(&destination);
     // A previous interrupted attempt leaves this behind; start clean rather
     // than resuming, since we cannot tell which files are complete.
     let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -562,10 +831,20 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
     }
 
     let client = reqwest::Client::new();
-    let files = match repo_files(&client, entry.repo, entry.revision).await {
-        Ok(files) => files,
-        Err(e) => return set_error(&downloads, e),
+    let files = match spec.files.clone() {
+        Some(files) => files,
+        None => match repo_files(&client, &spec.repo, &spec.revision).await {
+            Ok(files) => files,
+            Err(e) => return set_error(&downloads, e),
+        },
     };
+    if let Some((unsafe_path, _)) = files.iter().find(|(path, _)| !is_safe_repo_path(path)) {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return set_error(
+            &downloads,
+            format!("refusing to download a file at an unsafe path: {unsafe_path}"),
+        );
+    }
 
     let total: u64 = files.iter().map(|(_, size)| *size).sum();
     downloads
@@ -593,7 +872,7 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
             .or_default()
             .current_file = Some(path.clone());
 
-        let url = llm_models::hf_url(entry.repo, entry.revision, path);
+        let url = llm_models::hf_url(&spec.repo, &spec.revision, path);
         log::info!("Downloading MLX model asset {path} from {url}");
         let response = match client.get(&url).send().await {
             Ok(r) if r.status().is_success() => r,
@@ -660,6 +939,12 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
     }
 
     prune_stale_shard_index(&staging).await;
+    if spec.write_source_marker {
+        if let Err(e) = hf_repo::write_source_marker(&staging, &spec.repo, &spec.revision) {
+            // Only costs a later check its "already installed" answer.
+            log::warn!("could not record where the model came from: {e}");
+        }
+    }
 
     if let Err(e) = tokio::fs::rename(&staging, &destination).await {
         let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -673,13 +958,12 @@ async fn run_mlx_download(downloads: Downloads, entry: &'static mlx_models::Cata
     }
 
     let mut guard = downloads.lock().unwrap();
-    guard
-        .entry(DOWNLOAD_KEY.to_string())
-        .or_default()
-        .set_done();
+    let status = guard.entry(DOWNLOAD_KEY.to_string()).or_default();
+    status.installed_name = Some(spec.installed_name.clone());
+    status.set_done();
     log::info!(
         "MLX model {} downloaded to {}",
-        entry.id,
+        spec.label,
         destination.display()
     );
 }
@@ -766,6 +1050,45 @@ mod tests {
             prune_stale_shard_index(dir.path()).await;
             assert_eq!(index_path.is_file(), stays);
         }
+    }
+
+    #[test]
+    fn repo_paths_must_stay_inside_the_model_folder() {
+        for ok in [
+            "config.json",
+            "sub/dir/model.safetensors",
+            "chat_template.jinja",
+        ] {
+            assert!(is_safe_repo_path(ok), "{ok} should be accepted");
+        }
+        for bad in [
+            "",
+            "../escape.json",
+            "a/../../b",
+            "/etc/passwd",
+            "C:\\Windows\\x",
+            "c:x",
+            "a\\b",
+            "./x",
+        ] {
+            assert!(!is_safe_repo_path(bad), "{bad:?} should be refused");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_download_is_refused_while_one_is_running() {
+        let state = Arc::new(AppState::new(None, false));
+        state
+            .model_download
+            .lock()
+            .unwrap()
+            .insert(DOWNLOAD_KEY.to_string(), ModelDownloadStatus::downloading());
+        let response = download_start(
+            State(state),
+            Some(Json(json!({"id": llm_models::CATALOG[0].id}))),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
     }
 
     #[test]

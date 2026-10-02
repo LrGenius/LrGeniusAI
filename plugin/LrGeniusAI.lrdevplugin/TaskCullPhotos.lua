@@ -123,7 +123,7 @@ local function dedupePhotoIds(photoIds)
 	return result
 end
 
-local function photosFromIds(photoIds, photoById)
+local function photosFromIds(photoIds, photoById, missing)
 	local photos = {}
 	for _, photoId in ipairs(dedupePhotoIds(photoIds)) do
 		local photo = photoById[photoId]
@@ -131,6 +131,9 @@ local function photosFromIds(photoIds, photoById)
 			table.insert(photos, photo)
 		else
 			log:warn("Cull task: photo not found in catalog for photo_id " .. tostring(photoId))
+			if missing then
+				missing[photoId] = true
+			end
 		end
 	end
 	return photos
@@ -393,12 +396,14 @@ LrTasks.startAsyncTask(function()
 
 		local photoIds = {}
 		local photoById = {}
+		local photosWithoutId = 0
 		for _, photo in ipairs(photosToProcess) do
 			local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 			if photoId then
 				table.insert(photoIds, photoId)
 				photoById[photoId] = photo
 			else
+				photosWithoutId = photosWithoutId + 1
 				log:error("Cull task: skipping photo due to missing photo_id: " .. tostring(photoIdErr))
 			end
 		end
@@ -553,11 +558,15 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
-		local picksPhotos = photosFromIds(picksIds, photoById)
-		local alternatePhotos = photosFromIds(alternateIds, photoById)
-		local rejectPhotos = photosFromIds(rejectIds, photoById)
-		local duplicatePhotos = photosFromIds(duplicateIds, photoById)
-		local setPhotos = photosFromIds(setIds, photoById)
+		-- Photo IDs the backend grouped but this catalog no longer has. They are
+		-- collected rather than only logged, so the completion dialog can say
+		-- how much of the selection the collections are missing (#375).
+		local notInCatalog = {}
+		local picksPhotos = photosFromIds(picksIds, photoById, notInCatalog)
+		local alternatePhotos = photosFromIds(alternateIds, photoById, notInCatalog)
+		local rejectPhotos = photosFromIds(rejectIds, photoById, notInCatalog)
+		local duplicatePhotos = photosFromIds(duplicateIds, photoById, notInCatalog)
+		local setPhotos = photosFromIds(setIds, photoById, notInCatalog)
 
 		local catalog = LrApplication.activeCatalog()
 		local timestamp = LrDate.timeToW3CDate(LrDate.currentTime())
@@ -694,6 +703,33 @@ LrTasks.startAsyncTask(function()
 					tostring(setGroups),
 					tostring(summary.intentional_set_photo_count or #setPhotos)
 				)
+		end
+
+		-- Photos that fell out of the run rather than being culled: no usable
+		-- photo ID, or an ID the catalog no longer has. The dialog used to
+		-- report the groups it made and leave the difference unaccounted for
+		-- (#375).
+		local notInCatalogCount = 0
+		for _ in pairs(notInCatalog) do
+			notInCatalogCount = notInCatalogCount + 1
+		end
+		if photosWithoutId > 0 or notInCatalogCount > 0 then
+			local reasons = {}
+			if photosWithoutId > 0 then
+				table.insert(reasons, tostring(photosWithoutId) .. " had no usable photo ID")
+			end
+			if notInCatalogCount > 0 then
+				table.insert(reasons, tostring(notInCatalogCount) .. " are no longer in the catalog")
+			end
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. "Not culled: "
+				.. tostring(photosWithoutId + notInCatalogCount)
+				.. " of the "
+				.. tostring(#photosToProcess)
+				.. " selected photo(s) ("
+				.. table.concat(reasons, ", ")
+				.. ")."
 		end
 
 		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage)

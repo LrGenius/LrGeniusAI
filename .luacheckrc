@@ -11,6 +11,7 @@ globals = {
     "log",
     "JSON",
     "Util",
+    "AiProviders",
     "ErrorHandler",
     "Info",
     "UpdateCheck",
