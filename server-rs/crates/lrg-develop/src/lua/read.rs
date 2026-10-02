@@ -13,6 +13,11 @@
 //!   key is rounded half-to-even ([`KeySpec::coerce`]) and warned about;
 //! - booleans and 0/1 are both accepted on bool and 0/1-flag keys and
 //!   normalised to the key's kind;
+//! - an integer string (`"1"`) on a mask enum ([`KeySpec::is_mask_enum`]:
+//!   `MaskSubType`, `MaskBlendMode`, `CorrectionRangeMask.Type`, ...) is
+//!   read as that integer, without a warning: the Lua writer's
+//!   `EnumAs::String` form (`lua::LuaOptions::mask_enum_as`), so whichever
+//!   form experiment E2 settles on reads back;
 //! - a known key whose value has the wrong shape (`null` in an array, a mixed
 //!   array, a string for a number) is kept verbatim as [`Opaque::Json`] with a
 //!   [`WarningKind::WrongType`], and never written;
@@ -94,6 +99,12 @@ pub fn from_lua_value(
     let fields = reader.fields(obj, Level::Global, "");
     let settings = reader::finish(fields, hint, &mut reader.warnings);
     Ok((settings, reader.warnings))
+}
+
+/// `"3"`, `"-1"`: an optional minus and ASCII digits, nothing else.
+fn is_integer_text(t: &str) -> bool {
+    let digits = t.strip_prefix('-').unwrap_or(t);
+    !digits.is_empty() && digits.len() <= 18 && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[derive(Default)]
@@ -311,6 +322,10 @@ impl Reader {
         let input = match v {
             J::Bool(b) => ScalarIn::Bool(*b),
             J::Number(n) => ScalarIn::Num(n.as_f64().and_then(|f| Finite::new(f).ok())?),
+            // The writer's `EnumAs::String` form; plain digits only.
+            J::String(t) if spec.is_mask_enum() && is_integer_text(t) => {
+                ScalarIn::Num(Finite::from_i64(t.parse().ok()?))
+            }
             _ => return None,
         };
         reader::scalar(spec, input, path, key, || snippet(v), &mut self.warnings)
@@ -643,6 +658,39 @@ mod tests {
         let look = s.look.unwrap();
         assert_eq!(look.camera_restriction.as_deref(), Some("Synthetic Camera"));
         assert!(look.rest.get("CameraModelRestriction").is_none());
+    }
+
+    #[test]
+    fn integer_strings_are_read_on_mask_enums_only() {
+        // The Lua writer's `EnumAs::String` form reads back as numbers.
+        let (s, w) = read(json!({"MaskGroupBasedCorrections": [{
+            "What": "Correction", "CorrectionAmount": 1, "CorrectionActive": true,
+            "LocalExposure2012": 0.1,
+            "CorrectionMasks": [
+                {"What": "Mask/Image", "MaskActive": true, "MaskBlendMode": "0",
+                 "MaskInverted": false, "MaskValue": 1, "MaskSubType": "3",
+                 "MaskSubCategoryID": "5", "ErrorReason": "0"},
+                {"What": "Mask/RangeMask", "MaskActive": true, "MaskBlendMode": "1",
+                 "MaskInverted": true, "MaskValue": 0,
+                 "CorrectionRangeMask": {"Type": "2", "Invert": true, "Version": 3,
+                    "SampleType": "0", "LumRange": "0.5 0.7 1 1"}}
+            ]
+        }]}));
+        assert!(w.is_empty(), "{w:?}");
+        let masks = &s.corrections[0].masks;
+        assert_eq!(masks[0].tool, MaskTool::Semantic(Semantic::PeoplePart(5)));
+        assert_eq!(masks[1].combine, Combine::Intersect);
+        assert!(matches!(masks[1].tool, MaskTool::LuminanceRange(_)));
+        // Not a mask enum, or not an integer: the wrong type, as before.
+        let (_, w) = read(json!({"PostCropVignetteStyle": "1"}));
+        assert_eq!(kinds(&w), ["WrongType"]);
+        for bad in ["1.0", " 1", "x", "", "+1"] {
+            let (_, w) = read(json!({"MaskGroupBasedCorrections": [{
+                "What": "Correction",
+                "CorrectionMasks": [{"What": "Mask/Image", "MaskSubType": bad}]
+            }]}));
+            assert!(kinds(&w).contains(&"WrongType"), "{bad:?}: {w:?}");
+        }
     }
 
     #[test]

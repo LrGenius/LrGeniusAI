@@ -1,11 +1,12 @@
 # Dev: Native Develop Model (`lrg-develop`)
 
-> **Status: steps 1a, 1c and 1b (1d/1f use it; 1b's manual import test in
+> **Status: steps 1a, 1c, 1b and 1g (1d/1f use it; 1b's manual import test in
 > the installed Lightroom Classic is pending, see [Hand test](#hand-test)).** The crate has the key
 > registry, the typed model, the policy filter, the readers for the Lua table
 > form and for XMP (sidecars, develop presets, profiles), the develop-preset
-> writer and the mask builders. The Lua writer (1g) follows; this page grows
-> with it. Background and the research behind it:
+> writer, the mask builders and the Lua writer. The Lua writer's forms are
+> **provisional** until experiments E1/E2/E4/E11 are run (see [Writing the
+> Lua form](#writing-the-lua-form-provisional)). Background and the research behind it:
 > [AI Edit via XMP — Findings and Experiments](Dev-AI-Edit-XMP-Findings).
 
 `server-rs/crates/lrg-develop` holds the facts and shapes of Lightroom
@@ -42,6 +43,7 @@ Who uses it today:
 | `registry` | One `KeySpec` per develop key (`table.rs`), name families (`patterns.rs`), UI ↔ stored scaling (`ui.rs`, the only place), int/real conversion (`coerce.rs`, the only place) |
 | `model` | `DevelopSettings`, `Value`/`Finite`/`Opaque`, corrections and masks (`correction.rs`), white balance (`whitebalance.rs`), the policy filter (`policy.rs`) |
 | `lua::read` | `getDevelopSettings()` as JSON.lua encodes it → model + warnings |
+| `lua::write` | model → the table `applyDevelopSettings()` takes, as JSON for JSON.lua (`LuaMode::Apply`), or a lossless test rewrite (`LuaMode::TestRoundTrip`, feature `test-roundtrip`); the experiment-decided forms are `LuaOptions` |
 | `xmp::read` | an XMP sidecar, preset or profile → `XmpDocument` (kind, header, model, warnings, skipped subtrees) |
 | `xmp::write` | model → a develop preset (`WriteMode::Preset`), or a lossless test rewrite (`WriteMode::TestRoundTrip`, feature `test-roundtrip`) |
 | `xmp::format` | how the writer spells numbers, booleans, curves, ids, versions; XML escaping |
@@ -104,7 +106,10 @@ code* in [Dev-AI-Edit-XMP-Findings](Dev-AI-Edit-XMP-Findings)); it resolves to
 unknown, and a test pins that. `tests/no_temp_key.rs` keeps it from coming back
 as a key literal in `server-rs/crates/*/src` and the plugin's
 `DevelopEditManager.lua` (comments excluded; the develop experiments, which
-write `Temp` on purpose, are allowlisted). Because it guards a plugin file, CI
+write `Temp` on purpose, are allowlisted, and so is the one constant the Lua
+writer refuses it with, `RETIRED_TEMP_KEY` in `src/lua/write.rs`, via
+`ALLOWED_LINES`, matched on `/`-joined paths so the Windows release job
+agrees). Because it guards a plugin file, CI
 also runs it in the unfiltered `format-lint-rust` job of `lint-format.yml`, not
 only in `server-rs-tests.yml`, which skips plugin-only PRs.
 
@@ -465,6 +470,16 @@ and no registry key arrived in a form the model keeps whole
 files carrying `crs:ProcessVersion` as of September 2026, so it differs from
 the photo count in the research.
 
+October 2026 re-run of the corpus: 28,681 files, 10,815 sidecars parsed
+(8,006 at PV 15.4, 2,809 at 11.0; 5,524 corrections). One new sidecar,
+written by the Camera Raw 18.7 engine, carried `crs:Glow`, the switch of the
+Glow panel whose `GlowRange`/`GlowWarmth`/`GlowSpread`/`GlowStyle` rows
+already existed (unobserved); the full sweep failed on it (`UnknownKey
+Glow`) until it got its own row (global, `Any`, UNKNOWN, observed in XMP
+only so far). With the row the sweep is clean again: 0 parse errors, 0
+warnings, nothing kept whole. The other September counts on this page are
+from the 10,814-sidecar run.
+
 ## Writing XMP presets
 
 `xmp::write(&settings, &WriteMode) -> Result<Written, WriteError>` writes a
@@ -660,6 +675,324 @@ registry rows keep Lightroom's sidecar spelling. Follow-up for the registry
 `plus_sign`, and legacy `Exposure` is `Trim6` where Adobe writes two
 decimals.
 
+## Writing the Lua form (provisional)
+
+> **Provisional until experiments E1, E2, E4 and E11 are run.** They show
+> which forms `applyDevelopSettings` and plugin presets accept on the write
+> side ([Findings: Running the experiments](Dev-AI-Edit-XMP-Findings#running-the-experiments)).
+> The writer decides none of them: every alternative an experiment measures
+> that shapes the table, or the call that applies it, is one `LuaOptions`
+> field, and the provisional choices sit in one place,
+> `LuaOptions::PROVISIONAL` (the table below, which also says what the
+> experiments *as built* can settle: for several fields only the provisional
+> side, for `int_flag_as` nothing). The wire goldens are not frozen until
+> the results are in.
+
+`lua::to_lua_value(&settings, &LuaMode, &LuaOptions) -> Result<LuaWritten,
+WireError>` writes the table `photo:applyDevelopSettings()` takes, as the
+JSON the plugin's JSON.lua decodes into it. `LuaWritten { table, skipped,
+call }`: the table (always a JSON object; `is_empty()` when nothing reaches
+the photo), every value that did not make it (as `xmp::Written::skipped`),
+and `ApplyCall { update_ai_settings, flatten_auto_now }`, the call
+arguments that go with the table.
+
+```rust
+let photo = PhotoContext { file_kind: Some(FileKind::Raw), process_version: Some(ProcessVersion::V6), camera: None };
+let LuaWritten { table, skipped, call } =
+    lua::to_lua_value(&settings, &LuaMode::Apply(photo), &LuaOptions::default())?;
+```
+
+Two modes, as for XMP:
+
+- `LuaMode::Apply(PhotoContext { file_kind, process_version, camera })` is
+  production. The settings go through `filtered(Target::ApplyPhoto { .. })`
+  first: PHOTO values pass (the settings are meant for this photo; crop,
+  gradients, a person's reference point), gates, file-kind keys, `min_pv`
+  and camera-restricted profiles are checked against the photo, and every
+  removed non-default value is reported. An unknown `file_kind` gets
+  no white-balance numbers and no raw-only or non-raw-only key.
+- `LuaMode::Preset(PhotoContext)` is the same table for a plugin preset
+  applied to that one photo (`addDevelopPresetForPlugin`, the E4 route),
+  plus `SupportsAmount`/`SupportsAmount2` when `preset_amount_flags` asks
+  for them. It is the only mode that honours that field, so a preset-route
+  answer stored in `PROVISIONAL` cannot leak into `applyDevelopSettings`
+  tables.
+- `LuaMode::TestRoundTrip` (feature `test-roundtrip`, as for XMP) writes
+  everything the model holds, opaque content read from a Lua table
+  included; content kept as XMP has no Lua form and is a
+  `WireError::NotLua`. Of the options only the encodings apply
+  (`mask_enum_as`, `int_flag_as`), and the reader reads each of them back
+  (an integer string on a mask enum is read as that integer, without a
+  warning), so round trip 2 holds whichever form E2 settles on.
+
+### Rules (plan §4.1, writer rules 1–10)
+
+1. Keys without `crs:`; only what the policy filter lets through for the
+   photo, then a never-write guard (`lua_never_written`): the XMP writer's
+   `NEVER_WRITE` list (`CorrectionID`, `MaskID`, `CorrectionReferenceX/Y`,
+   `FullMaskSize`, `WholeImageArea`, `Origin`, `ModelVersion`, retouch and
+   filter payloads, `orientation`, ...), every key with `Digest` in its
+   name, `MaskBrushTable*`, the global `Enable*` switches (only
+   `panel_switches` writes them) and XMP-only keys. The guard's
+   drops are reported. Global META is set by the writer, never copied: no
+   `ProcessVersion` (it describes the example), `ToneCurveName2012` derived
+   from the curve, `WhiteBalance="Custom"` next to numbers.
+2. Integer keys as JSON integers (a real on an integer key goes through
+   `KeySpec::coerce`, the one rounding place; a value no integer key can
+   take is a `WireError::WrongValue`), real keys as JSON numbers at full
+   precision. Every number is a `Finite`, so never `null`.
+3. Booleans as JSON booleans; 0/1 flags (`IntFlag`) per `int_flag_as`.
+4. Numeric-looking strings stay strings: `ProcessVersion`,
+   `ReferencePoint`, `LumRange`, `FocalRange`, `Look.UUID`, local curve
+   points. A compound number string keeps its spelling (Lightroom's tables
+   mix `0` and `0.170630`) but must be a list of numbers
+   (`WireError::NotCompound`); only what the writer builds itself
+   (`LumRange` of a luminance range, a person's `ReferencePoint`) is spelled
+   `%.6f`. Ids are upper-cased and must be 32 hex digits.
+5. Global curves as a flat number list `[x, y, x, y, ...]` (integers where
+   they are), at least two points (`WireError::ShortCurve`); local curves
+   as a list of `"x,y"` strings.
+6. `MaskGroupBasedCorrections` as a list in panel order, `Local*` directly
+   on the correction, `CorrectionMasks` never empty. Every correction gets
+   `What`, `CorrectionAmount` 1 and `CorrectionActive` when the model has
+   none, and (`local_form = AdaptivePreset`) the 23 `Local*` keys of
+   Adobe's adaptive presets at 0 where the model has no value
+   (`ADAPTIVE_PRESET_LOCALS`, the list `DevelopExperiments.lua` applies,
+   pinned against it by a test; its legacy PV2010 keys are written only as
+   this 0). Every component gets `MaskActive`; `mask_form` decides the
+   rest.
+7. Never an empty container: JSON.lua encodes `{}` as `[]`, and an empty
+   `MaskGroupBasedCorrections` would delete every mask of the photo. When no
+   correction reaches the photo the key is absent; a structure left empty
+   by the filter is absent (the reader reads both as "absent" too).
+8. No mixed tables, no sparse arrays: no `null`, one JSON type per list.
+9. White balance as a family. After the filter only the photo's family is
+   left; numbers go with `Custom` or no mode (and get `"Custom"` per
+   `wb_custom_with_numbers`); numbers next to any other mode (`As Shot`,
+   `Auto`, `Daylight`, ...) are what that mode resolved to for the source
+   and are reported as `SkipReason::WhiteBalanceMode`; a named mode
+   without numbers is written only with `wb_mode_only` (reported otherwise,
+   `As Shot`, the default, silently). `Custom` without numbers (they
+   belonged to the other family, or the file kind is unknown) and a mode
+   outside the registry's list are always skipped and reported: `Custom`
+   alone would pin whatever the photo has. `Temp` is never written:
+   `RETIRED_TEMP_KEY` is the one place the name is spelled, refused at any
+   depth.
+10. The forms the experiments decide are `LuaOptions` (below).
+
+Rules 7–9 are checked once more on the finished table (`check_wire`, public
+for the apply layer); a failure is a writer bug and a
+`WireError::NotWireSafe`, never a table handed to Lightroom.
+
+The `Look` follows `look_form`. The stub forms carry `Name`, `UUID`,
+`Amount` (and `Stubbed`): the profile's COMPUTED fields (`Parameters`,
+`Group`, `Supports*`, `CameraModelRestriction`, `isAdobeAdaptive`, ...) are
+copies Lightroom fills in from its profile library when it resolves the
+stub, so dropping them is not reported (as in a preset). A camera
+restriction is not reported either: the policy filter has already kept a
+restricted Look to its own camera, so the stub that reaches the photo loses
+nothing. An Adobe Adaptive Look (`isAdobeAdaptive`) sets
+`ApplyCall::update_ai_settings` (with `ai_update`) in every form, since its
+`AILook` state is never written. `LookForm::Full` writes the whole record,
+with `Parameters` only when it was read from a Lua table and passes
+`check_wire` — the one place kept-verbatim content reaches Lightroom, and
+only on request. No experiment applies a camera-restricted or an adaptive
+Look (E11 uses Adobe Raw profiles and rejects adaptive ones).
+
+Number spelling is not part of the contract: JSON.lua under Lua 5.1 (the
+Lightroom runtime and CI's busted) re-encodes with `%.14g`, a local Lua 5.5
+with the shortest exact form. Tests compare decoded values, never encoded
+text.
+
+### Options and what decides them
+
+Every field is **provisional**; none is decided yet. "Settles" says what the
+experiments *as built* (`TaskDevelopExperiments.lua`, `DevelopExperiments.lua`)
+can settle: an experiment that applies only the provisional form can confirm
+it, not choose between the alternatives, and an alternative no experiment
+applies stays unmeasured whatever the run says.
+
+| `LuaOptions` field | Alternatives | Provisional | Settles | Evidence so far | Status |
+|---|---|---|---|---|---|
+| `mask_enum_as` | `Number` / `String` (mask enums, `KeySpec::is_mask_enum`: every closed integer set below the global level — `MaskSubType`, `MaskBlendMode`, `ErrorReason`, `CorrectionRangeMask.Type`/`SampleType`, ... — and `MaskSubCategoryID`) | `Number` | E2/E4 confirm `Number` only: they apply numbers; `String` is applied by no experiment | read back: `MaskSubType` a number in 655 of 655 masks of the training dump | provisional |
+| `int_flag_as` | `Number` (0/1) / `Bool` (`LensProfileEnable`, `AutoLateralCA`, `CropConstrainToWarp`, `HDREditMode`) | `Number` | nothing: no experiment writes a flag key (`LensProfileEnable` is only read back, as context) | read back: numbers in 1,294 of 1,294 rows; `DevelopEditManager.lua` already applies `AutoLateralCA` and `EnableLensCorrections` as booleans, so reading back such photos is cheap evidence | provisional |
+| `panel_switches` (the plan's `include_panel_switches`) | `None` / `MaskOnly` (`EnableMaskGroupBasedCorrections` next to corrections) / `All` (plus the switch of every panel the table touches, `PANEL_SWITCHES`) | `None` | nothing: E2/E4 always send `MaskOnly`, so a working run shows the mask switch does no harm, not that it is needed; `None` and `All` are applied by no experiment, and the `PANEL_SWITCHES` map is unverified (check it before turning `All` on) | plan §4.1 rule 10 | provisional |
+| `mask_form` | `PresetForm` (an AI mask's `MaskVersion` 1, `ReferencePoint` centre, `ErrorReason` 0; a luminance range's `Version` 3, `SampleType` 0) / `Minimal` | `PresetForm` | E2/E4 confirm `PresetForm` for AI masks only (`DevelopExperiments.aiMaskTool`); `Minimal`, and any luminance range, are applied by no experiment | Adobe's adaptive presets use this form | provisional |
+| `local_form` | `AdaptivePreset` (the 23 `Local*` keys at 0 unless the model has a value) / `Sparse` (the model's own) | `AdaptivePreset` | E2/E4 confirm `AdaptivePreset` (`DevelopExperiments.aiMaskCorrection`); `Sparse` is applied by no experiment | Adobe's adaptive presets use this form | provisional |
+| `wb_custom_with_numbers` | numbers with `WhiteBalance="Custom"` / alone | `true` | raw: E1c (`Custom` + numbers) against E1b (numbers alone); non-raw: E1b applies the incremental numbers alone, `Custom` + incremental numbers is applied by no experiment (E1c non-raw is the cross-family probe `{Temperature = 22}`) | none yet | provisional |
+| `wb_mode_only` | a named mode without numbers written / skipped and reported (`Custom` alone is never written) | `false` | E1e (`Daylight`), E1f/E1g (`Auto`); `"As Shot"` and the other named modes alone are applied by no experiment. Flips together with the style engine's `EMIT_NAMED_WB_MODES` | plan §6.1: no mode without numbers until E1 shows Lightroom recomputes temperature and tint | provisional |
+| `flatten_auto_now` | `ApplyCall::flatten_auto_now` when the table sets `WhiteBalance="Auto"` | `false` | E1f against E1g | matters only with `wb_mode_only` | provisional |
+| `ai_update` | `ApplyCall::update_ai_settings` after an AI mask (`Mask/Image`), `LensBlur` or an Adobe Adaptive `Look` | `true` | E2b against E2c, for AI masks; the adaptive `Look` by no experiment (E11 rejects adaptive Looks) | Findings: AI masks are computed per photo; E2c is update-then-poll | provisional |
+| `look_form` | `Stub` (`Stubbed = true`) / `BareStub` / `Full` | `Stub` | E11 (E11a `Stub`, E11b `Full`, E11c `BareStub`), with Adobe Raw profiles only: camera-restricted and adaptive Looks are applied by no experiment | every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) | provisional |
+| `preset_amount_flags` | `SupportsAmount`/`SupportsAmount2 = true` in a plugin preset's table (`LuaMode::Preset` only) | `false` | E4e (plain against flagged) | the preset route is not chosen | provisional |
+
+The provisional table differs from the one E2 and E4 apply in one way: it
+has no `EnableMaskGroupBasedCorrections` (`panel_switches = None`). Before
+the goldens are frozen, an experiment has to apply the writer's own output:
+see [Wire goldens](#wire-goldens).
+
+What the experiments measure that is **not** a writer switch, and why:
+
+- **E1a/E1d (`Temp` accepted?)**: whatever the answer, `Temp` is never
+  written; the family keys are the documented ones (rule 9).
+- **E1c on a non-raw file (`{Temperature = 22}`)**: a cross-family probe
+  (does Lightroom take a raw key on a non-raw photo?); the writer never
+  writes the other family's keys (rule 9), so the answer changes no table.
+- **E2 timing** (update call and mask-ready time): runtime planning for
+  step 2, no table shape.
+- **E4a/E4b (same-name presets), E4f (apply then delete the file)**: the
+  preset route's lifecycle in the apply layer (step 2); the table is the
+  same either way.
+- **E4c (preset masks merged or replacing)**: the writer writes exactly
+  `settings.corrections`. Keeping the photo's existing masks is the apply
+  layer's job on the photo's **raw** tables: the writer drops digests
+  (rule 1), so an existing AI mask passed through the model would lose its
+  computed state.
+- **E4d (re-apply duplicates or updates by sync id)**: sync ids come from
+  the builders (derived per role, see [Building corrections](#building-corrections));
+  the writer keeps them.
+
+When an experiment has answered, in one change:
+
+1. change the field in `LuaOptions::PROVISIONAL` and in its pinning test
+   (`the_provisional_choices_are_pinned`);
+2. E1 (mode only): flip `wb_mode_only` together with
+   `lrg_analysis::style_engine::EMIT_NAMED_WB_MODES` and its const assert
+   in `a_named_mode_majority_is_not_sent_while_the_switch_is_off`;
+3. re-bless the wire goldens and run `busted` ([Wire goldens](#wire-goldens));
+   no test or reader change is needed (`every_golden_case_is_clean_under_every_option_flip`
+   proves that for every single flip);
+4. set the field's Status in the table above (`decided: <date>, <run>`),
+   and correct the field's rustdoc and the `PROVISIONAL` table in
+   `src/lua/write.rs` if the run settled more or less than "Settles" says.
+   The Findings page, `wire/README.md` and the plugin spec point here
+   instead of restating the values.
+
+### Round trips 2 and 3
+
+Plan §7.3, in `tests/support/lua_round.rs` (shared by `tests/lua_roundtrip.rs`
+and the local sweeps):
+
+- **Round trip 2**, model → Lua → model (`LuaMode::TestRoundTrip`): the
+  same model back for every `Presence::Both`/`LuaOnly` value, opaque Lua
+  content and read warnings included, and writing the read-back model again
+  gives the same table. A model read from XMP goes in without what has no
+  Lua form (`without_xmp_only`): XMP-only keys (`HasSettings`, `HasCrop`,
+  ...; a preset header is not part of the model), `PerFormat` values in
+  their XMP shape, content kept as XMP. Empty containers need no exception:
+  the reader reads them as "absent".
+- **Round trip 3**, Lua → model → XMP preset → model → Lua, mixed and
+  single-kind preset: the preset's model goes through Lua losslessly and
+  without a warning, and every value it shares with the source (filtered
+  for the preset, rounded with `Value::quantized` to the preset writer's
+  `NumFmt`, then through Lua) is equal. Opaque content is excepted by
+  definition (format-specific; a preset never carries it).
+
+| Source | Round trip 2 | Round trip 3 |
+|---|---|---|
+| committed: Lua fixtures, wire goldens, XMP fixtures (`lua_roundtrip.rs`) | 42 Lua tables under 4 encodings (168), every XMP fixture (22) | 64 sources, 128 presets, 7,374 shared values |
+| training dump, 1,294 rows (local) | 311,746 values | 2,588 presets, 301,834 shared values |
+| Lightroom bundle, 446 presets (local) | 27,151 values | 892 presets, 48,281 shared values |
+| Camera Raw presets, 4 (local) | 310 values | 8 presets, 530 shared values |
+| sidecar corpus, all 10,815 (local) | 1,645,988 values | 21,630 presets, 2,267,558 shared values |
+
+All clean (October 2026): no value changed, lost or warned about, every
+second write identical.
+
+### Wire goldens
+
+`server-rs/testdata/develop/wire/*.json` are tables the writer produces in
+apply mode with the provisional options, one per shape: basic global
+sliders, raw Custom white balance, non-raw incremental white balance, global
+and parametric tone curves, HSL and colour grading, a subject and a sky
+correction, linear and radial gradients, a sky minus subject intersected
+with a luminance range, a people part, local point curves on a correction,
+the `Look` as a stub and whole, a source whose only correction is a brush
+(`MaskGroupBasedCorrections` absent, never `[]`), and five committed
+readbacks applied to their own photo: a sky mask, a colour range
+(`PointModels`, `ColorAmount`), an area colour range next to AI masks
+(`AreaModels`, `ColorRangeMaskAreaSampleInfo`), Select Object polygons
+(`Gesture`/`Points`) and the `LensBlur` struct (18 files).
+`tests/lua_wire_goldens.rs` writes and compares them, pins each case's
+skipped paths and `ApplyCall`, and checks each **file** both ways with the
+sweeps' check (`support/lua_apply.rs`): it reads back without a warning,
+every value of the filtered settings is in it or reported, and it holds
+nothing beyond those and the writer's fixed form. Sources are committed
+scrubbed fixtures or models built in the test, with synthetic sync ids; the
+files pass both hygiene checks. Their README (`wire/README.md`) says who
+reads them and how to re-bless.
+
+The same test file also
+
+- writes every case with each `LuaOptions` field flipped to each of its
+  other values in turn, in apply and preset mode, and requires the same
+  two-way check to pass (504 tables): flipping a field and re-blessing needs
+  no test or reader change on the Rust side;
+- generates `wire/key_classes.txt` from the registry (blessed with the
+  goldens): each key name with the classes of its values (`number`,
+  `integer`, `flag`, `maskenum`, `compound`, ...) or `never`, which the
+  plugin spec checks every value against, so the spec's key lists cannot
+  drift from the registry or from `NEVER_WRITE`;
+- pins `ADAPTIVE_PRESET_LOCALS` against `LOCAL_KEYS` in
+  `DevelopExperiments.lua`.
+
+**Not frozen.** Besides the experiments' answers, freezing needs one thing
+the experiments as built do not do: apply the writer's own output. E2 and
+E4 apply hand-built tables (the AI-mask preset form, all 23 locals,
+`EnableMaskGroupBasedCorrections`), never a golden. Blocking item before the
+goldens are frozen: an E2 variant that decodes `masks_subject_sky.json`,
+`mask_luminance_intersect.json` and `global_basic.json` with JSON.lua and
+passes them unchanged to `applyDevelopSettings` (with and without the mask
+switch). Variants for numeric-string mask enums, `MaskForm::Minimal`,
+`LocalForm::Sparse` and booleans on the flag keys would measure the
+alternatives no experiment applies yet.
+
+To re-bless after an intended writer change, or after an experiment has
+flipped a field of `LuaOptions::PROVISIONAL`:
+
+```bash
+cd server-rs
+LRG_BLESS=1 cargo test -p lrg-develop --test lua_wire_goldens   # writes the files and key_classes.txt
+cargo test -p lrg-develop --test lua_wire_goldens --test lua_roundtrip
+cd .. && busted                                                  # the plugin spec
+```
+
+The blessing run skips the read-back test (it would race the files being
+written), so the second command checks them. A golden no case writes fails
+the test: delete a file together with its case.
+
+**The plugin side.** `plugin/spec/native_wire_format_spec.lua` decodes every
+golden with the plugin's own `JSON.lua`, under Lua 5.1 in CI as in
+Lightroom (`lua-tests.yml`, which also runs when only
+`server-rs/testdata/develop/wire/**` changes), and checks what reaches
+`applyDevelopSettings`: a top-level table with string keys; real sequences
+(keys 1..n) and no empty, mixed, sparse or `null` value (decoded with a
+`null` placeholder so a null cannot hide as a missing key); every value of
+the Lua type of its key's registry class (`key_classes.txt`): numbers as
+numbers, numeric-looking strings as strings, compound strings as lists of
+numbers (`ReferencePoint` 2, `LumRange` and `FocalRange` 4; an empty
+string is no list), `CorrectionRangeMask.Type` only inside a range mask,
+sync ids 32 hex digits, booleans as booleans and never `"true"`/`"false"`;
+no key the registry does not know; global curves flat number lists of even
+length ≥ 4, local curves lists of `"x,y"` strings; a non-empty
+`CorrectionMasks` on every correction; no never-written key at any depth
+(the registry's `never`, `*Digest*`, `MaskBrushTable*`), no `Temp`, no
+top-level `ProcessVersion`; one white-balance family, numbers only with
+`Custom` or no mode; and the same decoded values after the plugin's own
+encode and decode. The encodings the experiments bear on are accepted
+either way (mask enums as integers or integer strings, 0/1 flags as 0/1 or
+booleans): all 504 flipped tables of the Rust test pass the spec under Lua
+5.1 and 5.5. The shapes the checks are about (corrections, global and local
+curves, compound strings and lists, booleans, flags, mask enums, numbers)
+are counted while the goldens are collected, and a check fails when one is
+missing, so a re-bless cannot make them pass vacuously; that check does not
+depend on the other tests having run. A block of crafted broken tables (a
+number as a string, an empty compound string, a wrong count, a mask enum
+that is no integer, an unknown key, ...) proves each check catches what it
+is for. Two pin tests hold JSON.lua's own behaviour the rules rest on:
+`encode({})` is `"[]"`, and a `null` inside an array decodes to a hole.
+Values are compared decoded, numbers within `%.14g`, never as encoded text.
+
 ## Building corrections
 
 `lrg_develop::build` makes new local corrections: a `CorrectionBuilder` takes
@@ -854,6 +1187,11 @@ in its README):
 - `xmp/*.xmp` are **self-authored**, one file per XMP form or develop shape
   (no Adobe file, no copy or excerpt of one, no real sidecar); the list is in
   the folder's README and in `FIXTURES` in `tests/xmp_fixtures.rs`.
+- `wire/*.json` are the **Lua writer's wire goldens** (see [Wire
+  goldens](#wire-goldens)): provisional until E1/E2/E4/E11, regenerated with
+  `LRG_BLESS=1 cargo test -p lrg-develop --test lua_wire_goldens`, read by
+  Rust and the plugin's busted spec. `wire/key_classes.txt`, generated by
+  the same run from the registry, holds key names and value classes only.
 - `written/*.xmp` are the **writer's byte goldens**: the three hand-test presets
   exactly as the preset writer emits them, with synthetic ids in place of the
   derived sync ids (a SHA-256 id cannot be told from a catalog's by the
@@ -969,6 +1307,49 @@ content, not line endings, so a Windows checkout passes too.
   (an intersected range with `Invert="true"`), PHOTO corrections are skipped
   and reported, output is byte-deterministic, and (feature `test-roundtrip`)
   every built tool round-trips exactly.
+- **`lua::write` unit tests**: one per writer rule — keys and policy,
+  the guard against every `NEVER_WRITE` key, computed mask bookkeeping
+  never written, JSON types of integers/reals/booleans/flags, coercion and
+  wrong variants, numeric-looking strings, compound strings and ids,
+  curves (flat, local strings, one point refused), corrections in panel
+  order with their fixed form, gradients, no empty containers (no
+  corrections, a brush-only source, an emptied structure), `check_wire`
+  against `null`, empty and mixed lists and `Temp`, the white-balance
+  family (raw, non-raw, unknown kind, other modes, mode only, `Custom`
+  never alone, flatten, `Custom` stamp), every `LuaOptions` alternative
+  (the adaptive-preset locals and the sparse form, the panel switches
+  `MaskOnly` and `All`, the amount flags only in preset mode), the `Look`
+  forms, a camera restriction and an adaptive Look's AI update,
+  `PANEL_SWITCHES` naming registry keys, read-back and determinism, and the
+  provisional choices pinned.
+- **`tests/lua_wire_goldens.rs`**: the wire goldens above, every case under
+  every single option flip, `key_classes.txt`, and the adaptive-preset
+  locals against the experiments' list.
+- **`plugin/spec/native_wire_format_spec.lua`** (busted, from the repo
+  root): the same goldens decoded by the plugin's JSON.lua (see [Wire
+  goldens](#wire-goldens)).
+- **`tests/lua_roundtrip.rs`** (plan §7.3, see [Round trips 2 and
+  3](#round-trips-2-and-3)): round trip 2 (model → Lua → model, lossless)
+  over every Lua fixture and wire golden, warnings included, under all four
+  encodings (mask enums as numbers or strings × flags as numbers or
+  booleans; 42 tables each), and over every XMP fixture without what has no
+  Lua form; round trip 3 (Lua → model → XMP preset → model → Lua, mixed and
+  single-kind) over the Lua fixtures, the wire goldens and the XMP
+  fixtures, agreeing on every shared value after `Value::quantized` (7,374
+  values; a failure names the source); the key enumeration
+  (`tests/support/enumerate.rs`, shared with `xmp_roundtrip.rs`) through
+  the lossless mode (792 values) and through apply mode for a raw and a
+  non-raw photo, where every global, correction, `LensBlur` and
+  `Look.Amount` value reaches the photo exactly or is reported or is its
+  default (1,299 written), with what is held back pinned per key and file
+  kind (the other white-balance family, a mode without numbers,
+  `LensProfileSetup` outside its values, the guard's `LensProfileDigest` and
+  `orientation`); and the sweeps' apply-mode check over every committed Lua
+  and XMP fixture (profiles excluded), with the provisional options and
+  every single flip, in apply and preset mode (45 sources, 1,350 tables,
+  130,792 values compared, nothing lost, changed or added) — the check that
+  covers the mask-tool, range-mask and gesture values the enumeration does
+  not place.
 - **`tests/builder_presets.rs`**: the three hand-test presets (see [Hand
   test](#hand-test)) build, write without skips and read back unchanged, and
   (with synthetic ids) match their byte goldens in `testdata/develop/written/`;
@@ -981,8 +1362,14 @@ content, not line endings, so a Windows checkout passes too.
   counts; `support/flat.rs` flattens a model into `path → value` with the
   typed parts expanded back into the XMP keys they stand for, so two models
   are compared key by key; `support/preset.rs` holds the two checks every
-  preset-writing test applies (included by path from the tests that use
-  them).
+  preset-writing test applies (and the quantization round trip 3 uses);
+  `support/enumerate.rs` the key enumeration both writers' round trips
+  share; `support/lua_apply.rs` the two-way apply-mode check of the Lua
+  writer (every filtered value written or reported, nothing added beyond
+  the writer's fixed form) and the option flips, shared by the local
+  sweeps, `lua_roundtrip.rs` and `lua_wire_goldens.rs`; `support/lua_round.rs` round trips 2 and 3, counted,
+  for `lua_roundtrip.rs` and the local sweeps (all included by path from
+  the tests that use them).
 - **`tests/training_dump_local.rs`** — local only: parses every row of the
   maintainer's private training dump and requires zero parse errors, zero
   warnings of any kind and every number within its key's registry range,
@@ -990,7 +1377,13 @@ content, not line endings, so a Windows checkout passes too.
   key (never values or photo ids; failing rows are named by position). Every
   row is also written as a preset, mixed and single-kind — the production
   path, since learned settings come from Lua — and must pass the same two
-  preset checks as the fixtures:
+  preset checks as the fixtures; and every row goes through the Lua writer:
+  round trips 2 and 3 (`tests/support/lua_round.rs`; 311,746 and 301,834
+  values) and apply mode for its own photo (`tests/support/lua_apply.rs`: a
+  table that passes `check_wire`, reads back without a warning, holds
+  every filtered value exactly or reports it, and holds nothing beyond
+  those and the writer's fixed form; 1,294 rows, 213,826 values compared,
+  none changed, lost or added, October 2026):
 
   ```bash
   LRG_DEVELOP_TRAINING_DUMP=/path/to/training_rows.json \
@@ -1026,7 +1419,13 @@ content, not line endings, so a Windows checkout passes too.
   no warning, no key outside the preset policy, nothing kept whole, and
   exactly the policy-filtered settings; what the policy holds back is
   printed per mode, key and reason, pattern families folded to
-  `Table_*`/`UprightTransform_*`). A fourth test, on `LRG_LRC_PRESETS_DIR`,
+  `Table_*`/`UprightTransform_*`). Every document but a profile also goes
+  through the Lua writer in apply mode for its own photo, with the same
+  check as the training dump (October 2026, both ways — every filtered
+  value written or reported, nothing added beyond the writer's fixed form:
+  the 446 bundled presets (24,283 values), the 4 Camera Raw presets (267)
+  and all 10,815 corpus sidecars (1,376,155) clean), and, without what has no Lua form, through round trips
+  2 and 3 (counts in [Round trips 2 and 3](#round-trips-2-and-3)). A fourth test, on `LRG_LRC_PRESETS_DIR`,
   is the builder parity with Adobe's adaptive presets (see [Building
   corrections](#building-corrections)). The corpus walk skips `* [conflicted].xmp`
   sync copies, darktable's `<name>.<ext>.xmp` sidecars (no `crs:` at all) and
@@ -1042,9 +1441,9 @@ content, not line endings, so a Windows checkout passes too.
       cargo test -p lrg-develop --test xmp_goldens_local -- --nocapture
   ```
 
-  The full corpus above (28,680 files, 10,814 parsed) takes about 90 s in a
-  debug build with all write-backs and checks; `LRG_XMP_CORPUS_SAMPLE=3000`
-  about 25 s.
+  The full corpus above (October 2026: 28,681 files, 10,815 parsed) takes
+  about 150 s in a debug build with all write-backs and checks;
+  `LRG_XMP_CORPUS_SAMPLE=3000` about 25 s.
   Gating works as for the training dump: an unset variable skips, the
   families are local-only (`all` leaves them out, only naming one makes its
   absence a failure), and a set variable that is not a directory, or a

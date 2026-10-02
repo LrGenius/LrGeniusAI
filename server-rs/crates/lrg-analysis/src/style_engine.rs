@@ -407,6 +407,13 @@ pub fn interpolate_recipes(winners: &[(TrainingCandidate, f64)]) -> Blend {
 /// photo. If it does not, a mode alone would leave the photo's old Kelvin in
 /// place under a new label. Until then an Auto/preset majority transfers
 /// nothing and says so ([`WbOutcome::NotTransferred`]).
+///
+/// The same E1 answer is the Lua writer's provisional
+/// `lrg_develop::lua::LuaOptions::PROVISIONAL.wb_mode_only` (whether a mode
+/// alone is written at all): flip both together, with the const assert in
+/// `a_named_mode_majority_is_not_sent_while_the_switch_is_off`. One without
+/// the other either sends a mode the writer drops and reports, or enables a
+/// form nothing produces.
 pub const EMIT_NAMED_WB_MODES: bool = false;
 
 /// At most this many Custom examples (the best-scored ones of the pool) give

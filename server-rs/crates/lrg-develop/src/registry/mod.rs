@@ -567,6 +567,19 @@ pub struct KeySpec {
     pub note: &'static str,
 }
 
+impl KeySpec {
+    /// Whether this is a mask enum: every closed integer set below the
+    /// global level (`MaskSubType`, `MaskBlendMode`, `ErrorReason`,
+    /// `CorrectionRangeMask.Type`/`SampleType`, ...), and
+    /// `MaskSubCategoryID` (an open integer set). The Lua writer spells them
+    /// as numbers or numeric strings (`lua::LuaOptions::mask_enum_as`), and
+    /// the Lua reader accepts both.
+    pub fn is_mask_enum(&self) -> bool {
+        (self.level != Level::Global && matches!(self.kind, ValueKind::EnumInt(_)))
+            || (self.level == Level::MaskTool && self.name == "MaskSubCategoryID")
+    }
+}
+
 /// How a `(level, name)` pair resolves.
 #[derive(Clone, Copy, Debug)]
 pub enum Resolved {

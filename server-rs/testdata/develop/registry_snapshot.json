@@ -84,7 +84,7 @@
       "presence": "Both"
     }
   ],
-  "row_count": 562,
+  "row_count": 563,
   "rows": [
     {
       "default_non_raw": "unverified",
@@ -4168,6 +4168,26 @@
       "plus_sign": false,
       "policy": {
         "class": "COMPUTED"
+      },
+      "presence": "Both",
+      "range": null,
+      "recipe_alias": null,
+      "ui": "identity"
+    },
+    {
+      "default_non_raw": "unverified",
+      "default_raw": "unverified",
+      "file_kind": "Both",
+      "fmt": "Text",
+      "frame": "NotApplicable",
+      "kind": "Any",
+      "level": "global",
+      "min_pv": null,
+      "name": "Glow",
+      "note": "Newer engine feature (the Glow panel, with GlowRange/GlowWarmth/GlowSpread/GlowStyle); type, range and default not established. [one sidecar of the local corpus, Camera Raw 18.7 engine (October 2026); never observed in LrC 15.5.1 output]",
+      "plus_sign": false,
+      "policy": {
+        "class": "UNKNOWN"
       },
       "presence": "Both",
       "range": null,
@@ -12320,7 +12340,7 @@
       "META": 22,
       "NEVER": 7,
       "PHOTO": 32,
-      "UNKNOWN": 26
+      "UNKNOWN": 27
     },
     "header": {
       "META": 22,

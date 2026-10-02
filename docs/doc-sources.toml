@@ -237,6 +237,9 @@ sources = ["server-rs/crates/lrg-providers/src/vertexai.rs"]
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopExperiments.lua",
+  # "What the answers change" and "Still open" name the LuaOptions fields
+  # each experiment bears on (LuaOptions::PROVISIONAL).
+  "server-rs/crates/lrg-develop/src/lua/write.rs",
 ]
 
 # The native develop model. `*` in fnmatch also crosses `/`, so this covers
@@ -255,4 +258,8 @@ sources = [
   "server-rs/crates/lrg-ml/tests/common/mod.rs",
   # The test-roundtrip feature wiring (the self dev-dependency).
   "server-rs/crates/lrg-develop/Cargo.toml",
+  # The plugin-side contract test of the Lua writer's wire goldens, and the
+  # workflow that runs it when only the goldens change.
+  "plugin/spec/native_wire_format_spec.lua",
+  ".github/workflows/lua-tests.yml",
 ]

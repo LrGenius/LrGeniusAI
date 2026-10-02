@@ -6,6 +6,9 @@ on:
       - ".busted"
       - ".luacheckrc"
       - ".github/workflows/lua-tests.yml"
+      # The backend's wire goldens: plugin/spec/native_wire_format_spec.lua
+      # decodes them, so a re-bless must re-run busted.
+      - "server-rs/testdata/develop/wire/**"
   push:
     branches: [main]
     paths:
@@ -13,6 +16,9 @@ on:
       - ".busted"
       - ".luacheckrc"
       - ".github/workflows/lua-tests.yml"
+      # The backend's wire goldens: plugin/spec/native_wire_format_spec.lua
+      # decodes them, so a re-bless must re-run busted.
+      - "server-rs/testdata/develop/wire/**"
 # A newer commit on the same ref makes the in-flight run obsolete; main is
 # exempt so each commit that lands keeps its own result.
 concurrency:

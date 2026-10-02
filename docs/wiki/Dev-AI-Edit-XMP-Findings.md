@@ -354,7 +354,53 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
   delete failed or was refused, or when applying the deleted preset wrote the
   file back.
 
+### What the answers change
+
+The Lua writer (`lrg_develop::lua::write`, PR 1g) represents every
+alternative E1, E2, E4 and E11 measure as a `LuaOptions` switch and decides
+none of them; the provisional choices are `LuaOptions::PROVISIONAL`. Which
+field each experiment bears on, what the experiments *as built* can settle
+about it, the evidence so far, each field's status and the steps after a
+run are in one table:
+[Dev: Native Develop Model — Options and what decides them](Dev-Develop-Model#options-and-what-decides-them).
+Read its "Settles" column before marking a field decided: for several
+fields the experiments apply only the provisional form, so a working run
+confirms it without measuring the alternative, and one field (`int_flag_as`)
+no experiment touches at all.
+The plugin spec `plugin/spec/native_wire_format_spec.lua` checks the
+goldens only for rules that hold whatever the experiments answer and
+accepts both forms of each provisional encoding, and the Rust tests check
+every single flip, so flipping a field needs a re-bless, not a test change
+([Wire goldens](Dev-Develop-Model#wire-goldens)).
+
 ### Still open after these experiments
+
+Write-side forms the experiments as built do not measure (the Lua writer
+holds each as a `LuaOptions` alternative; see the table linked above):
+
+- Whether the 0/1 flag keys (`LensProfileEnable`, `AutoLateralCA`,
+  `CropConstrainToWarp`, `HDREditMode`) take booleans, or need numbers: no
+  experiment writes one (`int_flag_as`). Cheap evidence: read back photos
+  the LLM path already applied `AutoLateralCA` to as a boolean.
+- Mask enums as numeric strings (`mask_enum_as = String`): E2/E4 write
+  numbers only.
+- A mask correction without `EnableMaskGroupBasedCorrections`
+  (`panel_switches = None`, the provisional form), and every other panel
+  switch (`PANEL_SWITCHES`, unverified).
+- A correction with only its own `Local*` keys (`local_form = Sparse`), an
+  AI mask without `MaskVersion`/`ReferencePoint`/`ErrorReason`
+  (`mask_form = Minimal`), and any luminance range applied through
+  `applyDevelopSettings`.
+- A non-raw `{WhiteBalance = "Custom", IncrementalTemperature,
+  IncrementalTint}` (`wb_custom_with_numbers` on non-raw files), and a named
+  mode other than `Daylight`/`Auto` alone (`wb_mode_only`).
+- A camera-restricted or an Adobe Adaptive `Look`, and whether an adaptive
+  one computes its `AILook` after `updateAISettings()`.
+- Applying a wire golden unchanged (decoded with JSON.lua): the experiments
+  apply hand-built tables, never the writer's own output. Needed before the
+  goldens are frozen.
+
+Other open questions:
 
 - `CircularGradient.Angle` convention and the direction of `Zero` vs `Full`.
 - Whether masks sit before or after lens correction and Upright.

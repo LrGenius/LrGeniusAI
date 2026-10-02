@@ -17,7 +17,7 @@ use super::{
     Lit, NumFmt, Policy, Presence, ProcessVersion, StructKind, UiScale, ValueKind,
 };
 
-/// The 562 registry rows.
+/// The 563 registry rows.
 pub(crate) static TABLE: &[KeySpec] = &[
     KeySpec {
         name: "WhiteBalance",
@@ -2976,6 +2976,23 @@ pub(crate) static TABLE: &[KeySpec] = &[
         min_pv: None,
         recipe_alias: None,
         note: "Grain pattern seed chosen by LrC. [recent LrC]",
+    },
+    KeySpec {
+        name: "Glow",
+        level: Level::Global,
+        kind: ValueKind::Any,
+        range: None,
+        ui: UiScale::Identity,
+        fmt: NumFmt::Text,
+        plus_sign: false,
+        default: DefaultSpec { raw: Def::Unverified, non_raw: Def::Unverified },
+        policy: Policy::Unknown,
+        frame: FrameScope::NotApplicable,
+        file_kind: FileScope::Both,
+        presence: Presence::Both,
+        min_pv: None,
+        recipe_alias: None,
+        note: "Newer engine feature (the Glow panel, with GlowRange/GlowWarmth/GlowSpread/GlowStyle); type, range and default not established. [one sidecar of the local corpus, Camera Raw 18.7 engine (October 2026); never observed in LrC 15.5.1 output]",
     },
     KeySpec {
         name: "GlowRange",
