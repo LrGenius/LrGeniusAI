@@ -2,10 +2,8 @@
 //! `services/index.py::process_image_task`'s core loop: embeddings
 //! (SigLIP2), pHash + culling metrics (always computed), faces (when
 //! requested), catalog association, existing-record merge for
-//! `regenerate_metadata=false`, LLM metadata generation across all four
-//! providers (Ollama, OpenAI, Gemini, LM Studio), and optional Vertex AI
-//! embeddings (silently skipped, not an error, when no project is
-//! configured — matching Python's behavior exactly).
+//! `regenerate_metadata=false`, and LLM metadata generation across all
+//! providers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +23,7 @@ use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 use lrg_ml::faces::FacePass;
 use lrg_providers::provider::{build_provider, ProviderSelection};
 use lrg_providers::types::{KeywordCategories, KeywordTree, ReasoningEffort};
-use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE, VERTEX_TABLE};
+use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE};
 
 use crate::routes::route_util::{parse_multipart, reasoning_effort_field};
 use crate::state::AppState;
@@ -41,7 +39,6 @@ pub(crate) struct ParsedOptions {
     /// quality proxies, so it skips FaceNet and the thumbnail encode.
     face_pass: FacePass,
     compute_metadata: bool,
-    compute_vertexai: bool,
     /// Run BioCLIP 2 and write a taxonomic identification.
     compute_species: bool,
     /// Only run BioCLIP on photos the organism prompt gate lets through.
@@ -74,8 +71,6 @@ pub(crate) struct ParsedOptions {
     /// Kelvin for one and a relative -100..100 for the other. Absent when the
     /// plugin could not read the format.
     is_raw: Option<bool>,
-    vertex_project_id: Option<String>,
-    vertex_location: Option<String>,
     /// How many photos to hand the provider per LLM call. `None` means "ask
     /// the provider", which is what callers should normally do — the useful
     /// width is a property of the loaded engine, not of the request.
@@ -359,7 +354,6 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             FacePass::QualityOnly
         },
         compute_metadata: has_task("metadata"),
-        compute_vertexai: has_task("vertexai"),
         compute_species: has_task("species"),
         species_prefilter: bool_field(fields, "species_prefilter", true),
         species_prefilter_threshold: fields
@@ -394,14 +388,6 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             .map(|s| s.trim().eq_ignore_ascii_case("true")),
         llm_batch_size,
         engine: crate::routes::llm::engine_overrides_from_fields(fields),
-        vertex_project_id: fields
-            .get("vertex_project_id")
-            .or_else(|| fields.get("vertexProjectId"))
-            .cloned(),
-        vertex_location: fields
-            .get("vertex_location")
-            .or_else(|| fields.get("vertexLocation"))
-            .cloned(),
         metadata_request: MetadataOptions {
             language: fields
                 .get("language")
@@ -1908,45 +1894,6 @@ async fn finish_one(
             // in IMAGE_TABLE. Losing the vector only costs a re-inference if
             // the taxonomy head is ever swapped.
             log::error!("Species embedding upsert failed for {photo_id}: {e}");
-        }
-    }
-
-    // Vertex AI embeddings: optional, separate table. Silently skipped
-    // (no warning) when no project is configured, matching Python's
-    // `if vertexai_service.is_available(...):` guard with no else branch.
-    if options.compute_vertexai {
-        let already_has_vertex = store
-            .get(VERTEX_TABLE, std::slice::from_ref(&photo_id.to_string()))
-            .await
-            .ok()
-            .is_some_and(|v| v.first().is_some_and(|r| r.vector.is_some()));
-        if options.regenerate_metadata || !already_has_vertex {
-            if let Some(client) = lrg_providers::vertexai::VertexAiProvider::new(
-                options.vertex_project_id.as_deref(),
-                options.vertex_location.as_deref(),
-            ) {
-                let embeddings = client
-                    .get_image_embeddings(std::slice::from_ref(&image_bytes.to_vec()))
-                    .await;
-                if let Some(Some(embedding)) = embeddings.into_iter().next() {
-                    let mut vertex_meta = Map::new();
-                    vertex_meta.insert("photo_id".into(), json!(photo_id));
-                    vertex_meta.insert("uuid".into(), json!(photo_id));
-                    let vertex_record = StoreRecord {
-                        id: photo_id.to_string(),
-                        vector: Some(embedding),
-                        metadata: vertex_meta,
-                    };
-                    if let Err(e) = store
-                        .upsert(VERTEX_TABLE, std::slice::from_ref(&vertex_record))
-                        .await
-                    {
-                        log::error!("Vertex AI embedding upsert failed for {photo_id}: {e}");
-                    } else {
-                        log::debug!("Photo {photo_id}: Vertex AI embedding stored.");
-                    }
-                }
-            }
         }
     }
 

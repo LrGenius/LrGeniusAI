@@ -31,7 +31,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 - **🦋 Species Identification (on-device):** Identify animals, plants and fungi down to the species with **BioCLIP 2**, running entirely on your machine — no LLM, so no invented binomials. Results land in searchable metadata fields (kingdom → species) and, optionally, as a keyword branch under `Species`. An uncertain call stops at the rank it is sure of rather than guessing. Enable it in *Analyze & Index Photos* after downloading the model in the Plug-in Manager.
 - **🔎 Find Similar Images:** Find near-duplicate or visually similar photos for any selected image using perceptual hash or semantic CLIP comparison.
 - **🏠 Built-In Local AI (no external app):** The backend runs vision models itself, using whichever engine suits the platform — **MLX** on macOS (Apple silicon, via a small Metal helper process) and **llama.cpp** in-process on Windows (GGUF, Vulkan). Pick a model in the Plug-in Manager, click *Download*, and analysis runs entirely on your machine. Models you already have in LM Studio (or the Hugging Face cache) are picked up without a second copy.
-- **☁️ Local & Cloud Models:** Also supports local AI models via **Ollama** and **LM Studio** (found automatically), cloud providers like **ChatGPT/OpenAI**, **Google Gemini** and **Anthropic Claude**, and any **OpenAI-compatible server** — OpenRouter, llama.cpp's `llama-server`, LiteLLM, vLLM — with an optional API key. (~~**Vertex AI**~~ — *removed*, see below.)
+- **☁️ Local & Cloud Models:** Also supports local AI models via **Ollama** and **LM Studio** (found automatically), cloud providers like **ChatGPT/OpenAI**, **Google Gemini** and **Anthropic Claude**, and any **OpenAI-compatible server** — OpenRouter, llama.cpp's `llama-server`, LiteLLM, vLLM — with an optional API key.
 - **🎨 Customizable Prompts & Analysis Depth:** System prompts for the AI can be added, edited, and deleted directly within the Lightroom Plug-In Manager. For cloud models that reason, *Analysis depth* (Fast / Balanced / Thorough) sets how long the model thinks before it answers; for local models, the temperature slider controls whether the wording should be varied or strictly consistent.
 - **📝 Photo Context (Contextual Info):** Provide manual hints to the AI before analysis (e.g., names of people or specific background details) that aren't immediately obvious from the image itself. This can be done via a popup dialog or directly in Lightroom's metadata panel.
 - **🗂️ Keyword Management:** Interactive synonym deduplication and automatic de-clutter during indexing to keep your keyword catalog clean.
@@ -41,6 +41,8 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 ---
 
 ## 🚀 Installation & Getting Started
+
+> **New here?** Follow the [Getting Started guide](https://github.com/LrGenius/LrGeniusAI/wiki/Getting-Started) — one path from installing to your first analyzed photos, nothing to choose along the way.
 
 1. Download the latest release from the [GitHub Releases page](https://github.com/LrGenius/LrGeniusAI/releases).
 2. Extract the ZIP file and add the plugin via the **Plug-in Manager** in Lightroom Classic.
@@ -65,13 +67,6 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 
 ---
 
-> **⚠️ Google Vertex AI has been removed (August 2026).**
-> The Vertex AI controls are gone from the Lightroom plugin: no project ID / location
-> settings, no Vertex embeddings during *Analyze & Index*, and no *Semantic (Vertex AI)*
-> search option. Existing Vertex embeddings in your database stay untouched but are no
-> longer created or queried. The old setup instructions are kept for reference on the
-> [Google Vertex AI Login Wiki Page](https://github.com/LrGenius/LrGeniusAI/wiki/Google-Vertex-AI-Login).
-
 ## ⚖️ License
 
 The LrGeniusAI core, plugin, and backend are released under the **GNU Affero General Public License v3 (AGPL-3.0)**. 
@@ -88,7 +83,7 @@ This project is built on the belief that AI tooling for creatives should remain 
 - **Species:** BioCLIP 2 (ONNX) with a pruned TreeOfLife taxonomy head
 - **Local Inference:** an MLX Swift helper (`lrgenius-mlx`) on macOS; llama.cpp compiled into the backend (Vulkan / CPU) on Windows
 - **Database:** LanceDB
-- **Supported Interfaces:** built-in MLX (macOS), built-in llama.cpp (Windows), Google Gemini, ChatGPT/OpenAI, Anthropic Claude, Ollama, LM-Studio, any OpenAI-compatible server (~~Vertex AI~~ — *removed*)
+- **Supported Interfaces:** built-in MLX (macOS), built-in llama.cpp (Windows), Google Gemini, ChatGPT/OpenAI, Anthropic Claude, Ollama, LM-Studio, any OpenAI-compatible server
 
 
 ---
