@@ -1,21 +1,30 @@
 # testdata/develop/wire — the Lua writer's wire goldens
 
-> **Provisional — not frozen.** These files change when experiments E1, E2,
-> E4 and E11 (`plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua`)
-> settle the write-side forms `photo:applyDevelopSettings()` accepts. Until
-> then they show the provisional choices of `LuaOptions::PROVISIONAL`
-> (`server-rs/crates/lrg-develop/src/lua/write.rs`); which choice that is,
-> what the experiments as built can settle about it and its status are in
-> one table on the wiki page Dev-Develop-Model ("Options and what decides
-> them"). `look_full.json` shows the whole-record `Look` alternative.
+> **Not frozen.** These files change when experiments E1, E2, E4 and E11
+> (`plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua`) settle the
+> write-side forms `photo:applyDevelopSettings()` accepts. They show the
+> defaults of `LuaOptions::PROVISIONAL`
+> (`server-rs/crates/lrg-develop/src/lua/write.rs`); each default's status
+> and evidence is `LuaOptions::EVIDENCE` and one table on the wiki page
+> Dev-Develop-Model ("Options and what decides them"). `look_full.json`
+> shows the whole-record `Look` alternative.
+>
+> **Status (2026-10-03):** the first run (Lightroom 15.6, one non-raw TIFF,
+> run from the Library module) settled the AI-mask forms for subject, sky
+> and background; the goldens were re-blessed for `panel_switches =
+> MaskOnly`, the form E2 applied, which adds
+> `EnableMaskGroupBasedCorrections = true` to the ten files with
+> corrections (supported, not settled: the switch was already on in E2's
+> photo). People parts, `int_flag_as`, `look_form` and the raw-side white
+> balance are still open.
 >
 > **Blocking before they are frozen:** the experiments apply hand-built
 > tables, never these files. An E2 variant has to decode at least
 > `masks_subject_sky.json`, `mask_luminance_intersect.json` and
 > `global_basic.json` with JSON.lua and pass them unchanged to
 > `applyDevelopSettings` (with and without
-> `EnableMaskGroupBasedCorrections`), so the provisional form itself is
-> measured.
+> `EnableMaskGroupBasedCorrections`, on a photo where the switch is off), so
+> the writer's own output is measured.
 
 Each `*.json` is one table exactly as the backend hands it to the plugin:
 what JSON.lua decodes into the Lua table `photo:applyDevelopSettings()`

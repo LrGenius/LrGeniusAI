@@ -250,6 +250,9 @@ sources = [
   "server-rs/crates/lrg-develop/src/*.rs",
   "server-rs/crates/lrg-develop/tests/*.rs",
   "server-rs/scripts/develop_registry/gen_table_rs.py",
+  # The non-raw default column comes from this readback (and spec.py's rows).
+  "server-rs/scripts/develop_registry/spec.py",
+  "server-rs/testdata/develop/defaults/*.json",
   # The page documents the fixture hygiene rules, which this script's
   # --check-only/--self-test and tests/fixture_hygiene.rs implement together.
   "server-rs/scripts/develop_registry/extract_fixtures.py",

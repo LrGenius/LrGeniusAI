@@ -10,6 +10,30 @@ it; regenerate after an intended change with
 settings, only key names and their metadata, so the hygiene check below
 applies only its text rules to it (see "Hygiene rules").
 
+## `defaults/` — Lightroom's own defaults, read back
+
+`non_raw_lrc15.6.json` is experiment E13's full `getDevelopSettings()`
+readback of one non-raw photo without develop edits (Lightroom Classic 15.6,
+process version 15.4, a virtual copy of a TIFF), reduced to key -> value: the
+top-level scalars and the four global tone curves. Left out: the empty tables
+(`AILook`, `FilterList`, `LensBlur`, `PointColors`, `RedEyeInfo`),
+`orientation` (the photo's own, not a default) and `ProcessVersion` (in
+`provenance`). Kept although they are not defaults: the Upright solver state
+(`Upright*`, nine keys), which the registry keeps `NoDefault` (a test relies
+on that) and whose `UprightFocalLength35mm` can reflect the photo's focal
+length, as in the fixtures; and `HDRMaxValue` (2.3), which the generator
+holds back as possibly per image (`NON_RAW_READBACK_NOT_CONSTANT`). One
+virtual copy is thin evidence for a default table: the run report's own
+check, a freshly imported JPEG (and raw) for the default tables, is still
+open.
+`provenance` holds only the Lightroom version, the process version and the
+file kind; nothing else from the run's report (no file name, path, id or
+date). `scripts/develop_registry/gen_table_rs.py` fills the registry's
+non-raw defaults from it, and `registry/tests.rs` requires every non-raw
+default to match it. Replace it only with another readback of an unedited
+photo, then re-run the generator and re-bless the registry snapshot. The
+hygiene checks cover it like every other file here.
+
 ## `lua/` — `getDevelopSettings()` values
 
 Each `*.json` file is one `photo:getDevelopSettings()` table exactly as the

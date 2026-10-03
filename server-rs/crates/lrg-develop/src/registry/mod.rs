@@ -329,7 +329,9 @@ pub enum Def {
     Value(Lit),
     /// The key does not exist for this file kind (`Temperature` on a JPEG).
     Absent,
-    /// Not established yet (every non-raw default until the E1 JPEG readback).
+    /// Not established yet. Non-raw: every key the E13 readback of a non-raw
+    /// photo (`testdata/develop/defaults/`) did not cover, and the ones the
+    /// generator holds back as possibly per image (`HDRMaxValue`).
     Unverified,
     /// There is no fixed default: Lightroom fills the value per photo
     /// (as-shot white balance, lens identity) or only writes the key when a

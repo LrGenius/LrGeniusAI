@@ -1,4 +1,5 @@
 {
+  "EnableMaskGroupBasedCorrections": true,
   "MaskGroupBasedCorrections": [
     {
       "BlueCurve": [

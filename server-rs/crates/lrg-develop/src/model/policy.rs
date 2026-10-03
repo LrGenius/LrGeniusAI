@@ -972,6 +972,70 @@ mod tests {
         assert!(skipped.is_empty(), "{skipped:?}");
     }
 
+    /// The non-raw default column (E13's readback) suppresses the report for
+    /// a non-raw source's removed defaults; a raw or unknown source falls
+    /// back to the raw column.
+    #[test]
+    fn non_raw_defaults_are_removed_without_a_report() {
+        let mixed = Target::Preset {
+            mixed_file_kinds: true,
+        };
+        // A mixed preset: the incremental 0s reach `is_default` instead of
+        // the single-kind preset's white-balance rule.
+        let mut s = DevelopSettings::new();
+        s.file_kind = Some(FileKind::NonRaw);
+        set(&mut s, "Sharpness", Value::Int(0));
+        set(&mut s, "ColorNoiseReduction", Value::Int(0));
+        set(&mut s, "CameraProfile", Value::Str("Embedded".into()));
+        set(&mut s, "IncrementalTemperature", Value::Int(0));
+        set(&mut s, "IncrementalTint", Value::Int(0));
+        set(&mut s, "WhiteBalance", Value::Str("As Shot".into()));
+        set(&mut s, "CropTop", Value::Real(Finite::ZERO));
+        let (out, skipped) = s.filtered(&mixed);
+        for k in [
+            "Sharpness",
+            "ColorNoiseReduction",
+            "CameraProfile",
+            "IncrementalTemperature",
+            "IncrementalTint",
+            "WhiteBalance",
+            "CropTop",
+        ] {
+            assert!(out.get_by_name(k).is_none(), "{k} kept");
+        }
+        assert!(skipped.is_empty(), "{skipped:?}");
+
+        // Not the default: reported.
+        let mut s = DevelopSettings::new();
+        s.file_kind = Some(FileKind::NonRaw);
+        set(&mut s, "Sharpness", Value::Int(40));
+        let (_, skipped) = s.filtered(&mixed);
+        assert_eq!(
+            skipped,
+            [Skipped {
+                path: "Sharpness".into(),
+                reason: SkipReason::Gate(Gate::FileKindDefault),
+            }]
+        );
+
+        // 0 is not the raw default (40), and an unknown kind reads the raw
+        // column.
+        for kind in [Some(FileKind::Raw), None] {
+            let mut s = DevelopSettings::new();
+            s.file_kind = kind;
+            set(&mut s, "Sharpness", Value::Int(0));
+            let (_, skipped) = s.filtered(&mixed);
+            assert_eq!(
+                skipped,
+                [Skipped {
+                    path: "Sharpness".into(),
+                    reason: SkipReason::Gate(Gate::FileKindDefault),
+                }],
+                "{kind:?}"
+            );
+        }
+    }
+
     fn look(restriction: Option<&str>) -> Look {
         Look {
             name: Some("Synthetic Profile".into()),
@@ -1139,6 +1203,10 @@ mod tests {
         assert_eq!(
             paths(&wb(Some("As Shot"), FileKind::Raw).1),
             ["Temperature", "Tint"]
+        );
+        assert_eq!(
+            paths(&wb(Some("As Shot"), FileKind::NonRaw).1),
+            ["IncrementalTemperature", "IncrementalTint"]
         );
         for mode in [Some("Custom"), None] {
             let (out, _) = wb(mode, FileKind::Raw);

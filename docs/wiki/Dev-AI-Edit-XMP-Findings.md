@@ -1,7 +1,8 @@
 # AI Edit via XMP — Findings and Experiments
 
 > **Status: research done 2026-09-26; step 1 in progress (1d/1f changed AI
-> Edit's style path).**
+> Edit's style path); first experiment results 2026-10-03 (one non-raw
+> photo, [below](#results-first-run-2026-10-03)).**
 > The page records what Camera Raw's XMP (`crs:`) can express, how that maps
 > onto the Lightroom SDK, and which questions only Lightroom itself can answer.
 > Those questions are what *Help → Plug-in Extras → Developer: Run
@@ -51,8 +52,10 @@ not match the full-size photo.
   the full colour grading, profiles as a `Look`, B&W mix, calibration, lens
   profile, lens blur, every AI mask type (people parts, landscape classes),
   linear/radial/range masks. This is proven for the global sliders. New masks
-  written through the SDK are so far shown only by third-party plugins, and a
-  new AI mask through `applyDevelopSettings` is exactly what E2 tests.
+  written through the SDK are so far shown only by third-party plugins; a
+  new AI mask through `applyDevelopSettings` is what E2 tests, and on
+  Lightroom 15.6 it works once `photo:updateAISettings()` follows (one
+  non-raw photo, [Results](#results-first-run-2026-10-03)).
 - **The resolution concern disappears for semantic AI masks.** Subject, sky,
   background, people parts and landscape classes are stored without geometry.
   Lightroom computes them itself at about 2880 px.
@@ -236,8 +239,8 @@ geometric masks should not be generated there.
 
 | Path | Coverage | Batch | Undo | Catalog safety | Verdict |
 |---|---|---|---|---|---|
-| `photo:applyDevelopSettings(tbl, name, flattenAuto)` | all flat keys; new gradient/radial/brush/range masks proven by third-party plugins; **new AI masks unproven** (E2) | one write gate, no module switch | one step | good | primary path |
-| `LrApplication.addDevelopPresetForPlugin` + `applyDevelopPreset(p, _PLUGIN, amount, updateAI)` (updateAI: 15.3+) | same table; AI masks incl. sub-categories proven by photo-workflow-mcp; masks reportedly added, not replaced (third-party report, LrC 11; E4 tests it) | AI compute per photo | one step | hidden presets, **no delete API**; deleting the file right after applying is E4f | path for AI masks |
+| `photo:applyDevelopSettings(tbl, name, flattenAuto)` | all flat keys; new gradient/radial/brush/range masks proven by third-party plugins; **new AI masks work** when followed by `photo:updateAISettings()` (E2, LrC 15.6, one non-raw photo) | one write gate, no module switch | one step | good | primary path, AI masks included |
+| `LrApplication.addDevelopPresetForPlugin` + `applyDevelopPreset(p, _PLUGIN, amount, updateAI)` (updateAI: 15.3+) | same table; AI masks incl. sub-categories proven by photo-workflow-mcp; in LrC 15.6 the preset's masks **replace** the photo's, `updateAI = true` left the preset's sky mask pending for 60 s, and the amount changed nothing (E4c, E4e) | AI compute per photo | one step | hidden presets, **no delete API**; deleting the file right after applying keeps the edit within the session (E4f) | not needed for AI masks |
 | `.xmp` preset file | full XMP incl. `SupportsAmount` flags | no SDK import; the user imports via *Presets → Import* (visible immediately), a file dropped into the folder needs a restart | – | LrC normalises on import and silently drops invalid keys | export artifact, not an apply path |
 | `.xmp` sidecar + *Read Metadata from Files* | full XMP | **no documented SDK call**; undocumented `photo:readMetadata()` is unverified | replaces **all** metadata | auto-write-XMP can clobber the file; JPEG/DNG means rewriting originals; virtual copies have no XMP | expert export only |
 | `LrDevelopController` (today) | AI types without sub-category or geometry | module switch, sleeps | many steps | ok | fallback for LrC < 15.3 |
@@ -255,8 +258,9 @@ still lists until a restart, is E4f.
 - AI Edit writes and trains on the develop key **`Temp`**, which occurs in 0 of
   17,814 catalog rows. The real keys are `Temperature`/`Tint` (raw) and
   `IncrementalTemperature`/`IncrementalTint` (non-raw). White balance is most
-  likely never learnt and never applied. E1 shows whether Lightroom rejects or
-  ignores `Temp`. *Fixed in AI Edit (step 1, PR 1d):* the style engine now
+  likely never learnt and never applied. E1 confirmed it on a non-raw photo
+  (LrC 15.6): `{Temp}` is accepted without an error and changes nothing, and
+  next to `WhiteBalance = "Custom"` only the mode changes (E1a, E1d). *Fixed in AI Edit (step 1, PR 1d):* the style engine now
   reads the white balance typed from the real keys and sends it as
   `edit.white_balance` (see [Dev-Develop-Model](Dev-Develop-Model) and
   `POST /v1/edit/style` in [Dev-Backend-API](Dev-Backend-API)); only the
@@ -279,9 +283,9 @@ still lists until a restart, is E4f.
 
 1. **Apply directly** (replaces today's pipeline). Apply the full native table
    through `applyDevelopSettings` in one write gate and one history step. AI
-   masks go through a plugin preset with `updateAI=true`, or through
-   `updateAISettings()` if E2 shows that works. UI automation stays only for
-   LrC < 15.3.
+   masks go in the same table, followed by `photo:updateAISettings()`: E2
+   shows that works (LrC 15.6), and the plugin-preset route replaces the
+   photo's masks (E4c). UI automation stays only for LrC < 15.3.
 2. **As preset.** The backend renders an `.xmp` preset containing only semantic
    masks, with no crop, geometry or lens identity. The user imports it through
    the Presets panel. It is shareable and gets the amount slider.
@@ -358,15 +362,16 @@ denylist: `FilterList`, `RetouchAreas`, digests, `CorrectionID`/`MaskID`,
 
 The Lua writer (`lrg_develop::lua::write`, PR 1g) represents every
 alternative E1, E2, E4 and E11 measure as a `LuaOptions` switch and decides
-none of them; the provisional choices are `LuaOptions::PROVISIONAL`. Which
-field each experiment bears on, what the experiments *as built* can settle
-about it, the evidence so far, each field's status and the steps after a
-run are in one table:
+none of them; the defaults are `LuaOptions::PROVISIONAL` and how far the
+evidence carries each is `LuaOptions::EVIDENCE`. Which field each
+experiment bears on, the evidence, what is still open, each field's status
+and the steps after a run are in one table:
 [Dev: Native Develop Model — Options and what decides them](Dev-Develop-Model#options-and-what-decides-them).
-Read its "Settles" column before marking a field decided: for several
-fields the experiments apply only the provisional form, so a working run
-confirms it without measuring the alternative, and one field (`int_flag_as`)
-no experiment touches at all.
+Read its "Still open" column before marking a field settled: for several
+fields the experiments apply only one form, so a working run confirms it
+without measuring the alternative, and one field (`int_flag_as`) no
+experiment touches at all. The first run's answers are in
+[Results](#results-first-run-2026-10-03).
 The plugin spec `plugin/spec/native_wire_format_spec.lua` checks the
 goldens only for rules that hold whatever the experiments answer and
 accepts both forms of each provisional encoding, and the Rust tests check
@@ -385,8 +390,10 @@ holds each as a `LuaOptions` alternative; see the table linked above):
 - Mask enums as numeric strings (`mask_enum_as = String`): E2/E4 write
   numbers only.
 - A mask correction without `EnableMaskGroupBasedCorrections`
-  (`panel_switches = None`, the provisional form), and every other panel
-  switch (`PANEL_SWITCHES`, unverified).
+  (`panel_switches = None`; the default is now `MaskOnly`, the form E2
+  applied): applied by no experiment; the first run cannot tell it from
+  `MaskOnly`, because the switch was already on in the source photo (E13).
+  Every other panel switch (`PANEL_SWITCHES`) is unverified.
 - A correction with only its own `Local*` keys (`local_form = Sparse`), an
   AI mask without `MaskVersion`/`ReferencePoint`/`ErrorReason`
   (`mask_form = Minimal`), and any luminance range applied through
@@ -409,3 +416,66 @@ Other open questions:
 - Whether LrC accepts a self-built Denoise `Table_` blob.
 - Import normalisation of generated `.xmp` presets.
 - Whether subtype-3 people parts apply to every person in the photo.
+
+## Results: first run (2026-10-03)
+
+One run of the experiments on **Lightroom Classic 15.6** in a test catalog,
+**run from the Library module**, with **one photo**: a non-raw TIFF (a
+virtual copy without develop edits, process version 15.4). No raw file was
+in the run, so everything raw-only (E1e, E11) did not run. E2's people-part
+mask ended with `ErrorReason` 1 (nothing found); the report does not say
+whether the photo shows a person. Every answer below is about one non-raw
+photo on 15.6, read back within seconds in the Library module: Lightroom may
+resolve Auto white balance or compute AI masks only when Develop renders the
+photo. The manual checks of the report (history step names, the white
+balance in the Basic panel, what the masks cover, the AI progress dialog,
+the look of the amount copies, E4f after a restart, a freshly imported raw
+and JPEG for the default tables) are not answered yet.
+
+| Experiment | Result | Settles | Stays open |
+|---|---|---|---|
+| E13 (frame) | `orientation = "AB"`; the crop model fits with 0 px error, under the reported and the swapped frame alike (a landscape photo without a crop) | nothing about the frame | a portrait raw with a straightened crop |
+| E13 (readback) | 172 top-level keys, `editCount` 0, *Has Adjustments* false: the non-raw default table as one photo (a virtual copy of a TIFF) carries it. E.g. `Sharpness` 0 (raw 40), `SharpenRadius` 1, `SharpenDetail` 25, `SharpenEdgeMasking` 0, `LuminanceSmoothing` 0, `ColorNoiseReduction` 0 (raw 25) with `Detail`/`Smoothness` 50, `CameraProfile` "Embedded", `ToneCurveName2012` "Linear", `WhiteBalance` "As Shot", `IncrementalTemperature`/`IncrementalTint` 0, no `Temperature` key | the registry's non-raw defaults for the keys it read (145 rows; `HDRMaxValue` 2.3 held back as possibly per image; [Native Develop Model](Dev-Develop-Model#maintaining-the-registry)) | keys absent from the readback (absence can mean "written only when used"); the report's own check of a freshly imported JPEG and raw for the default tables |
+| E1a | `{Temp = 20}` accepted, nothing changed | `Temp` is silently ignored, not rejected | — |
+| E1b | `{IncrementalTemperature = 21, IncrementalTint = 11}` without a mode: both stored, `WhiteBalance` stays "As Shot" | numbers alone leave the mode at As Shot in the readback, so the writer keeps writing `Custom` with them (`wb_custom_with_numbers`, supported); whether As Shot + numbers renders them is the open Basic-panel check | `Custom` + incremental numbers in one call; whether As Shot + numbers renders them (Basic panel); raw E1b against E1c |
+| E1c | `{Temperature = 22}` on non-raw: stored as `Temperature`, `WhiteBalance` stays "As Shot", the incremental keys unchanged | Lightroom keeps a raw-family key on a non-raw photo as a dead value: the writer's one-family rule stands | raw E1c (`Custom` + numbers) |
+| E1d | `{Temp = 15, WhiteBalance = "Custom"}`: `Temp` ignored, only the mode changed | as E1a | — |
+| E1e | did not run (`Daylight`, raw only) | — | a raw file |
+| E1f/E1g | `{WhiteBalance = "Auto"}` alone, from a Custom precondition: the mode becomes Auto, the incremental numbers read back unchanged within 15 s, with and without `optFlattenAutoNow` | the readback showed no recomputed numbers within 15 s (run from the Library module; the Basic-panel check is open): `wb_mode_only = false`, `flatten_auto_now = false`, and a mode alone is refused for non-raw photos; `EMIT_NAMED_WB_MODES` stays off | raw Auto and Daylight; the Basic-panel check |
+| E11 | skipped (Adobe Raw Looks need a raw file) | — | `look_form`, on a raw file |
+| E2a | a digest-less subject mask in the preset form (numbers, the 23 zero `Local*` keys, the mask switch on) is kept, run from the Library module | `applyDevelopSettings` adds new AI masks outside Develop; `mask_form` (subject, sky and background), `local_form` and `mask_enum_as` work. `panel_switches = MaskOnly` was sent, but E13 shows the switch was already `true` on the source photo (E2's copies inherit it), so the run does not tell `None` from `MaskOnly` | people parts (E2d); `None` against `MaskOnly` |
+| E2b | without `updateAISettings()` the mask is still pending after 30 s | still pending after 30 s in the Library module: the writer asks for the update (`ai_update`) | whether opening the photo in Develop computes it |
+| E2c | after `photo:updateAISettings()` it is computed (call 0.6 s, ready 0.6 s) | `ai_update = true` | timing on a raw and with the model not yet loaded |
+| E2d | sky and background computed the same way; a hair (people part) mask, `MaskSubType` 3 / `MaskSubCategoryID` 5 (the writer's form), ended `failed` with `ErrorReason` 1 (nothing found); the report does not say whether the photo shows a person | one update computes several masks | people parts: the subType-3 form on a photo with a visible person (form or photo is not known) |
+| E4a/E4b | plugin presets are created outside a write gate; a same-name add overwrites (same uuid, same file) | the preset lifecycle | — |
+| E4c | applying a preset with masks **replaces** the photo's existing masks; `applyDevelopPreset(..., updateAI = true)` left the preset's sky mask pending for 60 s (Library module) | the preset route loses masks, and its `updateAI` flag did not compute the mask within 60 s in the Library module | whether the AI progress dialog appeared (manual) |
+| E4d | re-applying updates the mask in place (same sync id, one correction) | sync ids identify a correction across applies | — |
+| E4e | amount 50 and 200 change nothing: globals and mask values stay at the preset's, with and without `SupportsAmount`/`SupportsAmount2` | `preset_amount_flags` has no effect in 15.6 | the look of the amount copies (manual) |
+| E4f | deleting the preset file right after applying keeps the photo's edit; until a restart Lightroom keeps listing the deleted preset and even applies it; re-adding the name writes the file again with the same uuid | "apply then delete" works within a session (settings only: the mask was still pending at the delete) | what a restart changes (manual) |
+
+**What it settles for step 2.** The viable route for AI masks is direct:
+`photo:applyDevelopSettings()` with the masks in the table, then
+`photo:updateAISettings()`. Plugin presets are not needed for masks and are
+worse at them: they replace the photo's existing masks, their `updateAI`
+flag did not compute the mask, and their amount is ignored. The Lua writer's
+options follow this run (`LuaOptions::EVIDENCE` and
+[Options and what decides them](Dev-Develop-Model#options-and-what-decides-them)):
+the AI-mask forms for subject, sky and background, `ai_update` and the
+non-raw mode-only choices (`wb_mode_only`, `flatten_auto_now`) are settled
+for non-raw files on 15.6. `wb_custom_with_numbers` is only supported:
+`Custom` with the incremental numbers (the writer's non-raw form) was never
+applied. `panel_switches = MaskOnly` is only supported (the switch was
+already on). People-part masks, `int_flag_as`, `look_form` and every
+raw-side white-balance question stay open.
+
+**Still open, for a second run on raw files:**
+- a portrait raw (rotated in camera) with a straightened crop, for E13's
+  frame, and a fresh, unedited raw for the raw default table;
+- a raw for E1b/E1c (`Custom` + numbers), E1e (`Daylight`), Auto on raw, and
+  E11 (the `Look` forms);
+- a photo with a visible person, to check E2's people-part form
+  (`MaskSubType` 3 with a sub-category, which failed with `ErrorReason` 1 in
+  the first run) and not only the photo;
+- a variant that applies a wire golden unchanged (decoded with JSON.lua),
+  still needed before the goldens are frozen;
+- the manual checks listed above.

@@ -104,7 +104,7 @@ fn the_provisional_choices_are_pinned() {
     let p = LuaOptions::PROVISIONAL;
     assert_eq!(p.mask_enum_as, EnumAs::Number);
     assert_eq!(p.int_flag_as, FlagAs::Number);
-    assert_eq!(p.panel_switches, PanelSwitches::None);
+    assert_eq!(p.panel_switches, PanelSwitches::MaskOnly);
     assert_eq!(p.mask_form, MaskForm::PresetForm);
     assert_eq!(p.local_form, LocalForm::AdaptivePreset);
     assert!(p.wb_custom_with_numbers);
@@ -113,6 +113,82 @@ fn the_provisional_choices_are_pinned() {
     assert!(p.ai_update);
     assert_eq!(p.look_form, LookForm::Stub);
     assert!(!p.preset_amount_flags);
+}
+
+/// One evidence row per field, in field order; a new field cannot be added
+/// without saying how far the experiments carry it (the destructuring below
+/// stops compiling).
+#[test]
+fn every_option_has_an_evidence_row() {
+    let LuaOptions {
+        mask_enum_as: _,
+        int_flag_as: _,
+        panel_switches: _,
+        mask_form: _,
+        local_form: _,
+        wb_custom_with_numbers: _,
+        wb_mode_only: _,
+        flatten_auto_now: _,
+        ai_update: _,
+        look_form: _,
+        preset_amount_flags: _,
+    } = LuaOptions::PROVISIONAL;
+    let fields: Vec<&str> = LuaOptions::EVIDENCE.iter().map(|e| e.field).collect();
+    assert_eq!(
+        fields,
+        [
+            "mask_enum_as",
+            "int_flag_as",
+            "panel_switches",
+            "mask_form",
+            "local_form",
+            "wb_custom_with_numbers",
+            "wb_mode_only",
+            "flatten_auto_now",
+            "ai_update",
+            "look_form",
+            "preset_amount_flags",
+        ]
+    );
+    for e in LuaOptions::EVIDENCE {
+        assert!(!e.open.is_empty(), "{}: say what is still open", e.field);
+        match e.status {
+            EvidenceStatus::Open => {
+                assert!(e.by.is_empty() && e.scope.is_empty(), "{}", e.field);
+            }
+            EvidenceStatus::Settled | EvidenceStatus::Supported => {
+                assert!(!e.by.is_empty() && !e.scope.is_empty(), "{}", e.field);
+            }
+        }
+    }
+}
+
+/// The first run's statuses: one non-raw photo, so nothing on the raw side
+/// is settled, the fields no experiment answered stay open, and
+/// `panel_switches` is only supported (E2 sent a switch the photo already
+/// had on, E13).
+#[test]
+fn the_first_run_statuses_are_pinned() {
+    let status = |f: &str| {
+        LuaOptions::EVIDENCE
+            .iter()
+            .find(|e| e.field == f)
+            .unwrap()
+            .status
+    };
+    for f in ["int_flag_as", "look_form"] {
+        assert_eq!(status(f), EvidenceStatus::Open, "{f}");
+    }
+    for f in ["wb_custom_with_numbers", "panel_switches"] {
+        assert_eq!(status(f), EvidenceStatus::Supported, "{f}");
+    }
+    for e in LuaOptions::EVIDENCE {
+        assert!(
+            e.status == EvidenceStatus::Open || e.scope == FIRST_RUN,
+            "{}",
+            e.field
+        );
+    }
 }
 
 // --- rule 1: keys, policy, guard -------------------------------------------
@@ -718,10 +794,22 @@ fn custom_without_numbers_is_never_written_alone() {
         assert!(w.skipped.iter().any(|k| k.path == "WhiteBalance"
             && k.reason == SkipReason::WhiteBalanceMode("Custom".into())));
     }
-    // A named mode still goes alone on request.
+    // A named mode still goes alone on request, to a raw photo.
     let auto = read(json!({"WhiteBalance": "Auto"}));
-    let w = to_lua_value(&auto, &photo(Some(FileKind::NonRaw)), &opt).unwrap();
+    let w = to_lua_value(&auto, &photo(Some(FileKind::Raw)), &opt).unwrap();
     assert_eq!(w.table, json!({"WhiteBalance": "Auto"}));
+    // Never to a non-raw one: there `Auto` alone kept the old numbers
+    // (E1f/E1g), so it is skipped and reported whatever the option says.
+    let w = to_lua_value(&auto, &photo(Some(FileKind::NonRaw)), &opt).unwrap();
+    assert!(w.is_empty(), "{}", w.table);
+    assert_eq!(
+        w.skipped,
+        [Skipped {
+            path: "WhiteBalance".into(),
+            reason: SkipReason::WhiteBalanceMode("Auto".into()),
+        }]
+    );
+    assert!(!w.call.flatten_auto_now);
 }
 
 #[test]
@@ -813,18 +901,17 @@ fn panel_switches_on_request_for_the_panels_written() {
         "ToneCurvePV2012": [0, 0, 128, 140, 255, 255]
     }));
     s.corrections = vec![subject_correction()];
-    assert!(all_keys(&apply(&s).table)
+    let none = LuaOptions {
+        panel_switches: PanelSwitches::None,
+        ..LuaOptions::default()
+    };
+    assert!(all_keys(&apply_with(&s, none).table)
         .iter()
         .all(|k| !k.starts_with("Enable")));
-    // What E2 and E4 send: the mask switch next to corrections, nothing else.
-    let mask_only = apply_with(
-        &s,
-        LuaOptions {
-            panel_switches: PanelSwitches::MaskOnly,
-            ..LuaOptions::default()
-        },
-    )
-    .table;
+    // What E2 and E4 send, and the default (a no-op on E2's photo, so not
+    // told from `None` yet): the mask switch next to corrections, nothing
+    // else.
+    let mask_only = apply(&s).table;
     let switches: Vec<&String> = mask_only
         .as_object()
         .unwrap()

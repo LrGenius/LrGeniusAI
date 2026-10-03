@@ -34,6 +34,7 @@
   "DefringePurpleHueHi": 70,
   "DefringePurpleHueLo": 30,
   "Dehaze": 0,
+  "EnableMaskGroupBasedCorrections": true,
   "Exposure2012": 0.0,
   "GrainAmount": 0,
   "GrainFrequency": 50,

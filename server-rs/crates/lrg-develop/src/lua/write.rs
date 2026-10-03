@@ -3,13 +3,18 @@
 //!
 //! **Provisional.** Experiments E1, E2, E4 and E11 (the plugin task
 //! `TaskDevelopExperiments.lua`) show which write-side forms Lightroom
-//! accepts, and they have not been run yet. Every alternative they measure
-//! that shapes the table is a switch in [`LuaOptions`]; the writer decides
-//! none of them. The provisional choices sit in one place,
-//! [`LuaOptions::PROVISIONAL`], each with what the experiments as built can
-//! settle about it (for some fields nothing: no experiment applies the
-//! alternative), and the wire goldens in `server-rs/testdata/develop/wire/`
-//! are not frozen until those results are in.
+//! accepts. Every alternative they measure that shapes the table is a
+//! switch in [`LuaOptions`]; the writer decides none of them. The defaults
+//! sit in one place, [`LuaOptions::PROVISIONAL`], and how far the evidence
+//! carries each of them in [`LuaOptions::EVIDENCE`]. One run so far
+//! (Lightroom Classic 15.6, October 2026, a single non-raw TIFF, run from the
+//! Library module) settled the AI-mask forms for subject, sky and background
+//! and the non-raw mode-only white-balance choices (`wb_mode_only`,
+//! `flatten_auto_now`); `wb_custom_with_numbers` is only supported, because
+//! `Custom` with the incremental numbers (the writer's non-raw form) was
+//! never applied. People-part masks, the raw side, the `Look` (E11), the
+//! flag encoding and `panel_switches` are still open, and the wire goldens
+//! in `server-rs/testdata/develop/wire/` are not frozen.
 //!
 //! # Modes
 //!
@@ -231,7 +236,9 @@ pub enum PanelSwitches {
     /// by no experiment.
     None,
     /// [`MASK_SWITCH`] (`EnableMaskGroupBasedCorrections = true`) next to
-    /// corrections, nothing else: what E2 and E4 send with every mask.
+    /// corrections, nothing else: what E2 and E4 send with every mask, and
+    /// the form E2 applied (a no-op on that photo: the switch was already
+    /// `true` there, E13).
     MaskOnly,
     /// [`MASK_SWITCH`] next to corrections and the switch of every panel
     /// the table touches ([`PANEL_SWITCHES`], an unverified map).
@@ -263,14 +270,15 @@ pub enum LookForm {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LuaOptions {
     /// Mask enums ([`KeySpec::is_mask_enum`]) as numbers or numeric
-    /// strings. E2 and E4 apply numbers only.
+    /// strings. E2 and E4 apply numbers only, and they work.
     pub mask_enum_as: EnumAs,
     /// 0/1 flag keys as numbers or booleans. No experiment writes a flag
     /// key.
     pub int_flag_as: FlagAs,
     /// Which `Enable*` panel switches the table carries (the plan's
     /// `include_panel_switches`). E2 and E4 always send
-    /// [`PanelSwitches::MaskOnly`].
+    /// [`PanelSwitches::MaskOnly`], on a photo where the switch was already
+    /// on, so no run has told it from [`PanelSwitches::None`].
     pub panel_switches: PanelSwitches,
     /// Complete AI and range masks in Adobe's preset form or write them
     /// minimal. E2 and E4 apply the preset form only.
@@ -281,14 +289,18 @@ pub struct LuaOptions {
     pub local_form: LocalForm,
     /// Write `WhiteBalance = "Custom"` next to white-balance numbers when the
     /// settings name no mode. Raw: E1c (with) against E1b (without);
-    /// non-raw: only numbers alone (E1b) are applied, `Custom` with the
-    /// incremental numbers by no experiment.
+    /// non-raw: only numbers alone (E1b) are applied, and they leave the
+    /// mode at `"As Shot"`; `Custom` with the incremental numbers in one
+    /// call is applied by no experiment.
     pub wb_custom_with_numbers: bool,
     /// Write a named white-balance mode (`"Auto"`, `"Daylight"`, ...) on
     /// its own, without numbers, for Lightroom to resolve (E1e, E1f, E1g
     /// apply `Daylight` and `Auto`; `"As Shot"` and the other named modes
     /// alone are applied by no experiment). Off: such a mode and the
-    /// numbers next to it are skipped and reported. `"Custom"` without
+    /// numbers next to it are skipped and reported. Honoured for raw (and
+    /// unknown) photos only: on a non-raw photo a mode alone is always
+    /// skipped and reported, because `"Auto"` alone left the old
+    /// incremental numbers in place there (E1f/E1g). `"Custom"` without
     /// numbers is always skipped and reported: it would pin whatever the
     /// photo has.
     pub wb_mode_only: bool,
@@ -306,67 +318,199 @@ pub struct LuaOptions {
     /// preset's amount applies (E4e, plain against flagged). Honoured only
     /// by [`LuaMode::Preset`]; [`LuaMode::Apply`] (the
     /// `applyDevelopSettings` route) never writes the flags, whatever this
-    /// says.
+    /// says. In Lightroom 15.6 the amount of a plugin preset changed nothing
+    /// with or without the flags (E4e).
     pub preset_amount_flags: bool,
 }
 
 impl LuaOptions {
-    /// The provisional choices, until the experiments are run. **The one
-    /// place every provisional write-side decision is made**: each field
-    /// below is provisional, none is decided yet.
+    /// The write-side defaults. **The one place every write-side decision is
+    /// made**; [`LuaOptions::EVIDENCE`] says, per field, how far the
+    /// experiments carry it. The type keeps its provisional name while
+    /// fields are open (see the Status column).
     ///
-    /// | Field | Provisional | What the experiments as built can settle | Evidence so far |
-    /// |---|---|---|---|
-    /// | `mask_enum_as` | `Number` | E2/E4 confirm `Number` only: they apply numbers; `String` is applied by no experiment | read back: `MaskSubType` is a number in 655 of 655 masks of the training dump |
-    /// | `int_flag_as` | `Number` | nothing: no experiment writes a flag key (`LensProfileEnable` is only read back, as context) | read back: numbers in 1,294 of 1,294 rows; `DevelopEditManager.lua` already applies `AutoLateralCA` (and `EnableLensCorrections`) as booleans, so its photos read back are cheap evidence |
-    /// | `panel_switches` | `None` | nothing: E2/E4 always send `MaskOnly`, so a working run shows the mask switch does no harm, not that it is needed; `None` and `All` are applied by no experiment, and the `PANEL_SWITCHES` map is unverified | plan §4.1 rule 10 |
-    /// | `mask_form` | `PresetForm` | E2/E4 confirm `PresetForm` for AI masks only (`DevelopExperiments.aiMaskTool`); `Minimal`, and any luminance range, are applied by no experiment | Adobe's adaptive presets use this form |
-    /// | `local_form` | `AdaptivePreset` | E2/E4 confirm `AdaptivePreset` (`DevelopExperiments.aiMaskCorrection`); `Sparse` is applied by no experiment | Adobe's adaptive presets use this form |
-    /// | `wb_custom_with_numbers` | `true` | raw: E1c (`Custom` + numbers) against E1b (numbers alone); non-raw: E1b applies the incremental numbers alone, `Custom` + incremental numbers by no experiment (E1c non-raw is the cross-family probe `{Temperature = 22}`) | none yet |
-    /// | `wb_mode_only` | `false` | E1e/E1f/E1g (`Daylight`, `Auto` alone); `"As Shot"` and the other named modes alone are applied by no experiment. Flip together with `lrg_analysis::style_engine::EMIT_NAMED_WB_MODES` | plan §6.1: no mode without numbers until E1 shows Lightroom recomputes temperature and tint |
-    /// | `flatten_auto_now` | `false` | E1f against E1g | matters only with `wb_mode_only` and `"Auto"` |
-    /// | `ai_update` | `true` | E2b against E2c, for AI masks; an Adobe Adaptive `Look` (which also asks for the update) by no experiment: E11 rejects adaptive Looks | Findings: AI masks are computed per photo; E2c is update-then-poll |
-    /// | `look_form` | `Stub` | E11 (E11a `Stub`, E11b `Full`, E11c `BareStub`), with Adobe Raw profiles only: camera-restricted and adaptive Looks are applied by no experiment | every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) |
-    /// | `preset_amount_flags` | `false` | E4e (plain against flagged), preset route only ([`LuaMode::Preset`]) | the preset route is not chosen |
+    /// The first run (Lightroom Classic 15.6, 2026-10-03, **one non-raw
+    /// TIFF** without develop edits, a virtual copy, run from the Library
+    /// module; no raw file) answered E1 (non-raw), E2 and E4; E1e and E11
+    /// need a raw file and did not run. Whether the photo shows a person the
+    /// report does not say. "Settled" below means: applied in that run, did
+    /// what the writer needs; it is not a claim about raw files, other
+    /// Lightroom versions or the Develop module.
     ///
-    /// The provisional table differs from the one E2 and E4 apply in one
-    /// way: no `EnableMaskGroupBasedCorrections` (`panel_switches`).
+    /// | Field | Default | Status | Evidence | Still open |
+    /// |---|---|---|---|---|
+    /// | `mask_enum_as` | `Number` | settled (E2, 15.6, non-raw) | E2a–E2d apply mask enums as numbers: the masks are kept and computed (subject, sky, background; a hair mask ended `failed`, `ErrorReason` 1) | `String` is applied by no experiment, and is not needed |
+    /// | `int_flag_as` | `Number` | open | no experiment writes a flag key; read side only: numbers in 1,294 of 1,294 training rows and in the E13 readback (`AutoLateralCA`, `LensProfileEnable`, `CropConstrainToWarp`, `HDREditMode` all `0`) | a write of a 0/1 flag key, numbers against booleans |
+    /// | `panel_switches` | `MaskOnly` | supported (E2, 15.6, non-raw) | E2 sent the switch, but E13 shows it was already `true` on the source photo (E2's copies inherit it), so the run does not tell `None` from `MaskOnly`; the default is the form E2 applied | `None` against `MaskOnly` (the blocking wire-golden variant, with and without the switch); `All` and the `PANEL_SWITCHES` map are unverified |
+    /// | `mask_form` | `PresetForm` | settled for subject, sky and background AI masks (E2, 15.6, non-raw) | E2a: a digest-less subject mask in this form is kept, pending until `updateAISettings()`, then computed; E2d: sky and background likewise | people parts: the one applied (E2d hair, `MaskSubType` 3 / `MaskSubCategoryID` 5, the writer's form) ended `failed`, `ErrorReason` 1; form or photo is not known. `Minimal`, and a luminance range's `Version`/`SampleType`, applied by no experiment |
+    /// | `local_form` | `AdaptivePreset` | settled (E2, 15.6, non-raw) | E2 applies the 23 zero-filled `Local*` keys and the correction works | `Sparse` applied by no experiment |
+    /// | `wb_custom_with_numbers` | `true` | supported on non-raw (E1b, E1d, 15.6); open on raw | E1b: incremental numbers alone are stored, and leave the mode at `"As Shot"` in the readback, so the writer keeps writing `Custom` with them (whether `"As Shot"` + numbers renders them is the open Basic-panel check); E1d: `"Custom"` is taken as a mode | non-raw: `Custom` + incremental numbers in one call; raw: E1b/E1c on a raw file |
+    /// | `wb_mode_only` | `false` | settled on non-raw (E1f/E1g, 15.6); open on raw | E1f/E1g: `"Auto"` alone sets the mode, and the readback showed the previous incremental numbers unchanged within 15 s (Library module; the Basic-panel check is open). Never honoured for a non-raw photo, whatever this says. Stays together with `lrg_analysis::style_engine::EMIT_NAMED_WB_MODES` | raw: E1e (`Daylight`) and `Auto` on a raw file (a positive answer turns it on for raw targets only); `"As Shot"` and the other named modes alone are applied by no experiment |
+    /// | `flatten_auto_now` | `false` | settled on non-raw (E1f against E1g, 15.6) | `optFlattenAutoNow = true` made no difference to the readback within 15 s (Library module) | raw (matters only with `wb_mode_only`) |
+    /// | `ai_update` | `true` | settled for AI masks (E2b against E2c, 15.6, non-raw) | without the call the subject mask is still pending after 30 s (Library module); after `photo:updateAISettings()` it is computed (call 0.6 s) | an Adobe Adaptive `Look` (E11 rejects adaptive Looks); people parts (the subType-3 form, on a photo with a visible person) |
+    /// | `look_form` | `Stub` | open | E11 needs a raw file and did not run; every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) | E11a/E11b/E11c on a raw file; camera-restricted and adaptive Looks by no experiment |
+    /// | `preset_amount_flags` | `false` | settled: no effect (E4e, 15.6, non-raw) | amount 50 and 200 leave the globals and the mask values at the preset's own, with and without `SupportsAmount`/`SupportsAmount2` (read back; the visual check is manual) | the preset route is not chosen (E4: preset masks replace the photo's, `updateAI = true` left the mask pending) |
     ///
-    /// When an experiment has answered, in one change:
+    /// When a run answers more, in one change:
     ///
-    /// 1. change the field here and in `the_provisional_choices_are_pinned`;
+    /// 1. change the field here, its row in [`LuaOptions::EVIDENCE`] and
+    ///    `the_provisional_choices_are_pinned`;
     /// 2. E1 (mode only): flip `wb_mode_only` together with
     ///    `lrg_analysis::style_engine::EMIT_NAMED_WB_MODES` and its const
-    ///    assert in `a_named_mode_majority_is_not_sent_while_the_switch_is_off`;
+    ///    assert in `a_named_mode_majority_is_not_sent_while_the_switch_is_off`.
+    ///    A positive raw E1e turns mode-only on for raw targets only: both
+    ///    refuse a mode alone for a non-raw photo before reading the switch
+    ///    (E1f/E1g), and the tests `custom_without_numbers_is_never_written_alone`
+    ///    and `a_non_raw_photo_gets_no_mode_alone_whatever_the_switch` pin it;
     /// 3. re-bless the wire goldens (`server-rs/testdata/develop/wire/README.md`)
     ///    and run `busted`;
     /// 4. set the field's Status on the wiki page Dev-Develop-Model
     ///    ("Options and what decides them"), and correct the field doc
     ///    above if it names the experiment differently.
     pub const PROVISIONAL: LuaOptions = LuaOptions {
-        // Provisional: E2/E4 apply numbers; strings are never measured.
+        // Settled (E2, 15.6, non-raw): numbers work; strings never applied.
         mask_enum_as: EnumAs::Number,
-        // Provisional: no experiment writes a flag key; read-back evidence only.
+        // Open: no experiment writes a flag key; read-back evidence only.
         int_flag_as: FlagAs::Number,
-        // Provisional: E2/E4 always send the mask switch; None is unmeasured.
-        panel_switches: PanelSwitches::None,
-        // Provisional: E2/E4 apply this form (AI masks); Minimal is unmeasured.
+        // Supported (E2, 15.6): the form E2 applied, a no-op on that photo.
+        panel_switches: PanelSwitches::MaskOnly,
+        // Settled for subject/sky/background (E2, 15.6, non-raw); people
+        // parts open; Minimal never applied.
         mask_form: MaskForm::PresetForm,
-        // Provisional: E2/E4 apply this form; Sparse is unmeasured.
+        // Settled (E2, 15.6, non-raw); Sparse never applied.
         local_form: LocalForm::AdaptivePreset,
-        // Provisional: raw E1c vs E1b; non-raw Custom + Incremental* unmeasured.
+        // Supported on non-raw (E1b/E1d, 15.6); raw E1b vs E1c open.
         wb_custom_with_numbers: true,
-        // Provisional: E1e-E1g (Daylight, Auto alone); with EMIT_NAMED_WB_MODES.
+        // Settled on non-raw (E1f/E1g, 15.6; never honoured for non-raw);
+        // raw E1e open. With EMIT_NAMED_WB_MODES.
         wb_mode_only: false,
-        // Provisional: E1f vs E1g.
+        // Settled on non-raw (E1f vs E1g, 15.6): no effect.
         flatten_auto_now: false,
-        // Provisional: E2b vs E2c.
+        // Settled for AI masks (E2b vs E2c, 15.6, non-raw).
         ai_update: true,
-        // Provisional: E11 (E11a/b/c).
+        // Open: E11 needs a raw file.
         look_form: LookForm::Stub,
-        // Provisional: E4e; preset route (LuaMode::Preset) only.
+        // Settled (E4e, 15.6): the amount changes nothing either way.
         preset_amount_flags: false,
     };
+
+    /// How far the experiments carry each field of
+    /// [`LuaOptions::PROVISIONAL`], in field order: the table above, typed,
+    /// so a test can require one row per field.
+    pub const EVIDENCE: &'static [OptionEvidence] = &[
+        OptionEvidence {
+            field: "mask_enum_as",
+            status: EvidenceStatus::Settled,
+            by: "E2a-E2d (numbers; a hair mask ended failed, ErrorReason 1)",
+            scope: FIRST_RUN,
+            open: "String is applied by no experiment (not needed)",
+        },
+        OptionEvidence {
+            field: "int_flag_as",
+            status: EvidenceStatus::Open,
+            by: "",
+            scope: "",
+            open: "no experiment writes a 0/1 flag key; numbers only on the read side (training rows, E13)",
+        },
+        OptionEvidence {
+            field: "panel_switches",
+            status: EvidenceStatus::Supported,
+            by: "E2a-E2d sent the switch, but E13 shows it was already true on the source photo (E2's copies inherit it)",
+            scope: FIRST_RUN,
+            open: "the run does not tell None from MaskOnly (the wire-golden variant with and without the switch); All and PANEL_SWITCHES unverified",
+        },
+        OptionEvidence {
+            field: "mask_form",
+            status: EvidenceStatus::Settled,
+            by: "E2a-E2d (subject, sky, background)",
+            scope: FIRST_RUN,
+            open: "people parts: the one applied (E2d hair, MaskSubType 3 / MaskSubCategoryID 5, the writer's form) ended failed, ErrorReason 1; form or photo is not known. Minimal and a luminance range's preset form are applied by no experiment",
+        },
+        OptionEvidence {
+            field: "local_form",
+            status: EvidenceStatus::Settled,
+            by: "E2a-E2d",
+            scope: FIRST_RUN,
+            open: "Sparse is applied by no experiment",
+        },
+        OptionEvidence {
+            field: "wb_custom_with_numbers",
+            status: EvidenceStatus::Supported,
+            by: "E1b (numbers alone leave As Shot in the readback), E1d (Custom is taken)",
+            scope: FIRST_RUN,
+            open: "non-raw Custom + incremental numbers in one call (the writer's non-raw form); whether As Shot + numbers renders them (Basic panel); raw E1b against E1c",
+        },
+        OptionEvidence {
+            field: "wb_mode_only",
+            status: EvidenceStatus::Settled,
+            by: "E1f/E1g (Auto alone: the readback showed the old numbers within 15 s)",
+            scope: FIRST_RUN,
+            open: "raw: E1e (Daylight) and Auto on a raw file; a positive answer enables raw targets only (non-raw is refused whatever the field says); the Basic-panel check",
+        },
+        OptionEvidence {
+            field: "flatten_auto_now",
+            status: EvidenceStatus::Settled,
+            by: "E1f against E1g (no difference)",
+            scope: FIRST_RUN,
+            open: "raw",
+        },
+        OptionEvidence {
+            field: "ai_update",
+            status: EvidenceStatus::Settled,
+            by: "E2b (still pending after 30 s) against E2c (computed after the call)",
+            scope: FIRST_RUN,
+            open: "an Adobe Adaptive Look; people parts (the subType-3 form, on a photo with a visible person)",
+        },
+        OptionEvidence {
+            field: "look_form",
+            status: EvidenceStatus::Open,
+            by: "",
+            scope: "",
+            open: "E11 needs a raw file and did not run",
+        },
+        OptionEvidence {
+            field: "preset_amount_flags",
+            status: EvidenceStatus::Settled,
+            by: "E4e (amount 50 and 200 change nothing, with and without the flags)",
+            scope: FIRST_RUN,
+            open: "visual check of the amount copies (manual)",
+        },
+    ];
+}
+
+/// Where the first run's answers hold: the scope of every
+/// [`EvidenceStatus::Settled`] and [`EvidenceStatus::Supported`] row so far.
+pub const FIRST_RUN: &str =
+    "Lightroom Classic 15.6, one non-raw TIFF without develop edits, run from the Library module";
+
+/// How far the experiments carry one [`LuaOptions`] field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EvidenceStatus {
+    /// The default was applied by an experiment and did what the writer
+    /// needs, within [`OptionEvidence::scope`]; alternatives that were never
+    /// applied are named in [`OptionEvidence::open`].
+    Settled,
+    /// The evidence points to the default without settling it: the default
+    /// was not applied as written, or was applied where it could make no
+    /// difference.
+    Supported,
+    /// No experiment has answered it: the default is a provisional guess.
+    Open,
+}
+
+/// One row of [`LuaOptions::EVIDENCE`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OptionEvidence {
+    /// The [`LuaOptions`] field.
+    pub field: &'static str,
+    /// How far the evidence goes.
+    pub status: EvidenceStatus,
+    /// Which experiments (empty when open).
+    pub by: &'static str,
+    /// Lightroom version and file kind they ran on (empty when open).
+    pub scope: &'static str,
+    /// What is still open about the field.
+    pub open: &'static str,
 }
 
 impl Default for LuaOptions {
@@ -635,6 +779,7 @@ fn write_apply(
     let mut w = Writer {
         apply: true,
         opt,
+        file_kind: photo.file_kind,
         skipped,
         ai: false,
     };
@@ -718,6 +863,7 @@ fn write_round_trip(settings: &DevelopSettings, opt: &LuaOptions) -> Result<LuaW
     let mut w = Writer {
         apply: false,
         opt,
+        file_kind: None,
         skipped: Vec::new(),
         ai: false,
     };
@@ -748,6 +894,8 @@ struct Writer<'a> {
     /// compound strings (kept as spelled). Off in a test round trip.
     apply: bool,
     opt: &'a LuaOptions,
+    /// The target photo's file kind (apply mode); `None` in a round trip.
+    file_kind: Option<FileKind>,
     skipped: Vec<Skipped>,
     /// Something written needs `updateAISettings()`.
     ai: bool,
@@ -989,8 +1137,11 @@ impl Writer<'_> {
     /// - numbers next to any other mode: they are what that mode resolved
     ///   to for the source, and are skipped ([`SkipReason::WhiteBalanceMode`]);
     /// - a named mode without numbers (or next to skipped ones): written
-    ///   alone with [`LuaOptions::wb_mode_only`], otherwise skipped and
-    ///   reported (`"As Shot"`, the default, without a report);
+    ///   alone with [`LuaOptions::wb_mode_only`] on a raw (or unknown) photo,
+    ///   otherwise skipped and reported (`"As Shot"`, the default, without a
+    ///   report). Never alone on a non-raw photo, whatever the option says:
+    ///   there `"Auto"` alone left the old incremental numbers in place
+    ///   (E1f/E1g, Lightroom 15.6);
     /// - `Custom` without numbers, or a mode outside the registry's list:
     ///   always skipped and reported.
     fn white_balance(
@@ -1051,7 +1202,10 @@ impl Writer<'_> {
         let named = mode != "Custom"
             && matches!(id(Level::Global, KEY).spec().kind,
                 ValueKind::Enum(set) if set.contains(&mode.as_str()));
-        if self.opt.wb_mode_only && named {
+        // Non-raw: a mode alone did not recompute the numbers (E1f/E1g), so
+        // the switch, which a raw answer (E1e) may turn on, stops at raw.
+        let alone = self.opt.wb_mode_only && self.file_kind != Some(FileKind::NonRaw);
+        if alone && named {
             table.insert(KEY.into(), J::String(mode));
         } else if mode != "As Shot" {
             self.skip(KEY, SkipReason::WhiteBalanceMode(mode.clone()));

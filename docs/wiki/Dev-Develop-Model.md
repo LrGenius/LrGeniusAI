@@ -67,11 +67,13 @@ patterns: `Table_<md5>` and `BrushTable_<md5>` blobs, `pm_*` patch state,
 
 ### Maintaining the registry
 
-The table was seeded once from `server-rs/scripts/develop_registry/spec.py`
-by `gen_table_rs.py` (same folder; it imports `spec.py` only, never the
-rendered Markdown, an inventory or the training dump). **`table.rs` is the
-source of truth since.** Adding or changing a key is editing a row there by
-hand, then refreshing the review snapshot:
+The table was seeded from `server-rs/scripts/develop_registry/spec.py`
+by `gen_table_rs.py` (same folder; it imports `spec.py` and reads one
+committed data file, the non-raw readback in
+`server-rs/testdata/develop/defaults/`; never the rendered Markdown, an
+inventory or the training dump). **`table.rs` is the source of truth.**
+Adding or changing a key is editing a row there by hand, then refreshing the
+review snapshot:
 
 ```bash
 cd server-rs
@@ -113,11 +115,35 @@ agrees). Because it guards a plugin file, CI
 also runs it in the unfiltered `format-lint-rust` job of `lint-format.yml`, not
 only in `server-rs-tests.yml`, which skips plugin-only PRs.
 
-Defaults: the non-raw column is `Unverified` for every key with a fixed raw
-default, because every training example so far is a raw file; a non-raw
-readback fills those in. `NoDefault` in that column means there is no fixed
-default for either file kind (as-shot white balance, digests, `Look`), which a
-readback does not change.
+Defaults: every training example is a raw file, so the non-raw column comes
+from a readback instead. Experiment E13 read Lightroom's full develop table
+for one non-raw photo without develop edits (Lightroom Classic 15.6, process
+version 15.4, a virtual copy of a TIFF; [Findings: Results](Dev-AI-Edit-XMP-Findings#results-first-run-2026-10-03)),
+committed scrubbed as `server-rs/testdata/develop/defaults/non_raw_lrc15.6.json`
+(key -> value, plus the Lightroom version, process version and file kind).
+`gen_table_rs.py` gives every global row the text leaves `Unverified` for
+non-raw files the value read back, if the readback has the key (145 rows),
+and stops when a readback contradicts the non-raw default `spec.py` states.
+It holds back the keys in `NON_RAW_READBACK_NOT_CONSTANT`: `HDRMaxValue` read
+2.3 (raw 4.0) on that one photo and may be per image, so its non-raw default
+stays `Unverified`. `registry/tests.rs` (`non_raw_defaults_come_from_the_readback`)
+requires every non-raw `Value` to match the file and no row the readback
+covers to be left `Unverified`, except the held-back keys. Most equal the raw
+default; the ones that differ are `Sharpness` 0 (raw 40),
+`ColorNoiseReduction` 0 (raw 25), `CameraProfile` "Embedded" (raw "Adobe
+Standard") and `IncrementalTemperature`/`IncrementalTint` 0 (absent for raw).
+The policy filter reads this column: a non-raw source's removed value equal
+to it is dropped without a report (`non_raw_defaults_are_removed_without_a_report`
+in `model/policy.rs`). One virtual copy is thin evidence for a table: the
+report's own check (a freshly imported JPEG and raw for the default tables)
+is still open. A key the readback does not have stays `Unverified`:
+absence can mean "written only when used", so no key was marked `Absent` on
+this evidence. `NoDefault` means there is no fixed default for either file
+kind (as-shot white balance, digests, `Look`, the Upright solver state),
+which a readback does not change (19 readback keys kept it). Hand edits to
+`table.rs` are mirrored in `spec.py`, so the generator reproduces the table
+and a later readback (a raw default table, another Lightroom version) is one
+regeneration plus a reviewed snapshot diff.
 
 ### Policy classes
 
@@ -677,16 +703,22 @@ decimals.
 
 ## Writing the Lua form (provisional)
 
-> **Provisional until experiments E1, E2, E4 and E11 are run.** They show
+> **Provisional while fields are open.** Experiments E1, E2, E4 and E11 show
 > which forms `applyDevelopSettings` and plugin presets accept on the write
 > side ([Findings: Running the experiments](Dev-AI-Edit-XMP-Findings#running-the-experiments)).
 > The writer decides none of them: every alternative an experiment measures
 > that shapes the table, or the call that applies it, is one `LuaOptions`
-> field, and the provisional choices sit in one place,
-> `LuaOptions::PROVISIONAL` (the table below, which also says what the
-> experiments *as built* can settle: for several fields only the provisional
-> side, for `int_flag_as` nothing). The wire goldens are not frozen until
-> the results are in.
+> field, the defaults sit in one place, `LuaOptions::PROVISIONAL`, and how
+> far the evidence carries each of them is `LuaOptions::EVIDENCE` (the table
+> below). The first run (Lightroom 15.6, 2026-10-03, one non-raw TIFF, run
+> from the Library module;
+> [Findings: Results](Dev-AI-Edit-XMP-Findings#results-first-run-2026-10-03))
+> settled the AI-mask forms for subject, sky
+> and background and the non-raw mode-only choices (`wb_mode_only`,
+> `flatten_auto_now`). `wb_custom_with_numbers` is only supported, because
+> `Custom` with the incremental numbers (the writer's non-raw form) was never
+> applied, and so is `panel_switches`. People parts, `int_flag_as`,
+> `look_form` and the raw side are open, and the wire goldens are not frozen.
 
 `lua::to_lua_value(&settings, &LuaMode, &LuaOptions) -> Result<LuaWritten,
 WireError>` writes the table `photo:applyDevelopSettings()` takes, as the
@@ -806,65 +838,82 @@ text.
 
 ### Options and what decides them
 
-Every field is **provisional**; none is decided yet. "Settles" says what the
-experiments *as built* (`TaskDevelopExperiments.lua`, `DevelopExperiments.lua`)
-can settle: an experiment that applies only the provisional form can confirm
-it, not choose between the alternatives, and an alternative no experiment
-applies stays unmeasured whatever the run says.
+Each field's default and status, as `LuaOptions::PROVISIONAL` and
+`LuaOptions::EVIDENCE` hold them (a test requires one evidence row per
+field). **Settled** means the first run applied the default and it did what
+the writer needs, on Lightroom 15.6 with one non-raw TIFF, run from the
+Library module; it says nothing about raw files, other versions or the
+Develop module. **Supported**: the evidence points to the default without
+settling it: the default was not applied as written, or was applied where it
+could make no difference. **Open**: no
+experiment has answered it. An alternative no experiment applies stays
+unmeasured whatever the run says.
 
-| `LuaOptions` field | Alternatives | Provisional | Settles | Evidence so far | Status |
+| `LuaOptions` field | Alternatives | Default | Evidence (first run, LrC 15.6, one non-raw TIFF, Library module) | Still open | Status |
 |---|---|---|---|---|---|
-| `mask_enum_as` | `Number` / `String` (mask enums, `KeySpec::is_mask_enum`: every closed integer set below the global level — `MaskSubType`, `MaskBlendMode`, `ErrorReason`, `CorrectionRangeMask.Type`/`SampleType`, ... — and `MaskSubCategoryID`) | `Number` | E2/E4 confirm `Number` only: they apply numbers; `String` is applied by no experiment | read back: `MaskSubType` a number in 655 of 655 masks of the training dump | provisional |
-| `int_flag_as` | `Number` (0/1) / `Bool` (`LensProfileEnable`, `AutoLateralCA`, `CropConstrainToWarp`, `HDREditMode`) | `Number` | nothing: no experiment writes a flag key (`LensProfileEnable` is only read back, as context) | read back: numbers in 1,294 of 1,294 rows; `DevelopEditManager.lua` already applies `AutoLateralCA` and `EnableLensCorrections` as booleans, so reading back such photos is cheap evidence | provisional |
-| `panel_switches` (the plan's `include_panel_switches`) | `None` / `MaskOnly` (`EnableMaskGroupBasedCorrections` next to corrections) / `All` (plus the switch of every panel the table touches, `PANEL_SWITCHES`) | `None` | nothing: E2/E4 always send `MaskOnly`, so a working run shows the mask switch does no harm, not that it is needed; `None` and `All` are applied by no experiment, and the `PANEL_SWITCHES` map is unverified (check it before turning `All` on) | plan §4.1 rule 10 | provisional |
-| `mask_form` | `PresetForm` (an AI mask's `MaskVersion` 1, `ReferencePoint` centre, `ErrorReason` 0; a luminance range's `Version` 3, `SampleType` 0) / `Minimal` | `PresetForm` | E2/E4 confirm `PresetForm` for AI masks only (`DevelopExperiments.aiMaskTool`); `Minimal`, and any luminance range, are applied by no experiment | Adobe's adaptive presets use this form | provisional |
-| `local_form` | `AdaptivePreset` (the 23 `Local*` keys at 0 unless the model has a value) / `Sparse` (the model's own) | `AdaptivePreset` | E2/E4 confirm `AdaptivePreset` (`DevelopExperiments.aiMaskCorrection`); `Sparse` is applied by no experiment | Adobe's adaptive presets use this form | provisional |
-| `wb_custom_with_numbers` | numbers with `WhiteBalance="Custom"` / alone | `true` | raw: E1c (`Custom` + numbers) against E1b (numbers alone); non-raw: E1b applies the incremental numbers alone, `Custom` + incremental numbers is applied by no experiment (E1c non-raw is the cross-family probe `{Temperature = 22}`) | none yet | provisional |
-| `wb_mode_only` | a named mode without numbers written / skipped and reported (`Custom` alone is never written) | `false` | E1e (`Daylight`), E1f/E1g (`Auto`); `"As Shot"` and the other named modes alone are applied by no experiment. Flips together with the style engine's `EMIT_NAMED_WB_MODES` | plan §6.1: no mode without numbers until E1 shows Lightroom recomputes temperature and tint | provisional |
-| `flatten_auto_now` | `ApplyCall::flatten_auto_now` when the table sets `WhiteBalance="Auto"` | `false` | E1f against E1g | matters only with `wb_mode_only` | provisional |
-| `ai_update` | `ApplyCall::update_ai_settings` after an AI mask (`Mask/Image`), `LensBlur` or an Adobe Adaptive `Look` | `true` | E2b against E2c, for AI masks; the adaptive `Look` by no experiment (E11 rejects adaptive Looks) | Findings: AI masks are computed per photo; E2c is update-then-poll | provisional |
-| `look_form` | `Stub` (`Stubbed = true`) / `BareStub` / `Full` | `Stub` | E11 (E11a `Stub`, E11b `Full`, E11c `BareStub`), with Adobe Raw profiles only: camera-restricted and adaptive Looks are applied by no experiment | every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) | provisional |
-| `preset_amount_flags` | `SupportsAmount`/`SupportsAmount2 = true` in a plugin preset's table (`LuaMode::Preset` only) | `false` | E4e (plain against flagged) | the preset route is not chosen | provisional |
+| `mask_enum_as` | `Number` / `String` (mask enums, `KeySpec::is_mask_enum`: every closed integer set below the global level — `MaskSubType`, `MaskBlendMode`, `ErrorReason`, `CorrectionRangeMask.Type`/`SampleType`, ... — and `MaskSubCategoryID`) | `Number` | E2a–E2d apply mask enums as numbers; the subject, sky and background masks are kept and computed (a hair mask ended `failed`, `ErrorReason` 1). Read back: a number in 655 of 655 masks of the training dump | `String` applied by no experiment (not needed) | settled (E2, non-raw) |
+| `int_flag_as` | `Number` (0/1) / `Bool` (`LensProfileEnable`, `AutoLateralCA`, `CropConstrainToWarp`, `HDREditMode`) | `Number` | no experiment writes a flag key; read side only: numbers in 1,294 of 1,294 training rows and in the E13 readback | a write of a flag key, numbers against booleans (cheap evidence: read back photos `DevelopEditManager.lua` applied `AutoLateralCA` to as a boolean) | open |
+| `panel_switches` (the plan's `include_panel_switches`) | `None` / `MaskOnly` (`EnableMaskGroupBasedCorrections` next to corrections) / `All` (plus the switch of every panel the table touches, `PANEL_SWITCHES`) | `MaskOnly` (was `None`) | E2 sent the switch, but E13 shows it was already `true` on the source photo (E2's copies inherit it), so the run does not tell `None` from `MaskOnly`; the default is the form E2 applied | `None` against `MaskOnly` (the blocking wire-golden variant, with and without the switch); `All` and the `PANEL_SWITCHES` map are unverified (check them before turning `All` on) | supported (E2, non-raw) |
+| `mask_form` | `PresetForm` (an AI mask's `MaskVersion` 1, `ReferencePoint` centre, `ErrorReason` 0; a luminance range's `Version` 3, `SampleType` 0) / `Minimal` | `PresetForm` | E2a: a digest-less subject mask in this form is kept, pending until `updateAISettings()`, then computed; sky and background likewise | people parts: the one applied (E2d hair, `MaskSubType` 3 / `MaskSubCategoryID` 5, the writer's form) ended `failed`, `ErrorReason` 1; form or photo is not known. `Minimal`, and any luminance range, applied by no experiment | settled for subject, sky and background (E2, non-raw) |
+| `local_form` | `AdaptivePreset` (the 23 `Local*` keys at 0 unless the model has a value) / `Sparse` (the model's own) | `AdaptivePreset` | E2 applies the zero-filled form, and the corrections work | `Sparse` applied by no experiment | settled (E2, non-raw) |
+| `wb_custom_with_numbers` | numbers with `WhiteBalance="Custom"` / alone | `true` | E1b: incremental numbers alone are stored, and leave the mode at "As Shot" in the readback, so the writer keeps writing `Custom` with them; whether As Shot + numbers renders them is the open Basic-panel check. E1d: `"Custom"` is taken as a mode | non-raw: `Custom` + incremental numbers in one call (the writer's non-raw form, never applied); raw: E1b against E1c on a raw file | supported on non-raw; open on raw |
+| `wb_mode_only` | a named mode without numbers written / skipped and reported (`Custom` alone is never written) | `false` | E1f/E1g: `"Auto"` alone sets the mode, and the readback showed the previous incremental numbers unchanged within 15 s (the Basic-panel check is open). Never honoured for a non-raw photo: the writer and the style engine refuse a mode alone there before reading the switch. Stays together with the style engine's `EMIT_NAMED_WB_MODES` (off) | raw: E1e (`Daylight`) and Auto on a raw file, where a positive answer turns mode-only on for raw targets only; `"As Shot"` and the other named modes alone are applied by no experiment | settled on non-raw; open on raw |
+| `flatten_auto_now` | `ApplyCall::flatten_auto_now` when the table sets `WhiteBalance="Auto"` | `false` | E1f against E1g: `optFlattenAutoNow = true` made no difference to the readback within 15 s | raw (matters only with `wb_mode_only`) | settled on non-raw |
+| `ai_update` | `ApplyCall::update_ai_settings` after an AI mask (`Mask/Image`), `LensBlur` or an Adobe Adaptive `Look` | `true` | E2b: without the call the mask is still pending after 30 s in the Library module; E2c: after `photo:updateAISettings()` it is computed (call 0.6 s) | an Adobe Adaptive `Look` (E11 rejects adaptive Looks); people parts (the subType-3 form, on a photo with a visible person) | settled for AI masks (E2, non-raw) |
+| `look_form` | `Stub` (`Stubbed = true`) / `BareStub` / `Full` | `Stub` | E11 needs a raw file and did not run; every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) | E11a/E11b/E11c on a raw file; camera-restricted and adaptive Looks by no experiment | open |
+| `preset_amount_flags` | `SupportsAmount`/`SupportsAmount2 = true` in a plugin preset's table (`LuaMode::Preset` only) | `false` | E4e: amount 50 and 200 leave the globals and the mask values at the preset's own, with and without the flags (read back) | the look of the amount copies (manual check); the preset route is not chosen (see below) | settled: no effect in 15.6 |
 
-The provisional table differs from the one E2 and E4 apply in one way: it
-has no `EnableMaskGroupBasedCorrections` (`panel_switches = None`). Before
-the goldens are frozen, an experiment has to apply the writer's own output:
-see [Wire goldens](#wire-goldens).
+The default table now equals the one E2 applies for AI masks (preset-form
+masks, zero-filled locals, numbers, the mask switch; the switch was already
+on in E2's photo). The goldens are still
+not frozen: no experiment has applied the writer's own output, see
+[Wire goldens](#wire-goldens).
 
 What the experiments measure that is **not** a writer switch, and why:
 
-- **E1a/E1d (`Temp` accepted?)**: whatever the answer, `Temp` is never
-  written; the family keys are the documented ones (rule 9).
-- **E1c on a non-raw file (`{Temperature = 22}`)**: a cross-family probe
-  (does Lightroom take a raw key on a non-raw photo?); the writer never
+- **E1a/E1d (`Temp` accepted?)**: accepted without an error and ignored
+  (15.6, non-raw). `Temp` is never written; the family keys are the
+  documented ones (rule 9).
+- **E1c on a non-raw file (`{Temperature = 22}`)**: a cross-family probe.
+  Lightroom 15.6 stores the raw key on the non-raw photo as a dead value
+  (the mode and the incremental keys stay as they were); the writer never
   writes the other family's keys (rule 9), so the answer changes no table.
 - **E2 timing** (update call and mask-ready time): runtime planning for
   step 2, no table shape.
 - **E4a/E4b (same-name presets), E4f (apply then delete the file)**: the
   preset route's lifecycle in the apply layer (step 2); the table is the
   same either way.
-- **E4c (preset masks merged or replacing)**: the writer writes exactly
-  `settings.corrections`. Keeping the photo's existing masks is the apply
-  layer's job on the photo's **raw** tables: the writer drops digests
-  (rule 1), so an existing AI mask passed through the model would lose its
-  computed state.
-- **E4d (re-apply duplicates or updates by sync id)**: sync ids come from
+- **E4c (preset masks merged or replacing)**: replacing (15.6), and the
+  preset's `updateAI = true` left its sky mask pending for 60 s. The writer
+  writes exactly `settings.corrections`. Keeping the photo's existing masks
+  is the apply layer's job on the photo's **raw** tables: the writer drops
+  digests (rule 1), so an existing AI mask passed through the model would
+  lose its computed state. Step 2 applies masks through
+  `applyDevelopSettings` + `updateAISettings()` instead of a preset.
+- **E4d (re-apply duplicates or updates by sync id)**: updates in place
+  (15.6). Sync ids come from
   the builders (derived per role, see [Building corrections](#building-corrections));
   the writer keeps them.
 
 When an experiment has answered, in one change:
 
-1. change the field in `LuaOptions::PROVISIONAL` and in its pinning test
-   (`the_provisional_choices_are_pinned`);
+1. change the field in `LuaOptions::PROVISIONAL`, its row in
+   `LuaOptions::EVIDENCE` and the pinning tests
+   (`the_provisional_choices_are_pinned`, `the_first_run_statuses_are_pinned`);
 2. E1 (mode only): flip `wb_mode_only` together with
    `lrg_analysis::style_engine::EMIT_NAMED_WB_MODES` and its const assert
-   in `a_named_mode_majority_is_not_sent_while_the_switch_is_off`;
+   in `a_named_mode_majority_is_not_sent_while_the_switch_is_off`. A positive
+   raw E1e turns mode-only on for raw targets only: both refuse a mode alone
+   for a non-raw photo before reading the switch (E1f/E1g), pinned by
+   `custom_without_numbers_is_never_written_alone` and
+   `a_non_raw_photo_gets_no_mode_alone_whatever_the_switch`;
 3. re-bless the wire goldens and run `busted` ([Wire goldens](#wire-goldens));
    no test or reader change is needed (`every_golden_case_is_clean_under_every_option_flip`
    proves that for every single flip);
-4. set the field's Status in the table above (`decided: <date>, <run>`),
-   and correct the field's rustdoc and the `PROVISIONAL` table in
-   `src/lua/write.rs` if the run settled more or less than "Settles" says.
+4. set the field's Status in the table above (and the run's scope: version
+   and file kind), and correct the field's rustdoc and the `PROVISIONAL`
+   table in `src/lua/write.rs` if the run settled more or less than the
+   table says.
    The Findings page, `wire/README.md` and the plugin spec point here
    instead of restating the values.
 
@@ -902,7 +951,10 @@ second write identical.
 ### Wire goldens
 
 `server-rs/testdata/develop/wire/*.json` are tables the writer produces in
-apply mode with the provisional options, one per shape: basic global
+apply mode with the default options (`LuaOptions::PROVISIONAL`; re-blessed
+2026-10-03 for `panel_switches = MaskOnly`, which added
+`EnableMaskGroupBasedCorrections = true` to the ten goldens with
+corrections), one per shape: basic global
 sliders, raw Custom white balance, non-raw incremental white balance, global
 and parametric tone curves, HSL and colour grading, a subject and a sky
 correction, linear and radial gradients, a sky minus subject intersected
@@ -936,14 +988,17 @@ The same test file also
 - pins `ADAPTIVE_PRESET_LOCALS` against `LOCAL_KEYS` in
   `DevelopExperiments.lua`.
 
-**Not frozen.** Besides the experiments' answers, freezing needs one thing
-the experiments as built do not do: apply the writer's own output. E2 and
-E4 apply hand-built tables (the AI-mask preset form, all 23 locals,
+**Not frozen.** The first run settled the AI-mask forms for subject, sky
+and background on one non-raw photo, and the default table is now the form
+E2 applied; people parts, `panel_switches` (`None` against `MaskOnly`),
+`int_flag_as`, `look_form` and the raw side are open. Freezing also needs one thing the
+experiments as built do not do: apply the writer's own output. E2 and E4
+apply hand-built tables (the AI-mask preset form, all 23 locals,
 `EnableMaskGroupBasedCorrections`), never a golden. Blocking item before the
 goldens are frozen: an E2 variant that decodes `masks_subject_sky.json`,
 `mask_luminance_intersect.json` and `global_basic.json` with JSON.lua and
 passes them unchanged to `applyDevelopSettings` (with and without the mask
-switch). Variants for numeric-string mask enums, `MaskForm::Minimal`,
+switch, on a photo where the switch is off). Variants for numeric-string mask enums, `MaskForm::Minimal`,
 `LocalForm::Sparse` and booleans on the flag keys would measure the
 alternatives no experiment applies yet.
 
@@ -1188,10 +1243,15 @@ in its README):
   (no Adobe file, no copy or excerpt of one, no real sidecar); the list is in
   the folder's README and in `FIXTURES` in `tests/xmp_fixtures.rs`.
 - `wire/*.json` are the **Lua writer's wire goldens** (see [Wire
-  goldens](#wire-goldens)): provisional until E1/E2/E4/E11, regenerated with
+  goldens](#wire-goldens)): not frozen while `LuaOptions` fields are open, regenerated with
   `LRG_BLESS=1 cargo test -p lrg-develop --test lua_wire_goldens`, read by
   Rust and the plugin's busted spec. `wire/key_classes.txt`, generated by
   the same run from the registry, holds key names and value classes only.
+- `defaults/non_raw_lrc15.6.json` is E13's readback of one non-raw photo
+  without develop edits (a virtual copy of a TIFF; key -> value, plus
+  Lightroom version, process version and file kind), the source of the
+  registry's non-raw default column (see
+  [Maintaining the registry](#maintaining-the-registry)).
 - `written/*.xmp` are the **writer's byte goldens**: the three hand-test presets
   exactly as the preset writer emits them, with synthetic ids in place of the
   derived sync ids (a SHA-256 id cannot be told from a catalog's by the
