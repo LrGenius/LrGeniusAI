@@ -51,7 +51,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         presence: Presence::Both,
         min_pv: None,
         recipe_alias: None,
-        note: "Raw-only key. Gate: drop from presets that can hit non-raw targets; learn relative to the example's as-shot value, not as absolute Kelvin (lighting differs per scene). Bug (f): code uses `Temp`. [all PV; raw only]",
+        note: "Raw-only key. Gate: drop from presets that can hit non-raw targets; learn relative to the example's as-shot value, not as absolute Kelvin (lighting differs per scene). Bug (f), fixed in PR 1d: the style engine read `Temp`; it now reads the white balance typed (`WbSetting`). [all PV; raw only]",
     },
     KeySpec {
         name: "Tint",
@@ -68,7 +68,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         presence: Presence::Both,
         min_pv: None,
         recipe_alias: None,
-        note: "Raw-only, same gate as Temperature. Bug (f): non-raw must use IncrementalTint, the code writes `Tint` for both. [all PV; raw only]",
+        note: "Raw-only, same gate as Temperature. Bug (f), fixed in PR 1d: non-raw must use IncrementalTint; the style engine blended `Tint` for both. [all PV; raw only]",
     },
     KeySpec {
         name: "IncrementalTemperature",

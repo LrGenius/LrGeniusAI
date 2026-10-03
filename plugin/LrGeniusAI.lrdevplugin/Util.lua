@@ -246,12 +246,13 @@ end
 -- shows, so blown highlights are recoverable there and gone on a rendered file.
 -- The edit guardrails use it to decide how far the white point may be pushed.
 --
--- It also decides which scale Lightroom's `Temp` is on: Kelvin for raw, a
--- relative -100..100 for JPEG/TIFF/PNG. Applying the wrong one ruins the photo,
--- so the three answers are kept apart: a readable non-raw format is `false`, but
--- a format we could not read at all is `nil` rather than `false`. Callers treat
--- `nil` as "assume raw", which is what the plug-in did before this existed and
--- what leaves an unreadable raw's white balance alone.
+-- It is only a fallback for which white balance a photo uses (Kelvin in
+-- `Temperature` for raw, an offset in `IncrementalTemperature` for rendered
+-- files): a DNG converted from a JPEG counts as raw here but has the rendered
+-- kind. DevelopEditManager.whiteBalanceFamily asks the develop settings first
+-- and falls back to this. The three answers are kept apart: a readable non-raw
+-- format is `false`, but a format we could not read at all is `nil` rather than
+-- `false`, and a `nil` family means no white balance is written at all.
 --
 -- DNG counts as raw — that is how Lightroom treats it, and a DNG carries the
 -- same headroom.
@@ -2510,6 +2511,166 @@ function Util.formatDownloadSize(bytes)
 		return string.format("%.1f GB", n / 1e9)
 	end
 	return string.format("%.0f MB", n / 1e6)
+end
+
+---
+-- The warnings a backend response carries, as a list of strings.
+--
+-- Current backends send a `warnings` array. Older ones sent a single
+-- `warning` string with several reports joined by newlines; that is split
+-- back apart so each report is counted on its own.
+--
+-- @param response table|nil A decoded backend response.
+-- @return table Array of non-empty strings (possibly empty).
+--
+function Util.responseWarnings(response)
+	local result = {}
+	if type(response) ~= "table" then
+		return result
+	end
+	local function add(text)
+		if text == nil then
+			return
+		end
+		text = tostring(text):gsub("^%s+", ""):gsub("%s+$", "")
+		if text ~= "" then
+			table.insert(result, text)
+		end
+	end
+	if type(response.warnings) == "table" then
+		for _, text in ipairs(response.warnings) do
+			add(text)
+		end
+		return result
+	end
+	if type(response.warning) == "string" then
+		for line in response.warning:gmatch("[^\r\n]+") do
+			add(line)
+		end
+	end
+	return result
+end
+
+---
+-- A per-run collection of warnings, deduplicated by text.
+--
+-- One cause usually hits many photos in a batch ("white balance was not
+-- transferred" for every JPEG); listing it once per photo buries every other
+-- report. The tally keeps each text once, with how many photos it hit and the
+-- first of them, so the end-of-run dialog can say "(12 photos)".
+--
+-- @return table An empty tally for Util.tallyWarnings/Util.formatWarningTally.
+--
+function Util.newWarningTally()
+	return { order = {}, entries = {} }
+end
+
+---
+-- Records one photo's warnings in a tally. Each photo counts once per text,
+-- however often the text is reported for it — within one list, or across
+-- several calls for the same photo (the backend's warnings, then the ones
+-- from applying the edit).
+--
+-- @param tally table From Util.newWarningTally.
+-- @param warnings table|nil Array of warning strings for this photo.
+-- @param photoName string|nil The photo's file name, shown when only one
+--        photo is affected.
+-- @param photoKey any|nil What identifies the photo within the run; defaults
+--        to `photoName`. Pass something unique when names can repeat (the
+--        same file name in two folders). With neither, every call counts.
+--
+function Util.tallyWarnings(tally, warnings, photoName, photoKey)
+	if type(tally) ~= "table" or type(warnings) ~= "table" then
+		return
+	end
+	if photoKey == nil then
+		photoKey = photoName
+	end
+	local seenInCall = {}
+	for _, warning in ipairs(warnings) do
+		local text = warning ~= nil and tostring(warning) or ""
+		if text ~= "" and not seenInCall[text] then
+			seenInCall[text] = true
+			local entry = tally.entries[text]
+			if not entry then
+				table.insert(tally.order, text)
+				entry = { text = text, count = 0, firstPhoto = photoName, photos = {}, seq = #tally.order }
+				tally.entries[text] = entry
+			end
+			if photoKey == nil then
+				entry.count = entry.count + 1
+			elseif not entry.photos[photoKey] then
+				entry.photos[photoKey] = true
+				entry.count = entry.count + 1
+			end
+		end
+	end
+end
+
+---
+-- Number of distinct warnings in a tally.
+--
+function Util.warningTallySize(tally)
+	if type(tally) ~= "table" or type(tally.order) ~= "table" then
+		return 0
+	end
+	return #tally.order
+end
+
+---
+-- The tally as dialog lines: the `maxShown` distinct warnings that hit the
+-- most photos, most frequent first, then in the order they first appeared;
+-- each with the photo count (or the one photo's name), followed by a line
+-- counting the rest. A run-wide cause is never the one folded away, and
+-- nothing is dropped silently.
+--
+-- @param tally table From Util.newWarningTally.
+-- @param maxShown number|nil How many distinct warnings to list (default 5).
+-- @return table Array of lines, e.g. "- White balance ... (12 photos)".
+--
+function Util.formatWarningTally(tally, maxShown)
+	local lines = {}
+	local total = Util.warningTallySize(tally)
+	if total == 0 then
+		return lines
+	end
+	maxShown = tonumber(maxShown) or 5
+	if maxShown < 1 then
+		maxShown = 1
+	end
+	local ranked = {}
+	for i, text in ipairs(tally.order) do
+		local entry = tally.entries[text]
+		entry.seq = entry.seq or i
+		ranked[i] = entry
+	end
+	-- table.sort is not stable, so the first-seen index breaks ties explicitly.
+	table.sort(ranked, function(a, b)
+		if a.count ~= b.count then
+			return a.count > b.count
+		end
+		return a.seq < b.seq
+	end)
+	for i = 1, math.min(maxShown, total) do
+		local entry = ranked[i]
+		local suffix
+		if entry.count > 1 then
+			suffix = " (" .. tostring(entry.count) .. " photos)"
+		elseif entry.firstPhoto and entry.firstPhoto ~= "" then
+			suffix = " (" .. tostring(entry.firstPhoto) .. ")"
+		else
+			suffix = ""
+		end
+		table.insert(lines, "- " .. entry.text .. suffix)
+	end
+	local hidden = total - maxShown
+	if hidden > 0 then
+		table.insert(
+			lines,
+			"... and " .. tostring(hidden) .. " more " .. (hidden == 1 and "warning" or "warnings") .. " (see the log)"
+		)
+	end
+	return lines
 end
 
 return Util

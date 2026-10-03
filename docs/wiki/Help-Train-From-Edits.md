@@ -16,6 +16,8 @@ The **Save Edits as AI Training Examples** workflow lets you teach LrGeniusAI yo
 
 The plugin reads the current develop settings from Lightroom and sends them to the backend, where they are stored as labeled training examples.
 
+Only **raw and DNG** files are saved. JPEGs, TIFFs and other formats in the chosen scope are skipped, and if nothing is left the workflow says so.
+
 ---
 
 ## Dialog options
@@ -67,20 +69,40 @@ hiding it.
 ## Raw and non-raw examples are kept apart
 
 Only for white balance, and only because Lightroom forces the issue: its
-temperature slider is Kelvin on a raw file and a relative −100..+100 on a JPEG.
-Averaging an example edited from a raw with one edited from a JPEG would produce
-a number that means nothing on either scale — and it would land on a real photo.
+temperature slider is Kelvin on a raw file and a relative −100..+100 offset on a
+JPEG. Averaging the two would produce a number that means nothing on either
+scale — and it would land on a real photo.
 
-So when the backend blends a white balance, it uses only the examples whose file
-type matches the photo you are editing. If none of the matched examples qualify,
-it leaves white balance alone and tells you why. Everything else — exposure,
-contrast, presence, colour, curves — means the same on both, and is blended from
-all matched examples as usual.
+"File type" here means the kind of white balance Lightroom stores for a photo,
+read from its develop settings, not the file extension. Since this workflow
+saves raw and DNG files only, nearly every example is the raw kind. The
+exception is a DNG converted from a JPEG: Lightroom keeps the JPEG kind of white
+balance for it, and so does the backend.
 
-Practically: if you shoot raw and JPEG both, keep saving examples from both.
-Nothing is wasted; the pool simply narrows for that one field. Examples you saved
-before this existed count as compatible with anything, so nothing you already
-have stops working.
+When the backend carries a white balance over, it uses only the examples whose
+file type matches the photo you are editing. For a JPEG or TIFF photo that
+usually means none qualify: it keeps its own white balance, and the run's
+summary tells you why. Everything else — exposure, contrast, presence, colour,
+curves — means the same on both, and is blended from all matched examples as
+usual.
+
+Examples you saved earlier are read again from their stored develop settings,
+so they take part with the right file type — and now with their white balance —
+without being saved again. The exception is an example still on a process
+version older than PV2012: it contributes nothing, and AI Edit's end-of-run
+warnings say so when such an example was among the matches. Update it in the
+Develop module and save it again.
+
+Saving an example reports the same kind of problem right away — an old process
+version, or develop settings that carry both kinds of white balance at once, in
+which case its white balance is not learned. The summary at the end lists each
+cause once, with the number of examples it hit.
+
+What is learned from an example's white balance is how you set it — As Shot,
+Auto, a preset or Custom — and, for Custom only, its temperature and tint. The
+Kelvin an As Shot or Auto example happens to have belongs to that photo's light
+and is never copied. See [Help: AI Edit](Help-AI-Edit) for how the examples'
+choices decide what a photo gets.
 
 ---
 

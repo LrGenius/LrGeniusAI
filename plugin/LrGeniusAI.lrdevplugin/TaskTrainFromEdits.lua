@@ -150,7 +150,10 @@ LrTasks.startAsyncTask(function()
 		local successCount = 0
 		local errorCount = 0
 		local errorMessages = {}
-		local backendWarnings = {}
+		-- One line per distinct warning with its photo count, so a cause that
+		-- hits every example (an old process version) does not push the
+		-- others out of the summary.
+		local warningTally = Util.newWarningTally()
 
 		local canceled = false
 
@@ -196,10 +199,21 @@ LrTasks.startAsyncTask(function()
 				local exifOptions = Util.getPhotoExif(photo)
 				exifOptions.label = options.label
 				exifOptions.summary = options.summary
-				-- Which Temp scale this example's develop settings are on. Left
-				-- absent when the format is unreadable; the style engine treats
-				-- that as compatible with anything.
-				exifOptions.is_raw = Util.isRawPhoto(photo)
+				-- Which white-balance family this example's develop settings
+				-- use: Kelvin `Temperature` (raw) or an `IncrementalTemperature`
+				-- offset (rendered, including a DNG converted from a JPEG).
+				-- Taken from the settings themselves, as the backend and
+				-- TaskAiEditPhotos do, with the file format as the fallback.
+				-- Left absent when neither knows; the backend then reads the
+				-- family from the settings' own white-balance keys, and an
+				-- example without them does not vote on white balance.
+				local wbFamily = DevelopEditManager.whiteBalanceFamily(
+					not developSettingsFailed and developSettings or nil,
+					Util.isRawPhoto(photo)
+				)
+				if wbFamily ~= nil then
+					exifOptions.is_raw = wbFamily == "raw"
+				end
 
 				-- Export a JPEG thumbnail for CLIP embedding + exposure analysis.
 				local exportedPath = SearchIndexAPI.exportPhotoForIndexing(photo)
@@ -223,14 +237,22 @@ LrTasks.startAsyncTask(function()
 				if ok then
 					successCount = successCount + 1
 					log:info("Saved training example for " .. fileName)
+					local exampleWarnings = {}
 					if developSettingsFailed then
 						table.insert(
-							backendWarnings,
-							fileName .. ": develop settings could not be read, so this example was saved without them."
+							exampleWarnings,
+							"Develop settings could not be read, so this example was saved without them."
 						)
 					end
-					if resp and resp.warning then
-						table.insert(backendWarnings, fileName .. ": " .. tostring(resp.warning))
+					-- `warnings`, or an older backend's joined `warning` string.
+					for _, warning in ipairs(Util.responseWarnings(resp)) do
+						table.insert(exampleWarnings, warning)
+					end
+					if #exampleWarnings > 0 then
+						log:warn(
+							"Training example warnings for " .. fileName .. ": " .. table.concat(exampleWarnings, " | ")
+						)
+						Util.tallyWarnings(warningTally, exampleWarnings, fileName, index)
 					end
 				else
 					errorCount = errorCount + 1
@@ -245,7 +267,8 @@ LrTasks.startAsyncTask(function()
 		progressScope:done()
 
 		-- Summary dialog.
-		if errorCount > 0 or #backendWarnings > 0 then
+		local warningCount = Util.warningTallySize(warningTally)
+		if errorCount > 0 or warningCount > 0 then
 			local uniqueErrors = {}
 			local errorList = {}
 			for _, msg in ipairs(errorMessages) do
@@ -279,21 +302,12 @@ LrTasks.startAsyncTask(function()
 				end
 			end
 
-			if #backendWarnings > 0 then
+			if warningCount > 0 then
 				combinedReport = combinedReport
 					.. "\n\n"
-					.. LOC("$$$/LrGeniusAI/common/BackendWarnings=Backend Warnings:")
+					.. "Warnings:"
 					.. "\n"
-				for i = 1, math.min(5, #backendWarnings) do
-					combinedReport = combinedReport .. "- " .. backendWarnings[i] .. "\n"
-				end
-				if #backendWarnings > 5 then
-					combinedReport = combinedReport
-						.. LOC(
-							"$$$/LrGeniusAI/common/MoreWarnings=... and ^1 more warnings",
-							tostring(#backendWarnings - 5)
-						)
-				end
+					.. table.concat(Util.formatWarningTally(warningTally, 5), "\n")
 			end
 
 			if canceled then

@@ -13,9 +13,10 @@ use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
 use lrg_analysis::training::{
-    aggregate_training_stats, compute_exposure_metrics, focal_length_bucket,
-    normalize_develop_settings_for_style, time_of_day_bucket_for_hour,
+    aggregate_training_stats, canonicalize_develop_settings, compute_exposure_metrics,
+    focal_length_bucket, time_of_day_bucket_for_hour, white_balance_json, CANONICAL_VERSION,
 };
+use lrg_develop::{FileKind, WarningKind};
 use lrg_store::TRAINING_TABLE;
 
 use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart, SinglePhotoForm};
@@ -98,17 +99,27 @@ async fn add_training_example(
         return err(StatusCode::BAD_REQUEST, "photo_id is required");
     }
 
-    let develop_settings: Map<String, Value> = match fields.get("develop_settings") {
-        Some(raw) if !raw.is_empty() => match serde_json::from_str::<Value>(raw) {
-            Ok(Value::Object(m)) => m,
-            Ok(_) | Err(_) => {
+    // `[]` is how the plugin's JSON.lua encodes an empty Lua table, so a
+    // photo without develop settings arrives as `"[]"`; it is the empty table,
+    // not an error.
+    let develop_settings: Value = match fields.get("develop_settings") {
+        Some(raw) if !raw.trim().is_empty() => match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Array(a)) if a.is_empty() => Value::Object(Map::new()),
+            Ok(v @ Value::Object(_)) => v,
+            Ok(_) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    "develop_settings must be a JSON object (or [] for none)",
+                )
+            }
+            Err(_) => {
                 return err(
                     StatusCode::BAD_REQUEST,
                     "develop_settings must be valid JSON",
                 )
             }
         },
-        _ => Map::new(),
+        _ => Value::Object(Map::new()),
     };
 
     let label = opt_str(&fields, "label");
@@ -120,15 +131,42 @@ async fn add_training_example(
     let shutter_speed = opt_str(&fields, "shutter_speed");
     let iso = opt_f64(&fields, "iso");
     let aperture = opt_f64(&fields, "aperture");
-    // Recorded so the style engine can keep raw and rendered examples apart
-    // when it blends a temperature. Absent means unknown, which it treats as
-    // compatible with anything — the only workable answer for examples saved
-    // before this field existed.
-    let is_raw = fields
+    // What the plugin believes. The develop settings' own white-balance keys
+    // win over it below: `Temperature` exists only on raw files and
+    // `IncrementalTemperature` only on the others, while the plugin's flag
+    // counts every DNG as raw, including DNGs converted from JPEGs.
+    let is_raw_hint = fields
         .get("is_raw")
         .map(|s| s.trim().eq_ignore_ascii_case("true"));
 
-    let mut warning: Option<&'static str> = None;
+    let canonical = match canonicalize_develop_settings(&develop_settings, is_raw_hint.into()) {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    for w in &canonical.warnings {
+        match &w.kind {
+            // The keys are the better source and the stored flag follows them.
+            // Nothing for the user to do about it, so the log only.
+            WarningKind::FileKindMismatch { .. } => log::info!(
+                "Training example {photo_id}: {w}; storing is_raw from the white-balance keys"
+            ),
+            WarningKind::UnsupportedProcessVersion { found } => warnings.push(format!(
+                "This example uses Lightroom process version {found}, older than PV2012 (6.7), so its develop settings are not learned. Update it to the current process version in the Develop module and save it again."
+            )),
+            WarningKind::ConflictingFileKind => warnings.push(
+                "The white balance of this example was not learned: its develop settings carry both raw (Temperature/Tint) and non-raw (IncrementalTemperature/IncrementalTint) keys.".to_string(),
+            ),
+            // Unknown keys, odd types and the like are kept verbatim and do
+            // not affect what is learned today; the user cannot act on them.
+            _ => log::debug!("Training example {photo_id}: {w}"),
+        }
+    }
+    let is_raw = canonical
+        .file_kind
+        .map(|k| k == FileKind::Raw)
+        .or(is_raw_hint);
+
     let mut embedding: Option<Vec<f32>> = None;
     let mut decoded_rgb: Option<(Vec<u8>, usize, usize)> = None;
     if let Some(bytes) = &image_bytes {
@@ -148,8 +186,9 @@ async fn add_training_example(
             Err(e) => log::warn!("Failed to decode training image: {e}"),
         }
         if embedding.is_none() {
-            warning = Some(
-                "Could not compute CLIP embedding for training example. AI style prediction may be less accurate.",
+            warnings.push(
+                "Could not compute CLIP embedding for training example. AI style prediction may be less accurate."
+                    .to_string(),
             );
         }
     }
@@ -158,12 +197,19 @@ async fn add_training_example(
     metadata.insert("photo_id".into(), json!(photo_id));
     metadata.insert(
         "develop_settings".into(),
-        json!(Value::Object(develop_settings.clone()).to_string()),
+        json!(develop_settings.to_string()),
     );
     metadata.insert(
         "canonical_settings".into(),
-        json!(Value::Object(normalize_develop_settings_for_style(&develop_settings)).to_string()),
+        json!(Value::Object(canonical.settings).to_string()),
     );
+    if let Some(wb) = &canonical.white_balance {
+        metadata.insert(
+            "white_balance".into(),
+            json!(white_balance_json(wb).to_string()),
+        );
+    }
+    metadata.insert("canonical_version".into(), json!(CANONICAL_VERSION));
     metadata.insert(
         "captured_at".into(),
         json!(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
@@ -240,9 +286,16 @@ async fn add_training_example(
     }
 
     let total_count = store.count(TRAINING_TABLE).await.unwrap_or(0);
-    let mut response = json!({"status": "ok", "photo_id": photo_id, "total_count": total_count});
-    if let Some(w) = warning {
-        response["warning"] = json!(w);
+    let mut response = json!({
+        "status": "ok",
+        "photo_id": photo_id,
+        "total_count": total_count,
+        "warnings": warnings,
+    });
+    // Legacy, for plugins that read only the single `warning` string; remove
+    // once every supported plugin reads `warnings`.
+    if !warnings.is_empty() {
+        response["warning"] = json!(warnings.join("\n"));
     }
     Json(response).into_response()
 }

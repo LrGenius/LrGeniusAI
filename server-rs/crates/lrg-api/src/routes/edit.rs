@@ -391,23 +391,35 @@ impl NoTrainingExamples {
     }
 }
 
-/// Lightroom's own key for white balance in a saved develop-settings blob, and
-/// the recipe schema's spelling of the same thing, since examples can come from
-/// either shape.
-const TEMPERATURE_KEYS: [&str; 2] = ["Temp", "temperature"];
+/// The white-balance keys of a saved develop-settings blob (Lightroom's raw
+/// family `Temperature`/`Tint`, the non-raw family
+/// `IncrementalTemperature`/`IncrementalTint`, and the `WhiteBalance` mode),
+/// plus the recipe schema's spelling, since examples can come from either
+/// shape.
+const WHITE_BALANCE_KEYS: [&str; 7] = [
+    "Temperature",
+    "Tint",
+    "IncrementalTemperature",
+    "IncrementalTint",
+    "WhiteBalance",
+    "temperature",
+    "tint",
+];
 
-/// Strip the white balance from an example saved from a file whose temperature
-/// scale differs from the photo being edited.
+/// Strip the white balance from an example saved from a file whose
+/// white-balance scale differs from the photo being edited.
 ///
 /// The few-shot block exists to give the model the user's own numbers to anchor
-/// on. A Kelvin `Temp` offered as a reference for a JPEG — or the reverse —
-/// anchors it on a number that is meaningless for the target, while the schema
-/// it must answer in declares the other range entirely. Every other develop
-/// setting means the same thing on both kinds of file, so only this one goes.
+/// on. A Kelvin `Temperature` offered as a reference for a JPEG — or an
+/// `IncrementalTemperature` offset for a raw file — anchors it on a number that
+/// is meaningless for the target, while the schema it must answer in declares
+/// the other range entirely. Tint changes meaning with it (absolute on raw, an
+/// offset otherwise), so the whole family goes; every other develop setting
+/// means the same thing on both kinds of file.
 ///
 /// An unknown raw status on either side means no conflict can be established,
 /// so nothing is removed.
-fn drop_incompatible_temperature(
+fn drop_incompatible_white_balance(
     settings: &mut Value,
     example_is_raw: Option<bool>,
     target_is_raw: Option<bool>,
@@ -422,7 +434,7 @@ fn drop_incompatible_temperature(
         return false;
     };
     let mut removed = false;
-    for key in TEMPERATURE_KEYS {
+    for key in WHITE_BALANCE_KEYS {
         removed |= map.remove(key).is_some();
     }
     removed
@@ -468,7 +480,8 @@ pub(crate) async fn fetch_training_examples(
                 .and_then(|s| serde_json::from_str::<Value>(s).ok())
                 .unwrap_or_else(|| json!({}));
             let example_is_raw = r.metadata.get("is_raw").and_then(Value::as_bool);
-            if drop_incompatible_temperature(&mut develop_settings, example_is_raw, target_is_raw) {
+            if drop_incompatible_white_balance(&mut develop_settings, example_is_raw, target_is_raw)
+            {
                 dropped_temperature += 1;
             }
             json!({
@@ -749,11 +762,28 @@ pub(crate) async fn persist_edit_recipe(
         .map_err(|e| e.to_string())
 }
 
+/// The provider's warning slot as one list entry per note.
+///
+/// `generate_edit_recipe_for_photo` appends the style-training note to
+/// whatever the provider already put in `warning`, one note per line. Collected
+/// as a single entry, a provider note and a training note would reach the plugin
+/// as one combined text, which it counts as its own cause instead of grouping it
+/// with the same note on other photos.
+pub(crate) fn warning_entries(warning: Option<String>) -> Vec<String> {
+    warning
+        .iter()
+        .flat_map(|w| w.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(crate) fn success_payload(
     photo_id: &str,
     recipe: &Value,
     options: &EditOptions,
-    warning: Option<&str>,
+    warnings: &[String],
     guardrail_reasons: &[String],
 ) -> Value {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -771,9 +801,15 @@ pub(crate) fn success_payload(
         // photograph would not take.
         "guardrail_reasons": guardrail_reasons,
         "guardrail_explanations": guardrail_explanations(guardrail_reasons),
+        // The backend's notes about this run (style-match confidence, white
+        // balance not transferred, ...), one entry each: a list, because a
+        // single slot loses the second report.
+        "warnings": warnings,
     });
-    if let Some(w) = warning {
-        payload["warning"] = json!(w);
+    // Legacy, for plugins that read only the single `warning` string: the same
+    // notes joined. Remove once every supported plugin reads `warnings`.
+    if !warnings.is_empty() {
+        payload["warning"] = json!(warnings.join("\n"));
     }
     payload
 }
@@ -922,11 +958,12 @@ async fn finish_edit(
         }
     }
 
+    let warnings = warning_entries(response.warning);
     let mut payload = success_payload(
         photo_id,
         &recipe,
         options,
-        response.warning.as_deref(),
+        &warnings,
         &response.guardrail_reasons,
     );
     payload["input_tokens"] = json!(response.input_tokens);
@@ -1083,29 +1120,45 @@ mod tests {
     fn a_wrong_scale_white_balance_is_kept_out_of_the_few_shot_block() {
         // A Kelvin number offered to the model as a reference for a JPEG
         // anchors it on a value the target's schema cannot even express.
-        let mut settings = json!({"Temp": 5600, "Exposure2012": 0.3});
-        assert!(drop_incompatible_temperature(
+        let mut settings = json!({
+            "WhiteBalance": "Custom",
+            "Temperature": 5600,
+            "Tint": 12,
+            "Exposure2012": 0.3,
+        });
+        assert!(drop_incompatible_white_balance(
             &mut settings,
             Some(true),
             Some(false)
         ));
-        assert!(settings.get("Temp").is_none());
+        for key in ["WhiteBalance", "Temperature", "Tint"] {
+            assert!(settings.get(key).is_none(), "{key} survived");
+        }
         assert_eq!(
             settings["Exposure2012"],
             json!(0.3),
             "everything else means the same on both kinds of file"
         );
+
+        let mut non_raw = json!({"IncrementalTemperature": 12, "IncrementalTint": -4});
+        assert!(drop_incompatible_white_balance(
+            &mut non_raw,
+            Some(false),
+            Some(true)
+        ));
+        assert_eq!(non_raw, json!({}));
     }
 
     #[test]
     fn a_matching_example_keeps_its_white_balance() {
-        let mut settings = json!({"Temp": 5600});
-        assert!(!drop_incompatible_temperature(
+        let mut settings = json!({"WhiteBalance": "Custom", "Temperature": 5600, "Tint": 3});
+        assert!(!drop_incompatible_white_balance(
             &mut settings,
             Some(true),
             Some(true)
         ));
-        assert_eq!(settings["Temp"], json!(5600));
+        assert_eq!(settings["Temperature"], json!(5600));
+        assert_eq!(settings["Tint"], json!(3));
     }
 
     #[test]
@@ -1113,13 +1166,44 @@ mod tests {
         // Examples saved before the flag existed would otherwise lose their
         // white balance on every edit after upgrading.
         for (example, target) in [(None, Some(true)), (Some(true), None), (None, None)] {
-            let mut settings = json!({"Temp": 5600});
-            assert!(!drop_incompatible_temperature(
+            let mut settings = json!({"Temperature": 5600});
+            assert!(!drop_incompatible_white_balance(
                 &mut settings,
                 example,
                 target
             ));
-            assert_eq!(settings["Temp"], json!(5600), "{example:?} vs {target:?}");
+            assert_eq!(
+                settings["Temperature"],
+                json!(5600),
+                "{example:?} vs {target:?}"
+            );
         }
+    }
+
+    #[test]
+    fn warning_entries_keeps_a_provider_note_and_a_training_note_apart() {
+        assert_eq!(
+            warning_entries(Some(
+                "Gemini fell back to high.\nStyle training skipped.".into()
+            )),
+            vec!["Gemini fell back to high.", "Style training skipped."]
+        );
+        assert_eq!(warning_entries(Some("only one".into())), vec!["only one"]);
+        assert!(warning_entries(Some(" \n".into())).is_empty());
+        assert!(warning_entries(None).is_empty());
+    }
+
+    #[test]
+    fn success_payload_lists_warnings_and_keeps_the_legacy_string() {
+        let options = parse_edit_options_form(&HashMap::new());
+        let recipe = json!({"summary": "s", "global": {}, "masks": [], "warnings": []});
+        let warnings = vec!["first".to_string(), "second".to_string()];
+        let payload = success_payload("p1", &recipe, &options, &warnings, &[]);
+        assert_eq!(payload["warnings"], json!(["first", "second"]));
+        assert_eq!(payload["warning"], json!("first\nsecond"));
+
+        let payload = success_payload("p1", &recipe, &options, &[], &[]);
+        assert_eq!(payload["warnings"], json!([]));
+        assert!(payload.get("warning").is_none());
     }
 }

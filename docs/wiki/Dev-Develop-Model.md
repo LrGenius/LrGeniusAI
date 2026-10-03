@@ -16,6 +16,19 @@ What it deliberately does *not* hold: learning and blending (majority votes,
 circular means, thresholds) stay in `lrg-analysis::style_engine`, and the LLM
 edit-recipe schema stays in `lrg-providers::edit_recipe`.
 
+Who uses it today:
+
+- `lrg-analysis::training` reads a training example's `develop_settings` blob
+  with `lua::read`, learns the registry keys that have a `global.*` recipe
+  alias, and keeps the white balance as a typed `WbSetting`
+  (`CANONICAL_VERSION` marks the stored form).
+- `lrg-analysis::style_engine` rounds blends to each key's registry precision
+  and decides the white balance per key family.
+- `lrg-api` (`routes/training.rs`, `routes/style_edit.rs`) stores and re-reads
+  that canonical form.
+- `lrg-providers` only in a test: every range the LLM recipe schema declares
+  for a registry key must equal the key's UI range.
+
 ## Layout
 
 | Module | What |
@@ -75,9 +88,14 @@ where it occurs and the first process version that has it. The invariants
 keys, raw-only keys absent for non-raw files, unobserved keys only UNKNOWN or
 COMPUTED, ...) are unit tests in `registry/tests.rs` and catch many
 half-filled rows. `Temp` is not a key: the plugin and the style engine's alias
-table still write it by mistake (see *Bugs found in the current code* in
-[Dev-AI-Edit-XMP-Findings](Dev-AI-Edit-XMP-Findings)); it resolves to
-unknown, and a test pins that.
+table used to read and write it by mistake (see *Bugs found in the current
+code* in [Dev-AI-Edit-XMP-Findings](Dev-AI-Edit-XMP-Findings)); it resolves to
+unknown, and a test pins that. `tests/no_temp_key.rs` keeps it from coming back
+as a key literal in `server-rs/crates/*/src` and the plugin's
+`DevelopEditManager.lua` (comments excluded; the develop experiments, which
+write `Temp` on purpose, are allowlisted). Because it guards a plugin file, CI
+also runs it in the unfiltered `format-lint-rust` job of `lint-format.yml`, not
+only in `server-rs-tests.yml`, which skips plugin-only PRs.
 
 Defaults: the non-raw column is `Unverified` for every key with a fixed raw
 default, because every training example so far is a raw file; a non-raw
@@ -171,7 +189,8 @@ Typed views exist only where logic hangs:
   for non-raw) comes from the keys the settings carry, via the registry's file
   scope, not from the file extension: a DNG converted from a JPEG uses the
   non-raw family. The white-balance *policy* (what transfers) belongs to the
-  style engine.
+  style engine (`blend_white_balance`, see `POST /v1/edit/style` in
+  [Dev-Backend-API](Dev-Backend-API)).
 - **Process version.** `process_version()`; PV2012 (`"6.7"`) is the lowest
   version whose settings are learned.
 

@@ -1454,9 +1454,10 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if type(options.exposure_bias) == "number" then
 		table.insert(mimeChunks, { name = "exposure_bias", value = tostring(options.exposure_bias) })
 	end
-	-- Whether the original is raw. Stored with the photo so later work — style
-	-- training above all, where raw and rendered Temp values are on different
-	-- scales — does not have to re-derive it. Absent when unknown.
+	-- Whether the original is raw. Stored with the photo so later work does not
+	-- have to re-derive it: the edit guardrails, and the style engine, which
+	-- keeps raw (Kelvin `Temperature`) and rendered (`IncrementalTemperature`
+	-- offset) white balances apart. Absent when unknown.
 	if type(options.is_raw) == "boolean" then
 		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end
@@ -2183,9 +2184,10 @@ local function buildPhotoOptions(photo, photoId, options)
 	end
 	-- Stored with the photo so later work does not have to ask the catalog
 	-- again: the same file can be edited from a different session, and the
-	-- style training in particular needs to keep raw and rendered originals
-	-- apart because their Temp values are on different scales. Absent when the
-	-- format could not be read; see Util.isRawPhoto.
+	-- style training in particular keeps raw and rendered originals apart
+	-- because their white balances live in different keys on different
+	-- scales (Kelvin `Temperature` vs an `IncrementalTemperature` offset).
+	-- Absent when the format could not be read; see Util.isRawPhoto.
 	local isRaw = Util.isRawPhoto(photo)
 	if isRaw ~= nil then
 		photoOptions.is_raw = isRaw
@@ -4988,9 +4990,12 @@ function SearchIndexAPI.addTrainingExample(photoId, filepath, developSettings, o
 		table.insert(mimeChunks, { name = "shutter_speed", value = tostring(options.shutter_speed) })
 	end
 	-- Recorded with the example so the style engine can keep raw and rendered
-	-- sources apart when it blends a white balance: Lightroom's Temp is Kelvin
-	-- for one and a relative -100..100 for the other, and averaging the two
-	-- produces a number that means nothing on either scale.
+	-- sources apart when it blends a white balance: a raw file stores Kelvin in
+	-- `Temperature`, a rendered one a -100..100 offset in
+	-- `IncrementalTemperature`, and averaging the two produces a number that
+	-- means nothing on either scale. The backend reads the family from those
+	-- keys in the develop settings first; this is the fallback when neither
+	-- is present.
 	if type(options.is_raw) == "boolean" then
 		table.insert(mimeChunks, { name = "is_raw", value = tostring(options.is_raw) })
 	end

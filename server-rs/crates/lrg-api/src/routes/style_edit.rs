@@ -17,12 +17,17 @@ use lrg_analysis::style_engine::{
     generate_style_edit, ExposureFeatures, StyleEngineResult, StyleQuery, TrainingCandidate,
     CANDIDATE_POOL, CONFIDENCE_LOW,
 };
-use lrg_analysis::training::{compute_exposure_metrics, time_of_day_bucket_for_hour};
+use lrg_analysis::training::{
+    canonicalize_develop_settings_str, compute_exposure_metrics, time_of_day_bucket_for_hour,
+    white_balance_from_json, CANONICAL_VERSION,
+};
+use lrg_develop::model::WbSetting;
+use lrg_develop::{FileKindHint, WarningKind};
 use lrg_store::{StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
 use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
-    success_payload,
+    success_payload, warning_entries,
 };
 use crate::routes::route_util::{
     compute_scene_tags, local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
@@ -33,23 +38,73 @@ pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new().route("/edit/style", axum::routing::post(style_edit))
 }
 
-fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> TrainingCandidate {
-    let canonical_settings = meta
-        .get("canonical_settings")
-        .and_then(Value::as_str)
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .and_then(|v| match v {
-            Value::Object(m) => Some(m),
-            _ => None,
-        })
-        .unwrap_or_default();
+/// The learnable form of a stored training example: its frozen
+/// `canonical_settings`/`white_balance` when they were written by the current
+/// [`CANONICAL_VERSION`], otherwise derived again from its `develop_settings`
+/// blob (rows saved before white balance was read from the right keys carry
+/// none, and a stale tint). Only the retrieved candidates (at most
+/// `CANDIDATE_POOL`) are re-derived, and nothing is written back.
+///
+/// The flag is true when a re-derived row teaches nothing: its blob is
+/// missing or unreadable, or older than PV2012. Training told the user
+/// about those only if the row was saved by a build that already knew; an
+/// older row reaches the user through the style route's warning instead.
+fn canonical_of(
+    id: &str,
+    meta: &Map<String, Value>,
+) -> (Map<String, Value>, Option<WbSetting>, bool) {
+    let stored_json = |key: &str| {
+        meta.get(key)
+            .and_then(Value::as_str)
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+    };
+    if meta.get("canonical_version").and_then(Value::as_u64) == Some(CANONICAL_VERSION) {
+        let settings = match stored_json("canonical_settings") {
+            Some(Value::Object(m)) => m,
+            _ => Map::new(),
+        };
+        let wb = stored_json("white_balance").and_then(|v| white_balance_from_json(&v));
+        return (settings, wb, false);
+    }
+    let Some(blob) = meta.get("develop_settings").and_then(Value::as_str) else {
+        log::warn!("Training example {id}: no stored develop settings; it contributes nothing to the style blend");
+        return (Map::new(), None, true);
+    };
+    log::debug!("Training example {id}: stored canonical form is outdated, re-deriving it");
+    let hint = FileKindHint::from(meta.get("is_raw").and_then(Value::as_bool));
+    match canonicalize_develop_settings_str(blob, hint) {
+        Ok(c) => {
+            let too_old = c
+                .warnings
+                .iter()
+                .any(|w| matches!(w.kind, WarningKind::UnsupportedProcessVersion { .. }));
+            if too_old {
+                log::warn!("Training example {id}: process version older than PV2012; it contributes nothing to the style blend");
+            }
+            (c.settings, c.white_balance, too_old)
+        }
+        Err(e) => {
+            log::warn!("Training example {id}: stored develop settings are unreadable ({e}); it contributes nothing to the style blend");
+            (Map::new(), None, true)
+        }
+    }
+}
+
+/// A stored training row as a style-engine candidate, and whether it had
+/// to be re-derived into nothing (see [`canonical_of`]).
+fn record_to_candidate(
+    id: &str,
+    meta: &Map<String, Value>,
+    distance: f64,
+) -> (TrainingCandidate, bool) {
+    let (canonical_settings, white_balance, unlearned) = canonical_of(id, meta);
     let scene_tags: Vec<String> = meta
         .get("scene_tags")
         .and_then(Value::as_str)
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
 
-    TrainingCandidate {
+    let candidate = TrainingCandidate {
         photo_id: id.to_string(),
         filename: meta
             .get("filename")
@@ -76,10 +131,9 @@ fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> Tr
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string(),
-        // Absent on examples saved before the flag was recorded, which the
-        // style engine treats as compatible with anything.
-        is_raw: meta.get("is_raw").and_then(Value::as_bool),
-    }
+        white_balance,
+    };
+    (candidate, unlearned)
 }
 
 /// Port of the candidate-retrieval half of `generate_style_edit`: CLIP
@@ -87,12 +141,15 @@ fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> Tr
 /// plain cosine distance to the Chroma-style squared-L2 value
 /// `clip_distance_to_similarity` expects), otherwise the most-recent-
 /// examples fallback with Python's neutral 0.5 distance.
+///
+/// Also returns how many of the candidates teach nothing (see
+/// [`canonical_of`]), so the caller can tell the user.
 async fn fetch_style_candidates(
     store: &lrg_store::Store,
     query_embedding: Option<&[f32]>,
     n_results: usize,
-) -> Vec<TrainingCandidate> {
-    if let Some(q) = query_embedding {
+) -> (Vec<TrainingCandidate>, usize) {
+    let pairs: Vec<(TrainingCandidate, bool)> = if let Some(q) = query_embedding {
         let records = store.scan_all(TRAINING_TABLE).await.unwrap_or_default();
         let mut scored: Vec<(f64, StoreRecord)> = records
             .into_iter()
@@ -118,8 +175,15 @@ async fn fetch_style_candidates(
         rows.into_iter()
             .map(|(id, meta)| record_to_candidate(&id, &meta, 0.5))
             .collect()
-    }
+    };
+    let unlearned = pairs.iter().filter(|(_, u)| *u).count();
+    (pairs.into_iter().map(|(c, _)| c).collect(), unlearned)
 }
+
+/// The note for candidates that were retrieved but teach nothing. The count
+/// goes to the log, not into the text: the plugin merges warnings by exact
+/// text into one "(N photos)" line, and a per-photo number would defeat it.
+const UNLEARNED_EXAMPLES_WARNING: &str = "Some of your matching training examples use a Lightroom process version older than PV2012, or their develop settings could not be read, so they were not used. Update them to the current process version in the Develop module and save them as training examples again.";
 
 async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     log::info!("Style edit request received");
@@ -202,7 +266,7 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     );
 
     let training_count = store.count(TRAINING_TABLE).await.unwrap_or(0);
-    let candidates = fetch_style_candidates(
+    let (candidates, unlearned) = fetch_style_candidates(
         &store,
         clip_embedding.as_deref(),
         CANDIDATE_POOL.min(training_count.max(1)),
@@ -210,8 +274,8 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     .await;
 
     // Parsed before the style engine runs, not after: the engine needs to know
-    // whether this photo is raw in order to decide which examples may
-    // contribute a temperature.
+    // whether this photo is raw to decide which examples' white balance
+    // applies (Kelvin for raw, an offset for everything else).
     let options = parse_edit_options_form(&fields);
 
     let query = StyleQuery {
@@ -222,12 +286,19 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         },
         scene_tags: query_scene_tags,
         time_of_day_bucket: query_tod,
-        // Decides which examples may contribute a temperature: Lightroom's is
-        // Kelvin for raw and relative for everything else, and the two cannot
-        // be averaged together.
+        // Decides the white-balance family: Kelvin (`Temperature`) for raw,
+        // an offset (`IncrementalTemperature`) for everything else. Unknown
+        // means no white balance is transferred.
         is_raw: options.is_raw,
     };
-    let result: StyleEngineResult = generate_style_edit(training_count, &candidates, &query);
+    let mut result: StyleEngineResult = generate_style_edit(training_count, &candidates, &query);
+    if unlearned > 0 && result.engine != "none" {
+        log::warn!(
+            "Photo {photo_id}: {unlearned} of {} matching training examples taught nothing (older than PV2012 or unreadable)",
+            candidates.len()
+        );
+        result.warnings.push(UNLEARNED_EXAMPLES_WARNING.to_string());
+    }
 
     if (result.engine == "none" || result.confidence < CONFIDENCE_LOW) && use_llm_fallback {
         log::info!(
@@ -255,17 +326,22 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         {
             log::error!("Failed to persist style_edit LLM-fallback recipe for {photo_id}: {e}");
         }
+        let llm_warnings = warning_entries(llm_response.warning);
         let mut payload = success_payload(
             &photo_id,
             &recipe,
             &options,
-            llm_response.warning.as_deref(),
+            &llm_warnings,
             &llm_response.guardrail_reasons,
         );
         payload["engine"] = json!("llm");
         payload["confidence"] = json!(round3(result.confidence));
         payload["matched_examples"] = json!(result.matched_count);
-        payload["style_engine_note"] = result.warning.map(|w| json!(w)).unwrap_or(Value::Null);
+        payload["style_engine_note"] = if result.warnings.is_empty() {
+            Value::Null
+        } else {
+            json!(result.warnings.join("\n"))
+        };
         payload["input_tokens"] = json!(llm_response.input_tokens);
         payload["output_tokens"] = json!(llm_response.output_tokens);
         return Json(payload).into_response();
@@ -279,7 +355,11 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
                 "engine": "none",
                 "confidence": 0.0,
                 "matched_examples": 0,
-                "error": result.warning.unwrap_or_else(|| "Style engine could not produce a result.".to_string()),
+                "error": if result.warnings.is_empty() {
+                    "Style engine could not produce a result.".to_string()
+                } else {
+                    result.warnings.join("\n")
+                },
             })),
         )
             .into_response();
@@ -309,18 +389,10 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     // average was formed across frames this one may have nothing in common
     // with. A habitual +25 contrast learnt on softly lit material is exactly
     // what `derive_budget` exists to keep off a harshly lit frame.
+    // White balance needs no sanitising here: `blend_white_balance` only
+    // sends numbers of the target's own key family, as `white_balance` at
+    // recipe level, never as `global.temperature`.
     let mut styled_recipe = result.recipe;
-    // The interpolated settings come straight from the user's own edits, so
-    // `temperature` carries whatever scale *those* photos used. Applying a
-    // Kelvin average to a JPEG is the maximum-warmth accident this guards
-    // against; the LLM paths get the same treatment inside
-    // `normalize_edit_recipe`, which the style engine never goes through.
-    if lrg_providers::edit_recipe::sanitize_recipe_temperature(&mut styled_recipe, options.is_raw) {
-        log::info!(
-            "Photo {photo_id}: dropped the style engine's temperature — \
-             it is on the raw Kelvin scale and this photo is not raw."
-        );
-    }
     let guardrail_reasons = crate::edit_budget::measure_and_apply(
         &mut styled_recipe,
         &image_bytes,
@@ -348,7 +420,7 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         &photo_id,
         &styled_recipe,
         &options,
-        result.warning.as_deref(),
+        &result.warnings,
         &guardrail_reasons,
     );
     payload["engine"] = json!("style");
@@ -360,4 +432,89 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
 
 fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lrg_develop::model::{WbFamily, WbMode};
+
+    fn meta(pairs: Value) -> Map<String, Value> {
+        match pairs {
+            Value::Object(m) => m,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn an_outdated_row_is_re_derived_from_its_blob() {
+        // Version 1 (no `canonical_version`): the frozen form has the old
+        // tint number and no white balance, the blob has the truth.
+        let blob = json!({
+            "ProcessVersion": "15.4",
+            "WhiteBalance": "Custom",
+            "Temperature": 5600,
+            "Tint": 5,
+            "Contrast2012": 20,
+        });
+        let row = meta(json!({
+            "canonical_settings": json!({"contrast": 99.0, "tint": 5.0}).to_string(),
+            "develop_settings": blob.to_string(),
+            "is_raw": true,
+        }));
+        let (c, unlearned) = record_to_candidate("old", &row, 0.5);
+        assert!(!unlearned);
+        assert_eq!(c.canonical_settings["contrast"], json!(20));
+        assert!(c.canonical_settings.get("tint").is_none());
+        let wb = c.white_balance.unwrap();
+        assert_eq!((wb.mode, wb.family), (WbMode::Custom, WbFamily::Raw));
+        assert_eq!(wb.temperature.map(|t| t.get()), Some(5600.0));
+    }
+
+    #[test]
+    fn a_current_row_uses_its_stored_form() {
+        let row = meta(json!({
+            "canonical_version": CANONICAL_VERSION,
+            "canonical_settings": json!({"contrast": 7}).to_string(),
+            "white_balance": json!({"mode": "As Shot", "family": "raw"}).to_string(),
+            // Would say otherwise; not read for a current row.
+            "develop_settings": json!({"Contrast2012": 50}).to_string(),
+        }));
+        let (c, unlearned) = record_to_candidate("new", &row, 0.5);
+        assert!(!unlearned);
+        assert_eq!(c.canonical_settings["contrast"], json!(7));
+        assert_eq!(c.white_balance.unwrap().mode, WbMode::AsShot);
+    }
+
+    #[test]
+    fn an_unreadable_or_missing_blob_contributes_nothing_and_says_so() {
+        let (c, unlearned) =
+            record_to_candidate("x", &meta(json!({"develop_settings": "not json"})), 0.5);
+        assert!(c.canonical_settings.is_empty() && c.white_balance.is_none());
+        assert!(unlearned);
+        let (c, unlearned) = record_to_candidate("y", &meta(json!({})), 0.5);
+        assert!(c.canonical_settings.is_empty() && c.white_balance.is_none());
+        assert!(unlearned);
+    }
+
+    #[test]
+    fn an_outdated_row_older_than_pv2012_is_flagged_as_unlearned() {
+        // No `canonical_version`, so the blob is read again, and PV 5.7
+        // (PV2010) teaches nothing.
+        let blob = json!({
+            "ProcessVersion": "5.7",
+            "WhiteBalance": "Custom",
+            "Temperature": 5600,
+            "Tint": 5,
+            "Contrast": 20,
+        });
+        let row = meta(json!({
+            "canonical_settings": json!({"contrast": 20.0}).to_string(),
+            "develop_settings": blob.to_string(),
+            "is_raw": true,
+        }));
+        let (c, unlearned) = record_to_candidate("pv2010", &row, 0.5);
+        assert!(unlearned);
+        assert!(c.canonical_settings.is_empty() && c.white_balance.is_none());
+    }
 }

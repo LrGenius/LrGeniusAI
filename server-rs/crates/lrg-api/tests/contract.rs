@@ -1000,6 +1000,275 @@ async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
 }
 
 // ---------------------------------------------------------------------------
+// Training examples and the style engine's white balance (PR 1d)
+// ---------------------------------------------------------------------------
+
+/// A scrubbed real `develop_settings` blob, as the plugin's JSON.lua sends it.
+fn develop_fixture(name: &str) -> serde_json::Value {
+    let path = format!(
+        "{}/../../testdata/develop/lua/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// `name` with its white balance replaced (a raw blob: `Temperature`/`Tint`).
+fn with_white_balance(name: &str, mode: &str, kelvin: i64, tint: i64) -> String {
+    let mut blob = develop_fixture(name);
+    blob["WhiteBalance"] = serde_json::json!(mode);
+    blob["Temperature"] = serde_json::json!(kelvin);
+    blob["Tint"] = serde_json::json!(tint);
+    blob.to_string()
+}
+
+/// A small decodable image, so the style route measures a real frame.
+fn tiny_png() -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(48, 32, image::Rgb([120, 110, 100]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .unwrap();
+    out.into_inner()
+}
+
+async fn add_training_example(
+    app: axum::Router,
+    db_path: &str,
+    photo_id: &str,
+    develop_settings: &str,
+    is_raw: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let mut fields = vec![
+        ("photo_id", photo_id),
+        ("db_path", db_path),
+        ("develop_settings", develop_settings),
+    ];
+    if let Some(r) = is_raw {
+        fields.push(("is_raw", r));
+    }
+    let (content_type, body) = multipart_body(&fields, None);
+    let response = app
+        .oneshot(
+            Request::post("/v1/edit/training")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+async fn bound_app() -> (axum::Router, Arc<AppState>, tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    (app, state, dir, db_path)
+}
+
+#[tokio::test]
+async fn training_accepts_real_blobs_and_the_empty_table() {
+    let (app, state, _dir, db_path) = bound_app().await;
+
+    // JSON.lua encodes an empty Lua table as `[]`.
+    let (status, json) = add_training_example(app.clone(), &db_path, "empty", "[]", None).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["warnings"], serde_json::json!([]));
+    assert!(json.get("warning").is_none());
+
+    // The plugin says "not raw", the blob's `Temperature` says raw: the keys win.
+    let blob = develop_fixture("lensblur_object.json").to_string();
+    let (status, json) =
+        add_training_example(app.clone(), &db_path, "raw1", &blob, Some("false")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["total_count"], 2);
+
+    let store = state.store().unwrap();
+    let rows = store
+        .get(lrg_store::TRAINING_TABLE, &["raw1".to_string()])
+        .await
+        .unwrap();
+    let meta = &rows[0].metadata;
+    assert_eq!(meta["canonical_version"], 2);
+    assert_eq!(meta["is_raw"], true);
+    let wb: serde_json::Value =
+        serde_json::from_str(meta["white_balance"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        wb,
+        serde_json::json!({"mode": "Custom", "family": "raw", "temperature": 5432, "tint": 23})
+    );
+    let canonical: serde_json::Value =
+        serde_json::from_str(meta["canonical_settings"].as_str().unwrap()).unwrap();
+    assert_eq!(canonical["exposure"], 0.15);
+    assert!(canonical.get("temperature").is_none());
+
+    // Not a table at all is still the caller's mistake.
+    let (status, json) = add_training_example(app.clone(), &db_path, "bad", "[1,2]", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(json["error"].is_string());
+}
+
+#[tokio::test]
+async fn training_learns_no_white_balance_from_both_key_families() {
+    let (app, state, _dir, db_path) = bound_app().await;
+    // Raw `Temperature` next to non-raw `IncrementalTint`, with the plugin's
+    // "raw" hint: the hint is no independent evidence, so nothing is learned
+    // and the response says exactly that.
+    let blob = develop_fixture("hand_wb_both_families.json").to_string();
+    let (status, json) =
+        add_training_example(app.clone(), &db_path, "both", &blob, Some("true")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let warnings = json["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .contains("white balance of this example was not learned")),
+        "{json}"
+    );
+
+    let store = state.store().unwrap();
+    let rows = store
+        .get(lrg_store::TRAINING_TABLE, &["both".to_string()])
+        .await
+        .unwrap();
+    let meta = &rows[0].metadata;
+    assert!(
+        meta.get("white_balance")
+            .is_none_or(|v| v.is_null() || v.as_str() == Some("null")),
+        "{meta:?}"
+    );
+}
+
+/// Five examples in real blob form: `custom` of them Custom white balance
+/// (agreeing within 100 K), the rest As Shot. Saved without images, so the
+/// style request (for a photo with no indexed image row either) takes the
+/// recent-examples fallback, where every example scores the same.
+async fn seed_white_balance_examples(app: &axum::Router, db_path: &str, custom: usize) {
+    let customs = [
+        ("lensblur_object.json", 5400, 10),
+        ("mask_linear_gradient.json", 5500, 14),
+        ("mask_ai_subject.json", 5450, 6),
+    ];
+    let as_shot = ["mask_ai_sky.json", "no_look.json", "mask_range_color.json"];
+    let mut blobs: Vec<String> = customs[..custom]
+        .iter()
+        .map(|&(f, k, t)| with_white_balance(f, "Custom", k, t))
+        .collect();
+    blobs.extend(
+        as_shot
+            .iter()
+            .take(5 - custom)
+            .map(|f| with_white_balance(f, "As Shot", 5000, 0)),
+    );
+    for (i, blob) in blobs.iter().enumerate() {
+        let (status, json) =
+            add_training_example(app.clone(), db_path, &format!("ex{i}"), blob, Some("true")).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+    }
+}
+
+#[tokio::test]
+async fn style_edit_transfers_a_custom_majority_white_balance_to_a_raw_photo() {
+    let (app, _state, _dir, db_path) = bound_app().await;
+    seed_white_balance_examples(&app, &db_path, 3).await;
+
+    let png = tiny_png();
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[
+            ("photo_id", "target"),
+            ("db_path", db_path.as_str()),
+            ("is_raw", "true"),
+        ],
+        Some(("target.png", png.as_slice())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["engine"], "style");
+    // At recipe level, next to `global`: never `global.temperature`.
+    assert_eq!(
+        json["edit"]["white_balance"],
+        serde_json::json!({"mode": "Custom", "family": "raw", "temperature": 5450, "tint": 10})
+    );
+    let global = json["edit"]["global"].as_object().unwrap();
+    for key in ["temperature", "tint", "white_balance"] {
+        assert!(!global.contains_key(key), "global.{key} in {json}");
+    }
+    assert!(json["warnings"].is_array());
+}
+
+#[tokio::test]
+async fn style_edit_leaves_white_balance_alone_for_an_as_shot_majority() {
+    let (app, _state, _dir, db_path) = bound_app().await;
+    seed_white_balance_examples(&app, &db_path, 2).await;
+
+    let png = tiny_png();
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[
+            ("photo_id", "target"),
+            ("db_path", db_path.as_str()),
+            ("is_raw", "true"),
+        ],
+        Some(("target.png", png.as_slice())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["edit"].get("white_balance").is_none(), "{json}");
+    assert!(json["edit"]["global"].get("temperature").is_none());
+    // As Shot is the examples' own habit: nothing to report about it.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("White balance")),
+        "{json}"
+    );
+}
+
+#[tokio::test]
+async fn style_edit_reports_why_a_jpeg_gets_no_white_balance() {
+    let (app, _state, _dir, db_path) = bound_app().await;
+    seed_white_balance_examples(&app, &db_path, 3).await;
+
+    let png = tiny_png();
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[
+            ("photo_id", "target"),
+            ("db_path", db_path.as_str()),
+            ("is_raw", "false"),
+        ],
+        Some(("target.png", png.as_slice())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["edit"].get("white_balance").is_none(), "{json}");
+    assert!(json["edit"]["global"].get("temperature").is_none());
+
+    let expected = "your training examples are raw files and this photo is not";
+    let warnings: Vec<&str> = json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        warnings.iter().filter(|w| w.contains(expected)).count(),
+        1,
+        "{json}"
+    );
+    // Installed plugins read only the legacy joined string.
+    let legacy = json["warning"].as_str().unwrap();
+    assert!(legacy.contains(expected), "{legacy}");
+    assert_eq!(legacy, warnings.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
 // Analysis depth (`reasoning_effort`): a value that is not a level is refused
 // by name rather than quietly run — and billed — at another level.
 // ---------------------------------------------------------------------------
