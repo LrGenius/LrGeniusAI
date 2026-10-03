@@ -12,6 +12,7 @@ members = [
     "crates/lrg-mlx",
     "crates/lrg-api",
     "crates/lrg-server",
+    "crates/lrg-develop",
 ]
 
 [workspace.package]
