@@ -152,7 +152,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics.
 - `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
-- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs` — and Vertex AI via `gcp_auth` — Vertex AI was removed from the plugin UI in August 2026, so the client is dormant but still compiled and functional), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
+- `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-develop` — the native Lightroom develop model, a leaf crate (no image, network or async dependencies, so `cargo test -p lrg-develop` takes seconds): the key registry (`registry/table.rs`, one `KeySpec` per `crs:` key with type, stored range, UI scale, number format, defaults, policy class, frame scope, file kind), the typed model (`DevelopSettings`, corrections and masks, `Look`, white balance, the policy filter), the readers for `getDevelopSettings()` blobs (`lua::read`) and XMP sidecars, presets and profiles (`xmp::read`, on `roxmltree`), which share their typing and classification rules so both land in the same model, the deterministic develop-preset writer (`xmp::write`; its lossless test mode exists only behind the crate's `test-roundtrip` feature, which only its own dev-dependency enables) and the correction builders (`build`: semantic, gradient and luminance-range masks with SHA-256-derived sync ids). The LLM edit-recipe schema stays in `lrg-providers`, learning/blending in `lrg-analysis::style_engine`. See [Dev-Develop-Model.md](docs/wiki/Dev-Develop-Model.md).
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
 - `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
@@ -163,7 +163,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 ### Data & Identity
 
 - Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
-- Vector search: LanceDB tables `IMAGE_TABLE`/`VERTEX_TABLE`/`FACE_TABLE` in `lrg_store` (SigLIP2, Vertex AI, and face embeddings respectively). `VERTEX_TABLE` is legacy: the plugin stopped writing and querying it when Vertex AI was removed (August 2026), existing rows are kept.
+- Vector search: LanceDB tables `IMAGE_TABLE`/`FACE_TABLE`/`SPECIES_TABLE` in `lrg_store` (SigLIP2, face, and BioCLIP 2 embeddings respectively).
 - Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
 
 ---
@@ -220,8 +220,7 @@ Concretely, when writing or reviewing this path:
   `Option<String>`/variable means the second problem erases the first.
 
 Silence is only acceptable for something the user did not ask for and cannot
-act on (e.g. Vertex AI embeddings when no project is configured) — and that
-decision belongs in a comment at the point where it is made.
+act on — and that decision belongs in a comment at the point where it is made.
 
 ### Docs
 
