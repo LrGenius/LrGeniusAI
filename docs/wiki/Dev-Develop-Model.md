@@ -1,10 +1,11 @@
 # Dev: Native Develop Model (`lrg-develop`)
 
-> **Status: steps 1a and 1c (1d/1f use it).** The crate has the key
-> registry, the typed model, the policy filter and the readers for the Lua
-> table form and for XMP (sidecars, develop presets, profiles). The XMP
-> writer and mask builders (1b) and the Lua writer (1g) follow; this page
-> grows with them. Background and the research behind it:
+> **Status: steps 1a, 1c and 1b (1d/1f use it; 1b's manual import test in
+> the installed Lightroom Classic is pending, see [Hand test](#hand-test)).** The crate has the key
+> registry, the typed model, the policy filter, the readers for the Lua table
+> form and for XMP (sidecars, develop presets, profiles), the develop-preset
+> writer and the mask builders. The Lua writer (1g) follows; this page grows
+> with it. Background and the research behind it:
 > [AI Edit via XMP — Findings and Experiments](Dev-AI-Edit-XMP-Findings).
 
 `server-rs/crates/lrg-develop` holds the facts and shapes of Lightroom
@@ -42,6 +43,9 @@ Who uses it today:
 | `model` | `DevelopSettings`, `Value`/`Finite`/`Opaque`, corrections and masks (`correction.rs`), white balance (`whitebalance.rs`), the policy filter (`policy.rs`) |
 | `lua::read` | `getDevelopSettings()` as JSON.lua encodes it → model + warnings |
 | `xmp::read` | an XMP sidecar, preset or profile → `XmpDocument` (kind, header, model, warnings, skipped subtrees) |
+| `xmp::write` | model → a develop preset (`WriteMode::Preset`), or a lossless test rewrite (`WriteMode::TestRoundTrip`, feature `test-roundtrip`) |
+| `xmp::format` | how the writer spells numbers, booleans, curves, ids, versions; XML escaping |
+| `build` | `CorrectionBuilder`: new corrections from UI values and semantic, gradient and luminance-range components, with deterministic sync ids |
 | `reader` (crate-private) | what both readers share: typing through the registry, closed sets and ids, curve points, file kind, process-version check, assembly |
 | `parse` | `ParseError` (input unusable) and `ParseWarning` (one value, reading went on) |
 
@@ -212,17 +216,22 @@ Typed views exist only where logic hangs:
 
   Any other combination stays as it is (`Combine::Unrecognised`, with a
   warning).
-- **Look.** The profile is taken whole from its source (name, UUID, amount,
+- **Look.** The profile is read whole from its source (name, UUID, amount,
   camera restriction, and the rest including `Parameters` verbatim). It is
   never rebuilt from a profile name. An empty `CameraModelRestriction` means
-  "no restriction" and stays in the rest as it was.
+  "no restriction" and stays in the rest as it was. What of it leaves the
+  model depends on the target (see [Policy filter and frame
+  scope](#policy-filter-and-frame-scope)).
 - **White balance.** `WbSetting { mode, family, temperature, tint }`. The family
   (`Temperature`/`Tint` for raw, `IncrementalTemperature`/`IncrementalTint`
   for non-raw) comes from the keys the settings carry, via the registry's file
   scope, not from the file extension: a DNG converted from a JPEG uses the
   non-raw family. The white-balance *policy* (what transfers) belongs to the
   style engine (`blend_white_balance`, see `POST /v1/edit/style` in
-  [Dev-Backend-API](Dev-Backend-API)).
+  [Dev-Backend-API](Dev-Backend-API)); what a preset may carry is the policy
+  filter's: the numbers only next to a `Custom` (or absent) `WhiteBalance`,
+  never an `As Shot` or `Auto` result turned into a custom white balance
+  (see [Policy filter and frame scope](#policy-filter-and-frame-scope)).
 - **Process version.** `process_version()`; PV2012 (`"6.7"`) is the lowest
   version whose settings are learned.
 
@@ -239,20 +248,49 @@ its default as `Skipped { path, reason }`, so a caller can say what did not
 transfer. A correction goes or stays whole, decided by its most restrictive
 component (semantic masks, except a person part at a reference point, and
 luminance ranges are LEARN; gradients, Select Object and colour ranges PHOTO;
-brushes NEVER). A camera-restricted `Look` only goes to that camera.
+brushes NEVER). A camera-restricted `Look` only goes to that camera. In a
+preset, white-balance numbers (`Temperature`, `Tint`, `Incremental*`) go only
+with a custom white balance: next to any other `WhiteBalance` mode (`As
+Shot`, `Auto`, `Daylight`, ...) they are what that mode resolved to for the
+source photo, so they are dropped and reported as
+`SkipReason::WhiteBalanceMode(mode)` instead of pinning one photo's white
+balance on every photo (`WhiteBalance` itself is PHOTO; writing `As Shot`
+into a preset is a later policy change).
 `ApplyPhoto` also drops keys newer than the photo's process version and keys
-of the other file kind.
+of the other file kind. A single-kind preset (`Preset { mixed_file_kinds:
+false }`) is for photos of the settings' own file kind: it drops the other
+kind's keys, and when the settings carry both white-balance families with no
+known file kind (the readers warn `ConflictingFileKind`) it drops both
+families, since either would make the preset contradict itself. A mask
+component whose `MaskBlendMode`/`MaskValue`/`MaskInverted` form no known
+combination (`Combine::Unrecognised`) is UNKNOWN, so its correction reaches
+neither a preset nor a photo: what it does to the mask is not known. Both
+rules came out of the writer's round-trip tests (a preset written from such
+settings read back with a warning).
 
 The verdict is per key at every depth: a kept structure is rebuilt from the
 fields that pass at their own registry rows, and each removed field is
 reported with its full path (`LensBlur.SampledArea`,
 `MaskGroupBasedCorrections[0].CorrectionMasks[1].CorrectionRangeMask.LuminanceDepthSampleInfo`).
 So a shared `LensBlur` keeps `Active` and the look sliders but not its sampled
-area or focal range, and a luminance range loses its eyedropper sample. The
-`Look` is the one exception, taken whole: its `Parameters` are the profile
-definition. A range mask's `SampleType` is UNKNOWN (default 0) and is dropped
-without a report; the XMP writer must emit Adobe's fixed range-mask form
-(`Version` 3, `SampleType` 0) itself.
+area or focal range, and a luminance range loses its eyedropper sample. A
+registry value the reader kept whole (`Value::Opaque`: an `rdf:Bag`,
+qualifiers, a Lua table of an unexpected shape) reaches neither a preset nor
+a photo and is always reported (`SkipReason::Opaque`). The `Look` goes to one
+photo whole (its profile record as the source has it) and to a preset by
+reference: `Name`, `UUID`, `Amount` (and the META `Stubbed` when present),
+without its COMPUTED fields — `Parameters` (the profile definition, whose
+`Table_*` blobs a preset never carries), `Group`, `Cluster`, `Copyright`,
+`SortName`, `Supports*`, `isAdobeAdaptive`. Those are copies Lightroom takes
+from its profile library, none of Adobe's 118 bundled presets with a `Look`
+has `Parameters`, and they are dropped without a report (nothing the user
+could act on). Adobe's presets themselves use either the name alone or a
+stub (`Stubbed="true"` with the profile's `Group`, `Cluster`, `Copyright`
+and `Supports*`); the writer's form, `Name`/`UUID`/`Amount`, is untested in
+Lightroom until the E11 experiment. A range mask's `SampleType` is UNKNOWN
+(default 0) and is dropped without a report; the XMP writer emits Adobe's
+fixed range-mask form (`Version` 3, `SampleType` 0) itself (see [Preset
+mode](#preset-mode)).
 
 Global META values (`ProcessVersion`, `Version`, `CompatibleVersion`,
 `ToneCurveName2012`, `HasCrop`, the `Enable*` panel switches, ...) never leave
@@ -427,6 +465,378 @@ and no registry key arrived in a form the model keeps whole
 files carrying `crs:ProcessVersion` as of September 2026, so it differs from
 the photo count in the research.
 
+## Writing XMP presets
+
+`xmp::write(&settings, &WriteMode) -> Result<Written, WriteError>` writes a
+develop preset Lightroom Classic imports (Develop → Presets → Import). It is
+hand-written and deterministic: the same settings give the same bytes in every
+build (registry order for keys, the reader's order for opaque content, never a
+`serde_json` map). `Written { xmp, skipped }` returns the document and every
+value that did not make it, so a caller can say what was left out.
+
+```rust
+let header = PresetHeader::lrgenius(uuid, "LrGenius · Warm evening");
+let mut spec = PresetSpec::new(header); // mixed_file_kinds: true, no process version
+spec.process_version = Some(ProcessVersion::V6);
+let Written { xmp, skipped } = xmp::write(&settings, &WriteMode::Preset(spec))?;
+```
+
+### Preset mode
+
+`WriteMode::Preset(PresetSpec { header, mixed_file_kinds, process_version })`
+is the only production mode:
+
+1. The settings go through `filtered(Target::Preset { mixed_file_kinds })`
+   first; only keys whose policy reaches a shared preset are written, and the
+   filter's `Skipped` reports become `Written::skipped`. A mixed preset (the
+   default) carries no raw-only or non-raw-only key (`Temperature`, `Tint`,
+   `Incremental*`), no crop, geometry mask or lens identity; a single-kind
+   one keeps only its own kind's keys, and white-balance numbers only next to
+   a `Custom` (or absent) `WhiteBalance`; the `Look` goes by reference,
+   without its profile definition (see [Policy filter and frame
+   scope](#policy-filter-and-frame-scope)).
+2. The writer sets what describes the file rather than the settings:
+   - the header: `PresetType="Normal"` (always; `Look` profiles cannot be
+     written), `UUID` (required, upper-cased), `Name` (required), `ShortName`,
+     `SortName`, `Group` (`LrGeniusAI` from `PresetHeader::lrgenius`) and
+     `Description` as `rdf:Alt` with an `x-default` item (empty ones as
+     `<rdf:li xml:lang="x-default"/>`), `Cluster`, `CameraModelRestriction`,
+     `Copyright`, `ContactInfo` (empty by default), the four `Supports*` flags
+     of the header (default `True`), and the values Adobe's newer (Camera
+     Raw >= 14.4) presets carry: `SupportsHighDynamicRange`,
+     `SupportsNormalDynamicRange`, `SupportsSceneReferred`,
+     `SupportsOutputReferred` `True`, `RequiresRGBTables` `False` (163 of the
+     446 bundled develop presets have these keys — exactly the ones with
+     `SupportsAmount2`, every adaptive preset included; the older 283 have
+     none). `RequiresRGBTables` `False` is right because a preset never
+     carries an RGB table. `Name` must not be blank
+     (`WriteError::MissingHeaderField`). Further META header keys in
+     `PresetHeader::rest` (`ShowInPresets`, ...) are written; anything else
+     there is skipped and reported;
+   - `Version="18.5"` (`TARGET_ENGINE`: the oldest engine targeted,
+     Lightroom Classic 15.5.1's Camera Raw 18.5.1; the installed 15.6 is
+     newer), `CompatibleVersion` from the feature table below,
+     `ProcessVersion` only when `PresetSpec::process_version` is set (the
+     settings' own process version describes the example and never reaches a
+     preset), `HasSettings="True"`;
+   - `WhiteBalance="Custom"` whenever white-balance numbers are written
+     (only a custom or absent source mode lets them through), and
+     `ToneCurveName2012` (`Linear` or `Custom`) next to a point curve (a
+     typed one; a curve kept whole never reaches a preset).
+3. It completes the fixed form of Adobe's adaptive presets for what the
+   policy filter removes as per-photo or a builder may leave out (present
+   values are kept): a correction's `What="Correction"`, `CorrectionAmount`
+   1, `CorrectionActive`; a component's `MaskActive`; an AI mask's
+   `MaskVersion` 1, `ReferencePoint="0.500000 0.500000"`, `ErrorReason` 0; a
+   luminance range's `CorrectionRangeMask` `Version` 3 and `SampleType` 0.
+   Builders therefore need not set these. What this form puts back without a
+   loss is taken out of `Written::skipped` again, so a caller that shows
+   `skipped` to the user (as step 2 will) does not warn about it: an AI
+   mask's `ReferencePoint` and `ErrorReason` (Lightroom recomputes both per
+   photo; Adobe's presets carry the centre and 0 whatever photo they were
+   made on), a luminance range's `SampleType` 0, and `WhiteBalance="Custom"`
+   next to its numbers. A people part's (`MaskSubType` 3) `ReferencePoint`
+   away from the centre stays reported, because the point may pick the
+   person; a non-zero `SampleType` too.
+4. A last guard refuses the never-write list (`NEVER_WRITE`) whatever the
+   policy says: every `*Digest*` key, `CorrectionID`, `MaskID`,
+   `CorrectionReferenceX/Y`, `FullMaskSize`, `WholeImageArea`, `Origin`,
+   `ModelVersion`, `MaskBrushTable*`, `Dabs`, `RetouchAreas`, `RemoveAreas`,
+   `RetouchInfo`, `RedEyeInfo`, `FilterList`, `AILook`, `DepthMapInfo`,
+   `orientation`, `AutoWhiteVersion`, `RawFileName`, `AlreadyApplied`, the
+   global `Enable*` switches, and every Lua-only or never-observed key. Pattern
+   families (`Table_*`, `pm_*`, ...) are opaque and never reach a preset. A
+   unit test pins that the policy filter already removes each of them, so the
+   guard only catches a future filter bug. A registry value kept whole
+   (`Opaque::Xmp`) is likewise skipped and reported by the writer itself,
+   should the filter ever let one through.
+
+Content read from a Lua table (`Opaque::Json`) has no XMP form: the filter
+removes it and reports it (a Lua example's `Look.Parameters` is COMPUTED and
+goes silently, as from XMP); converting it is step 1g's business.
+
+`CompatibleVersion` (`crs:CompatibleVersion`, packed `major << 24 | minor <<
+16`) is the highest row a preset's content needs, capped at the engine, and
+absent when no row applies (as in most of Adobe's own presets without masks).
+The rows are the lowest values Adobe's bundled presets use for the same
+feature (`COMPATIBLE_VERSIONS`):
+
+| Feature | Version | Evidence |
+|---|---|---|
+| any mask group, subject, sky | 14.0 | adaptive Subject/Sky presets |
+| people parts | 15.0 | adaptive Portrait presets |
+| background | 15.0 | not in the bundle; Select Background shipped with the people masks — unverified: the hand test only shows that the installed (newer) Lightroom imports it, and an import into 15.x cannot check a minimum |
+| landscape classes | 15.3 | adaptive Landscape presets |
+| point curves inside a correction | 15.3 | adaptive presets with `MainCurve`/`BlueCurve` |
+| `LensBlur` | 16.0 | Blur Background presets |
+| global `CurveRefineSaturation` | 17.0 | presets with that curve |
+| `LocalPointColors` | 17.4 | adaptive presets with point colour in a mask |
+
+The writer computes the version from the *filtered* settings, so two rows
+never apply to a preset it writes: `LocalPointColors` (UNKNOWN) and a person
+part at a point (PHOTO, the other half of the people-parts row) never pass
+the filter. They stay for `compatible_version` on unfiltered settings.
+
+### Document shape and spelling
+
+One `rdf:Description` in the `crs:` namespace under `x:xmpmeta` with
+`x:xmptk="LrGeniusAI <backend version>"` (never an Adobe toolkit string), in
+Adobe's layout: header attributes, version stamps, global values,
+`HasSettings`, then the `rdf:Alt` names, then `rdf:Seq`s and structures as
+elements. Simple values are attributes; a structure of simple values only is
+written as attributes on its property element or `rdf:li` (mask components),
+one with a complex field as a nested `rdf:Description` (corrections, a range
+mask's component). `rdf:parseType="Resource"` and `rdf:Bag` are never
+written. Numbers and the rest follow `xmp::format`:
+
+| Rule | Example |
+|---|---|
+| `NumFmt::Int`: no decimal point | `Temperature` 3569 → `3569` |
+| `NumFmt::Fixed(n)`: exactly n decimals | `Exposure2012` 0.5 → `+0.50`, `SharpenRadius` 1 → `+1.0` |
+| `NumFmt::Trim6`: up to 6 decimals, trailing zeros trimmed | `LocalExposure2012` 0.0625 → `0.0625`, `CorrectionAmount` 1 → `1` |
+| `NumFmt::CompoundFixed6`: `%.6f` each, one space apart | `ReferencePoint` → `0.500000 0.500000`, `LumRange` |
+| `+` only on `plus_sign` keys at the global level, only above 0 | `Tint` 6 → `+6`, 0 → `0`, -6 → `-6`; never in a structure |
+| never `-0` | -0.001 at 2 decimals → `0.00` |
+| booleans by level | `True`/`False` global and header, `true`/`false` in structures |
+| curves | global points `x, y`, local points `x,y` |
+| ids | 32 upper-case hex digits (`UUID`, `CorrectionSyncID`, `MaskSyncID`) |
+| escaping | `&` `<` `>` `"` `'` as entities; tab, line feed, carriage return as character references in attributes (a parser would turn them into spaces), a carriage return also in element text; UTF-8 unchanged; a character XML 1.0 cannot hold is a `WriteError`, never a broken file |
+
+A value whose variant does not fit its key (text for `Exposure2012`) is a
+`WriteError::WrongValue`, not a guess.
+
+### Test round trip
+
+`WriteMode::TestRoundTrip(Option<PresetHeader>)` writes everything the model
+and the header hold — opaque, COMPUTED, NEVER and UNKNOWN content, `rdf:Bag`s,
+language alternatives, qualifiers and foreign namespaces inside structures —
+so XMP → model → XMP → model compares equal. Numbers keep their registry
+spelling unless it would change the value; then the shortest exact text is
+written (Lightroom never writes such a number). It exists only behind the
+crate feature `test-roundtrip`, which only `lrg-develop`'s own
+dev-dependency on itself switches on (`[dev-dependencies] lrg-develop = {
+path = ".", features = ["test-roundtrip"] }`): `cargo tree -p lrg-server -e
+features -i lrg-develop` shows only `default`. Any build that compiles
+`lrg-develop`'s tests (`cargo test --workspace`, `cargo clippy --workspace
+--all-targets`, so CI and pre-commit) unifies the feature into the
+`lrg-develop` every crate links, so CI cannot catch another crate naming
+`TestRoundTrip`; only the release build would fail. Never name it outside
+`lrg-develop`; `WriteMode` is `#[non_exhaustive]`, so a match elsewhere
+always needs a wildcard arm. **Never write a sidecar with
+it**: the model drops every namespace but `crs:` (`dc:`, `xmp:`, `exif:`,
+`tiff:`, `aux:`, `photoshop:`, `xmpMM:`) and `crss:` snapshots, so a rewritten
+sidecar would lose the photo's metadata. Writing into an existing sidecar
+needs a merge into that document (later step).
+
+Round trip 1 of the plan (XMP → model → XMP → model) runs with this mode in
+`tests/xmp_roundtrip.rs` over every committed fixture and writer golden, and
+in the local sweeps over Adobe's and the maintainer's files (see
+[Tests](#tests)). Last local run (September 2026): all 1,045 bundled presets
+and profiles, the 23 presets and profiles of Camera Raw's user folder and all
+10,814 corpus sidecars write without an error, read back into an equal model
+(header, kind and opaque content included, no key differing), and write again
+byte-identically. The same sources written as presets (production mode, mixed
+and single-kind: the 446 bundled develop presets, the 4 Camera Raw presets,
+all 10,814 sidecars, and the 1,294 training-dump rows) write without an error
+and read back as presets with no warning, no key outside the preset policy,
+nothing kept whole, and exactly the policy-filtered settings (2.3 million
+values compared over the corpus, none missing, changed or extra).
+
+The byte rules against the source (plan §7.4) are part of the same sweeps:
+every `crs:` value text of the source (attributes, text-only elements,
+`rdf:li` items, outside `crss:` snapshots) is compared with the lossless
+output as a multiset per file, and anything but a known variance fails.
+Known variances, all keys Adobe spells unusually and rarely: over the
+10,814 corpus sidecars the legacy PV2010 `Clarity` (1 value, written with a
+`+` the row does not have) and `CropAngle`/`CropBottom`/`CropTop` in two
+sidecars that spell them untrimmed at `%.6f` (all never in a preset); in
+Adobe's bundle `Look.Amount` (`1.000000` where sidecars and the writer write
+`1`, 35 values), legacy `Clarity` and legacy `Exposure` (two decimals, the
+row is `Trim6`), `PerspectiveX`/`PerspectiveY` in `Classic/General/Zeroed.xmp`
+(`0` against `Fixed(2)`), one `LocalTemperature="0.10"` in an Adobe Sky preset; in
+Camera Raw's folder one `LocalShadows2012` with two decimals. The
+registry rows keep Lightroom's sidecar spelling. Follow-up for the registry
+(round-trip spelling only, both COMPUTED): legacy `Clarity` has no
+`plus_sign`, and legacy `Exposure` is `Trim6` where Adobe writes two
+decimals.
+
+## Building corrections
+
+`lrg_develop::build` makes new local corrections: a `CorrectionBuilder` takes
+adjustments in UI units and mask components in evaluation order and returns a
+`Correction` the preset writer (or, later, the Lua writer) takes as it is.
+
+```rust
+let ns = SyncNamespace::lrgenius();
+let sky = CorrectionBuilder::new("Sky", &ns)      // CorrectionName "LrGenius · Sky"
+    .amount_ui(100.0)?                            // CorrectionAmount 1 (the default)
+    .local_ui("LocalHighlights2012", -40.0)?      // stored -0.4
+    .local_ui("LocalDehaze", 15.0)?               // stored 0.15
+    .add(Semantic::Sky)
+    .subtract(Semantic::Subject)
+    .intersect(LuminanceRange::highs(0.5, 0.2)?)
+    .build()?;                                    // Result<Correction, BuildError>
+```
+
+- **Adjustments.** `local_ui(key, ui)` converts through the registry's UI
+  scale (`LocalExposure2012` EV / 4, the other signed sliders / 100,
+  `LocalToningHue` and `LocalCurveRefineSaturation` as they are);
+  `local_curve(key, &[(x, y)])` sets `MainCurve`/`RedCurve`/`GreenCurve`/
+  `BlueCurve` (2+ points, x strictly increasing). Out of range is
+  `BuildError::Ui(OutOfRange)`, never clamped. Only learnable adjustments with
+  a verified UI scale are writable: `LocalHue` and `LocalGrain` (unverified
+  scales), `LocalPointColors`/`LocalColorVariance` (UNKNOWN), the legacy
+  `LocalExposure` family (COMPUTED) and every bookkeeping key are
+  `BuildError::NotWritable`.
+- **Components.** `add`, `add_inverted`, `subtract`, `intersect` encode as the
+  combination table in [The model](#the-model). `build` refuses a correction
+  without components (`Empty`), one whose first component is not added
+  (`FirstNotAdd`), one without any adjustment (`NoAdjustments`) and an empty
+  role (`EmptyRole`). `MaskValue` is 0 exactly when `MaskBlendMode` is 1. A
+  luminance range's `CorrectionRangeMask.Invert` is set to the component's
+  `MaskInverted` (not the caller's), as Lightroom writes every range mask —
+  an intersected range therefore has `Invert="true"`; a range whose `Invert`
+  disagreed could be read as its opposite.
+- **Names.** The correction is `"LrGenius · <role>"`; each component gets a
+  neutral English `MaskName` close to Adobe's (`Subject`, `Sky`,
+  `Background`, `Iris and Pupil`, `Vegetation`, `Linear Gradient`, `Radial
+  Gradient`, `Luminance Range`, ...; Adobe's own Subject and Sky presets say
+  `Subject 1`/`Sky 1`). Names are display only; nothing reads them back.
+- **Sync ids.** `CorrectionSyncID` and every `MaskSyncID` are the first 16
+  bytes of SHA-256 over a domain tag and the length-prefixed namespace, role
+  and slot (the correction, or component *i*), as 32 upper-case hex digits
+  (`SyncNamespace::id`). The same role gets the same ids on every run, so a
+  later step can replace a correction rather than stack a second one (whether
+  Lightroom replaces or duplicates is experiment E4/E5). Two corrections of one
+  preset therefore need different roles: assemble a preset's corrections with
+  `build::corrections([builder, ...])`, which builds each and refuses a
+  repeated role (`BuildError::DuplicateRole`). The preset writer does not
+  check it, because Lightroom's own sidecars repeat `MaskSyncID`s across the
+  corrections of one file (133 of 3,465 sidecars with corrections, 12 even
+  within one correction). Known-answer tests pin three ids, so a change to
+  the domain tag, the length prefixes or the slot texts — which would stop a
+  later release from replacing what an earlier one wrote — fails.
+- **What is left to the writer.** The builder sets the typed parts only
+  (name, id, amount, active, adjustments, tool, combination). The preset
+  writer adds `What`, an AI mask's `MaskVersion`/`ReferencePoint`/
+  `ErrorReason` and a range mask's `Version` 3/`SampleType` 0 (see [Preset
+  mode](#preset-mode)). A radial gradient's `Version` 2 is set by the builder,
+  because the reader keeps that field in the component's `extra`.
+
+| Component | Built from | Encoding | Policy |
+|---|---|---|---|
+| `Semantic::Subject` / `Sky` | — | `Mask/Image`, subtype 1 / 2 | LEARN |
+| `Semantic::Background` | — | subtype 0, category 22 | LEARN |
+| `Semantic::people_part(PeoplePart)` | `FaceSkin` 2, `IrisAndPupil` 3, `BodySkin` 4, `Hair` 5, `Lips` 6, `FacialHair` 7, `EyeSclera` 8, `Eyebrows` 9, `Clothes` 11, `Teeth` 12 | subtype 3 (preset form; "all people" unconfirmed) | LEARN |
+| `Semantic::landscape(LandscapeClass)` | `Architecture` 50001 … `Snow` 50008 | subtype 0 | LEARN |
+| `Semantic::person_part_at(part, SensorPoint)` | a part and the person's point | subtype 0 + a real `ReferencePoint` | PHOTO, unverified until E2/E8 |
+| `LinearGradient::new(zero, full)` | two different `SensorPoint`s (by the key names no effect at `zero`, full at `full`; the direction is unverified until E6) | `Mask/Gradient` | PHOTO |
+| `RadialGradient::new(top, left, bottom, right, feather)` | `top < bottom`, `left < right`, feather 0..=100 | `Mask/CircularGradient`, `Angle` 0, `Midpoint` 50, `Roundness` 0, `Version` 2, `Flipped = !MaskInverted` | PHOTO |
+| `LuminanceRange::new([fl, l, h, fh])`, `lows(upto, feather)`, `highs(from, feather)` | `0 ≤ fl ≤ l ≤ h ≤ fh ≤ 1` | `Mask/RangeMask`, `CorrectionRangeMask.Type` 2, `Invert = MaskInverted`; no eyedropper sample (`LuminanceDepthSampleInfo`, which every range in Lightroom's sidecars has) — unverified in a preset until the hand test | LEARN |
+
+A category outside these tables is `BuildError::InvalidCategory` (whole-person
+20036 included); `MaskTool::Opaque` (brush, Select Object, colour or depth
+range) and a luminance range carrying further `CorrectionRangeMask` fields
+(the eyedropper sample) are `NotBuildable`. A PHOTO component makes its whole
+correction PHOTO, so the preset writer leaves it out and reports it in
+`Written::skipped`.
+
+**Coordinates.** A `SensorPoint { x, y }` (and a radial gradient's `Top`,
+`Left`, `Bottom`, `Right`) is normalised per axis in the **uncropped image in
+sensor orientation**: `x` 0 is the left edge and 1 the right, `y` 0 the top
+and 1 the bottom, as the raw file's sensor lies, before crop and before the
+photo's rotation. Values may leave 0..1 (a gradient may start outside the
+frame). Builders take `SensorPoint`s and normalised numbers only, never pixel
+tuples; converting export or display pixels (crop, rotation, orientation) is
+`FrameGeometry`, which comes with its first consumer in step 2. Until then the
+gradient builders are only usable with points that already are in this frame
+(tests, presets).
+
+**Radial gradients: `Angle` 0 only.** The reader types a radial gradient only
+when its `Angle` is 0; a rotated one stays `MaskTool::Opaque` (with every
+field, so it still round-trips) until experiment E6 settles the rotation
+convention, and the builder has no angle parameter. It also fixes `Midpoint`
+50 and `Roundness` 0 and sets `Flipped = !MaskInverted` itself: that is the
+relation every radial gradient in the maintainer's sidecar corpus holds
+(414 typed ones; the local sweep counts it on every run, next to
+`Invert = MaskInverted` for all 207 typed luminance ranges, their `Version`
+3 and their `SampleType`: 195 × 0, 12 × 1).
+
+**Parity with Adobe's adaptive presets** (`lightroom_adaptive_presets_rebuild_with_the_builders`
+in `tests/xmp_goldens_local.rs`, local only). Every correction of the bundle's
+adaptive presets is rebuilt from the parsed model with the builders (the
+amount and adjustments through `to_ui` → `amount_ui`/`local_ui`/`local_curve`,
+the same components and combinations, a luminance range without its
+`Version`/`SampleType`, which the writer adds) and written as a preset. Last
+run (September 2026, Lightroom Classic 15.6's bundle): 38 presets, 109
+corrections, all rebuilt; read back, they equal Adobe's corrections written by
+the same writer in every field (names and sync ids apart, which are ours by
+design). Against Adobe's files as they are, the only differing fields are ones
+the writer also holds back from Adobe's own corrections: the digests
+`LocalInputDigest`/`LocalInputDigestVersion` (36), the legacy PV2010
+`LocalBrightness`/`LocalClarity`/`LocalContrast`/`LocalExposure` (109, all at
+their default), `LocalCorrectedDepth` (65) and `LocalGrain` (65, unverified
+scale, all 0), `LocalHue` (109, unverified scale; one non-zero), and
+`LocalPointColors`/`LocalColorVariance` (9, UNKNOWN). The builder refuses
+`LocalGrain`, `LocalHue` and `LocalPointColors`/`LocalColorVariance` as
+`NotWritable`, which the test counts; `LocalCorrectedDepth`, the digests and
+the legacy keys are COMPUTED and never offered to it. The bundle holds only
+added AI masks (110 components, all `Add`), so this parity says nothing about
+subtract, intersect, luminance ranges, gradients or Select Background; the
+corpus sweep and the third hand-test preset cover those forms. `CompatibleVersion` is
+compared for the report: equal in 28 presets, ours lower in 10 — 6 carry
+point colour (Adobe 17.4, ours 15.3, since we drop it) and 4 are Subject, Sky
+or people presets Adobe stamped 15.3 whose only difference from Adobe's own
+14.0/15.0 presets of the same content is `LocalCorrectedDepth`/`LocalGrain`
+at 0, which we do not write.
+
+### Hand test
+
+The one check no test can do: does Lightroom Classic (15.5.1 or later)
+import a written preset and show its masks? It runs on the installed
+Lightroom Classic — 15.6 on the maintainer's machine, newer than the 15.5.1
+`TARGET_ENGINE` aims at — and the version actually used goes into the
+record below and the PR. An import into a newer Lightroom cannot confirm a
+`CompatibleVersion` minimum. `tests/builder_presets.rs` builds three
+presets with the real builders and writer in preset mode (`ProcessVersion`
+15.4):
+
+| File | `CompatibleVersion` | Global | Corrections (Masking panel) |
+|---|---|---|---|
+| `LrGenius Handtest Subject+Sky.xmp` | 14.0 | Contrast +15 | "LrGenius · Subject" (Subject: Exposure +0.30); "LrGenius · Sky" (Sky: Highlights −40, Dehaze +15) |
+| `LrGenius Handtest Landscape+People.xmp` | 15.3 | — | "LrGenius · Vegetation" (Vegetation: Saturation +20); "LrGenius · Eyes" (Iris and Pupil of all people: Saturation +30) |
+| `LrGenius Handtest Combinations+Background.xmp` | 15.0 | — | "LrGenius · Bright sky" (Sky, minus Subject, intersected with a luminance range 0.3/0.5/1/1: Highlights −30); "LrGenius · Background" (Background: Exposure −0.50, Saturation −30) |
+
+The third preset carries what no preset of Adobe's does: a subtract, an
+intersect (with the range's `Invert="true"` mirroring `MaskInverted`), a
+luminance range without the eyedropper sample every range in Lightroom's
+sidecars has, and Select Background.
+
+```bash
+LRG_HANDTEST_DIR=/some/dir cargo test -p lrg-develop --test builder_presets
+```
+
+writes all three there. In Lightroom Classic: Develop → Presets panel → `+` →
+Import Presets…, pick the files; they appear in the group "LrGeniusAI".
+Apply the first and third to a photo with a person, sky and some bright
+background, the second to one with vegetation and to one with **two or more
+people** (does the people part select everyone, or one person?). Expected:
+the global Contrast moves to +15; the Masks panel lists the named masks,
+each with the components the table names (Lightroom computes the masks on
+apply, which can take a few seconds; the people and landscape masks may ask
+for an update); the mask sliders show the values above; the "Bright sky"
+mask covers only the bright sky around the subject. What to note if it
+fails: an import error, masks listed but empty, a mask missing, a
+component shown inverted (a range selecting the shadows), or a people part
+on one person only. Until the run is recorded here, Select Background's
+15.0 row, the luminance range and the subtract/intersect encodings in a
+preset, and "all people" are unverified. The same presets with synthetic
+ids are the byte goldens in `testdata/develop/written/` (see [Fixtures and
+hygiene](#fixtures-and-hygiene)).
+
+Record (Lightroom version, date, per preset: imported / masks shown /
+values / notes): *pending*.
+
 ## Fixtures and hygiene
 
 Test data lives in `server-rs/testdata/develop/` (layout and scrubbing rules
@@ -444,6 +854,12 @@ in its README):
 - `xmp/*.xmp` are **self-authored**, one file per XMP form or develop shape
   (no Adobe file, no copy or excerpt of one, no real sidecar); the list is in
   the folder's README and in `FIXTURES` in `tests/xmp_fixtures.rs`.
+- `written/*.xmp` are the **writer's byte goldens**: the three hand-test presets
+  exactly as the preset writer emits them, with synthetic ids in place of the
+  derived sync ids (a SHA-256 id cannot be told from a catalog's by the
+  hygiene check) and the development toolkit string. Regenerate after an
+  intended format change with
+  `LRG_BLESS=1 cargo test -p lrg-develop --test builder_presets`.
 
 The hygiene rules keep private data out of the repository: no photo ids,
 paths, file or image names, dates, real 32-hex ids or GUIDs, profile
@@ -462,6 +878,13 @@ An XMP file must be well-formed with an `rdf:RDF`, its `rdf:Alt` items need a
 valid `xml:lang`, and its data model (`xmp_as_tree`, the same conversion on
 both sides) gets the rules of a hand-written JSON file, so a `Look.Parameters`
 beyond the stub, a real id or a date in an XMP fixture fails the same way.
+The table-key substrings (`Table_`, `LookTable`, `RGBTable`) are forbidden as
+text, with one exception on both sides: the preset-header key
+`RequiresRGBTables` as a whole word, which Adobe's newer presets (the 163 of
+446 bundled ones that carry `SupportsAmount2`, every adaptive preset
+included) and every preset the writer produces carry (the writer goldens and
+`xmp/preset_header.xmp` hold it). It is removed before the text rules run, so `RGBTable_<md5>` or
+`RequiresRGBTablesX` still fail; crafted self-test files pin both cases.
 
 Everything under `server-rs/testdata/develop/` is checked out with LF line
 endings on every platform (`.gitattributes`), and the snapshot test compares
@@ -498,15 +921,76 @@ content, not line endings, so a Windows checkout passes too.
   under [Reading XMP](#reading-xmp) (`PerFormat` and `Any` keys, nested
   Lua-only keys, the `PointColors` sentinel) are kept out of the fixtures
   instead.
+- **`xmp::format` and `xmp::write` unit tests**: every spelling rule above,
+  the document shape against Adobe's layout, the preset header defaults and
+  stamps, policy filtering and the never-write guard (with every
+  `NEVER_WRITE` key checked against its policy), the `CompatibleVersion`
+  table, errors instead of broken files, byte determinism (twice the same
+  bytes, insertion order irrelevant), the `Look` by reference without its
+  profile definition or tables, values kept whole never reaching a preset,
+  white-balance numbers only with a custom mode, the recomputed AI-mask
+  fields not reported, a blank name refused, and — with the `test-roundtrip`
+  feature — the lossless mode's own rules (numbers the format would round,
+  foreign namespaces and qualifiers, Lua content refused).
+- **`tests/xmp_roundtrip.rs`** (plan §7.3): round trip 1 over every fixture in
+  `testdata/develop/xmp/` and every golden in `testdata/develop/written/`
+  (model, header, kind and opaque content equal; writing the read-back model
+  gives the same bytes); the key enumeration — every LEARN and PHOTO key with
+  an XMP form, at every level (global, correction, mask component, `Look`,
+  `LensBlur`, range-mask, area-model and gesture fields), with its minimum,
+  maximum, midpoint, default, a negative value for a signed range, a value
+  with more digits than any format keeps, and every member of a closed set,
+  survives the lossless mode exactly (789 values), and every LEARN value a
+  preset can carry by itself (global values, a correction's adjustments and
+  amount, `LensBlur` fields, the `Look` amount) survives preset mode, mixed
+  and single-kind, after rounding to its `NumFmt` (`Value::quantized`; 1,073
+  checks; a LEARN† key may be held back by its gate — the raw-only and
+  non-raw-only white balance, the file-kind-default `Sharpness` and
+  `ColorNoiseReduction` in a mixed preset, `LensProfileSetup` outside its
+  values — and what is held back is pinned per key, gate and mode; a plain
+  LEARN key never is). Mask fields are typed and go through presets in the
+  builder tests. And a preset written from every Lua and XMP fixture, mixed
+  and single-kind, is byte-deterministic and reads back as a preset with no
+  warning, nothing kept whole, no key outside LEARN, LEARN† and META (apart
+  from the writer's own fixed values: `WhiteBalance="Custom"`, an AI mask's
+  `ReferencePoint`/`ErrorReason`, a range mask's `SampleType`), and exactly
+  the policy-filtered settings, each value rounded as written (the writer's
+  stamps and fixed form apart). Both checks live in `tests/support/preset.rs`
+  and are shared with the local sweeps; a test pins that they catch a lost,
+  changed or extra value, a PHOTO key and content kept whole.
+- **`build` unit tests**: every semantic variant with its encoding and name,
+  unknown categories, the combination table and `MaskValue 0 ⇔ MaskBlendMode
+  1`, first-component-added, empty correction, `Flipped = !MaskInverted`,
+  a range's `Invert = MaskInverted` under every combination, radial and
+  linear checks, luminance-range ordering, UI scaling and the not-writable
+  keys, local curves, sync-id determinism, uniqueness per namespace, role and
+  slot, and known answers, `corrections` refusing a repeated role; through
+  the writer: built semantic corrections read back unchanged from a preset
+  (an intersected range with `Invert="true"`), PHOTO corrections are skipped
+  and reported, output is byte-deterministic, and (feature `test-roundtrip`)
+  every built tool round-trips exactly.
+- **`tests/builder_presets.rs`**: the three hand-test presets (see [Hand
+  test](#hand-test)) build, write without skips and read back unchanged, and
+  (with synthetic ids) match their byte goldens in `testdata/develop/written/`;
+  `LRG_HANDTEST_DIR` writes them out for Lightroom.
 - **`tests/registry_snapshot.rs`**: the snapshot above.
 - **`tests/support/`**: helpers the local sweeps share (mask tool and
-  combination counts, the registry-range check, warning paths without
-  indices), all reducing a model to key names and counts.
+  combination counts, the mask forms the builders rely on — `Flipped`,
+  a range's `Invert`, `Version` and `SampleType` —, the registry-range check,
+  warning paths without indices), all reducing a model to key names and
+  counts; `support/flat.rs` flattens a model into `path → value` with the
+  typed parts expanded back into the XMP keys they stand for, so two models
+  are compared key by key; `support/preset.rs` holds the two checks every
+  preset-writing test applies (included by path from the tests that use
+  them).
 - **`tests/training_dump_local.rs`** — local only: parses every row of the
   maintainer's private training dump and requires zero parse errors, zero
   warnings of any kind and every number within its key's registry range,
   printing counts per warning kind, mask tool, combination and out-of-range
-  key (never values or photo ids; failing rows are named by position):
+  key (never values or photo ids; failing rows are named by position). Every
+  row is also written as a preset, mixed and single-kind — the production
+  path, since learned settings come from Lua — and must pass the same two
+  preset checks as the fixtures:
 
   ```bash
   LRG_DEVELOP_TRAINING_DUMP=/path/to/training_rows.json \
@@ -519,9 +1003,9 @@ content, not line endings, so a Windows checkout passes too.
   `LRG_REQUIRE_GOLDENS=training-dump` makes a missing dump a failure. Setting
   the variable makes a missing file a failure: a typo or an unmounted volume
   must not pass as a skipped run.
-- **`tests/xmp_goldens_local.rs`** — local only: the XMP reader over files
-  that can never be in the repository or CI, one test and one gate family
-  per source:
+- **`tests/xmp_goldens_local.rs`** — local only: the XMP reader and writer
+  over files that can never be in the repository or CI, one test and one
+  gate family per source:
 
   | Variable | Family | Parses | Must hold |
   |---|---|---|---|
@@ -529,8 +1013,22 @@ content, not line endings, so a Windows checkout passes too.
   | `LRG_ACR_PRESETS_DIR` | `acr-presets` | the presets and profiles among the `*.xmp` below it (Camera Raw's user folder: its presets and profiles) | as the bundle; keys kept whole only printed (a user preset may have a localized name) |
   | `LRG_XMP_CORPUS_DIR` | `xmp-corpus` | the sidecars below it with `crs:ProcessVersion`; `LRG_XMP_CORPUS_SAMPLE=N` takes a fixed-seed sample of N | 0 parse errors, no warning at all, 0 keys kept whole, every file a `Sidecar` |
 
-  Every sweep also fails on an unrecognised mask combination and on a number
-  outside its key's registry range. The corpus walk skips `* [conflicted].xmp`
+  Every sweep also fails on an unrecognised mask combination, on a mask
+  component against a relation the builders rely on (`Flipped` other than
+  `!MaskInverted`, a range's `Invert` other than `MaskInverted`, a range
+  `Version` other than 3), and on a number outside its key's registry range,
+  and writes every parsed document back: losslessly (round trip 1: no write
+  error, no key differing after reading back, the same model, header and
+  kind, idempotent bytes, and every `crs:` value spelled as the source spelled
+  it, apart from a per-sweep allow-list of known Adobe variances with their
+  reasons; mismatches are counted per key with indices removed) and as a
+  preset, mixed and single-kind (no write error, reads back as a preset with
+  no warning, no key outside the preset policy, nothing kept whole, and
+  exactly the policy-filtered settings; what the policy holds back is
+  printed per mode, key and reason, pattern families folded to
+  `Table_*`/`UprightTransform_*`). A fourth test, on `LRG_LRC_PRESETS_DIR`,
+  is the builder parity with Adobe's adaptive presets (see [Building
+  corrections](#building-corrections)). The corpus walk skips `* [conflicted].xmp`
   sync copies, darktable's `<name>.<ext>.xmp` sidecars (no `crs:` at all) and
   metadata-only sidecars, and prints how many of each. Output is counts per
   document kind, warning kind, process version, skipped subtree, mask tool
@@ -544,7 +1042,9 @@ content, not line endings, so a Windows checkout passes too.
       cargo test -p lrg-develop --test xmp_goldens_local -- --nocapture
   ```
 
-  The full corpus above (28,680 files) takes about 20 s in a debug build.
+  The full corpus above (28,680 files, 10,814 parsed) takes about 90 s in a
+  debug build with all write-backs and checks; `LRG_XMP_CORPUS_SAMPLE=3000`
+  about 25 s.
   Gating works as for the training dump: an unset variable skips, the
   families are local-only (`all` leaves them out, only naming one makes its
   absence a failure), and a set variable that is not a directory, or a

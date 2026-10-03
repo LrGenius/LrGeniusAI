@@ -13,6 +13,7 @@
    crs:SupportsNormalDynamicRange="True"
    crs:SupportsSceneReferred="True"
    crs:SupportsOutputReferred="False"
+   crs:RequiresRGBTables="False"
    crs:ShowInPresets="True"
    crs:ShowInQuickActions="False"
    crs:CameraModelRestriction=""

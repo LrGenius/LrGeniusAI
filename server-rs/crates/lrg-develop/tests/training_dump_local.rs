@@ -23,18 +23,30 @@
 //!
 //! Every row must parse without an error and without any warning (the rows
 //! are Lightroom's own output, so any warning means the registry is wrong),
-//! and every number must lie within its key's registry range. Output names
-//! keys, row numbers and counts only, never values or photo ids: the rows are
-//! private.
+//! and every number must lie within its key's registry range. Every row is
+//! also written as a develop preset, mixed and single-kind (the production
+//! path: learned settings come from Lua): no write error, a preset without
+//! a warning, no key outside the preset policy, and exactly the
+//! policy-filtered settings (`support/preset.rs`). Output names keys, row
+//! numbers and counts only, never values or photo ids: the rows are private.
 
 #[path = "../../lrg-ml/tests/common/mod.rs"]
 mod common;
+// Only `settings` and `Leaf` are used here (through `preset`).
+#[allow(dead_code)]
+#[path = "support/flat.rs"]
+mod flat;
+#[path = "support/preset.rs"]
+mod preset;
 mod support;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use lrg_develop::build::{IdSlot, SyncNamespace};
 use lrg_develop::lua::from_lua_str;
+use lrg_develop::model::Target;
+use lrg_develop::xmp::{parse, write, PresetHeader, PresetSpec, WriteMode, XmpKind};
 use lrg_develop::FileKindHint;
 use serde_json::Value as J;
 use support::{generic_path, MaskCounts, RangeCheck};
@@ -68,6 +80,7 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
     let mut masks = MaskCounts::default();
     let mut process_versions: BTreeMap<String, usize> = BTreeMap::new();
     let mut ranges = RangeCheck::default();
+    let mut presets = PresetCounts::default();
 
     // Rows are named by their position only: their ids are private photo ids.
     for (i, row) in rows.iter().enumerate() {
@@ -105,6 +118,7 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
             )
             .or_default() += 1;
         masks.add(&settings);
+        presets.row(&settings);
     }
 
     eprintln!(
@@ -119,10 +133,12 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
         masks.corrections, masks.tools
     );
     eprintln!("combinations: {:?}", masks.combines);
+    eprintln!("mask forms: {:?}", masks.forms);
     eprintln!("values outside their registry range: {:?}", ranges.outside);
     for (what, n) in &unexpected {
         eprintln!("  {n:>5}  {what}");
     }
+    presets.report();
 
     assert!(errors.is_empty(), "parse errors: {errors:#?}");
     // The dump is Lightroom's own output: any warning (an unknown key, a
@@ -135,8 +151,121 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
     );
     assert_eq!(masks.combines.get("unrecognised"), None);
     assert!(
+        masks.broken_forms().is_empty(),
+        "mask components against a relation the builders rely on: {:?}",
+        masks.broken_forms()
+    );
+    assert!(
         ranges.outside.is_empty(),
         "values outside the registry range (widen the range in registry/table.rs): {:#?}",
         ranges.outside
     );
+    presets.assert_clean();
+}
+
+/// Every row written as a preset, mixed and single-kind; counts only.
+#[derive(Default)]
+struct PresetCounts {
+    written: usize,
+    write_errors: BTreeMap<String, usize>,
+    parse_errors: usize,
+    not_a_preset: usize,
+    warnings: BTreeMap<String, usize>,
+    violations: BTreeMap<String, usize>,
+    differences: BTreeMap<String, usize>,
+    compared: usize,
+    skipped: BTreeMap<String, usize>,
+}
+
+impl PresetCounts {
+    fn row(&mut self, settings: &lrg_develop::model::DevelopSettings) {
+        let uuid = SyncNamespace::new("training_dump_local").id("row", IdSlot::Correction);
+        for mixed in [true, false] {
+            let mode = if mixed { "mixed" } else { "single-kind" };
+            let spec = PresetSpec {
+                mixed_file_kinds: mixed,
+                ..PresetSpec::new(PresetHeader::lrgenius(uuid.clone(), "Row"))
+            };
+            self.written += 1;
+            let written = match write(settings, &WriteMode::Preset(spec)) {
+                // The error's text can quote a value; only its variant is kept.
+                Err(e) => {
+                    let variant = format!("{e:?}");
+                    let variant = variant.split(['(', ' ', '{']).next().unwrap_or("?");
+                    *self.write_errors.entry(variant.to_owned()).or_default() += 1;
+                    continue;
+                }
+                Ok(w) => w,
+            };
+            for k in &written.skipped {
+                // Only the reason's variant: a `WhiteBalanceMode` or a camera
+                // restriction carries a value.
+                let reason = format!("{:?}", k.reason);
+                let reason = reason.split(['(', ' ', '{']).next().unwrap_or("?");
+                *self
+                    .skipped
+                    .entry(format!("{mode} {} {reason}", generic_path(&k.path)))
+                    .or_default() += 1;
+            }
+            let Ok(back) = parse(written.xmp.as_bytes()) else {
+                self.parse_errors += 1;
+                continue;
+            };
+            if back.kind != XmpKind::Preset {
+                self.not_a_preset += 1;
+            }
+            for w in &back.warnings {
+                *self
+                    .warnings
+                    .entry(format!("{} {}", w.kind.name(), w.key))
+                    .or_default() += 1;
+            }
+            for v in preset::violations(&back) {
+                *self.violations.entry(format!("{mode} {v}")).or_default() += 1;
+            }
+            let (filtered, _) = settings.filtered(&Target::Preset {
+                mixed_file_kinds: mixed,
+            });
+            self.compared += flat::settings(&filtered).len();
+            for d in preset::differences(&filtered, &back.develop) {
+                *self
+                    .differences
+                    .entry(format!("{mode} {}", generic_path(&d)))
+                    .or_default() += 1;
+            }
+        }
+    }
+
+    fn report(&self) {
+        eprintln!(
+            "as presets: {} written, write errors {:?}, parse errors {}, not a preset {}, \
+             warnings {:?}, keys a preset must not carry {:?}",
+            self.written,
+            self.write_errors,
+            self.parse_errors,
+            self.not_a_preset,
+            self.warnings,
+            self.violations
+        );
+        eprintln!(
+            "preset against the filtered settings: {} values compared, differing {:?}",
+            self.compared, self.differences
+        );
+        eprintln!("held back from the presets (mode, key, reason: count):");
+        for (what, n) in &self.skipped {
+            eprintln!("  {n:>5}  {what}");
+        }
+    }
+
+    fn assert_clean(&self) {
+        assert!(
+            self.write_errors.is_empty()
+                && self.parse_errors == 0
+                && self.not_a_preset == 0
+                && self.warnings.is_empty()
+                && self.violations.is_empty()
+                && self.differences.is_empty(),
+            "writing the rows as presets is not clean (see the report above)"
+        );
+    }
 }
