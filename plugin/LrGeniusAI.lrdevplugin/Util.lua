@@ -2377,8 +2377,7 @@ end
 -- The on-device model families an indexing run needs, given its `tasks` array.
 --
 -- Only the models the backend loads itself are listed. `metadata` runs on an
--- LLM and `vertexai` in the cloud, so neither has an entry — a run of those
--- alone needs nothing downloaded.
+-- LLM, so it has no entry — a metadata-only run needs nothing downloaded.
 --
 -- `cull` maps to the face model because the fast cull ingest still scores face
 -- quality (the backend's `compute_faces = has_task("faces") || cull_pass`);
