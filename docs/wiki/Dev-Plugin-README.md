@@ -86,6 +86,11 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   - `Alternates`
   - `Reject Candidates`
   - optional `Duplicates / Near Duplicates`
+- Judge the moment as well as sharpness: the Sports and Event presets ask
+  about action and emotion, keep usable frames ahead of flawed ones, and do not
+  count a kiss or a laugh with closed eyes as a blink
+- Nominate a clearly blurred single, or a burst blurred throughout, as reject
+  candidates instead of picking it by default
 - Detect exposure brackets, focus stacks and panoramas and route them to a
   `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
   off — every frame of such a set is part of one picture

@@ -57,21 +57,21 @@ local function showCullDialog(ctx)
 				f:popup_menu({
 					value = bind("cullingPreset"),
 					items = {
-						{ title = LOC("$$$/LrGeniusAI/CullTask/PresetDefault=Default (balanced)"), value = "default" },
+						{ title = "Default (sharpness, exposure, faces)", value = "default" },
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetPortrait=Portrait (face-focused)"),
+							title = "Portrait (faces and expression)",
 							value = "portrait",
 						},
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetStreet=Street (technical-focused)"),
+							title = "Street (candid moments)",
 							value = "street",
 						},
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetEvent=Event (people + moments)"),
+							title = "Event (people, emotion, moments)",
 							value = "event",
 						},
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetSports=Sports (motion-tolerant)"),
+							title = "Sports (action and emotion)",
 							value = "sports",
 						},
 					},
@@ -140,17 +140,20 @@ local function photosFromIds(photoIds, photoById, missing)
 end
 
 ---
--- Runs the fast cull-only ingest for photos the backend has no culling data
--- for. Sends `tasks = {"cull"}`, which computes exactly what culling reads —
--- pHash, image metrics and face quality — and skips the SigLIP2 embedding and
--- the LLM. That is the difference between seconds and tens of minutes on a
--- freshly imported shoot.
+-- Runs the fast cull ingest for photos the backend is missing culling data
+-- for. `tasks` comes from `Util.cullPrepTasks`: `{"cull"}` computes exactly
+-- what technical culling reads — pHash, image metrics and face quality — and
+-- skips the SigLIP2 embedding and the LLM. That is the difference between
+-- seconds and tens of minutes on a freshly imported shoot. A preset that
+-- judges the moment adds `embeddings`, because the moment is read from it;
+-- still no LLM.
 --
 -- Originals are sent by path when the backend is on this machine; otherwise
 -- each photo is exported to a temporary JPEG and uploaded, and the temp file
 -- is removed afterwards.
+-- @param tasks table Index tasks to send.
 -- @return number|nil processed count, string|nil error, string|nil warnings
-local function cullPrepare(missingIds, photoById, progressScope)
+local function cullPrepare(missingIds, photoById, progressScope, tasks)
 	local total = #missingIds
 	local processed = 0
 	local failures = 0
@@ -193,7 +196,7 @@ local function cullPrepare(missingIds, photoById, progressScope)
 	-- Sharing one table across the loop would give every photo the first one's
 	-- compensation.
 	local function indexOptionsFor(photo)
-		local indexOptions = { tasks = { "cull" }, regenerate_metadata = false }
+		local indexOptions = { tasks = tasks, regenerate_metadata = false }
 		local exposureBias = photo:getRawMetadata("exposureBias")
 		if type(exposureBias) == "number" then
 			indexOptions.exposure_bias = exposureBias
@@ -232,7 +235,7 @@ local function cullPrepare(missingIds, photoById, progressScope)
 		return false
 	end
 
-	-- `tasks = {"cull"}` never reaches an LLM, so the group is sized for the
+	-- The prep tasks never reach an LLM, so the group is sized for the
 	-- server's decode throughput rather than a context window. Grouping only
 	-- pays off when the backend reads the originals itself; the upload path
 	-- still sends one exported JPEG at a time.
@@ -280,7 +283,7 @@ local function cullPrepare(missingIds, photoById, progressScope)
 					)
 				end
 				local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, {
-					tasks = { "cull" },
+					tasks = tasks,
 					regenerate_metadata = false,
 				})
 				-- A transport-level failure has no per-photo detail, so every
@@ -422,33 +425,54 @@ LrTasks.startAsyncTask(function()
 		-- unanalyzed folder used to come back as an empty result with no
 		-- explanation. Ask first, and offer the fast cull-only ingest, which
 		-- computes just what culling reads (pHash, image metrics, face quality)
-		-- and skips the embedding and the LLM entirely.
-		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, { "cull" })
+		-- and skips the LLM entirely. Presets that judge the moment also need
+		-- the embedding, so a photo culled before with the default preset
+		-- counts as unprepared for them.
+		local prepTasks = Util.cullPrepTasks(options.cullingPreset)
+		local judgesMoment = Util.cullPresetJudgesMoment(options.cullingPreset)
+		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, prepTasks)
 		if missingErr then
 			log:warn("Cull pre-flight check failed, continuing anyway: " .. tostring(missingErr))
 		elseif missing and #missing > 0 then
-			local answer = LrDialogs.confirm(
-				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepTitle=Some photos need preparing"),
-				LOC(
+			local prepMessage, skipVerb
+			if judgesMoment then
+				prepMessage = string.format(
+					"%d of %d selected photos are not fully prepared for this preset. Prepare them now?\n\n"
+						.. "This computes the culling signals and the image analysis the moment "
+						.. "(emotion, expression, action) is judged from. It takes longer than the culling "
+						.. "signals alone, but no AI descriptions are generated. Without it, photos with no "
+						.. "culling data are skipped and the rest are ranked without their moment.",
+					#missing,
+					#photoIds
+				)
+				skipVerb = "Cull without preparing"
+			else
+				prepMessage = LOC(
 					"$$$/LrGeniusAI/CullTask/NeedsPrepMessage=^1 of ^2 selected photos have no culling data yet and would be skipped. Prepare them now? This only computes culling signals, so it is much faster than a full Analyze & Index.",
 					tostring(#missing),
 					tostring(#photoIds)
-				),
+				)
+				skipVerb = LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
+			end
+			local answer = LrDialogs.confirm(
+				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepTitle=Some photos need preparing"),
+				prepMessage,
 				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepPrepare=Prepare now"),
-				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
+				skipVerb
 			)
 			if answer == "ok" then
 				-- Same gate as Analyze & Index, for the same reason: the prep
-				-- pass scores face quality, and without the face model it
-				-- produces photos culling can only grade on technical metrics.
-				if not SearchIndexAPI.confirmModelsReadyForTasks({ "cull" }) then
+				-- pass scores face quality, and for a moment preset reads the
+				-- image model too. Without either it produces photos culling
+				-- can only grade on technical metrics.
+				if not SearchIndexAPI.confirmModelsReadyForTasks(prepTasks) then
 					return
 				end
 				local prepScope = LrProgressScope({
 					title = LOC("$$$/LrGeniusAI/CullTask/PrepProgressTitle=Preparing photos for culling..."),
 					functionContext = context,
 				})
-				local prepared, prepErr, prepWarnings = cullPrepare(missing, photoById, prepScope)
+				local prepared, prepErr, prepWarnings = cullPrepare(missing, photoById, prepScope, prepTasks)
 				prepScope:done()
 				if prepErr then
 					ErrorHandler.handleError(LOC("$$$/LrGeniusAI/CullTask/PrepErrorTitle=Preparation failed"), prepErr)
@@ -495,10 +519,14 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		if cullResult and cullResult.warning then
+		-- Every caveat the backend raised, not just the first: a skipped photo
+		-- and an unjudged moment have different fixes.
+		local cullWarnings = Util.responseWarnings(cullResult)
+		if #cullWarnings > 0 then
+			log:warn("Culling warnings: " .. table.concat(cullWarnings, " | "))
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/BackendWarning=Culling warning"),
-				cullResult.warning,
+				Util.formatWarningList(cullWarnings),
 				"warning"
 			)
 		end
@@ -574,6 +602,10 @@ LrTasks.startAsyncTask(function()
 		local picksCollection = nil
 
 		local cullDataByPhotoId = {}
+		-- Reject candidates that had their group's strongest moment. The
+		-- usable gate demoted them for a flaw no edit repairs, which is usually
+		-- right, but a blurred winning goal is still the user's call to delete.
+		local strongMomentRejects = 0
 		for _, group in ipairs(groups) do
 			local groupId = tostring(group["group_id"] or "")
 			local groupType = tostring(group["group_type"] or "")
@@ -587,6 +619,9 @@ LrTasks.startAsyncTask(function()
 						decision = "pick"
 					elseif photoResult["reject_candidate"] then
 						decision = "reject_candidate"
+						if Util.table_contains(photoResult["reason_codes"] or {}, "strong_moment_but_unusable") then
+							strongMomentRejects = strongMomentRejects + 1
+						end
 					end
 					cullDataByPhotoId[photoId] = {
 						decision = decision,
@@ -702,6 +737,15 @@ LrTasks.startAsyncTask(function()
 					"$$$/LrGeniusAI/CullTask/CompletionSets=^1 group(s) covering ^2 photo(s) were recognised as exposure brackets, focus stacks or panoramas. Every frame in those was kept — none was suggested for rejection.",
 					tostring(setGroups),
 					tostring(summary.intentional_set_photo_count or #setPhotos)
+				)
+		end
+
+		if strongMomentRejects > 0 then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. string.format(
+					"%d reject candidate(s) had the strongest moment of their group but a technical flaw such as blur. Look at them before deleting: the reason is under 'Culling explanation' in the Metadata panel.",
+					strongMomentRejects
 				)
 		end
 

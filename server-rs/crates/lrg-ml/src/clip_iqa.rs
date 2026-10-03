@@ -147,6 +147,97 @@ pub const CANDID_PROMPT_PAIRS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Prompt pairs for emotion in sport: is somebody in this frame *feeling*
+/// something strongly?
+///
+/// The action set asks whether play is happening; it cannot see the goal
+/// celebration that follows, the striker on his knees after the miss, or the
+/// keeper screaming at his defence. In sport those are often the frames that
+/// get published, and none of them has a ball near anybody's foot. So emotion
+/// is asked separately, and ranking takes the *stronger* of the two answers as
+/// the frame's moment rather than their average.
+///
+/// What counts is *intensity*, not whether the emotion is happy. Despair and
+/// anger are as valuable to a sports photographer as joy, so every pair names
+/// several emotions on the positive side — the organism set's lesson applies:
+/// a pair that only covers joy drags a frame of despair down with it, because
+/// [`IqaPrompts::score`] averages over pairs.
+pub const SPORT_EMOTION_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "an athlete showing intense emotion, such as joy, anger or despair.",
+        "an athlete with a calm, neutral face.",
+    ),
+    (
+        "players celebrating, protesting or consoling each other with big gestures.",
+        "players standing apart, waiting calmly.",
+    ),
+    (
+        "an athlete screaming, cheering or crying.",
+        "an athlete looking relaxed and expressionless.",
+    ),
+    (
+        "a dramatic, emotional moment in a sports game.",
+        "an uneventful moment in a sports game.",
+    ),
+];
+
+/// Prompt pairs for emotion at events: weddings, parties, company events,
+/// concerts.
+///
+/// Here the emotion that counts is warm — laughter, happy tears, a hug, a
+/// guest's delighted reaction — and the failure that counts is the
+/// unflattering frame: mid-sentence, mid-bite, a blank stare. The last pair
+/// asks about that directly, because an event photographer's first cull is
+/// largely throwing those out.
+///
+/// Same construction as the sport set: each pair is a complete question on its
+/// own, naming several emotions, so averaging cannot punish a frame for showing
+/// the "wrong" kind of joy.
+pub const EVENT_EMOTION_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "people laughing, crying with joy or hugging.",
+        "people with blank, neutral faces.",
+    ),
+    (
+        "a heartfelt, emotional moment between people.",
+        "an ordinary moment where nobody shows any emotion.",
+    ),
+    (
+        "guests reacting with delight or surprise.",
+        "guests looking bored or distracted.",
+    ),
+    (
+        "people with natural, flattering expressions.",
+        "a person caught mid-sentence or mid-bite with an awkward face.",
+    ),
+];
+
+/// Prompt pairs asking whether closed eyes in this frame are *meant*: a kiss,
+/// or laughter hard enough to squeeze the eyes shut.
+///
+/// Not a grading axis, a gate, like [`ORGANISM_PROMPT_PAIRS`]. The blink proxy
+/// cannot tell a kiss from a blink — both are closed eyes — so without this the
+/// kiss at a wedding is the frame most reliably marked as a reject candidate.
+/// The ranking skips the blink penalty for a frame that clears the gate.
+///
+/// The last pair contrasts the two causes head-on, which is the question
+/// actually being asked; the first two keep a frame where nobody is kissing or
+/// laughing firmly below the threshold.
+pub const EYES_CLOSED_INTENT_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "people kissing or laughing so hard their eyes are closed.",
+        "people with their eyes open, neither kissing nor laughing.",
+    ),
+    (
+        "a kiss or a burst of laughter.",
+        "a calm moment without a kiss or laughter.",
+    ),
+    (
+        "eyes closed in a kiss or in laughter.",
+        "eyes closed in an accidental blink.",
+    ),
+];
+
 /// Prompt pairs asking whether there is an *organism* in the frame at all.
 ///
 /// Unlike every other set here this is not a grading axis — nothing weights it
@@ -221,6 +312,15 @@ pub enum PromptSet {
     Expression,
     /// Is this a real moment or a pose? [`CANDID_PROMPT_PAIRS`].
     Candid,
+    /// Is an athlete feeling something strongly? [`SPORT_EMOTION_PROMPT_PAIRS`].
+    SportEmotion,
+    /// Are people laughing, moved, reacting? [`EVENT_EMOTION_PROMPT_PAIRS`].
+    EventEmotion,
+    /// Are closed eyes meant — a kiss, a laugh? [`EYES_CLOSED_INTENT_PROMPT_PAIRS`].
+    ///
+    /// A gate on the blink penalty, not a grading axis — deliberately absent
+    /// from [`PromptSet::SEMANTIC`].
+    EyesClosedIntent,
     /// Is there an organism in the frame? [`ORGANISM_PROMPT_PAIRS`].
     ///
     /// A gate for the species task, not a grading axis — deliberately absent
@@ -235,6 +335,9 @@ impl PromptSet {
             PromptSet::Action => ACTION_PROMPT_PAIRS,
             PromptSet::Expression => EXPRESSION_PROMPT_PAIRS,
             PromptSet::Candid => CANDID_PROMPT_PAIRS,
+            PromptSet::SportEmotion => SPORT_EMOTION_PROMPT_PAIRS,
+            PromptSet::EventEmotion => EVENT_EMOTION_PROMPT_PAIRS,
+            PromptSet::EyesClosedIntent => EYES_CLOSED_INTENT_PROMPT_PAIRS,
             PromptSet::Organism => ORGANISM_PROMPT_PAIRS,
         }
     }
@@ -249,6 +352,9 @@ impl PromptSet {
             PromptSet::Action => "action",
             PromptSet::Expression => "expression",
             PromptSet::Candid => "candid",
+            PromptSet::SportEmotion => "sport_emotion",
+            PromptSet::EventEmotion => "event_emotion",
+            PromptSet::EyesClosedIntent => "eyes_closed_intent",
             PromptSet::Organism => "organism",
         }
     }
@@ -261,24 +367,36 @@ impl PromptSet {
             "action" => Some(PromptSet::Action),
             "expression" => Some(PromptSet::Expression),
             "candid" => Some(PromptSet::Candid),
+            "sport_emotion" => Some(PromptSet::SportEmotion),
+            "event_emotion" => Some(PromptSet::EventEmotion),
+            "eyes_closed_intent" => Some(PromptSet::EyesClosedIntent),
             "organism" => Some(PromptSet::Organism),
             _ => None,
         }
     }
 
     /// The genre-selectable grading axes: every set except
-    /// [`PromptSet::Quality`], which always applies, and
-    /// [`PromptSet::Organism`], which gates the species task rather than
-    /// grading anything.
-    pub const SEMANTIC: [PromptSet; 3] =
-        [PromptSet::Action, PromptSet::Expression, PromptSet::Candid];
+    /// [`PromptSet::Quality`], which always applies, and the two gates —
+    /// [`PromptSet::Organism`] for the species task and
+    /// [`PromptSet::EyesClosedIntent`] for the blink penalty — which decide
+    /// whether something runs rather than grading anything.
+    pub const SEMANTIC: [PromptSet; 5] = [
+        PromptSet::Action,
+        PromptSet::Expression,
+        PromptSet::Candid,
+        PromptSet::SportEmotion,
+        PromptSet::EventEmotion,
+    ];
 
     /// Every set, so the invariant tests cannot silently skip a new one.
-    pub const ALL: [PromptSet; 5] = [
+    pub const ALL: [PromptSet; 8] = [
         PromptSet::Quality,
         PromptSet::Action,
         PromptSet::Expression,
         PromptSet::Candid,
+        PromptSet::SportEmotion,
+        PromptSet::EventEmotion,
+        PromptSet::EyesClosedIntent,
         PromptSet::Organism,
     ];
 }
