@@ -2512,4 +2512,37 @@ function Util.formatDownloadSize(bytes)
 	return string.format("%.0f MB", n / 1e6)
 end
 
+---
+-- Whether a virtual copy Lightroom just created is a copy of `source`.
+--
+-- `catalog:createVirtualCopies()` copies the selection, and the new copy always
+-- belongs to a *master* photo: copying a master gives a copy whose
+-- `masterPhoto` is that master, but copying a virtual copy gives a copy whose
+-- `masterPhoto` is the master the source copy belongs to (it carries the source
+-- copy's settings). Comparing the new copy's master with `source` alone
+-- therefore rejects every virtual copy as "a different photo".
+--
+-- Pure: takes the raw metadata values rather than LrPhoto objects, so it can be
+-- tested headless. It never accepts a copy of a *different* master, but for a
+-- virtual-copy source it accepts a copy made from any photo under the same
+-- master (the master itself or a sibling copy): all of them share the image
+-- file, only their settings differ. The caller therefore checks, inside the
+-- write gate and right before copying, that `source` alone is selected.
+--
+-- @param copyMaster any `masterPhoto` of the new copy.
+-- @param source any The photo that was selected and copied.
+-- @param sourceIsVirtualCopy boolean|nil `isVirtualCopy` of `source`.
+-- @param sourceMaster any|nil `masterPhoto` of `source` (only read for a virtual copy).
+-- @return boolean
+--
+function Util.isVirtualCopyOf(copyMaster, source, sourceIsVirtualCopy, sourceMaster)
+	if copyMaster == nil or source == nil then
+		return false
+	end
+	if sourceIsVirtualCopy then
+		return sourceMaster ~= nil and copyMaster == sourceMaster
+	end
+	return copyMaster == source
+end
+
 return Util

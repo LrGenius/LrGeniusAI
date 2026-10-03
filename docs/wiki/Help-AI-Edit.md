@@ -116,6 +116,17 @@ The copy is created *after* the review dialog, so a photo you skip leaves
 nothing behind. If Lightroom refuses to create the copy, the photo is reported
 as an error and skipped; the edit is never redirected onto the original.
 
+A photo that is itself a virtual copy works too: Lightroom makes the new copy
+from that copy's current settings, and files it under the same master photo,
+as it does for *Photo > Create Virtual Copy*.
+
+If something fails after the copy exists (the plugin cannot confirm that
+Lightroom copied the right photo, or saving or applying the edit fails), the
+copy stays in the catalog without the edit, or with only part of it: the
+Lightroom SDK gives plugins no way to delete a photo. The end-of-run summary
+then says how many such *AI Edit* copies may have been left behind; remove them
+yourself with *Photo > Remove Photo*.
+
 Two side effects come from Lightroom's own API here: copying works on the
 current selection, so your grid selection changes as the run walks through the
 photos, and if a photo is not part of the folder or collection you are looking
