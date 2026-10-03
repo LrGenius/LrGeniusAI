@@ -359,7 +359,13 @@ name is the LLM schema's `{temperature, tint}` alias):
 ```json
 "edit": {
   "summary": "...",
-  "global": {"exposure": 0.35, "contrast": 12, "tone_curve": {"shadows": -8}},
+  "global": {
+    "exposure": 0.35, "contrast": 12, "sharpen_radius": 1.2, "grain_size": 30,
+    "hsl": {"blue": {"hue": -5, "saturation": -20, "luminance": -12}, "...": {}},
+    "color_grading": {"shadows": {"hue": 220, "saturation": 15},
+                      "highlights": {"hue": 40, "saturation": 20}, "balance": -10},
+    "tone_curve": {"shadows": -8, "shadow_split": 20, "midtone_split": 45, "highlight_split": 70}
+  },
   "masks": [],
   "warnings": [],
   "white_balance": {"mode": "Custom", "family": "raw", "temperature": 5450, "tint": 10}
@@ -378,13 +384,71 @@ this photo is not ..."*. The thresholds are assumptions pinned by tests
 The other settings are blended per key over the winners that carry the key (an
 example that never touched a slider does not pull it towards 0) and rounded to
 the key's registry precision (integers for integer sliders, `Exposure2012` to 2
-decimals). The learned keys are the registry's `global.*` recipe aliases.
+decimals, `SharpenRadius` to 1). The learned keys are the registry's `global.*`
+recipe aliases: every `global` field the installed plugin's
+`DevelopEditManager` already applies (65 keys since step 1f):
 
-Stored examples carry a `canonical_version`. A row written by an older backend
-(no version, or a lower one) is re-read from its stored `develop_settings` blob
-when it is retrieved — at most `CANDIDATE_POOL` rows per request, nothing is
-written back — so examples saved before white balance was read from the right
-keys contribute it now. A re-read row that teaches nothing (settings older than
+| `global` field(s) | Lightroom keys |
+|---|---|
+| `exposure`, `contrast`, `highlights`, `shadows`, `whites`, `blacks`, `texture`, `clarity`, `dehaze`, `vibrance`, `saturation` | `Exposure2012`, `Contrast2012`, ..., `Saturation` |
+| `sharpening`, `sharpen_radius`, `sharpen_detail`, `sharpen_masking` | `Sharpness`, `SharpenRadius`, `SharpenDetail`, `SharpenEdgeMasking` |
+| `noise_reduction`, `noise_reduction_detail`, `noise_reduction_contrast` | `LuminanceSmoothing`, `LuminanceNoiseReductionDetail`, `LuminanceNoiseReductionContrast` |
+| `color_noise_reduction`, `color_noise_reduction_detail`, `color_noise_reduction_smoothness` | `ColorNoiseReduction`, `ColorNoiseReductionDetail`, `ColorNoiseReductionSmoothness` |
+| `vignette`, `vignette_midpoint`, `vignette_roundness`, `vignette_feather`, `vignette_highlights` | `PostCropVignetteAmount`, `...Midpoint`, `...Roundness`, `...Feather`, `...HighlightContrast` |
+| `grain`, `grain_size`, `grain_roughness` | `GrainAmount`, `GrainSize`, `GrainFrequency` |
+| `hsl.<red..magenta>.{hue,saturation,luminance}` | `HueAdjustment<Colour>`, `SaturationAdjustment<Colour>`, `LuminanceAdjustment<Colour>` |
+| `color_grading.{shadows,highlights}.{hue,saturation}`, `color_grading.balance` | `SplitToning{Shadow,Highlight}{Hue,Saturation}`, `SplitToningBalance` |
+| `tone_curve.{highlights,lights,darks,shadows}`, `tone_curve.{shadow,midtone,highlight}_split` | `Parametric*` |
+
+Not sent: colour-grading midtones, global, luminance and blending (installed
+plugins warn "not supported" and drop them), point curves (averaging curves is
+a later step), lens, crop, `Look`, masks.
+
+Two kinds of key are not plain means:
+
+- **Toning** (`SplitToning{Shadow,Highlight}{Hue,Saturation}`; registry gate
+  `CircularHue(<saturation key>)` on the hue): each winner's zone is a colour
+  vector (hue = angle, saturation = length), and the zone gets the
+  score-weighted mean vector: its angle is the hue, its length the saturation.
+  So 350° and 10° give 0°, a hue left behind at saturation 0 does not pull, and
+  tints that disagree fade towards neutral instead of landing at full strength
+  on a hue none of the examples used (orange 30°/40 and blue 190°/40 give
+  110°/7, not 110°/40). Where the tints agree the saturation equals the plain
+  mean. If the saturations sum to about 0, or the mean vector rounds to
+  saturation 0 (fully cancelling tints), the hue is left out and saturation 0
+  is sent. When the toned winners' agreement (mean resultant length) is below
+  `MIN_HUE_AGREEMENT` (0.5, i.e. the tint lost more than half its strength) and
+  the plain mean saturation is at least 5, `warnings` gets *"Color grading of
+  the shadows was toned down: your matching examples tint the shadows in
+  clearly different colors."* (or highlights).
+- **Curve splits** are blended as one group over the winners that carry all
+  three, which keeps `shadow_split < midtone_split < highlight_split`; if
+  integer rounding makes two equal, the three are left out and `warnings` gets
+  *"The tone curve's region splits were not transferred: your matching
+  examples' splits could not be averaged into a valid order."*
+
+Black-and-white examples (`ConvertToGrayscale`) contribute no toning and no
+colour mixer: the recipe does not carry the B&W switch, so their sepia or
+selenium toning would land on colour photos as a cast. The Basic, curve,
+detail and effects keys they carry are still blended.
+
+`HueAdjustment*` (the colour mixer's hue) is an offset on −100..100, not an
+angle, so it is a plain mean.
+
+The guardrail budget (`edit_budget::measure_and_apply`) acts on contrast,
+clarity, dehaze, the parametric curve strength, shadows and whites only. The
+new keys need no budget of their own: the splits do not change the curve
+strength (a scaled curve keeps them), and HSL saturation, vignette and grain
+are not moves the frame measurements (light hardness, dynamic range, clipping)
+say anything about — like the global `saturation`/`vibrance`, which were never
+budgeted.
+
+Stored examples carry a `canonical_version` (currently 3). A row written by an
+older backend (no version, or a lower one) is re-read from its stored
+`develop_settings` blob when it is retrieved — at most `CANDIDATE_POOL` rows per
+request, nothing is written back — so examples saved before white balance was
+read from the right keys contribute it now, and examples saved before step 1f
+contribute the colour mixer, toning, curve splits and detail/effects sliders. A re-read row that teaches nothing (settings older than
 PV2012, or a blob that cannot be read) is counted, and the response gets one
 `warnings` entry for it.
 

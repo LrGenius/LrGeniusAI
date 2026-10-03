@@ -487,6 +487,38 @@ mod tests {
     }
 
     #[test]
+    fn a_version_2_row_is_re_derived_to_pick_up_the_1f_keys() {
+        // Saved by the 1d build: white balance typed, but only the 20 basic
+        // aliases frozen. The blob has the colour mixer and the toning.
+        let blob = json!({
+            "ProcessVersion": "15.4",
+            "Contrast2012": 20,
+            "HueAdjustmentRed": -6,
+            "SplitToningShadowHue": 220,
+            "SplitToningShadowSaturation": 15,
+            "ParametricShadowSplit": 30,
+            "ParametricMidtoneSplit": 50,
+            "ParametricHighlightSplit": 70,
+        });
+        let row = meta(json!({
+            "canonical_version": 2,
+            "canonical_settings": json!({"contrast": 20}).to_string(),
+            "develop_settings": blob.to_string(),
+            "is_raw": true,
+        }));
+        assert_ne!(CANONICAL_VERSION, 2);
+        let (c, unlearned) = record_to_candidate("v2", &row, 0.5);
+        assert!(!unlearned);
+        assert_eq!(c.canonical_settings["contrast"], json!(20));
+        assert_eq!(c.canonical_settings["hsl_red_hue"], json!(-6));
+        assert_eq!(
+            c.canonical_settings["color_grading_shadows_hue"],
+            json!(220)
+        );
+        assert_eq!(c.canonical_settings["tone_curve_shadow_split"], json!(30));
+    }
+
+    #[test]
     fn an_unreadable_or_missing_blob_contributes_nothing_and_says_so() {
         let (c, unlearned) =
             record_to_candidate("x", &meta(json!({"develop_settings": "not json"})), 0.5);
