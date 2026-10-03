@@ -104,7 +104,6 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   - OpenAI / ChatGPT
   - Anthropic (Claude)
   - an OpenAI-compatible server (OpenRouter, llama.cpp server, LiteLLM, …), if it needs one
-  - ~~Vertex AI (project + location)~~ — **removed**, the plugin no longer offers Vertex AI
 
 ---
 
@@ -177,8 +176,7 @@ In the plugin settings dialog you can configure:
 - Optional AI providers: the OpenAI, Gemini and Anthropic keys, and an **Other AI server**
   (any OpenAI-compatible server) with an optional key. Ollama and LM Studio have
   no settings: they are found at their default address on this computer, and
-  one running elsewhere is the Other AI server. (The Vertex AI
-  project/location fields were removed.)
+  one running elsewhere is the Other AI server.
 - **Local AI Model (no external app)** — browse, download and select vision
   models the backend runs itself, plus the advanced knobs (context size, photos
   in parallel, layers on the GPU). Which engine backs this section is decided
@@ -202,59 +200,6 @@ In the plugin settings dialog you can configure:
 
 ---
 
-## Google Vertex AI Login (gcloud) — REMOVED
-
-> **⚠️ Vertex AI was removed from the plugin in August 2026.** The project ID / location
-> fields, the *Create Vertex AI embeddings* option in Analyze & Index, and the
-> *Semantic (Vertex AI)* search option are gone from the Lightroom UI. The section below is
-> kept for reference only and no longer describes a working setup path.
-
-If you want to use Vertex AI from LrGeniusAI, run the login on the machine where the backend server runs.
-
-### macOS
-
-1. Install Google Cloud CLI (if not installed):
-   - [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install)
-2. Open Terminal and run:
-
-```bash
-gcloud init
-gcloud config set project YOUR_PROJECT_ID
-gcloud auth application-default login
-```
-
-3. Optional verification:
-
-```bash
-gcloud auth application-default print-access-token
-```
-
-### Windows (PowerShell)
-
-1. Install Google Cloud CLI (if not installed):
-   - [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install)
-2. Open **Google Cloud SDK Shell** (or PowerShell with gcloud in PATH) and run:
-
-```powershell
-gcloud init
-gcloud config set project YOUR_PROJECT_ID
-gcloud auth application-default login
-```
-
-3. Optional verification:
-
-```powershell
-gcloud auth application-default print-access-token
-```
-
-### Notes
-
-- `gcloud auth application-default login` creates local Application Default Credentials (ADC) used by the backend.
-- In plugin settings, set `Vertex AI Project ID` and `Vertex AI Location` (for example `us-central1`).
-- For headless/server deployments, prefer a service account with `GOOGLE_APPLICATION_CREDENTIALS`.
-
----
-
 ## Typical Workflow
 
 1. Run **Analyze and Index Photos**
@@ -268,11 +213,9 @@ gcloud auth application-default print-access-token
 
 ## Migration Notes
 
-If you migrated from legacy UUID-based IDs to `photo_id`:
-
-- The plugin can trigger backend migration from the Plugin Manager UI.
-- Migration uses a progress scope and batch requests.
-- Existing collections (main embeddings, legacy vertex embeddings, faces) are migrated through backend migration endpoints.
+If you are upgrading from an older version that stored Lightroom catalog UUIDs as primary IDs,
+re-run **Analyze & Index Photos** over the catalog. There is no migration path — photos already
+indexed under the current IDs are skipped.
 
 ---
 
