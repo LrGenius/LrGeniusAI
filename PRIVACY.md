@@ -22,7 +22,7 @@ You have full control over where your data is processed. This is how we handle i
 When using local models like **Ollama** or **LM Studio**, all analysis, tagging, and semantic indexing happen entirely on your machine. No image data or metadata is transmitted to external servers. The same holds for an **Other AI server** you run on your own network (a llama.cpp server, vLLM, …): the photo goes to that machine and nowhere else.
 
 ### 🌐 Cloud Processing (Optional)
-If you choose to enable cloud providers (OpenAI, Google Gemini, Anthropic, or a cloud service such as OpenRouter entered as the *Other AI server*; Vertex AI was removed in August 2026 and is no longer contacted), only the necessary data is sent to these services:
+If you choose to enable cloud providers (OpenAI, Google Gemini, Anthropic, or a cloud service such as OpenRouter entered as the *Other AI server*), only the necessary data is sent to these services:
 - **Image Content**: Temporary transmission of image pixels or descriptive prompts for analysis.
 - **Contextual Hints**: Any manual photo context you provide.
 - **Location**: When *Location* is ticked under **AI Context** in Analyze & Index, the place recorded in the photo's own EXIF is described in words in the prompt ("Photo taken in ..."). Raw coordinates are never transmitted. Untick it and nothing about where the photo was taken leaves your machine.
@@ -64,7 +64,6 @@ Your API keys for services like OpenAI, Google Gemini or Anthropic are stored in
 If you utilize cloud features, please refer to the privacy policies of the supported providers:
 
 *   [OpenAI Privacy Policy](https://openai.com/policies/privacy-policy)
-*   ~~[Google Cloud (Vertex AI) Privacy Notice](https://cloud.google.com/terms/cloud-privacy-notice)~~ - *Vertex AI removed, no longer used*
 *   [Ollama (Local)](https://ollama.com/) - *Fully Private*
 *   [LM Studio (Local)](https://lmstudio.ai/) - *Fully Private*
 
