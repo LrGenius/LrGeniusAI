@@ -67,9 +67,6 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 	-- Scope and search-in options from prefs (persisted)
 	props.searchScope = prefs.searchScope or "all"
 	props.searchInSemanticSiglip = prefs.searchInSemanticSiglip ~= false
-	-- Vertex AI is disabled in the GUI; the backend code is untouched.
-	props.searchInSemanticVertex = false
-	-- props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
 	props.searchInMetadata = prefs.searchInMetadata ~= false
 	props.searchInMetadataKeywords = prefs.searchInMetadataKeywords ~= false
 	props.searchInMetadataCaption = prefs.searchInMetadataCaption ~= false
@@ -193,11 +190,6 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 						value = bind("searchInSemanticSiglip"),
 						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (AI search)"),
 					}),
-					-- Vertex AI is disabled in the GUI; the backend code is untouched.
-					-- f:checkbox({
-					-- 	value = bind("searchInSemanticVertex"),
-					-- 	title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)"),
-					-- }),
 					f:checkbox({
 						value = bind("searchInMetadata"),
 						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata"),
@@ -256,8 +248,6 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 		-- Persist dialog options to prefs for next time
 		prefs.searchScope = props.searchScope
 		prefs.searchInSemanticSiglip = props.searchInSemanticSiglip
-		-- Vertex AI is disabled in the GUI; the backend code is untouched.
-		-- prefs.searchInSemanticVertex = props.searchInSemanticVertex
 		prefs.searchInMetadata = props.searchInMetadata
 		prefs.searchInMetadataKeywords = props.searchInMetadataKeywords
 		prefs.searchInMetadataCaption = props.searchInMetadataCaption
@@ -318,7 +308,6 @@ LrTasks.startAsyncTask(function()
 			log:trace("Performing semantic search for: " .. props.searchTerm)
 			local searchOptions = {
 				semanticSiglip = props.searchInSemanticSiglip,
-				semanticVertex = props.searchInSemanticVertex,
 				metadata = props.searchInMetadata,
 				metadataFields = {},
 				relevanceStrictness = props.relevanceStrictness,
