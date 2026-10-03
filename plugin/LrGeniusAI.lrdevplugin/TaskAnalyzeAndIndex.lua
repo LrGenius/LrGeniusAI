@@ -32,9 +32,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.speciesKeywords = prefs.speciesKeywords or Defaults.speciesKeywords
 	props.speciesLinkLang = prefs.speciesLinkLang or Defaults.speciesLinkLang
 	props.speciesMinConfidence = prefs.speciesMinConfidence or Defaults.speciesMinConfidence
-	-- Vertex AI is disabled in the GUI; the backend code is untouched.
-	props.enableVertexAI = false
-	-- props.enableVertexAI = prefs.enableVertexAI or false
 	props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
 	props.regenerateMetadata = prefs.regenerateMetadata or false
 
@@ -255,15 +252,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 							enabled = bind("enableSpecies"),
 						}),
 					}),
-					-- Vertex AI is disabled in the GUI; the backend code is untouched.
-					-- f:row({
-					-- 	f:checkbox({
-					-- 		value = bind("enableVertexAI"),
-					-- 		title = LOC(
-					-- 			"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
-					-- 		),
-					-- 	}),
-					-- }),
 				}),
 			}), -- end General tab
 
@@ -712,8 +700,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.speciesPrefilter = props.speciesPrefilter
 		prefs.speciesKeywords = props.speciesKeywords
 		prefs.speciesLinkLang = props.speciesLinkLang
-		-- Vertex AI is disabled in the GUI; the backend code is untouched.
-		-- prefs.enableVertexAI = props.enableVertexAI
 		prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
 		prefs.regenerateMetadata = props.regenerateMetadata
 		prefs.appendMetadata = props.appendMetadata
@@ -863,7 +849,6 @@ LrTasks.startAsyncTask(function()
 			and not props.enableMetadata
 			and not props.enableFaces
 			and not props.enableSpecies
-			and not props.enableVertexAI
 		then
 			LrDialogs.showError(
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected=Please select at least one task to perform.")
@@ -887,7 +872,7 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
-		-- Build tasks array (task name compute_vertexai → "vertexai" in API)
+		-- Build tasks array
 		local tasks = {}
 		if props.enableEmbeddings then
 			table.insert(tasks, "embeddings")
@@ -900,9 +885,6 @@ LrTasks.startAsyncTask(function()
 		end
 		if props.enableSpecies then
 			table.insert(tasks, "species")
-		end
-		if props.enableVertexAI then
-			table.insert(tasks, "vertexai")
 		end
 
 		-- Asked here, before a single photo is exported: an on-device model
@@ -952,7 +934,6 @@ LrTasks.startAsyncTask(function()
 			submit_user_context = props.showPhotoContextDialog,
 			enableMetadata = props.enableMetadata,
 			enableFaces = props.enableFaces,
-			enableVertexAI = props.enableVertexAI,
 			species_prefilter = props.speciesPrefilter,
 			species_min_confidence = props.speciesMinConfidence,
 			replace_ss = props.replaceSS,
@@ -964,26 +945,9 @@ LrTasks.startAsyncTask(function()
 			keyword_secondary_language = props.keywordSecondaryLanguage,
 			generate_aliases = props.keywordAliases,
 		}
-		if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
-			options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")
-			options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
-				or "us-central1"
-		end
 		-- The key and server address the chosen provider needs, if any.
 		options.api_key = connection.api_key
 		options.server_url = connection.server_url
-
-		if props.enableVertexAI and prefs then
-			local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
-			if projectId == "" then
-				LrDialogs.showError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences."
-					)
-				)
-				return
-			end
-		end
 
 		if prefs.useKeywordHierarchy then
 			if prefs.useCatalogKeywordStructure then
@@ -1018,7 +982,6 @@ LrTasks.startAsyncTask(function()
 					enableEmbeddings = props.enableEmbeddings,
 					enableMetadata = props.enableMetadata,
 					enableFaces = props.enableFaces,
-					enableVertexAI = props.enableVertexAI,
 					regenerateMetadata = props.regenerateMetadata,
 				}
 			or nil
