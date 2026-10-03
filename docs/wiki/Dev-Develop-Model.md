@@ -1,9 +1,10 @@
 # Dev: Native Develop Model (`lrg-develop`)
 
-> **Status: step 1a.** The crate has the key registry, the typed model, the
-> policy filter and the reader for the Lua table form. The XMP parser (1c),
-> the XMP writer and mask builders (1b) and the Lua writer (1g) follow; this
-> page grows with them. Background and the research behind it:
+> **Status: steps 1a and 1c (1d/1f use it).** The crate has the key
+> registry, the typed model, the policy filter and the readers for the Lua
+> table form and for XMP (sidecars, develop presets, profiles). The XMP
+> writer and mask builders (1b) and the Lua writer (1g) follow; this page
+> grows with them. Background and the research behind it:
 > [AI Edit via XMP — Findings and Experiments](Dev-AI-Edit-XMP-Findings).
 
 `server-rs/crates/lrg-develop` holds the facts and shapes of Lightroom
@@ -40,6 +41,8 @@ Who uses it today:
 | `registry` | One `KeySpec` per develop key (`table.rs`), name families (`patterns.rs`), UI ↔ stored scaling (`ui.rs`, the only place), int/real conversion (`coerce.rs`, the only place) |
 | `model` | `DevelopSettings`, `Value`/`Finite`/`Opaque`, corrections and masks (`correction.rs`), white balance (`whitebalance.rs`), the policy filter (`policy.rs`) |
 | `lua::read` | `getDevelopSettings()` as JSON.lua encodes it → model + warnings |
+| `xmp::read` | an XMP sidecar, preset or profile → `XmpDocument` (kind, header, model, warnings, skipped subtrees) |
+| `reader` (crate-private) | what both readers share: typing through the registry, closed sets and ids, curve points, file kind, process-version check, assembly |
 | `parse` | `ParseError` (input unusable) and `ParseWarning` (one value, reading went on) |
 
 ## The key registry
@@ -291,6 +294,139 @@ across a series later.
 more than 4 MiB, or a top level that is not a table. Warnings are a list with
 a path such as `MaskGroupBasedCorrections[2].CorrectionMasks[0].MaskSubType`.
 
+## Reading XMP
+
+`xmp::parse(bytes)` reads a sidecar, a develop preset or a profile into an
+`XmpDocument { kind, header, develop, warnings, skipped_subtrees }`. It lands
+in **the same model the Lua reader produces**: the same key ids, value
+variants, correction and mask classification, `Look` and white-balance family.
+Both readers only walk their own syntax; typing (through `KeySpec::coerce`),
+the checks on closed sets and ids, curve points, the file kind and the
+process-version check live once in the crate-private `reader` module, and the
+correction/mask classification in `model::correction`.
+`tests/xmp_lua_equivalence.rs` holds the two readers to that. What differs by
+design, and what those fixtures therefore avoid or strip:
+
+- global keys of only one format (`Presence::XmpOnly`/`LuaOnly`);
+- `PerFormat` keys (`PointColors`, `RetouchInfo`): a `StructList` from Lua, a
+  `StrList` from XMP;
+- `ValueKind::Any` and `Settings` keys (`RGBTables`, `ProfileGainTableMap`,
+  `Look.Parameters`, ...): `Opaque::Json` from Lua, `Opaque::Xmp` from XMP;
+- struct-, correction- and mask-level Lua-only keys (`CorrectionID`,
+  `CorrectionReferenceX/Y`, `MaskID`, `Look.isAdobeAdaptive`);
+- Lightroom writes `PointColors` into every sidecar as a sentinel item
+  (19 × `-1`) where `getDevelopSettings()` returns `[]`, so an XMP model
+  reports one point colour that the Lua model does not.
+
+Pairing real training rows with their sidecars (September 2026, key names
+only) found no key present in both formats with a different value variant,
+and identical mask tools and combine sequences. It also found `Presence`
+rows the data contradicts, a follow-up for the registry (not changed yet):
+seen only in XMP although marked `Both` — `Version`, `CompatibleVersion`,
+`CameraProfileDigest`, `OverrideLookVignette`, `ColorVariance`,
+`AutoToneDigest`, `AutoToneDigestNoSat`, `ToggleStyle*`, `AllowFilters`,
+`RangeMaskMapInfo`, `Upright*DependentDigest`; seen only in Lua — the PV2010
+keys (`Exposure`, `Contrast`, `Brightness`, `Shadows`, `FillLight`,
+`HighlightRecovery`), the `Auto*` flags and `ExtendedToneCurvePV2012*`.
+
+Two passes. The first turns RDF into the XMP data model (`XmpNode`), whatever
+the syntax: attribute form and element form, structures as a nested
+`rdf:Description`, as attributes on the property element or with
+`rdf:parseType="Resource"`, `rdf:Seq`/`rdf:Bag`/`rdf:Alt` with empty items,
+`xml:lang` and qualifiers (`rdf:value`, as an element or an attribute). Every
+`rdf:Description` under every outermost `rdf:RDF` is merged in document
+order. Top-level properties outside `crs:` are counted and never built. A
+property element that mixes forms RDF does not allow (a container next to
+other elements or field attributes, something other than `rdf:li` in a
+container) is read as a plain structure of everything it holds, so the
+second pass reports it (`WrongType`/`UnknownKey`) and keeps it whole; text
+next to elements, which the data model cannot hold, is dropped with one
+`MalformedRdf` warning per top-level property (the first place, and how many
+more). Namespace URIs are shared (`Arc<str>`), not copied per field, so a
+long URI cannot multiply into gigabytes. The second pass types the `crs:`
+properties through the registry:
+
+- the namespace is matched by URI (`http://ns.adobe.com/camera-raw-settings/1.0/`),
+  never by the `crs:` prefix;
+- top-level names resolve at the global level first, then as preset header
+  keys (`Baseline` is a header key though it looks like a setting);
+- `True`/`true`/`False`/`false` are all booleans, `"+15"` is 15, `"1.000000"`
+  is 1.0; a non-integer on an integer key is rounded half-to-even with a
+  warning, as in the Lua reader; ids are checked for 32 hex digits;
+- global curves (`"x, y"`) and local curves (`"x,y"`) both become
+  `Value::Curve` — the same value the Lua reader makes of a flat number list
+  and of `"x,y"` strings;
+- an `rdf:Alt` with only `x-default` is `Value::Alt`. One with further
+  languages, an `rdf:Bag` or `rdf:Alt` where the registry expects an
+  `rdf:Seq`, and any value with qualifiers are kept whole under their key as
+  `Opaque::Xmp` (lossless, no warning: valid XMP the model does not
+  interpret; `XmpNode::alt_default` still finds the default language). Each
+  such key is counted in `skipped_subtrees.kept_whole`, so the lost typing
+  is visible; the local sweeps require 0 for Lightroom's own files;
+- `crss:` (snapshots) is skipped entirely; `Look.Parameters` (a profile
+  definition) and `Preset.Parameters` (the last applied preset) are kept
+  opaque and never evaluated; properties in other namespaces (`dc:`, `xmp:`,
+  `exif:`, ...) are not part of the model. `skipped_subtrees` counts each;
+- an unknown `crs:` key, or a foreign property inside a develop structure, is
+  kept verbatim (with its namespace) with an `UnknownKey` warning; a known key
+  of the wrong shape with `WrongType`; a key that appears twice at one level
+  (Adobe's own bundle has profiles with `Group` twice in one description)
+  keeps the first occurrence — typed, or opaque if it did not type — and
+  keeps later ones verbatim with `DuplicateKey`.
+
+The kind: a **sidecar** has `crs:ProcessVersion` and no `crs:PresetType`; a
+**preset** has `PresetType="Normal"`, a **profile** `"Look"` (its settings are
+the profile definition); anything else is `NotDevelop`, which is not an error.
+The header's common fields are typed (`PresetHeader`: type, UUID, the `x-default`
+names, cluster, camera restriction, the four `Supports*` flags); every other
+header key stays in `PresetHeader::rest`.
+
+`ParseError` only when the file is unusable as a whole: more than
+`MAX_XMP_BYTES` (4 MiB, the sidecar limit of `lrg-imaging`), not UTF-8 after
+an optional byte-order mark, not well-formed XML (a DTD counts as that, and
+so do more than 2^18 XML nodes), no `rdf:RDF`, elements nested deeper than
+`MAX_XMP_DEPTH` (64) below a description (`TooDeep`; real files nest about
+20), or beyond a structural limit (`Limit`): more than `MAX_XMP_ATTRIBUTES`
+(1024) attributes on one element, more than `MAX_XMP_NAMESPACES` (256)
+namespace declarations, or a namespace URI longer than
+`MAX_XMP_NAMESPACE_URI` (1024 bytes); real files stay near 200, 20 and 60.
+
+The depth and structural limits are enforced by a linear, non-recursive
+pre-scan of the text before roxmltree sees it. roxmltree's tokenizer recurses
+once per element with no depth limit, so without it a deeply nested file
+overflows the stack inside the XML parser — an abort that takes down the
+whole backend, not a catchable panic — and its duplicate-attribute check and
+namespace resolution are quadratic, so a file under 4 MiB could take minutes
+to hours. The reader's own recursion checks the depth a second time.
+Filtering `* [conflicted].xmp` sync copies is the caller's job, not the
+parser's.
+
+### Checked against real files
+
+The fixtures cover the forms; whether the registry covers what Lightroom
+actually writes is checked by the local sweeps in `tests/xmp_goldens_local.rs`
+(see [Tests](#tests) for how to run them). Last run (September 2026,
+Lightroom Classic 15.6):
+
+| Source | Files | Result |
+|---|---|---|
+| Lightroom Classic's bundled presets and profiles (`Contents/Resources/Settings`) | 1,045 (446 presets, 599 profiles) | 0 parse errors, 0 unknown keys, 0 values outside a registry range; the only warnings are 6 `DuplicateKey Group` |
+| A sidecar corpus of 28,680 `.xmp` files | 10,814 Lightroom sidecars (PV 11.0 and 15.4, 5,523 corrections) | 0 parse errors, 0 warnings of any kind |
+| Camera Raw's user folder: its presets and profiles | 23 | 0 parse errors, 0 warnings |
+
+The `Group` duplicates are Adobe's: some bundled camera profiles carry
+`crs:Group` twice in one description, with different values. The reader keeps
+the first and warns; the sweep allows exactly that pair (`ADOBE_ALLOWED`) and
+nothing else. Camera Raw's folder also holds its own state in `crs:` form
+(`Defaults/Preferences.xmp`, `Defaults/Previous.xmp`, `GPU/…`), with keys no
+preset or sidecar carries (`JPEGHandling`, `SubsetRetouch`, …); those are not
+develop documents, so that sweep checks only presets and profiles and counts
+the rest by kind. No registry row had to be added for any of these sources,
+and no registry key arrived in a form the model keeps whole
+(`kept_whole` is 0 in all three). The corpus is counted as the non-conflicted
+files carrying `crs:ProcessVersion` as of September 2026, so it differs from
+the photo count in the research.
+
 ## Fixtures and hygiene
 
 Test data lives in `server-rs/testdata/develop/` (layout and scrubbing rules
@@ -305,6 +441,9 @@ in its README):
   the generator never touches them. Add a new one there, and give it its own
   test in `tests/lua_read.rs` naming the warnings it must produce.
 - Any other `*.json` in `lua/` is a hygiene failure.
+- `xmp/*.xmp` are **self-authored**, one file per XMP form or develop shape
+  (no Adobe file, no copy or excerpt of one, no real sidecar); the list is in
+  the folder's README and in `FIXTURES` in `tests/xmp_fixtures.rs`.
 
 The hygiene rules keep private data out of the repository: no photo ids,
 paths, file or image names, dates, real 32-hex ids or GUIDs, profile
@@ -319,6 +458,10 @@ same crafted files through the file-level rules
 `dispatch_rules_flag_exactly_the_crafted_files` in the Rust test).
 `registry_snapshot.json` holds key names and their metadata, no settings, so
 it gets the text rules without the table-key substrings, plus the id check.
+An XMP file must be well-formed with an `rdf:RDF`, its `rdf:Alt` items need a
+valid `xml:lang`, and its data model (`xmp_as_tree`, the same conversion on
+both sides) gets the rules of a hand-written JSON file, so a `Look.Parameters`
+beyond the stub, a real id or a date in an XMP fixture fails the same way.
 
 Everything under `server-rs/testdata/develop/` is checked out with LF line
 endings on every platform (`.gitattributes`), and the snapshot test compares
@@ -338,7 +481,27 @@ content, not line endings, so a Windows checkout passes too.
   (rules in `server-rs/testdata/develop/README.md`): no photo ids, paths, file
   names, dates, real ids, profile definitions or lookup tables in the test
   data.
+- **`tests/xmp_fixtures.rs`**: every fixture in `testdata/develop/xmp/`
+  parses; only `unknown_keys.xmp` has `UnknownKey` warnings and only it and
+  `coercion_warnings.xmp` any warning; only `bag.xmp` (1) and
+  `alt_second_language.xmp` (2) keep registry keys whole (`kept_whole`); no
+  fixture uses a Lua-only key; each form has its own assertions (attribute
+  and element form, and plain and `parseType="Resource"` structures, read
+  into equal models). The pre-scan, the limits, mixed-form elements,
+  duplicates and `rdf:value` attributes are unit tests in `xmp/read.rs`
+  (deep nesting is parsed on a 2 MiB-stack thread).
+- **`tests/xmp_lua_equivalence.rs`**: for the curve, mask, look and number
+  fixtures, the same settings hand-written in the Lua table form read into an
+  equal model. Removed before comparing: global keys of only one format
+  (`Presence::XmpOnly`/`LuaOnly`) and `Look.Parameters`, which each reader
+  keeps opaque in its own format. The other by-design differences listed
+  under [Reading XMP](#reading-xmp) (`PerFormat` and `Any` keys, nested
+  Lua-only keys, the `PointColors` sentinel) are kept out of the fixtures
+  instead.
 - **`tests/registry_snapshot.rs`**: the snapshot above.
+- **`tests/support/`**: helpers the local sweeps share (mask tool and
+  combination counts, the registry-range check, warning paths without
+  indices), all reducing a model to key names and counts.
 - **`tests/training_dump_local.rs`** — local only: parses every row of the
   maintainer's private training dump and requires zero parse errors, zero
   warnings of any kind and every number within its key's registry range,
@@ -356,3 +519,39 @@ content, not line endings, so a Windows checkout passes too.
   `LRG_REQUIRE_GOLDENS=training-dump` makes a missing dump a failure. Setting
   the variable makes a missing file a failure: a typo or an unmounted volume
   must not pass as a skipped run.
+- **`tests/xmp_goldens_local.rs`** — local only: the XMP reader over files
+  that can never be in the repository or CI, one test and one gate family
+  per source:
+
+  | Variable | Family | Parses | Must hold |
+  |---|---|---|---|
+  | `LRG_LRC_PRESETS_DIR` | `lrc-presets` | every `*.xmp` below it (Lightroom's `Contents/Resources/Settings`) | 0 parse errors, 0 `UnknownKey`, no warning but `DuplicateKey Group`, 0 keys kept whole; presets and profiles only |
+  | `LRG_ACR_PRESETS_DIR` | `acr-presets` | the presets and profiles among the `*.xmp` below it (Camera Raw's user folder: its presets and profiles) | as the bundle; keys kept whole only printed (a user preset may have a localized name) |
+  | `LRG_XMP_CORPUS_DIR` | `xmp-corpus` | the sidecars below it with `crs:ProcessVersion`; `LRG_XMP_CORPUS_SAMPLE=N` takes a fixed-seed sample of N | 0 parse errors, no warning at all, 0 keys kept whole, every file a `Sidecar` |
+
+  Every sweep also fails on an unrecognised mask combination and on a number
+  outside its key's registry range. The corpus walk skips `* [conflicted].xmp`
+  sync copies, darktable's `<name>.<ext>.xmp` sidecars (no `crs:` at all) and
+  metadata-only sidecars, and prints how many of each. Output is counts per
+  document kind, warning kind, process version, skipped subtree, mask tool
+  and combination, plus key names; never a value, and corpus or Camera Raw
+  files are named by ordinal only.
+
+  ```bash
+  LRG_LRC_PRESETS_DIR="/Applications/Adobe Lightroom Classic/Adobe Lightroom Classic.app/Contents/Resources/Settings" \
+  LRG_ACR_PRESETS_DIR="$HOME/Library/Application Support/Adobe/CameraRaw" \
+  LRG_XMP_CORPUS_DIR=/path/to/photos \
+      cargo test -p lrg-develop --test xmp_goldens_local -- --nocapture
+  ```
+
+  The full corpus above (28,680 files) takes about 20 s in a debug build.
+  Gating works as for the training dump: an unset variable skips, the
+  families are local-only (`all` leaves them out, only naming one makes its
+  absence a failure), and a set variable that is not a directory, or a
+  directory without a single file to check, fails.
+
+  A new unknown key found here goes into the registry as a hand-written row
+  in `registry/table.rs`, followed by
+  `LRG_BLESS=1 cargo test -p lrg-develop --test registry_snapshot` (see
+  [Maintaining the registry](#maintaining-the-registry)), never into an
+  allow-list.

@@ -1,0 +1,83 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:ProcessVersion="15.4">
+   <crs:MaskGroupBasedCorrections>
+    <rdf:Seq>
+     <rdf:li>
+      <rdf:Description
+       crs:What="Correction"
+       crs:CorrectionAmount="1"
+       crs:CorrectionActive="true"
+       crs:CorrectionName="Correction 1"
+       crs:CorrectionSyncID="00000000000000000000000000000F01"
+       crs:LocalShadows2012="0.2">
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li>
+         <rdf:Description
+          crs:What="Mask/RangeMask"
+          crs:MaskActive="true"
+          crs:MaskName="Mask 1"
+          crs:MaskBlendMode="0"
+          crs:MaskInverted="false"
+          crs:MaskSyncID="00000000000000000000000000000F02"
+          crs:MaskValue="1">
+         <crs:CorrectionRangeMask
+          crs:Version="3"
+          crs:Type="2"
+          crs:Invert="false"
+          crs:SampleType="0"
+          crs:LumRange="0.000000 0.100000 0.350000 0.500000"
+          crs:LuminanceDepthSampleInfo="0.250000 0.200000 0.300000"/>
+         </rdf:Description>
+        </rdf:li>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description
+       crs:What="Correction"
+       crs:CorrectionAmount="1"
+       crs:CorrectionActive="true"
+       crs:CorrectionName="Correction 2"
+       crs:CorrectionSyncID="00000000000000000000000000000F03"
+       crs:LocalSaturation="-0.3">
+      <crs:CorrectionMasks>
+       <rdf:Seq>
+        <rdf:li>
+         <rdf:Description
+          crs:What="Mask/RangeMask"
+          crs:MaskActive="true"
+          crs:MaskName="Mask 2"
+          crs:MaskBlendMode="0"
+          crs:MaskInverted="false"
+          crs:MaskSyncID="00000000000000000000000000000F04"
+          crs:MaskValue="1">
+         <crs:CorrectionRangeMask>
+          <rdf:Description
+           crs:Version="3"
+           crs:Type="1"
+           crs:ColorAmount="0.494949"
+           crs:Invert="false"
+           crs:SampleType="0">
+          <crs:PointModels>
+           <rdf:Seq>
+            <rdf:li>0.255405 0.034566 0.419137 0.692175 0.651248 0</rdf:li>
+           </rdf:Seq>
+          </crs:PointModels>
+          </rdf:Description>
+         </crs:CorrectionRangeMask>
+         </rdf:Description>
+        </rdf:li>
+       </rdf:Seq>
+      </crs:CorrectionMasks>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Seq>
+   </crs:MaskGroupBasedCorrections>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

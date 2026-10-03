@@ -1,0 +1,31 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:ProcessVersion="15.4"
+   crs:CameraProfile="Adobe Standard"
+   crs:ConvertToGrayscale="False">
+   <crs:Look>
+    <rdf:Description
+     crs:Name="Adobe Landscape"
+     crs:Amount="0.850000"
+     crs:UUID="6F9C877E84273F4E8271E6B91BEB36A1"
+     crs:SupportsAmount="false"
+     crs:SupportsMonochrome="false"
+     crs:SupportsOutputReferred="false"
+     crs:Copyright="Synthetic copyright notice">
+    <crs:Group>
+     <rdf:Alt>
+      <rdf:li xml:lang="x-default">Synthetic Group</rdf:li>
+     </rdf:Alt>
+    </crs:Group>
+    <crs:Parameters>
+     <rdf:Description
+      crs:ProcessVersion="15.4"
+      crs:ConvertToGrayscale="False"/>
+    </crs:Parameters>
+    </rdf:Description>
+   </crs:Look>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

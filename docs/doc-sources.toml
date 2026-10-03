@@ -251,4 +251,7 @@ sources = [
   # The page documents the fixture hygiene rules, which this script's
   # --check-only/--self-test and tests/fixture_hygiene.rs implement together.
   "server-rs/scripts/develop_registry/extract_fixtures.py",
+  # The page documents the LOCAL_ONLY golden families and the gate's
+  # behaviour for them.
+  "server-rs/crates/lrg-ml/tests/common/mod.rs",
 ]
