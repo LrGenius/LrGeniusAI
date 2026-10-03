@@ -329,7 +329,9 @@ pub enum Def {
     Value(Lit),
     /// The key does not exist for this file kind (`Temperature` on a JPEG).
     Absent,
-    /// Not established yet (every non-raw default until the E1 JPEG readback).
+    /// Not established yet. Non-raw: every key the E13 readback of a non-raw
+    /// photo (`testdata/develop/defaults/`) did not cover, and the ones the
+    /// generator holds back as possibly per image (`HDRMaxValue`).
     Unverified,
     /// There is no fixed default: Lightroom fills the value per photo
     /// (as-shot white balance, lens identity) or only writes the key when a
@@ -565,6 +567,19 @@ pub struct KeySpec {
     pub recipe_alias: Option<&'static str>,
     /// Maintainer's note (why a policy, what is unverified).
     pub note: &'static str,
+}
+
+impl KeySpec {
+    /// Whether this is a mask enum: every closed integer set below the
+    /// global level (`MaskSubType`, `MaskBlendMode`, `ErrorReason`,
+    /// `CorrectionRangeMask.Type`/`SampleType`, ...), and
+    /// `MaskSubCategoryID` (an open integer set). The Lua writer spells them
+    /// as numbers or numeric strings (`lua::LuaOptions::mask_enum_as`), and
+    /// the Lua reader accepts both.
+    pub fn is_mask_enum(&self) -> bool {
+        (self.level != Level::Global && matches!(self.kind, ValueKind::EnumInt(_)))
+            || (self.level == Level::MaskTool && self.name == "MaskSubCategoryID")
+    }
 }
 
 /// How a `(level, name)` pair resolves.

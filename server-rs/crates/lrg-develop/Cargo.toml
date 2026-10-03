@@ -5,11 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-# Enables `xmp::WriteMode::TestRoundTrip`, which writes opaque, COMPUTED,
-# NEVER and UNKNOWN content verbatim. Tests only: it is switched on solely by
-# the self dev-dependency below, so no production build (`cargo build -p
-# lrg-server`) has it. Never enable it from another crate, and never name
-# `WriteMode::TestRoundTrip` outside lrg-develop: any build that compiles
+# Enables `xmp::WriteMode::TestRoundTrip` and `lua::LuaMode::TestRoundTrip`,
+# which write opaque, COMPUTED, NEVER and UNKNOWN content verbatim. Tests
+# only: it is switched on solely by the self dev-dependency below, so no
+# production build (`cargo build -p lrg-server`) has it. Never enable it from
+# another crate, and never name `WriteMode::TestRoundTrip` or
+# `LuaMode::TestRoundTrip` outside lrg-develop: any build that compiles
 # lrg-develop's tests (`cargo test --workspace`, `cargo clippy --workspace
 # --all-targets`) unifies the feature into the lrg-develop every crate links,
 # so CI cannot catch such a use; only the release build would fail.

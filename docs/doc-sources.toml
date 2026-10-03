@@ -238,6 +238,9 @@ sources = [
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopExperiments.lua",
+  # "What the answers change" and "Still open" name the LuaOptions fields
+  # each experiment bears on (LuaOptions::PROVISIONAL).
+  "server-rs/crates/lrg-develop/src/lua/write.rs",
 ]
 
 # The native develop model. `*` in fnmatch also crosses `/`, so this covers
@@ -248,6 +251,9 @@ sources = [
   "server-rs/crates/lrg-develop/src/*.rs",
   "server-rs/crates/lrg-develop/tests/*.rs",
   "server-rs/scripts/develop_registry/gen_table_rs.py",
+  # The non-raw default column comes from this readback (and spec.py's rows).
+  "server-rs/scripts/develop_registry/spec.py",
+  "server-rs/testdata/develop/defaults/*.json",
   # The page documents the fixture hygiene rules, which this script's
   # --check-only/--self-test and tests/fixture_hygiene.rs implement together.
   "server-rs/scripts/develop_registry/extract_fixtures.py",
@@ -256,4 +262,8 @@ sources = [
   "server-rs/crates/lrg-ml/tests/common/mod.rs",
   # The test-roundtrip feature wiring (the self dev-dependency).
   "server-rs/crates/lrg-develop/Cargo.toml",
+  # The plugin-side contract test of the Lua writer's wire goldens, and the
+  # workflow that runs it when only the goldens change.
+  "plugin/spec/native_wire_format_spec.lua",
+  ".github/workflows/lua-tests.yml",
 ]

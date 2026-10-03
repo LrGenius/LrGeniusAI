@@ -84,10 +84,12 @@
       "presence": "Both"
     }
   ],
-  "row_count": 562,
+  "row_count": 563,
   "rows": [
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": "As Shot"
+      },
       "default_raw": {
         "value": "As Shot"
       },
@@ -157,7 +159,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": "absent",
       "file_kind": "NonRawOnly",
       "fmt": "Int",
@@ -181,7 +185,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": "absent",
       "file_kind": "NonRawOnly",
       "fmt": "Int",
@@ -265,7 +271,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -290,7 +298,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -315,7 +325,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -340,7 +352,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -365,7 +379,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -390,7 +406,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -415,7 +433,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -440,7 +460,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -465,7 +487,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -490,7 +514,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -515,7 +541,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -700,7 +728,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": "Linear"
+      },
       "default_raw": {
         "value": "Linear"
       },
@@ -722,7 +752,14 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": [
+          0,
+          0,
+          255,
+          255
+        ]
+      },
       "default_raw": {
         "value": [
           0,
@@ -749,7 +786,14 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": [
+          0,
+          0,
+          255,
+          255
+        ]
+      },
       "default_raw": {
         "value": [
           0,
@@ -776,7 +820,14 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": [
+          0,
+          0,
+          255,
+          255
+        ]
+      },
       "default_raw": {
         "value": [
           0,
@@ -803,7 +854,14 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": [
+          0,
+          0,
+          255,
+          255
+        ]
+      },
       "default_raw": {
         "value": [
           0,
@@ -830,7 +888,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -855,7 +915,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -880,7 +942,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -905,7 +969,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -930,7 +996,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 25
+      },
       "default_raw": {
         "value": 25
       },
@@ -955,7 +1023,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -980,7 +1050,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 75
+      },
       "default_raw": {
         "value": 75
       },
@@ -1005,7 +1077,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 100
+      },
       "default_raw": {
         "value": 100
       },
@@ -1230,7 +1304,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1255,7 +1331,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1280,7 +1358,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1305,7 +1385,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1330,7 +1412,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1355,7 +1439,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1380,7 +1466,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1405,7 +1493,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1430,7 +1520,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1455,7 +1547,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1480,7 +1574,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1505,7 +1601,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1530,7 +1628,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1555,7 +1655,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1580,7 +1682,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1605,7 +1709,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1630,7 +1736,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1655,7 +1763,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1680,7 +1790,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1705,7 +1817,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1730,7 +1844,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1755,7 +1871,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1780,7 +1898,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1805,7 +1925,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -1830,7 +1952,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": false
+      },
       "default_raw": {
         "value": false
       },
@@ -2065,7 +2189,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2091,7 +2217,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2116,7 +2244,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2142,7 +2272,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2167,7 +2299,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2192,7 +2326,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2217,7 +2353,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2242,7 +2380,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2268,7 +2408,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2293,7 +2435,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2318,7 +2462,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2344,7 +2490,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2369,7 +2517,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2394,7 +2544,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -2419,7 +2571,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 40
       },
@@ -2445,7 +2599,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 1.0
+      },
       "default_raw": {
         "value": 1.0
       },
@@ -2470,7 +2626,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 25
+      },
       "default_raw": {
         "value": 25
       },
@@ -2495,7 +2653,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2520,7 +2680,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2545,7 +2707,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -2570,7 +2734,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2595,7 +2761,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 25
       },
@@ -2621,7 +2789,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -2646,7 +2816,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -2691,7 +2863,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2716,7 +2890,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": "LensDefaults"
+      },
       "default_raw": {
         "value": "LensDefaults"
       },
@@ -2871,7 +3047,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2896,7 +3074,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2921,7 +3101,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2946,7 +3128,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -2971,7 +3155,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -2996,7 +3182,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 30
+      },
       "default_raw": {
         "value": 30
       },
@@ -3021,7 +3209,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 70
+      },
       "default_raw": {
         "value": 70
       },
@@ -3046,7 +3236,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3071,7 +3263,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 40
+      },
       "default_raw": {
         "value": 40
       },
@@ -3096,7 +3290,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 60
+      },
       "default_raw": {
         "value": 60
       },
@@ -3201,7 +3397,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3223,7 +3421,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3248,7 +3448,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3273,7 +3475,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -3298,7 +3502,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 100
+      },
       "default_raw": {
         "value": 100
       },
@@ -3323,7 +3529,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3348,7 +3556,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -3373,7 +3583,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -3618,7 +3830,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -3643,7 +3857,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -3668,7 +3884,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 1.0
+      },
       "default_raw": {
         "value": 1.0
       },
@@ -3693,7 +3911,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 1.0
+      },
       "default_raw": {
         "value": 1.0
       },
@@ -3718,7 +3938,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0.0
+      },
       "default_raw": {
         "value": 0.0
       },
@@ -3743,7 +3965,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3768,7 +3992,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 1
+      },
       "default_raw": {
         "value": 1
       },
@@ -3910,7 +4136,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -3935,7 +4163,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -3960,7 +4190,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -3985,7 +4217,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4010,7 +4244,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 1
+      },
       "default_raw": {
         "value": 1
       },
@@ -4033,7 +4269,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4080,7 +4318,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4105,7 +4345,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 25
+      },
       "default_raw": {
         "value": 25
       },
@@ -4130,7 +4372,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 50
+      },
       "default_raw": {
         "value": 50
       },
@@ -4168,6 +4412,26 @@
       "plus_sign": false,
       "policy": {
         "class": "COMPUTED"
+      },
+      "presence": "Both",
+      "range": null,
+      "recipe_alias": null,
+      "ui": "identity"
+    },
+    {
+      "default_non_raw": "unverified",
+      "default_raw": "unverified",
+      "file_kind": "Both",
+      "fmt": "Text",
+      "frame": "NotApplicable",
+      "kind": "Any",
+      "level": "global",
+      "min_pv": null,
+      "name": "Glow",
+      "note": "Newer engine feature (the Glow panel, with GlowRange/GlowWarmth/GlowSpread/GlowStyle); type, range and default not established. [one sidecar of the local corpus, Camera Raw 18.7 engine (October 2026); never observed in LrC 15.5.1 output]",
+      "plus_sign": false,
+      "policy": {
+        "class": "UNKNOWN"
       },
       "presence": "Both",
       "range": null,
@@ -4296,7 +4560,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4321,7 +4587,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4346,7 +4614,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4371,7 +4641,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4396,7 +4668,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4421,7 +4695,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4446,7 +4722,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4471,7 +4749,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": "Embedded"
+      },
       "default_raw": {
         "value": "Adobe Standard"
       },
@@ -4795,7 +5075,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4831,7 +5113,7 @@
       "level": "global",
       "min_pv": null,
       "name": "HDRMaxValue",
-      "note": "[LrC 12+]",
+      "note": "Non-raw default not established: the one non-raw readback (E13, a virtual copy of a TIFF, LrC 15.6) has 2.3, which may be per image, so the generator holds it back (NON_RAW_READBACK_NOT_CONSTANT). [LrC 12+]",
       "plus_sign": true,
       "policy": {
         "class": "PHOTO"
@@ -4842,7 +5124,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4867,7 +5151,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4892,7 +5178,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4917,7 +5205,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4942,7 +5232,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4967,7 +5259,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -4992,7 +5286,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": 0
+      },
       "default_raw": {
         "value": 0
       },
@@ -5257,7 +5553,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": false
+      },
       "default_raw": {
         "value": false
       },
@@ -5279,7 +5577,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": false
+      },
       "default_raw": {
         "value": false
       },
@@ -5301,7 +5601,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": false
+      },
       "default_raw": {
         "value": false
       },
@@ -5323,7 +5625,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": false
+      },
       "default_raw": {
         "value": false
       },
@@ -5810,7 +6114,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5832,7 +6138,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5854,7 +6162,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5876,7 +6186,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5898,7 +6210,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5920,7 +6234,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5942,7 +6258,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5964,7 +6282,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -5986,7 +6306,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -6008,7 +6330,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -6030,7 +6354,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -6052,7 +6378,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -6096,7 +6424,9 @@
       "ui": "identity"
     },
     {
-      "default_non_raw": "unverified",
+      "default_non_raw": {
+        "value": true
+      },
       "default_raw": {
         "value": true
       },
@@ -12320,7 +12650,7 @@
       "META": 22,
       "NEVER": 7,
       "PHOTO": 32,
-      "UNKNOWN": 26
+      "UNKNOWN": 27
     },
     "header": {
       "META": 22,

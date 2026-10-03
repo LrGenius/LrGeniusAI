@@ -333,9 +333,14 @@ separately:
    (As Shot, Auto, a preset, Custom).
 2. **As Shot** wins: nothing is sent, the photo keeps its own. No warning — that
    is the habit the examples show.
-3. **Auto** or a **preset** (Daylight, Cloudy, ...) wins: nothing is sent while
-   `EMIT_NAMED_WB_MODES` is `false` (until experiment E1 shows that Lightroom
-   recomputes the temperature for a mode set without numbers), with a warning.
+3. **Auto** or a **preset** (Daylight, Cloudy, ...) wins: nothing is sent, with
+   a warning. For a non-raw photo always: Lightroom has no presets for it, and
+   in the first experiment run (Lightroom 15.6, run from the Library module)
+   `Auto` alone left the old numbers in the readback within 15 s (E1f/E1g;
+   the Basic-panel check is open). For a raw photo while
+   `EMIT_NAMED_WB_MODES` is `false`, until experiment E1 shows that Lightroom
+   recomputes the temperature for a mode set without numbers on a raw file
+   (E1e has not run); turning it on reaches raw photos only.
 4. **Custom** wins: temperature and tint from up to **3** of the best-scored
    Custom examples of the photo's own family, weighted over exactly those, and
    only when at least **2** exist and their temperatures lie within **500 K**

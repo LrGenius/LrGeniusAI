@@ -407,6 +407,22 @@ pub fn interpolate_recipes(winners: &[(TrainingCandidate, f64)]) -> Blend {
 /// photo. If it does not, a mode alone would leave the photo's old Kelvin in
 /// place under a new label. Until then an Auto/preset majority transfers
 /// nothing and says so ([`WbOutcome::NotTransferred`]).
+///
+/// First run (Lightroom 15.6, one non-raw TIFF, run from the Library
+/// module): `WhiteBalance = "Auto"` alone changed the mode, and the readback
+/// showed the previous incremental numbers unchanged within 15 s, with and
+/// without `optFlattenAutoNow` (E1f/E1g; whether the Basic panel shows them
+/// is an open manual check). The raw side (E1e, `Daylight`) has not run, so
+/// this stays off. A positive raw answer turns it on for raw targets only:
+/// [`blend_white_balance`] refuses a mode alone for a non-raw target before
+/// it looks at this switch.
+///
+/// The same E1 answer is the Lua writer's provisional
+/// `lrg_develop::lua::LuaOptions::PROVISIONAL.wb_mode_only` (whether a mode
+/// alone is written at all): flip both together, with the const assert in
+/// `a_named_mode_majority_is_not_sent_while_the_switch_is_off`. One without
+/// the other either sends a mode the writer drops and reports, or enables a
+/// form nothing produces.
 pub const EMIT_NAMED_WB_MODES: bool = false;
 
 /// At most this many Custom examples (the best-scored ones of the pool) give
@@ -497,6 +513,21 @@ pub fn blend_white_balance(
     match winner {
         WbMode::AsShot => WbOutcome::Unchanged,
         WbMode::Auto | WbMode::Named(_) => {
+            // Non-raw targets never get a mode alone, whatever the switch
+            // says: Lightroom offers only As Shot, Auto and Custom for them,
+            // and `Auto` alone left the old incremental numbers in place
+            // (E1f/E1g, Lightroom 15.6). Checked first, so a raw answer that
+            // turns EMIT_NAMED_WB_MODES on cannot reach a non-raw photo.
+            if target == Some(FileKind::NonRaw) {
+                return WbOutcome::NotTransferred(match winner {
+                    WbMode::Named(_) => format!(
+                        "White balance was not transferred: the \"{winner}\" preset exists only for raw files, and this photo is not raw."
+                    ),
+                    _ => format!(
+                        "White balance was not transferred: most of your matching examples use the \"{winner}\" white balance, which AI Edit does not apply to JPEG/TIFF (non-raw) files."
+                    ),
+                });
+            }
             // Decision (plan step 1, 6.1): a mode without numbers is only
             // sent after E1; see EMIT_NAMED_WB_MODES. Reported rather than
             // silent, because the examples do show a white-balance habit
@@ -511,12 +542,6 @@ pub fn blend_white_balance(
                     "White balance was not transferred: it is not known whether this photo is a raw file.".to_string(),
                 );
             };
-            // Lightroom offers only As Shot, Auto and Custom for non-raw files.
-            if matches!(winner, WbMode::Named(_)) && target == FileKind::NonRaw {
-                return WbOutcome::NotTransferred(format!(
-                    "White balance was not transferred: the \"{winner}\" preset exists only for raw files, and this photo is not raw."
-                ));
-            }
             WbOutcome::Transfer(WbSetting {
                 mode: winner,
                 family: target.into(),
@@ -1218,6 +1243,22 @@ mod tests {
         assert!(w.contains("\"Daylight\""), "{w}");
         let p = vec![(raw_wb("Auto", 5500.0, 10.0), 0.9)];
         assert!(not_transferred(blend_white_balance(&p, Some(FileKind::Raw))).contains("Auto"));
+    }
+
+    /// A non-raw target never gets a mode alone, and the refusal comes before
+    /// the switch, so turning it on after a raw E1e cannot change this
+    /// (E1f/E1g: `Auto` alone kept a non-raw photo's old numbers).
+    #[test]
+    fn a_non_raw_photo_gets_no_mode_alone_whatever_the_switch() {
+        for mode in ["Auto", "Daylight"] {
+            let p = vec![
+                (raw_wb(mode, 5500.0, 10.0), 0.9),
+                (non_raw_wb(mode, 0.0, 0.0), 0.8),
+            ];
+            let w = not_transferred(blend_white_balance(&p, Some(FileKind::NonRaw)));
+            assert!(w.contains(&format!("\"{mode}\"")), "{w}");
+            assert!(!w.contains("does not apply yet"), "{mode}: {w}");
+        }
     }
 
     #[test]
