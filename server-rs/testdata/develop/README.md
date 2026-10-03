@@ -1,0 +1,130 @@
+# testdata/develop — fixtures for the native develop model (`lrg-develop`)
+
+## `lua/` — `getDevelopSettings()` values
+
+Each `*.json` file is one `photo:getDevelopSettings()` table exactly as the
+plugin's `JSON.lua` encodes it (the `develop_settings` blob of a training
+example), decoded and pretty-printed. `manifest.json` lists every file the
+generator owns, the shapes each one covers, its process version and whether
+it is synthetic.
+
+Shapes covered: AI masks (subject, sky, background, a people part in preset
+form and for one person, a landscape class), "Select Object" with a polygon
+gesture, linear and radial gradients, a brush `Mask/Aggregate`, luminance and
+colour range masks (point and area form), `MaskBlendMode` 1 as subtract
+(`MaskInverted` false) and intersect (`MaskInverted` true), a local curve
+(`MainCurve`), non-empty `PointColors`, `AILook` as an object, `Look` absent,
+Adobe, adaptive (`isAdobeAdaptive`) and camera-restricted, float `Look.Amount`,
+`PerspectiveRotate` and legacy `LocalExposure`/`LocalClarity`, retouch and
+remove areas with their `pm_*` keys, `RetouchInfo`, `UprightTransform_N`,
+`DepthMapInfo`, `WhiteBalance` Auto with `AutoWhiteVersion`, number tokens in
+exponent form (`1e-05`), a `GrainSeed` above 2^31, `LensBlur` as `[]` and as an
+object, `FilterList` as `[]` and with `Filters`, process versions 11.0 and 15.4,
+and a top-level `[]` (the encoding of an empty table).
+
+Not in the source data, so hand-written in step 1a (see below): a Bool key sent
+as `0`/`1`, a non-integer on an Int key, `null` inside arrays, mixed arrays,
+non-raw `IncrementalTemperature`/`IncrementalTint`, a white-balance family that
+contradicts the file kind, and a process version below 6.7. Every training row
+is a raw file.
+
+### Generated and hand-written files
+
+- Files listed in `lua/manifest.json` are **owned by the generator** and
+  replaced on every run.
+- **Hand-written fixtures go into `lua/` as `hand_*.json`.** The generator never
+  deletes or rewrites them, and the hygiene check applies its relaxed rules to
+  them (so, for example, a localised `MaskName` is fine). Any other `*.json`
+  in `lua/` that the manifest does not list fails the check.
+
+### Provenance
+
+Derived from the maintainer's own Lightroom Classic edits (the "Train from
+edits" table of the maintainer's catalog), published with the maintainer's
+consent. Produced by `server-rs/scripts/develop_registry/extract_fixtures.py`
+and scrubbed:
+
+- **Only the develop settings.** Photo ids, file names, capture times, camera,
+  EXIF, scene tags and every other metadata field were dropped.
+- **No Adobe or third-party profile content.** `Look.Parameters` (a profile
+  definition) is reduced to `ConvertToGrayscale` and `ProcessVersion`. Profile
+  lookup-table keys (named `Table` or `BrushTable` plus an underscore and an
+  md5, `LookTable*`, `RGBTable*`) are removed everywhere. `Look.Name`/`UUID` are
+  kept only for Adobe profiles whose UUID was verified against Lightroom
+  Classic's bundled profiles (`ADOBE_LOOKS` in the extractor); any other
+  profile's name and UUID are synthetic, and all other Look text is generic.
+- **IDs do not link back to a catalog.** Every 32-hex digest/ID is replaced by
+  twenty zeros + 12 hex digits and every GUID by `00000000-0000-4000-8000-` +
+  12 hex digits, consistently across files (equal IDs stay equal). `GrainSeed`
+  is the constant 4000000001. Names are type-neutral (`Correction N`,
+  `Mask N`); lens profile names/file names, model versions and time stamps are
+  fixed synthetic values.
+- **Numeric values are otherwise unmodified.** Slider values, coordinates and
+  structure are exactly what Lightroom produced; numbers keep their original
+  JSON token, so int vs float, `true`/`false` vs `0`/`1` and `[]` for empty
+  tables are preserved. Because they are unmodified, some numbers can reveal
+  the camera class (image size, black levels in a Denoise payload) and the
+  focal length (`UprightFocalLength35mm`).
+
+`top_level_empty.json` is **synthetic**: no stored example had an empty table
+(see its `manifest.json` entry).
+
+### Hygiene rules
+
+`extract_fixtures.py --check-only` enforces them over every `*.json` and
+`*.xmp` below this folder; it runs in pre-commit (`develop-fixture-hygiene`) and
+in CI (`lint-format.yml`, docs-check job). The Rust test
+`tests/fixture_hygiene.rs` planned for step 1a must mirror them:
+
+- Scope: `lua/*.json` and `xmp/*.xmp` (plus any other `*.json`/`*.xmp` here);
+  never this README.
+- Hard failures anywhere (text level): the `md5p` photo-id prefix with its
+  colon, `file:`, user/volume/home paths, `/private/`, `/tmp/`, `/var/`,
+  `/Library/`, drive and UNC paths, raw or image file names (`.cr3`, `.nef`,
+  `.dng`, `.jpg`, ...), and the substrings of the dropped table keys.
+- Keys are identifiers; language tags only under `Look.Group`/`Look.SortName`.
+- `Look.Parameters` is `[]` or an object whose keys are within
+  `{ConvertToGrayscale, ProcessVersion}` (a boolean and a version string).
+- `Look.UUID` is in the extractor's `ADOBE_LOOKS` constant (and `Look.Name`
+  matches it) or synthetic. The allowlist is that constant, never a list read
+  from `manifest.json`.
+- Every 32-hex value and GUID is synthetic; no dates (ISO or EXIF form) other
+  than `2000-01-01T00:00:00+00:00`.
+- No number or bare numeric string ≥ 1e9, except packed version keys
+  (`UprightVersion`, `ModelVersion`, `MinEditVersion`, `MinDisplayVersion`,
+  `CompatibleVersion`, `AutoWhiteVersion`) and the synthetic `GrainSeed`.
+- Generated files only: every string satisfies its key's value rule
+  (`STRING_RULES` in the extractor) or is a number list, brush-dab string or
+  a synthetic value.
+
+Run it by hand with:
+
+```bash
+python3 server-rs/scripts/develop_registry/extract_fixtures.py --check-only \
+    --out-dir server-rs/testdata/develop/lua --root server-rs/testdata/develop
+```
+
+### Regenerating
+
+```bash
+cd server-rs/scripts/develop_registry
+OUT=$(mktemp -d)   # private folder outside the repository
+uv run --group lance dump_training.py <dir>/lrgenius-lance/edit_training.lance "$OUT/training_rows.json"
+uv run extract_fixtures.py "$OUT/training_rows.json" --out-dir ../../testdata/develop/lua
+rm -rf "$OUT"
+```
+
+The dump is private (`dump_training.py` creates it with mode 0600 and refuses a
+path inside the repository). The extractor writes into a private temporary
+folder first and replaces the files it owns in `lua/` only when the hygiene
+and shape checks pass; on failure `lua/` is left untouched. Regenerating after
+the training table has grown picks different rows and renumbers every synthetic
+ID, so expect the whole generated set to change.
+
+### License
+
+The files contain no Adobe content (no presets, profiles, profile parameters or
+lookup tables) — only the numeric settings of the maintainer's own edits, the
+key names Lightroom uses for them and the names/UUIDs of a few profiles every
+Lightroom Classic installation ships. They are covered by the repository's
+license.
