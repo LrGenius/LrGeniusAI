@@ -73,8 +73,9 @@ pub struct MetadataGenerationRequest {
     pub generate_alt_text: bool,
 
     pub language: String,
-    /// Sampling temperature. Only the local providers use it; see
-    /// [`ReasoningEffort`] for what the cloud providers take instead.
+    /// Sampling temperature. Only models that do not reason use it (the
+    /// local providers, gpt-4.1, Gemini 2.x); see [`ReasoningEffort`] for
+    /// what the reasoning models take instead.
     pub temperature: f64,
     pub reasoning_effort: ReasoningEffort,
     pub max_tokens: Option<u32>,
