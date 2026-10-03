@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::{
-    meta, Store, StoreRecord, FACE_TABLE, IMAGE_TABLE, TABLES, TRAINING_TABLE, VERTEX_TABLE,
-};
+use crate::{meta, Store, StoreRecord, FACE_TABLE, IMAGE_TABLE, TABLES, TRAINING_TABLE};
 
 const BATCH_SIZE: usize = 1000;
 
@@ -63,7 +61,6 @@ pub async fn migrate_from_chroma(chroma_dir: &Path, store: &Store) -> Result<Val
         let table = match collection.name.as_str() {
             IMAGE_TABLE => IMAGE_TABLE,
             FACE_TABLE => FACE_TABLE,
-            VERTEX_TABLE => VERTEX_TABLE,
             TRAINING_TABLE => TRAINING_TABLE,
             other => {
                 log::warn!("migration: skipping unknown collection {other}");

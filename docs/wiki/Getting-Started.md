@@ -1,159 +1,90 @@
 # Getting Started
 
-Welcome to LrGeniusAI! This guide will walk you through setting up the plugin, indexing your first batch of photos, and starting your AI-powered Lightroom workflow.
+One way to get going, start to finish: install, download the models, analyze
+your first photos. Everything runs on your own computer — no account, no API
+key, no cloud.
 
-## 1. Install Plugin and Server
+**You need:**
 
-To begin, you must install both the Lightroom Classic plugin frontend and the backend server (`geniusai-server`, a single Rust binary). These components communicate locally to process your images without freezing the Lightroom UI. 
-Please refer to the high-level installation instructions on the [root `README.md`](Dev-Project-README) or the detailed steps in the [`plugin/README.md`](Dev-Plugin-README).
-
-### ⚠️ Bypassing Security Warnings (Unsigned Installers)
-
-Because LrGeniusAI is an open-source project and the current installers are not code-signed, your operating system will likely flag them as "untrusted" or "malicious". This is a standard security precaution for any third-party software that has not been notarized by Microsoft or Apple.
-
-#### Windows (SmartScreen)
-When you run the installer or the backend `.cmd` file, you may see a "Windows protected your PC" dialog.
-1. Click **More info**.
-2. Click **Run anyway**.
-
-#### macOS (Gatekeeper)
-When you try to open the `.pkg` installer or the backend binary:
-1. **Right-click** (or Control-click) the file in Finder.
-2. Select **Open** from the menu.
-3. In the dialog that appears, click **Open** again.
-4. If it still fails, go to `System Settings -> Privacy & Security`, scroll down to the "Security" section, and click **Open Anyway**.
+- Lightroom Classic 14 or newer
+- A Mac with Apple silicon (M1 or newer) **or** a Windows PC
+- 16 GB of memory
+- About 10 GB of free disk space
 
 ---
 
-## 2. Configure Plugin
+## 1. Install
 
-Once installed, open the **Lightroom Plug-in Manager** (`File -> Plug-in Manager`) and locate LrGeniusAI. Here you need to:
-- **Set the Backend Server URL:** This defaults to `http://127.0.0.1:19819` but if you're running the backend on a different machine (e.g. via Docker), update the address here.
-- **Optional AI providers:** Only if you want a cloud service or a server of your own to do the analysis: enter your OpenAI, Google Gemini or Anthropic key, or the address of an **Other AI server** (OpenRouter, a llama.cpp server, LiteLLM, or LM Studio/Ollama on another computer — see [Other AI Server](Help-Other-AI-Server)). Ollama and LM Studio running on this computer need no setup; they are found automatically.
-- ~~**Set Vertex AI Details:** If using Google Cloud's Vertex AI, provide your project ID and preferred location.~~ **Removed** — the Vertex AI fields no longer exist in the Plug-in Manager (see [section 7](#7-vertex-ai-login--removed)).
+1. Open the [latest release](https://github.com/LrGenius/LrGeniusAI/releases/latest)
+   and download the installer for your computer:
+   - **Mac:** `LrGeniusAI-macos-arm64-….pkg`
+   - **Windows:** `LrGeniusAI-windows-x64-….exe`
+2. Quit Lightroom Classic.
+3. Run the installer and click through it.
+4. Start Lightroom Classic.
 
-*Having trouble? Refer to the [Troubleshooting](Troubleshooting) guide for connectivity and API issues.*
+That's it — the installer puts the plugin into Lightroom and starts the
+LrGeniusAI server in the background.
 
-### Download the on-device AI models
+### If your computer warns about the installer
 
-Some features do not use a cloud model at all and instead run their own model on
-your machine: smart photo search, species identification for animals, plants and
-fungi, and face detection. Those model files are not part of the installer, so
-fetch them once before you index anything.
+- **Mac** ("cannot be opened because it is from an unidentified developer"):
+  open **System Settings → Privacy & Security**, scroll down and click
+  **Open Anyway**.
+- **Windows** ("Windows protected your PC"): click **More info**, then
+  **Run anyway**.
 
-In the same settings dialog, scroll to **On-device AI models** and click
-**Download AI models**. One button fetches everything that is missing — there is
-nothing to choose per feature — and the per-model indicators next to it turn
-green as each family lands. Expect roughly 3.3 GB in total on a fresh install.
+---
 
-The same button appears in the first-run setup wizard. It is also how you finish
-setting up after an upgrade: families already on disk are skipped, so an
-existing installation that only had the search model downloads just the species
-model.
+## 2. Download the models
 
-Until a model is on disk, the feature that needs it stays greyed out in the
-Analyze & Index dialog rather than failing at run time.
+1. In Lightroom, open **File → Plug-in Manager…** and select **LrGeniusAI**.
+2. Under **Status**, click **Run Setup Wizard**.
+3. On the **Backend Server** tab, check that *Server Status* says **Running**.
+4. Switch to the **AI Models** tab:
+   1. Click **Download AI Models** (about 3.3 GB). These power search, species
+      and face detection.
+   2. Further down, in **Local AI Model — MLX** (Mac) or **Local AI Model —
+      llama.cpp** (Windows), pick **Gemma 4 E4B (recommended)** and click
+      **Download** (about 5–6 GB). This is the model that writes your
+      keywords, titles and captions.
+5. Click **OK**.
 
-### Prefer to stay fully local? (no API key, no extra app)
+The downloads keep running in the background — watch the progress bar in the
+top-left corner of Lightroom. Wait until both are finished before you go on.
 
-The backend can run vision models itself. In the same settings dialog, scroll to
-the **Local AI Model** sections:
+---
 
-- **Local AI Model — MLX** on macOS.
-- **Local AI Model — llama.cpp** on Windows.
+## 3. Analyze your first photos
 
-Each platform ships exactly one of them, so you will only ever see the section
-that applies to your machine.
+1. In the **Library**, select a few photos (start with 10–20).
+2. Open **Library → Plug-in Extras → Analyze & Index Photos…**
+3. Under **AI Model**, choose:
+   - **Mac:** `On this Mac · gemma-4-e4b-it-4bit`
+   - **Windows:** `On this PC · gemma-4-E4B-it-Q4_K_M.gguf`
+4. Leave everything else as it is and click **Start**.
+5. For each photo, a **Review results** window shows what the AI wrote. Click
+   **OK** to save it to the photo.
 
-Pick a model (start with **Gemma 4 E4B**), click **Download**, and wait for the
-**Installed** line to list it. It then appears in the **AI Model** dropdown of
-every task as `On this Mac · …` or `On this PC · …`. Full guide:
-[Local AI Models](Help-Local-AI-Models).
+The first photo takes a little longer while the model loads.
 
-## 3. Index Photos
+---
 
-Before semantic search or AI-assisted culling can work, the backend needs to process ("index") your photos.
-1. Select one or more photos in your Lightroom Library grid.
-2. Navigate to `Library -> Plug-in Extras -> Analyze & Index Photos`.
-3. The plugin will pass the photos to the backend, generate descriptions, tags, and AI embeddings, and store them.
-4. Optional, and off until you tick it: **Identify animal and plant species**
-   runs BioCLIP 2 on-device and writes a taxonomic identification into the
-   plugin's metadata panel. Keep its *Only where an animal or plant is detected*
-   sub-option on for a general library — it skips the portraits and landscapes
-   before the expensive model runs. See
-   [Help: Analyze and Index](Help-Analyze-and-Index#species-identification).
+## 4. Search your photos
 
-Once indexing finishes, try out **Advanced Search**, the **People** workflows, or use **Retrieve Metadata** to inject the generated tags straight back into your catalog. For **AI Edit Photos** *(beta)*, first save a handful of your own edits with **Save Edits as AI Training Examples** — that is what AI Edit builds develop settings from.
+1. Open **Library → Plug-in Extras → Advanced Search…**
+2. Describe what you are looking for, e.g. `dog on the beach` or
+   `red car in front of a house`.
+3. Click **Search**.
 
-## 4. Upgrading From a UUID-Era Database
+The matches appear as a new collection under **Search Results** in the
+Collections panel.
 
-*Only relevant if you are upgrading from a version of LrGeniusAI that predates
-file-based `photo_id` values.*
+---
 
-Those versions keyed everything on Lightroom catalog UUIDs, which the backend
-cannot match against your photos any more. There is no migration — the one the
-plugin used to offer never worked and has been removed. Run
-**Analyze & Index Photos** over the catalog again; photos already indexed under
-the current IDs are skipped.
+## Done
 
-## 5. Run Culling on Similar Photos
+Now run **Analyze & Index Photos** over the rest of your catalog.
 
-After indexing your photos, you can automate the process of picking the best shots from bursts or removing near-duplicates:
-1. Select the group of photos you want to cull, or leave it empty to use the current folder view.
-2. Open `Library -> Plug-in Extras -> Cull Similar Photos`.
-3. Choose a culling preset (e.g., `default` or `sports`) depending on how aggressive you want the AI to be.
-4. Wait for the backend to group and analyze your photos. 
-5. LrGeniusAI will rapidly create a time-stamped Collection Set in Lightroom containing `Picks`, `Alternates`, `Reject Candidates`, and `Duplicates`. Your view will automatically switch to the `Picks` collection so you can review the best shots right away.
-
-## 6. Create a DB Backup
-
-We highly recommend creating regular backups of your backend data, especially before migrations, moving to a new server, or performing maintenance.
-1. Open `File -> Plug-in Manager`.
-2. Navigate to `Backend Server` and click **Download DB backup**.
-3. Save the resulting `.zip` file somewhere safe. The backup contains the full persistent backend directory including your embeddings and metadata databases.
-
-## 7. Vertex AI Login — REMOVED
-
-> **⚠️ Vertex AI was removed from LrGeniusAI in August 2026.** The plugin no longer exposes
-> Vertex AI project/location settings, Vertex embeddings, or *Semantic (Vertex AI)* search,
-> so this step is no longer needed. It is kept here for reference only.
-
-For users of Google's Vertex AI, you need to use Google Cloud ADC (Application Default Credentials) on the host running the server.
-
-From your server terminal:
-```bash
-gcloud init
-gcloud config set project YOUR_PROJECT_ID
-gcloud auth application-default login
-```
-
-If your backend is running in the remote Docker Compose environment:
-```bash
-mkdir -p gcloud
-docker compose up -d --build
-docker compose exec geniusai-server gcloud config set project YOUR_PROJECT_ID
-docker compose exec geniusai-server gcloud auth application-default login
-```
-
-For headless servers without a GUI/browser:
-```bash
-docker compose exec geniusai-server gcloud auth application-default login --no-browser
-```
-The `./gcloud:/root/.config/gcloud` bind mount keeps your ADC credentials intact between container restarts.
-
-## 8. Next Steps
-
-- [FAQ](FAQ) — quick answers to common questions
-- [Help: Analyze and Index](Help-Analyze-and-Index)
-- [Help: AI Edit Photos](Help-AI-Edit) *(beta)*
-- [Help: Advanced Search](Help-Advanced-Search)
-- [Help: Cull Photos](Help-Cull-Photos) *(beta)*
-- [Help: People & Faces](Help-People-Faces)
-- [Help: Find Similar Images](Help-Find-Similar)
-- [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter)
-- [Help: Choosing AI Model](Help-Choosing-AI-Model)
-- [Help: Local AI Models](Help-Local-AI-Models) — built-in llama.cpp and MLX engines
-- [Help: Ollama Setup](Help-Ollama-Setup)
-- [Help: LM Studio Setup](Help-LM-Studio-Setup)
-- [Help: Other AI Server](Help-Other-AI-Server)
-- [Troubleshooting](Troubleshooting)
+When you want to explore more, the [Plugin Guide](Plugin-Guide) lists every
+feature. Stuck? See [Troubleshooting](Troubleshooting).
