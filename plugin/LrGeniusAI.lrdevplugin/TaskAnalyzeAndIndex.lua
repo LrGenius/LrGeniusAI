@@ -1099,6 +1099,14 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		-- Three places read a photo's data back after the run: the inline apply
+		-- below, the species pass and the save pass. getPhotoData hands each of
+		-- them nil twice over — once when the request failed and once when the
+		-- index has nothing for the photo — so the two are counted apart instead
+		-- of becoming one silent shortfall.
+		local photoDataErrCount = 0
+		local photoDataMissingCount = 0
+
 		-- When validation is disabled, apply metadata inline as each photo's analysis returns
 		-- so keywords/title/caption land on photos progressively instead of all at the end.
 		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
@@ -1106,7 +1114,13 @@ LrTasks.startAsyncTask(function()
 		if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
-				local response = SearchIndexAPI.getPhotoData(photoId)
+				local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+				if photoDataErr then
+					log:error("getPhotoData failed during inline apply: " .. photoDataErr)
+					photoDataErrCount = photoDataErrCount + 1
+				elseif not response then
+					photoDataMissingCount = photoDataMissingCount + 1
+				end
 				saveSpecies(photo, response)
 				if response and response.metadata then
 					collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, nil, {
@@ -1156,7 +1170,13 @@ LrTasks.startAsyncTask(function()
 			for _, photo in ipairs(processedPhotos) do
 				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local response = SearchIndexAPI.getPhotoData(photoId)
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving species: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					end
 					if response and response.species then
 						saveSpecies(photo, response)
 						speciesCount = speciesCount + 1
@@ -1182,7 +1202,13 @@ LrTasks.startAsyncTask(function()
 				-- Process responses if validation is enabled or just save metadata
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local response = SearchIndexAPI.getPhotoData(photoId)
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving metadata: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					end
 
 					-- Written at the end of this iteration rather than here, so
 					-- it shares the loop's one /get per photo without being
@@ -1317,6 +1343,26 @@ LrTasks.startAsyncTask(function()
 					skippedCount = skippedCount + 1
 				end
 			end
+		end
+
+		-- Read back here, after the last of the three sites above. The two nil
+		-- cases stay separate in the report: one is a request that never made
+		-- it to the backend, the other a photo the index has nothing for.
+		if photoDataErrCount > 0 then
+			table.insert(
+				runWarnings,
+				"The search index could not be read for "
+					.. tostring(photoDataErrCount)
+					.. " photo(s), so nothing was applied to them."
+			)
+		end
+		if photoDataMissingCount > 0 then
+			table.insert(
+				runWarnings,
+				"The search index holds no data for "
+					.. tostring(photoDataMissingCount)
+					.. " photo(s), so nothing was written for them."
+			)
 		end
 
 		progressScope:done()
