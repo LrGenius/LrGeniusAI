@@ -394,7 +394,11 @@ Extra information sent alongside the photo to improve accuracy:
   **Discard** and **Cancel** now drop the species along with everything else —
   before, the species fields, the look-up links and the species keywords were
   written whichever button you pressed. Cancel stops the review there, and the
-  completion dialog says how many photos were left untouched.
+  completion dialog says how many photos were left untouched. The same dialog
+  also names the photos the run's own totals count as done but never wrote:
+  those you discarded in the review, and those skipped for having no photo ID.
+  A photo whose data cannot be read back from the backend appears under
+  **Warnings** rather than disappearing.
 - **Import metadata from catalog before indexing** — pushes the metadata you
   already have into the backend first, so the AI does not overwrite it blindly.
 
