@@ -319,6 +319,9 @@ return {
 			searchable = false,
 			browsable = false,
 		},
+		-- Legacy identity cache: retain these definitions and values for upgrades.
+		-- Util reads them but stores new identities in catalog plugin properties;
+		-- clearing or rewriting these photo fields would change lastEditTime.
 		{
 			id = "globalPhotoId",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoId=Global Photo ID"),

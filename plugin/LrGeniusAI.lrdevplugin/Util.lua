@@ -839,100 +839,147 @@ function Util.buildGlobalPhotoId(filePath, windowBytes)
 	return globalPhotoId, metadata
 end
 
+-- Identity bookkeeping belongs to the catalog, never to LrPhoto metadata:
+-- even private photo:setPropertyForPlugin writes advance Lightroom's lastEditTime.
+-- One durable record per Lightroom UUID keeps IDs stable across renames/restarts
+-- without a catalog-sized JSON blob or a process-global cache leaking across catalogs.
+local PHOTO_ID_CACHE_PREFIX = "photoIdentityV1_"
+
+local function readPhotoIdentity(catalog, key)
+	local raw = catalog:getPropertyForPlugin(_PLUGIN, key)
+	if raw == nil or raw == "" then
+		return nil
+	end
+	local record = JSON:decode(raw)
+	if
+		type(record) ~= "table"
+		or type(record.id) ~= "string"
+		or Util.nilOrEmpty(record.id)
+		or (record.algorithm ~= STABLE_ID_ALGO and record.algorithm ~= LEGACY_HASH_ALGO)
+	then
+		error("Invalid photo identity cache entry. Restore the catalog from a backup before retrying.")
+	end
+	return record
+end
+
+local function photoIdentityIsCurrent(record, attributes)
+	if not record then
+		return false
+	end
+	if record.algorithm == STABLE_ID_ALGO then
+		return true
+	end
+	-- Keep the last known identity for offline photos. A scan must not lose
+	-- their backend association just because the originals are disconnected.
+	return record.algorithm == LEGACY_HASH_ALGO
+		and (
+			not attributes
+			or (
+				tonumber(record.fileSize) == attributes.fileSize
+				and math.floor(tonumber(record.fileModificationDate) or 0)
+					== math.floor(attributes.fileModificationDate)
+			)
+		)
+end
+
+--- Resolves a backend ID without writing any photo metadata, including on a
+--- cache miss or forceRecompute. Existing photo properties are read-only legacy
+--- input; new and migrated identities are stored in catalog plugin properties.
 function Util.getGlobalPhotoIdForPhoto(photo, options)
 	options = options or {}
 	if not photo then
 		return nil, "Photo is nil"
 	end
+	local catalog = photo.catalog or LrApplication.activeCatalog()
+	local uuid = photo:getRawMetadata("uuid")
+	if not catalog or Util.nilOrEmpty(uuid) then
+		return nil, "A catalog and photo UUID are required to preserve the photo identity"
+	end
+	local key = PHOTO_ID_CACHE_PREFIX .. uuid
+	local ok, record = LrTasks.pcall(readPhotoIdentity, catalog, key)
+	if not ok then
+		return nil, "Could not read photo identity: " .. tostring(record)
+	end
+	local initialId = record and record.id
+	-- Stable IDs need no disk access, including when the original is offline.
+	if not options.forceRecompute and record and record.algorithm == STABLE_ID_ALGO then
+		return record.id, nil
+	end
 
 	local originalFilePath = photo:getRawMetadata("path")
-	local attributes, attrErr = getFileAttributes(originalFilePath)
-	if not attributes then
-		log:error(
-			"getGlobalPhotoIdForPhoto: file attributes unavailable for photo path="
-				.. tostring(originalFilePath)
-				.. " err="
-				.. tostring(attrErr)
-		)
-		return nil, attrErr
-	end
-
-	local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
-	local cachedAlgorithm = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm")
-	local cachedSize = tonumber(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize") or "")
-	local cachedMtime = tonumber(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate") or "")
-
-	if not options.forceRecompute and not Util.nilOrEmpty(cachedId) then
-		if cachedAlgorithm == STABLE_ID_ALGO then
-			-- log:trace("getGlobalPhotoIdForPhoto: cache hit for " .. tostring(originalFilePath))
-			return cachedId, nil
+	local attributes = getFileAttributes(originalFilePath)
+	if not options.forceRecompute then
+		if photoIdentityIsCurrent(record, attributes) then
+			return record.id, nil
 		end
-		if
-			cachedAlgorithm == LEGACY_HASH_ALGO
-			and cachedSize == tonumber(attributes.fileSize)
-			and math.floor(cachedMtime or 0) == math.floor(tonumber(attributes.fileModificationDate) or 0)
-		then
-			-- log:trace("getGlobalPhotoIdForPhoto: cache hit for legacy hash " .. tostring(originalFilePath))
-			return cachedId, nil
+		-- Only consult the old photo cache when no catalog record exists. A
+		-- recomputed catalog ID must never be replaced by stale photo metadata.
+		if not record then
+			local legacyId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
+			if not Util.nilOrEmpty(legacyId) then
+				local legacy = {
+					id = legacyId,
+					algorithm = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm"),
+					fileSize = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize"),
+					fileModificationDate = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate"),
+				}
+				if photoIdentityIsCurrent(legacy, attributes) then
+					record = legacy
+				end
+			end
 		end
 	end
 
-	local rebuildStartedAt = LrDate.currentTime()
-	local globalPhotoId, idErr = Util.computeStableMetadataPhotoId(photo)
-	local metadata = {
-		fileSize = attributes.fileSize,
-		fileModificationDate = attributes.fileModificationDate,
-		algorithm = STABLE_ID_ALGO,
-	}
-
-	if not globalPhotoId then
-		log:warn(
-			"getGlobalPhotoIdForPhoto: stable metadata id failed, falling back to partial hash for "
-				.. tostring(originalFilePath)
-				.. " err="
-				.. tostring(idErr)
-		)
-		local fallbackId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
-		if not fallbackId then
-			log:error(
-				"getGlobalPhotoIdForPhoto: failed for "
-					.. tostring(originalFilePath)
-					.. " err="
-					.. tostring(metadataOrErr)
-			)
-			return nil, metadataOrErr
+	if options.forceRecompute or not photoIdentityIsCurrent(record, attributes) then
+		local id, idErr = Util.computeStableMetadataPhotoId(photo)
+		record = { id = id, algorithm = STABLE_ID_ALGO }
+		if not id then
+			log:trace("Stable metadata ID unavailable; using partial hash: " .. tostring(idErr))
+			local fallbackId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
+			if not fallbackId then
+				return nil, metadataOrErr
+			end
+			if type(metadataOrErr) ~= "table" then
+				return nil, "Invalid photo metadata"
+			end
+			record = metadataOrErr
+			record.id = fallbackId
+			record.algorithm = LEGACY_HASH_ALGO
 		end
-		if type(metadataOrErr) ~= "table" then
-			return nil, "Invalid photo metadata"
-		end
-		globalPhotoId = fallbackId
-		metadata = metadataOrErr
-		metadata.algorithm = LEGACY_HASH_ALGO
 	end
 
-	local catalog = LrApplication.activeCatalog()
-	catalog:withPrivateWriteAccessDo(function()
-		photo:setPropertyForPlugin(_PLUGIN, "globalPhotoId", globalPhotoId)
-		photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize", tostring(metadata.fileSize or ""))
-		photo:setPropertyForPlugin(
-			_PLUGIN,
-			"globalPhotoIdFileModificationDate",
-			tostring(metadata.fileModificationDate or "")
-		)
-		photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm", tostring(metadata.algorithm or STABLE_ID_ALGO))
+	-- Do not return a newly computed ID until it is durable: otherwise a
+	-- rename/restart after a failed cache write could orphan backend data.
+	local didSave = false
+	local saved, saveErr = LrTasks.pcall(function()
+		local function save()
+			local current = readPhotoIdentity(catalog, key)
+			-- Another task may have resolved this photo while write access yielded.
+			if
+				not options.forceRecompute
+				and current
+				and current.id ~= initialId
+				and photoIdentityIsCurrent(current, attributes)
+			then
+				record = current
+			else
+				catalog:setPropertyForPlugin(_PLUGIN, key, JSON:encode(record))
+			end
+			didSave = true
+		end
+		if catalog.hasPrivateWriteAccess or catalog.hasWriteAccess then
+			save()
+		else
+			catalog:withPrivateWriteAccessDo(save)
+		end
 	end)
-
-	local rebuildElapsedMs = math.floor((LrDate.currentTime() - rebuildStartedAt) * 1000)
-	log:trace(
-		"getGlobalPhotoIdForPhoto: cache miss -> generated id for "
-			.. tostring(originalFilePath)
-			.. " elapsedMs="
-			.. tostring(rebuildElapsedMs)
-			.. " idPrefix="
-			.. tostring(string.sub(globalPhotoId, 1, 24))
-	)
-
-	return globalPhotoId, nil
+	if not saved or not didSave then
+		return nil,
+			"Could not save photo identity. Check catalog write access and retry: " .. tostring(
+				saveErr or "write access was not granted"
+			)
+	end
+	return record.id, nil
 end
 
 function Util.getStringsFromRelativePath(absolutePath)

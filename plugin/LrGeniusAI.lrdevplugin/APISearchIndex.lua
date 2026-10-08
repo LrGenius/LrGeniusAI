@@ -641,26 +641,7 @@ function SearchIndexAPI.findPhotoByPhotoId(photoId)
 		return nil
 	end
 
-	local catalog = LrApplication.activeCatalog()
-	if not shouldUseGlobalPhotoId() then
-		return catalog:findPhotoByUuid(photoId)
-	end
-
-	for _, photo in ipairs(catalog:getAllPhotos()) do
-		local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
-		if cachedId == photoId then
-			return photo
-		end
-	end
-
-	for _, photo in ipairs(catalog:getAllPhotos()) do
-		local candidateId = getPhotoIdForPhoto(photo)
-		if candidateId == photoId then
-			return photo
-		end
-	end
-
-	return nil
+	return SearchIndexAPI.findPhotosByPhotoIds({ photoId })[1]
 end
 
 function SearchIndexAPI.findPhotosByPhotoIds(photoIds)
@@ -687,11 +668,16 @@ function SearchIndexAPI.findPhotosByPhotoIds(photoIds)
 	end
 
 	local idSet = {}
+	local remaining = 0
 	for _, photoId in ipairs(photoIds) do
-		idSet[photoId] = true
+		if not idSet[photoId] then
+			idSet[photoId] = true
+			remaining = remaining + 1
+		end
 	end
 
 	local photoById = {}
+	local identityErrors = {}
 	local startedAt = LrDate.currentTime()
 	local allPhotos = catalog:getAllPhotos()
 	local allPhotosElapsed = math.floor((LrDate.currentTime() - startedAt) * 1000)
@@ -704,10 +690,23 @@ function SearchIndexAPI.findPhotosByPhotoIds(photoIds)
 	)
 
 	for _, photo in ipairs(allPhotos) do
-		local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
-		if cachedId and idSet[cachedId] and not photoById[cachedId] then
-			photoById[cachedId] = photo
+		-- Resolve through the same catalog cache used for indexing and claims;
+		-- new photos no longer have a globalPhotoId property on the photo.
+		local candidateId, idErr = getPhotoIdForPhoto(photo)
+		if not candidateId then
+			identityErrors[#identityErrors + 1] = tostring(idErr)
 		end
+		if candidateId and idSet[candidateId] and not photoById[candidateId] then
+			photoById[candidateId] = photo
+			remaining = remaining - 1
+			if remaining == 0 then
+				break
+			end
+		end
+	end
+
+	if #identityErrors > 0 then
+		ErrorHandler.handleError("Could not resolve photo identities", SearchIndexAPI.condenseMessages(identityErrors))
 	end
 
 	for _, photoId in ipairs(photoIds) do
@@ -1551,7 +1550,7 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 			if photoId then
 				table.insert(photoIds, photoId)
 			else
-				log:error("Skipping photo in scoped search due to missing photo ID: " .. tostring(idErr))
+				return nil, "Could not resolve photo identity for search: " .. tostring(idErr)
 			end
 		end
 
@@ -1953,10 +1952,12 @@ function SearchIndexAPI.syncCleanup()
 			progressScope:done()
 			return false, "canceled"
 		end
-		local photoId = getPhotoIdForPhoto(photo)
-		if photoId then
-			photoIds[#photoIds + 1] = photoId
+		local photoId, idErr = getPhotoIdForPhoto(photo)
+		if not photoId then
+			progressScope:done()
+			return false, "Could not resolve photo identity for cleanup: " .. tostring(idErr)
 		end
+		photoIds[#photoIds + 1] = photoId
 		if i % updateInterval == 0 or i == #allPhotos then
 			progressScope:setPortionComplete(i, #allPhotos)
 			progressScope:setCaption(
@@ -1968,31 +1969,23 @@ function SearchIndexAPI.syncCleanup()
 	end
 
 	progressScope:setCaption(LOC("$$$/LrGeniusAI/SearchIndexAPI/syncCleanupSending=Syncing with backend..."))
-	local batchSize = 5000
-	local disassociated = 0
-	for startIdx = 1, #photoIds, batchSize do
-		if progressScope:isCanceled() then
-			progressScope:done()
-			return false, "canceled"
-		end
-		local stopIdx = math.min(startIdx + batchSize - 1, #photoIds)
-		local batch = {}
-		for j = startIdx, stopIdx do
-			batch[#batch + 1] = photoIds[j]
-		end
-		local result, err = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
-			catalog_id = catalogId,
-			photo_ids = batch,
-		}, 120)
-		if err then
-			progressScope:done()
-			log:error("syncCleanup failed: " .. tostring(err))
-			return false, err
-		end
-		if result and result.disassociated then
-			disassociated = disassociated + result.disassociated
-		end
+	if progressScope:isCanceled() then
+		progressScope:done()
+		return false, "canceled"
 	end
+	-- Cleanup is a complete inventory, not an additive claim. Sending batches
+	-- would disassociate every photo outside each batch (and an empty catalog
+	-- must still be sent so its former associations can be removed).
+	local result, err = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
+		catalog_id = catalogId,
+		photo_ids = photoIds,
+	}, 120)
+	if err then
+		progressScope:done()
+		log:error("syncCleanup failed: " .. tostring(err))
+		return false, err
+	end
+	local disassociated = result and result.disassociated or 0
 	progressScope:done()
 	log:info(
 		"syncCleanup finished: "
@@ -2043,10 +2036,14 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
 			progressScope:done()
 			return false, "canceled", nil
 		end
-		local photoId, _ = getPhotoIdForPhoto(photo)
-		if photoId then
-			photoIds[#photoIds + 1] = photoId
+		local photoId, idErr = getPhotoIdForPhoto(photo)
+		if not photoId then
+			if progressScope then
+				progressScope:done()
+			end
+			return false, "Could not resolve photo identity for claiming: " .. tostring(idErr), nil
 		end
+		photoIds[#photoIds + 1] = photoId
 		if progressScope and (i % progressStride == 0 or i == totalPhotos) then
 			progressScope:setPortionComplete(i, totalPhotos)
 			progressScope:setCaption(
@@ -2106,7 +2103,15 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
 	if progressScope then
 		progressScope:setPortionComplete(totalPhotos, totalPhotos)
 	end
-	return true, nil, { claimed = totalClaimed, errors = totalErrors }
+	local result = { claimed = totalClaimed, errors = totalErrors }
+	if totalErrors > 0 then
+		return false,
+			"The backend could not claim "
+				.. tostring(totalErrors)
+				.. " photos. Retry claiming after checking the backend.",
+			result
+	end
+	return true, nil, result
 end
 
 function SearchIndexAPI.removeMissingFromIndex()
@@ -3628,7 +3633,8 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 			if photoId then
 				table.insert(photoIds, photoId)
 			else
-				log:error("Could not compute photo_id for missing-check: " .. tostring(idErr))
+				ErrorHandler.handleError("Could not check unprocessed photos", tostring(idErr))
+				return false, {}
 			end
 			if i % updateInterval == 0 or i == totalCatalog then
 				updateLookupProgress(i, totalCatalog)
@@ -3688,7 +3694,11 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 			if lookupProgressScope and lookupProgressScope:isCanceled() then
 				return false, {}
 			end
-			local photoId = getPhotoIdForPhoto(photo)
+			local photoId, idErr = getPhotoIdForPhoto(photo)
+			if not photoId then
+				ErrorHandler.handleError("Could not match unprocessed photos", tostring(idErr))
+				return false, {}
+			end
 			if photoIdSet[photoId] then
 				table.insert(photosToProcess, photo)
 			end
@@ -3709,8 +3719,12 @@ function SearchIndexAPI.getMissingPhotosFromIndex(taskOptions, lookupProgressSco
 
 	local photosToProcess = {}
 	for _, photo in ipairs(allPhotos) do
-		local photoId = getPhotoIdForPhoto(photo)
-		if photoId and not Util.table_contains(indexedPhotoIds, photoId) then
+		local photoId, idErr = getPhotoIdForPhoto(photo)
+		if not photoId then
+			ErrorHandler.handleError("Could not check unprocessed photos", tostring(idErr))
+			return false, {}
+		end
+		if not Util.table_contains(indexedPhotoIds, photoId) then
 			table.insert(photosToProcess, photo)
 		end
 	end
