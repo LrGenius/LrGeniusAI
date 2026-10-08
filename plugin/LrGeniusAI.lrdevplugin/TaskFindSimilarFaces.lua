@@ -368,7 +368,14 @@ LrTasks.startAsyncTask(function()
 		-- Collection name: use person name when available (same as People "Show in Library")
 		local personDisplayName
 		if personId and personId ~= "" then
-			local personsResp2, _ = SearchIndexAPI.getPersons()
+			local personsResp2, personsErr2 = SearchIndexAPI.getPersons()
+			if personsErr2 then
+				log:warn("getPersons failed during collection naming: " .. tostring(personsErr2))
+				table.insert(
+					resolutionWarnings,
+					"The list of people could not be read, so the new collection is named generically."
+				)
+			end
 			local personsList = (personsResp2 and personsResp2.persons) and personsResp2.persons or {}
 			personDisplayName = getPersonNameForId(personId, personsList)
 		end
