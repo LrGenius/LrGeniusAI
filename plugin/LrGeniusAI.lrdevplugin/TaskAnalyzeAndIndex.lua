@@ -1035,7 +1035,8 @@ LrTasks.startAsyncTask(function()
 						progressScope:done()
 						LrDialogs.message(
 							LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+							"info"
 						)
 						return
 					end
