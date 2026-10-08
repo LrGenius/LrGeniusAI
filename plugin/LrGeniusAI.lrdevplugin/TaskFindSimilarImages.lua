@@ -185,7 +185,7 @@ local function createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 	if #notes > 0 then
 		doneMessage = doneMessage .. "\n\nNot in the collection: " .. table.concat(notes, "; ") .. "."
 	end
-	LrDialogs.message(LOC("$$$/LrGeniusAI/FindSimilarImages/Done=Done"), doneMessage)
+	LrDialogs.message(LOC("$$$/LrGeniusAI/FindSimilarImages/Done=Done"), doneMessage, "info")
 end
 
 LrTasks.startAsyncTask(function()

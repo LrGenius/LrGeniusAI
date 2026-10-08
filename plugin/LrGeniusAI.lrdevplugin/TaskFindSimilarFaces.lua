@@ -175,7 +175,8 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 			'$$$/LrGeniusAI/People/CollectionCreated=^1 photo(s) added to collection "^2".',
 			tostring(#photos),
 			collectionName
-		)
+		),
+		"info"
 	)
 end
 

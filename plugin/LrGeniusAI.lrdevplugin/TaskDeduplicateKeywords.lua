@@ -667,7 +667,11 @@ LrTasks.startAsyncTask(function()
 			if semanticWarning then
 				msg = msg .. "\n\n" .. semanticWarning
 			end
-			LrDialogs.message(LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesTitle=No Duplicates Found"), msg)
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesTitle=No Duplicates Found"),
+				msg,
+				"info"
+			)
 			return
 		end
 
@@ -944,7 +948,11 @@ LrTasks.startAsyncTask(function()
 				)
 		end
 
-		LrDialogs.message(LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultTitle=Deduplication Complete"), resultMsg)
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultTitle=Deduplication Complete"),
+			resultMsg,
+			"info"
+		)
 
 		log:info(
 			"DeduplicateKeywords complete: merged="

@@ -732,6 +732,6 @@ LrTasks.startAsyncTask(function()
 				.. ")."
 		end
 
-		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage)
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage, "info")
 	end)
 end)

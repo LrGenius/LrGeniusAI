@@ -144,7 +144,7 @@ end
 --- Führt "Show in Library" aus. entries: { person_id, person_name? }[]; matchMode: "union" | "intersection".
 local function doShowInLibrary(entries, matchMode)
 	if not entries or #entries == 0 then
-		LrDialogs.message("No people selected", "Select one or more people on the People page, then try again.")
+		LrDialogs.message("No people selected", "Select one or more people on the People page, then try again.", "info")
 		return
 	end
 
@@ -167,9 +167,9 @@ local function doShowInLibrary(entries, matchMode)
 
 	if #photoIdsOrdered == 0 then
 		if mode == "intersection" and #entries >= 2 then
-			LrDialogs.message("No photos", "No photos contain all selected people together.")
+			LrDialogs.message("No photos", "No photos contain all selected people together.", "info")
 		else
-			LrDialogs.message("No photos", "No photos found for this person.")
+			LrDialogs.message("No photos", "No photos found for this person.", "info")
 		end
 		return
 	end
@@ -177,7 +177,7 @@ local function doShowInLibrary(entries, matchMode)
 	local catalog = LrApplication.activeCatalog()
 	local photos = SearchIndexAPI.findPhotosByPhotoIds(photoIdsOrdered)
 	if #photos == 0 then
-		LrDialogs.message("Not in catalog", "Photos for this person are not in the current catalog.")
+		LrDialogs.message("Not in catalog", "Photos for this person are not in the current catalog.", "info")
 		return
 	end
 
@@ -221,7 +221,7 @@ local function doShowInLibrary(entries, matchMode)
 
 	catalog:setActiveSources({ collection })
 	LrApplicationView.gridView()
-	LrDialogs.message("Done", string.format('%d photo(s) added to collection "%s".', #photos, collectionName))
+	LrDialogs.message("Done", string.format('%d photo(s) added to collection "%s".', #photos, collectionName), "info")
 end
 
 --- Übersetzt eine Aktion der Browser-Seite in Lightroom-Arbeit.

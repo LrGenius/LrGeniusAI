@@ -1453,7 +1453,8 @@ LrTasks.startAsyncTask(function()
 		if status == "canceled" then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+				"info"
 			)
 		elseif status == "allfailed" then
 			if not Util.nilOrEmpty(combinedError) then
@@ -1464,7 +1465,8 @@ LrTasks.startAsyncTask(function()
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"),
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
+					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
+					"critical"
 				)
 			end
 		elseif status == "somefailed" then
@@ -1490,7 +1492,7 @@ LrTasks.startAsyncTask(function()
 			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(summary, combinedError)
 			elseif cancelNote then
-				LrDialogs.message("Task Canceled", summary)
+				LrDialogs.message("Task Canceled", summary, "info")
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"), summary)
 			end
@@ -1510,11 +1512,11 @@ LrTasks.startAsyncTask(function()
 				msg = msg .. "\n\nWarnings:\n" .. warningText
 			end
 			if cancelNote then
-				LrDialogs.message("Task Canceled", msg)
+				LrDialogs.message("Task Canceled", msg, "info")
 			elseif warningText then
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
-				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg, "info")
 			end
 		end
 

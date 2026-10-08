@@ -386,7 +386,8 @@ LrTasks.startAsyncTask(function()
 		if #finalResults == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 			return
 		end
@@ -416,7 +417,8 @@ LrTasks.startAsyncTask(function()
 		if #photoIds == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 			return
 		end
@@ -525,7 +527,8 @@ LrTasks.startAsyncTask(function()
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 		end
 	end)
