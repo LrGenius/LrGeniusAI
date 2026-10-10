@@ -281,6 +281,11 @@ It runs with `--no-project` on purpose — `facenet-pytorch` pins `torch<2.3`
 and `numpy<2.0`, which `scripts/pyproject.toml` cannot satisfy, so the script
 carries its own PEP 723 dependency header.
 
+`scripts/develop_registry/` is a separate, stdlib-only `uv` project for the
+native Lightroom develop model: the `crs:` key inventory and registry
+generator, and the extractor that produces the scrubbed fixtures in
+`testdata/develop/`. See its README.
+
 Then point the server at the files:
 
 ```bash

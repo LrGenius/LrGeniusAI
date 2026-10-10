@@ -1,0 +1,28 @@
+[project]
+name = "lrg-develop-registry"
+version = "0.1.0"
+description = "Research and fixture tools for the native Lightroom develop model (lrg-develop): crs XMP inventory, key-registry generator, scrubbed test fixtures. Build-time tooling only, not part of any shipped backend."
+requires-python = ">=3.12"
+# The tools are stdlib-only. Only dump_training.py needs LanceDB's Python
+# package; it lives in an opt-in group so a plain `uv run` never installs it:
+#   uv run --group lance dump_training.py ...
+dependencies = []
+
+[dependency-groups]
+lance = [
+    "pylance>=12.0.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# spec.py is a data table kept one row per line (see its docstring).
+"spec.py" = ["E501"]
