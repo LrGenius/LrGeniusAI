@@ -22,10 +22,18 @@ only `dump_training.py` needs `pylance`, in the opt-in `lance` group.
 > private and must never be committed.** That covers `corpus_meta.json`,
 > `corpus_keyfreq.json`, `sample_files.json`, `inventory*.json`, the registry
 > Markdown and the training dump — they contain paths, file names, photo ids
-> and capture data. The **only** exception is what `extract_fixtures.py` writes:
-> it scrubs its output, checks it in a private temporary folder and only then
+> and capture data. The **only** exceptions are what `extract_fixtures.py` writes
+> (it scrubs its output, checks it in a private temporary folder and only then
 > replaces the fixtures it owns; if the check fails the fixture folder is left
-> untouched. Write every other output to a folder outside the repository.
+> untouched) and `server-rs/testdata/develop/defaults/`, Lightroom's own
+> defaults read back from an unedited photo, reduced to key -> value plus the
+> Lightroom version, process version and file kind (no file name, path, id
+> or date; `orientation` is dropped. The Upright solver state stays in: the
+> registry keeps it `NoDefault` and a test relies on that, and
+> `UprightFocalLength35mm` can reflect the photo's focal length, as in the
+> fixtures. `HDRMaxValue` stays in too, held back from the defaults as
+> possibly per image. The hygiene checks cover it).
+> Write every other output to a folder outside the repository.
 
 The tools enforce this: they refuse an output path inside the repository
 (`outpath.py`), except `extract_fixtures.py` into `server-rs/testdata/develop/`.
@@ -123,11 +131,20 @@ patterns (`Table_<md5>`, `pm_*`, the FilterList payload,
 `registry/patterns.rs`, and the decisions the free text cannot carry (value
 kind of "mixed" rows, gates, frame scope, presence, number format, recipe
 aliases) are the tables at the top of the script. It imports `spec` and
-nothing else — no inventory, no training dump. The `Temp` row is not seeded:
+reads one committed data file,
+`server-rs/testdata/develop/defaults/non_raw_lrc15.6.json` (experiment E13's
+readback of an unedited non-raw photo): every global row whose non-raw
+default the text leaves unverified gets the value read back, if the readback
+has the key and it is not held back in `NON_RAW_READBACK_NOT_CONSTANT`
+(`--counts` prints how many, which keys kept `NoDefault` and which were held
+back). A readback that contradicts a non-raw default the text states stops
+the run.
+No inventory, no training dump. The `Temp` row is not seeded:
 it documents the plugin bug, it is not a key.
 
-The Rust table is the source of truth once seeded; running the script again
-overwrites hand edits to `table.rs`. Refresh the review snapshot afterwards:
+The Rust table is the source of truth; running the script again overwrites
+hand edits to `table.rs`, so mirror them in `spec.py` (as of October 2026 the
+script reproduces `table.rs` exactly). Refresh the review snapshot afterwards:
 
 ```bash
 python3 gen_table_rs.py --out ../../crates/lrg-develop/src/registry/table.rs --counts

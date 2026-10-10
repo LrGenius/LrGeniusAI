@@ -609,8 +609,9 @@ fn global_fields(settings: &DevelopSettings) -> Fields {
     f
 }
 
-/// The `Look`'s typed fields back in their registry rows, next to `rest`.
-fn look_struct(look: &Look) -> Struct {
+/// The `Look`'s typed fields back in their registry rows, next to `rest`
+/// (shared with the Lua writer).
+pub(crate) fn look_struct(look: &Look) -> Struct {
     const L: Level = Level::Struct(StructKind::Look);
     let mut s = look.rest.clone();
     let mut put = |name: &str, v: Option<Value>| {

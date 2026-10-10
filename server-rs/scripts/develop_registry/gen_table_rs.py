@@ -13,9 +13,14 @@ unit, defaults, policy, notes). This script turns them into typed
   gates, frame scope, presence, number format, recipe aliases) are the tables
   at the top of this file.
 
-It imports ``spec`` and nothing else: no inventory, no training dump, no
-ExifTool data, and it never reads the rendered Markdown or its "Observed"
-column. The output depends only on committed files.
+It imports ``spec`` and reads one committed data file,
+``server-rs/testdata/develop/defaults/non_raw_lrc15.6.json`` (experiment E13's
+readback of a non-raw photo without develop edits: key -> value plus the
+Lightroom version, process version and file kind it was read on). That file
+fills the non-raw default of every global row the text leaves ``Unverified``
+(see ``non_raw_readback``). No inventory, no training dump, no ExifTool data,
+and it never reads the rendered Markdown or its "Observed" column. The output
+depends only on committed files.
 
 The Rust table is the source of truth once seeded (docs/wiki/Dev-Develop-Model.md).
 Re-running this script overwrites ``table.rs``, including hand edits made
@@ -31,6 +36,7 @@ reviewed. Afterwards regenerate the snapshot::
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -831,6 +837,106 @@ def default_of(r: Row, kind: str, policy: str) -> tuple:
     return ("Value", lit), ("Unverified",)
 
 
+# Lightroom's own non-raw defaults, read back (experiment E13). Committed,
+# scrubbed: key -> value only, plus where it was read (Lightroom version,
+# process version, file kind). Values for keys absent from the readback are
+# not invented: absence can mean "written only when used".
+NON_RAW_READBACK = Path(__file__).resolve().parents[2] / "testdata/develop/defaults/non_raw_lrc15.6.json"
+
+
+# Readback keys whose value is not taken as Lightroom's non-raw default: the
+# readback is one photo, and these may be per image. They stay ``Unverified``
+# and are listed by ``--counts``; ``registry/tests.rs``
+# (``non_raw_defaults_come_from_the_readback``) holds the same set.
+NON_RAW_READBACK_NOT_CONSTANT = {
+    "HDRMaxValue": "one photo (a virtual copy of a TIFF) read 2.3; may be per image",
+}
+
+
+def load_non_raw_readback(path: Path = NON_RAW_READBACK) -> dict:
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    prov = doc.get("provenance", {})
+    for k in ("lightroom", "process_version", "file_kind"):
+        if not isinstance(prov.get(k), str) or not prov[k]:
+            raise SystemExit(f"{path.name}: provenance.{k} missing")
+    if not isinstance(doc.get("settings"), dict) or not doc["settings"]:
+        raise SystemExit(f"{path.name}: no settings")
+    return doc["settings"]
+
+
+def readback_lit(kind: str, v):
+    """The readback value ``v`` as a literal of ``kind``; None when the kind
+    cannot carry a default (``Any``, ``Hex32``, ...) or the value does not fit."""
+    if isinstance(v, bool):
+        return ("Bool", v) if kind.startswith("Bool") else None
+    if isinstance(v, int):
+        if kind in ("Int", "VersionU32") or kind.startswith("EnumInt"):
+            return ("Int", v)
+        if kind == "IntFlag":
+            return ("Int", v) if v in (0, 1) else None
+        if kind == "Real":
+            return ("Real", float(v))
+        return None
+    if isinstance(v, float):
+        return ("Real", v) if kind == "Real" else None
+    if isinstance(v, str):
+        if kind == "Str":
+            return ("Str", v)
+        if kind.startswith("Enum("):
+            return ("Str", v) if v in re.findall(r'"([^"]*)"', kind) else None
+        return None
+    if isinstance(v, list) and kind == "Curve(CurveKind::Global)":
+        if all(isinstance(x, int) and not isinstance(x, bool) for x in v) and len(v) >= 4 and len(v) % 2 == 0:
+            return ("IntList", v)
+    return None
+
+
+def stated_non_raw(r: Row, kind: str):
+    """The non-raw half of the row's default text ("raw / non-raw") as a
+    literal of ``kind``; None when the text states none ("?", prose, or no
+    second half)."""
+    text = r.default.strip()
+    if " / " not in text:
+        return None
+    right = text.split(" / ", 1)[1]
+    right = re.split(r"\s+\(|\s+in preset form|\s+in presets", right)[0]
+    return parse_lit(kind, right) or parse_lit(kind, right.split()[0] if right.split() else "")
+
+
+def non_raw_readback(r: Row, kind: str, non_raw: tuple, readback: dict, report: dict) -> tuple:
+    """The non-raw default after the readback: an ``Unverified`` global row
+    whose key Lightroom read back gets that value. ``NoDefault`` and
+    ``Absent`` stay (a per-photo value, or a key of the other file kind),
+    and so do the keys in ``NON_RAW_READBACK_NOT_CONSTANT``. Two
+    contradictions stop the run: a readback of a key the text calls absent
+    for non-raw files, and a readback that differs from the non-raw default
+    the text states (unless the key is held back)."""
+    if r.level != "Global" or r.name not in readback:
+        return non_raw
+    report["seen"].add(r.name)
+    if non_raw == ("Absent",):
+        raise SystemExit(f"{r.name}: non-raw readback has the key, the row says absent for non-raw files")
+    stated = stated_non_raw(r, kind)
+    read = readback_lit(kind, readback[r.name])
+    if stated is not None and read is not None and stated != read and r.name not in NON_RAW_READBACK_NOT_CONSTANT:
+        raise SystemExit(
+            f"{r.name}: the text states the non-raw default {stated[1]!r}, the readback has {read[1]!r};"
+            " correct spec.py or hold the key back in NON_RAW_READBACK_NOT_CONSTANT"
+        )
+    if r.name in NON_RAW_READBACK_NOT_CONSTANT:
+        report["held_back"].append(f"{r.name} ({NON_RAW_READBACK_NOT_CONSTANT[r.name]})")
+        return non_raw
+    if non_raw != ("Unverified",):
+        report["kept"].append(f"{r.name} ({non_raw[0]})")
+        return non_raw
+    lit = read
+    if lit is None:
+        report["no_literal"].append(f"{r.name} ({kind})")
+        return non_raw
+    report["filled"].append(r.name)
+    return ("Value", lit)
+
+
 def fmt_of(r: Row, kind: str, presence: str) -> str:
     if presence == "LuaOnly":
         return "NumFmt::Text"
@@ -892,7 +998,9 @@ def note_of(r: Row) -> str:
     return text
 
 
-def render(all_rows: list[Row]) -> tuple[str, dict]:
+def render(all_rows: list[Row], readback: dict | None = None) -> tuple[str, dict]:
+    readback = load_non_raw_readback() if readback is None else readback
+    report: dict = {"seen": set(), "filled": [], "kept": [], "held_back": [], "no_literal": []}
     seen: set[tuple[str, str]] = set()
     lines = []
     counts: dict = {}
@@ -908,16 +1016,18 @@ def render(all_rows: list[Row]) -> tuple[str, dict]:
         if r.level == "Struct(StructKind::Look)" and r.name == "Amount":
             ui, rng = "UiScale::Div(100.0)", (0.0, 2.0)
         raw, non_raw = default_of(r, kind, policy.split("(")[0])
+        non_raw = non_raw_readback(r, kind, non_raw, readback, report)
         fmt = fmt_of(r, kind, presence)
         plus = plus_of(r, kind, rng, presence)
         frame = frame_of(r, policy.split("(")[0])
         file_scope = FILE_SCOPE.get(r.name, "Both") if r.level == "Global" else "Both"
         min_pv = "Some(ProcessVersion::PV2012)" if PV2012_NOTE.search(r.pv) else "None"
         alias = ALIAS.get(r.name) if r.level == "Global" else None
-        if raw[0] == "Value" and rng is not None and raw[1][0] in ("Int", "Real"):
-            v = raw[1][1]
-            if not rng[0] <= v <= rng[1]:
-                raise SystemExit(f"default {v} outside range {rng} for {r.level}/{r.name}")
+        for d in (raw, non_raw):
+            if d[0] == "Value" and rng is not None and d[1][0] in ("Int", "Real"):
+                v = d[1][1]
+                if not rng[0] <= v <= rng[1]:
+                    raise SystemExit(f"default {v} outside range {rng} for {r.level}/{r.name}")
         rng_rs = "None" if rng is None else f"Some(({rs_f(rng[0])}, {rs_f(rng[1])}))"
         lines.append(
             "    KeySpec {\n"
@@ -942,6 +1052,21 @@ def render(all_rows: list[Row]) -> tuple[str, dict]:
         cls = policy.split("(")[0]
         counts.setdefault(lvl, {}).setdefault(cls, 0)
         counts[lvl][cls] += 1
+    unknown = sorted(set(readback) - report["seen"])
+    stale = sorted(set(NON_RAW_READBACK_NOT_CONSTANT) - report["seen"])
+    if stale:
+        raise SystemExit(f"NON_RAW_READBACK_NOT_CONSTANT names keys the readback lacks: {stale}")
+    if unknown:
+        raise SystemExit(f"non-raw readback keys without a global row: {unknown}")
+    counts["non-raw readback"] = {
+        "filled": len(report["filled"]),
+        "kept (NoDefault)": len(report["kept"]),
+        "held back (not constant)": len(report["held_back"]),
+        "no literal (kind)": len(report["no_literal"]),
+    }
+    counts["non-raw readback: kept"] = report["kept"]
+    counts["non-raw readback: held back"] = report["held_back"]
+    counts["non-raw readback: no literal"] = report["no_literal"]
     missing_alias = set(ALIAS) - {r.name for r in all_rows if r.level == "Global"}
     if missing_alias:
         raise SystemExit(f"aliases for unknown keys: {sorted(missing_alias)}")
@@ -985,6 +1110,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.counts:
         total = 0
         for lvl, c in counts.items():
+            if lvl.startswith("non-raw readback"):
+                print(f"{lvl:28} {c}")
+                continue
             print(f"{lvl:28} {dict(sorted(c.items()))}")
             total += sum(c.values())
         print("total rows", total)

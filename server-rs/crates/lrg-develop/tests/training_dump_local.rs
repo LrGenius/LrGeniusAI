@@ -27,8 +27,15 @@
 //! also written as a develop preset, mixed and single-kind (the production
 //! path: learned settings come from Lua): no write error, a preset without
 //! a warning, no key outside the preset policy, and exactly the
-//! policy-filtered settings (`support/preset.rs`). Output names keys, row
-//! numbers and counts only, never values or photo ids: the rows are private.
+//! policy-filtered settings (`support/preset.rs`). And every row goes
+//! through the Lua writer (plan §7.3): losslessly (round trip 2: the same
+//! model back, the same table again), through an XMP preset and back
+//! (round trip 3: Lua → model → preset → model → Lua, equal after
+//! quantisation; `support/lua_round.rs`), and in apply mode for its own
+//! photo (`support/lua_apply.rs`: a table that passes `check_wire`, reads
+//! back without a warning, holds every filtered value exactly or reports
+//! it, and holds nothing beyond those and the writer's fixed form). Output names keys, row numbers and
+//! counts only, never values or photo ids: the rows are private.
 
 #[path = "../../lrg-ml/tests/common/mod.rs"]
 mod common;
@@ -36,6 +43,13 @@ mod common;
 #[allow(dead_code)]
 #[path = "support/flat.rs"]
 mod flat;
+#[allow(dead_code)] // the option flips and the single-table check are for the committed data
+#[path = "support/lua_apply.rs"]
+mod lua_apply;
+// `round_trip_3_only` and the panicking helpers are for the committed tests.
+#[allow(dead_code)]
+#[path = "support/lua_round.rs"]
+mod lua_round;
 #[path = "support/preset.rs"]
 mod preset;
 mod support;
@@ -45,9 +59,11 @@ use std::path::PathBuf;
 
 use lrg_develop::build::{IdSlot, SyncNamespace};
 use lrg_develop::lua::from_lua_str;
-use lrg_develop::model::Target;
+use lrg_develop::model::{DevelopSettings, Target};
 use lrg_develop::xmp::{parse, write, PresetHeader, PresetSpec, WriteMode, XmpKind};
 use lrg_develop::FileKindHint;
+use lua_apply::LuaApply;
+use lua_round::LuaRoundTrips;
 use serde_json::Value as J;
 use support::{generic_path, MaskCounts, RangeCheck};
 
@@ -81,6 +97,7 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
     let mut process_versions: BTreeMap<String, usize> = BTreeMap::new();
     let mut ranges = RangeCheck::default();
     let mut presets = PresetCounts::default();
+    let mut lua = LuaCounts::default();
 
     // Rows are named by their position only: their ids are private photo ids.
     for (i, row) in rows.iter().enumerate() {
@@ -119,6 +136,7 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
             .or_default() += 1;
         masks.add(&settings);
         presets.row(&settings);
+        lua.row(&settings);
     }
 
     eprintln!(
@@ -139,6 +157,7 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
         eprintln!("  {n:>5}  {what}");
     }
     presets.report();
+    lua.report();
 
     assert!(errors.is_empty(), "parse errors: {errors:#?}");
     // The dump is Lightroom's own output: any warning (an unknown key, a
@@ -161,6 +180,33 @@ fn every_training_row_parses_without_errors_or_unknown_keys() {
         ranges.outside
     );
     presets.assert_clean();
+    lua.assert_clean();
+}
+
+/// Every row through the Lua writer: round trips 2 and 3
+/// (`support/lua_round.rs`) and for its own photo (`support/lua_apply.rs`);
+/// counts only.
+#[derive(Default)]
+struct LuaCounts {
+    round: LuaRoundTrips,
+    apply: LuaApply,
+}
+
+impl LuaCounts {
+    fn row(&mut self, settings: &DevelopSettings) {
+        self.round.settings(settings);
+        self.apply.settings(settings);
+    }
+
+    fn report(&self) {
+        self.round.report("");
+        self.apply.report("");
+    }
+
+    fn assert_clean(&self) {
+        self.round.assert_clean("training dump");
+        self.apply.assert_clean("training dump");
+    }
 }
 
 /// Every row written as a preset, mixed and single-kind; counts only.
@@ -178,7 +224,7 @@ struct PresetCounts {
 }
 
 impl PresetCounts {
-    fn row(&mut self, settings: &lrg_develop::model::DevelopSettings) {
+    fn row(&mut self, settings: &DevelopSettings) {
         let uuid = SyncNamespace::new("training_dump_local").id("row", IdSlot::Correction);
         for mixed in [true, false] {
             let mode = if mixed { "mixed" } else { "single-kind" };

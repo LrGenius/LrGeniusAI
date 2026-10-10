@@ -7,7 +7,8 @@
 //! Scanned: every `.rs` file under `server-rs/crates/*/src` and the plugin's
 //! `DevelopEditManager.lua`, comments excluded. Allowed: the develop
 //! experiments (`*DevelopExperiments*.lua`), which write `Temp` on purpose to
-//! observe what Lightroom does with it.
+//! observe what Lightroom does with it, and the one constant the Lua writer
+//! refuses it with (`ALLOWED_LINES`).
 //!
 //! CI runs it twice: with the rest of `cargo test --workspace` in
 //! `server-rs-tests.yml` (only on `server-rs/**` changes), and on its own in
@@ -35,6 +36,14 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// Lines allowed to spell the key, by file (relative to the repository
+/// root) and trimmed text: the one constant the Lua writer's wire guard
+/// refuses the key with.
+const ALLOWED_LINES: &[(&str, &str)] = &[(
+    "server-rs/crates/lrg-develop/src/lua/write.rs",
+    r#"pub const RETIRED_TEMP_KEY: &str = "Temp";"#,
+)];
 
 fn is_allowlisted(path: &Path) -> bool {
     path.file_name()
@@ -152,14 +161,28 @@ fn no_code_uses_temp_as_a_develop_key() {
     assert!(files.len() > 50, "only {} files found", files.len());
 
     let mut report = Vec::new();
+    let mut allowed_seen = 0;
     for file in files.iter().filter(|f| !is_allowlisted(f)) {
         let text = std::fs::read_to_string(file).unwrap();
         let is_lua = file.extension().is_some_and(|e| e == "lua");
+        let rel = file.strip_prefix(&root).unwrap_or(file);
+        // `/`-joined, so `ALLOWED_LINES` matches on Windows too (the release
+        // job runs this test there; its canonical `\\?\` root yields `\`).
+        let rel_s = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
         for (line, code) in offences(&text, is_lua, &pattern) {
-            let rel = file.strip_prefix(&root).unwrap_or(file);
+            if ALLOWED_LINES.contains(&(rel_s.as_str(), code.as_str())) {
+                allowed_seen += 1;
+                continue;
+            }
             report.push(format!("{}:{line}: {code}", rel.display()));
         }
     }
+    // No stale allowance: each allowed line exists, once.
+    assert_eq!(allowed_seen, ALLOWED_LINES.len(), "{ALLOWED_LINES:?}");
     assert!(
         report.is_empty(),
         "`Temp` is not a Lightroom develop key; use Temperature/Tint (raw) or \

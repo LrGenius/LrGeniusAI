@@ -38,7 +38,13 @@
 //! without warnings, without keys outside the preset policy or anything kept
 //! whole, holding exactly the policy-filtered settings; what the policy
 //! holds back is printed per mode, key and reason). A profile is not written
-//! as a preset. [`lightroom_adaptive_presets_rebuild_with_the_builders`] rebuilds
+//! as a preset. Every other document also goes through the Lua writer for
+//! its own photo (`support/lua_apply.rs`): a wire-safe table that reads
+//! back without a warning, holds every policy-filtered value or reports
+//! it, and holds nothing beyond those and the writer's fixed form; and,
+//! without what has no Lua form, through round trips 2 and 3 of
+//! the plan (`support/lua_round.rs`: model → Lua → model losslessly, and
+//! Lua → model → preset → model → Lua equal after quantisation). [`lightroom_adaptive_presets_rebuild_with_the_builders`] rebuilds
 //! the bundle's adaptive presets with the mask builders and compares them
 //! field by field.
 //!
@@ -64,6 +70,13 @@
 mod common;
 #[path = "support/flat.rs"]
 mod flat;
+#[allow(dead_code)] // the option flips and the single-table check are for the committed data
+#[path = "support/lua_apply.rs"]
+mod lua_apply;
+// `round_trip_3_only` and the panicking helpers are for the committed tests.
+#[allow(dead_code)]
+#[path = "support/lua_round.rs"]
+mod lua_round;
 #[path = "support/preset.rs"]
 mod preset;
 mod support;
@@ -82,6 +95,8 @@ use lrg_develop::xmp::{
     XmpKind,
 };
 use lrg_develop::{ParseError, WarningKind};
+use lua_apply::LuaApply;
+use lua_round::{without_xmp_only, LuaRoundTrips};
 use support::{generic_path, MaskCounts, RangeCheck};
 
 const PRESETS_VAR: &str = "LRG_LRC_PRESETS_DIR";
@@ -182,6 +197,8 @@ struct Sweep {
     ranges: RangeCheck,
     round_trip: RoundTrip,
     preset: PresetOut,
+    lua: LuaApply,
+    lua_round: LuaRoundTrips,
 }
 
 /// Known differences between the source's spelling and the writer's, as
@@ -291,6 +308,8 @@ impl Sweep {
         self.round_trip.file(&doc, bytes);
         if doc.kind != XmpKind::Profile {
             self.preset.file(&doc);
+            self.lua.settings(&doc.develop);
+            self.lua_round.settings(&without_xmp_only(&doc.develop));
         }
     }
 
@@ -322,6 +341,8 @@ impl Sweep {
         }
         self.round_trip.report();
         self.preset.report();
+        self.lua.report("  ");
+        self.lua_round.report("  ");
     }
 
     /// Fails on any parse error, any `UnknownKey`, any other warning not in
@@ -378,6 +399,8 @@ impl Sweep {
     fn assert_writes_back(&self, title: &str, spelling: &[(&str, &str)]) {
         self.round_trip.assert_clean(title, spelling);
         self.preset.assert_clean(title);
+        self.lua.assert_clean(title);
+        self.lua_round.assert_clean(title);
     }
 
     fn assert_all_typed(&self, title: &str) {

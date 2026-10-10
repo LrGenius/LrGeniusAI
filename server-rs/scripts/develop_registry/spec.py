@@ -38,7 +38,7 @@ def sec(title, rows):
 
 sec('White balance', [
     ('WhiteBalance', 'enum', 'As Shot, Auto, Custom, Daylight, Cloudy, Shade, Tungsten, Fluorescent, Flash (non-raw: As Shot, Auto, Custom)', 'string = UI label (English, not localised)', 'As Shot / As Shot', 'all PV', 'PHOTO',
-     'Never average. Serializer derives `Custom` whenever it writes Temperature/Tint. `Auto` is resolved per photo by LrC (see AutoWhiteVersion). Raw and non-raw have different preset lists, so a mixed batch must not share one value.'),
+     'Never average. The preset writer derives `Custom` whenever it writes Temperature/Tint, which a preset carries only when this is `Custom` or absent: next to any other mode they are that photo\'s resolved values (SkipReason::WhiteBalanceMode). `Auto` is resolved per photo by LrC (see AutoWhiteVersion). Raw and non-raw have different preset lists, so a mixed batch must not share one value.'),
     ('Temperature', 'int', '2000..50000 K', 'stored = UI (Kelvin)', 'as shot (camera) / key absent', 'all PV; raw only', 'LEARN†',
      'Raw-only key. Gate: drop from presets that can hit non-raw targets; learn relative to the example\'s as-shot value, not as absolute Kelvin (lighting differs per scene). **Bug (f), fixed in PR 1d: the style engine read `Temp`; it now reads the white balance typed (`WbSetting`).**'),
     ('Tint', 'int', '-150..+150', 'stored = UI', 'as shot / key absent', 'all PV; raw only', 'LEARN†',
@@ -196,6 +196,7 @@ sec('Effects', [
     ('GrainSize', 'int', '0..100', 'stored = UI', '25 / 25', '', 'LEARN', 'Zeroed template uses 50; the Adobe default and the corpus mode are 25.'),
     ('GrainFrequency', 'int', '0..100 (UI "Roughness")', 'stored = UI', '50 / 50', '', 'LEARN', ''),
     ('GrainSeed', 'uint32', 'random seed', '', 'absent', 'recent LrC', 'COMPUTED', 'Grain pattern seed chosen by LrC.'),
+    ('Glow', '?', '?', '?', '', 'one sidecar of the local corpus, Camera Raw 18.7 engine (October 2026); never observed in LrC 15.5.1 output', 'UNKNOWN', 'Newer engine feature (the Glow panel, with GlowRange/GlowWarmth/GlowSpread/GlowStyle); type, range and default not established.'),
     ('GlowRange, GlowWarmth, GlowSpread, GlowStyle, ReshapeAmount', 'number', '?', '?', '', 'known from Camera Raw 18.6; never observed in LrC output', 'UNKNOWN', 'Newer engine features not seen in LrC 15.5.1 output.', ['GlowRange', 'GlowWarmth', 'GlowSpread', 'GlowStyle', 'ReshapeAmount']),
 ])
 
@@ -234,7 +235,7 @@ sec('Point colour', [
 
 sec('HDR', [
     ('HDREditMode', 'int (0/1)', '0/1', 'integer', '0 / 0', 'LrC 12+', 'PHOTO', 'Never learn: the 8-bit JPEG export cannot show HDR. Keep the photo\'s value.'),
-    ('HDRMaxValue', 'real', 'EV headroom', 'fixed 2 decimals, always "+" ("+4.00")', '+4.00 / +4.00', 'LrC 12+', 'PHOTO', ''),
+    ('HDRMaxValue', 'real', 'EV headroom', 'fixed 2 decimals, always "+" ("+4.00")', '+4.00 / ?', 'LrC 12+', 'PHOTO', 'Non-raw default not established: the one non-raw readback (E13, a virtual copy of a TIFF, LrC 15.6) has 2.3, which may be per image, so the generator holds it back (NON_RAW_READBACK_NOT_CONSTANT).'),
     ('SDRBrightness, SDRContrast, SDRClarity, SDRHighlights, SDRShadows, SDRWhites, SDRBlend', 'int', '-100..+100 (SDR rendition sliders)', 'stored = UI', '0 / 0', 'LrC 12+, only with HDREditMode=1', 'PHOTO', '', ['SDRBrightness', 'SDRContrast', 'SDRClarity', 'SDRHighlights', 'SDRShadows', 'SDRWhites', 'SDRBlend']),
 ])
 

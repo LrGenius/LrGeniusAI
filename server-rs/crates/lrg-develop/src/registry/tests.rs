@@ -279,18 +279,103 @@ fn raw_only_keys_are_absent_for_non_raw_files_and_vice_versa() {
     }
 }
 
-/// Step 1 has no evidence for non-raw defaults (every training row is raw);
-/// they stay unverified until the E1 JPEG readback, except the documented
-/// absences.
-#[test]
-fn no_non_raw_default_is_claimed_yet() {
-    for (_, s) in iter() {
+/// Lightroom's non-raw defaults as read back by experiment E13 (one non-raw
+/// photo without develop edits; provenance inside the file). The generator
+/// (`scripts/develop_registry/gen_table_rs.py`) fills the non-raw column from
+/// it; this file is what a claimed non-raw default must come from.
+const NON_RAW_READBACK: &str =
+    include_str!("../../../../testdata/develop/defaults/non_raw_lrc15.6.json");
+
+/// Readback keys held back from the non-raw defaults because the one photo
+/// read may carry a per-image value; the same set as the generator's
+/// `NON_RAW_READBACK_NOT_CONSTANT`.
+const NON_RAW_READBACK_NOT_CONSTANT: &[&str] = &["HDRMaxValue"];
+
+fn non_raw_readback() -> serde_json::Map<String, serde_json::Value> {
+    let doc: serde_json::Value = serde_json::from_str(NON_RAW_READBACK).unwrap();
+    for k in ["lightroom", "process_version", "file_kind"] {
         assert!(
-            !matches!(s.default.non_raw, Def::Value(_)),
-            "{}: non-raw default claimed without evidence",
-            s.name
+            doc["provenance"][k].as_str().is_some_and(|s| !s.is_empty()),
+            "provenance.{k} missing"
         );
     }
+    doc["settings"].as_object().unwrap().clone()
+}
+
+fn lit_equals_json(lit: Lit, v: &serde_json::Value) -> bool {
+    match lit {
+        Lit::Int(i) => v.as_i64() == Some(i),
+        Lit::Real(r) => v.as_f64() == Some(r.get()),
+        Lit::Bool(b) => v.as_bool() == Some(b),
+        Lit::Str(s) => v.as_str() == Some(s),
+        Lit::IntList(l) => v.as_array().is_some_and(|a| {
+            a.len() == l.len() && a.iter().zip(l).all(|(x, y)| x.as_i64() == Some(*y))
+        }),
+    }
+}
+
+/// Every claimed non-raw default is a value Lightroom read back for a
+/// non-raw photo, and every global row the readback covers that the text
+/// left unverified got its value: nothing is invented for a key the
+/// readback does not have (absence can mean "written only when used").
+#[test]
+fn non_raw_defaults_come_from_the_readback() {
+    let readback = non_raw_readback();
+    for (_, s) in iter() {
+        let read = (s.level == Level::Global)
+            .then(|| readback.get(s.name))
+            .flatten();
+        match (s.default.non_raw, read) {
+            (Def::Value(lit), Some(v)) => assert!(
+                lit_equals_json(lit, v),
+                "{}: non-raw default {lit:?}, read back {v}",
+                s.name
+            ),
+            (Def::Value(lit), None) => {
+                panic!("{}: non-raw default {lit:?} without a readback", s.name)
+            }
+            (Def::Unverified, Some(_)) if NON_RAW_READBACK_NOT_CONSTANT.contains(&s.name) => {}
+            (Def::Unverified, Some(v)) => {
+                panic!("{}: read back as {v} but still unverified", s.name)
+            }
+            (Def::Absent, Some(v)) => panic!("{}: absent for non-raw, read back as {v}", s.name),
+            _ => {}
+        }
+    }
+    for key in readback.keys() {
+        assert!(lookup(Level::Global, key).is_some(), "{key}: no global row");
+    }
+    for key in NON_RAW_READBACK_NOT_CONSTANT {
+        assert!(readback.contains_key(*key), "{key}: held back but not read");
+        assert_eq!(row(Level::Global, key).default.non_raw, Def::Unverified);
+    }
+}
+
+/// What the readback changes against the raw column: the keys whose
+/// defaults really differ by file kind.
+#[test]
+fn the_non_raw_readback_differs_from_raw_where_expected() {
+    let non_raw = |name| row(Level::Global, name).default.non_raw;
+    assert_eq!(non_raw("Sharpness"), Def::Value(Lit::Int(0)));
+    assert_eq!(
+        row(Level::Global, "Sharpness").default.raw,
+        Def::Value(Lit::Int(40))
+    );
+    assert_eq!(non_raw("ColorNoiseReduction"), Def::Value(Lit::Int(0)));
+    assert_eq!(
+        row(Level::Global, "ColorNoiseReduction").default.raw,
+        Def::Value(Lit::Int(25))
+    );
+    assert_eq!(non_raw("CameraProfile"), Def::Value(Lit::Str("Embedded")));
+    assert_eq!(non_raw("WhiteBalance"), Def::Value(Lit::Str("As Shot")));
+    assert_eq!(non_raw("IncrementalTemperature"), Def::Value(Lit::Int(0)));
+    assert_eq!(non_raw("IncrementalTint"), Def::Value(Lit::Int(0)));
+    // Raw-only keys stay absent: the readback has no `Temperature`.
+    assert_eq!(non_raw("Temperature"), Def::Absent);
+    assert_eq!(non_raw("Tint"), Def::Absent);
+    // Per-photo or written-when-used keys keep `NoDefault` whatever the
+    // readback shows (the Upright solver state).
+    assert_eq!(non_raw("UprightVersion"), Def::NoDefault);
 }
 
 #[test]

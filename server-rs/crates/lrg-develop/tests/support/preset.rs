@@ -176,7 +176,7 @@ fn quantize_correction(c: &Correction) -> Correction {
 }
 
 /// `s` with every registry value quantized as the writer writes it.
-fn quantized(s: &DevelopSettings) -> DevelopSettings {
+pub fn quantized(s: &DevelopSettings) -> DevelopSettings {
     let mut out = s.clone();
     for (id, v) in s.values() {
         out.insert(id, quantize(id.spec(), v))
@@ -201,7 +201,7 @@ fn number(l: &Leaf) -> Option<f64> {
 
 /// Leaves equal as the writer and reader treat them: numbers by value
 /// (within `%.6f`, the finest format), a 32-digit hex id in any case.
-fn same(a: &Leaf, b: &Leaf) -> bool {
+pub fn same(a: &Leaf, b: &Leaf) -> bool {
     if let (Some(x), Some(y)) = (number(a), number(b)) {
         return (x - y).abs() <= 5e-7;
     }
