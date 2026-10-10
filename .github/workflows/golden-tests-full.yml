@@ -6,6 +6,9 @@ name: "Golden tests (all model assets)"
 # (2.2 GB) are too heavy to fetch on every push. This job fetches all three
 # and runs with LRG_REQUIRE_GOLDENS=all, so a missing asset fails instead of
 # skipping — the numerical checks either run or the job goes red.
+# `all` leaves out the gate's LOCAL_ONLY families (crates/lrg-ml/tests/common),
+# whose data is private and can never be fetched here — e.g. `training-dump`,
+# lrg-develop's sweep over the maintainer's training rows.
 #
 # Deliberately *not* cached. A fresh download each night also verifies that
 # the published release assets are still present and fetchable, which is what

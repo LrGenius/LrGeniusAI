@@ -7,6 +7,11 @@
 > Develop-Settings Experiments…* runs (see [below](#running-the-experiments)).
 > If the XMP idea comes back, start here rather than re-running the
 > investigation.
+>
+> Work has started: the first building block, a native model of Lightroom's
+> develop settings (key registry, typed model, Lua reader), is the
+> `lrg-develop` crate. See [Native Develop Model](Dev-Develop-Model). AI
+> Edit's behaviour is unchanged so far.
 
 ## The question
 
