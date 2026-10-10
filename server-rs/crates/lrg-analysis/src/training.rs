@@ -79,11 +79,14 @@ pub fn time_of_day_bucket_for_hour(hour: Option<u32>) -> &'static str {
 ///
 /// Rows without the field are version 1: the old alias table, which read a
 /// `Temp` key Lightroom never writes (so no example ever carried a white
-/// balance) and blended `Tint` without its file kind. Readers re-derive
-/// anything older than this from the stored `develop_settings` blob instead
-/// of trusting the frozen fields; bump it whenever [`canonical_keys`] or the
-/// white-balance extraction changes.
-pub const CANONICAL_VERSION: u64 = 2;
+/// balance) and blended `Tint` without its file kind. Version 2 had the
+/// typed white balance but only the 20 basic aliases; version 3 adds every
+/// other field the installed plugin applies (detail, vignette and grain
+/// sliders, HSL, colour grading shadows/highlights/balance, the parametric
+/// curve splits). Readers re-derive anything older than this from the stored
+/// `develop_settings` blob instead of trusting the frozen fields; bump it
+/// whenever [`canonical_keys`] or the white-balance extraction changes.
+pub const CANONICAL_VERSION: u64 = 3;
 
 /// One learnable global key: the canonical name the style engine blends
 /// under, where it goes in the edit recipe, and its registry row.
@@ -164,8 +167,21 @@ pub fn canonicalize_develop_settings(
             ..CanonicalExample::default()
         });
     }
+    // The recipe never carries ConvertToGrayscale, so a black-and-white
+    // example's colour keys would land on a colour photo as a cast (a sepia
+    // split toning, most visibly). They are not learned from such an example
+    // until the style engine can keep B&W and colour apart (Gate::Categorical).
+    // Silent by design: nothing is wrong with the example, and the user has
+    // nothing to act on; Help-AI-Edit says toning is not taken from B&W.
+    let monochrome = registry::lookup(Level::Global, "ConvertToGrayscale")
+        .and_then(|id| settings.get(id))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mut canonical = Map::new();
     for key in canonical_keys() {
+        if monochrome && (key.name.starts_with("color_grading_") || key.name.starts_with("hsl_")) {
+            continue;
+        }
         let Some(id) = registry::lookup(Level::Global, key.spec.name) else {
             continue;
         };
@@ -681,6 +697,15 @@ mod tests {
         let tc = canonical_key("tone_curve_lights").unwrap();
         assert_eq!(tc.recipe_path, ["tone_curve", "lights"]);
         assert_eq!(tc.spec.name, "ParametricLights");
+        let hsl = canonical_key("hsl_magenta_luminance").unwrap();
+        assert_eq!(hsl.recipe_path, ["hsl", "magenta", "luminance"]);
+        assert_eq!(hsl.spec.name, "LuminanceAdjustmentMagenta");
+        let cg = canonical_key("color_grading_balance").unwrap();
+        assert_eq!(cg.recipe_path, ["color_grading", "balance"]);
+        assert_eq!(
+            canonical_key("grain_roughness").unwrap().spec.name,
+            "GrainFrequency"
+        );
     }
 
     #[test]
@@ -755,6 +780,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.file_kind, Some(FileKind::Raw));
+    }
+
+    #[test]
+    fn a_black_and_white_example_teaches_no_toning_or_colour_mixer() {
+        let blob = |grayscale: bool| {
+            json!({
+                "ProcessVersion": "15.4",
+                "ConvertToGrayscale": grayscale,
+                "Contrast2012": 20,
+                "SplitToningShadowHue": 233,
+                "SplitToningShadowSaturation": 43,
+                "SplitToningHighlightHue": 60,
+                "SplitToningHighlightSaturation": 27,
+                "SplitToningBalance": 10,
+                "HueAdjustmentRed": 5,
+            })
+        };
+        let c = canonicalize_develop_settings(&blob(true), FileKindHint::Raw).unwrap();
+        assert_eq!(c.settings.get("contrast"), Some(&json!(20)));
+        let leaked: Vec<&String> = c
+            .settings
+            .keys()
+            .filter(|k| k.starts_with("color_grading_") || k.starts_with("hsl_"))
+            .collect();
+        assert!(leaked.is_empty(), "{leaked:?}");
+        // The same settings in colour are learned in full.
+        let c = canonicalize_develop_settings(&blob(false), FileKindHint::Raw).unwrap();
+        assert_eq!(
+            c.settings.get("color_grading_shadows_hue"),
+            Some(&json!(233))
+        );
+        assert_eq!(c.settings.get("color_grading_balance"), Some(&json!(10)));
+        assert_eq!(c.settings.get("hsl_red_hue"), Some(&json!(5)));
     }
 
     #[test]

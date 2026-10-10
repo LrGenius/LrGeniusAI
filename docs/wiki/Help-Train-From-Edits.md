@@ -82,9 +82,13 @@ balance for it, and so does the backend.
 When the backend carries a white balance over, it uses only the examples whose
 file type matches the photo you are editing. For a JPEG or TIFF photo that
 usually means none qualify: it keeps its own white balance, and the run's
-summary tells you why. Everything else — exposure, contrast, presence, colour,
-curves — means the same on both, and is blended from all matched examples as
-usual.
+summary tells you why. Everything else — exposure, contrast, presence, the
+color mixer, color grading of shadows and highlights, the parametric tone curve,
+detail, vignette and grain — is blended from all matched examples as usual (see
+[What it generates](Help-AI-Edit#what-it-generates)). Most of these mean the
+same on both file types; sharpening amount and color noise reduction do not
+quite: Lightroom starts them from different defaults on raw and JPEG files, and
+they are still averaged across both for now.
 
 Examples you saved earlier are read again from their stored develop settings,
 so they take part with the right file type — and now with their white balance —

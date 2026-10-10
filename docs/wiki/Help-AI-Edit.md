@@ -40,11 +40,49 @@ provider switched off.
 
 ## What it generates
 
-A develop recipe of **global adjustments** — exposure, highlights, shadows,
-whites, blacks, contrast, texture, clarity, dehaze, vibrance, saturation, tone
-curve, sharpening, noise reduction, vignette, grain — averaged from the
-matching examples. White balance is decided separately; see *How white balance
-is carried over* below.
+A develop recipe of **global adjustments** averaged from the matching
+examples:
+
+- **Basic:** exposure, contrast, highlights, shadows, whites, blacks, texture,
+  clarity, dehaze, vibrance, saturation.
+- **Tone curve:** the four parametric sliders (highlights, lights, darks,
+  shadows) and the three region splits.
+- **Color mixer (HSL):** hue, saturation and luminance of all eight colors.
+- **Color grading:** hue and saturation of the shadows and highlights, and the
+  balance. Tints are averaged as colors (a red at 350° and one at 10° average
+  to red, not cyan), and a tint you set at zero saturation does not count.
+  When your matching examples tint the shadows (or highlights) in clearly
+  different colors, the tints partly cancel: that zone is toned down towards
+  neutral (fully opposite tints leave no toning at all), and the end-of-run
+  summary says so. Toning from black-and-white examples is not carried over,
+  so a sepia black-and-white example does not tint a color photo. Midtones,
+  global grading, luminance and blending are not carried over yet.
+- **Detail:** sharpening amount, radius, detail and masking; luminance noise
+  reduction with its detail and contrast; color noise reduction with its detail
+  and smoothness.
+- **Effects:** post-crop vignette (amount, midpoint, roundness, feather,
+  highlights) and grain (amount, size, roughness).
+
+White balance is decided separately; see *How white balance is carried over*
+below. Point curves, lens corrections, the profile and crop are not carried
+over.
+
+A setting only some of the matching examples carry (a black-and-white example
+has no color mixer, for instance) is averaged over the ones that have it, so it
+is not pulled towards zero. Examples you saved before this release take part
+with all of these settings without being saved again.
+
+The color mixer, color grading, curve splits and the detail and effects
+settings above came with a backend update alone: the plug-in already knew how
+to apply them, so you do not need a new plug-in version to get them.
+
+These values replace the photo's own settings in those panels, including a
+color mixer, color grading, curve splits or detail and effects settings it
+already had (earlier versions left those alone), usually with values near 0
+when your examples did not use a panel. To keep an edited photo's own look,
+turn on *Apply the edit to a new virtual copy*. The review dialog lists
+`hsl`, `color_grading` and `tone_curve` whenever they are sent, even when every
+value in them is 0.
 
 Local masks are not part of a style-engine edit; every recipe carries an empty
 mask list.

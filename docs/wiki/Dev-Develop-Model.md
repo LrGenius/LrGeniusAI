@@ -21,9 +21,13 @@ Who uses it today:
 - `lrg-analysis::training` reads a training example's `develop_settings` blob
   with `lua::read`, learns the registry keys that have a `global.*` recipe
   alias, and keeps the white balance as a typed `WbSetting`
-  (`CANONICAL_VERSION` marks the stored form).
-- `lrg-analysis::style_engine` rounds blends to each key's registry precision
-  and decides the white balance per key family.
+  (`CANONICAL_VERSION` marks the stored form). A black-and-white example
+  (`ConvertToGrayscale`) teaches no `color_grading_*`/`hsl_*` keys: the recipe
+  does not carry the B&W switch, so its toning would reach colour photos.
+- `lrg-analysis::style_engine` rounds blends to each key's registry precision,
+  blends each `CircularHue` key with its saturation as a mean colour vector
+  (hue = angle, saturation = length), and decides the white balance per key
+  family.
 - `lrg-api` (`routes/training.rs`, `routes/style_edit.rs`) stores and re-reads
   that canonical form.
 - `lrg-providers` only in a test: every range the LLM recipe schema declares
@@ -120,6 +124,31 @@ Gates: `RawOnly`/`NonRawOnly` (white balance), `FileKindDefault` (defaults
 differ between raw and non-raw), `OnlyValues` (only some values transfer),
 `CameraRestricted` (profiles), and the learning-side gates `Categorical`,
 `CircularHue`, `DependsOn`, `ByMaskType`, `NeedsAiUpdate`.
+
+`CircularHue(<key>)` names the saturation that weighs the angle
+(`SplitToningShadowHue` → `SplitToningShadowSaturation`, `LocalToningHue` →
+`LocalToningSaturation`, same level): the style engine treats each example as
+a colour vector of that length and averages the vectors by score (see
+`POST /v1/edit/style` in
+[Dev-Backend-API](Dev-Backend-API)). A registry test checks that the named key
+exists on the same level and cannot be negative.
+
+### Recipe aliases
+
+`recipe_alias` is the edit-recipe field a global key is learned and sent as
+(`global.exposure`, `global.hsl.red.hue`, `global.color_grading.shadows.hue`,
+`global.tone_curve.shadow_split`). Since step 1f every field the installed
+plugin's `DevelopEditManager` applies has one: 65 keys (the basic and presence
+sliders, detail, vignette, grain, the parametric curve with its splits, the 24
+HSL values, colour grading shadows/highlights hue and saturation plus balance).
+Deliberately without an alias: white balance (typed, `WbSetting`), colour
+grading midtones/global/luminance/blending (installed plugins warn and drop
+them), point curves, lens, crop, `Look`. Tests pin that aliases are unique,
+only on learnable global keys, never a prefix of one another, and that the LLM
+schema declares the registry's UI range for each (`edit_recipe.rs`). The
+aliases live in `gen_table_rs.py`'s `ALIAS` table and are regenerated into
+`table.rs` with the rest; adding one means bumping `CANONICAL_VERSION` in
+`lrg-analysis::training`, so stored examples are re-read from their blob.
 
 `CameraRestricted` on `CameraProfile` depends on the value: `Adobe Standard`
 and the symbolic `Default Color`/`Default Monochrome`/`Default Profile` exist

@@ -951,7 +951,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.tone_curve.shadow_split",
       "ui": "identity"
     },
     {
@@ -976,7 +976,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.tone_curve.midtone_split",
       "ui": "identity"
     },
     {
@@ -1001,7 +1001,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.tone_curve.highlight_split",
       "ui": "identity"
     },
     {
@@ -1251,7 +1251,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.red.hue",
       "ui": "identity"
     },
     {
@@ -1276,7 +1276,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.orange.hue",
       "ui": "identity"
     },
     {
@@ -1301,7 +1301,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.yellow.hue",
       "ui": "identity"
     },
     {
@@ -1326,7 +1326,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.green.hue",
       "ui": "identity"
     },
     {
@@ -1351,7 +1351,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.aqua.hue",
       "ui": "identity"
     },
     {
@@ -1376,7 +1376,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.blue.hue",
       "ui": "identity"
     },
     {
@@ -1401,7 +1401,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.purple.hue",
       "ui": "identity"
     },
     {
@@ -1426,7 +1426,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.magenta.hue",
       "ui": "identity"
     },
     {
@@ -1451,7 +1451,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.red.saturation",
       "ui": "identity"
     },
     {
@@ -1476,7 +1476,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.orange.saturation",
       "ui": "identity"
     },
     {
@@ -1501,7 +1501,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.yellow.saturation",
       "ui": "identity"
     },
     {
@@ -1526,7 +1526,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.green.saturation",
       "ui": "identity"
     },
     {
@@ -1551,7 +1551,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.aqua.saturation",
       "ui": "identity"
     },
     {
@@ -1576,7 +1576,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.blue.saturation",
       "ui": "identity"
     },
     {
@@ -1601,7 +1601,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.purple.saturation",
       "ui": "identity"
     },
     {
@@ -1626,7 +1626,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.magenta.saturation",
       "ui": "identity"
     },
     {
@@ -1651,7 +1651,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.red.luminance",
       "ui": "identity"
     },
     {
@@ -1676,7 +1676,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.orange.luminance",
       "ui": "identity"
     },
     {
@@ -1701,7 +1701,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.yellow.luminance",
       "ui": "identity"
     },
     {
@@ -1726,7 +1726,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.green.luminance",
       "ui": "identity"
     },
     {
@@ -1751,7 +1751,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.aqua.luminance",
       "ui": "identity"
     },
     {
@@ -1776,7 +1776,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.blue.luminance",
       "ui": "identity"
     },
     {
@@ -1801,7 +1801,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.purple.luminance",
       "ui": "identity"
     },
     {
@@ -1826,7 +1826,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.hsl.magenta.luminance",
       "ui": "identity"
     },
     {
@@ -2080,14 +2080,14 @@
       "plus_sign": false,
       "policy": {
         "class": "LEARN†",
-        "gate": "CircularHue"
+        "gate": "CircularHue(\"SplitToningShadowSaturation\")"
       },
       "presence": "Both",
       "range": [
         0.0,
         360.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_grading.shadows.hue",
       "ui": "identity"
     },
     {
@@ -2112,7 +2112,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_grading.shadows.saturation",
       "ui": "identity"
     },
     {
@@ -2131,14 +2131,14 @@
       "plus_sign": false,
       "policy": {
         "class": "LEARN†",
-        "gate": "CircularHue"
+        "gate": "CircularHue(\"SplitToningHighlightSaturation\")"
       },
       "presence": "Both",
       "range": [
         0.0,
         360.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_grading.highlights.hue",
       "ui": "identity"
     },
     {
@@ -2163,7 +2163,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_grading.highlights.saturation",
       "ui": "identity"
     },
     {
@@ -2188,7 +2188,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_grading.balance",
       "ui": "identity"
     },
     {
@@ -2257,7 +2257,7 @@
       "plus_sign": false,
       "policy": {
         "class": "LEARN†",
-        "gate": "CircularHue"
+        "gate": "CircularHue(\"ColorGradeMidtoneSat\")"
       },
       "presence": "Both",
       "range": [
@@ -2333,7 +2333,7 @@
       "plus_sign": false,
       "policy": {
         "class": "LEARN†",
-        "gate": "CircularHue"
+        "gate": "CircularHue(\"ColorGradeGlobalSat\")"
       },
       "presence": "Both",
       "range": [
@@ -2466,7 +2466,7 @@
         0.5,
         3.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.sharpen_radius",
       "ui": "identity"
     },
     {
@@ -2491,7 +2491,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.sharpen_detail",
       "ui": "identity"
     },
     {
@@ -2516,7 +2516,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.sharpen_masking",
       "ui": "identity"
     },
     {
@@ -2566,7 +2566,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.noise_reduction_detail",
       "ui": "identity"
     },
     {
@@ -2591,7 +2591,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.noise_reduction_contrast",
       "ui": "identity"
     },
     {
@@ -2642,7 +2642,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_noise_reduction_detail",
       "ui": "identity"
     },
     {
@@ -2667,7 +2667,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.color_noise_reduction_smoothness",
       "ui": "identity"
     },
     {
@@ -3956,7 +3956,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.vignette_midpoint",
       "ui": "identity"
     },
     {
@@ -3981,7 +3981,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.vignette_feather",
       "ui": "identity"
     },
     {
@@ -4006,7 +4006,7 @@
         -100.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.vignette_roundness",
       "ui": "identity"
     },
     {
@@ -4054,7 +4054,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.vignette_highlights",
       "ui": "identity"
     },
     {
@@ -4126,7 +4126,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.grain_size",
       "ui": "identity"
     },
     {
@@ -4151,7 +4151,7 @@
         0.0,
         100.0
       ],
-      "recipe_alias": null,
+      "recipe_alias": "global.grain_roughness",
       "ui": "identity"
     },
     {
@@ -7199,7 +7199,7 @@
       "plus_sign": false,
       "policy": {
         "class": "LEARN†",
-        "gate": "CircularHue"
+        "gate": "CircularHue(\"LocalToningSaturation\")"
       },
       "presence": "Both",
       "range": [

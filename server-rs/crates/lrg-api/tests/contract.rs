@@ -1092,7 +1092,10 @@ async fn training_accepts_real_blobs_and_the_empty_table() {
         .await
         .unwrap();
     let meta = &rows[0].metadata;
-    assert_eq!(meta["canonical_version"], 2);
+    assert_eq!(
+        meta["canonical_version"],
+        lrg_analysis::training::CANONICAL_VERSION
+    );
     assert_eq!(meta["is_raw"], true);
     let wb: serde_json::Value =
         serde_json::from_str(meta["white_balance"].as_str().unwrap()).unwrap();
@@ -1104,6 +1107,10 @@ async fn training_accepts_real_blobs_and_the_empty_table() {
         serde_json::from_str(meta["canonical_settings"].as_str().unwrap()).unwrap();
     assert_eq!(canonical["exposure"], 0.15);
     assert!(canonical.get("temperature").is_none());
+    // Version 3 (1f): the colour mixer, toning and curve splits too.
+    assert!(canonical["hsl_red_hue"].is_i64(), "{canonical}");
+    assert!(canonical["color_grading_shadows_saturation"].is_i64());
+    assert!(canonical["tone_curve_midtone_split"].is_i64());
 
     // Not a table at all is still the caller's mistake.
     let (status, json) = add_training_example(app.clone(), &db_path, "bad", "[1,2]", None).await;
@@ -1266,6 +1273,125 @@ async fn style_edit_reports_why_a_jpeg_gets_no_white_balance() {
     let legacy = json["warning"].as_str().unwrap();
     assert!(legacy.contains(expected), "{legacy}");
     assert_eq!(legacy, warnings.join("\n"));
+}
+
+/// Step 1f: the style recipe carries every `global` field the *installed*
+/// plugin applies, in the nested shape its `DevelopEditManager` reads
+/// (`hsl.<colour>.{hue,saturation,luminance}`, `color_grading.{shadows,
+/// highlights}.{hue,saturation}` + `balance`, `tone_curve.*_split`), and none
+/// of the colour-grading fields that plugin warns about.
+#[tokio::test]
+async fn style_edit_sends_every_global_field_the_installed_plugin_applies() {
+    let (app, _state, _dir, db_path) = bound_app().await;
+    let style = serde_json::json!({
+        "SharpenRadius": 1.2,
+        "SharpenDetail": 30,
+        "SharpenEdgeMasking": 15,
+        "LuminanceNoiseReductionDetail": 55,
+        "ColorNoiseReductionSmoothness": 60,
+        "PostCropVignetteAmount": -12,
+        "PostCropVignetteMidpoint": 40,
+        "PostCropVignetteFeather": 70,
+        "PostCropVignetteRoundness": -10,
+        "PostCropVignetteHighlightContrast": 20,
+        "GrainAmount": 15,
+        "GrainSize": 30,
+        "GrainFrequency": 60,
+        "HueAdjustmentAqua": -8,
+        "SaturationAdjustmentBlue": -20,
+        "LuminanceAdjustmentOrange": 12,
+        "SplitToningShadowHue": 220,
+        "SplitToningShadowSaturation": 15,
+        "SplitToningHighlightHue": 40,
+        "SplitToningHighlightSaturation": 20,
+        "SplitToningBalance": -10,
+        "ParametricShadowSplit": 20,
+        "ParametricMidtoneSplit": 45,
+        "ParametricHighlightSplit": 70,
+        "ColorGradeMidtoneHue": 100,
+        "ColorGradeMidtoneSat": 10,
+        "ColorGradeBlending": 60,
+        "ColorGradeShadowLum": 5,
+    });
+    let fixtures = [
+        "lensblur_object.json",
+        "mask_linear_gradient.json",
+        "mask_ai_subject.json",
+        "filterlist_filters.json",
+        "mask_radial_gradient.json",
+    ];
+    for (i, name) in fixtures.iter().enumerate() {
+        let mut blob = develop_fixture(name);
+        for (k, v) in style.as_object().unwrap() {
+            blob[k] = v.clone();
+        }
+        let (status, json) = add_training_example(
+            app.clone(),
+            &db_path,
+            &format!("style{i}"),
+            &blob.to_string(),
+            Some("true"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+    }
+
+    let png = tiny_png();
+    let (status, json) = style_edit_request(
+        app.clone(),
+        &[
+            ("photo_id", "target"),
+            ("db_path", db_path.as_str()),
+            ("is_raw", "true"),
+        ],
+        Some(("target.png", png.as_slice())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["engine"], "style");
+    let global = &json["edit"]["global"];
+    for (field, value) in [
+        ("sharpen_radius", serde_json::json!(1.2)),
+        ("sharpen_detail", serde_json::json!(30)),
+        ("sharpen_masking", serde_json::json!(15)),
+        ("noise_reduction_detail", serde_json::json!(55)),
+        ("color_noise_reduction_smoothness", serde_json::json!(60)),
+        ("vignette", serde_json::json!(-12)),
+        ("vignette_midpoint", serde_json::json!(40)),
+        ("vignette_feather", serde_json::json!(70)),
+        ("vignette_roundness", serde_json::json!(-10)),
+        ("vignette_highlights", serde_json::json!(20)),
+        ("grain", serde_json::json!(15)),
+        ("grain_size", serde_json::json!(30)),
+        ("grain_roughness", serde_json::json!(60)),
+    ] {
+        assert_eq!(global[field], value, "global.{field} in {global}");
+    }
+    let hsl = global["hsl"].as_object().unwrap();
+    assert_eq!(hsl.len(), 8, "{global}");
+    assert_eq!(global["hsl"]["aqua"]["hue"], -8);
+    assert_eq!(global["hsl"]["blue"]["saturation"], -20);
+    assert_eq!(global["hsl"]["orange"]["luminance"], 12);
+    assert_eq!(
+        global["color_grading"],
+        serde_json::json!({
+            "shadows": {"hue": 220, "saturation": 15},
+            "highlights": {"hue": 40, "saturation": 20},
+            "balance": -10,
+        })
+    );
+    assert_eq!(global["tone_curve"]["shadow_split"], 20);
+    assert_eq!(global["tone_curve"]["midtone_split"], 45);
+    assert_eq!(global["tone_curve"]["highlight_split"], 70);
+    // Nothing the installed plugin would print as a table address.
+    for (k, v) in global.as_object().unwrap() {
+        if v.is_object() {
+            assert!(
+                ["hsl", "color_grading", "tone_curve"].contains(&k.as_str()),
+                "global.{k} is an object the installed plugin has no line for"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

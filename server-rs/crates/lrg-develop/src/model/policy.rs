@@ -247,7 +247,7 @@ fn gate_verdict(gate: Gate, value: Option<&Value>, target: &Target) -> Result<()
         // whether a value may be written.
         (
             Gate::Categorical
-            | Gate::CircularHue
+            | Gate::CircularHue(_)
             | Gate::ByMaskType
             | Gate::NeedsAiUpdate
             | Gate::DependsOn(_),

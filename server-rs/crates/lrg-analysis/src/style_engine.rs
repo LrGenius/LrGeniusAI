@@ -10,11 +10,13 @@
 //! [`generate_style_edit`] here.
 
 use lrg_develop::model::{WbFamily, WbMode, WbSetting};
-use lrg_develop::registry::{self, Level};
+use lrg_develop::registry::{self, Gate, Level};
 use lrg_develop::{FileKind, Finite};
 use serde_json::{json, Map, Value};
 
-use crate::training::{canonical_key, canonical_keys, number_json, white_balance_json};
+use crate::training::{
+    canonical_key, canonical_keys, number_json, white_balance_json, CanonicalKey,
+};
 
 pub const WEIGHT_CLIP: f64 = 0.50;
 pub const WEIGHT_EXPOSURE: f64 = 0.25;
@@ -168,34 +170,233 @@ pub fn calculate_composite_score(
         + WEIGHT_TIME_OF_DAY * tod_score
 }
 
+/// The blended canonical settings of the winners, and what the blend had
+/// to leave out.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Blend {
+    /// Canonical name → blended value (see [`interpolate_recipes`]).
+    pub settings: Map<String, Value>,
+    /// One note per setting the winners disagree on too much to average,
+    /// constant per cause so the plugin can merge them across photos.
+    pub warnings: Vec<String>,
+}
+
+/// Registry keys blended as one group because Lightroom keeps them ordered
+/// (`ParametricShadowSplit < ParametricMidtoneSplit <
+/// ParametricHighlightSplit`). A weighted mean of ordered triples is ordered,
+/// so the group is blended only over winners that carry all of its keys.
+const ORDERED_GROUPS: &[&[&str]] = &[&[
+    "ParametricShadowSplit",
+    "ParametricMidtoneSplit",
+    "ParametricHighlightSplit",
+]];
+
+/// Below this agreement of the toned winners' hues (their mean resultant
+/// length: 0 = the tints cancel out, 1 = all the same hue) the blended tint
+/// kept less than this share of the toned examples' strength, and the blend
+/// says so. The saturation itself is the length of the mean colour vector,
+/// so disagreeing tints fade towards neutral continuously; this only decides
+/// when that fading is worth a note.
+pub const MIN_HUE_AGREEMENT: f64 = 0.5;
+
+/// A zone whose linear mean saturation is below this is too faint for its
+/// fading to be worth a note.
+const MIN_NOTICEABLE_TONING: f64 = 5.0;
+
+/// The note for a colour-grading zone whose tints faded in the blend.
+fn toning_warning(saturation_key: &str) -> String {
+    let zone = if saturation_key.contains("Shadow") {
+        "shadows"
+    } else if saturation_key.contains("Highlight") {
+        "highlights"
+    } else {
+        "photo"
+    };
+    format!(
+        "Color grading of the {zone} was toned down: your matching examples tint the {zone} in clearly different colors."
+    )
+}
+
+/// The note for curve splits that could not be averaged into a valid order.
+const SPLITS_WARNING: &str = "The tone curve's region splits were not transferred: your matching examples' splits could not be averaged into a valid order.";
+
 /// Port of `interpolate_recipes`: weighted blend of the canonical settings
 /// across the winners, weights normalized by composite score **per key**,
 /// over the winners that have the key (an example that never touched a
 /// slider must not pull it towards 0), rounded to the key's registry
 /// precision (integers for integer sliders, `Exposure2012` to 2 decimals).
 ///
+/// Two kinds of key are not plain means:
+/// - **Hue angles** ([`Gate::CircularHue`], the colour-grading hues) and
+///   their saturation: each winner is a colour vector (hue angle, saturation
+///   length), and the zone gets the score-weighted mean vector: its angle is
+///   the hue, its length the saturation. A hue at saturation 0 does not
+///   pull; 350° and 10° average to 0°, not 180°; and tints that disagree
+///   fade towards neutral instead of landing at full strength on a hue no
+///   example used. When the saturations sum to about 0, or the mean vector
+///   rounds to saturation 0, the hue is left out and saturation 0 is sent
+///   (the photo keeps its own hue under no toning). When the toned winners
+///   agree less than [`MIN_HUE_AGREEMENT`] the blend says so.
+/// - **Ordered groups** ([`ORDERED_GROUPS`], the parametric curve splits):
+///   blended together over the winners that carry the whole group; left out,
+///   with a note, if rounding breaks their order.
+///
 /// Only keys of [`canonical_keys`] are blended; white balance is not a
 /// canonical number (see [`blend_white_balance`]).
-pub fn interpolate_recipes(winners: &[(TrainingCandidate, f64)]) -> Map<String, Value> {
-    let mut blended = Map::new();
+///
+/// [`Gate::CircularHue`]: lrg_develop::registry::Gate::CircularHue
+pub fn interpolate_recipes(winners: &[(TrainingCandidate, f64)]) -> Blend {
+    let value_of = |example: &TrainingCandidate, name: &str| {
+        example.canonical_settings.get(name).and_then(Value::as_f64)
+    };
+    let mut blend = Blend::default();
+    let mut hues: Vec<(&CanonicalKey, &CanonicalKey)> = Vec::new();
     for key in canonical_keys() {
+        if ORDERED_GROUPS.iter().any(|g| g.contains(&key.spec.name)) {
+            continue;
+        }
+        if let Some(Gate::CircularHue(weight)) = key.spec.policy.gate() {
+            // A hue whose saturation is not canonical has no weight: skip it.
+            if let Some(sat) = canonical_keys().iter().find(|k| k.spec.name == weight) {
+                hues.push((key, sat));
+            }
+            continue;
+        }
         let mut weight = 0.0;
         let mut sum = 0.0;
         for (example, score) in winners {
-            if let Some(v) = example
-                .canonical_settings
-                .get(key.name)
-                .and_then(Value::as_f64)
-            {
+            if let Some(v) = value_of(example, key.name) {
                 weight += score;
                 sum += score * v;
             }
         }
         if weight > 0.0 {
-            blended.insert(key.name.to_string(), number_json(key.spec, sum / weight));
+            blend
+                .settings
+                .insert(key.name.to_string(), number_json(key.spec, sum / weight));
         }
     }
-    blended
+
+    for group in ORDERED_GROUPS {
+        let keys: Vec<&CanonicalKey> = group
+            .iter()
+            .filter_map(|name| canonical_keys().iter().find(|k| k.spec.name == *name))
+            .collect();
+        if keys.len() != group.len() {
+            continue;
+        }
+        let mut weight = 0.0;
+        let mut sums = vec![0.0; keys.len()];
+        for (example, score) in winners {
+            let values: Option<Vec<f64>> = keys.iter().map(|k| value_of(example, k.name)).collect();
+            if let Some(values) = values {
+                weight += score;
+                for (sum, v) in sums.iter_mut().zip(values) {
+                    *sum += score * v;
+                }
+            }
+        }
+        if weight <= 0.0 {
+            continue;
+        }
+        let blended: Vec<Value> = keys
+            .iter()
+            .zip(&sums)
+            .map(|(k, sum)| number_json(k.spec, sum / weight))
+            .collect();
+        // Integer rounding can make two neighbours equal (1.5 and 2.5 both
+        // round to 2); Lightroom's splits must stay strictly ordered.
+        let ordered = blended
+            .windows(2)
+            .all(|w| match (w[0].as_f64(), w[1].as_f64()) {
+                (Some(a), Some(b)) => a < b,
+                _ => false,
+            });
+        if ordered {
+            for (k, v) in keys.iter().zip(blended) {
+                blend.settings.insert(k.name.to_string(), v);
+            }
+        } else {
+            // Only reachable when the winners' splits are 1 apart and the
+            // means land on .5 ties (or a blob is unordered); Lightroom-written
+            // triples are far apart. The photo keeps its own splits.
+            log::warn!(
+                "Style blend: {group:?} lost their order after rounding ({blended:?}); left out"
+            );
+            if !blend.warnings.iter().any(|w| w == SPLITS_WARNING) {
+                blend.warnings.push(SPLITS_WARNING.to_string());
+            }
+        }
+    }
+
+    for (hue, sat) in hues {
+        // x, y: the score-weighted sum of the colour vectors; weight: the
+        // sum of score x saturation (the length the vectors would have if
+        // they all agreed); score_sum: the scores of the winners carrying
+        // the pair, which the mean vector is divided by.
+        let (mut x, mut y, mut weight, mut score_sum) = (0.0, 0.0, 0.0, 0.0);
+        for (example, score) in winners {
+            let (Some(h), Some(s)) = (value_of(example, hue.name), value_of(example, sat.name))
+            else {
+                continue;
+            };
+            let w = score.max(0.0) * s.max(0.0);
+            let rad = h.to_radians();
+            x += w * rad.cos();
+            y += w * rad.sin();
+            weight += w;
+            score_sum += score.max(0.0);
+        }
+        if weight <= 1e-9 {
+            // Every winner leaves this zone untoned; the blended saturation
+            // (0) says so, and a hue would be noise. A saturation without
+            // any hue next to it (a blob missing one of the pair) would tint
+            // the photo in whatever hue it has, so it goes too. Silent:
+            // Lightroom always writes hue and saturation together, so only a
+            // malformed blob gets here and the user has nothing to act on.
+            if blend
+                .settings
+                .get(sat.name)
+                .and_then(Value::as_f64)
+                .is_some_and(|v| v > 0.0)
+            {
+                blend.settings.remove(sat.name);
+            }
+            continue;
+        }
+        let agreement = x.hypot(y) / weight;
+        // The linear mean from the loop above, before the vector replaces it.
+        let linear = blend
+            .settings
+            .get(sat.name)
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let saturation = number_json(sat.spec, x.hypot(y) / score_sum);
+        let faded = saturation.as_f64().is_none_or(|v| v <= 0.0);
+        blend.settings.insert(sat.name.to_string(), saturation);
+        if agreement < MIN_HUE_AGREEMENT && linear >= MIN_NOTICEABLE_TONING {
+            log::info!(
+                "Style blend: {} hues disagree (agreement {agreement:.3}); saturation {linear:.1} faded",
+                hue.spec.name,
+            );
+            let note = toning_warning(sat.spec.name);
+            if !blend.warnings.contains(&note) {
+                blend.warnings.push(note);
+            }
+        }
+        if faded {
+            // No toning left: the photo keeps its own hue under saturation 0.
+            continue;
+        }
+        let degrees = y.atan2(x).to_degrees().rem_euclid(360.0);
+        let mut value = number_json(hue.spec, degrees);
+        // 359.6° rounds to 360, which is 0° (the plugin wraps it too).
+        if value.as_f64().is_some_and(|v| v >= 360.0) {
+            value = number_json(hue.spec, 0.0);
+        }
+        blend.settings.insert(hue.name.to_string(), value);
+    }
+    blend
 }
 
 /// Whether the style engine may send a white-balance *mode* without numbers
@@ -490,7 +691,13 @@ pub fn adaptive_compensation(
 
 /// Port of `_canonical_to_edit_recipe`: each canonical value goes to its
 /// registry recipe alias below `global` (`tone_curve_shadows` →
-/// `global.tone_curve.shadows`).
+/// `global.tone_curve.shadows`, `hsl_red_hue` → `global.hsl.red.hue`,
+/// `color_grading_shadows_hue` → `global.color_grading.shadows.hue`). Those
+/// nested objects are exactly what the installed plugin's
+/// `DevelopEditManager` reads (`buildHslDevelopSettings`,
+/// `buildColorGradingDevelopSettings`, `buildToneCurveSettings`), and they
+/// are the only objects in `global`: its review dialog prints any other
+/// table as an address.
 ///
 /// White balance goes to the **recipe level**, `white_balance: {mode,
 /// family, temperature?, tint?}` next to `global`/`masks`, never into
@@ -613,7 +820,10 @@ pub fn generate_style_edit(
         })
         .collect();
 
-    let mut blended = interpolate_recipes(&winners);
+    let Blend {
+        settings: mut blended,
+        warnings: blend_warnings,
+    } = interpolate_recipes(&winners);
     adaptive_compensation(&mut blended, &query.exposure, &winners);
 
     // Python builds this from a `set(...)`, whose iteration order is not
@@ -661,6 +871,7 @@ pub fn generate_style_edit(
     let warnings: Vec<String> = confidence_warning(confidence)
         .into_iter()
         .chain(wb_warning)
+        .chain(blend_warnings)
         .collect();
 
     StyleEngineResult {
@@ -805,7 +1016,7 @@ mod tests {
             (from_blob(json!({"Exposure2012": 1.0}), 0.0), 2.0),
             (from_blob(json!({"Exposure2012": 0.0}), 0.0), 1.0),
         ];
-        let blended = interpolate_recipes(&winners);
+        let blended = interpolate_recipes(&winners).settings;
         // 2/3 * 1.0 + 1/3 * 0.0, to Exposure2012's 2 decimals
         assert_eq!(blended["exposure"], json!(0.67));
     }
@@ -821,7 +1032,7 @@ mod tests {
             ),
             (from_blob(json!({"Contrast2012": 21}), 0.0), 1.0),
         ];
-        let blended = interpolate_recipes(&winners);
+        let blended = interpolate_recipes(&winners).settings;
         assert_eq!(blended["clarity"], json!(30));
         assert_eq!(
             blended["contrast"],
@@ -835,7 +1046,7 @@ mod tests {
         let mut c = from_blob(json!({"Contrast2012": 10}), 0.0);
         // A version-1 row still carrying the old tint number.
         c.canonical_settings.insert("tint".into(), json!(40.0));
-        let blended = interpolate_recipes(&[(c, 1.0)]);
+        let blended = interpolate_recipes(&[(c, 1.0)]).settings;
         assert!(blended.get("tint").is_none());
         assert_eq!(blended["contrast"], json!(10));
     }
@@ -1100,6 +1311,286 @@ mod tests {
         assert!(result.warnings[0].contains("confidence"));
         assert!(!result.warnings[0].contains('%'), "{}", result.warnings[0]);
         assert!(result.warnings[1].contains("raw files and this photo is not"));
+    }
+
+    /// Shadow toning of one example (hue in degrees, saturation 0..100).
+    fn toned(hue: f64, sat: f64) -> TrainingCandidate {
+        from_blob(
+            json!({
+                "ProcessVersion": "15.4",
+                "SplitToningShadowHue": hue,
+                "SplitToningShadowSaturation": sat,
+            }),
+            0.0,
+        )
+    }
+
+    #[test]
+    fn every_field_the_installed_plugin_applies_is_blended_and_nested() {
+        let blob = json!({
+            "ProcessVersion": "15.4",
+            "SharpenRadius": 1.26,
+            "SharpenDetail": 30,
+            "SharpenEdgeMasking": 12,
+            "LuminanceNoiseReductionDetail": 55,
+            "LuminanceNoiseReductionContrast": 5,
+            "ColorNoiseReductionDetail": 50,
+            "ColorNoiseReductionSmoothness": 60,
+            "PostCropVignetteMidpoint": 40,
+            "PostCropVignetteRoundness": -10,
+            "PostCropVignetteFeather": 70,
+            "PostCropVignetteHighlightContrast": 20,
+            "GrainSize": 25,
+            "GrainFrequency": 50,
+            "HueAdjustmentAqua": -8,
+            "SaturationAdjustmentBlue": -20,
+            "LuminanceAdjustmentOrange": 12,
+            "SplitToningShadowHue": 220,
+            "SplitToningShadowSaturation": 15,
+            "SplitToningHighlightHue": 45,
+            "SplitToningHighlightSaturation": 20,
+            "SplitToningBalance": -10,
+            "ParametricShadowSplit": 20,
+            "ParametricMidtoneSplit": 45,
+            "ParametricHighlightSplit": 70,
+            // Not sent: the installed plugin warns about and drops them.
+            "ColorGradeMidtoneHue": 100,
+            "ColorGradeMidtoneSat": 10,
+            "ColorGradeBlending": 60,
+            "ColorGradeShadowLum": 5,
+        });
+        let blend = interpolate_recipes(&[(from_blob(blob, 0.0), 1.0)]);
+        assert!(blend.warnings.is_empty(), "{:?}", blend.warnings);
+        let recipe = canonical_to_edit_recipe(&blend.settings, "", None);
+        let global = &recipe["global"];
+        assert_eq!(global["sharpen_radius"], json!(1.3), "one decimal");
+        for (field, v) in [
+            ("sharpen_detail", 30),
+            ("sharpen_masking", 12),
+            ("noise_reduction_detail", 55),
+            ("noise_reduction_contrast", 5),
+            ("color_noise_reduction_detail", 50),
+            ("color_noise_reduction_smoothness", 60),
+            ("vignette_midpoint", 40),
+            ("vignette_roundness", -10),
+            ("vignette_feather", 70),
+            ("vignette_highlights", 20),
+            ("grain_size", 25),
+            ("grain_roughness", 50),
+        ] {
+            assert_eq!(global[field], json!(v), "{field}");
+        }
+        assert_eq!(global["hsl"]["aqua"]["hue"], json!(-8));
+        assert_eq!(global["hsl"]["blue"]["saturation"], json!(-20));
+        assert_eq!(global["hsl"]["orange"]["luminance"], json!(12));
+        assert_eq!(
+            global["color_grading"],
+            json!({
+                "shadows": {"hue": 220, "saturation": 15},
+                "highlights": {"hue": 45, "saturation": 20},
+                "balance": -10,
+            })
+        );
+        assert_eq!(
+            global["tone_curve"],
+            json!({"shadow_split": 20, "midtone_split": 45, "highlight_split": 70})
+        );
+    }
+
+    #[test]
+    fn hsl_values_are_renormalised_per_key() {
+        // The second example's settings carry no colour mixer at all (older
+        // Lightroom tables can omit it); it must not pull red towards 0.
+        let winners = vec![
+            (
+                from_blob(json!({"HueAdjustmentRed": 20, "Contrast2012": 0}), 0.0),
+                1.0,
+            ),
+            (from_blob(json!({"Contrast2012": 10}), 0.0), 3.0),
+        ];
+        let blended = interpolate_recipes(&winners).settings;
+        assert_eq!(blended["hsl_red_hue"], json!(20));
+        // HueAdjustment* is an offset on -100..100: a plain (linear) mean.
+        let winners = vec![
+            (from_blob(json!({"HueAdjustmentRed": -90}), 0.0), 1.0),
+            (from_blob(json!({"HueAdjustmentRed": 90}), 0.0), 1.0),
+        ];
+        assert_eq!(
+            interpolate_recipes(&winners).settings["hsl_red_hue"],
+            json!(0)
+        );
+    }
+
+    #[test]
+    fn split_toning_hues_average_on_the_circle() {
+        // 350 and 10 are 20 degrees apart around red, not 180 apart.
+        let blend = interpolate_recipes(&[(toned(350.0, 20.0), 1.0), (toned(10.0, 20.0), 1.0)]);
+        assert_eq!(blend.settings["color_grading_shadows_hue"], json!(0));
+        assert_eq!(
+            blend.settings["color_grading_shadows_saturation"],
+            json!(20)
+        );
+        assert!(blend.warnings.is_empty());
+
+        // A mean just below 360 rounds to 360, which is written as 0.
+        let blend = interpolate_recipes(&[(toned(359.0, 40.0), 1.0), (toned(0.0, 60.0), 1.0)]);
+        assert_eq!(blend.settings["color_grading_shadows_hue"], json!(0));
+    }
+
+    #[test]
+    fn split_toning_hues_are_weighted_by_score_times_saturation() {
+        // Equal scores: 30 x (1, 0) + 10 x (0, 1) -> atan(1/3) = 18.4 degrees.
+        let blend = interpolate_recipes(&[(toned(0.0, 30.0), 1.0), (toned(90.0, 10.0), 1.0)]);
+        assert_eq!(blend.settings["color_grading_shadows_hue"], json!(18));
+        // Equal saturations: the score decides. 3 x (1, 0) + 1 x (0, 1).
+        let blend = interpolate_recipes(&[(toned(0.0, 20.0), 3.0), (toned(90.0, 20.0), 1.0)]);
+        assert_eq!(blend.settings["color_grading_shadows_hue"], json!(18));
+        // A hue at saturation 0 is invisible: it does not pull at all.
+        let blend = interpolate_recipes(&[(toned(200.0, 25.0), 1.0), (toned(40.0, 0.0), 5.0)]);
+        assert_eq!(blend.settings["color_grading_shadows_hue"], json!(200));
+    }
+
+    #[test]
+    fn an_untoned_zone_sends_no_hue() {
+        // Lightroom keeps a hue around after the saturation went back to 0.
+        let blend = interpolate_recipes(&[(toned(218.0, 0.0), 1.0), (toned(33.0, 0.0), 1.0)]);
+        assert!(blend.settings.get("color_grading_shadows_hue").is_none());
+        assert_eq!(blend.settings["color_grading_shadows_saturation"], json!(0));
+        assert!(blend.warnings.is_empty());
+        let recipe = canonical_to_edit_recipe(&blend.settings, "", None);
+        assert_eq!(
+            recipe["global"]["color_grading"]["shadows"],
+            json!({"saturation": 0})
+        );
+    }
+
+    #[test]
+    fn opposite_toning_hues_cancel_to_neutral_and_say_so() {
+        let blend = interpolate_recipes(&[(toned(30.0, 20.0), 1.0), (toned(210.0, 20.0), 1.0)]);
+        assert!(blend.settings.get("color_grading_shadows_hue").is_none());
+        assert_eq!(blend.settings["color_grading_shadows_saturation"], json!(0));
+        assert_eq!(blend.warnings.len(), 1);
+        assert!(
+            blend.warnings[0].starts_with("Color grading of the shadows was toned down"),
+            "{:?}",
+            blend.warnings
+        );
+    }
+
+    /// Highlight toning of one example.
+    fn toned_highlights(hue: f64, sat: f64) -> TrainingCandidate {
+        from_blob(
+            json!({
+                "ProcessVersion": "15.4",
+                "SplitToningHighlightHue": hue,
+                "SplitToningHighlightSaturation": sat,
+            }),
+            0.0,
+        )
+    }
+
+    #[test]
+    fn disagreeing_tints_fade_towards_neutral_instead_of_a_third_colour() {
+        let sat_hue = |blend: &Blend, zone: &str| {
+            (
+                blend.settings[&format!("color_grading_{zone}_saturation")].clone(),
+                blend
+                    .settings
+                    .get(&format!("color_grading_{zone}_hue"))
+                    .cloned(),
+            )
+        };
+        // Orange and blue shadows: the midpoint (green) only at the length
+        // of the mean colour vector, and a note.
+        let blend = interpolate_recipes(&[(toned(30.0, 40.0), 1.0), (toned(190.0, 40.0), 1.0)]);
+        assert_eq!(sat_hue(&blend, "shadows"), (json!(7), Some(json!(110))));
+        assert_eq!(blend.warnings.len(), 1, "{:?}", blend.warnings);
+        let blend = interpolate_recipes(&[(toned(47.0, 37.0), 1.0), (toned(216.0, 34.0), 1.0)]);
+        assert_eq!(sat_hue(&blend, "shadows"), (json!(4), Some(json!(108))));
+        assert_eq!(blend.warnings.len(), 1);
+        let blend = interpolate_recipes(&[(toned(30.0, 20.0), 1.0), (toned(190.0, 20.0), 1.0)]);
+        assert_eq!(sat_hue(&blend, "shadows"), (json!(3), Some(json!(110))));
+        assert_eq!(blend.warnings.len(), 1);
+
+        let blend = interpolate_recipes(&[
+            (toned_highlights(37.0, 20.0), 1.0),
+            (toned_highlights(213.0, 68.0), 1.0),
+            (toned_highlights(16.0, 55.0), 1.0),
+        ]);
+        assert_eq!(
+            blend.settings["color_grading_highlights_saturation"],
+            json!(5)
+        );
+        assert!(
+            blend.warnings[0].starts_with("Color grading of the highlights was toned down"),
+            "{:?}",
+            blend.warnings
+        );
+
+        // Hues that agree keep the linear mean: untoned winners dilute, they
+        // do not disagree, so there is no note.
+        let blend = interpolate_recipes(&[
+            (toned(40.0, 35.0), 1.0),
+            (toned(200.0, 0.0), 1.0),
+            (toned(90.0, 0.0), 1.0),
+        ]);
+        assert_eq!(sat_hue(&blend, "shadows"), (json!(12), Some(json!(40))));
+        assert!(blend.warnings.is_empty(), "{:?}", blend.warnings);
+    }
+
+    #[test]
+    fn the_curve_splits_are_blended_as_one_ordered_group() {
+        let splits = |s: i64, m: i64, h: i64| {
+            json!({
+                "ParametricShadowSplit": s,
+                "ParametricMidtoneSplit": m,
+                "ParametricHighlightSplit": h,
+            })
+        };
+        let winners = vec![
+            (from_blob(splits(10, 30, 50), 0.0), 1.0),
+            (from_blob(splits(40, 60, 90), 0.0), 1.0),
+            // Carries only one split: not part of the group's blend.
+            (from_blob(json!({"ParametricShadowSplit": 80}), 0.0), 5.0),
+        ];
+        let blended = interpolate_recipes(&winners).settings;
+        assert_eq!(blended["tone_curve_shadow_split"], json!(25));
+        assert_eq!(blended["tone_curve_midtone_split"], json!(45));
+        assert_eq!(blended["tone_curve_highlight_split"], json!(70));
+
+        // Rounding half to even can collapse neighbours (25.5 and 26.5 both
+        // become 26): the group is then left out rather than sent unordered,
+        // and the blend says so.
+        let winners = vec![
+            (from_blob(splits(25, 26, 70), 0.0), 1.0),
+            (from_blob(splits(26, 27, 71), 0.0), 1.0),
+        ];
+        let blend = interpolate_recipes(&winners);
+        for key in [
+            "tone_curve_shadow_split",
+            "tone_curve_midtone_split",
+            "tone_curve_highlight_split",
+        ] {
+            assert!(blend.settings.get(key).is_none(), "{key}: {blend:?}");
+        }
+        assert_eq!(blend.warnings, [SPLITS_WARNING]);
+    }
+
+    #[test]
+    fn a_toning_note_reaches_the_style_result() {
+        let result = generate_style_edit(
+            5,
+            &[toned(30.0, 20.0), toned(210.0, 20.0)],
+            &StyleQuery::default(),
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("Color grading of the shadows")),
+            "{:?}",
+            result.warnings
+        );
     }
 
     #[test]

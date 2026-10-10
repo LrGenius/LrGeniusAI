@@ -355,8 +355,10 @@ pub enum Gate {
     NonRawOnly,
     /// Categorical: weighted majority vote, never a mean.
     Categorical,
-    /// An angle: circular mean, weighted by the matching saturation.
-    CircularHue,
+    /// An angle (0..360): circular mean, weighted by the named saturation
+    /// key of the same level and zone. A hue whose saturation is 0 has no
+    /// visible effect, so it must not pull the mean.
+    CircularHue(&'static str),
     /// Only to the same camera (or make) as the example.
     CameraRestricted,
     /// Per mask component: the mask type decides.

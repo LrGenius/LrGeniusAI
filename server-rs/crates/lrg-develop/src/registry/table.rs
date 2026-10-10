@@ -645,7 +645,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.tone_curve.shadow_split"),
         note: "Keep the ordering Shadow < Midtone < Highlight when averaging.",
     },
     KeySpec {
@@ -662,7 +662,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.tone_curve.midtone_split"),
         note: "",
     },
     KeySpec {
@@ -679,7 +679,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.tone_curve.highlight_split"),
         note: "",
     },
     KeySpec {
@@ -883,7 +883,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.red.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -900,7 +900,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.orange.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -917,7 +917,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.yellow.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -934,7 +934,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.green.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -951,7 +951,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.aqua.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -968,7 +968,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.blue.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -985,7 +985,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.purple.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -1002,7 +1002,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.magenta.hue"),
         note: "8 keys: HueAdjustmentRed, HueAdjustmentOrange, HueAdjustmentYellow, HueAdjustmentGreen, HueAdjustmentAqua, HueAdjustmentBlue, HueAdjustmentPurple, HueAdjustmentMagenta",
     },
     KeySpec {
@@ -1019,7 +1019,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.red.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1036,7 +1036,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.orange.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1053,7 +1053,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.yellow.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1070,7 +1070,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.green.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1087,7 +1087,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.aqua.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1104,7 +1104,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.blue.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1121,7 +1121,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.purple.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1138,7 +1138,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.magenta.saturation"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1155,7 +1155,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.red.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1172,7 +1172,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.orange.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1189,7 +1189,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.yellow.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1206,7 +1206,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.green.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1223,7 +1223,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.aqua.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1240,7 +1240,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.blue.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1257,7 +1257,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.purple.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1274,7 +1274,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.hsl.magenta.luminance"),
         note: "8 keys.",
     },
     KeySpec {
@@ -1456,12 +1456,12 @@ pub(crate) static TABLE: &[KeySpec] = &[
         fmt: NumFmt::Int,
         plus_sign: false,
         default: DefaultSpec { raw: Def::Value(Lit::Int(0)), non_raw: Def::Unverified },
-        policy: Policy::LearnGated(Gate::CircularHue),
+        policy: Policy::LearnGated(Gate::CircularHue("SplitToningShadowSaturation")),
         frame: FrameScope::Shareable,
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_grading.shadows.hue"),
         note: "Circular mean; weight by saturation. [LrC 10+ reuses the split-toning keys]",
     },
     KeySpec {
@@ -1478,7 +1478,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_grading.shadows.saturation"),
         note: "",
     },
     KeySpec {
@@ -1490,12 +1490,12 @@ pub(crate) static TABLE: &[KeySpec] = &[
         fmt: NumFmt::Int,
         plus_sign: false,
         default: DefaultSpec { raw: Def::Value(Lit::Int(0)), non_raw: Def::Unverified },
-        policy: Policy::LearnGated(Gate::CircularHue),
+        policy: Policy::LearnGated(Gate::CircularHue("SplitToningHighlightSaturation")),
         frame: FrameScope::Shareable,
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_grading.highlights.hue"),
         note: "Circular mean.",
     },
     KeySpec {
@@ -1512,7 +1512,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_grading.highlights.saturation"),
         note: "",
     },
     KeySpec {
@@ -1529,7 +1529,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_grading.balance"),
         note: "",
     },
     KeySpec {
@@ -1575,7 +1575,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         fmt: NumFmt::Int,
         plus_sign: false,
         default: DefaultSpec { raw: Def::Value(Lit::Int(0)), non_raw: Def::Unverified },
-        policy: Policy::LearnGated(Gate::CircularHue),
+        policy: Policy::LearnGated(Gate::CircularHue("ColorGradeMidtoneSat")),
         frame: FrameScope::Shareable,
         file_kind: FileScope::Both,
         presence: Presence::Both,
@@ -1626,7 +1626,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         fmt: NumFmt::Int,
         plus_sign: false,
         default: DefaultSpec { raw: Def::Value(Lit::Int(0)), non_raw: Def::Unverified },
-        policy: Policy::LearnGated(Gate::CircularHue),
+        policy: Policy::LearnGated(Gate::CircularHue("ColorGradeGlobalSat")),
         frame: FrameScope::Shareable,
         file_kind: FileScope::Both,
         presence: Presence::Both,
@@ -1716,7 +1716,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.sharpen_radius"),
         note: "",
     },
     KeySpec {
@@ -1733,7 +1733,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.sharpen_detail"),
         note: "Non-zero default.",
     },
     KeySpec {
@@ -1750,7 +1750,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.sharpen_masking"),
         note: "",
     },
     KeySpec {
@@ -1784,7 +1784,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.noise_reduction_detail"),
         note: "[written only when LuminanceSmoothing was touched]",
     },
     KeySpec {
@@ -1801,7 +1801,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.noise_reduction_contrast"),
         note: "[as above]",
     },
     KeySpec {
@@ -1835,7 +1835,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_noise_reduction_detail"),
         note: "",
     },
     KeySpec {
@@ -1852,7 +1852,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.color_noise_reduction_smoothness"),
         note: "",
     },
     KeySpec {
@@ -2821,7 +2821,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.vignette_midpoint"),
         note: "",
     },
     KeySpec {
@@ -2838,7 +2838,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.vignette_feather"),
         note: "",
     },
     KeySpec {
@@ -2855,7 +2855,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.vignette_roundness"),
         note: "",
     },
     KeySpec {
@@ -2889,7 +2889,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.vignette_highlights"),
         note: "",
     },
     KeySpec {
@@ -2940,7 +2940,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.grain_size"),
         note: "Zeroed template uses 50; the Adobe default and the corpus mode are 25.",
     },
     KeySpec {
@@ -2957,7 +2957,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         file_kind: FileScope::Both,
         presence: Presence::Both,
         min_pv: None,
-        recipe_alias: None,
+        recipe_alias: Some("global.grain_roughness"),
         note: "",
     },
     KeySpec {
@@ -5332,7 +5332,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         fmt: NumFmt::Trim6,
         plus_sign: false,
         default: DefaultSpec { raw: Def::Value(Lit::Real(Finite::new_const(0.0))), non_raw: Def::Unverified },
-        policy: Policy::LearnGated(Gate::CircularHue),
+        policy: Policy::LearnGated(Gate::CircularHue("LocalToningSaturation")),
         frame: FrameScope::Shareable,
         file_kind: FileScope::Both,
         presence: Presence::Both,

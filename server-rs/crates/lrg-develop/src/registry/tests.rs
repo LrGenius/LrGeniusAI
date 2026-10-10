@@ -198,8 +198,46 @@ fn recipe_aliases_are_unique_and_only_on_learnable_global_keys() {
             panic!("alias {alias} on both {other} and {}", s.name);
         }
     }
-    // The fields the style engine blends today, minus white balance (1d).
-    assert_eq!(seen.len(), 20);
+    // Every field the installed plugin applies from `global` (1f), minus
+    // white balance (1d): 36 sliders and parametric curve values, 24
+    // HSL values, 5 colour-grading values.
+    assert_eq!(seen.len(), 65);
+    // A path must never end where another continues (`global.hsl` next to
+    // `global.hsl.red.hue`): the recipe builder nests objects along them.
+    for a in seen.keys() {
+        for b in seen.keys() {
+            assert!(
+                !b.starts_with(&format!("{a}.")),
+                "alias {a} is a prefix of {b}"
+            );
+        }
+    }
+    assert_eq!(
+        row(Level::Global, "HueAdjustmentAqua").recipe_alias,
+        Some("global.hsl.aqua.hue")
+    );
+    assert_eq!(
+        row(Level::Global, "SplitToningHighlightSaturation").recipe_alias,
+        Some("global.color_grading.highlights.saturation")
+    );
+    assert_eq!(
+        row(Level::Global, "ParametricMidtoneSplit").recipe_alias,
+        Some("global.tone_curve.midtone_split")
+    );
+    assert_eq!(
+        row(Level::Global, "GrainFrequency").recipe_alias,
+        Some("global.grain_roughness")
+    );
+    // The installed plugin warns about and drops these (1f leaves them out).
+    for name in [
+        "ColorGradeMidtoneHue",
+        "ColorGradeGlobalHue",
+        "ColorGradeShadowLum",
+        "ColorGradeBlending",
+        "ToneCurvePV2012",
+    ] {
+        assert_eq!(row(Level::Global, name).recipe_alias, None, "{name}");
+    }
     assert_eq!(
         row(Level::Global, "Exposure2012").recipe_alias,
         Some("global.exposure")
@@ -418,11 +456,21 @@ fn gates_are_consistent() {
                 };
                 assert!(values.iter().all(|v| all.contains(v)), "{}", s.name);
             }
-            Some(Gate::CircularHue) => {
+            Some(Gate::CircularHue(weight)) => {
                 let (_, max) = s
                     .range
                     .unwrap_or_else(|| panic!("{}: hue without range", s.name));
                 assert!(max.get() >= 359.0, "{}: not an angle", s.name);
+                // The weight is a saturation of the same level, never negative.
+                let w = lookup(s.level, weight)
+                    .unwrap_or_else(|| panic!("{}: weight {weight} unknown", s.name))
+                    .spec();
+                assert!(w.name.contains("Sat"), "{}: weight {weight}", s.name);
+                assert!(
+                    w.range.is_some_and(|(lo, _)| lo.get() >= 0.0),
+                    "{}: weight {weight} can be negative",
+                    s.name
+                );
             }
             _ => {}
         }
@@ -431,7 +479,7 @@ fn gates_are_consistent() {
     assert_eq!(row(Level::Global, "HueAdjustmentRed").policy, Policy::Learn);
     assert_eq!(
         row(Level::Global, "SplitToningShadowHue").policy,
-        Policy::LearnGated(Gate::CircularHue)
+        Policy::LearnGated(Gate::CircularHue("SplitToningShadowSaturation"))
     );
     assert_eq!(
         row(Level::Global, "ConvertToGrayscale").policy,
