@@ -7,8 +7,9 @@ local GLOBAL_KEY_MAP = {
 	shadows = "Shadows2012",
 	whites = "Whites2012",
 	blacks = "Blacks2012",
-	temperature = "Temp",
-	tint = "Tint",
+	-- No temperature/tint here: which Lightroom keys carry a white balance
+	-- depends on the photo (see buildWhiteBalanceSettings), so a fixed name
+	-- cannot be right for every file.
 	texture = "Texture",
 	clarity = "Clarity2012",
 	dehaze = "Dehaze",
@@ -41,7 +42,7 @@ local MASK_KEY_CANDIDATES = {
 	shadows = { "local_Shadows", "Shadows2012", "Shadows" },
 	whites = { "local_Whites", "Whites2012", "Whites" },
 	blacks = { "local_Blacks", "Blacks2012", "Blacks" },
-	temperature = { "local_Temperature", "Temperature", "Temp" },
+	temperature = { "local_Temperature", "Temperature" },
 	tint = { "local_Tint", "Tint" },
 	texture = { "local_Texture", "Texture" },
 	clarity = { "local_Clarity", "Clarity2012", "Clarity" },
@@ -83,7 +84,7 @@ local HSL_LABELS = {
 -- edit therefore double-counts that edit.
 --
 -- This used to be an additive merge for most keys, which was catastrophic for
--- `Temp` (as-shot 5500 K + a recommended 5600 K produced 11100 K) and silently
+-- the white balance (as-shot 5500 K + a recommended 5600 K produced 11100 K) and silently
 -- wrong wherever Lightroom's default is non-zero: `ColorNoiseReduction` (25),
 -- `SharpenDetail` (25), `GrainSize`, the vignette midpoints, and the wrapping
 -- `SplitToning*Hue` angles.
@@ -100,11 +101,17 @@ local DEVELOP_VALUE_BOUNDS = {
 	Shadows2012 = { min = -100, max = 100 },
 	Whites2012 = { min = -100, max = 100 },
 	Blacks2012 = { min = -100, max = 100 },
-	-- Raw only. Lightroom's Temp is Kelvin for raw files and a relative
-	-- -100..100 for JPEG/TIFF/PNG; see TEMP_BOUNDS_RELATIVE below and
-	-- `temperature_range` in `edit_recipe.rs`, which has to agree.
-	Temp = { min = 2000, max = 50000 },
+	-- White balance lives in two families of keys, never in `Temp`, which is
+	-- not what `getDevelopSettings` reports (none of the saved training
+	-- examples carries it). A raw file carries Kelvin in
+	-- `Temperature` and an absolute `Tint`; a rendered file (JPEG/TIFF/PNG, and
+	-- a DNG converted from one) carries offsets from its own rendering in
+	-- `IncrementalTemperature`/`IncrementalTint`. Each key has one scale, so the
+	-- bounds no longer depend on the file.
+	Temperature = { min = 2000, max = 50000 },
 	Tint = { min = -150, max = 150 },
+	IncrementalTemperature = { min = -100, max = 100 },
+	IncrementalTint = { min = -100, max = 100 },
 	Texture = { min = -100, max = 100 },
 	Clarity2012 = { min = -100, max = 100 },
 	Dehaze = { min = -100, max = 100 },
@@ -147,16 +154,20 @@ local DEVELOP_VALUE_BOUNDS = {
 	CropAngle = { min = -45, max = 45 },
 }
 
--- Non-raw originals use a relative white balance. Clamping such a photo's Temp
--- with the Kelvin bounds above turned a sensible `+10` into 2000 — maximum
--- cool — because the clamp raised it to the Kelvin minimum.
-local TEMP_BOUNDS_RELATIVE = { min = -100, max = 100 }
-
 -- A value this large on the relative scale can only be Kelvin that reached us
 -- anyway: an older backend, or a model that ignored the schema. Clamping it
 -- would apply maximum warmth to every affected photo, so it is dropped
--- instead. Mirrors `KELVIN_LOOKING` in `edit_recipe.rs`.
-local TEMP_KELVIN_LOOKING = 500
+-- instead. Mirrors `KELVIN_LOOKING` in `edit_recipe.rs`. The same threshold
+-- read the other way catches a relative value aimed at a raw file, which the
+-- Kelvin clamp would otherwise turn into 2000 K, maximum cool.
+local KELVIN_LOOKING = 500
+
+-- The develop keys that carry a white balance, per family. See the note in
+-- DEVELOP_VALUE_BOUNDS.
+local WHITE_BALANCE_KEYS = {
+	raw = { temperature = "Temperature", tint = "Tint" },
+	non_raw = { temperature = "IncrementalTemperature", tint = "IncrementalTint" },
+}
 
 for _, label in pairs(HSL_LABELS) do
 	DEVELOP_VALUE_BOUNDS["HueAdjustment" .. label] = { min = -100, max = 100 }
@@ -461,16 +472,11 @@ local function mergeSettings(target, source)
 	end
 end
 
--- `isRaw` is only consulted for `Temp`; every other key means the same thing on
--- both kinds of file. `nil` keeps the historical Kelvin behaviour.
-local function normalizeDevelopValue(key, value, isRaw)
+local function normalizeDevelopValue(key, value)
 	if type(value) ~= "number" then
 		return value
 	end
 	local bounds = DEVELOP_VALUE_BOUNDS[key]
-	if key == "Temp" and isRaw == false then
-		bounds = TEMP_BOUNDS_RELATIVE
-	end
 	if not bounds then
 		return value
 	end
@@ -492,7 +498,7 @@ local function normalizeDevelopValue(key, value, isRaw)
 	return value
 end
 
-local function mergeGlobalDevelopSettings(currentSettings, aiSettings, isRaw)
+local function mergeGlobalDevelopSettings(currentSettings, aiSettings)
 	local merged = {}
 	-- Start with existing settings to preserve all state, including linked keys
 	-- like crop coordinates and tone curves that aren't being touched by the AI.
@@ -506,9 +512,262 @@ local function mergeGlobalDevelopSettings(currentSettings, aiSettings, isRaw)
 	-- key the recipe carries replaces the current value rather than adding to it.
 	-- Keys the recipe does not mention keep whatever the photo already had.
 	for key, value in pairs(aiSettings or {}) do
-		merged[key] = normalizeDevelopValue(key, value, isRaw)
+		merged[key] = normalizeDevelopValue(key, value)
 	end
 	return merged
+end
+
+---
+-- Which family of white-balance keys a photo's develop settings use.
+--
+-- Lightroom answers this itself: a raw file's settings carry `Temperature`
+-- (Kelvin), a rendered file's carry `IncrementalTemperature` (an offset from
+-- its own rendering). The file format is only a fallback, because it is wrong
+-- for a DNG converted from a JPEG: Lightroom counts that as a DNG, yet its
+-- white balance is the rendered kind.
+--
+-- @param settings table|nil The photo's `getDevelopSettings()`, or nil when
+--        they could not be read.
+-- @param isRawFallback boolean|nil `Util.isRawPhoto(photo)`, used only when the
+--        settings carry neither key.
+-- @return string|nil "raw", "non_raw", or nil when neither source knows.
+--
+function DevelopEditManager.whiteBalanceFamily(settings, isRawFallback)
+	if type(settings) == "table" then
+		if settings.Temperature ~= nil then
+			return "raw"
+		end
+		if settings.IncrementalTemperature ~= nil then
+			return "non_raw"
+		end
+	end
+	if isRawFallback == true then
+		return "raw"
+	end
+	if isRawFallback == false then
+		return "non_raw"
+	end
+	return nil
+end
+
+---
+-- The white-balance family of a photo in the catalog. Needs an async task,
+-- because it reads the develop settings. Sent to the backend as `is_raw`, so
+-- the style engine picks examples of the same family that this plug-in will
+-- later write the result into.
+--
+-- @param photo LrPhoto
+-- @return string|nil "raw", "non_raw", or nil when unknown.
+--
+function DevelopEditManager.photoWhiteBalanceFamily(photo)
+	if photo == nil then
+		return nil
+	end
+	local ok, settingsOrErr = LrTasks.pcall(function()
+		return photo:getDevelopSettings()
+	end)
+	local settings = nil
+	if ok and type(settingsOrErr) == "table" then
+		settings = settingsOrErr
+	else
+		log:warn(
+			"DevelopEditManager.photoWhiteBalanceFamily: develop settings unavailable: " .. tostring(settingsOrErr)
+		)
+	end
+	return DevelopEditManager.whiteBalanceFamily(settings, Util.isRawPhoto(photo))
+end
+
+local function familyLabel(family)
+	if family == "raw" then
+		return "raw files"
+	end
+	return "non-raw files (JPEG, TIFF, PNG, or a DNG converted from one)"
+end
+
+-- One family's temperature/tint pair as develop settings, with
+-- `WhiteBalance = "Custom"` so Lightroom shows the numbers it was given rather
+-- than a preset label that no longer describes them. Returns an empty table
+-- (and says why) when the numbers are on the other family's scale.
+local function mapWhiteBalanceValues(family, temperature, tint, warnings)
+	local keys = WHITE_BALANCE_KEYS[family]
+	local settings = {}
+	if not keys then
+		return settings
+	end
+	if type(temperature) == "number" then
+		local looksKelvin = math.abs(temperature) > KELVIN_LOOKING
+		if family == "non_raw" and looksKelvin then
+			-- Clamping 6200 into -100..100 gives +100: a hard orange cast.
+			-- Leaving the photo's own white balance alone is the lesser harm,
+			-- and the tint that came with it is on the raw scale too.
+			appendWarning(
+				warnings,
+				"White balance was not applied: the suggestion is a Kelvin value, but this photo is not a raw file, "
+					.. "where Lightroom expects a relative -100 to +100 value instead."
+			)
+			return {}
+		end
+		if family == "raw" and not looksKelvin then
+			appendWarning(
+				warnings,
+				"White balance was not applied: the suggestion is a relative value, but this photo is a raw file, "
+					.. "where Lightroom expects a temperature in Kelvin."
+			)
+			return {}
+		end
+		settings[keys.temperature] = temperature
+	end
+	if type(tint) == "number" then
+		settings[keys.tint] = tint
+	end
+	if next(settings) ~= nil then
+		settings.WhiteBalance = "Custom"
+	end
+	return settings
+end
+
+local function warnUnknownFamily(warnings)
+	appendWarning(
+		warnings,
+		"White balance was not applied: Lightroom did not report whether this photo is a raw file, "
+			.. "so it is unclear which white-balance scale it uses."
+	)
+end
+
+-- Develop settings for the recipe's white balance, written into the keys of
+-- the photo's own family (`targetFamily`, from whiteBalanceFamily).
+--
+-- Two wire forms reach this:
+--  * `recipe.white_balance = { mode, family, temperature?, tint? }`, next to
+--    `global`/`masks`: what the style engine sends. `family` says which
+--    scale the numbers are on; a mismatch with the photo drops them, since a
+--    Kelvin value has no meaning as an offset and vice versa.
+--  * `recipe.global.temperature`/`tint` (or the LLM's `global.white_balance`
+--    alias object): an older backend, or the LLM fallback. These carry no
+--    family, so they are read on the photo's own scale.
+--
+-- Never writes `Temp`: it is not a key `getDevelopSettings` reports, and its
+-- scale changes with the file, which is how a Kelvin value used to land on a
+-- JPEG. (TaskDevelopExperiments writes it on purpose, to find out what
+-- Lightroom makes of it.)
+local function buildWhiteBalanceSettings(recipe, targetFamily, warnings)
+	local wb = type(recipe) == "table" and recipe.white_balance or nil
+	if type(wb) == "table" then
+		local mode = wb.mode
+		if mode ~= nil and mode ~= "Custom" then
+			-- A mode without numbers ("Auto", "Daylight", ...) is meant to be
+			-- re-evaluated by Lightroom for this frame. Whether
+			-- applyDevelopSettings does that is not verified yet (experiment
+			-- E1), and the backend does not send such modes until it is; if
+			-- one arrives anyway it is reported rather than applied blind.
+			appendWarning(
+				warnings,
+				"White balance '"
+					.. tostring(mode)
+					.. "' was not applied: this plug-in version only transfers a custom white balance. "
+					.. "Update the plug-in to transfer this white-balance mode."
+			)
+			return {}
+		end
+		if targetFamily == nil then
+			warnUnknownFamily(warnings)
+			return {}
+		end
+		local family = wb.family
+		if not WHITE_BALANCE_KEYS[family] then
+			appendWarning(
+				warnings,
+				"White balance was not applied: the backend sent an unrecognised white-balance scale ("
+					.. tostring(family)
+					.. "). Update the plug-in and the backend together."
+			)
+			return {}
+		end
+		if family ~= targetFamily then
+			appendWarning(
+				warnings,
+				"White balance was not applied: it was learned from "
+					.. familyLabel(family)
+					.. ", and this photo is one of the "
+					.. familyLabel(targetFamily)
+					.. "."
+			)
+			return {}
+		end
+		return mapWhiteBalanceValues(targetFamily, wb.temperature, wb.tint, warnings)
+	end
+
+	local globalSettings = type(recipe) == "table" and type(recipe.global) == "table" and recipe.global or {}
+	local temperature = globalSettings.temperature
+	local tint = globalSettings.tint
+	if temperature == nil and tint == nil and type(globalSettings.white_balance) == "table" then
+		temperature = globalSettings.white_balance.temperature
+		tint = globalSettings.white_balance.tint
+	end
+	if type(temperature) ~= "number" and type(tint) ~= "number" then
+		return {}
+	end
+	if targetFamily == nil then
+		warnUnknownFamily(warnings)
+		return {}
+	end
+	return mapWhiteBalanceValues(targetFamily, temperature, tint, warnings)
+end
+
+local function roundNumber(value)
+	if value >= 0 then
+		return math.floor(value + 0.5)
+	end
+	return -math.floor(-value + 0.5)
+end
+
+local function signedNumber(value)
+	local rounded = roundNumber(value)
+	if rounded > 0 then
+		return "+" .. tostring(rounded)
+	end
+	return tostring(rounded)
+end
+
+---
+-- A white balance as one readable phrase, for the review dialog.
+--
+-- @param wb table `{ mode?, family?, temperature?, tint? }`.
+-- @return string|nil e.g. "Custom 5600 K, tint +5"; nil for a non-table.
+--
+function DevelopEditManager.formatWhiteBalance(wb)
+	if type(wb) ~= "table" then
+		return nil
+	end
+	local parts = {}
+	local head = wb.mode ~= nil and tostring(wb.mode) or nil
+	if type(wb.temperature) == "number" then
+		local temperature
+		if wb.family == "raw" then
+			temperature = tostring(roundNumber(wb.temperature)) .. " K"
+		elseif wb.family == "non_raw" then
+			temperature = "temperature " .. signedNumber(wb.temperature)
+		else
+			temperature = "temperature " .. tostring(roundNumber(wb.temperature))
+		end
+		if head and wb.family == "raw" then
+			head = head .. " " .. temperature
+		elseif head then
+			table.insert(parts, temperature)
+		else
+			head = temperature
+		end
+	end
+	if type(wb.tint) == "number" then
+		table.insert(parts, "tint " .. signedNumber(wb.tint))
+	end
+	if head then
+		table.insert(parts, 1, head)
+	end
+	if #parts == 0 then
+		return "unchanged"
+	end
+	return table.concat(parts, ", ")
 end
 
 local function formatGlobalSettings(globalSettings)
@@ -520,9 +779,22 @@ local function formatGlobalSettings(globalSettings)
 			and key ~= "tone_curve"
 			and key ~= "lens_corrections"
 			and key ~= "crop"
+			and key ~= "white_balance"
 		then
-			table.insert(lines, "- " .. tostring(key) .. ": " .. tostring(globalSettings[key]))
+			local value = globalSettings[key]
+			if type(value) == "table" then
+				-- A group this dialog has no dedicated line for (a newer
+				-- backend may send one). Its address is no use to anyone.
+				table.insert(lines, "- " .. tostring(key) .. ": " .. tostring(tableCount(value)) .. " setting(s)")
+			else
+				table.insert(lines, "- " .. tostring(key) .. ": " .. tostring(value))
+			end
 		end
+	end
+	-- The LLM's `{ temperature, tint }` alias; the style engine's white balance
+	-- sits next to `global` and is shown by formatRecipeDetails.
+	if type(globalSettings.white_balance) == "table" then
+		table.insert(lines, "- white_balance: " .. DevelopEditManager.formatWhiteBalance(globalSettings.white_balance))
 	end
 	if type(globalSettings.hsl) == "table" then
 		table.insert(lines, "- hsl: " .. tostring(tableCount(globalSettings.hsl)) .. " channel(s)")
@@ -591,6 +863,9 @@ function DevelopEditManager.formatRecipeDetails(response)
 	local globalSettings = recipe.global or {}
 	table.insert(lines, "Global adjustments")
 	local globalLines = formatGlobalSettings(globalSettings)
+	if type(recipe.white_balance) == "table" then
+		table.insert(globalLines, 1, "- White balance: " .. DevelopEditManager.formatWhiteBalance(recipe.white_balance))
+	end
 	if #globalLines == 0 then
 		table.insert(lines, "- none")
 	else
@@ -612,13 +887,30 @@ function DevelopEditManager.formatRecipeDetails(response)
 	end
 	table.insert(lines, "")
 
+	-- The recipe's own notes, then the response's (the style engine puts its
+	-- white-balance and confidence notes there, not in the recipe), so the
+	-- user sees why a setting was left out before deciding to apply.
 	table.insert(lines, "Warnings")
-	local warnings = recipe.warnings or {}
+	local warnings = {}
+	local seen = {}
+	local function addWarning(text)
+		text = text ~= nil and tostring(text) or ""
+		if text ~= "" and not seen[text] then
+			seen[text] = true
+			table.insert(warnings, text)
+		end
+	end
+	for _, warning in ipairs(type(recipe.warnings) == "table" and recipe.warnings or {}) do
+		addWarning(warning)
+	end
+	for _, warning in ipairs(Util.responseWarnings(response)) do
+		addWarning(warning)
+	end
 	if #warnings == 0 then
 		table.insert(lines, "- none")
 	else
 		for _, warning in ipairs(warnings) do
-			table.insert(lines, "- " .. tostring(warning))
+			table.insert(lines, "- " .. warning)
 		end
 	end
 
@@ -699,7 +991,9 @@ function DevelopEditManager.persistEditRecipe(photo, response, warnings, status)
 	log:trace("DevelopEditManager.persistEditRecipe: done warningsCount=" .. tostring(#allWarnings))
 end
 
-local function buildDevelopSettings(recipe, warnings, isRaw)
+-- `whiteBalanceFamily` is the photo's own family ("raw", "non_raw" or nil),
+-- from DevelopEditManager.whiteBalanceFamily.
+local function buildDevelopSettings(recipe, warnings, whiteBalanceFamily)
 	local developSettings = {}
 	local globalSettings = recipe.global or {}
 
@@ -710,20 +1004,11 @@ local function buildDevelopSettings(recipe, warnings, isRaw)
 		end
 	end
 
-	-- Dropped here rather than clamped in normalizeDevelopValue, because the
-	-- merge starts from the photo's current settings: removing the key later
-	-- would take the photo's own white balance with it, whereas never adding it
-	-- simply leaves the existing value alone.
-	if isRaw == false and type(developSettings.Temp) == "number" then
-		if math.abs(developSettings.Temp) > TEMP_KELVIN_LOOKING then
-			appendWarning(
-				warnings,
-				"Ignored the proposed white balance: it is a Kelvin value, and this photo is not a raw file, "
-					.. "where Lightroom expects a relative -100 to +100 value instead."
-			)
-			developSettings.Temp = nil
-		end
-	end
+	-- A white balance that does not fit the photo is left out here rather than
+	-- removed after the merge: the merge starts from the photo's current
+	-- settings, so never adding a key leaves the photo's own white balance
+	-- alone, whereas removing it later would take that with it.
+	mergeSettings(developSettings, buildWhiteBalanceSettings(recipe, whiteBalanceFamily, warnings))
 
 	-- Respect the RAW profile (Adobe Color, Camera Neutral, ...) so the baseline the
 	-- recipe was solved against is the one Lightroom actually renders.
@@ -753,6 +1038,7 @@ DevelopEditManager.internal = {
 	normalizeDevelopValue = normalizeDevelopValue,
 	mergeGlobalDevelopSettings = mergeGlobalDevelopSettings,
 	buildDevelopSettings = buildDevelopSettings,
+	buildWhiteBalanceSettings = buildWhiteBalanceSettings,
 }
 
 local function focusPhotoInDevelop(photo, warnings)
@@ -792,11 +1078,18 @@ end
 
 local function applyGlobalDevelopSettings(photo, recipe, warnings)
 	log:trace("DevelopEditManager.applyGlobalDevelopSettings: start")
-	-- Read from the catalog rather than passed in: the backend was told the
+	local okCurrent, currentOrErr = LrTasks.pcall(function()
+		return photo:getDevelopSettings()
+	end)
+	local currentSettings = nil
+	if okCurrent and type(currentOrErr) == "table" then
+		currentSettings = currentOrErr
+	end
+	-- Read from the photo rather than passed in: the backend was told the
 	-- same thing when the recipe was generated, but a recipe can also be
-	-- re-applied later, and the file is the authority either way.
-	local isRaw = Util.isRawPhoto(photo)
-	local developSettings = buildDevelopSettings(recipe, warnings, isRaw)
+	-- re-applied later, and the photo is the authority either way.
+	local wbFamily = DevelopEditManager.whiteBalanceFamily(currentSettings, Util.isRawPhoto(photo))
+	local developSettings = buildDevelopSettings(recipe, warnings, wbFamily)
 	local cropInRecipe = recipe and recipe.global and recipe.global.crop
 	if type(cropInRecipe) == "table" then
 		log:trace(
@@ -829,13 +1122,13 @@ local function applyGlobalDevelopSettings(photo, recipe, warnings)
 		return true
 	end
 
-	local mergedSettings = developSettings
-	local okCurrent, currentOrErr = LrTasks.pcall(function()
-		return photo:getDevelopSettings()
-	end)
-	if okCurrent and type(currentOrErr) == "table" then
-		mergedSettings = mergeGlobalDevelopSettings(currentOrErr, developSettings, isRaw)
+	local mergedSettings
+	if currentSettings then
+		mergedSettings = mergeGlobalDevelopSettings(currentSettings, developSettings)
 	else
+		-- Merged onto nothing rather than used as-is, so the values are still
+		-- clamped to Lightroom's slider ranges.
+		mergedSettings = mergeGlobalDevelopSettings({}, developSettings)
 		appendWarning(
 			warnings,
 			"Could not read current develop settings for additive merge; AI edits were applied directly."
@@ -1432,7 +1725,7 @@ function DevelopEditManager.showValidationDialog(context, photo, response, optio
 	local bind = LrView.bind
 	local share = LrView.share
 	local props = LrBinding.makePropertyTable(context)
-	props.applyGlobal = next(recipe.global or {}) ~= nil
+	props.applyGlobal = next(recipe.global or {}) ~= nil or type(recipe.white_balance) == "table"
 	props.applyMasks = (options and options.applyMasks ~= false) and ((recipe.masks and #recipe.masks > 0) or false)
 	props.details = DevelopEditManager.formatRecipeDetails(response)
 	props.engineTypeDisplay = recipe.engine_type or "Style Engine"

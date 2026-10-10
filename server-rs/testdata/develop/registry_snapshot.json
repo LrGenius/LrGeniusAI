@@ -118,7 +118,7 @@
       "level": "global",
       "min_pv": null,
       "name": "Temperature",
-      "note": "Raw-only key. Gate: drop from presets that can hit non-raw targets; learn relative to the example's as-shot value, not as absolute Kelvin (lighting differs per scene). Bug (f): code uses `Temp`. [all PV; raw only]",
+      "note": "Raw-only key. Gate: drop from presets that can hit non-raw targets; learn relative to the example's as-shot value, not as absolute Kelvin (lighting differs per scene). Bug (f), fixed in PR 1d: the style engine read `Temp`; it now reads the white balance typed (`WbSetting`). [all PV; raw only]",
       "plus_sign": false,
       "policy": {
         "class": "LEARN†",
@@ -142,7 +142,7 @@
       "level": "global",
       "min_pv": null,
       "name": "Tint",
-      "note": "Raw-only, same gate as Temperature. Bug (f): non-raw must use IncrementalTint, the code writes `Tint` for both. [all PV; raw only]",
+      "note": "Raw-only, same gate as Temperature. Bug (f), fixed in PR 1d: non-raw must use IncrementalTint; the style engine blended `Tint` for both. [all PV; raw only]",
       "plus_sign": true,
       "policy": {
         "class": "LEARN†",

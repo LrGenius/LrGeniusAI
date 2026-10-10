@@ -40,10 +40,11 @@ provider switched off.
 
 ## What it generates
 
-A develop recipe of **global adjustments** — exposure, white balance,
-highlights, shadows, whites, blacks, contrast, texture, clarity, dehaze,
-vibrance, saturation, tone curve, sharpening, noise reduction, vignette, grain
-— averaged from the matching examples.
+A develop recipe of **global adjustments** — exposure, highlights, shadows,
+whites, blacks, contrast, texture, clarity, dehaze, vibrance, saturation, tone
+curve, sharpening, noise reduction, vignette, grain — averaged from the
+matching examples. White balance is decided separately; see *How white balance
+is carried over* below.
 
 Local masks are not part of a style-engine edit; every recipe carries an empty
 mask list.
@@ -76,7 +77,55 @@ balance can be carried over at all — Lightroom's temperature is Kelvin on a ra
 file and a relative −100…100 value on everything else, and the two cannot be
 averaged together. The plugin tells the backend which it is, since the photo is
 exported to JPEG before upload and the original encoding is otherwise invisible
-from the server side.
+from the server side. It asks the photo's own develop settings rather than the
+file extension, so a DNG converted from a JPEG counts as a JPEG here — which is
+how Lightroom treats its white balance.
+
+A white balance that does not fit the photo is left out, never squeezed onto the
+other scale: the photo keeps its own, and the run's summary says why.
+
+### How white balance is carried over
+
+White balance is not averaged like the sliders. Up to twenty of your matching
+examples vote on *how* you set it, weighted by how well each one matches:
+
+- **Mostly As Shot:** the photo keeps its own white balance. That is what your
+  examples do, so nothing is reported.
+- **Mostly Custom:** the temperature and tint of your best-matching Custom
+  examples of the same file type as the photo (up to three) are applied — but
+  only when at least two of them exist and their temperatures are within 500 K
+  of each other. If they disagree, or there is only one, the photo keeps its
+  own and the run's summary says so. A JPEG or TIFF photo is the exception,
+  see below.
+- **Mostly Auto or a preset such as Daylight:** not carried over yet; the
+  summary says so. (Whether Lightroom recalculates the temperature when only
+  the mode is set is still being tested.)
+- **A JPEG or TIFF photo when Custom wins:** training examples are saved from
+  raw and DNG files only, so their Kelvin temperature means nothing on a JPEG.
+  The photo keeps its own white balance, with a note in the end-of-run
+  warnings. With an As Shot habit a JPEG simply keeps its own, with no note.
+  (The one exception is an example saved from a DNG converted from a JPEG: it
+  has the JPEG kind of white balance and can pass it on to JPEG photos.)
+
+These thresholds are a first setting and may be tuned. In this release white
+balance transfer cannot be switched off separately; undo it in Lightroom's
+Edit History if a photo should keep its own.
+
+---
+
+## Warnings at the end of a run
+
+Anything that did not go as planned — a white balance left out, a low
+style-match confidence, a recipe that could not be applied — is listed in the
+dialog at the end of the run. A cause that hit many photos is listed once with a
+count, for example *"White balance was not transferred … (12 photos)"*, so one
+run-wide reason does not push every other report out of view. The five that
+affected the most photos are shown; the dialog says how many more there were,
+and the plug-in log has all of them.
+
+With **review before apply** on, the review dialog lists the same notes for the
+photo in front of you, so you see why a white balance was left out before you
+decide.
 
 ---
 

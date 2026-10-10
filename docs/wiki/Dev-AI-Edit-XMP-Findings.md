@@ -238,7 +238,11 @@ still lists until a restart, is E4f.
   17,814 catalog rows. The real keys are `Temperature`/`Tint` (raw) and
   `IncrementalTemperature`/`IncrementalTint` (non-raw). White balance is most
   likely never learnt and never applied. E1 shows whether Lightroom rejects or
-  ignores `Temp`.
+  ignores `Temp`. *Fixed in AI Edit (step 1, PR 1d):* the style engine now
+  reads the white balance typed from the real keys and sends it as
+  `edit.white_balance` (see [Dev-Develop-Model](Dev-Develop-Model) and
+  `POST /v1/edit/style` in [Dev-Backend-API](Dev-Backend-API)); only the
+  develop experiments still write `Temp`, on purpose.
 - The dormant LLM path has several problems:
   - `EnableLensCorrections` (the panel toggle) is written where the profile
     toggle `LensProfileEnable` is meant.
