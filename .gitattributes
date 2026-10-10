@@ -1,5 +1,6 @@
 # lrg-develop's fixtures and goldens are compared byte for byte by tests (the
-# registry snapshot now, the Lua wire goldens later); keep them LF on every
+# registry snapshot, the XMP writer goldens in written/, the Lua wire goldens
+# later); keep them LF on every
 # checkout, Windows runners with core.autocrlf=true included. Only this
 # folder: server-rs/testdata also holds binary files.
 server-rs/testdata/develop/** text eol=lf

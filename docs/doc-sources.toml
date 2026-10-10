@@ -254,4 +254,6 @@ sources = [
   # The page documents the LOCAL_ONLY golden families and the gate's
   # behaviour for them.
   "server-rs/crates/lrg-ml/tests/common/mod.rs",
+  # The test-roundtrip feature wiring (the self dev-dependency).
+  "server-rs/crates/lrg-develop/Cargo.toml",
 ]

@@ -190,7 +190,8 @@ impl Semantic {
     }
 }
 
-/// A linear gradient: full effect at `full`, none at `zero`.
+/// A linear gradient from `zero` to `full` (by the key names none at `zero`,
+/// full at `full`; the direction is unverified until experiment E6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LinearGradient {
     /// `ZeroX`/`ZeroY`.

@@ -34,7 +34,7 @@ pub(crate) static TABLE: &[KeySpec] = &[
         presence: Presence::Both,
         min_pv: None,
         recipe_alias: None,
-        note: "Never average. Serializer derives `Custom` whenever it writes Temperature/Tint. `Auto` is resolved per photo by LrC (see AutoWhiteVersion). Raw and non-raw have different preset lists, so a mixed batch must not share one value. [all PV]",
+        note: "Never average. The preset writer derives `Custom` whenever it writes Temperature/Tint, which a preset carries only when this is `Custom` or absent: next to any other mode they are that photo's resolved values (SkipReason::WhiteBalanceMode). `Auto` is resolved per photo by LrC (see AutoWhiteVersion). Raw and non-raw have different preset lists, so a mixed batch must not share one value. [all PV]",
     },
     KeySpec {
         name: "Temperature",

@@ -60,6 +60,12 @@ pub struct MaskCounts {
     pub tools: BTreeMap<String, usize>,
     /// Mask components per combination label.
     pub combines: BTreeMap<&'static str, usize>,
+    /// The fixed relations and forms the builders and the preset writer
+    /// rely on, counted over Lightroom's own components: a radial
+    /// gradient's `Flipped` against `MaskInverted`, a luminance range's
+    /// `CorrectionRangeMask.Invert` against `MaskInverted`, its `Version`
+    /// and its `SampleType` (a typed luminance range is `Type` 2).
+    pub forms: BTreeMap<String, usize>,
 }
 
 impl MaskCounts {
@@ -69,7 +75,51 @@ impl MaskCounts {
         for m in s.corrections.iter().flat_map(|c| &c.masks) {
             *self.tools.entry(tool_name(&m.tool)).or_default() += 1;
             *self.combines.entry(combine_name(m.combine)).or_default() += 1;
+            let inverted = m.combine.encode().map(|(_, _, inverted)| inverted);
+            let mut form = |f: String| *self.forms.entry(f).or_default() += 1;
+            match &m.tool {
+                MaskTool::Radial(g) => form(
+                    if Some(!g.flipped) == inverted {
+                        "radial: Flipped = !MaskInverted"
+                    } else {
+                        "radial: Flipped != !MaskInverted"
+                    }
+                    .into(),
+                ),
+                MaskTool::LuminanceRange(lr) => {
+                    form(
+                        if Some(lr.invert) == inverted {
+                            "luminance range: Invert = MaskInverted"
+                        } else {
+                            "luminance range: Invert != MaskInverted"
+                        }
+                        .into(),
+                    );
+                    let int = |n| {
+                        lr.rest
+                            .get(n)
+                            .and_then(Value::as_int)
+                            .map_or_else(|| "none".to_owned(), |v| v.to_string())
+                    };
+                    form(format!("luminance range: Version {}", int("Version")));
+                    form(format!("luminance range: SampleType {}", int("SampleType")));
+                }
+                _ => {}
+            }
         }
+    }
+
+    /// The counted forms that break a relation the builders rely on:
+    /// `Flipped` other than `!MaskInverted`, `Invert` other than
+    /// `MaskInverted`, a range mask `Version` other than 3.
+    pub fn broken_forms(&self) -> Vec<(&String, &usize)> {
+        self.forms
+            .iter()
+            .filter(|(f, _)| {
+                f.contains("!= ")
+                    || (f.starts_with("luminance range: Version ") && !f.ends_with(" 3"))
+            })
+            .collect()
     }
 }
 

@@ -33,6 +33,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 
 ## Utilities & SDKs
 - **roxmltree** (MIT OR Apache-2.0): Read-only XML tree the backend parses Lightroom's XMP sidecars, develop presets and profiles with (`lrg-develop::xmp`). [GitHub](https://github.com/RazrFalcon/roxmltree)
+- **sha2** (MIT OR Apache-2.0): SHA-256 from the RustCrypto project; the backend verifies self-update downloads with it (`lrg-api`) and derives stable mask and correction ids for generated develop presets (`lrg-develop::build`). [GitHub](https://github.com/RustCrypto/hashes)
 - **JSON.lua** (CC-BY 3.0): A complete JSON encoder/decoder in Lua by Jeffrey Friedl, vendored into the plugin. [Upstream](http://regex.info/blog/lua/json)
 - **Adobe Lightroom Classic SDK**: The Lua API the plugin frontend is built on.
 - **Hugging Face Hub**: Distribution for the downloadable local models.

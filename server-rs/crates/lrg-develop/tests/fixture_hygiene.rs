@@ -8,7 +8,8 @@
 //! - scope: every `*.json`/`*.xmp` below the folder (never the README);
 //! - hard text rules everywhere: photo-id prefix, `file:`, user/volume/temp
 //!   paths, drive and UNC paths, raw/image file names, the dropped table-key
-//!   names;
+//!   names (the preset-header key `RequiresRGBTables`, a whole word, is not
+//!   one);
 //! - keys are identifiers, no table keys, `Look.Parameters` only as the stub,
 //!   `Look.UUID`/`Name` only from [`ADOBE_LOOKS`] or synthetic, every 32-hex
 //!   value and GUID synthetic, no dates, no number ≥ 1e9 outside the version
@@ -165,6 +166,16 @@ static HARD_TEXT: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 const TABLE_NAME_RULES: usize = 3;
 
+/// Preset-header keys whose names contain a dropped table-key name but are
+/// not table content: `RequiresRGBTables` (a preset-header key Adobe's newer
+/// presets — the 163 of 446 bundled ones that carry `SupportsAmount2`, every
+/// adaptive preset included — and every preset the writer produces carry).
+/// Removed as whole ASCII words
+/// before the text rules run, so `RGBTable_<md5>` or `RequiresRGBTablesX`
+/// still fail.
+static ALLOWED_HEADER_KEYS: LazyLock<Regex> =
+    LazyLock::new(|| re(r"(?-u:\b)RequiresRGBTables(?-u:\b)"));
+
 /// 32-hex runs not embedded in a longer hex run (the Python look-arounds).
 fn hex32_runs(s: &str) -> Vec<&str> {
     let bytes = s.as_bytes();
@@ -273,6 +284,8 @@ fn is_dropped_key(key: &str) -> bool {
 }
 
 fn hard_text_problems(text: &str, name: &str, skip_table_names: bool) -> Vec<String> {
+    let text = ALLOWED_HEADER_KEYS.replace_all(text, "");
+    let text = text.as_ref();
     let rules = if skip_table_names {
         &HARD_TEXT[..HARD_TEXT.len() - TABLE_NAME_RULES]
     } else {
@@ -943,6 +956,22 @@ fn dispatch_rules_flag_exactly_the_crafted_files() {
             true,
         ),
         ("lua/hand_null_name.json", r#"{"Look": {"Name": null}}"#.into(), false),
+        // The preset-header key is allowed as a whole word only.
+        (
+            "xmp/requires_rgb_tables.xmp",
+            crafted_xmp(r#"crs:RequiresRGBTables="False""#, ""),
+            false,
+        ),
+        (
+            "xmp/requires_rgb_tables_suffix.xmp",
+            crafted_xmp(r#"crs:RequiresRGBTablesX="False""#, ""),
+            true,
+        ),
+        (
+            "xmp/rgb_table_key.xmp",
+            crafted_xmp(r#"crs:RequiresRGBTables="False" crs:RGBTable="x""#, ""),
+            true,
+        ),
     ];
     for (file, content, _) in crafted {
         std::fs::write(tmp.join(file), content).unwrap();

@@ -4360,10 +4360,12 @@ dependencies = [
 name = "lrg-develop"
 version = "0.1.0"
 dependencies = [
+ "lrg-develop",
  "regex",
  "roxmltree",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

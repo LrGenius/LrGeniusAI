@@ -14,24 +14,39 @@
 //! | META, global (`ProcessVersion`, `Enable*`, ...) | no: set by the serializer | no: set by the serializer | yes |
 //! | META, nested (correction, mask and structure bookkeeping) | yes | yes | yes |
 //! | PHOTO | no | yes | yes |
-//! | COMPUTED, NEVER, UNKNOWN, opaque | no | no | yes |
+//! | COMPUTED, NEVER, UNKNOWN, opaque | no | no (the `Look`'s profile record apart) | yes |
 //!
 //! The verdict is per key at every depth: a kept structure (`LensBlur`, a
 //! mask's `CorrectionRangeMask`, a `Gesture` item, ...) is rebuilt from the
 //! fields that pass at their own registry rows, so a shareable `LensBlur`
-//! loses its sampled area and a luminance range its eyedropper point. The one
-//! exception is the [`Look`], which goes whole or not at all: its
-//! `Parameters` are the profile definition and mean nothing in part.
+//! loses its sampled area and a luminance range its eyedropper point. A
+//! registry value the reader kept whole ([`Value::Opaque`]: an `rdf:Bag`,
+//! qualifiers, a Lua table of an unexpected shape) reaches no target but the
+//! round trip, and is always reported.
+//!
+//! The [`Look`] goes to one photo whole (its profile record as the source
+//! has it) and to a preset by reference: `Name`, `UUID`, `Amount` and the
+//! META `Stubbed`, as Adobe's own presets refer to a profile. Its COMPUTED
+//! fields (`Parameters`, the profile definition, and the profile's `Group`,
+//! `Cluster`, `Copyright`, `Supports*`, ...) are copies Lightroom takes from
+//! its profile library; they are dropped from a preset without a report.
+//!
+//! In a preset, white-balance numbers go only with a custom white balance:
+//! next to any other `WhiteBalance` mode (`As Shot`, `Auto`, `Daylight`, ...)
+//! they are what that mode resolved to for the source photo, and are dropped
+//! and reported as [`SkipReason::WhiteBalanceMode`].
 //!
 //! Global META values are dropped without a report: the source's
 //! `ProcessVersion`, `Version` stamps and panel switches describe the source,
 //! not the settings, and a writer sets them from its own context (copying an
 //! example's `ProcessVersion` would silently change the target photo's
-//! process version). Nested META stays for now (a range mask's `Version`, sync
-//! ids); what the writer sets there itself is decided with the XMP writer.
+//! process version). Nested META stays (a range mask's `Version`, sync ids);
+//! the XMP writer completes Adobe's fixed preset form itself (see
+//! `xmp::write`).
 
-use super::correction::{Correction, LuminanceRange, MaskComponent, MaskTool, Semantic};
+use super::correction::{Combine, Correction, LuminanceRange, MaskComponent, MaskTool, Semantic};
 use super::value::{Fields, Struct, Value};
+use super::whitebalance::WbFamily;
 use super::{DevelopSettings, FileKind, Look};
 use crate::registry::{
     self, Def, FileScope, FrameScope, Gate, KeyId, KeySpec, Level, Policy, ProcessVersion,
@@ -100,7 +115,22 @@ pub enum SkipReason {
     },
     /// Content the model keeps only for the round trip.
     Opaque,
+    /// A white-balance number (`Temperature`, `Tint`,
+    /// `IncrementalTemperature`, `IncrementalTint`) next to a `WhiteBalance`
+    /// mode other than `Custom` (the mode, e.g. `"As Shot"`, `"Auto"`,
+    /// `"Daylight"`): the number is what that mode resolved to for the
+    /// source photo, so a preset would pin one photo's white balance on
+    /// every photo as a custom one.
+    WhiteBalanceMode(String),
 }
+
+/// The white-balance numbers [`SkipReason::WhiteBalanceMode`] applies to.
+pub const WB_NUMBERS: &[&str] = &[
+    "Temperature",
+    "Tint",
+    "IncrementalTemperature",
+    "IncrementalTint",
+];
 
 /// One value [`DevelopSettings::filtered`] removed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,8 +181,13 @@ fn rank(p: Policy) -> u8 {
 }
 
 impl MaskComponent {
-    /// The component's policy class, from its tool.
+    /// The component's policy class, from its tool; UNKNOWN when its
+    /// combination is not one the model recognises (the fields stay for the
+    /// round trip, but what the component does to the mask is not known).
     pub fn policy(&self) -> Policy {
+        if self.combine == Combine::Unrecognised {
+            return Policy::Unknown;
+        }
         match &self.tool {
             MaskTool::Semantic(Semantic::PersonPartAt { .. }) => Policy::Photo,
             MaskTool::Semantic(_) | MaskTool::LuminanceRange(_) => Policy::Learn,
@@ -314,7 +349,40 @@ fn join(path: &str, key: &str) -> String {
 struct Filter<'a> {
     target: &'a Target,
     kind: Option<FileKind>,
+    /// Raw and non-raw white-balance keys together while the file kind is
+    /// unknown (the readers warn `ConflictingFileKind`).
+    wb_conflict: bool,
     skipped: Vec<Skipped>,
+}
+
+/// A single-kind preset (`Preset { mixed_file_kinds: false }`) is for photos
+/// of the settings' own file kind, so a key of the other kind cannot go, and
+/// with both white-balance families and no known kind neither can: either
+/// would make the preset contradict itself.
+fn single_kind_preset_verdict(
+    spec: &KeySpec,
+    kind: Option<FileKind>,
+    wb_conflict: bool,
+    target: &Target,
+) -> Result<(), SkipReason> {
+    let single_kind = matches!(
+        target,
+        Target::Preset {
+            mixed_file_kinds: false
+        }
+    );
+    let fails = single_kind
+        && match (spec.file_kind, kind) {
+            (FileScope::Both, _) => false,
+            (FileScope::RawOnly, Some(k)) => k != FileKind::Raw,
+            (FileScope::NonRawOnly, Some(k)) => k != FileKind::NonRaw,
+            (_, None) => wb_conflict,
+        };
+    if fails {
+        Err(SkipReason::FileKind(spec.file_kind))
+    } else {
+        Ok(())
+    }
 }
 
 impl Filter<'_> {
@@ -326,7 +394,19 @@ impl Filter<'_> {
     /// verdict first, then, when it stays, what is inside it.
     fn keyed(&mut self, id: KeyId, v: &Value, path: &str) -> Option<Value> {
         let spec = id.spec();
-        match key_verdict(spec, Some(v), self.target) {
+        // A registry value the reader kept whole (`rdf:Bag`, qualifiers, a
+        // Lua table of an unexpected shape, `Look.Parameters`): its meaning
+        // is not established, so it reaches no target but the round trip,
+        // whatever its key's class. Always reported: even a default-looking
+        // key held something the model could not type.
+        if matches!(v, Value::Opaque(_)) {
+            self.skip(path.to_owned(), SkipReason::Opaque);
+            return None;
+        }
+        let verdict = key_verdict(spec, Some(v), self.target).and_then(|()| {
+            single_kind_preset_verdict(spec, self.kind, self.wb_conflict, self.target)
+        });
+        match verdict {
             Ok(()) => self.nested(v, path),
             Err(reason) => {
                 if !is_default(spec, v, self.kind) {
@@ -413,13 +493,42 @@ impl Filter<'_> {
                 }
             }
         }
-        match verdict {
-            Ok(()) => Some(look.clone()),
-            Err(reason) => {
-                self.skip("Look".into(), reason);
-                None
+        if let Err(reason) = verdict {
+            self.skip("Look".into(), reason);
+            return None;
+        }
+        if !matches!(self.target, Target::Preset { .. }) {
+            // One photo: the whole profile record, as the source has it
+            // (experiments E1/E11 apply it this way).
+            return Some(look.clone());
+        }
+        // A preset refers to the profile by `Name`, `UUID` and `Amount`, as
+        // Adobe's own presets do; LrC resolves it from its profile library.
+        let mut rest = Fields::default();
+        for (id, v) in &look.rest.fields.values {
+            if id.spec().policy == Policy::Computed {
+                // Not reported on purpose: `Parameters` (the profile
+                // definition, whose `Table_*` blobs a preset does not carry),
+                // `Group`, `Cluster`, `Copyright`, `SortName`, `Supports*`,
+                // `isAdobeAdaptive` are copies LrC takes from its profile
+                // library. None of Adobe's bundled presets carries
+                // `Parameters`; nothing is lost that the user could act on.
+                continue;
+            }
+            if let Some(kept) = self.keyed(*id, v, &join("Look", id.spec().name)) {
+                rest.values.insert(*id, kept);
             }
         }
+        for o in &look.rest.fields.opaque {
+            self.skip(join("Look", &o.name), SkipReason::Opaque);
+        }
+        Some(Look {
+            rest: Struct {
+                kind: look.rest.kind,
+                fields: rest,
+            },
+            ..look.clone()
+        })
     }
 
     fn correction(&mut self, c: &Correction, path: &str) -> Option<Correction> {
@@ -484,19 +593,34 @@ impl DevelopSettings {
     /// component ([`Correction::policy`]); inside a kept correction,
     /// bookkeeping fields (runtime ids, digests) are removed one by one.
     /// Structures are filtered field by field at their own registry rows,
-    /// at any depth. The `Look` goes whole or not at all.
+    /// at any depth. The `Look` goes whole to a photo and by reference
+    /// (without its COMPUTED fields, unreported) to a preset; see the module
+    /// docs, which also cover white-balance numbers in a preset.
     pub fn filtered(&self, target: &Target) -> (DevelopSettings, Vec<Skipped>) {
         if let Target::TestRoundTrip = target {
             return (self.clone(), Vec::new());
         }
+        let (raw_wb, non_raw_wb) = WbFamily::present_in(self);
         let mut f = Filter {
             target,
             kind: self.file_kind,
+            wb_conflict: self.file_kind.is_none() && raw_wb && non_raw_wb,
             skipped: Vec::new(),
         };
         let mut out = DevelopSettings {
             file_kind: self.file_kind,
             ..DevelopSettings::default()
+        };
+        // A preset carries white-balance numbers only as a custom white
+        // balance: next to any other mode they are one photo's resolved
+        // values (`WhiteBalance` itself is PHOTO and never goes).
+        let resolved_wb = match target {
+            Target::Preset { .. } => self
+                .get_by_name("WhiteBalance")
+                .and_then(Value::as_str)
+                .filter(|mode| *mode != "Custom")
+                .map(str::to_owned),
+            _ => None,
         };
         for (id, v) in self.values() {
             let spec = id.spec();
@@ -508,6 +632,16 @@ impl DevelopSettings {
                 continue;
             }
             if let Some(kept) = f.keyed(id, v, spec.name) {
+                if let Some(mode) = resolved_wb
+                    .as_ref()
+                    .filter(|_| WB_NUMBERS.contains(&spec.name))
+                {
+                    f.skip(
+                        spec.name.to_owned(),
+                        SkipReason::WhiteBalanceMode(mode.clone()),
+                    );
+                    continue;
+                }
                 out.values.insert(id, kept);
             }
         }
@@ -722,6 +856,62 @@ mod tests {
     }
 
     #[test]
+    fn a_component_with_an_unrecognised_combination_keeps_its_correction_out() {
+        let mut odd = component(MaskTool::Semantic(Semantic::Sky));
+        odd.combine = Combine::Unrecognised;
+        assert_eq!(odd.policy(), Policy::Unknown);
+        let mut s = DevelopSettings::new();
+        s.corrections = vec![correction(vec![odd])];
+        for target in [
+            Target::Preset {
+                mixed_file_kinds: true,
+            },
+            Target::ApplyPhoto {
+                file_kind: None,
+                process_version: None,
+                camera: None,
+            },
+        ] {
+            let (out, skipped) = s.filtered(&target);
+            assert!(out.corrections.is_empty());
+            assert_eq!(skipped[0].reason, SkipReason::Policy(Policy::Unknown));
+        }
+        let (out, _) = s.filtered(&Target::TestRoundTrip);
+        assert_eq!(out, s);
+    }
+
+    #[test]
+    fn a_single_kind_preset_never_carries_both_white_balance_families() {
+        let mut s = DevelopSettings::new();
+        set(&mut s, "Temperature", Value::Int(5000));
+        set(&mut s, "IncrementalTint", Value::Int(10));
+        let single = Target::Preset {
+            mixed_file_kinds: false,
+        };
+        // Both families, kind unknown (what the readers make of it): neither.
+        let (out, skipped) = s.filtered(&single);
+        assert!(out.get_by_name("Temperature").is_none());
+        assert!(out.get_by_name("IncrementalTint").is_none());
+        let reasons: Vec<_> = skipped.iter().map(|k| (&*k.path, &k.reason)).collect();
+        assert_eq!(
+            reasons,
+            [
+                ("Temperature", &SkipReason::FileKind(FileScope::RawOnly)),
+                (
+                    "IncrementalTint",
+                    &SkipReason::FileKind(FileScope::NonRawOnly)
+                ),
+            ]
+        );
+        // A known kind keeps its own family and drops the other.
+        s.file_kind = Some(FileKind::Raw);
+        let (out, skipped) = s.filtered(&single);
+        assert!(out.get_by_name("Temperature").is_some());
+        assert!(out.get_by_name("IncrementalTint").is_none());
+        assert_eq!(skipped.len(), 1);
+    }
+
+    #[test]
     fn applying_to_a_photo_keeps_photo_content_but_checks_its_context() {
         let s = sample();
         let (out, skipped) = s.filtered(&Target::ApplyPhoto {
@@ -823,6 +1013,148 @@ mod tests {
         });
         assert_eq!(out.look, open.look, "taken whole");
         assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn a_preset_refers_to_the_look_and_drops_its_computed_profile_record() {
+        let lk = |name: &str| lookup(Level::Struct(StructKind::Look), name).unwrap();
+        let mut s = DevelopSettings::new();
+        let mut look = look(None);
+        let parameters = crate::model::xmp_node::XmpNode::text("profile definition");
+        for (id, v) in [
+            (lk("Parameters"), Value::Opaque(Opaque::Xmp(parameters))),
+            (lk("Group"), Value::Alt("Profiles".into())),
+            (lk("Copyright"), Value::Str("(c)".into())),
+            (lk("SupportsMonochrome"), Value::Bool(false)),
+            (lk("Stubbed"), Value::Bool(true)),
+        ] {
+            look.rest.fields.values.insert(id, v);
+        }
+        s.look = Some(look.clone());
+        let (out, skipped) = s.filtered(&Target::Preset {
+            mixed_file_kinds: true,
+        });
+        let kept = out.look.expect("the reference stays");
+        assert_eq!((&kept.name, kept.amount), (&look.name, look.amount));
+        let names: Vec<&str> = kept
+            .rest
+            .fields
+            .values
+            .keys()
+            .map(|id| id.spec().name)
+            .collect();
+        assert_eq!(names, ["Stubbed"], "only the META stub flag stays");
+        assert!(skipped.is_empty(), "copies of the profile: {skipped:?}");
+
+        // One photo gets the whole record.
+        let (out, _) = s.filtered(&Target::ApplyPhoto {
+            file_kind: None,
+            process_version: None,
+            camera: None,
+        });
+        assert_eq!(out.look, Some(look));
+    }
+
+    #[test]
+    fn values_kept_whole_reach_no_target_and_are_always_reported() {
+        let mut s = DevelopSettings::new();
+        let node = crate::model::xmp_node::XmpNode::text("5");
+        set(&mut s, "Texture", Value::Opaque(Opaque::Xmp(node)));
+        let mut c = correction(vec![component(MaskTool::Semantic(Semantic::Sky))]);
+        c.local.insert(
+            lookup(Level::Correction, "LocalExposure2012").unwrap(),
+            Value::Opaque(Opaque::Json(serde_json::json!([0]))),
+        );
+        s.corrections.push(c);
+        for target in [
+            Target::Preset {
+                mixed_file_kinds: true,
+            },
+            Target::ApplyPhoto {
+                file_kind: None,
+                process_version: None,
+                camera: None,
+            },
+        ] {
+            let (out, skipped) = s.filtered(&target);
+            assert!(out.get_by_name("Texture").is_none());
+            assert!(out.corrections[0].local.is_empty());
+            let opaque: Vec<Skipped> = skipped
+                .into_iter()
+                .filter(|k| k.reason == SkipReason::Opaque)
+                .collect();
+            assert_eq!(
+                opaque,
+                ["Texture", "MaskGroupBasedCorrections[0].LocalExposure2012"]
+                    .map(|p| Skipped {
+                        path: p.into(),
+                        reason: SkipReason::Opaque
+                    })
+                    .to_vec()
+            );
+        }
+        let (out, _) = s.filtered(&Target::TestRoundTrip);
+        assert_eq!(out, s);
+    }
+
+    #[test]
+    fn white_balance_numbers_reach_a_preset_only_as_a_custom_white_balance() {
+        let wb = |mode: Option<&str>, kind: FileKind| {
+            let mut s = DevelopSettings::new();
+            s.file_kind = Some(kind);
+            if let Some(m) = mode {
+                set(&mut s, "WhiteBalance", Value::Str(m.into()));
+            }
+            match kind {
+                FileKind::Raw => {
+                    set(&mut s, "Temperature", Value::Int(5150));
+                    set(&mut s, "Tint", Value::Int(8));
+                }
+                FileKind::NonRaw => {
+                    set(&mut s, "IncrementalTemperature", Value::Int(-4));
+                    set(&mut s, "IncrementalTint", Value::Int(3));
+                }
+            }
+            s.filtered(&Target::Preset {
+                mixed_file_kinds: false,
+            })
+        };
+        for mode in ["As Shot", "Auto", "Daylight"] {
+            for kind in [FileKind::Raw, FileKind::NonRaw] {
+                let (out, skipped) = wb(Some(mode), kind);
+                assert_eq!(out.values().count(), 0, "{mode} {kind:?}");
+                let reasons: Vec<_> = skipped
+                    .iter()
+                    .filter(|k| k.path != "WhiteBalance")
+                    .map(|k| k.reason.clone())
+                    .collect();
+                assert_eq!(
+                    reasons,
+                    vec![SkipReason::WhiteBalanceMode(mode.into()); 2],
+                    "{mode} {kind:?}"
+                );
+            }
+        }
+        // "As Shot" is the default, so the mode itself is not reported.
+        assert_eq!(
+            paths(&wb(Some("As Shot"), FileKind::Raw).1),
+            ["Temperature", "Tint"]
+        );
+        for mode in [Some("Custom"), None] {
+            let (out, _) = wb(mode, FileKind::Raw);
+            assert_eq!(out.get_by_name("Temperature"), Some(&Value::Int(5150)));
+            assert_eq!(out.get_by_name("Tint"), Some(&Value::Int(8)));
+        }
+        // One photo takes the mode itself (PHOTO) and its numbers.
+        let mut s = DevelopSettings::new();
+        set(&mut s, "WhiteBalance", Value::Str("As Shot".into()));
+        set(&mut s, "Temperature", Value::Int(5150));
+        let (out, _) = s.filtered(&Target::ApplyPhoto {
+            file_kind: Some(FileKind::Raw),
+            process_version: None,
+            camera: None,
+        });
+        assert!(out.get_by_name("Temperature").is_some());
     }
 
     #[test]
