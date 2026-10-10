@@ -4,6 +4,11 @@ This is the task that does the actual AI work: it sends your photos to a model,
 gets keywords, titles, captions and alt text back, and builds the search index
 the other features rely on.
 
+> **Back up your catalog before the first run.** Lightroom counts what this task
+> writes as an edit, so every photo it processes gets a new **Edit Date** — even
+> with titles, captions and keywords switched off — and the old date cannot be
+> set back. See [Before you start](Getting-Started#before-you-start-back-up-your-catalog).
+
 ## Start the task
 
 In Lightroom Classic:

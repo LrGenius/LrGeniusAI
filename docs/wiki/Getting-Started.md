@@ -13,6 +13,44 @@ key, no cloud.
 
 ---
 
+## Before you start: back up your catalog
+
+LrGeniusAI writes its results into your Lightroom catalog — keywords, titles,
+captions, and its own fields such as species or culling results. That has two
+side effects you should know about before the first run, because neither can be
+undone afterwards:
+
+- **The Edit Date of your photos changes.** Lightroom counts every change a
+  plug-in makes to a photo as an edit, so each photo LrGeniusAI processes gets
+  the time of the run as its **Edit Date** — even on an *Analyze & Index* run
+  that writes no titles, captions or keywords. Smart collections that filter on
+  *Edit Date* will pick those photos up. Lightroom gives a plug-in no way to set
+  the old date back, and putting old metadata back would itself count as another
+  edit.
+- **Your image files may change too.** If **Automatically write changes into
+  XMP** is turned on (*Catalog Settings → Metadata*), Lightroom writes the new
+  keywords, titles and captions into XMP sidecar files, and directly into DNG,
+  JPEG, TIFF and PSD files. A cloud or NAS sync tool then sees all of those files
+  as changed and uploads them again.
+
+So before you let LrGeniusAI loose on your catalog:
+
+1. **Back up your catalog.** Open **Catalog Settings** (**Edit → Catalog
+   Settings…** on Windows, **Lightroom Classic → Catalog Settings…** on a Mac),
+   set **Back up catalog** on the **General** tab to **When Lightroom next
+   exits**, quit Lightroom and click **Back Up** in the dialog that appears.
+2. **Check your XMP setting** on the **Metadata** tab of the same window, and
+   whether your photos sit in a folder that a cloud or NAS service syncs.
+3. **Start small.** Try LrGeniusAI on a handful of photos (step 3 below) and look
+   at what changed before you run it over the whole catalog.
+
+Restoring a catalog backup is the only way to get the old Edit Dates back — and
+it also undoes everything else you changed in the catalog since. A catalog
+backup does not include your image files, so it cannot undo what Lightroom wrote
+into them.
+
+---
+
 ## 1. Install
 
 1. Open the [latest release](https://github.com/LrGenius/LrGeniusAI/releases/latest)
@@ -40,7 +78,9 @@ LrGeniusAI server in the background.
 
 1. In Lightroom, open **File → Plug-in Manager…** and select **LrGeniusAI**.
 2. Under **Status**, click **Run Setup Wizard**.
-3. On the **Backend Server** tab, check that *Server Status* says **Running**.
+3. On the **Backend Server** tab, read the **Before you start** box (the same
+   advice as [above](#before-you-start-back-up-your-catalog)) and check that
+   *Server Status* says **Running**.
 4. Switch to the **AI Models** tab:
    1. Click **Download AI Models** (about 3.3 GB). These power search, species
       and face detection.
@@ -57,7 +97,9 @@ top-left corner of Lightroom. Wait until both are finished before you go on.
 
 ## 3. Analyze your first photos
 
-1. In the **Library**, select a few photos (start with 10–20).
+1. In the **Library**, select a few photos (start with 10–20). Back up your
+   catalog first if you have not — see
+   [Before you start](#before-you-start-back-up-your-catalog).
 2. Open **Library → Plug-in Extras → Analyze & Index Photos…**
 3. Under **AI Model**, choose:
    - **Mac:** `On this Mac · gemma-4-e4b-it-4bit`

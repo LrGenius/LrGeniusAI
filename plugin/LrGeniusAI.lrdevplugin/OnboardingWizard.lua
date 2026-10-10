@@ -13,6 +13,14 @@ OnboardingWizard = {}
 -- on disk, so this is where the user is told to fetch them rather than
 -- discovering the empty state later from a greyed-out feature.
 --
+-- The first tab also asks for a catalog backup before anything runs (#397):
+-- Lightroom counts every write LrGeniusAI makes to a photo as an edit, so the
+-- photo's Edit Date moves to the time of the run and no SDK call sets it back.
+-- A backup made beforehand is the only way to recover the old dates.
+--
+local BACKUP_HELP_URL =
+	"https://github.com/LrGenius/LrGeniusAI/wiki/Getting-Started#before-you-start-back-up-your-catalog"
+
 function OnboardingWizard.show(manualTrigger)
 	LrTasks.startAsyncTask(function()
 		LrFunctionContext.callWithContext("OnboardingWizard", function(context)
@@ -169,6 +177,36 @@ function OnboardingWizard.show(manualTrigger)
 								),
 								width_in_chars = 60,
 								wrap = true,
+							}),
+						}),
+
+						f:group_box({
+							title = "Before you start: back up your catalog",
+							fill_horizontal = 1,
+							f:static_text({
+								title = "LrGeniusAI writes its results into your Lightroom catalog —\n"
+									.. "keywords, titles, captions and its own fields. Lightroom counts\n"
+									.. "each of these as an edit, so every photo LrGeniusAI processes\n"
+									.. "gets the time of the run as its Edit Date. Smart collections that\n"
+									.. "use Edit Date will include those photos, and the old date cannot\n"
+									.. "be set back.\n"
+									.. "\n"
+									.. 'With "Automatically write changes into XMP" turned on in Catalog\n'
+									.. "Settings, Lightroom also writes the new metadata into XMP sidecars\n"
+									.. "and DNG/JPEG files, so cloud or NAS sync will upload them again.\n"
+									.. "\n"
+									.. "Back up your catalog before the first run, and start with a few\n"
+									.. "photos.",
+								width_in_chars = 60,
+							}),
+							f:spacer({ height = 5 }),
+							f:row({
+								f:push_button({
+									title = "How to back up",
+									action = function()
+										LrHttp.openUrlInBrowser(BACKUP_HELP_URL)
+									end,
+								}),
 							}),
 						}),
 

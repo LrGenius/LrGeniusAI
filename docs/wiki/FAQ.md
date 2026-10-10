@@ -10,6 +10,10 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Anthropic Claude, or a cloud service such as OpenRouter as the *Other AI server*). With a local provider — the built-in llama.cpp and MLX engines, Ollama / LM Studio, or a server on your own network — your photos never leave your machines. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
+### Does LrGeniusAI change my catalog or my image files?
+
+It changes your **catalog**: keywords, titles, captions and alt text, its own metadata fields (species, culling results, AI model and run date), and — with *AI Edit* — develop settings. Lightroom counts each of those writes as an edit, so the photos get a new **Edit Date**. LrGeniusAI itself never writes to your image files, but if **Automatically write changes into XMP** is on in *Catalog Settings*, Lightroom writes the new metadata into XMP sidecars and into DNG, JPEG, TIFF and PSD files, which cloud or NAS sync will upload again. Back up your catalog before the first run — see [Before you start](Getting-Started#before-you-start-back-up-your-catalog).
+
 ### Which Lightroom version is supported?
 
 Adobe **Lightroom Classic** only. Lightroom CC (cloud) and other Lightroom versions are not supported, as the plugin relies on the Lightroom Classic SDK.
@@ -99,6 +103,12 @@ Up to four things in one pass:
 4. Identifies animal, plant and fungus species (using BioCLIP 2 locally) and writes the taxonomy to the plugin's metadata fields.
 
 Every step is optional and each has its own checkbox — only step 1 involves a language model or a cloud account at all.
+
+### Why did the Edit Date of my photos change?
+
+Because Lightroom counts every change a plug-in makes to a photo as an edit. Each photo *Analyze & Index* processes gets the time of the run as its **Edit Date** — even on a run that writes no titles, captions or keywords — and smart collections that filter on *Edit Date* pick it up. Lightroom offers plug-ins no way to set the old date back, and putting old metadata back would count as another edit, so the only way to recover the previous dates is a catalog backup made before the run. See [Before you start](Getting-Started#before-you-start-back-up-your-catalog).
+
+Up to version 3.2.1, LrGeniusAI could also change the Edit Date of **every photo in the catalog** — typically the first time a task ran — no matter which photos you had selected ([#397](https://github.com/LrGenius/LrGeniusAI/issues/397)). Later versions no longer touch photos you did not ask them to process; dates already changed by an older version can only be recovered from a backup.
 
 ### Does species identification send my photos anywhere?
 
