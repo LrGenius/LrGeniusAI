@@ -1035,7 +1035,8 @@ LrTasks.startAsyncTask(function()
 						progressScope:done()
 						LrDialogs.message(
 							LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+							"info"
 						)
 						return
 					end
@@ -1099,6 +1100,14 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		-- Three places read a photo's data back after the run: the inline apply
+		-- below, the species pass and the save pass. getPhotoData hands each of
+		-- them nil twice over — once when the request failed and once when the
+		-- index has nothing for the photo — so the two are counted apart instead
+		-- of becoming one silent shortfall.
+		local photoDataErrCount = 0
+		local photoDataMissingCount = 0
+
 		-- When validation is disabled, apply metadata inline as each photo's analysis returns
 		-- so keywords/title/caption land on photos progressively instead of all at the end.
 		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
@@ -1106,7 +1115,13 @@ LrTasks.startAsyncTask(function()
 		if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
-				local response = SearchIndexAPI.getPhotoData(photoId)
+				local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+				if photoDataErr then
+					log:error("getPhotoData failed during inline apply: " .. photoDataErr)
+					photoDataErrCount = photoDataErrCount + 1
+				elseif not response then
+					photoDataMissingCount = photoDataMissingCount + 1
+				end
 				saveSpecies(photo, response)
 				if response and response.metadata then
 					collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, nil, {
@@ -1156,7 +1171,13 @@ LrTasks.startAsyncTask(function()
 			for _, photo in ipairs(processedPhotos) do
 				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local response = SearchIndexAPI.getPhotoData(photoId)
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving species: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					end
 					if response and response.species then
 						saveSpecies(photo, response)
 						speciesCount = speciesCount + 1
@@ -1171,10 +1192,18 @@ LrTasks.startAsyncTask(function()
 		-- ends with the backend's status, so this has to be said separately.
 		local reviewCanceledAt = nil
 
+		-- Declared out here, next to it, so the completion dialogs below can
+		-- read them. The backend's own figures never see a photo the review
+		-- discarded or one with no photo ID to write to, so a run made up
+		-- largely of those ended looking like a clean one (#396).
+		local savedCount = 0
+		local discardedCount = 0
+		local noPhotoIdCount = 0
+		local metadataSavePassRan = false
+
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
 			log:trace("Saving metadata for processed photos...")
-			local savedCount = 0
-			local skippedCount = 0
+			metadataSavePassRan = true
 
 			local skipFromHere = false
 
@@ -1182,7 +1211,13 @@ LrTasks.startAsyncTask(function()
 				-- Process responses if validation is enabled or just save metadata
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local response = SearchIndexAPI.getPhotoData(photoId)
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving metadata: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					end
 
 					-- Written at the end of this iteration rather than here, so
 					-- it shares the loop's one /get per photo without being
@@ -1249,7 +1284,7 @@ LrTasks.startAsyncTask(function()
 
 								savedCount = savedCount + 1
 							elseif result == "other" then
-								skippedCount = skippedCount + 1
+								discardedCount = discardedCount + 1
 								-- Clear only metadata so the photo stays in the index and can be regenerated later
 								SearchIndexAPI.removePhotoMetadata(photoId)
 								Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
@@ -1314,9 +1349,29 @@ LrTasks.startAsyncTask(function()
 					end
 				else
 					log:error("Skipping photo data retrieval due to missing photo_id: " .. tostring(photoIdErr))
-					skippedCount = skippedCount + 1
+					noPhotoIdCount = noPhotoIdCount + 1
 				end
 			end
+		end
+
+		-- Read back here, after the last of the three sites above. The two nil
+		-- cases stay separate in the report: one is a request that never made
+		-- it to the backend, the other a photo the index has nothing for.
+		if photoDataErrCount > 0 then
+			table.insert(
+				runWarnings,
+				"The search index could not be read for "
+					.. tostring(photoDataErrCount)
+					.. " photo(s), so nothing was applied to them."
+			)
+		end
+		if photoDataMissingCount > 0 then
+			table.insert(
+				runWarnings,
+				"The search index holds no data for "
+					.. tostring(photoDataMissingCount)
+					.. " photo(s), so nothing was written for them."
+			)
 		end
 
 		progressScope:done()
@@ -1357,11 +1412,50 @@ LrTasks.startAsyncTask(function()
 				.. " photo(s) were left as they were."
 		end
 
+		-- What the backend's own figures leave out of the completion: how much
+		-- of the save pass was actually written, and what became of the rest.
+		-- Only that pass knows either number, and only when it ran at all (#396).
+		local function collectWriteNote()
+			if not metadataSavePassRan then
+				return nil
+			end
+			local parts = {}
+			if savedCount < #processedPhotos then
+				table.insert(
+					parts,
+					"Metadata was written for "
+						.. tostring(savedCount)
+						.. " of "
+						.. tostring(#processedPhotos)
+						.. " photo(s)."
+				)
+			end
+			if discardedCount > 0 then
+				table.insert(
+					parts,
+					tostring(discardedCount)
+						.. " photo(s) were discarded in the review, so their generated metadata was removed."
+				)
+			end
+			if noPhotoIdCount > 0 then
+				table.insert(
+					parts,
+					tostring(noPhotoIdCount)
+						.. " photo(s) were skipped because no photo ID could be resolved, so nothing was written for them."
+				)
+			end
+			if #parts == 0 then
+				return nil
+			end
+			return table.concat(parts, " ")
+		end
+
 		-- Show completion message based on status
 		if status == "canceled" then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+				"info"
 			)
 		elseif status == "allfailed" then
 			if not Util.nilOrEmpty(combinedError) then
@@ -1372,7 +1466,8 @@ LrTasks.startAsyncTask(function()
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"),
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
+					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
+					"critical"
 				)
 			end
 		elseif status == "somefailed" then
@@ -1383,6 +1478,10 @@ LrTasks.startAsyncTask(function()
 				processed,
 				failed
 			)
+			local writeNote = collectWriteNote()
+			if writeNote then
+				summary = summary .. "\n\n" .. writeNote
+			end
 			local warningText = collectWarnings()
 			if warningText then
 				summary = summary .. "\n\nWarnings:\n" .. warningText
@@ -1394,13 +1493,17 @@ LrTasks.startAsyncTask(function()
 			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(summary, combinedError)
 			elseif cancelNote then
-				LrDialogs.message("Task Canceled", summary)
+				LrDialogs.message("Task Canceled", summary, "info")
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"), summary)
 			end
 		else -- success
 			local msg =
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
+			local writeNote = collectWriteNote()
+			if writeNote then
+				msg = msg .. "\n\n" .. writeNote
+			end
 			local warningText = collectWarnings()
 			local cancelNote = collectCancelNote()
 			if cancelNote then
@@ -1410,11 +1513,11 @@ LrTasks.startAsyncTask(function()
 				msg = msg .. "\n\nWarnings:\n" .. warningText
 			end
 			if cancelNote then
-				LrDialogs.message("Task Canceled", msg)
+				LrDialogs.message("Task Canceled", msg, "info")
 			elseif warningText then
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
-				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg, "info")
 			end
 		end
 

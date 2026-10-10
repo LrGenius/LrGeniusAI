@@ -93,7 +93,8 @@ LrTasks.startAsyncTask(function()
 		if status == "canceled" then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+				"info"
 			)
 		elseif status == "allfailed" then
 			ErrorHandler.handleError(

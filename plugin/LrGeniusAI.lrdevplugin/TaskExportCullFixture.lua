@@ -439,6 +439,6 @@ LrTasks.startAsyncTask(function()
 					dropped.photos
 				)
 		end
-		LrDialogs.message(LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"), doneMessage)
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"), doneMessage, "info")
 	end)
 end)
