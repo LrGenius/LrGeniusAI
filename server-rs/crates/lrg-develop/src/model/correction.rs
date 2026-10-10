@@ -276,8 +276,9 @@ impl Correction {
                 })
                 .collect(),
             Some(other) => {
-                // Not reachable from the readers (they only produce `Tools`
-                // for this key); keep the value rather than drop it.
+                // The XMP reader keeps CorrectionMasks whole (Value::Opaque)
+                // when it is an rdf:Bag or carries qualifiers; keep the value
+                // for the round trip, no typed masks.
                 let id = crate::registry::lookup(C, "CorrectionMasks").expect("registry row");
                 f.values.insert(id, other);
                 Vec::new()

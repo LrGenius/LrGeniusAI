@@ -30,16 +30,20 @@
 //!   the same order in every build (`serde_json`'s map order depends on its
 //!   `preserve_order` feature, which the workspace turns on and a lone
 //!   `cargo test -p lrg-develop` does not).
+//!
+//! Typing, the file-kind and process-version checks and the assembly of the
+//! settings are shared with the XMP reader (`crate::reader`), and so is the
+//! correction and mask classification (`crate::model::correction`), so
+//! both formats land in the same model.
 
 use serde_json::{Map, Value as J};
 
 use crate::model::correction::Correction;
-use crate::model::value::{Fields, Finite, Hex32, Opaque, OpaqueEntry, Struct, Value};
-use crate::model::{DevelopSettings, FileKind, FileKindHint, Look, WbFamily, MIN_SUPPORTED_PV};
+use crate::model::value::{Fields, Finite, Opaque, OpaqueEntry, Struct, Value};
+use crate::model::{DevelopSettings, FileKindHint};
 use crate::parse::{ParseError, ParseWarning, WarningKind};
-use crate::registry::{
-    self, CoerceError, CurveKind, KeySpec, Level, ProcessVersion, Resolved, Scalar, ValueKind,
-};
+use crate::reader::{self, child, parse_point, ScalarIn};
+use crate::registry::{self, CurveKind, KeySpec, Level, Resolved, ValueKind};
 
 /// Largest `develop_settings` text [`from_lua_str`] accepts (4 MiB; real
 /// blobs are at most ~50 KB).
@@ -87,42 +91,14 @@ pub fn from_lua_value(
         J::Null => return Err(ParseError::NotATable { found: "null" }),
     };
     let mut reader = Reader::default();
-    let mut fields = reader.fields(obj, Level::Global, "");
-    let mut settings = DevelopSettings::default();
-
-    match fields.take(Level::Global, "MaskGroupBasedCorrections") {
-        Some(Value::Corrections(corrections)) => settings.corrections = corrections,
-        Some(_) => unreachable!("the reader only builds corrections for a CorrectionSeq key"),
-        None => {}
-    }
-    match fields.take(Level::Global, "Look") {
-        Some(Value::Struct(s)) => settings.look = Some(Look::from_struct(s)),
-        Some(_) => unreachable!("the reader only builds a struct for a Struct key"),
-        None => {}
-    }
-    for (id, v) in fields.values {
-        settings
-            .insert(id, v)
-            .expect("global keys without the typed ones");
-    }
-    settings.opaque = fields.opaque;
-
-    reader.file_kind(&mut settings, hint);
-    reader.process_version(&settings);
+    let fields = reader.fields(obj, Level::Global, "");
+    let settings = reader::finish(fields, hint, &mut reader.warnings);
     Ok((settings, reader.warnings))
 }
 
 #[derive(Default)]
 struct Reader {
     warnings: Vec<ParseWarning>,
-}
-
-fn child(path: &str, key: &str) -> String {
-    if path.is_empty() {
-        key.to_owned()
-    } else {
-        format!("{path}.{key}")
-    }
 }
 
 fn is_empty_table(v: &J) -> bool {
@@ -177,25 +153,9 @@ fn opaque(name: &str, v: &J) -> OpaqueEntry {
     }
 }
 
-fn parse_local_point(s: &str) -> Option<(Finite, Finite)> {
-    let (x, y) = s.split_once(',')?;
-    let num = |t: &str| {
-        t.trim()
-            .parse::<f64>()
-            .ok()
-            .and_then(|v| Finite::new(v).ok())
-    };
-    Some((num(x)?, num(y)?))
-}
-
 impl Reader {
     fn warn(&mut self, path: &str, key: &str, raw: Option<&J>, kind: WarningKind) {
-        self.warnings.push(ParseWarning {
-            path: path.to_owned(),
-            key: key.to_owned(),
-            raw: raw.map(snippet),
-            kind,
-        });
+        reader::warn(&mut self.warnings, path, key, raw.map(snippet), kind);
     }
 
     /// Reads one table at `level`, in key-name order. Empty tables below it
@@ -242,19 +202,9 @@ impl Reader {
             | ValueKind::EnumInt(_)
             | ValueKind::VersionU32
             | ValueKind::Bool(_) => self.scalar(spec, v, path, key),
-            ValueKind::Enum(set) => v.as_str().map(|s| {
-                if !set.contains(&s) {
-                    self.warn(path, key, Some(v), WarningKind::ValueNotInSet);
-                }
-                Value::Str(s.to_owned())
-            }),
-            ValueKind::Str | ValueKind::VersionStr => v.as_str().map(|s| Value::Str(s.to_owned())),
-            ValueKind::Hex32 => v.as_str().map(|s| {
-                if Hex32::parse(s).is_none() {
-                    self.warn(path, key, Some(v), WarningKind::NotHex32);
-                }
-                Value::Str(s.to_owned())
-            }),
+            ValueKind::Enum(_) | ValueKind::Str | ValueKind::VersionStr | ValueKind::Hex32 => v
+                .as_str()
+                .and_then(|s| reader::text(kind, s, path, key, || snippet(v), &mut self.warnings)),
             ValueKind::Curve(CurveKind::Global) => v.as_array().and_then(|a| {
                 if a.len() % 2 != 0 {
                     return None;
@@ -274,7 +224,7 @@ impl Reader {
             }),
             ValueKind::Curve(CurveKind::Local) => v.as_array().and_then(|a| {
                 a.iter()
-                    .map(|x| x.as_str().and_then(parse_local_point))
+                    .map(|x| x.as_str().and_then(parse_point))
                     .collect::<Option<Vec<_>>>()
                     .map(Value::Curve)
             }),
@@ -358,95 +308,20 @@ impl Reader {
     }
 
     fn scalar(&mut self, spec: &KeySpec, v: &J, path: &str, key: &str) -> Option<Value> {
-        let coerced = match v {
-            J::Bool(b) => spec.coerce_bool(*b),
-            J::Number(n) => {
-                let x = n.as_f64().and_then(|f| Finite::new(f).ok())?;
-                spec.coerce(x)
-            }
+        let input = match v {
+            J::Bool(b) => ScalarIn::Bool(*b),
+            J::Number(n) => ScalarIn::Num(n.as_f64().and_then(|f| Finite::new(f).ok())?),
             _ => return None,
         };
-        match coerced {
-            Ok(c) => {
-                if let (Scalar::Int(i), true) = (c.value, c.rounded) {
-                    self.warn(
-                        path,
-                        key,
-                        Some(v),
-                        WarningKind::NonIntegerForIntKey { rounded: i },
-                    );
-                }
-                Some(Value::from(c.value))
-            }
-            // Observed truth outside the known set: keep it, but say so.
-            Err(CoerceError::NotInEnum { value, .. }) => {
-                self.warn(path, key, Some(v), WarningKind::ValueNotInSet);
-                Some(Value::Int(value))
-            }
-            Err(_) => None,
-        }
-    }
-
-    fn file_kind(&mut self, settings: &mut DevelopSettings, hint: FileKindHint) {
-        let (raw, non_raw) = WbFamily::present_in(settings);
-        let family = match (raw, non_raw) {
-            (true, false) => Some(FileKind::Raw),
-            (false, true) => Some(FileKind::NonRaw),
-            (true, true) => {
-                // Name the keys that clash, one of each family
-                // ("Temperature/IncrementalTint").
-                let first = |family| {
-                    WbFamily::keys_in(settings)
-                        .into_iter()
-                        .find(|(_, f)| *f == family)
-                        .map_or("", |(k, _)| k)
-                };
-                let keys = format!("{}/{}", first(WbFamily::Raw), first(WbFamily::NonRaw));
-                self.warn(&keys, &keys, None, WarningKind::ConflictingFileKind);
-                None
-            }
-            (false, false) => None,
-        };
-        if let (Some(family), Some(hinted)) = (family, hint.kind()) {
-            if family != hinted {
-                let key = WbFamily::from(family).temperature_key();
-                self.warn(
-                    key,
-                    key,
-                    None,
-                    WarningKind::FileKindMismatch {
-                        hint: hinted,
-                        family,
-                    },
-                );
-            }
-        }
-        settings.file_kind = family.or(hint.kind());
-    }
-
-    fn process_version(&mut self, settings: &DevelopSettings) {
-        const KEY: &str = "ProcessVersion";
-        let Some(Value::Str(text)) = settings.get_by_name(KEY) else {
-            return;
-        };
-        let raw = J::String(text.clone());
-        match ProcessVersion::parse(text) {
-            None => self.warn(KEY, KEY, Some(&raw), WarningKind::InvalidProcessVersion),
-            Some(pv) if pv < MIN_SUPPORTED_PV => self.warn(
-                KEY,
-                KEY,
-                Some(&raw),
-                WarningKind::UnsupportedProcessVersion { found: pv },
-            ),
-            Some(_) => {}
-        }
+        reader::scalar(spec, input, path, key, || snippet(v), &mut self.warnings)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Combine, MaskTool, Semantic};
+    use crate::model::{Combine, FileKind, MaskTool, Semantic};
+    use crate::registry::ProcessVersion;
     use serde_json::json;
 
     fn read(v: J) -> (DevelopSettings, Vec<ParseWarning>) {

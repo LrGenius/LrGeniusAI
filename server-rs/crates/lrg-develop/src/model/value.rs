@@ -152,12 +152,7 @@ impl fmt::Display for Hex32 {
     }
 }
 
-/// Placeholder for an XMP subtree kept verbatim (namespace, `rdf:Bag`,
-/// further languages, qualifiers). The XMP parser (PR 1c) fills it in; until
-/// then it cannot be constructed outside this crate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct XmpNode {}
+pub use super::xmp_node::{XmpArrayKind, XmpField, XmpNode, XmpValue};
 
 /// Lossless pass-through of something the model does not interpret.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,7 +161,9 @@ pub enum Opaque {
     /// objects, and the keys the registry keeps opaque on purpose
     /// (`ValueKind::Any`, `ValueKind::Settings`).
     Json(serde_json::Value),
-    /// From an XMP file (PR 1c).
+    /// From an XMP file: unknown keys, `rdf:Bag`, language alternatives
+    /// with more than `x-default`, qualifiers, `Look.Parameters` and
+    /// `Preset.Parameters`.
     Xmp(XmpNode),
 }
 
@@ -175,7 +172,8 @@ pub enum Opaque {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpaqueEntry {
     /// XMP namespace URI; `None` for Lua tables and the `crs:` namespace.
-    pub ns: Option<String>,
+    /// Shared with the XMP fields of the same file (see [`XmpField::ns`]).
+    pub ns: Option<std::sync::Arc<str>>,
     /// Key name as it appeared.
     pub name: String,
     /// The value, verbatim.

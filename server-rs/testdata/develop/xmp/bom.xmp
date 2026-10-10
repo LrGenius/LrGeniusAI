@@ -1,0 +1,8 @@
+﻿<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:ProcessVersion="15.4"
+   crs:Exposure2012="+0.50"/>
+ </rdf:RDF>
+</x:xmpmeta>

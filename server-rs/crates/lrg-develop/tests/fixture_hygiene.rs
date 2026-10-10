@@ -15,6 +15,9 @@
 //!   keys and the synthetic `GrainSeed`;
 //! - generated files (listed in `lua/manifest.json`) additionally follow the
 //!   per-key value rules; any other `lua/*.json` must be named `hand_*.json`;
+//! - an XMP file must be well-formed XML with an `rdf:RDF`; its data model
+//!   ([`xmp_as_tree`]) gets the structural rules of a hand-written JSON file,
+//!   and every `rdf:Alt` item needs a valid `xml:lang`;
 //! - `registry_snapshot.json` (the registry's own description) gets the text
 //!   rules minus the table-key names, and the 32-hex/GUID rule.
 //!
@@ -366,7 +369,11 @@ impl Tree<'_> {
             self.problems
                 .push(format!("{name}: date-like text at {path}"));
         }
-        if NUMERIC_TEXT.is_match(v) && !numeric_text_ok(v) {
+        // Numbers are text in XMP, so the version keys and the synthetic
+        // GrainSeed are exempt as numeric strings too.
+        let big_ok = BIG_NUMBER_KEYS.contains(&key)
+            || (key == "GrainSeed" && v == SYNTHETIC_GRAIN_SEED.to_string());
+        if NUMERIC_TEXT.is_match(v) && !numeric_text_ok(v) && !big_ok {
             self.problems
                 .push(format!("{name}: numeric string >= 1e9 at {path}"));
         }
@@ -497,6 +504,124 @@ fn check_json_tree(data: &J, name: &str, strict: bool) -> Vec<String> {
     t.problems
 }
 
+const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+
+/// `xmp_as_tree` of the extractor: an XMP file's data model as a JSON tree
+/// for [`check_json_tree`]. Every `rdf:Description` under `rdf:RDF` becomes
+/// an object (the tree is the list of them); properties are keyed by local
+/// name whatever their namespace; attributes in `rdf:`/`xml:` are skipped. A
+/// property element whose first container child is `rdf:Seq`/`rdf:Bag`/
+/// `rdf:Alt` is a list of its `rdf:li` items; else one with an
+/// `rdf:Description` child is that object; else one with
+/// `rdf:parseType="Resource"`, child elements or field attributes is an
+/// object of those; else its text. `True`/`False` (either case) become
+/// booleans. Every `rdf:Alt` item needs a valid `xml:lang`.
+fn xmp_as_tree(text: &str, name: &str) -> (Option<J>, Vec<String>) {
+    use roxmltree::{Document, Node, ParsingOptions};
+
+    fn scalar(v: &str) -> J {
+        match v {
+            "True" | "true" => J::Bool(true),
+            "False" | "false" => J::Bool(false),
+            _ => J::String(v.to_owned()),
+        }
+    }
+    fn is_field_attr(ns: Option<&str>) -> bool {
+        !matches!(ns, Some(RDF_NS | XML_NS))
+    }
+    fn is_rdf(n: &Node, local: &str) -> bool {
+        n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == local
+    }
+    struct Conv<'a> {
+        name: &'a str,
+        problems: Vec<String>,
+    }
+    impl Conv<'_> {
+        fn fields(&mut self, node: Node, path: &str) -> J {
+            let mut d = Map::new();
+            for a in node.attributes() {
+                if is_field_attr(a.namespace()) {
+                    d.insert(a.name().to_owned(), scalar(a.value()));
+                }
+            }
+            for c in node.children().filter(Node::is_element) {
+                let local = c.tag_name().name();
+                let p = if path.is_empty() {
+                    local.to_owned()
+                } else {
+                    format!("{path}.{local}")
+                };
+                let v = self.value(c, &p);
+                d.insert(local.to_owned(), v);
+            }
+            J::Object(d)
+        }
+        fn value(&mut self, el: Node, path: &str) -> J {
+            let kids: Vec<Node> = el.children().filter(Node::is_element).collect();
+            for c in &kids {
+                if c.tag_name().namespace() != Some(RDF_NS)
+                    || !matches!(c.tag_name().name(), "Seq" | "Bag" | "Alt")
+                {
+                    continue;
+                }
+                let items: Vec<Node> = c.children().filter(|n| is_rdf(n, "li")).collect();
+                if c.tag_name().name() == "Alt" {
+                    for li in &items {
+                        if !li
+                            .attribute((XML_NS, "lang"))
+                            .is_some_and(|l| LANG.is_match(l))
+                        {
+                            self.problems
+                                .push(format!("{}: bad language tag at {path}", self.name));
+                        }
+                    }
+                }
+                return J::Array(
+                    items
+                        .into_iter()
+                        .map(|li| self.value(li, &format!("{path}[]")))
+                        .collect(),
+                );
+            }
+            if let Some(desc) = kids.iter().find(|c| is_rdf(c, "Description")) {
+                return self.fields(*desc, path);
+            }
+            if el.attribute((RDF_NS, "parseType")) == Some("Resource")
+                || !kids.is_empty()
+                || el.attributes().any(|a| is_field_attr(a.namespace()))
+            {
+                return self.fields(el, path);
+            }
+            scalar(el.text().unwrap_or(""))
+        }
+    }
+
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // Python's parser accepts a DTD; so does this one, to judge alike.
+    let options = ParsingOptions {
+        allow_dtd: true,
+        ..ParsingOptions::default()
+    };
+    let doc = match Document::parse_with_options(text, options) {
+        Ok(d) => d,
+        Err(e) => return (None, vec![format!("{name}: not well-formed XML ({e})")]),
+    };
+    let Some(rdf) = doc.descendants().find(|n| is_rdf(n, "RDF")) else {
+        return (None, vec![format!("{name}: no rdf:RDF element")]);
+    };
+    let mut conv = Conv {
+        name,
+        problems: Vec::new(),
+    };
+    let tree = rdf
+        .children()
+        .filter(|n| is_rdf(n, "Description"))
+        .map(|d| conv.fields(d, ""))
+        .collect();
+    (Some(J::Array(tree)), conv.problems)
+}
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/develop")
 }
@@ -556,6 +681,11 @@ fn hygiene_check(root: &Path) -> Vec<String> {
                         &h[..6]
                     ));
                 }
+            }
+            let (tree, xml_problems) = xmp_as_tree(&text, &name);
+            problems.extend(xml_problems);
+            if let Some(tree) = tree {
+                problems.extend(check_json_tree(&tree, &name, false));
             }
             continue;
         }
@@ -685,8 +815,46 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// A minimal well-formed XMP file (same text as `crafted_xmp` in the
+/// extractor).
+fn crafted_xmp(attrs: &str, body: &str) -> String {
+    format!(
+        concat!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+            r#"<rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {}>{}"#,
+            "</rdf:Description></rdf:RDF></x:xmpmeta>"
+        ),
+        attrs, body
+    )
+}
+
+#[test]
+fn xmp_trees_follow_the_data_model_not_the_syntax() {
+    let attrs = xmp_as_tree(
+        &crafted_xmp(
+            r#"crs:A="True" crs:B="+1""#,
+            r#"<crs:S crs:X="1"/><crs:L><rdf:Seq><rdf:li>a</rdf:li></rdf:Seq></crs:L>"#,
+        ),
+        "t",
+    );
+    let elements = xmp_as_tree(
+        &crafted_xmp(
+            "",
+            concat!(
+                "<crs:A>True</crs:A><crs:B>+1</crs:B>",
+                r#"<crs:S rdf:parseType="Resource"><crs:X>1</crs:X></crs:S>"#,
+                "<crs:L><rdf:Seq><rdf:li>a</rdf:li></rdf:Seq></crs:L>"
+            ),
+        ),
+        "t",
+    );
+    let want = serde_json::json!([{ "A": true, "B": "+1", "S": { "X": "1" }, "L": ["a"] }]);
+    assert_eq!(attrs, (Some(want.clone()), Vec::new()));
+    assert_eq!(elements, (Some(want), Vec::new()));
+}
+
 /// The file-level rules (scope, manifest ownership, the registry exemption,
-/// XMP ids) and the inputs the Rust and Python checks once disagreed on, on a
+/// XMP ids and trees) and the inputs the Rust and Python checks once disagreed on, on a
 /// copy of the real tree with one crafted file per case. Mirrored by
 /// `extract_fixtures.py --self-test`.
 #[test]
@@ -719,13 +887,43 @@ fn dispatch_rules_flag_exactly_the_crafted_files() {
         ),
         (
             "xmp/foreign_id.xmp",
-            format!("<x crs:MaskDigest=\"{foreign_hex}\"/>"),
+            crafted_xmp(&format!("crs:MaskDigest=\"{foreign_hex}\""), ""),
             true,
         ),
         (
             "xmp/adobe_look.xmp",
-            "<x crs:UUID=\"B952C231111CD8E0ECCF14B86BAA7077\"/>".into(),
+            crafted_xmp(
+                "",
+                r#"<crs:Look crs:Name="Adobe Color" crs:UUID="B952C231111CD8E0ECCF14B86BAA7077"/>"#,
+            ),
             false,
+        ),
+        (
+            "xmp/look_parameters.xmp",
+            crafted_xmp(
+                "",
+                r#"<crs:Look><rdf:Description><crs:Parameters crs:Exposure2012="+0.50"/></rdf:Description></crs:Look>"#,
+            ),
+            true,
+        ),
+        ("xmp/not_xml.xmp", "<x:xmpmeta".into(), true),
+        (
+            "xmp/serial_number.xmp",
+            crafted_xmp(r#"crs:Serial="1234567890""#, ""),
+            true,
+        ),
+        (
+            "xmp/version_number.xmp",
+            crafted_xmp(r#"crs:ModelVersion="3000000000""#, ""),
+            false,
+        ),
+        (
+            "xmp/bad_language.xmp",
+            crafted_xmp(
+                "",
+                r#"<crs:Name><rdf:Alt><rdf:li xml:lang="1 2">Synthetic Text</rdf:li></rdf:Alt></crs:Name>"#,
+            ),
+            true,
         ),
         ("lua/owned_crafted.json", masked.into(), true),
         ("lua/hand_localised.json", masked.into(), false),

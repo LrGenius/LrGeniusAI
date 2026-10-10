@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+roxmltree = "0.21.1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"

@@ -7,8 +7,11 @@ name: "Golden tests (all model assets)"
 # and runs with LRG_REQUIRE_GOLDENS=all, so a missing asset fails instead of
 # skipping — the numerical checks either run or the job goes red.
 # `all` leaves out the gate's LOCAL_ONLY families (crates/lrg-ml/tests/common),
-# whose data is private and can never be fetched here — e.g. `training-dump`,
-# lrg-develop's sweep over the maintainer's training rows.
+# whose data is private or not redistributable and can never be fetched here:
+# lrg-develop's local sweeps `training-dump` (the maintainer's training rows),
+# `lrc-presets` (Lightroom's bundled presets and profiles), `acr-presets`
+# (Camera Raw's user folder: its presets and profiles) and `xmp-corpus`
+# (a private sidecar corpus).
 #
 # Deliberately *not* cached. A fresh download each night also verifies that
 # the published release assets are still present and fetchable, which is what

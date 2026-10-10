@@ -123,6 +123,17 @@ pre-commit and CI, and a test in `fixture_hygiene.rs`):
 - Generated files only: every string satisfies its key's value rule
   (`STRING_RULES` in the extractor) or is a number list, brush-dab string or
   a synthetic value.
+- XMP files: well-formed XML with an `rdf:RDF`, and every `rdf:Alt` item
+  carries a valid `xml:lang`. Their data model (`xmp_as_tree` in the
+  extractor and in `fixture_hygiene.rs`: every `rdf:Description` an object,
+  properties by local name in any namespace, `rdf:Seq`/`rdf:Bag`/`rdf:Alt`
+  as lists, `True`/`False` as booleans, everything else as text) gets the
+  same rules as a hand-written JSON file — so `Look.Parameters` is the stub,
+  `Look.UUID`/`Name` are an Adobe pair or synthetic, no dates, no 32-hex id
+  or GUID that is not synthetic. Numbers are text in XMP, so the version-key
+  and `GrainSeed` exemptions apply to numeric strings as well. A header key
+  whose name contains a dropped table-key name (`RequiresRGBTables`) cannot
+  appear in a fixture: the text rule forbids the substring.
 
 Run it by hand with:
 
@@ -162,3 +173,48 @@ lookup tables) — only the numeric settings of the maintainer's own edits, the
 key names Lightroom uses for them and the names/UUIDs of a few profiles every
 Lightroom Classic installation ships. They are covered by the repository's
 license.
+
+## `xmp/` — XMP sidecars, presets and profiles
+
+Input for the XMP reader (`lrg_develop::xmp::parse`), tested by
+`crates/lrg-develop/tests/xmp_fixtures.rs` (every file is listed there and
+has a test of its own) and `tests/xmp_lua_equivalence.rs` (the same settings
+written by hand in the Lua table form must read into an equal model).
+
+**Self-authored, one file per form.** No file is an Adobe preset or profile,
+a copy of one, or an excerpt of a real sidecar: the key names are
+Lightroom's, the values are synthetic or reused from the scrubbed `lua/`
+fixtures (some mask coordinates, the rotated radial box and its `Angle`, the
+brush radius and dab, the range `PointModels`/`ColorAmount`); none comes
+from an Adobe file or a real sidecar (ids synthetic as above, names
+`Synthetic Text`/`Synthetic Group`/`Synthetic Profile`, `Correction N`,
+`Mask N`), the only real identifiers are one profile pair from `ADOBE_LOOKS`.
+Each file uses only keys Lightroom writes to XMP (no Lua-only key; checked).
+
+| File | Form |
+|---|---|
+| `preset_header.xmp` | develop preset: full header, empty `rdf:Alt` items, empty `Cluster`/`CameraModelRestriction` |
+| `number_formats.xmp` | `+1.35`, `+0.50`, signed integers (`+6`, `-12`, `+35`), `-1.5`, `0`, `+1.0`, `0.012345`, `True`/`False`, 0/1 flags, a packed version (`CompatibleVersion`), a struct boolean `true` |
+| `curves.xmp` | global curves (`"x, y"`) and local curves (`"x,y"`) |
+| `masks_ai.xmp` | subject, sky, background, people part (preset form), landscape class, person part at a reference point |
+| `mask_linear.xmp` | linear gradient |
+| `element_form.xmp` | `mask_linear.xmp` in element form (and an `xpacket` wrapper); reads into the same model |
+| `mask_radial.xmp` | radial gradients with `Angle` 0 (typed) and ≠ 0 (opaque) |
+| `mask_range.xmp` | luminance range (attributes on the property element) and colour range (nested `rdf:Description`) |
+| `parse_type_resource.xmp` | `mask_range.xmp` with `rdf:parseType="Resource"` throughout; reads into the same model |
+| `mask_combine.xmp` | add, subtract, intersect, inverted add |
+| `mask_brush.xmp` | `Mask/Aggregate` with a nested `Mask/Paint` and its dabs |
+| `look_stub.xmp` | `Look` with the stub `Parameters` |
+| `preset_record.xmp` | `crs:Preset` with its `Parameters` (kept opaque, never evaluated) |
+| `snapshot_crss.xmp` | a `crss:` snapshot (skipped entirely) |
+| `multiple_descriptions.xmp` | three `rdf:Description`s, two of them `crs:`, one `dc:`/`xmp:` |
+| `unknown_keys.xmp` | unknown keys at every level and a foreign namespace inside a correction (the only file with `UnknownKey` warnings) |
+| `coercion_warnings.xmp` | wrong types, a rounded integer, a value outside its set, a short id, an unknown combination (the only other file with warnings) |
+| `bag.xmp` | an `rdf:Bag` where the registry expects an `rdf:Seq` (kept whole) |
+| `alt_second_language.xmp` | `rdf:Alt` with a second language (kept whole) |
+| `bom.xmp` | a UTF-8 byte-order mark |
+| `profile.xmp` | a profile (`PresetType="Look"`) |
+| `not_develop.xmp` | no develop settings at all (not an error) |
+
+A new file needs an entry in `FIXTURES` in `tests/xmp_fixtures.rs` and a test
+of its own.

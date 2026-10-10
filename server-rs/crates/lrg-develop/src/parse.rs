@@ -1,7 +1,8 @@
-//! Errors and warnings of the readers (Lua/JSON now, XMP in PR 1c).
+//! Errors and warnings of the readers (the Lua/JSON table form and XMP).
 //!
-//! A [`ParseError`] means the input as a whole is unusable (not JSON, too
-//! large, not a settings table). Everything else is a [`ParseWarning`],
+//! A [`ParseError`] means the input as a whole is unusable (not JSON or not
+//! well-formed XML, not UTF-8, too large, not a settings table, no
+//! `rdf:RDF`). Everything else is a [`ParseWarning`],
 //! collected in a list (never a single slot): the value is kept (verbatim if
 //! it had to be) and the caller decides how to report it. An unknown key is
 //! never an error.
@@ -18,7 +19,7 @@ pub enum ParseError {
     #[error("develop settings are not valid JSON: {0}")]
     Json(#[from] serde_json::Error),
     /// Larger than the reader accepts.
-    #[error("develop settings are {size} bytes, more than the {max}-byte limit")]
+    #[error("the input is {size} bytes, more than the {max}-byte limit")]
     TooLarge {
         /// Input size.
         size: usize,
@@ -31,6 +32,31 @@ pub enum ParseError {
     NotATable {
         /// What was found instead (`"a string"`, `"a non-empty array"`, ...).
         found: &'static str,
+    },
+    /// An XMP file that is not UTF-8 (after an optional byte-order mark).
+    #[error("the XMP file is not UTF-8: {0}")]
+    Encoding(#[from] std::str::Utf8Error),
+    /// An XMP file that is not well-formed XML.
+    #[error("the XMP file is not well-formed XML: {0}")]
+    Xml(#[from] roxmltree::Error),
+    /// An XMP file without an `rdf:RDF` element.
+    #[error("the XMP file has no rdf:RDF element")]
+    NoRdf,
+    /// An XMP file nested deeper than any develop setting goes.
+    #[error("the XMP file nests elements more than {max} levels deep")]
+    TooDeep {
+        /// The limit.
+        max: usize,
+    },
+    /// An XMP file beyond a structural limit no real file comes near (too
+    /// many attributes on one element, namespace declarations, or too long
+    /// a namespace URI); refused before XML parsing.
+    #[error("the XMP file has more than {max} {what}")]
+    Limit {
+        /// What is counted (`"attributes on one element"`, ...).
+        what: &'static str,
+        /// The limit.
+        max: usize,
     },
 }
 
@@ -85,6 +111,18 @@ pub enum WarningKind {
     /// add, subtract, intersect; kept as they are.
     #[error("MaskBlendMode/MaskValue/MaskInverted form no known combination; kept as they are")]
     UnrecognisedMaskCombine,
+    /// The key appears more than once at one level (twice in one
+    /// `rdf:Description`, or in two merged descriptions); the first
+    /// occurrence is used (typed, or kept verbatim if it did not type), the
+    /// later ones are kept verbatim.
+    #[error(
+        "the key appears more than once; the first value is used, the later one kept verbatim"
+    )]
+    DuplicateKey,
+    /// XMP text that RDF does not allow where it stands (text next to
+    /// elements or a container); the text is dropped, the rest is read.
+    #[error("text next to elements is not valid RDF; the text is dropped")]
+    MalformedRdf,
 }
 
 impl WarningKind {
@@ -101,6 +139,8 @@ impl WarningKind {
             WarningKind::FileKindMismatch { .. } => "FileKindMismatch",
             WarningKind::ConflictingFileKind => "ConflictingFileKind",
             WarningKind::UnrecognisedMaskCombine => "UnrecognisedMaskCombine",
+            WarningKind::DuplicateKey => "DuplicateKey",
+            WarningKind::MalformedRdf => "MalformedRdf",
         }
     }
 }

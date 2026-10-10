@@ -8,9 +8,12 @@
 > If the XMP idea comes back, start here rather than re-running the
 > investigation.
 >
-> Work has started: the first building block, a native model of Lightroom's
-> develop settings (key registry, typed model, Lua reader), is the
-> `lrg-develop` crate. See [Native Develop Model](Dev-Develop-Model). AI
+> Work has started: the first building blocks, a native model of Lightroom's
+> develop settings (key registry, typed model, readers for the Lua form and
+> for XMP), are the `lrg-develop` crate. The XMP reader parses Lightroom's
+> bundled presets and the current state of that sidecar corpus with no
+> unknown key (counts and method in
+> [Native Develop Model](Dev-Develop-Model#checked-against-real-files)). AI
 > Edit's behaviour is unchanged so far.
 
 ## The question
