@@ -403,7 +403,9 @@ Extra information sent alongside the photo to improve accuracy:
   also names the photos the run's own totals count as done but never wrote:
   those you discarded in the review, and those skipped for having no photo ID.
   A photo whose data cannot be read back from the backend appears under
-  **Warnings** rather than disappearing.
+  **Warnings** rather than disappearing. Warnings are listed however the run
+  ends: a run you stop from the progress bar, and one in which every photo
+  failed, now show what the run had already found as well.
 - **Import metadata from catalog before indexing** — pushes the metadata you
   already have into the backend first, so the AI does not overwrite it blindly.
 
