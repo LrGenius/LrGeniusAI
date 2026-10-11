@@ -209,6 +209,18 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
+		-- One request per detected face, so the run can show where it is. Cancel
+		-- is deliberately not offered (#402): each request is atomic, so a cancel
+		-- could only be honoured between them, which is not what the control
+		-- would promise.
+		local progressScope = LrProgressScope({
+			title = "Finding similar faces...",
+			functionContext = context,
+		})
+		progressScope:setCancelable(false)
+
+		progressScope:setCaption("Preparing the photo...")
+
 		local photo = targetPhotos[1]
 		local path = SearchIndexAPI.exportPhotoForIndexing(photo)
 		if not path or not LrFileUtils.exists(path) then
@@ -230,6 +242,7 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- 1) Detect faces
+		progressScope:setCaption("Detecting faces...")
 		local detectResp, err = SearchIndexAPI.detectFacesInImage(imageBase64)
 		if err then
 			ErrorHandler.handleError(LOC("$$$/LrGeniusAI/FindSimilarFaces/DetectError=Face detection failed"), err)
@@ -271,7 +284,9 @@ LrTasks.startAsyncTask(function()
 			table.insert(resolutionWarnings, tostring(personsResp.warning))
 		end
 		local persons = (personsResp and personsResp.persons) and personsResp.persons or {}
+		progressScope:setPortionComplete(0, #faces)
 		for i, face in ipairs(faces) do
+			progressScope:setCaption("Looking up face " .. tostring(i) .. " of " .. tostring(#faces))
 			local qResp, qErr = SearchIndexAPI.queryFacesByImage(imageBase64, i - 1, 1)
 			if qErr then
 				log:warn(
@@ -298,6 +313,7 @@ LrTasks.startAsyncTask(function()
 					face.person_name = name
 				end
 			end
+			progressScope:setPortionComplete(i, #faces)
 		end
 
 		-- 2) User selects face (1-based index)
@@ -307,6 +323,7 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- 3) Query similar faces (face_index is 0-based)
+		progressScope:setCaption("Finding similar faces...")
 		local faceIndex = selectedIndex - 1
 		local queryResp
 		queryResp, err = SearchIndexAPI.queryFacesByImage(imageBase64, faceIndex, 500)
@@ -331,6 +348,7 @@ LrTasks.startAsyncTask(function()
 		end
 
 		-- 4) Get cluster: prefer person_id from first result, then get all photos for that person
+		progressScope:setCaption("Collecting the matching photos...")
 		local personId = results[1].person_id
 		local photoIds = {}
 		if personId and personId ~= "" then
@@ -389,6 +407,7 @@ LrTasks.startAsyncTask(function()
 			personDisplayName = LOC("$$$/LrGeniusAI/FindSimilarFaces/SimilarFaces=Similar Faces")
 		end
 		local collectionName = string.format("%s @ %s", personDisplayName, LrDate.timeToW3CDate(LrDate.currentTime()))
+		progressScope:done()
 		if #resolutionWarnings > 0 then
 			LrDialogs.message(
 				"Search completed with warnings",

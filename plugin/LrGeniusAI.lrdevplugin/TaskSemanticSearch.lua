@@ -308,6 +308,18 @@ LrTasks.startAsyncTask(function()
 		local searchStartedAt = LrDate.currentTime()
 		if props.searchTerm ~= "" then
 			log:trace("Performing semantic search for: " .. props.searchTerm)
+
+			-- The search itself is one request, so there is nothing to measure and
+			-- nothing to interrupt: the bar is indeterminate, and cancel is not
+			-- offered (#402).
+			local progressScope = LrProgressScope({
+				title = "Searching...",
+				functionContext = context,
+			})
+			progressScope:setIndeterminate()
+			progressScope:setCancelable(false)
+			progressScope:setCaption("Searching the catalog...")
+
 			local searchOptions = {
 				semanticSiglip = props.searchInSemanticSiglip,
 				metadata = props.searchInMetadata,
@@ -333,6 +345,7 @@ LrTasks.startAsyncTask(function()
 				searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
 			end
 			results, err = SearchIndexAPI.searchIndex(props.searchTerm, photosToSearch, searchOptions)
+			progressScope:done()
 			local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
 			local resCount = 0
 			if type(results) == "table" then
