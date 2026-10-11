@@ -241,7 +241,7 @@ LrTasks.startAsyncTask(function()
 						LOC(
 							"$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachableMessage=Cannot reach backend server. Please check your connection and try again."
 						),
-						"error"
+						"critical"
 					)
 					log:error("Backend server unreachable during metadata retrieval")
 					break

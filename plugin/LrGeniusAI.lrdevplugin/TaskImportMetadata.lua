@@ -70,12 +70,14 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+					"info"
 				)
 			end
 			return

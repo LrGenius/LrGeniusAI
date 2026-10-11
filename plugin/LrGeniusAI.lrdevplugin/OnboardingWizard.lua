@@ -481,7 +481,8 @@ function OnboardingWizard.show(manualTrigger)
 			if result == "cancel" then
 				LrDialogs.message(
 					"Setup canceled",
-					"Your API keys were not saved. Run LrGeniusAI Setup again from the Plug-in Manager when you are ready."
+					"Your API keys were not saved. Run LrGeniusAI Setup again from the Plug-in Manager when you are ready.",
+					"info"
 				)
 			elseif result == "ok" or result == "other" then
 				prefs.onboardingCompleted = true

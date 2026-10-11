@@ -4224,7 +4224,8 @@ function SearchIndexAPI.startClipDownload()
 					progressScope:done()
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/ClipDownload/SuccessTitle=AI Model Download"),
-						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=AI search model downloaded successfully.")
+						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=AI search model downloaded successfully."),
+						"info"
 					)
 					break
 				elseif
@@ -4335,7 +4336,8 @@ function SearchIndexAPI.startAssetDownload()
 					progressScope:done()
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/AssetDownload/SuccessTitle=AI Model Download"),
-						LOC("$$$/LrGeniusAI/AssetDownload/SuccessMessage=The AI models are downloaded and ready.")
+						LOC("$$$/LrGeniusAI/AssetDownload/SuccessMessage=The AI models are downloaded and ready."),
+						"info"
 					)
 					break
 				elseif
@@ -4428,7 +4430,8 @@ function SearchIndexAPI.confirmModelsReadyForTasks(tasks)
 			LOC("$$$/LrGeniusAI/ModelPreflight/StartedTitle=Downloading AI models"),
 			LOC(
 				"$$$/LrGeniusAI/ModelPreflight/StartedMessage=The download has started. Run this again once it finishes and the photos will be processed with everything you selected."
-			)
+			),
+			"info"
 		)
 	end
 
@@ -4565,7 +4568,8 @@ function SearchIndexAPI.startBioclipDownload()
 						LOC("$$$/LrGeniusAI/BioclipDownload/SuccessTitle=Species Model Download"),
 						LOC(
 							"$$$/LrGeniusAI/BioclipDownload/SuccessMessage=Species identification model downloaded successfully."
-						)
+						),
+						"info"
 					)
 					break
 				elseif
@@ -4724,7 +4728,8 @@ function SearchIndexAPI.startLlmDownload(spec, onDone)
 							LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
 							LOC(
 								"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
-							)
+							),
+							"info"
 						)
 					end
 					break

@@ -116,7 +116,8 @@ local function createCollectionFromPhotoIds(photoIds, collectionName)
 			LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotosInCatalog=Not in catalog"),
 			LOC(
 				"$$$/LrGeniusAI/FindSimilarFaces/PersonPhotosNotInCatalog=Photos for this person are not in the current catalog."
-			)
+			),
+			"info"
 		)
 		return
 	end
@@ -192,7 +193,8 @@ LrTasks.startAsyncTask(function()
 		if not targetPhotos or #targetPhotos == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotoTitle=No photo selected"),
-				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotoMessage=Please select a single photo in the Library.")
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotoMessage=Please select a single photo in the Library."),
+				"info"
 			)
 			return
 		end
@@ -201,7 +203,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoTitle=Select one photo"),
 				LOC(
 					"$$$/LrGeniusAI/FindSimilarFaces/SinglePhotoMessage=Please select exactly one photo to find similar faces."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -245,7 +248,8 @@ LrTasks.startAsyncTask(function()
 		if #faces == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoFacesTitle=No faces found"),
-				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoFacesMessage=No faces were detected on this photo.")
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoFacesMessage=No faces were detected on this photo."),
+				"info"
 			)
 			return
 		end
@@ -320,7 +324,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces"),
 				LOC(
 					"$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -360,7 +365,8 @@ LrTasks.startAsyncTask(function()
 		if #photoIds == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces"),
-				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotosForFace=No photos found for this face.")
+				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoPhotosForFace=No photos found for this face."),
+				"info"
 			)
 			return
 		end
