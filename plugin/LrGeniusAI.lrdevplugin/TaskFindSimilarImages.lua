@@ -138,7 +138,7 @@ local function createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 			tostring(missingFromCatalog)
 				.. " of the "
 				.. tostring(#photoIds)
-				.. " matched photo(s) are not in the current catalog"
+				.. " matched photo(s) are not in the current catalog, so the collection is smaller than the number of matches"
 		)
 	end
 

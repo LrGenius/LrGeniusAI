@@ -1142,7 +1142,7 @@ LrTasks.startAsyncTask(function()
 							runWarnings,
 							"After applying metadata, the search index could not be updated for "
 								.. tostring(impFailed)
-								.. " photo(s)."
+								.. " photo(s). Re-run indexing to fix this."
 						)
 					end
 				end
@@ -1278,7 +1278,7 @@ LrTasks.startAsyncTask(function()
 										runWarnings,
 										"After applying metadata, the search index could not be updated for "
 											.. tostring(impFailed)
-											.. " photo(s)."
+											.. " photo(s). Re-run indexing to fix this."
 									)
 								end
 
@@ -1320,7 +1320,7 @@ LrTasks.startAsyncTask(function()
 									runWarnings,
 									"After applying metadata, the search index could not be updated for "
 										.. tostring(impFailed)
-										.. " photo(s)."
+										.. " photo(s). Re-run indexing to fix this."
 								)
 							end
 

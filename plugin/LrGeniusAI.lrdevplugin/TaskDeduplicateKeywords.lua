@@ -654,7 +654,8 @@ LrTasks.startAsyncTask(function()
 		-- act on them — reused by the no-duplicates and preview messages.
 		local scanStoppedNote
 		if scanAborted then
-			scanStoppedNote = "The scan was stopped before all branches were checked, so this list may be incomplete."
+			scanStoppedNote =
+				"The scan was stopped before all branches were checked, so this list may be incomplete. Re-run the scan to check the remaining branches."
 		end
 
 		if #semanticPairs == 0 then
