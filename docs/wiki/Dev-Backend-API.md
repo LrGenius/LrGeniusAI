@@ -186,6 +186,25 @@ Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
 ### `POST /v1/index/unprocessed`
 Given a list of `photo_id` values, returns which ones are not yet indexed or are missing specific data.
 
+"Missing" is per task, and where the producer of a field can change it means *produced by the
+producer this build uses*, not merely present:
+
+| task | outstanding when |
+| --- | --- |
+| `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
+| `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
+| `species` | no `species_checked`, or a `species_model` that is not the head on disk |
+| `cull` | no `cull_phash`, or no `cull_faces_present` key |
+| `metadata` | no title, caption, alt_text or keywords |
+
+`regenerate_metadata` overrides all of them.
+
+The two identity fields differ in one respect, deliberately. For `faces`, a missing `face_model`
+re-queues the photo. For `embeddings`, a missing `embedding_model` does **not**: `has_embedding` has
+existed since before this field, so an absent identity is the normal state of every existing index,
+and re-queueing on absence would re-embed a whole catalog to settle a maybe. A present identity that
+differs always re-queues.
+
 ### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 

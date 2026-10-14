@@ -19,6 +19,22 @@ use crate::image_pre;
 use crate::text_pre::{SiglipTokenizer, TokenizeError, CONTEXT_LENGTH};
 
 pub const EMBED_DIM: usize = 1152;
+
+/// Identifier for the embedding function this build writes.
+///
+/// A compile-time constant, like `lrg_ml::faces::MODEL_ID` and unlike the
+/// BioCLIP head's `model_id`, which reads its version off the labels file: the
+/// ONNX assets carry no version to read, and the release tag they are published
+/// under is a different crate's constant.
+///
+/// **Bump this whenever a change would make new embeddings incomparable with
+/// stored ones** — different weights, an export at a different optimization
+/// level, a change to [`crate::image_pre::preprocess`], or a different
+/// tokenizer. A stored vector only means something next to the function that
+/// produced it, and `/v1/index/unprocessed` re-queues photos whose stored
+/// `embedding_model` is not this value.
+pub const MODEL_ID: &str = "siglip2-so400m-384/fp16";
+
 const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
 
 #[derive(Debug, thiserror::Error)]
@@ -111,6 +127,15 @@ impl SiglipModel {
 
     pub fn is_cached(&self) -> bool {
         self.paths.all_exist()
+    }
+
+    /// Identifier for the embedding function this build writes.
+    ///
+    /// Read by `/v1/index/unprocessed`, which runs *before* any indexing, so it
+    /// is a constant rather than anything read off the loaded session — asking
+    /// the model would mean loading it just to ask.
+    pub fn model_id(&self) -> &'static str {
+        MODEL_ID
     }
 
     fn ensure_loaded(&self) -> Result<(), SiglipError> {

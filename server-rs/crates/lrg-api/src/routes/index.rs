@@ -100,6 +100,9 @@ async fn check_unprocessed(
     // against and stored results are taken at face value — the alternative
     // would re-queue the whole catalog on every server restart.
     let current_species_model = state.bioclip.model_id();
+    // Which embedding function this build writes. A compile-time constant, like
+    // the detector/recognizer pair below and unlike the BioCLIP head above.
+    let current_embedding_model = state.siglip.model_id();
     // Which detector/recognizer pair this build writes. A compile-time
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
@@ -186,8 +189,21 @@ async fn check_unprocessed(
                         _ => true,
                     })
                 };
-                let needs_embedding =
-                    compute_embeddings && (regenerate_metadata || !has_flag("has_embedding"));
+                // A stored embedding only compares against the function that
+                // produced it, so an identity that is present and different
+                // re-queues the photo. An identity that is *absent* is taken as
+                // current: a row that predates the field cannot be checked
+                // either way, and re-embedding a whole catalog on the first run
+                // after an upgrade is not something to do on a maybe.
+                let embedding_model_current = match m.get("embedding_model").and_then(Value::as_str)
+                {
+                    Some(stored) => stored == current_embedding_model,
+                    None => true,
+                };
+                let needs_embedding = compute_embeddings
+                    && (regenerate_metadata
+                        || !has_flag("has_embedding")
+                        || !embedding_model_current);
                 let has_any_metadata = has_flag("title")
                     || has_flag("caption")
                     || has_flag("alt_text")
