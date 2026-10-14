@@ -43,19 +43,112 @@ impl ModelPaths {
     }
 }
 
-struct Loaded {
-    image_session: Session,
-    text_session: Session,
+/// The text tower's session, together with the tokenizer that feeds it.
+///
+/// The tokenizer lives here rather than beside the paths because nothing but
+/// the text path reads it, and keeping it here is what lets the two towers be
+/// loaded and dropped independently.
+struct TextTower {
+    session: Session,
     tokenizer: SiglipTokenizer,
+}
+
+/// One lazily-loaded, independently idle-unloaded tower.
+///
+/// The image and text towers each hold one of these. They used to share a
+/// single `Option<Loaded>` that owned both sessions behind one mutex and one
+/// idle clock, so anything that touched either tower built both: an
+/// embeddings-only run paid for the text tower it never calls, and a semantic
+/// search paid for the image tower. Nothing about either tower's cost changes
+/// here — only which of them a call makes resident.
+struct Tower<T> {
+    loaded: Mutex<Option<T>>,
+    /// This tower's own clock. A shared one meant image work refreshing the
+    /// text tower's idle timer, so a tower nothing ever called could not be
+    /// dropped while the other one was busy.
+    last_used_unix: AtomicI64,
+    load_error: Mutex<Option<String>>,
+}
+
+impl<T> Tower<T> {
+    fn new() -> Self {
+        Tower {
+            loaded: Mutex::new(None),
+            last_used_unix: AtomicI64::new(0),
+            load_error: Mutex::new(None),
+        }
+    }
+
+    /// Runs `f` against this tower's loaded value, building it first when it is
+    /// not there yet.
+    ///
+    /// `name` reaches the failure log and is only for the human reading it: a
+    /// load that fails on a background path has to say which tower it was.
+    /// `build` fails with an ort error, `f` with a `SiglipError`, so the
+    /// tokenizer's own error type reaches the caller unchanged.
+    fn with<R>(
+        &self,
+        name: &str,
+        build: impl FnOnce() -> ort::Result<T>,
+        f: impl FnOnce(&mut T) -> Result<R, SiglipError>,
+    ) -> Result<R, SiglipError> {
+        let mut guard = self.loaded.lock().unwrap();
+        if guard.is_none() {
+            match build() {
+                Ok(value) => {
+                    *guard = Some(value);
+                    *self.load_error.lock().unwrap() = None;
+                }
+                Err(e) => {
+                    log::warn!("Could not load the SigLIP2 {name} tower: {e}");
+                    *self.load_error.lock().unwrap() = Some(e.to_string());
+                    return Err(e.into());
+                }
+            }
+        }
+        self.last_used_unix.store(now_unix(), Ordering::Relaxed);
+        let loaded = guard.as_mut().ok_or(SiglipError::NotLoaded)?;
+        f(loaded)
+    }
+
+    /// Drops this tower's session(s). Safe to call when nothing is loaded.
+    ///
+    /// The reason is a parameter because this is reached two ways — the
+    /// `/unload` route and the idle sweep — and the log line used to say
+    /// "due to inactivity" for both. A real `/unload` from the plugin then
+    /// looked like an idle timeout in the log, which is the kind of small lie
+    /// that costs an hour the next time someone reads it.
+    fn unload_with_reason(&self, name: &str, reason: &str) {
+        let mut guard = self.loaded.lock().unwrap();
+        if guard.take().is_some() {
+            log::info!("Unloading SigLIP2 {name} tower ({reason})");
+        }
+    }
+
+    fn unload_if_idle(&self, name: &str) {
+        let last = self.last_used_unix.load(Ordering::Relaxed);
+        if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
+            self.unload_with_reason(name, "idle");
+        }
+    }
+
+    fn status(&self) -> (&'static str, Option<String>) {
+        if self.loaded.lock().unwrap().is_some() {
+            ("loaded", None)
+        } else if let Some(err) = self.load_error.lock().unwrap().clone() {
+            ("failed", Some(err))
+        } else {
+            ("not_loaded", None)
+        }
+    }
 }
 
 /// Lazily-loaded, idle-unloadable SigLIP2 model handle. One instance is
 /// shared behind an `Arc` in `AppState`.
 pub struct SiglipModel {
     paths: ModelPaths,
-    loaded: Mutex<Option<Loaded>>,
-    last_used_unix: AtomicI64,
-    load_error: Mutex<Option<String>>,
+    image: Tower<Session>,
+    text: Tower<TextTower>,
 }
 
 fn now_unix() -> i64 {
@@ -103,9 +196,8 @@ impl SiglipModel {
     pub fn new(paths: ModelPaths) -> Self {
         SiglipModel {
             paths,
-            loaded: Mutex::new(None),
-            last_used_unix: AtomicI64::new(0),
-            load_error: Mutex::new(None),
+            image: Tower::new(),
+            text: Tower::new(),
         }
     }
 
@@ -113,108 +205,101 @@ impl SiglipModel {
         self.paths.all_exist()
     }
 
-    fn ensure_loaded(&self) -> Result<(), SiglipError> {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.is_some() {
-            self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-            return Ok(());
-        }
-        let result = (|| -> ort::Result<Loaded> {
-            let image_session = build_session(&self.paths.image_onnx)?;
-            let text_session = build_session(&self.paths.text_onnx)?;
-            Ok(Loaded {
-                image_session,
-                text_session,
-                tokenizer: SiglipTokenizer::from_file(&self.paths.tokenizer_json)
-                    .map_err(|e| ort::Error::new(e.to_string()))?,
-            })
-        })();
-        match result {
-            Ok(loaded) => {
-                *guard = Some(loaded);
-                *self.load_error.lock().unwrap() = None;
-                self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-                Ok(())
-            }
-            Err(e) => {
-                *self.load_error.lock().unwrap() = Some(e.to_string());
-                Err(e.into())
-            }
-        }
-    }
-
-    /// Drops the loaded session(s). Safe to call when nothing is loaded.
+    /// Drops both towers. Safe to call when nothing is loaded.
     ///
-    /// The reason is a parameter because this is reached two ways — the
-    /// `/unload` route and the idle sweep — and the log line used to say
-    /// "due to inactivity" for both. A real `/unload` from the plugin then
-    /// looked like an idle timeout in the log, which is the kind of small lie
-    /// that costs an hour the next time someone reads it.
-    fn unload_with_reason(&self, reason: &str) {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.take().is_some() {
-            log::info!("Unloading SigLIP2 model ({reason})");
-        }
-    }
-
+    /// Both, unconditionally: `/server/unload` promises to free what the
+    /// process holds, and leaving one tower resident because the caller
+    /// happened to name the other would break that promise.
     pub fn unload(&self) {
-        self.unload_with_reason("requested");
+        self.image.unload_with_reason("image", "requested");
+        self.text.unload_with_reason("text", "requested");
     }
 
     /// Call periodically (e.g. every 60s) from a background task.
     pub fn unload_if_idle(&self) {
-        let last = self.last_used_unix.load(Ordering::Relaxed);
-        if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
-            self.unload_with_reason("idle");
-        }
+        self.image.unload_if_idle("image");
+        self.text.unload_if_idle("text");
     }
 
+    /// The pair's status, which is what `/health`'s `clip_model` field has
+    /// always described.
+    ///
+    /// A failure on either tower reports `"failed"` even when the other one is
+    /// resident. The plug-in reads this field as "the AI model failed to load",
+    /// and since the towers now load separately, a broken tower must not be
+    /// able to hide behind a working one. [`Self::image_status`] and
+    /// [`Self::text_status`] say which tower it was.
     pub fn status(&self) -> (&'static str, Option<String>) {
-        if self.loaded.lock().unwrap().is_some() {
+        let (image, image_error) = self.image.status();
+        let (text, text_error) = self.text.status();
+        if image == "failed" || text == "failed" {
+            ("failed", image_error.or(text_error))
+        } else if image == "loaded" || text == "loaded" {
             ("loaded", None)
-        } else if let Some(err) = self.load_error.lock().unwrap().clone() {
-            ("failed", Some(err))
         } else {
             ("not_loaded", None)
         }
     }
 
+    /// The image tower alone — what indexing and the training path embed with.
+    pub fn image_status(&self) -> (&'static str, Option<String>) {
+        self.image.status()
+    }
+
+    /// The text tower alone — what search, keyword lookup and the prompt sets
+    /// embed with.
+    pub fn text_status(&self) -> (&'static str, Option<String>) {
+        self.text.status()
+    }
+
     /// Embed one RGB8 image; NOT L2-normalized (callers normalize per the
     /// Python search/index call sites, which normalize after this call).
+    ///
+    /// Loads the image tower and nothing else: before the towers were split,
+    /// this call also brought the text tower resident.
     pub fn embed_image(
         &self,
         pixels: &[u8],
         width: usize,
         height: usize,
     ) -> Result<Vec<f32>, SiglipError> {
-        self.ensure_loaded()?;
-        let mut guard = self.loaded.lock().unwrap();
-        let loaded = guard.as_mut().ok_or(SiglipError::NotLoaded)?;
-
-        let data = image_pre::preprocess(pixels, width, height);
-        let input =
-            Tensor::from_array(([1, 3, image_pre::IMAGE_SIZE, image_pre::IMAGE_SIZE], data))?;
-        let outputs = loaded
-            .image_session
-            .run(ort::inputs!["pixel_values" => input])?;
-        let (_, embedding) = outputs[0].try_extract_tensor::<f32>()?;
-        Ok(embedding.to_vec())
+        self.image.with(
+            "image",
+            || build_session(&self.paths.image_onnx),
+            |session| {
+                let data = image_pre::preprocess(pixels, width, height);
+                let input = Tensor::from_array((
+                    [1, 3, image_pre::IMAGE_SIZE, image_pre::IMAGE_SIZE],
+                    data,
+                ))?;
+                let outputs = session.run(ort::inputs!["pixel_values" => input])?;
+                let (_, embedding) = outputs[0].try_extract_tensor::<f32>()?;
+                Ok(embedding.to_vec())
+            },
+        )
     }
 
     /// Embed a batch of texts; NOT L2-normalized (see `embed_image`).
+    ///
+    /// Loads the text tower and nothing else, tokenizer included.
     pub fn embed_text(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, SiglipError> {
-        self.ensure_loaded()?;
-        let mut guard = self.loaded.lock().unwrap();
-        let loaded = guard.as_mut().ok_or(SiglipError::NotLoaded)?;
-
-        let ids = loaded.tokenizer.encode_batch(texts)?;
-        let batch = texts.len();
-        let input = Tensor::from_array(([batch, CONTEXT_LENGTH], ids))?;
-        let outputs = loaded
-            .text_session
-            .run(ort::inputs!["input_ids" => input])?;
-        let (_, embedding) = outputs[0].try_extract_tensor::<f32>()?;
-        Ok(embedding.chunks(EMBED_DIM).map(|c| c.to_vec()).collect())
+        self.text.with(
+            "text",
+            || {
+                let session = build_session(&self.paths.text_onnx)?;
+                let tokenizer = SiglipTokenizer::from_file(&self.paths.tokenizer_json)
+                    .map_err(|e| ort::Error::new(e.to_string()))?;
+                Ok(TextTower { session, tokenizer })
+            },
+            |tower| {
+                let ids = tower.tokenizer.encode_batch(texts)?;
+                let batch = texts.len();
+                let input = Tensor::from_array(([batch, CONTEXT_LENGTH], ids))?;
+                let outputs = tower.session.run(ort::inputs!["input_ids" => input])?;
+                let (_, embedding) = outputs[0].try_extract_tensor::<f32>()?;
+                Ok(embedding.chunks(EMBED_DIM).map(|c| c.to_vec()).collect())
+            },
+        )
     }
 }
 
