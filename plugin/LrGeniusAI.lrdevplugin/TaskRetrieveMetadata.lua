@@ -241,7 +241,7 @@ LrTasks.startAsyncTask(function()
 						LOC(
 							"$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachableMessage=Cannot reach backend server. Please check your connection and try again."
 						),
-						"error"
+						"critical"
 					)
 					log:error("Backend server unreachable during metadata retrieval")
 					break
@@ -381,7 +381,7 @@ LrTasks.startAsyncTask(function()
 			if #backendWarnings > 0 then
 				combinedReport = combinedReport
 					.. "\n\n"
-					.. LOC("$$$/LrGeniusAI/common/BackendWarnings=Backend Warnings:")
+					.. LOC("$$$/LrGeniusAI/common/BackendWarnings=Warnings:")
 					.. "\n"
 				for i = 1, math.min(5, #backendWarnings) do
 					combinedReport = combinedReport .. "- " .. backendWarnings[i] .. "\n"

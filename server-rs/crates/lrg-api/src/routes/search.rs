@@ -3,9 +3,7 @@
 //! search (brute-force cosine over `image_embeddings` — small enough
 //! per-catalog to skip building a LanceDB ANN index for now) + in-memory
 //! metadata substring search, merged and knee-filtered exactly like
-//! Python. Vertex AI semantic search is M8 (needs cloud auth wiring);
-//! omitting it changes result composition when a user has Vertex
-//! embeddings, not correctness of what IS implemented.
+//! Python.
 
 use std::collections::HashSet;
 use std::sync::Arc;

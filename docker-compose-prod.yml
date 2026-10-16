@@ -24,7 +24,6 @@ services:
     volumes:
       - ./data:/data
       - ./models:/models
-      - ./gcloud:/root/.config/gcloud
     environment:
       - GENIUSAI_HOST=0.0.0.0
       - GENIUSAI_PORT=19819

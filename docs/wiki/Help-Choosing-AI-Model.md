@@ -118,20 +118,6 @@ If Claude reports that it stopped because the token limit was reached, raise
 Max Tokens to 4096 or higher. If the same photo keeps failing, the model is
 repeating itself; pick a different Claude model.
 
-### ~~Vertex AI (embeddings only)~~ — REMOVED
-
-> **⚠️ Removed in August 2026.** The plugin no longer offers Vertex AI anywhere: no
-> project/location settings, no Vertex embeddings during *Analyze & Index*, no
-> *Semantic (Vertex AI)* search option. Semantic search now runs on the built-in SigLIP2
-> embeddings only. Existing Vertex embeddings stay in the database but are not updated or
-> queried. Description below kept for reference.
-
-Vertex AI is used for the `multimodalembedding@001` model that powers the
-`image_embeddings_vertex` semantic-search collection. It is **not** an
-alternative LLM for keywords/descriptions — pair it with a Gemini, ChatGPT,
-or local provider for metadata generation. See
-[Google Vertex AI Login](Google-Vertex-AI-Login).
-
 ## Local models
 
 Local providers run on your own machine, so privacy is the strongest argument

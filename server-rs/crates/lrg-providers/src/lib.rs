@@ -1,7 +1,6 @@
 //! LLM provider REST clients for metadata generation, plus the
 //! edit-recipe contract (`edit_recipe`) shared by all edit-capable
-//! providers. Gemini, LM Studio, and Vertex AI providers land in M8
-//! alongside the `/v1/edit/recipe` endpoint.
+//! providers.
 
 pub mod anthropic;
 pub mod edit_recipe;
@@ -21,4 +20,3 @@ pub mod schema;
 pub mod schema_strict;
 pub mod text_llm;
 pub mod types;
-pub mod vertexai;

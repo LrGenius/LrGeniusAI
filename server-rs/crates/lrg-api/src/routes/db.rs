@@ -21,7 +21,7 @@ use axum::{
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use lrg_store::{meta, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE, VERTEX_TABLE};
+use lrg_store::{meta, FACE_TABLE, IMAGE_TABLE, SPECIES_TABLE};
 
 use crate::state::AppState;
 
@@ -49,7 +49,7 @@ async fn database_stats(
 ) -> Response {
     let empty = json!({
         "photos": {"total": 0, "with_embedding": 0, "with_title": 0,
-                    "with_caption": 0, "with_keywords": 0, "with_vertexai": 0,
+                    "with_caption": 0, "with_keywords": 0,
                     "with_species": 0, "with_species_id": 0},
         "faces": {"total": 0},
         "persons": {"total": 0},
@@ -59,13 +59,6 @@ async fn database_stats(
     };
 
     let result: Result<Value, String> = async {
-        let vertex_ids: BTreeSet<String> = store
-            .scan_meta(VERTEX_TABLE)
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
         let catalog_id = query
             .catalog_id
             .as_deref()
@@ -78,8 +71,7 @@ async fn database_stats(
                 .is_some_and(|s| !s.trim().is_empty())
         };
 
-        // Only the ids are needed, unlike VERTEX_TABLE above whose metadata
-        // this route used to want.
+        // Only the ids are needed.
         let species_ids: BTreeSet<String> = store
             .scan_ids(SPECIES_TABLE)
             .await
@@ -88,7 +80,7 @@ async fn database_stats(
             .collect();
 
         let (mut total, mut with_embedding, mut with_title) = (0u64, 0u64, 0u64);
-        let (mut with_caption, mut with_keywords, mut with_vertexai) = (0u64, 0u64, 0u64);
+        let (mut with_caption, mut with_keywords) = (0u64, 0u64);
         // `with_species` is "BioCLIP has looked at it", `with_species_id` is
         // "and it came back with something". The gap between the two is how
         // much of the catalog is being scanned for nothing, which is the
@@ -118,9 +110,6 @@ async fn database_stats(
             if non_empty(&m, "keywords") || non_empty(&m, "flattened_keywords") {
                 with_keywords += 1;
             }
-            if vertex_ids.contains(&id) {
-                with_vertexai += 1;
-            }
             if species_ids.contains(&id) {
                 with_species += 1;
             }
@@ -147,7 +136,7 @@ async fn database_stats(
         Ok(json!({
             "photos": {"total": total, "with_embedding": with_embedding,
                         "with_title": with_title, "with_caption": with_caption,
-                        "with_keywords": with_keywords, "with_vertexai": with_vertexai,
+                        "with_keywords": with_keywords,
                         "with_species": with_species, "with_species_id": with_species_id},
             "faces": {"total": faces_total},
             "persons": {"total": persons.len()},

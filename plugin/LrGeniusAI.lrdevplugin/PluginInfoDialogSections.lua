@@ -64,9 +64,6 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.geminiApiKey = prefs.geminiApiKey
 	propertyTable.chatgptApiKey = prefs.chatgptApiKey
 	propertyTable.anthropicApiKey = prefs.anthropicApiKey
-	-- Vertex AI is disabled in the GUI; the backend code is untouched.
-	-- propertyTable.vertexProjectId = prefs.vertexProjectId
-	-- propertyTable.vertexLocation = prefs.vertexLocation or "us-central1"
 
 	propertyTable.exportSize = prefs.exportSize
 	propertyTable.exportQuality = prefs.exportQuality
@@ -1244,7 +1241,8 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									end
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/ClaimPhotosTitle=Claim photos"),
-										msg
+										msg,
+										"info"
 									)
 								else
 									LrDialogs.message(
@@ -1290,7 +1288,8 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 									LrShell.revealInShell(pathOrErr)
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/DbBackupDownloaded=Database backup downloaded."),
-										LrPathUtils.leafName(pathOrErr)
+										LrPathUtils.leafName(pathOrErr),
+										"info"
 									)
 								elseif pathOrErr ~= "canceled" then
 									-- A user-canceled save panel is not an error; anything else is.
@@ -1350,7 +1349,8 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 												.. LOC("$$$/LrGeniusAI/PluginInfo/BackendPrefix=Backend: ")
 												.. backendTag
 												.. "\n\n"
-												.. buildInfo
+												.. buildInfo,
+											"info"
 										)
 									else
 										LrDialogs.message(
@@ -1402,7 +1402,8 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 								if ok then
 									LrDialogs.message(
 										LOC("$$$/LrGeniusAI/PluginInfo/RestartBackend=Restart Backend"),
-										LOC("$$$/LrGeniusAI/PluginInfo/RestartSuccess=Backend restarted successfully.")
+										LOC("$$$/LrGeniusAI/PluginInfo/RestartSuccess=Backend restarted successfully."),
+										"info"
 									)
 								else
 									LrDialogs.message(
@@ -1438,11 +1439,6 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	prefs.aiServerApiKey = trimmed(propertyTable.aiServerApiKey)
 	-- Shown for one opening of this dialog; see updateHealth.
 	prefs.pendingProviderNotice = nil
-	-- Vertex AI is disabled in the GUI; the backend code is untouched.
-	-- prefs.vertexProjectId = (propertyTable.vertexProjectId and propertyTable.vertexProjectId:gsub("^%s*(.-)%s*$", "%1"))
-	-- 	or ""
-	-- prefs.vertexLocation = (propertyTable.vertexLocation and propertyTable.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
-	-- 	or "us-central1"
 	prefs.exportSize = propertyTable.exportSize
 	prefs.exportQuality = propertyTable.exportQuality
 	prefs.indexSubmitOriginals = (propertyTable.indexSubmitOriginals == true)

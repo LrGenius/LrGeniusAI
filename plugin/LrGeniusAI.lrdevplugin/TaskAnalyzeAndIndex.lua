@@ -32,9 +32,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 	props.speciesKeywords = prefs.speciesKeywords or Defaults.speciesKeywords
 	props.speciesLinkLang = prefs.speciesLinkLang or Defaults.speciesLinkLang
 	props.speciesMinConfidence = prefs.speciesMinConfidence or Defaults.speciesMinConfidence
-	-- Vertex AI is disabled in the GUI; the backend code is untouched.
-	props.enableVertexAI = false
-	-- props.enableVertexAI = prefs.enableVertexAI or false
 	props.enableImportBeforeIndex = prefs.enableImportBeforeIndex or false
 	props.regenerateMetadata = prefs.regenerateMetadata or false
 
@@ -255,15 +252,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 							enabled = bind("enableSpecies"),
 						}),
 					}),
-					-- Vertex AI is disabled in the GUI; the backend code is untouched.
-					-- f:row({
-					-- 	f:checkbox({
-					-- 		value = bind("enableVertexAI"),
-					-- 		title = LOC(
-					-- 			"$$$/LrGeniusAI/AnalyzeAndIndex/EnableVertexAI=Create Vertex AI embeddings (Cloud-based search)"
-					-- 		),
-					-- 	}),
-					-- }),
 				}),
 			}), -- end General tab
 
@@ -712,8 +700,6 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.speciesPrefilter = props.speciesPrefilter
 		prefs.speciesKeywords = props.speciesKeywords
 		prefs.speciesLinkLang = props.speciesLinkLang
-		-- Vertex AI is disabled in the GUI; the backend code is untouched.
-		-- prefs.enableVertexAI = props.enableVertexAI
 		prefs.enableImportBeforeIndex = props.enableImportBeforeIndex
 		prefs.regenerateMetadata = props.regenerateMetadata
 		prefs.appendMetadata = props.appendMetadata
@@ -863,7 +849,6 @@ LrTasks.startAsyncTask(function()
 			and not props.enableMetadata
 			and not props.enableFaces
 			and not props.enableSpecies
-			and not props.enableVertexAI
 		then
 			LrDialogs.showError(
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/NoTasksSelected=Please select at least one task to perform.")
@@ -887,7 +872,7 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
-		-- Build tasks array (task name compute_vertexai → "vertexai" in API)
+		-- Build tasks array
 		local tasks = {}
 		if props.enableEmbeddings then
 			table.insert(tasks, "embeddings")
@@ -900,9 +885,6 @@ LrTasks.startAsyncTask(function()
 		end
 		if props.enableSpecies then
 			table.insert(tasks, "species")
-		end
-		if props.enableVertexAI then
-			table.insert(tasks, "vertexai")
 		end
 
 		-- Asked here, before a single photo is exported: an on-device model
@@ -952,7 +934,6 @@ LrTasks.startAsyncTask(function()
 			submit_user_context = props.showPhotoContextDialog,
 			enableMetadata = props.enableMetadata,
 			enableFaces = props.enableFaces,
-			enableVertexAI = props.enableVertexAI,
 			species_prefilter = props.speciesPrefilter,
 			species_min_confidence = props.speciesMinConfidence,
 			replace_ss = props.replaceSS,
@@ -964,26 +945,9 @@ LrTasks.startAsyncTask(function()
 			keyword_secondary_language = props.keywordSecondaryLanguage,
 			generate_aliases = props.keywordAliases,
 		}
-		if props.enableVertexAI and prefs and not Util.nilOrEmpty(prefs.vertexProjectId) then
-			options.vertex_project_id = prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")
-			options.vertex_location = (prefs.vertexLocation and prefs.vertexLocation:gsub("^%s*(.-)%s*$", "%1"))
-				or "us-central1"
-		end
 		-- The key and server address the chosen provider needs, if any.
 		options.api_key = connection.api_key
 		options.server_url = connection.server_url
-
-		if props.enableVertexAI and prefs then
-			local projectId = (prefs.vertexProjectId and prefs.vertexProjectId:gsub("^%s*(.-)%s*$", "%1")) or ""
-			if projectId == "" then
-				LrDialogs.showError(
-					LOC(
-						"$$$/LrGeniusAI/AnalyzeAndIndex/MissingVertexConfig=Vertex AI Project ID is not configured. Please set it in the plugin preferences."
-					)
-				)
-				return
-			end
-		end
 
 		if prefs.useKeywordHierarchy then
 			if prefs.useCatalogKeywordStructure then
@@ -1018,7 +982,6 @@ LrTasks.startAsyncTask(function()
 					enableEmbeddings = props.enableEmbeddings,
 					enableMetadata = props.enableMetadata,
 					enableFaces = props.enableFaces,
-					enableVertexAI = props.enableVertexAI,
 					regenerateMetadata = props.regenerateMetadata,
 				}
 			or nil
@@ -1035,7 +998,8 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 			else
 				log:trace(
@@ -1043,7 +1007,8 @@ LrTasks.startAsyncTask(function()
 				)
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-					LOC("$$$/LrGeniusAI/common/NoPhotosInScope=No photos found in the selected scope.")
+					LOC("$$$/LrGeniusAI/common/NoPhotosInScope=No photos found in the selected scope."),
+					"info"
 				)
 			end
 			return
@@ -1072,7 +1037,8 @@ LrTasks.startAsyncTask(function()
 						progressScope:done()
 						LrDialogs.message(
 							LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+							LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+							"info"
 						)
 						return
 					end
@@ -1136,6 +1102,14 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		-- Three places read a photo's data back after the run: the inline apply
+		-- below, the species pass and the save pass. getPhotoData hands each of
+		-- them nil twice over — once when the request failed and once when the
+		-- index has nothing for the photo — so the two are counted apart instead
+		-- of becoming one silent shortfall.
+		local photoDataErrCount = 0
+		local photoDataMissingCount = 0
+
 		-- When validation is disabled, apply metadata inline as each photo's analysis returns
 		-- so keywords/title/caption land on photos progressively instead of all at the end.
 		-- Validation-on keeps the two-phase flow because modal dialogs must serialize on the main task.
@@ -1143,7 +1117,13 @@ LrTasks.startAsyncTask(function()
 		if props.enableMetadata and props.saveDataToCatalog and not props.enableValidation then
 			usedInlineApply = true
 			options.onPhotoAnalyzed = function(photo, photoId, scope)
-				local response = SearchIndexAPI.getPhotoData(photoId)
+				local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+				if photoDataErr then
+					log:error("getPhotoData failed during inline apply: " .. photoDataErr)
+					photoDataErrCount = photoDataErrCount + 1
+				elseif not response then
+					photoDataMissingCount = photoDataMissingCount + 1
+				end
 				saveSpecies(photo, response)
 				if response and response.metadata then
 					collectMetadataWarnings(MetadataManager.applyMetadata(photo, response, nil, {
@@ -1164,7 +1144,7 @@ LrTasks.startAsyncTask(function()
 							runWarnings,
 							"After applying metadata, the search index could not be updated for "
 								.. tostring(impFailed)
-								.. " photo(s)."
+								.. " photo(s). Re-run indexing to fix this."
 						)
 					end
 				end
@@ -1193,7 +1173,13 @@ LrTasks.startAsyncTask(function()
 			for _, photo in ipairs(processedPhotos) do
 				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local response = SearchIndexAPI.getPhotoData(photoId)
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving species: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					end
 					if response and response.species then
 						saveSpecies(photo, response)
 						speciesCount = speciesCount + 1
@@ -1208,10 +1194,18 @@ LrTasks.startAsyncTask(function()
 		-- ends with the backend's status, so this has to be said separately.
 		local reviewCanceledAt = nil
 
+		-- Declared out here, next to it, so the completion dialogs below can
+		-- read them. The backend's own figures never see a photo the review
+		-- discarded or one with no photo ID to write to, so a run made up
+		-- largely of those ended looking like a clean one (#396).
+		local savedCount = 0
+		local discardedCount = 0
+		local noPhotoIdCount = 0
+		local metadataSavePassRan = false
+
 		if status ~= "allfailed" and props.enableMetadata and props.saveDataToCatalog and not usedInlineApply then
 			log:trace("Saving metadata for processed photos...")
-			local savedCount = 0
-			local skippedCount = 0
+			metadataSavePassRan = true
 
 			local skipFromHere = false
 
@@ -1219,7 +1213,13 @@ LrTasks.startAsyncTask(function()
 				-- Process responses if validation is enabled or just save metadata
 				local photoId, photoIdErr = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
-					local response = SearchIndexAPI.getPhotoData(photoId)
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving metadata: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					end
 
 					-- Written at the end of this iteration rather than here, so
 					-- it shares the loop's one /get per photo without being
@@ -1280,13 +1280,13 @@ LrTasks.startAsyncTask(function()
 										runWarnings,
 										"After applying metadata, the search index could not be updated for "
 											.. tostring(impFailed)
-											.. " photo(s)."
+											.. " photo(s). Re-run indexing to fix this."
 									)
 								end
 
 								savedCount = savedCount + 1
 							elseif result == "other" then
-								skippedCount = skippedCount + 1
+								discardedCount = discardedCount + 1
 								-- Clear only metadata so the photo stays in the index and can be regenerated later
 								SearchIndexAPI.removePhotoMetadata(photoId)
 								Util.addPhotoToRejectedDescriptionsCollection(photo, Defaults.catalogWriteAccessOptions)
@@ -1322,7 +1322,7 @@ LrTasks.startAsyncTask(function()
 									runWarnings,
 									"After applying metadata, the search index could not be updated for "
 										.. tostring(impFailed)
-										.. " photo(s)."
+										.. " photo(s). Re-run indexing to fix this."
 								)
 							end
 
@@ -1351,9 +1351,29 @@ LrTasks.startAsyncTask(function()
 					end
 				else
 					log:error("Skipping photo data retrieval due to missing photo_id: " .. tostring(photoIdErr))
-					skippedCount = skippedCount + 1
+					noPhotoIdCount = noPhotoIdCount + 1
 				end
 			end
+		end
+
+		-- Read back here, after the last of the three sites above. The two nil
+		-- cases stay separate in the report: one is a request that never made
+		-- it to the backend, the other a photo the index has nothing for.
+		if photoDataErrCount > 0 then
+			table.insert(
+				runWarnings,
+				"The search index could not be read for "
+					.. tostring(photoDataErrCount)
+					.. " photo(s), so nothing was applied to them."
+			)
+		end
+		if photoDataMissingCount > 0 then
+			table.insert(
+				runWarnings,
+				"The search index holds no data for "
+					.. tostring(photoDataMissingCount)
+					.. " photo(s), so nothing was written for them."
+			)
 		end
 
 		progressScope:done()
@@ -1394,23 +1414,68 @@ LrTasks.startAsyncTask(function()
 				.. " photo(s) were left as they were."
 		end
 
+		-- What the backend's own figures leave out of the completion: how much
+		-- of the save pass was actually written, and what became of the rest.
+		-- Only that pass knows either number, and only when it ran at all (#396).
+		local function collectWriteNote()
+			if not metadataSavePassRan then
+				return nil
+			end
+			local parts = {}
+			if savedCount < #processedPhotos then
+				table.insert(
+					parts,
+					"Metadata was written for "
+						.. tostring(savedCount)
+						.. " of "
+						.. tostring(#processedPhotos)
+						.. " photo(s)."
+				)
+			end
+			if discardedCount > 0 then
+				table.insert(
+					parts,
+					tostring(discardedCount)
+						.. " photo(s) were discarded in the review, so their generated metadata was removed."
+				)
+			end
+			if noPhotoIdCount > 0 then
+				table.insert(
+					parts,
+					tostring(noPhotoIdCount)
+						.. " photo(s) were skipped because no photo ID could be resolved, so nothing was written for them."
+				)
+			end
+			if #parts == 0 then
+				return nil
+			end
+			return table.concat(parts, " ")
+		end
+
 		-- Show completion message based on status
 		if status == "canceled" then
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
-			)
+			-- The warnings this run had already collected used to be dropped here:
+			-- a cancel reported only the generic line, while everything in
+			-- runWarnings stayed invisible (#402).
+			local msg = LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+			local warningText = collectWarnings()
+			if warningText then
+				msg = msg .. "\n\nWarnings:\n" .. warningText
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"), msg, "info")
 		elseif status == "allfailed" then
+			-- The same shortfall as the cancel above: this branch showed the
+			-- backend's error and never the warnings the run had collected (#402).
+			local msg =
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
+			local warningText = collectWarnings()
+			if warningText then
+				msg = msg .. "\n\nWarnings:\n" .. warningText
+			end
 			if not Util.nilOrEmpty(combinedError) then
-				ErrorHandler.handleError(
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
-					combinedError
-				)
+				ErrorHandler.handleError(msg, combinedError)
 			else
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"),
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
-				)
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"), msg, "critical")
 			end
 		elseif status == "somefailed" then
 			local successCount = processed - failed
@@ -1420,6 +1485,10 @@ LrTasks.startAsyncTask(function()
 				processed,
 				failed
 			)
+			local writeNote = collectWriteNote()
+			if writeNote then
+				summary = summary .. "\n\n" .. writeNote
+			end
 			local warningText = collectWarnings()
 			if warningText then
 				summary = summary .. "\n\nWarnings:\n" .. warningText
@@ -1431,13 +1500,17 @@ LrTasks.startAsyncTask(function()
 			if not Util.nilOrEmpty(combinedError) then
 				ErrorHandler.handleError(summary, combinedError)
 			elseif cancelNote then
-				LrDialogs.message("Task Canceled", summary)
+				LrDialogs.message("Task Canceled", summary, "info")
 			else
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Errors"), summary)
 			end
 		else -- success
 			local msg =
 				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/SuccessMessage=Successfully processed ^1 photos.", processed)
+			local writeNote = collectWriteNote()
+			if writeNote then
+				msg = msg .. "\n\n" .. writeNote
+			end
 			local warningText = collectWarnings()
 			local cancelNote = collectCancelNote()
 			if cancelNote then
@@ -1447,11 +1520,11 @@ LrTasks.startAsyncTask(function()
 				msg = msg .. "\n\nWarnings:\n" .. warningText
 			end
 			if cancelNote then
-				LrDialogs.message("Task Canceled", msg)
+				LrDialogs.message("Task Canceled", msg, "info")
 			elseif warningText then
 				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed with Warnings"), msg)
 			else
-				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg)
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCompleted/Title=Task Completed"), msg, "info")
 			end
 		end
 

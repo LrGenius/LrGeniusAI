@@ -8,7 +8,7 @@ Welcome to the project wiki.
 
 ### Getting started
 
-- [Getting Started](Getting-Started) — installation, first index run, initial setup
+- [Getting Started](Getting-Started) — install, download the models, analyze your first photos
 - [FAQ](FAQ) — common questions and quick answers
 - [Troubleshooting](Troubleshooting) — connection issues, API errors, missing models
 - [Performance Tips](Help-Performance-Tips) — which features are LLM-costly and how to speed them up
@@ -32,7 +32,6 @@ Welcome to the project wiki.
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
 - [Help: Other AI Server](Help-Other-AI-Server) — OpenRouter, llama.cpp server, LiteLLM, vLLM
-- [Google Vertex AI Login](Google-Vertex-AI-Login) — *removed, kept for reference*
 
 ### Other
 

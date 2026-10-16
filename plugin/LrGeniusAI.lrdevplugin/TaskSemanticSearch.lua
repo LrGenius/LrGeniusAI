@@ -67,9 +67,6 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 	-- Scope and search-in options from prefs (persisted)
 	props.searchScope = prefs.searchScope or "all"
 	props.searchInSemanticSiglip = prefs.searchInSemanticSiglip ~= false
-	-- Vertex AI is disabled in the GUI; the backend code is untouched.
-	props.searchInSemanticVertex = false
-	-- props.searchInSemanticVertex = prefs.searchInSemanticVertex ~= false
 	props.searchInMetadata = prefs.searchInMetadata ~= false
 	props.searchInMetadataKeywords = prefs.searchInMetadataKeywords ~= false
 	props.searchInMetadataCaption = prefs.searchInMetadataCaption ~= false
@@ -193,11 +190,6 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 						value = bind("searchInSemanticSiglip"),
 						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticSiglip=Semantic (AI search)"),
 					}),
-					-- Vertex AI is disabled in the GUI; the backend code is untouched.
-					-- f:checkbox({
-					-- 	value = bind("searchInSemanticVertex"),
-					-- 	title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInSemanticVertex=Semantic (Vertex AI)"),
-					-- }),
 					f:checkbox({
 						value = bind("searchInMetadata"),
 						title = LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchInMetadata=Metadata"),
@@ -256,8 +248,6 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 		-- Persist dialog options to prefs for next time
 		prefs.searchScope = props.searchScope
 		prefs.searchInSemanticSiglip = props.searchInSemanticSiglip
-		-- Vertex AI is disabled in the GUI; the backend code is untouched.
-		-- prefs.searchInSemanticVertex = props.searchInSemanticVertex
 		prefs.searchInMetadata = props.searchInMetadata
 		prefs.searchInMetadataKeywords = props.searchInMetadataKeywords
 		prefs.searchInMetadataCaption = props.searchInMetadataCaption
@@ -300,12 +290,14 @@ LrTasks.startAsyncTask(function()
 						LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 						LOC(
 							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-						)
+						),
+						"info"
 					)
 				else
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+						"info"
 					)
 				end
 				return
@@ -316,9 +308,20 @@ LrTasks.startAsyncTask(function()
 		local searchStartedAt = LrDate.currentTime()
 		if props.searchTerm ~= "" then
 			log:trace("Performing semantic search for: " .. props.searchTerm)
+
+			-- The search itself is one request, so there is nothing to measure and
+			-- nothing to interrupt: the bar is indeterminate, and cancel is not
+			-- offered (#402).
+			local progressScope = LrProgressScope({
+				title = "Searching...",
+				functionContext = context,
+			})
+			progressScope:setIndeterminate()
+			progressScope:setCancelable(false)
+			progressScope:setCaption("Searching the catalog...")
+
 			local searchOptions = {
 				semanticSiglip = props.searchInSemanticSiglip,
-				semanticVertex = props.searchInSemanticVertex,
 				metadata = props.searchInMetadata,
 				metadataFields = {},
 				relevanceStrictness = props.relevanceStrictness,
@@ -342,6 +345,7 @@ LrTasks.startAsyncTask(function()
 				searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
 			end
 			results, err = SearchIndexAPI.searchIndex(props.searchTerm, photosToSearch, searchOptions)
+			progressScope:done()
 			local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
 			local resCount = 0
 			if type(results) == "table" then
@@ -371,7 +375,8 @@ LrTasks.startAsyncTask(function()
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteria=No Search Criteria"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term."),
+				"info"
 			)
 			return
 		end
@@ -397,7 +402,8 @@ LrTasks.startAsyncTask(function()
 		if #finalResults == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 			return
 		end
@@ -427,7 +433,8 @@ LrTasks.startAsyncTask(function()
 		if #photoIds == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 			return
 		end
@@ -536,7 +543,8 @@ LrTasks.startAsyncTask(function()
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 		end
 	end)

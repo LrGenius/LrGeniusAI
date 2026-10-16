@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::{json, Map, Value};
 
-use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE, VERTEX_TABLE};
+use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
 
 use crate::state::AppState;
 
@@ -71,19 +71,14 @@ async fn check_unprocessed(
     let compute_embeddings = has_task("embeddings");
     let compute_metadata = has_task("metadata");
     let compute_faces = has_task("faces");
-    let compute_vertexai = has_task("vertexai");
     let compute_species = has_task("species");
     // The fast cull ingest. Deliberately does not set `compute_faces`: that
     // pass writes no FACE_TABLE rows (it has no identity embedding), so keying
     // off stored faces would report every cull-processed photo as outstanding
     // forever. It has its own completion flag below.
     let compute_cull = has_task("cull");
-    let any_task = compute_embeddings
-        || compute_metadata
-        || compute_faces
-        || compute_vertexai
-        || compute_cull
-        || compute_species;
+    let any_task =
+        compute_embeddings || compute_metadata || compute_faces || compute_cull || compute_species;
 
     let regenerate_metadata = data
         .get("regenerate_metadata")
@@ -129,17 +124,6 @@ async fn check_unprocessed(
                 }
             }
             existing.insert(id, Value::Object(m));
-        }
-
-        let mut vertex_present: std::collections::HashSet<String> = Default::default();
-        if compute_vertexai && !regenerate_metadata {
-            vertex_present = store
-                .get_meta(VERTEX_TABLE, &photo_ids)
-                .await
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .map(|(id, _)| id)
-                .collect();
         }
 
         let mut faces_checked: std::collections::HashSet<String> = Default::default();
@@ -211,8 +195,6 @@ async fn check_unprocessed(
                 let needs_metadata = compute_metadata && (regenerate_metadata || !has_any_metadata);
                 let needs_faces =
                     compute_faces && (regenerate_metadata || !faces_checked.contains(*pid));
-                let needs_vertexai =
-                    compute_vertexai && (regenerate_metadata || !vertex_present.contains(*pid));
                 let needs_cull_phash = any_task && (regenerate_metadata || !has_flag("cull_phash"));
                 // `cull_faces_present` is legitimately `false` for a photo with
                 // no faces, so completion is "the key exists", not "it is
@@ -237,7 +219,6 @@ async fn check_unprocessed(
                 needs_embedding
                     || needs_metadata
                     || needs_faces
-                    || needs_vertexai
                     || needs_cull_phash
                     || needs_cull_faces
                     || needs_species
@@ -462,8 +443,6 @@ async fn remove_image(State(state): State<Arc<AppState>>, body: Option<Json<Valu
             .delete(IMAGE_TABLE, &ids)
             .await
             .map_err(|e| e.to_string())?;
-        // delete_vertex_image failures are swallowed in Python; same here.
-        let _ = store.delete(VERTEX_TABLE, &ids).await;
         // delete_faces_by_photo_uuid: face ids are always `{photo_id}_{n}`
         // (index_upload.rs stamps both photo_id and photo_uuid to the same
         // value), so a prefix delete finds them without a full-table
@@ -540,14 +519,6 @@ async fn remove_metadata(
             if let Err(e) = store.upsert(IMAGE_TABLE, &[clear_table(record)]).await {
                 log::error!("Error clearing metadata for {photo_id}: {e}");
                 return not_found();
-            }
-            // Vertex collection: same if present; failures logged only.
-            if let Ok(vrecords) = store.get(VERTEX_TABLE, &ids).await {
-                if let Some(vrecord) = vrecords.into_iter().next() {
-                    if let Err(e) = store.upsert(VERTEX_TABLE, &[clear_table(vrecord)]).await {
-                        log::debug!("clear_image_metadata vertex {photo_id}: {e}");
-                    }
-                }
             }
             log::info!("Metadata cleared for photo_id {photo_id} (embeddings kept).");
             Json(json!({"status": "ok", "photo_id": photo_id, "uuid": photo_id})).into_response()

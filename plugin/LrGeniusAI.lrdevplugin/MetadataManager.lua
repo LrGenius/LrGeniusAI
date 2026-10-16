@@ -222,7 +222,12 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 					-- before this marker existed (or by hand) would never receive it.
 					mergeKeywordSynonyms(topKeyword, { Defaults.topLevelKeywordSynonym })
 					if not topKeyword then
-						table.insert(warnings, 'Could not create the top-level keyword "' .. topKeywordName .. '".')
+						table.insert(
+							warnings,
+							'Could not create the top-level keyword "'
+								.. topKeywordName
+								.. '", so this photo is not tagged with it.'
+						)
 					else
 						local okAdd, errAdd = LrTasks.pcall(function()
 							photo:addKeyword(topKeyword) -- Add top-level keyword to photo. To see the number of tagged photos in keyword list (Gerald Uhl)
@@ -775,7 +780,10 @@ function MetadataManager.addKeywordRecursively(
 			if resolved then
 				resolvedKey = nameLower
 			else
-				table.insert(warnings, 'Could not create the keyword "' .. candidateName .. '".')
+				table.insert(
+					warnings,
+					'Could not create the keyword "' .. candidateName .. '", so this photo is not tagged with it.'
+				)
 			end
 		end
 
@@ -826,7 +834,12 @@ function MetadataManager.addKeywordRecursively(
 		if type(key) == "string" and key ~= "" and key ~= "None" and key ~= "none" and prefs.useKeywordHierarchy then
 			keyword = createKeywordSafely(catalog, key, {}, false, parent, sessionCache)
 			if not keyword then
-				table.insert(warnings, 'Could not create the keyword category "' .. key .. '".')
+				table.insert(
+					warnings,
+					'Could not create the keyword category "'
+						.. key
+						.. '", so the keywords under it were not filed there.'
+				)
 			end
 		elseif type(key) == "number" and value then
 			local keywordName, keywordSynonyms, keywordAliases, keywordSynonymAliases = parseKeywordLeaf(value)
@@ -1512,7 +1525,9 @@ function MetadataManager.applySpecies(photo, species, options)
 			log:error("Could not create the species root keyword; skipping the taxonomy branch")
 			table.insert(
 				warnings,
-				'Could not create the species root keyword "' .. tostring(Defaults.defaultSpeciesKeyword) .. '".'
+				'Could not create the species root keyword "'
+					.. tostring(Defaults.defaultSpeciesKeyword)
+					.. '", so no species keywords were added for this photo.'
 			)
 			return
 		end
@@ -1524,7 +1539,12 @@ function MetadataManager.applySpecies(photo, species, options)
 			local keyword = createKeywordSafely(catalog, entry.name, entry.synonyms, isLeaf, parent, sessionCache)
 			if not keyword then
 				log:warn("Could not create species keyword '" .. tostring(entry.name) .. "'")
-				table.insert(warnings, 'Could not create the species keyword "' .. tostring(entry.name) .. '".')
+				table.insert(
+					warnings,
+					'Could not create the species keyword "'
+						.. tostring(entry.name)
+						.. '", so no species keywords were added for this photo.'
+				)
 				return
 			end
 			-- createKeyword drops its synonyms argument when returnExisting

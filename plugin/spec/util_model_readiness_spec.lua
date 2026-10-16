@@ -35,10 +35,8 @@ describe("Util.requiredModelFamilies", function()
 		assert.are.same({ "face" }, Util.requiredModelFamilies({ "cull" }))
 	end)
 
-	it("requires nothing on-device for LLM or cloud tasks", function()
+	it("requires nothing on-device for an LLM-only run", function()
 		assert.are.same({}, Util.requiredModelFamilies({ "metadata" }))
-		assert.are.same({}, Util.requiredModelFamilies({ "vertexai" }))
-		assert.are.same({}, Util.requiredModelFamilies({ "metadata", "vertexai" }))
 	end)
 
 	it("reports a stable order regardless of task order", function()

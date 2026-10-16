@@ -193,10 +193,18 @@ Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 Removes only the AI-generated metadata fields for a given `photo_id`, leaving embeddings intact.
 
 ### `POST /v1/photos/catalogs/cleanup`
-Removes backend records for photos that no longer exist in a given catalog.
+Disassociates the catalog from backend records for photos no longer present in
+the supplied catalog inventory; it does not physically delete photo data. The
+plugin resolves IDs without changing photo metadata and aborts if it cannot
+resolve the complete inventory. The inventory is sent in one request (including
+for an empty catalog), since separate batches would each remove associations
+for photos outside that batch.
 
 ### `POST /v1/photos/catalogs/claim`
 Associates an existing backend record with a (potentially new) catalog ID.
+The plugin may scan the whole catalog for automatic or manual claiming, but
+identity caching uses catalog plugin properties and never writes photo metadata
+or Lightroom’s `lastEditTime`. The existing `photo_id` formats are unchanged.
 
 ---
 
@@ -829,9 +837,6 @@ Progress of the current local-model download (same shape as the CLIP download st
 Returns aggregate database statistics:
 - total indexed photos
 - photos with SigLIP embeddings
-- photos with Vertex AI embeddings *(legacy — Vertex AI was removed from the plugin in
-  August 2026; the field is still returned but the plugin no longer displays it and the
-  count no longer grows)*
 - photos with title / caption / keywords
 - total detected faces
 - total persons

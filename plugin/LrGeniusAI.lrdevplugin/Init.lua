@@ -88,14 +88,6 @@ do
 	end
 end
 
-if _G.prefs.vertexProjectId == nil then
-	_G.prefs.vertexProjectId = ""
-end
-
-if _G.prefs.vertexLocation == nil then
-	_G.prefs.vertexLocation = "us-central1"
-end
-
 if _G.prefs.generateTitle == nil then
 	_G.prefs.generateTitle = true
 end
@@ -266,9 +258,6 @@ if _G.prefs.searchScope == nil then
 end
 if _G.prefs.searchInSemanticSiglip == nil then
 	_G.prefs.searchInSemanticSiglip = true
-end
-if _G.prefs.searchInSemanticVertex == nil then
-	_G.prefs.searchInSemanticVertex = true
 end
 if _G.prefs.searchInMetadata == nil then
 	_G.prefs.searchInMetadata = true

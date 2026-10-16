@@ -386,12 +386,14 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+					"info"
 				)
 			end
 			return
@@ -416,7 +418,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/CullTask/NoPhotoIdsTitle=No usable photos"),
 				LOC(
 					"$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=None of the selected photos could be prepared for culling."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -534,7 +537,8 @@ LrTasks.startAsyncTask(function()
 		if #groups == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/CullTask/NoGroupsTitle=No groups found"),
-				LOC("$$$/LrGeniusAI/CullTask/NoGroupsMessage=The selected photos could not be grouped for culling.")
+				LOC("$$$/LrGeniusAI/CullTask/NoGroupsMessage=The selected photos could not be grouped for culling."),
+				"info"
 			)
 			return
 		end
@@ -776,6 +780,6 @@ LrTasks.startAsyncTask(function()
 				.. ")."
 		end
 
-		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage)
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage, "info")
 	end)
 end)

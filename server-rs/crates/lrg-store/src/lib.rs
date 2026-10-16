@@ -36,7 +36,6 @@ pub mod migrate;
 /// the service layer share vocabulary.
 pub const IMAGE_TABLE: &str = "image_embeddings";
 pub const FACE_TABLE: &str = "face_embeddings";
-pub const VERTEX_TABLE: &str = "image_embeddings_vertex";
 pub const TRAINING_TABLE: &str = "edit_training";
 /// BioCLIP 2 image embeddings, one row per photo keyed by `photo_id`.
 ///
@@ -47,13 +46,17 @@ pub const TRAINING_TABLE: &str = "edit_training";
 /// ViT-L/14 over every photo again.
 pub const SPECIES_TABLE: &str = "species_embeddings";
 
-pub const TABLES: [(&str, i32); 5] = [
+pub const TABLES: [(&str, i32); 4] = [
     (IMAGE_TABLE, 1152),
     (FACE_TABLE, 512),
-    (VERTEX_TABLE, 1408),
     (TRAINING_TABLE, 1152),
     (SPECIES_TABLE, 768),
 ];
+
+/// Where the removed Vertex AI integration kept its embeddings. Nothing
+/// reads or writes it any more; `Store::open` drops it from databases that
+/// still carry one.
+const RETIRED_VERTEX_TABLE: &str = "image_embeddings_vertex";
 
 /// Chunk size for `id IN (...)` predicates, mirroring the Python
 /// GET_IDS_CHUNK_SIZE rationale (bounded query size on large catalogs).
@@ -314,6 +317,21 @@ impl Store {
             .execute()
             .await?;
         let existing = conn.table_names().execute().await?;
+        // The one deliberate exception to "the server never deletes photo
+        // data": these embeddings were only ever searchable through the
+        // Vertex AI integration, which is gone, so they are dead weight
+        // (1408 floats per photo). Best effort on purpose — a failed drop
+        // leaves an unused table that costs disk space and nothing else,
+        // which the user could not act on, so it is logged and opening goes
+        // on rather than failing the whole database over it.
+        if existing.iter().any(|t| t == RETIRED_VERTEX_TABLE) {
+            match conn.drop_table(RETIRED_VERTEX_TABLE, &[]).await {
+                Ok(()) => log::info!("Dropped the retired Vertex AI table {RETIRED_VERTEX_TABLE}"),
+                Err(e) => log::warn!(
+                    "Could not drop the retired Vertex AI table {RETIRED_VERTEX_TABLE}: {e}"
+                ),
+            }
+        }
         for (name, dim) in TABLES {
             if !existing.iter().any(|t| t == name) {
                 conn.create_empty_table(name, table_schema(dim))
@@ -709,6 +727,35 @@ mod tests {
 
         store.delete(FACE_TABLE, &["face_a".into()]).await.unwrap();
         assert_eq!(store.count(FACE_TABLE).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn open_drops_the_retired_vertex_table() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            // A database written before Vertex AI was removed.
+            let conn = lancedb::connect(&dir.path().to_string_lossy())
+                .execute()
+                .await
+                .unwrap();
+            conn.create_empty_table(RETIRED_VERTEX_TABLE, table_schema(1408))
+                .execute()
+                .await
+                .unwrap();
+        }
+
+        let store = Store::open(dir.path()).await.unwrap();
+
+        let names = store.conn.table_names().execute().await.unwrap();
+        assert!(!names.iter().any(|t| t == RETIRED_VERTEX_TABLE));
+        for (name, _) in TABLES {
+            assert!(names.iter().any(|t| t == name), "{name} missing");
+        }
+        // Dropped, not just unlisted: the space comes back.
+        assert!(!dir
+            .path()
+            .join(format!("{RETIRED_VERTEX_TABLE}.lance"))
+            .exists());
     }
 
     #[tokio::test]

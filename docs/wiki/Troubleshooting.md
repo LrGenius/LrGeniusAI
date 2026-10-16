@@ -15,7 +15,7 @@ LrGeniusAI surfaces errors directly in Lightroom rather than hiding them in log 
 Since LrGeniusAI installers are not currently code-signed, your OS may block them.
 
 - **Symptom:** "Windows protected your PC" or "LrGeniusAI.pkg cannot be opened because it is from an unidentified developer".
-- **Resolution:** Refer to the [Getting Started](Getting-Started#%E2%9A%A0%EF%B8%8F-bypassing-security-warnings-unsigned-installers) guide for OS-specific bypass steps. This is a one-time requirement during installation.
+- **Resolution:** Refer to the [Getting Started](Getting-Started#if-your-computer-warns-about-the-installer) guide for OS-specific bypass steps. This is a one-time requirement during installation.
 
 ---
 
