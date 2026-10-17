@@ -8,8 +8,9 @@ Build-time tools behind the backend's native Lightroom develop model (the
    sidecars (`parse_xmp.py`, `scan_corpus.py`, `sample.py`, `structform.py`).
 2. **What goes into the key registry?** — `spec.py` holds the hand-maintained
    rows (type, range, UI scaling, defaults, policy class) and `gen.py` renders
-   them as Markdown with observed statistics. This seeds the static Rust table
-   once; after that the Rust table is the source of truth.
+   them as Markdown with observed statistics. `gen_table_rs.py` seeded the
+   static Rust table from them once; after that the Rust table is the source
+   of truth.
 3. **What do real `getDevelopSettings()` values look like?** — `dump_training.py`
    reads the backend's training table and `extract_fixtures.py` turns a few rows
    into scrubbed test fixtures under `server-rs/testdata/develop/lua/`.
@@ -113,6 +114,26 @@ uv run gen.py --inventory "$OUT/inventory.json" --full-inventory "$OUT/inventory
     --out-dir "$OUT" --strict
 ```
 
+### `gen_table_rs.py` — seed the Rust registry table
+
+Turns `spec.py`'s rows into `crates/lrg-develop/src/registry/table.rs`: group
+rows are expanded (`HueAdjustment*`, `SDR*`, ...), the families that stay
+patterns (`Table_<md5>`, `pm_*`, the FilterList payload,
+`UprightTransform_N`, `UprightFourSegments_N`) are left to
+`registry/patterns.rs`, and the decisions the free text cannot carry (value
+kind of "mixed" rows, gates, frame scope, presence, number format, recipe
+aliases) are the tables at the top of the script. It imports `spec` and
+nothing else — no inventory, no training dump. The `Temp` row is not seeded:
+it documents the plugin bug, it is not a key.
+
+The Rust table is the source of truth once seeded; running the script again
+overwrites hand edits to `table.rs`. Refresh the review snapshot afterwards:
+
+```bash
+python3 gen_table_rs.py --out ../../crates/lrg-develop/src/registry/table.rs --counts
+LRG_BLESS=1 cargo test -p lrg-develop --test registry_snapshot
+```
+
 ### `dump_training.py` — the training table as JSON
 
 Reads `edit_training.lance` from the backend's Lance store
@@ -140,12 +161,16 @@ touched by a run.
 uv run extract_fixtures.py "$OUT/training_rows.json" --out-dir ../../testdata/develop/lua
 # the check alone (stdlib only, also what pre-commit and CI run):
 python3 extract_fixtures.py --check-only --out-dir ../../testdata/develop/lua --root ../../testdata/develop
+# the check's own test: crafted files on a copy of the tree, the same cases as
+# crates/lrg-develop/tests/fixture_hygiene.rs (also in pre-commit and CI):
+python3 extract_fixtures.py --self-test --out-dir ../../testdata/develop/lua --root ../../testdata/develop
 ```
 
 ## Lint
 
-The pre-commit hook `develop-fixture-hygiene` and the docs-check job in
-`lint-format.yml` run the fixture check. No hook runs ruff yet; keep the code
+The pre-commit hooks `develop-fixture-hygiene` and
+`develop-fixture-hygiene-self-test` and the docs-check job in
+`lint-format.yml` run the fixture check and its self-test. No hook runs ruff yet; keep the code
 clean by hand:
 
 ```bash
