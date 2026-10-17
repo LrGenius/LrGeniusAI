@@ -109,7 +109,14 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 					width = share("labelWidth"),
 					alignment = "right",
 				}),
-				f:edit_field({ value = bind("searchTerm"), width_in_chars = 40 }),
+				-- Editable, with the earlier searches in its menu: a search is
+				-- often repeated after an indexing run, and retyping it is the
+				-- one part of that a machine can do.
+				f:combo_box({
+					value = bind("searchTerm"),
+					items = Util.historyItems(prefs.searchHistory),
+					width_in_chars = 40,
+				}),
 			}),
 			f:row({
 				f:static_text({
@@ -255,6 +262,7 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 		prefs.searchInMetadataAltText = props.searchInMetadataAltText
 		prefs.relevanceStrictness = props.relevanceStrictness
 		prefs.maxResults = props.maxResults
+		prefs.searchHistory = Util.pushHistory(prefs.searchHistory, props.searchTerm, Defaults.inputHistoryLength)
 		return props
 	else
 		return nil
@@ -290,12 +298,14 @@ LrTasks.startAsyncTask(function()
 						LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 						LOC(
 							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-						)
+						),
+						"info"
 					)
 				else
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+						"info"
 					)
 				end
 				return
@@ -306,6 +316,18 @@ LrTasks.startAsyncTask(function()
 		local searchStartedAt = LrDate.currentTime()
 		if props.searchTerm ~= "" then
 			log:trace("Performing semantic search for: " .. props.searchTerm)
+
+			-- The search itself is one request, so there is nothing to measure and
+			-- nothing to interrupt: the bar is indeterminate, and cancel is not
+			-- offered (#402).
+			local progressScope = LrProgressScope({
+				title = "Searching...",
+				functionContext = context,
+			})
+			progressScope:setIndeterminate()
+			progressScope:setCancelable(false)
+			progressScope:setCaption("Searching the catalog...")
+
 			local searchOptions = {
 				semanticSiglip = props.searchInSemanticSiglip,
 				metadata = props.searchInMetadata,
@@ -331,6 +353,7 @@ LrTasks.startAsyncTask(function()
 				searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
 			end
 			results, err = SearchIndexAPI.searchIndex(props.searchTerm, photosToSearch, searchOptions)
+			progressScope:done()
 			local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
 			local resCount = 0
 			if type(results) == "table" then
@@ -360,7 +383,8 @@ LrTasks.startAsyncTask(function()
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteria=No Search Criteria"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term."),
+				"info"
 			)
 			return
 		end

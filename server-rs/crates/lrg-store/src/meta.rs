@@ -9,6 +9,11 @@ pub const CATALOG_IDS_FIELD: &str = "catalog_ids";
 pub const PHOTO_ID_FIELD: &str = "photo_id";
 pub const LEGACY_UUID_FIELD: &str = "uuid";
 pub const HAS_EMBEDDING_FIELD: &str = "has_embedding";
+/// Which embedding function produced the stored vector, so a row written by a
+/// different one can be told apart from a current row. Sits beside
+/// [`HAS_EMBEDDING_FIELD`] for the same reason: "has an embedding" and "has an
+/// embedding this build can compare against" are different questions.
+pub const EMBEDDING_MODEL_FIELD: &str = "embedding_model";
 
 /// Parse catalog_ids from metadata (JSON list string or plain list).
 pub fn parse_catalog_ids(metadata: &Map<String, Value>) -> BTreeSet<String> {

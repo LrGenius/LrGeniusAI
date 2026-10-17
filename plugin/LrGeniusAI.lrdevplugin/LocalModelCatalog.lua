@@ -213,7 +213,11 @@ function LocalModelCatalog.onDownloaded(propertyTable, provider)
 		-- its fields must not turn a finished download into an error.
 		LrTasks.pcall(LocalModelCatalog.refresh, propertyTable)
 		if Util.nilOrEmpty(name) then
-			LrDialogs.message("Local AI Model", "Local AI model downloaded. Select it as the model for AI metadata.")
+			LrDialogs.message(
+				"Local AI Model",
+				"Local AI model downloaded. Select it as the model for AI metadata.",
+				"info"
+			)
 			return
 		end
 		local answer = LrDialogs.confirm(

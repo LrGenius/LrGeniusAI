@@ -1771,6 +1771,10 @@ end
 -- `summary` additionally reports `intentional_set_group_count` and
 -- `intentional_set_photo_count`.
 --
+-- `warning` is every caveat for the run in one string, or nil: photos never
+-- analyzed, no embeddings, or an AI quality score that could not be computed.
+-- Show it as is. `warnings` holds the same caveats as a list.
+--
 -- Each photo's `metrics` may carry `semantic` plus `semantic_axis`
 -- ("action" | "expression" | "candid") — a zero-shot score for what the genre
 -- is actually judged on, which the technical signals cannot express. Absent
@@ -4224,7 +4228,8 @@ function SearchIndexAPI.startClipDownload()
 					progressScope:done()
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/ClipDownload/SuccessTitle=AI Model Download"),
-						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=AI search model downloaded successfully.")
+						LOC("$$$/LrGeniusAI/ClipDownload/SuccessMessage=AI search model downloaded successfully."),
+						"info"
 					)
 					break
 				elseif
@@ -4335,7 +4340,8 @@ function SearchIndexAPI.startAssetDownload()
 					progressScope:done()
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/AssetDownload/SuccessTitle=AI Model Download"),
-						LOC("$$$/LrGeniusAI/AssetDownload/SuccessMessage=The AI models are downloaded and ready.")
+						LOC("$$$/LrGeniusAI/AssetDownload/SuccessMessage=The AI models are downloaded and ready."),
+						"info"
 					)
 					break
 				elseif
@@ -4428,7 +4434,8 @@ function SearchIndexAPI.confirmModelsReadyForTasks(tasks)
 			LOC("$$$/LrGeniusAI/ModelPreflight/StartedTitle=Downloading AI models"),
 			LOC(
 				"$$$/LrGeniusAI/ModelPreflight/StartedMessage=The download has started. Run this again once it finishes and the photos will be processed with everything you selected."
-			)
+			),
+			"info"
 		)
 	end
 
@@ -4565,7 +4572,8 @@ function SearchIndexAPI.startBioclipDownload()
 						LOC("$$$/LrGeniusAI/BioclipDownload/SuccessTitle=Species Model Download"),
 						LOC(
 							"$$$/LrGeniusAI/BioclipDownload/SuccessMessage=Species identification model downloaded successfully."
-						)
+						),
+						"info"
 					)
 					break
 				elseif
@@ -4724,7 +4732,8 @@ function SearchIndexAPI.startLlmDownload(spec, onDone)
 							LOC("$$$/LrGeniusAI/LlmDownload/SuccessTitle=Local AI Model"),
 							LOC(
 								"$$$/LrGeniusAI/LlmDownload/SuccessMessage=Local AI model downloaded. Select it as the model for AI metadata."
-							)
+							),
+							"info"
 						)
 					end
 					break
@@ -4802,12 +4811,34 @@ function SearchIndexAPI.checkServerHealth()
 	end
 
 	if res then
-		-- 1. Check CLIP model
-		if res.clip_model == "failed" then
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
-				res.clip_error or "Unknown error loading CLIP model."
-			)
+		-- 1. Check the SigLIP2 towers. They load independently, so which one
+		-- failed decides which message is true: search and keyword lookup
+		-- embed the query with the text tower, indexing embeds photos with the
+		-- image tower. A server older than these two fields reports the pair
+		-- in `clip_model` alone, and is still handled below — reporting the
+		-- pair twice would be worse than not naming the tower.
+		local hasPerTower = (res.clip_image_model ~= nil) or (res.clip_text_model ~= nil)
+		if not hasPerTower then
+			if res.clip_model == "failed" then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
+					res.clip_error or "Unknown error loading CLIP model."
+				)
+			end
+		else
+			if res.clip_text_model == "failed" then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
+					res.clip_text_error or "Unknown error loading the search model."
+				)
+			end
+			if res.clip_image_model == "failed" then
+				ErrorHandler.handleError(
+					"AI image analysis model failed to load.",
+					res.clip_image_error
+						or "Unknown error loading the model that embeds photos. Analysis and search will not find anything until it loads."
+				)
+			end
 		end
 
 		-- 2. Check Face model

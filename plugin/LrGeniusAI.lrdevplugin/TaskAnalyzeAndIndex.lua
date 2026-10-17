@@ -453,8 +453,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 							width = share("labelWidth"),
 						}),
 						f:checkbox({ value = bind("useTopLevelKeyword") }),
-						f:edit_field({
+						f:combo_box({
 							value = bind("topLevelKeyword"),
+							-- The ones used recently first, then every other
+							-- top-level keyword LrGeniusAI knows about.
+							items = Util.historyItems(prefs.topLevelKeywordHistory, prefs.knownTopLevelKeywords),
 							width_in_chars = 20,
 							enabled = bind("useTopLevelKeyword"),
 						}),
@@ -734,6 +737,10 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.useCatalogKeywordStructure = props.useCatalogKeywordStructure
 		prefs.useTopLevelKeyword = props.useTopLevelKeyword
 		prefs.topLevelKeyword = props.topLevelKeyword
+		if props.useTopLevelKeyword then
+			prefs.topLevelKeywordHistory =
+				Util.pushHistory(prefs.topLevelKeywordHistory, props.topLevelKeyword, Defaults.inputHistoryLength)
+		end
 		prefs.bilingualKeywords = props.bilingualKeywords
 		prefs.keywordSecondaryLanguage = props.keywordSecondaryLanguage
 		prefs.keywordAliases = props.keywordAliases
@@ -998,7 +1005,8 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 			else
 				log:trace(
@@ -1006,7 +1014,8 @@ LrTasks.startAsyncTask(function()
 				)
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-					LOC("$$$/LrGeniusAI/common/NoPhotosInScope=No photos found in the selected scope.")
+					LOC("$$$/LrGeniusAI/common/NoPhotosInScope=No photos found in the selected scope."),
+					"info"
 				)
 			end
 			return
@@ -1142,7 +1151,7 @@ LrTasks.startAsyncTask(function()
 							runWarnings,
 							"After applying metadata, the search index could not be updated for "
 								.. tostring(impFailed)
-								.. " photo(s)."
+								.. " photo(s). Re-run indexing to fix this."
 						)
 					end
 				end
@@ -1278,7 +1287,7 @@ LrTasks.startAsyncTask(function()
 										runWarnings,
 										"After applying metadata, the search index could not be updated for "
 											.. tostring(impFailed)
-											.. " photo(s)."
+											.. " photo(s). Re-run indexing to fix this."
 									)
 								end
 
@@ -1320,7 +1329,7 @@ LrTasks.startAsyncTask(function()
 									runWarnings,
 									"After applying metadata, the search index could not be updated for "
 										.. tostring(impFailed)
-										.. " photo(s)."
+										.. " photo(s). Re-run indexing to fix this."
 								)
 							end
 
@@ -1452,23 +1461,28 @@ LrTasks.startAsyncTask(function()
 
 		-- Show completion message based on status
 		if status == "canceled" then
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
-				"info"
-			)
+			-- The warnings this run had already collected used to be dropped here:
+			-- a cancel reported only the generic line, while everything in
+			-- runWarnings stayed invisible (#402).
+			local msg = LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+			local warningText = collectWarnings()
+			if warningText then
+				msg = msg .. "\n\nWarnings:\n" .. warningText
+			end
+			LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"), msg, "info")
 		elseif status == "allfailed" then
+			-- The same shortfall as the cancel above: this branch showed the
+			-- backend's error and never the warnings the run had collected (#402).
+			local msg =
+				LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed)
+			local warningText = collectWarnings()
+			if warningText then
+				msg = msg .. "\n\nWarnings:\n" .. warningText
+			end
 			if not Util.nilOrEmpty(combinedError) then
-				ErrorHandler.handleError(
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
-					combinedError
-				)
+				ErrorHandler.handleError(msg, combinedError)
 			else
-				LrDialogs.message(
-					LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"),
-					LOC("$$$/LrGeniusAI/AnalyzeAndIndex/AllFailedMessage=All ^1 photos failed to process.", processed),
-					"critical"
-				)
+				LrDialogs.message(LOC("$$$/LrGeniusAI/common/TaskFailed/Title=Task Failed"), msg, "critical")
 			end
 		elseif status == "somefailed" then
 			local successCount = processed - failed

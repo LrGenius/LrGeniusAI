@@ -122,7 +122,8 @@ local function createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 			LOC("$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalog=Not in catalog"),
 			LOC(
 				"$$$/LrGeniusAI/FindSimilarImages/NoPhotosInCatalogMessage=Similar photos were found in the index but are not in the current catalog."
-			)
+			),
+			"info"
 		)
 		return
 	end
@@ -138,7 +139,7 @@ local function createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 			tostring(missingFromCatalog)
 				.. " of the "
 				.. tostring(#photoIds)
-				.. " matched photo(s) are not in the current catalog"
+				.. " matched photo(s) are not in the current catalog, so the collection is smaller than the number of matches"
 		)
 	end
 
@@ -200,7 +201,8 @@ LrTasks.startAsyncTask(function()
 		if not targetPhotos or #targetPhotos == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarImages/NoPhotoTitle=No photo selected"),
-				LOC("$$$/LrGeniusAI/FindSimilarImages/NoPhotoMessage=Please select a single photo in the Library.")
+				LOC("$$$/LrGeniusAI/FindSimilarImages/NoPhotoMessage=Please select a single photo in the Library."),
+				"info"
 			)
 			return
 		end
@@ -209,7 +211,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/FindSimilarImages/SinglePhotoTitle=Select one photo"),
 				LOC(
 					"$$$/LrGeniusAI/FindSimilarImages/SinglePhotoMessage=Please select exactly one photo to find similar images."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -238,7 +241,8 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 				return
 			end
@@ -299,7 +303,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/FindSimilarImages/NoResultsTitle=No similar images"),
 				LOC(
 					"$$$/LrGeniusAI/FindSimilarImages/NoResultsMessage=No similar images found. The photo may not be indexed yet, or no other photos are similar enough. Run 'Analyze & Index' to ensure perceptual hashes are computed."
-				)
+				),
+				"info"
 			)
 			return
 		end
