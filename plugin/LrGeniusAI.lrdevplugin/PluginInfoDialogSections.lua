@@ -71,7 +71,9 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	propertyTable.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
-	propertyTable.prompts = prefs.prompts
+	-- A copy, assigned back in endDialog. LrPrefs saves a key when it is
+	-- assigned, not when the table under it changes.
+	propertyTable.prompts = Util.deepcopy(prefs.prompts)
 	-- See Util.resolvePromptName: a name the prompt table no longer holds
 	-- leaves the picker with no matching item, which is where both the lost
 	-- edit and the crash in the observer below came from.

@@ -326,6 +326,10 @@ what you do not want. A template you delete stays deleted, and one you rewrite
 stays rewritten — the plug-in only ever offers each built-in once. "Reset to
 defaults" in the prompt dialog brings both back.
 
+Template changes made in this dialog — edits, new templates, deletions — are
+kept when you start the run and dropped when you press **Cancel**, the same as
+every other setting here.
+
 **Clearing a template's text** is allowed and is saved: an empty template means
 "no persona of my own", and the run uses the backend's built-in one instead of
 being sent an empty instruction. The template itself stays in the menu — it is

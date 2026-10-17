@@ -38,7 +38,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- Metadata generation options
 	props.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
-	props.prompts = prefs.prompts
+	-- A copy, edited by the dialog and assigned back on OK: LrPrefs saves a key
+	-- when it is assigned, not when the table under it changes, and editing the
+	-- stored table itself would also keep edits the user cancelled -- in memory
+	-- until a restart, or for good once some later save assigned it.
+	props.prompts = Util.deepcopy(prefs.prompts)
 	-- The stored name can point at a prompt that is no longer there. Resolving
 	-- it here is what keeps the picker's value among its items; see
 	-- Util.resolvePromptName for what a dangling name does to the dialog.
@@ -739,8 +743,8 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.keywordAliases = props.keywordAliases
 
 		-- Keep track of used top-level keywords
-		if props.useTopLevelKeyword and not Util.table_contains(prefs.knownTopLevelKeywords, props.topLevelKeyword) then
-			table.insert(prefs.knownTopLevelKeywords, props.topLevelKeyword)
+		if props.useTopLevelKeyword then
+			Util.appendToPrefsList(prefs, "knownTopLevelKeywords", props.topLevelKeyword)
 		end
 
 		return props

@@ -1237,6 +1237,39 @@ function Util.deepcopy(o, seen)
 end
 
 ---
+-- Adds a value to a list kept in the preferences, in a way that gets saved.
+--
+-- LrPrefs saves a preference when its key is assigned, and the SDK warns it
+-- may not notice a change made inside a table already stored under a key. So
+-- `table.insert(prefs.someList, x)` changes the list for this session only,
+-- and the addition is gone once Lightroom restarts. The list is copied,
+-- extended and assigned back instead. The copy also leaves alone the table the
+-- preference was seeded with: `knownTopLevelKeywords` starts out as
+-- `Defaults.defaultTopLevelKeywords` itself, not a copy of it.
+--
+-- @param store table The preferences (`prefs`), or a table standing in for them.
+-- @param key string The preference holding the list.
+-- @param value any The value to add; nil adds nothing.
+-- @return boolean Whether the value was added; false when it was already there.
+--
+function Util.appendToPrefsList(store, key, value)
+	if value == nil then
+		return false
+	end
+	local current = store[key]
+	if type(current) ~= "table" then
+		current = {}
+	end
+	if Util.table_contains(current, value) then
+		return false
+	end
+	local updated = Util.deepcopy(current)
+	table.insert(updated, value)
+	store[key] = updated
+	return true
+end
+
+---
 -- Returns true if a table is a keyword leaf object.
 -- Supported shape: { name = "keyword", synonyms = { ... } }
 local function isKeywordLeafObject(value)

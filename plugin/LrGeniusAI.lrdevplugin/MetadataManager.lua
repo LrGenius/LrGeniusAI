@@ -243,12 +243,7 @@ function MetadataManager.applyMetadata(photo, response, validatedData, options)
 				end
 			)
 			-- Keep track of used top-level keywords
-			if
-				options.topLevelKeyword
-				and not Util.table_contains(prefs.knownTopLevelKeywords, options.topLevelKeyword)
-			then
-				table.insert(prefs.knownTopLevelKeywords, options.topLevelKeyword)
-			end
+			Util.appendToPrefsList(prefs, "knownTopLevelKeywords", options.topLevelKeyword)
 		end
 		local existingKeywordNames = nil
 		local currentTopLevelKeyword = options.useTopLevelKeyword and (options.topLevelKeyword or "LrGeniusAI") or nil
