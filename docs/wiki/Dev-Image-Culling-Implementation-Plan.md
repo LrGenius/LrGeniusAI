@@ -569,10 +569,12 @@ Covers outstanding items 1, 2, 4, 5, 6 and 10 of the previous list.
   nominated for rejection. Surfaced as `keep_all` / `intentional_set` on each
   group and a dedicated Lightroom collection.
 - **CLIP-IQA aesthetics** (`lrg-ml::clip_iqa`). Five antonym prompt pairs
-  embedded once per server lifetime; every photo is then a handful of dot
-  products against the SigLIP2 vector already in the database. Blended against
+  embedded once per model and stored in the database's `text_embeddings`
+  table; every photo is then a handful of dot products against the SigLIP2
+  vector already in the database. Blended against
   the old heuristic at `aesthetic_iqa_weight` (0.8). Degrades silently to the
-  heuristic when there is no embedding or no reachable text tower.
+  heuristic when there is no embedding, and to the heuristic plus a caveat in
+  the response when the prompt vectors cannot be had.
 - **Group-relative exposure.** The absolute target of mean luminance 0.5 marks
   every frame of a low-key set as badly exposed and then cannot tell them apart.
   Exposure is now blended toward its position in the group's own range

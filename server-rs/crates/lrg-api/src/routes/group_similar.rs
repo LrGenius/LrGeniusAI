@@ -14,6 +14,7 @@ use lrg_analysis::grouping::{group_and_sort_images, Group, GroupingInput};
 use lrg_ml::clip_iqa::PromptSet;
 use lrg_store::IMAGE_TABLE;
 
+use crate::prompt_embeddings::PromptEmbeddings;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -37,10 +38,11 @@ struct GroupingParams {
     /// Score the aesthetic term with CLIP-IQA over the stored SigLIP2
     /// embeddings instead of the contrast/colourfulness heuristic alone.
     ///
-    /// On by default. It exists as a switch because the first call in a server
-    /// lifetime loads the text tower, and because the evaluation harness needs
-    /// to be able to measure what the signal is actually worth by turning it
-    /// off.
+    /// On by default. It exists as a switch because the evaluation harness
+    /// needs to be able to measure what the signal is actually worth by
+    /// turning it off. (It used to matter for cost too, when the first call in
+    /// a server lifetime loaded the text tower; the prompt vectors now come
+    /// out of the database.)
     use_iqa: bool,
     /// Echo each photo's stored `cull_*` metadata verbatim, alongside the
     /// ranked `metrics` block.
@@ -311,6 +313,8 @@ struct GroupingOutcome {
     /// `include_stored_metadata` was requested — building it clones a map per
     /// photo, which is pure waste on the normal cull path.
     stored_metadata: std::collections::HashMap<String, Map<String, Value>>,
+    /// Signals the ranking was asked to use and had to do without.
+    degraded: Vec<String>,
 }
 
 /// The stored fields that reproduce a ranking run: every `cull_*` metric plus
@@ -333,35 +337,21 @@ fn stored_cull_fields(metadata: &Map<String, Value>) -> Map<String, Value> {
 /// Scores every record that carries an embedding against one prompt set and
 /// writes the result under `key`.
 ///
-/// Every failure path here is silent by design: no model on disk, a text tower
-/// that will not load, a photo indexed by the fast cull pass with no embedding.
-/// Ranking has a fallback for each of these — the aesthetic heuristic, and for
-/// moment simply not applying the blend — so a missing score is a *worse*
-/// result, never a broken one. Refusing to cull because an optional signal is
-/// unavailable would be the wrong trade.
+/// Per photo, a photo that cannot be scored (no embedding — the fast cull
+/// pass stores none) is skipped in silence: ranking has a fallback for it, the
+/// aesthetic heuristic and for moment simply not applying the blend, and the
+/// run as a whole already warns when nothing has an embedding. A set that is
+/// unavailable altogether is the caller's to report.
 ///
-/// Returns how many photos were scored, for the log line.
+/// Returns how many photos were scored, or `None` when the set itself is
+/// unavailable.
 fn apply_prompt_scores(
-    state: &AppState,
+    prompts: &PromptEmbeddings,
     records: &mut [GroupingInput],
-    set: lrg_ml::clip_iqa::PromptSet,
+    set: PromptSet,
     key: &str,
-) -> usize {
-    if !records.iter().any(|r| {
-        r.embedding
-            .as_ref()
-            .is_some_and(|v| v.iter().any(|x| *x != 0.0))
-    }) {
-        return 0;
-    }
-
-    // Locked once for the whole batch rather than per record, which is why
-    // this takes the guard instead of calling `score_prompt_set`.
-    let mut cache = state.clip_iqa.lock().unwrap();
-    let Some(prompts) = crate::routes::route_util::ensure_prompt_set(state, &mut cache, set) else {
-        return 0;
-    };
-
+) -> Option<usize> {
+    let prompts = prompts.prompt_set(set)?;
     let mut scored = 0usize;
     for record in records.iter_mut() {
         let Some(embedding) = record.embedding.as_ref() else {
@@ -372,7 +362,18 @@ fn apply_prompt_scores(
             scored += 1;
         }
     }
-    scored
+    Some(scored)
+}
+
+/// The caveat for a ranking signal that could not be computed.
+fn unavailable_signal(what: &str, prompts: &PromptEmbeddings) -> String {
+    let why = prompts
+        .problem()
+        .unwrap_or("its prompts could not be prepared");
+    format!(
+        "Ranking ran without the AI {what} score because {why}. Picks rest on the \
+         remaining measurements (sharpness, exposure, faces) alone."
+    )
 }
 
 async fn compute_groups(
@@ -385,6 +386,7 @@ async fn compute_groups(
             missing_count: params.photo_ids.len(),
             embedded_count: 0,
             stored_metadata: Default::default(),
+            degraded: Vec::new(),
         });
     };
     let mut records = load_grouping_inputs(&store, &params.photo_ids).await?;
@@ -400,52 +402,66 @@ async fn compute_groups(
         })
         .count();
 
-    // Before grouping, because ranking runs inside it.
-    if params.use_iqa {
-        let scored = apply_prompt_scores(
-            state,
-            &mut records,
-            lrg_ml::clip_iqa::PromptSet::Quality,
-            "cull_aesthetic_iqa",
-        );
-        if scored > 0 {
-            log::debug!(
-                "CLIP-IQA quality scored {scored}/{} photo(s)",
-                records.len()
-            );
-        }
-
+    // Before grouping, because ranking runs inside it. Only when some photo
+    // can be scored: preparing the prompts may mean a text-tower run the first
+    // time ever, which is not worth paying for a run with nothing to score.
+    let mut degraded: Vec<String> = Vec::new();
+    if params.use_iqa && embedded_count > 0 {
         // The genre axis runs only when the chosen preset actually names one
-        // and gives it weight. It is a second text-tower call and a second set
-        // of dot products, and asking a landscape whether anyone is smiling
-        // produces a number that is then discarded.
+        // and gives it weight. Asking a landscape whether anyone is smiling
+        // produces a number that is then discarded — and its prompts are not
+        // worth preparing either.
         let ranking = get_culling_config(&params.culling_preset).ranking;
         let weight = params.semantic_weight.unwrap_or(ranking.semantic_weight);
-        if weight > 0.0 {
-            match ranking.semantic_prompt_set.and_then(PromptSet::from_name) {
-                Some(set) => {
-                    let scored = apply_prompt_scores(state, &mut records, set, "cull_semantic_iqa");
-                    if scored > 0 {
-                        log::debug!(
-                            "CLIP-IQA {} scored {scored}/{} photo(s)",
-                            set.as_str(),
-                            records.len()
-                        );
-                    }
+        let semantic = if weight > 0.0 {
+            let set = ranking.semantic_prompt_set.and_then(PromptSet::from_name);
+            if set.is_none() {
+                // A weight with no axis, or an axis name no prompt set
+                // answers to. Log rather than fail: the rest of the ranking
+                // is unaffected and a cull that refuses to run over a config
+                // typo helps nobody.
+                if let Some(name) = ranking.semantic_prompt_set {
+                    log::warn!(
+                        "culling preset {:?} names unknown semantic prompt set {name:?}; \
+                         skipping that signal",
+                        params.culling_preset
+                    );
                 }
-                None => {
-                    // A weight with no axis, or an axis name no prompt set
-                    // answers to. Log rather than fail: the rest of the ranking
-                    // is unaffected and a cull that refuses to run over a
-                    // config typo helps nobody.
-                    if let Some(name) = ranking.semantic_prompt_set {
-                        log::warn!(
-                            "culling preset {:?} names unknown semantic prompt set {name:?}; \
-                             skipping that signal",
-                            params.culling_preset
-                        );
-                    }
-                }
+            }
+            set
+        } else {
+            None
+        };
+
+        let sets: Vec<PromptSet> = std::iter::once(PromptSet::Quality)
+            .chain(semantic)
+            .collect();
+        let prompts =
+            crate::prompt_embeddings::prepare(state, &crate::prompt_embeddings::texts_of(&sets))
+                .await;
+        match apply_prompt_scores(
+            &prompts,
+            &mut records,
+            PromptSet::Quality,
+            "cull_aesthetic_iqa",
+        ) {
+            Some(scored) => log::debug!(
+                "CLIP-IQA quality scored {scored}/{} photo(s)",
+                records.len()
+            ),
+            None => degraded.push(unavailable_signal("quality", &prompts)),
+        }
+        if let Some(set) = semantic {
+            match apply_prompt_scores(&prompts, &mut records, set, "cull_semantic_iqa") {
+                Some(scored) => log::debug!(
+                    "CLIP-IQA {} scored {scored}/{} photo(s)",
+                    set.as_str(),
+                    records.len()
+                ),
+                // One run-wide cause: said once, under the quality caveat it
+                // shares, rather than twice.
+                None if !degraded.is_empty() => {}
+                None => degraded.push(unavailable_signal(set.as_str(), &prompts)),
             }
         }
     }
@@ -474,6 +490,7 @@ async fn compute_groups(
         ),
         missing_count,
         embedded_count,
+        degraded,
     })
 }
 
@@ -512,6 +529,21 @@ fn grouping_warning(outcome: &GroupingOutcome) -> Option<String> {
     None
 }
 
+/// Every caveat for a grouping run: what the data lacked, then which ranking
+/// signals had to be done without.
+///
+/// Returned as the `warnings` list, and joined into the one `warning` string
+/// as well, because that string is what the plug-in shows — a second caveat
+/// that only reached the list would never reach the user.
+fn grouping_warnings(outcome: &GroupingOutcome) -> (Vec<String>, Option<String>) {
+    let warnings: Vec<String> = grouping_warning(outcome)
+        .into_iter()
+        .chain(outcome.degraded.iter().cloned())
+        .collect();
+    let joined = (!warnings.is_empty()).then(|| warnings.join("\n\n"));
+    (warnings, joined)
+}
+
 async fn group_similar(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
     let Some(Json(data)) = body else {
         return (
@@ -527,13 +559,13 @@ async fn group_similar(State(state): State<Arc<AppState>>, body: Option<Json<Val
 
     match compute_groups(&state, &params).await {
         Ok(outcome) => {
-            let warning = grouping_warning(&outcome);
+            let (warnings, warning) = grouping_warnings(&outcome);
             let json_groups: Vec<Value> = outcome
                 .groups
                 .iter()
                 .map(|g| group_to_json(g, &params, &outcome))
                 .collect();
-            let mut response = json!({"groups": json_groups});
+            let mut response = json!({"groups": json_groups, "warnings": warnings});
             if let Some(w) = warning {
                 response["warning"] = json!(w);
             }
@@ -565,7 +597,7 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
 
     match compute_groups(&state, &params).await {
         Ok(outcome) => {
-            let warning = grouping_warning(&outcome);
+            let (warnings, warning) = grouping_warnings(&outcome);
             let (mut picks, mut alternates, mut rejects, mut near_dup_groups) =
                 (0i64, 0i64, 0i64, 0i64);
             let (mut set_groups, mut set_photos) = (0i64, 0i64);
@@ -595,6 +627,7 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
             Json(json!({
                 "status": "success",
                 "warning": warning,
+                "warnings": warnings,
                 "summary": {
                     "group_count": outcome.groups.len(),
                     "pick_count": picks,

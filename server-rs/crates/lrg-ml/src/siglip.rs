@@ -230,37 +230,7 @@ impl SiglipModel {
         MODEL_ID
     }
 
-    fn ensure_loaded(&self) -> Result<(), SiglipError> {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.is_some() {
-            self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-            return Ok(());
-        }
-        let result = (|| -> ort::Result<Loaded> {
-            let image_session = build_session(&self.paths.image_onnx)?;
-            let text_session = build_session(&self.paths.text_onnx)?;
-            Ok(Loaded {
-                image_session,
-                text_session,
-                tokenizer: SiglipTokenizer::from_file(&self.paths.tokenizer_json)
-                    .map_err(|e| ort::Error::new(e.to_string()))?,
-            })
-        })();
-        match result {
-            Ok(loaded) => {
-                *guard = Some(loaded);
-                *self.load_error.lock().unwrap() = None;
-                self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-                Ok(())
-            }
-            Err(e) => {
-                *self.load_error.lock().unwrap() = Some(e.to_string());
-                Err(e.into())
-            }
-        }
-    }
-
-    /// Drops the loaded session(s). Safe to call when nothing is loaded.
+    /// Drops both towers. Safe to call when nothing is loaded.
     ///
     /// Both, unconditionally: `/server/unload` promises to free what the
     /// process holds, and leaving one tower resident because the caller
@@ -268,6 +238,16 @@ impl SiglipModel {
     pub fn unload(&self) {
         self.image.unload_with_reason("image", "requested");
         self.text.unload_with_reason("text", "requested");
+    }
+
+    /// Drops the text tower alone, leaving the image tower as it is.
+    ///
+    /// For a caller that loaded the text tower for one batch of fixed prompts
+    /// and knows nothing else is about to need it: left to the idle sweep, it
+    /// would stay resident for half an hour of an indexing run that never
+    /// calls it again.
+    pub fn unload_text(&self) {
+        self.text.unload_with_reason("text", "no longer needed");
     }
 
     /// Call periodically (e.g. every 60s) from a background task.

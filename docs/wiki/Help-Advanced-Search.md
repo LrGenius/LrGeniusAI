@@ -30,6 +30,10 @@ Free text. Describe what is in the photo, not how it was shot:
 - `sunset over mountains with orange sky`
 - `two people laughing at a wooden table`
 
+The field is also a drop-down: its menu lists your last 15 searches, most recent
+first, so a search you run again after indexing more photos is one click rather
+than retyped. Pick one and edit it, or type over it as usual.
+
 ## Search scope
 
 - **All photos** — everything indexed in the backend
