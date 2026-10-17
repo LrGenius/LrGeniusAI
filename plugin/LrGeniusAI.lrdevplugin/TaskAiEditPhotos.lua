@@ -66,6 +66,11 @@ end
 -- `DevelopEditManager` does the same); only creating the copy needs one. The
 -- switch to All Photographs is the same fallback that function uses, for the
 -- same reason: the scope may reach outside the folder or collection on screen.
+local function isOnlySelected(catalog, photo)
+	local selected = catalog:getTargetPhotos()
+	return type(selected) == "table" and #selected == 1 and selected[1] == photo
+end
+
 local function selectOnly(catalog, photo)
 	local ok = LrTasks.pcall(function()
 		catalog:setSelectedPhotos(photo, { photo })
@@ -73,10 +78,17 @@ local function selectOnly(catalog, photo)
 	if not ok then
 		return false
 	end
-	local selected = catalog:getTargetPhotos()
-	return type(selected) == "table" and #selected == 1 and selected[1] == photo
+	return isOnlySelected(catalog, photo)
 end
 
+local function localIdOf(photo)
+	return photo and tostring(photo.localIdentifier) or "nil"
+end
+
+-- Returns `copy, nil, 0` on success, or `nil, err, strayCount` on failure.
+-- `strayCount` is how many copies Lightroom may already have created before
+-- the failure was detected: the SDK cannot delete a photo, so those copies stay
+-- in the catalog and the user has to be told to remove them.
 local function createVirtualCopyFor(photo)
 	local catalog = LrApplication.activeCatalog()
 
@@ -86,30 +98,56 @@ local function createVirtualCopyFor(photo)
 			LrTasks.sleep(0.2)
 		end)
 		if not switched or not selectOnly(catalog, photo) then
-			return nil, "the photo could not be selected in Lightroom"
+			return nil, "the photo could not be selected in Lightroom", 0
 		end
 	end
 
 	local copies
+	local selectionChanged = false
 	local ok, err = LrTasks.pcall(function()
 		catalog:withWriteAccessDo(
 			LOC("$$$/LrGeniusAI/TaskAiEditPhotos/VirtualCopyUndo=Create virtual copy for AI edit"),
 			function()
+				-- Waiting for write access can take up to the gate's timeout,
+				-- and the user may click in the grid meanwhile. The copy is
+				-- made from whatever is selected *now*, so check again here.
+				if not isOnlySelected(catalog, photo) then
+					selectionChanged = true
+					return
+				end
 				copies = catalog:createVirtualCopies(LOC("$$$/LrGeniusAI/TaskAiEditPhotos/VirtualCopyName=AI Edit"))
 			end,
 			Defaults.catalogWriteAccessOptions
 		)
 	end)
 	if not ok then
-		return nil, tostring(err)
+		return nil, tostring(err), type(copies) == "table" and #copies or 0
+	end
+	if selectionChanged then
+		return nil, "the selection in Lightroom changed before the copy could be made", 0
 	end
 	if type(copies) ~= "table" or #copies ~= 1 then
-		return nil, "Lightroom did not return exactly one virtual copy"
+		return nil, "Lightroom did not return exactly one virtual copy", type(copies) == "table" and #copies or 0
 	end
-	if copies[1]:getRawMetadata("masterPhoto") ~= photo then
-		return nil, "Lightroom copied a different photo"
+	-- A copy of a virtual copy belongs to that copy's master, not to the copy.
+	local isVirtualCopy = photo:getRawMetadata("isVirtualCopy")
+	local sourceMaster = isVirtualCopy and photo:getRawMetadata("masterPhoto") or nil
+	local copyMaster = copies[1]:getRawMetadata("masterPhoto")
+	if not Util.isVirtualCopyOf(copyMaster, photo, isVirtualCopy, sourceMaster) then
+		-- Catalog-local ids only, so a failure can be diagnosed from the log.
+		log:error(
+			"Virtual copy check failed: source="
+				.. localIdOf(photo)
+				.. " isVirtualCopy="
+				.. tostring(isVirtualCopy)
+				.. " sourceMaster="
+				.. localIdOf(sourceMaster)
+				.. " copyMaster="
+				.. localIdOf(copyMaster)
+		)
+		return nil, "Lightroom copied a different photo than the one selected", 1
 	end
-	return copies[1], nil
+	return copies[1], nil, 0
 end
 
 local function showAiEditDialog(ctx, stats)
@@ -322,6 +360,9 @@ LrTasks.startAsyncTask(function()
 		local skippedCount = 0
 		local errorCount = 0
 		local errorMessages = {}
+		-- "AI Edit" virtual copies left in the catalog by an attempt that then
+		-- failed (the check, persisting the recipe, or applying it).
+		local strayCopyCount = 0
 		local backendWarnings = {}
 
 		local canceled = false
@@ -447,7 +488,7 @@ LrTasks.startAsyncTask(function()
 				-- virtual copy behind.
 				local target = photo
 				if continueProcessing and options.createVirtualCopy then
-					local copy, copyErr = createVirtualCopyFor(photo)
+					local copy, copyErr, strayCount = createVirtualCopyFor(photo)
 					if copy then
 						target = copy
 						log:trace("Created virtual copy for " .. fileName)
@@ -461,6 +502,7 @@ LrTasks.startAsyncTask(function()
 						)
 						errorCount = errorCount + 1
 						continueProcessing = false
+						strayCopyCount = strayCopyCount + strayCount
 					end
 				end
 
@@ -474,6 +516,9 @@ LrTasks.startAsyncTask(function()
 						table.insert(errorMessages, fileName .. ": could not persist recipe: " .. tostring(persistErr))
 						errorCount = errorCount + 1
 						continueProcessing = false
+						if target ~= photo then
+							strayCopyCount = strayCopyCount + 1
+						end
 					end
 				end
 
@@ -506,6 +551,9 @@ LrTasks.startAsyncTask(function()
 					else
 						errorCount = errorCount + 1
 						table.insert(errorMessages, fileName .. ": failed to apply recipe")
+						if target ~= photo then
+							strayCopyCount = strayCopyCount + 1
+						end
 					end
 					if warnings and #warnings > 0 then
 						log:warn("AI edit warnings for " .. fileName .. ": " .. table.concat(warnings, " | "))
@@ -553,6 +601,20 @@ LrTasks.startAsyncTask(function()
 						.. "\n"
 						.. LOC("$$$/LrGeniusAI/common/MoreErrors=... and ^1 more errors", tostring(#errorMessages - 5))
 				end
+			end
+
+			if strayCopyCount > 0 then
+				-- Said once for the run, not in every error line: the user acts
+				-- on it once, after the run.
+				combinedReport = combinedReport
+					.. "\n\n"
+					.. string.format(
+						'Failed attempts may have left %d virtual %s named "AI Edit" without the edit,\n'
+							.. "or with only part of it. Lightroom does not let plugins delete photos: select\n"
+							.. "them in the Library grid and remove them with Photo > Remove Photo.",
+						strayCopyCount,
+						strayCopyCount == 1 and "copy" or "copies"
+					)
 			end
 
 			if #backendWarnings > 0 then
