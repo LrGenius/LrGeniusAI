@@ -230,37 +230,7 @@ impl SiglipModel {
         MODEL_ID
     }
 
-    fn ensure_loaded(&self) -> Result<(), SiglipError> {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.is_some() {
-            self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-            return Ok(());
-        }
-        let result = (|| -> ort::Result<Loaded> {
-            let image_session = build_session(&self.paths.image_onnx)?;
-            let text_session = build_session(&self.paths.text_onnx)?;
-            Ok(Loaded {
-                image_session,
-                text_session,
-                tokenizer: SiglipTokenizer::from_file(&self.paths.tokenizer_json)
-                    .map_err(|e| ort::Error::new(e.to_string()))?,
-            })
-        })();
-        match result {
-            Ok(loaded) => {
-                *guard = Some(loaded);
-                *self.load_error.lock().unwrap() = None;
-                self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-                Ok(())
-            }
-            Err(e) => {
-                *self.load_error.lock().unwrap() = Some(e.to_string());
-                Err(e.into())
-            }
-        }
-    }
-
-    /// Drops the loaded session(s). Safe to call when nothing is loaded.
+    /// Drops both towers. Safe to call when nothing is loaded.
     ///
     /// Both, unconditionally: `/server/unload` promises to free what the
     /// process holds, and leaving one tower resident because the caller
