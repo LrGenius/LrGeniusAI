@@ -615,6 +615,19 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 							OnboardingWizard.show(true)
 						end,
 					}),
+					-- The backend holds its models for 30 minutes after the
+					-- last request, and the plug-in could only ask it to let go
+					-- at shutdown. This reaches the same route the shutdown
+					-- function calls, so the memory can be handed back mid-
+					-- session instead of at the end of one.
+					f:push_button({
+						title = "Unload AI Models",
+						action = function()
+							LrTasks.startAsyncTask(function()
+								Util.unloadModelsDialog()
+							end)
+						end,
+					}),
 				}),
 			}),
 			f:row({
