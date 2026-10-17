@@ -66,10 +66,27 @@ For each culling run, the plugin creates a new collection set:
   - `Alternates`
   - `Reject Candidates`
   - optional `Duplicates / Near Duplicates`
+  - `Brackets / Stacks / Panoramas (keep all)` – only when the run found such a
+    set
 
 After creation, Lightroom automatically switches to the **Picks** collection inside that set so you can start your review immediately.
 
 You can safely rename or move these collections later; they are standard Lightroom collections.
+
+### When the run finishes
+
+The completion dialog counts the groups, picks, alternates, reject candidates
+and near-duplicate groups, and names the preset used. Two lines appear only
+when they apply:
+
+- how many groups were recognised as brackets, stacks or panoramas, and that
+  every frame in them was kept
+- **Not culled:** how many of the selected photos are missing from the
+  collections, and why — the plugin could not compute a photo ID for them, or
+  the backend grouped photos that are no longer in this catalog
+
+If the backend reports a problem with the run itself, a **Culling warning**
+dialog shows it before the collections are created.
 
 ## Understanding scores and explanations
 

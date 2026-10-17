@@ -151,6 +151,11 @@ several people selected, the dropdown decides what you get:
   together (the default)
 - **photos with any selected person** — the union
 
+The collection goes into the `People` collection set and is named after the
+selected people plus a timestamp. People without a name appear in it once, as
+"Unnamed person"; a name list longer than 100 characters becomes
+`People (<count>)`.
+
 Lightroom builds the collection and switches the Library to it. This is the one
 thing the page cannot do on its own, so it needs the *People* progress bar
 still running in Lightroom — if it is not, the page says so instead of leaving
@@ -171,6 +176,11 @@ you waiting.
 4. The plugin queries the backend for photos with matching face embeddings
    across all indexed photos.
 5. Results are placed into a new Lightroom collection, sorted by similarity.
+
+If the plugin cannot read the list of people or look up one of the faces, a
+**Search completed with warnings** dialog says so before the collection is
+created. The search itself still runs, but the collection may be missing
+photos, or carry a generic name where a person's name could not be found.
 
 There are no scope or result-limit options here — the search always runs over
 the whole indexed catalog.

@@ -11,6 +11,18 @@ The **Find Similar Images** workflow lets you select one photo and find other vi
 3. Choose your search options in the dialog.
 4. The plugin queries the backend and creates a new Lightroom collection with the results, sorted by similarity.
 
+The collection is named `Similar images @ <timestamp>` and goes into the
+`Similar Images` collection set. When it is done, a dialog says how many photos
+were added. If fewer photos ended up in the collection than the search found,
+a **Not in the collection** line says why: matches that are not in the current
+catalog, photos in the current view that have no photo ID and so were not
+searched, or result rows the backend sent without a photo ID.
+
+If the selected photo has not been indexed for the mode you picked (no
+embedding for **Similar content (AI)**, no perceptual hash for **Near
+duplicates**), a warning says so, and no collection is created. Run
+**Analyze & Index Photos** on it first.
+
 ---
 
 ## Search options
