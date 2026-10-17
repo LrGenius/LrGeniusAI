@@ -453,8 +453,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 							width = share("labelWidth"),
 						}),
 						f:checkbox({ value = bind("useTopLevelKeyword") }),
-						f:edit_field({
+						f:combo_box({
 							value = bind("topLevelKeyword"),
+							-- The ones used recently first, then every other
+							-- top-level keyword LrGeniusAI knows about.
+							items = Util.historyItems(prefs.topLevelKeywordHistory, prefs.knownTopLevelKeywords),
 							width_in_chars = 20,
 							enabled = bind("useTopLevelKeyword"),
 						}),
@@ -734,6 +737,10 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.useCatalogKeywordStructure = props.useCatalogKeywordStructure
 		prefs.useTopLevelKeyword = props.useTopLevelKeyword
 		prefs.topLevelKeyword = props.topLevelKeyword
+		if props.useTopLevelKeyword then
+			prefs.topLevelKeywordHistory =
+				Util.pushHistory(prefs.topLevelKeywordHistory, props.topLevelKeyword, Defaults.inputHistoryLength)
+		end
 		prefs.bilingualKeywords = props.bilingualKeywords
 		prefs.keywordSecondaryLanguage = props.keywordSecondaryLanguage
 		prefs.keywordAliases = props.keywordAliases

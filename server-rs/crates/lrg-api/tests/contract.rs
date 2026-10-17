@@ -614,14 +614,41 @@ async fn cull_warns_about_unindexed_photos_instead_of_dropping_them_silently() {
     );
 }
 
+/// Writes every fixed prompt's embedding, the way an earlier run that had the
+/// text tower would have left them.
+async fn seed_prompt_embeddings(state: &Arc<AppState>) {
+    let rows: Vec<lrg_store::TextEmbedding> = lrg_api::prompt_embeddings::fixed_prompts()
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let mut vector = vec![0.0f32; 1152];
+            vector[i] = 1.0;
+            lrg_store::TextEmbedding {
+                model_id: lrg_ml::siglip::MODEL_ID.to_string(),
+                text: text.to_string(),
+                vector,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .put_text_embeddings(&rows)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn cull_warning_tracks_stored_embeddings_not_model_residency() {
     let dir = tempfile::tempdir().unwrap();
     let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
     let (app, state) = fresh_app();
     state.ensure_db_path(&db_path_str).await.unwrap();
-    // Embeddings present, SigLIP definitely not resident in this test process.
+    // Embeddings present, SigLIP definitely not resident in this test process
+    // — not even on disk. With the prompt vectors an earlier run stored,
+    // culling needs no model at all.
     seed_burst(&state, 3, true).await;
+    seed_prompt_embeddings(&state).await;
 
     let json = cull_request(
         app,
@@ -657,6 +684,154 @@ async fn cull_warns_when_no_embeddings_are_stored() {
     );
     // Grouping still works from pHash + capture time.
     assert_eq!(json["summary"]["group_count"], 1);
+}
+
+/// Photos with embeddings, but no stored prompt vectors and no model to make
+/// them: the quality score cannot be computed, and the ranking that skipped it
+/// has to say so — and say how to fix it.
+#[tokio::test]
+async fn cull_warns_when_quality_scoring_has_no_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    // `sports` ranks with the action set as well as quality, so two sets
+    // miss for one cause.
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "culling_preset": "sports",
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    // Said once, not once per set.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    // The string the plug-in shows carries it too.
+    let warning = json["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("quality score") && warning.contains("Download AI models"),
+        "expected a quality-scoring caveat naming the fix, got {warning:?}"
+    );
+    assert_eq!(json["summary"]["group_count"], 1);
+}
+
+/// A second catalog's database gets the prompt vectors from the first one's
+/// run, out of memory — no text tower, and nothing for the user to see.
+#[tokio::test]
+async fn a_second_database_is_filled_with_prompts_from_memory() {
+    let (app, state) = fresh_app();
+
+    let first = tempfile::tempdir().unwrap();
+    let first_db = first
+        .path()
+        .join("lrgenius.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+    state.ensure_db_path(&first_db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    seed_prompt_embeddings(&state).await;
+    let json = cull_request(
+        app.clone(),
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": first_db}),
+    )
+    .await;
+    assert!(json["warning"].is_null(), "{json}");
+
+    let second = tempfile::tempdir().unwrap();
+    let second_db = second
+        .path()
+        .join("lrgenius.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+    state.ensure_db_path(&second_db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": second_db}),
+    )
+    .await;
+    assert!(json["warning"].is_null(), "{json}");
+    // What this cull read: the quality set, which the default preset is
+    // ranked with. Nothing it did not need is copied over.
+    let quality: Vec<String> = lrg_ml::clip_iqa::PromptSet::Quality
+        .texts()
+        .map(str::to_string)
+        .collect();
+    let store = state.store().unwrap();
+    let copied = store
+        .get_text_embeddings(lrg_ml::siglip::MODEL_ID, &quality)
+        .await
+        .unwrap();
+    assert_eq!(copied.len(), quality.len());
+    assert_eq!(
+        store.count(lrg_store::TEXT_EMBEDDING_TABLE).await.unwrap(),
+        quality.len()
+    );
+}
+
+/// Binding a database stamps the embedding identity on rows written before
+/// the field existed, once, and leaves a row naming another model alone.
+#[tokio::test]
+async fn binding_stamps_the_embedding_model_on_rows_that_predate_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    {
+        // What an older build left: a store with no upgrade marker.
+        let lance_root = lrg_store::migrate::lance_root_for_db(&db_path);
+        let store = lrg_store::Store::open(&lance_root).await.unwrap();
+        let row = |id: &str, model: Option<&str>| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(true));
+            if let Some(model) = model {
+                m.insert("embedding_model".into(), serde_json::json!(model));
+            }
+            lrg_store::StoreRecord {
+                id: id.into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        };
+        store
+            .upsert(
+                lrg_store::IMAGE_TABLE,
+                &[row("old", None), row("other", Some("some-previous-model"))],
+            )
+            .await
+            .unwrap();
+    }
+
+    let (_, state) = fresh_app();
+    state
+        .ensure_db_path(db_path.to_str().unwrap())
+        .await
+        .unwrap();
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &["old".to_string(), "other".to_string()],
+        )
+        .await
+        .unwrap();
+    let model_of = |id: &str| {
+        rows.iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.metadata.get("embedding_model"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(model_of("old").as_deref(), Some(lrg_ml::siglip::MODEL_ID));
+    assert_eq!(model_of("other").as_deref(), Some("some-previous-model"));
 }
 
 #[tokio::test]

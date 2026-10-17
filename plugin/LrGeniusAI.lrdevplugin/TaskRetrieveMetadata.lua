@@ -113,8 +113,11 @@ local function showRetrieveMetadataDialog(ctx)
 				f:checkbox({
 					value = bind("useTopLevelKeyword"),
 				}),
-				f:edit_field({
+				f:combo_box({
 					value = bind("topLevelKeyword"),
+					-- Shares its history with Analyze & Index: it is the same
+					-- keyword, and both dialogs write the same preference.
+					items = Util.historyItems(prefs.topLevelKeywordHistory, prefs.knownTopLevelKeywords),
 					width_in_chars = 20,
 					enabled = bind("useTopLevelKeyword"),
 				}),
@@ -139,6 +142,10 @@ local function showRetrieveMetadataDialog(ctx)
 		prefs.retrieveAppendMetadata = props.appendMetadata
 		prefs.useTopLevelKeyword = props.useTopLevelKeyword
 		prefs.topLevelKeyword = props.topLevelKeyword
+		if props.useTopLevelKeyword then
+			prefs.topLevelKeywordHistory =
+				Util.pushHistory(prefs.topLevelKeywordHistory, props.topLevelKeyword, Defaults.inputHistoryLength)
+		end
 
 		return {
 			scope = props.scope,

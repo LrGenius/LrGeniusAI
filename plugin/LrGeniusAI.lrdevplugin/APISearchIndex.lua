@@ -1771,6 +1771,10 @@ end
 -- `summary` additionally reports `intentional_set_group_count` and
 -- `intentional_set_photo_count`.
 --
+-- `warning` is every caveat for the run in one string, or nil: photos never
+-- analyzed, no embeddings, or an AI quality score that could not be computed.
+-- Show it as is. `warnings` holds the same caveats as a list.
+--
 -- Each photo's `metrics` may carry `semantic` plus `semantic_axis`
 -- ("action" | "expression" | "candid") — a zero-shot score for what the genre
 -- is actually judged on, which the technical signals cannot express. Absent

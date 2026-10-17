@@ -8,6 +8,7 @@ pub mod llm_models;
 pub mod middleware;
 pub mod mlx_engine;
 pub mod mlx_models;
+pub mod prompt_embeddings;
 pub mod routes;
 pub mod species_links;
 pub mod state;
