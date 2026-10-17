@@ -117,6 +117,12 @@ downloaded yet: open **File → Plug-in Manager → LrGeniusAI** and press
 **Download AI models**, then run culling again. Culling still works in the
 meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive.
 
+The same applies to the AI quality score (composition, light, moment). It needs
+the AI search model once, to prepare a set of reference phrases; those are then
+kept in LrGeniusAI's database, so later culling runs never load the model for
+them. If the model was not there for that first step, the culling warning says
+that ranking ran on the technical measurements alone and how to fix it.
+
 ## Tips for best results
 
 - Run culling after you have narrowed down an initial selection for a shoot (for example by folder or date range).

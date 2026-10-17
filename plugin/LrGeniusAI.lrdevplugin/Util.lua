@@ -563,6 +563,88 @@ function Util.promptForRequest(text)
 	return trimmed
 end
 
+-- How many earlier inputs an editable drop-down offers when no length is given.
+local DEFAULT_HISTORY_LENGTH = 15
+
+---
+-- Puts `entry` at the top of a most-recent-first input history.
+--
+-- Backs the editable drop-downs (search term, top-level keyword, style label):
+-- what was used last is offered first next time. Blank entries are not
+-- recorded, and an earlier copy of the same entry -- compared without regard
+-- to case or surrounding space -- moves up instead of appearing twice, in the
+-- spelling used most recently.
+--
+-- Returns a new table rather than editing `history`. LrPrefs saves a table
+-- when it is assigned, not when its contents change, so a `table.insert` into
+-- the stored one would be gone the next time Lightroom starts.
+--
+-- @param history table|nil The stored list, most recent first.
+-- @param entry string|nil What was just used.
+-- @param maxEntries number|nil How many to keep; 15 when omitted.
+-- @return table The new list, to assign back to prefs.
+--
+function Util.pushHistory(history, entry, maxEntries)
+	local limit = tonumber(maxEntries) or DEFAULT_HISTORY_LENGTH
+	local result = {}
+	local seen = {}
+	local function add(value)
+		if #result >= limit or type(value) ~= "string" then
+			return
+		end
+		local trimmed = Util.trim(value)
+		local key = string.lower(trimmed)
+		if trimmed == "" or seen[key] then
+			return
+		end
+		seen[key] = true
+		table.insert(result, trimmed)
+	end
+
+	add(entry)
+	if type(history) == "table" then
+		for _, value in ipairs(history) do
+			add(value)
+		end
+	end
+	return result
+end
+
+---
+-- The items for an editable drop-down: the history first, then any of
+-- `extras` it does not already hold.
+--
+-- `extras` covers the values worth offering before anything has been typed --
+-- the top-level keywords LrGeniusAI already knows about, say. Duplicates and
+-- blanks are dropped the same way Util.pushHistory drops them, and anything
+-- that is not a string is skipped, so a damaged prefs entry yields a shorter
+-- list rather than a dialog that fails to open.
+--
+-- @param history table|nil Most recent first, as Util.pushHistory keeps it.
+-- @param extras table|nil Further values, offered after the history.
+-- @return table Array of strings, for a combo_box's `items`.
+--
+function Util.historyItems(history, extras)
+	local items = Util.pushHistory(history, nil, math.huge)
+	local seen = {}
+	for _, value in ipairs(items) do
+		seen[string.lower(value)] = true
+	end
+	if type(extras) == "table" then
+		for _, value in ipairs(extras) do
+			if type(value) == "string" then
+				local trimmed = Util.trim(value)
+				local key = string.lower(trimmed)
+				if trimmed ~= "" and not seen[key] then
+					seen[key] = true
+					table.insert(items, trimmed)
+				end
+			end
+		end
+	end
+	return items
+end
+
 ---
 -- Splits a flattened keyword list into ordinary keywords and face tags.
 --

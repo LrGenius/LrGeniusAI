@@ -11,17 +11,19 @@
 //! The method (Wang, Chan & Loy, *Exploring CLIP for Assessing the Look and
 //! Feel of Images*) is to ask the model directly, with pairs of opposed
 //! prompts: embed "a good photo" and "a bad photo", and score an image by which
-//! it sits closer to. It costs one text-tower pass for the whole prompt set,
-//! once per server lifetime — after that every photo is a handful of dot
-//! products against a vector the database already holds. There is no per-photo
-//! image inference, which is what makes this affordable in the culling hot
-//! path where a learned IQA model would not be.
+//! it sits closer to. The prompts cost one text-tower pass, once per model:
+//! the backend keeps their vectors in the database's `text_embeddings` table
+//! (`lrg-api`'s `prompt_embeddings`), so after the first run nothing loads the
+//! text tower for them at all. Every photo is then a handful of dot products
+//! against a vector the database already holds. There is no per-photo image
+//! inference, which is what makes this affordable in the culling hot path
+//! where a learned IQA model would not be.
 //!
 //! It applies only to photos that carry an embedding, so the fast `tasks=cull`
 //! ingest — which deliberately skips SigLIP2 — degrades to the old heuristic
 //! rather than failing.
 
-use crate::siglip::{l2_normalize, SiglipError, SiglipModel};
+use crate::siglip::l2_normalize;
 
 /// Opposed prompt pairs, `(positive, negative)`.
 ///
@@ -211,7 +213,7 @@ pub const ORGANISM_PROMPT_PAIRS: &[(&str, &str)] = &[
 ///   spatial relations are a known blind spot for contrastive image-text models.
 ///   These are measurable directly and should be.
 /// - *Animal eye sharpness.* Needs detection, not a global scene judgement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PromptSet {
     /// Is this a good photograph? [`DEFAULT_PROMPT_PAIRS`].
     Quality,
@@ -237,6 +239,12 @@ impl PromptSet {
             PromptSet::Candid => CANDID_PROMPT_PAIRS,
             PromptSet::Organism => ORGANISM_PROMPT_PAIRS,
         }
+    }
+
+    /// Every prompt of the set, positive before negative, pair by pair — the
+    /// texts whose embeddings [`IqaPrompts::from_lookup`] asks for.
+    pub fn texts(self) -> impl Iterator<Item = &'static str> {
+        self.pairs().iter().flat_map(|(pos, neg)| [*pos, *neg])
     }
 
     /// Stable name, used as the cache key and as the axis label a preset names.
@@ -289,42 +297,40 @@ impl PromptSet {
 /// would flatten to ~0.5 for every image on earth.
 const LOGIT_SCALE: f64 = 100.0;
 
-/// L2-normalized text embeddings for [`DEFAULT_PROMPT_PAIRS`], computed once.
+/// L2-normalized text embeddings for one [`PromptSet`]'s pairs.
 #[derive(Clone)]
 pub struct IqaPrompts {
     pairs: Vec<(Vec<f32>, Vec<f32>)>,
 }
 
 impl IqaPrompts {
-    /// Runs the text tower over every prompt in one batch.
+    /// Builds the set from embeddings the caller already has, `None` when any
+    /// of its texts is missing.
     ///
-    /// This is the only expensive call in the module, and it also loads the
-    /// SigLIP2 model if it has idle-unloaded. Callers should treat failure as
-    /// "no IQA available" rather than an error — the aesthetic heuristic is
-    /// still there.
-    pub fn compute(model: &SiglipModel) -> Result<Self, SiglipError> {
-        Self::compute_set(model, PromptSet::Quality)
-    }
-
-    /// [`Self::compute`] for a named set. One text-tower call per set; callers
-    /// cache the result for the process lifetime.
-    pub fn compute_set(model: &SiglipModel, set: PromptSet) -> Result<Self, SiglipError> {
-        let texts: Vec<String> = set
+    /// Takes a lookup rather than a model because the text tower is the
+    /// expensive way to get these: they are a pure function of the weights
+    /// and a compile-time list of strings, so the backend stores them once
+    /// per model and reads them back. A half-built set is refused rather than
+    /// scored, since [`Self::score`] averages over pairs and a missing pair
+    /// would quietly change what the number means.
+    ///
+    /// The vectors are normalized here whatever the lookup hands over.
+    pub fn from_lookup<'a>(
+        set: PromptSet,
+        lookup: impl Fn(&str) -> Option<&'a [f32]>,
+    ) -> Option<Self> {
+        let pairs = set
             .pairs()
             .iter()
-            .flat_map(|(pos, neg)| [pos.to_string(), neg.to_string()])
-            .collect();
-        let mut embeddings = model.embed_text(&texts)?;
-        for e in embeddings.iter_mut() {
-            l2_normalize(e);
-        }
-        let pairs = embeddings
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|c| (c[0].clone(), c[1].clone()))
-            .collect();
-        Ok(IqaPrompts { pairs })
+            .map(|(pos, neg)| {
+                let mut pos = lookup(pos)?.to_vec();
+                let mut neg = lookup(neg)?.to_vec();
+                l2_normalize(&mut pos);
+                l2_normalize(&mut neg);
+                Some((pos, neg))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(IqaPrompts { pairs })
     }
 
     pub fn pair_count(&self) -> usize {
@@ -433,6 +439,46 @@ mod tests {
     fn a_dimension_mismatch_has_no_score() {
         let p = prompts(vec![(vec![1.0, 0.0], vec![0.0, 1.0])]);
         assert!(p.score(&[1.0, 0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn from_lookup_builds_a_complete_set_and_refuses_a_partial_one() {
+        let vectors: std::collections::HashMap<&str, Vec<f32>> = PromptSet::Organism
+            .texts()
+            .enumerate()
+            .map(|(i, text)| (text, vec![i as f32 + 1.0, 1.0]))
+            .collect();
+        let full =
+            IqaPrompts::from_lookup(PromptSet::Organism, |t| vectors.get(t).map(Vec::as_slice))
+                .unwrap();
+        assert_eq!(full.pair_count(), ORGANISM_PROMPT_PAIRS.len());
+
+        let missing = ORGANISM_PROMPT_PAIRS[1].1;
+        let partial = IqaPrompts::from_lookup(PromptSet::Organism, |t| {
+            (t != missing)
+                .then(|| vectors.get(t).map(Vec::as_slice))
+                .flatten()
+        });
+        assert!(partial.is_none());
+    }
+
+    /// The lookup's vectors need not be normalized; scoring assumes they are.
+    #[test]
+    fn from_lookup_normalizes_what_it_is_given() {
+        let pos = vec![10.0, 0.0];
+        let neg = vec![0.0, 0.5];
+        let p = IqaPrompts::from_lookup(PromptSet::Quality, |t| {
+            if PromptSet::Quality.pairs().iter().any(|(a, _)| *a == t) {
+                Some(pos.as_slice())
+            } else {
+                Some(neg.as_slice())
+            }
+        })
+        .unwrap();
+        for (a, b) in &p.pairs {
+            assert_eq!(a, &vec![1.0, 0.0]);
+            assert_eq!(b, &vec![0.0, 1.0]);
+        }
     }
 
     #[test]

@@ -895,6 +895,25 @@ pub(crate) async fn process_batch(
         cull_signals = normalized_photos.iter().map(|_| Err(msg.clone())).collect();
     }
 
+    // The organism gate in front of BioCLIP scores against fixed prompts.
+    // Made ready here, once for the batch and before any photo, so the gate
+    // is a lookup rather than a text-tower load in the middle of the run —
+    // and after the first run ever, a read from the database. Not when
+    // BioCLIP is missing: every photo's species step fails before the gate,
+    // so the prompts would be made for nothing.
+    if options.compute_species && options.species_prefilter && state.bioclip.is_cached() {
+        let wanted = crate::prompt_embeddings::texts_of(&[lrg_ml::clip_iqa::PromptSet::Organism]);
+        let prompts = crate::prompt_embeddings::prepare(&state, &wanted).await;
+        if let Some(problem) = prompts.problem() {
+            // Not reported to the user: without the gate every photo goes to
+            // BioCLIP, which is slower and identifies just as well, so nothing
+            // they asked for comes out worse.
+            log::warn!(
+                "Organism gate unavailable for this batch, running BioCLIP on every photo: {problem}"
+            );
+        }
+    }
+
     // Phase 1 — everything that does not need the LLM, still strictly
     // sequential (SigLIP2 and the face detector each want the whole machine).
     let mut prepared: Vec<PreparedPhoto> = Vec::with_capacity(normalized_photos.len());
@@ -1949,12 +1968,13 @@ fn run_species(
     if options.species_prefilter {
         match siglip_embedding {
             Some(embedding) => {
-                let score = crate::routes::route_util::score_prompt_set(
-                    state,
-                    lrg_ml::clip_iqa::PromptSet::Organism,
-                    embedding,
-                );
-                // A missing score means the text tower would not load. Fall
+                // Prepared by `process_batch` before the first photo; this is
+                // a lookup, never a text-tower run.
+                let score = state
+                    .prompt_embeddings
+                    .current()
+                    .score(lrg_ml::clip_iqa::PromptSet::Organism, embedding);
+                // A missing score means the prompts could not be had. Fall
                 // through rather than skip: the gate is an optimization, and
                 // failing it closed would silently lose species.
                 if let Some(score) = score {

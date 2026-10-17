@@ -460,6 +460,15 @@ Decode is pure CPU and by far the largest sequential cost of a batch without
 an LLM in it, so this trades wall time against peak memory directly. `1`
 restores the one-at-a-time behaviour.
 
+The SigLIP2 text tower (about 1 GB resident) is kept out of indexing, culling
+and the edit routes altogether. What they score photos against is fixed text —
+the CLIP-IQA prompts, the organism gate in front of BioCLIP, the scene probes —
+and its vectors are stored in the `text_embeddings` LanceDB table, keyed by
+`model_id` and `text` (`lrg-api/src/prompt_embeddings.rs`). A request that needs
+a prompt the table lacks runs the text tower for it once, stores the result, and
+unloads the tower again straight after when that request is what loaded it;
+afterwards only a free-text search or keyword clustering loads it.
+
 The other half of memory behaviour during a long indexing run is
 compaction — see `Store::optimize_all` and the constants above it. To
 reproduce and measure the write-path memory profile without Lightroom in

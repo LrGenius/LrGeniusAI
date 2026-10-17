@@ -109,7 +109,14 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 					width = share("labelWidth"),
 					alignment = "right",
 				}),
-				f:edit_field({ value = bind("searchTerm"), width_in_chars = 40 }),
+				-- Editable, with the earlier searches in its menu: a search is
+				-- often repeated after an indexing run, and retyping it is the
+				-- one part of that a machine can do.
+				f:combo_box({
+					value = bind("searchTerm"),
+					items = Util.historyItems(prefs.searchHistory),
+					width_in_chars = 40,
+				}),
 			}),
 			f:row({
 				f:static_text({
@@ -255,6 +262,7 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 		prefs.searchInMetadataAltText = props.searchInMetadataAltText
 		prefs.relevanceStrictness = props.relevanceStrictness
 		prefs.maxResults = props.maxResults
+		prefs.searchHistory = Util.pushHistory(prefs.searchHistory, props.searchTerm, Defaults.inputHistoryLength)
 		return props
 	else
 		return nil
