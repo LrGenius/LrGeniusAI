@@ -1671,6 +1671,48 @@ function Util.get_keys(t)
 	return keys
 end
 
+---
+-- Frees the models the backend is holding in memory, on demand.
+--
+-- The backend loads the two SigLIP2 towers, the face pair and BioCLIP lazily
+-- and drops them again after 30 minutes without a request. Until this existed
+-- the only way to hand that memory back sooner was to quit Lightroom: the
+-- plug-in called `/server/unload` from its shutdown function and nowhere else,
+-- so a session that indexed a catalog and then sat idle kept several GB
+-- resident with no way to release it (#405).
+--
+-- Nothing is lost by unloading. Each model is loaded again the next time it is
+-- needed — the first analysis, search or cull after this costs a few seconds —
+-- and the index, the database and the models on disk are untouched.
+--
+-- Deliberately does not start the backend. Unloading is only meaningful
+-- against a running server, and starting one in order to empty it would be the
+-- opposite of what the button is for.
+function Util.unloadModelsDialog()
+	if not SearchIndexAPI.pingServer() then
+		LrDialogs.message(
+			"AI models",
+			"The backend is not running, so there are no models in memory. Nothing was changed.",
+			"info"
+		)
+		return
+	end
+
+	if SearchIndexAPI.unloadResources() then
+		log:trace("Backend models unloaded on request")
+		LrDialogs.message(
+			"AI models unloaded",
+			"The models were released and the memory they were holding is free.\n\nThe next analysis, search or cull loads them again, which takes a few seconds.",
+			"info"
+		)
+	else
+		ErrorHandler.handleError(
+			"Could not unload the AI models",
+			"The backend did not answer the unload request. It may have stopped in the meantime — check the server status and try again."
+		)
+	end
+end
+
 function Util.waitForServerDialog(options)
 	options = options or {}
 

@@ -12,9 +12,27 @@ This reference is intended for developers integrating with or extending the back
 Minimal liveness check. Returns `{"status": "ok"}`.
 
 ### `GET /v1/server/health`
-Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
-`face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
-`"failed"`. It does **not** report cloud/local LLM provider availability —
+Returns local model load state. Each `*_model` field is `"loaded"`,
+`"not_loaded"`, or `"failed"`, with a matching `*_error` carrying the message
+when it is `"failed"`.
+
+| Field | What it covers |
+|---|---|
+| `clip_model` / `clip_error` | The SigLIP2 pair, as it has always been. `"failed"` if **either** tower failed, `"loaded"` if **either** is resident. |
+| `clip_image_model` / `clip_image_error` | The SigLIP2 **image** tower alone — what indexing and the training path embed with. |
+| `clip_text_model` / `clip_text_error` | The SigLIP2 **text** tower alone — what search, keyword lookup and the CLIP-IQA prompt sets embed with. |
+| `face_model` / `face_error` | YuNet + FaceNet. |
+| `species_model` / `species_error` | BioCLIP 2. |
+
+The two SigLIP2 towers load and idle-unload **independently**, so an
+embeddings-only indexing run leaves `clip_image_model: "loaded"` and
+`clip_text_model: "not_loaded"`, and a semantic search does the opposite.
+`clip_model` is kept as the pair so that a client reading only that field still
+learns that something failed rather than missing a failure on the tower it does
+not ask about; the per-tower fields are additive and a server older than them
+does not send them.
+
+It does **not** report cloud/local LLM provider availability —
 the backend has no stored API keys or base URLs to probe on a bare GET. The
 plugin checks provider availability itself (stored keys, an Other AI server
 address, and whether `POST /v1/llm/providers/models` lists anything for the
@@ -185,6 +203,25 @@ Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
 
 ### `POST /v1/index/unprocessed`
 Given a list of `photo_id` values, returns which ones are not yet indexed or are missing specific data.
+
+"Missing" is per task, and where the producer of a field can change it means *produced by the
+producer this build uses*, not merely present:
+
+| task | outstanding when |
+| --- | --- |
+| `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
+| `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
+| `species` | no `species_checked`, or a `species_model` that is not the head on disk |
+| `cull` | no `cull_phash`, or no `cull_faces_present` key |
+| `metadata` | no title, caption, alt_text or keywords |
+
+`regenerate_metadata` overrides all of them.
+
+The two identity fields differ in one respect, deliberately. For `faces`, a missing `face_model`
+re-queues the photo. For `embeddings`, a missing `embedding_model` does **not**: `has_embedding` has
+existed since before this field, so an absent identity is the normal state of every existing index,
+and re-queueing on absence would re-embed a whole catalog to settle a maybe. A present identity that
+differs always re-queues.
 
 ### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
