@@ -180,11 +180,18 @@ meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive,
 and with a moment preset the moment is not judged either.
 
 The same applies after the run: when the moment could not be judged for some
-photos, because they have no image analysis yet or the image model could not
-be loaded, the culling warning names how many and what to do. Photos without
-it are ranked on sharpness, exposure and faces only, and so is every photo in
-the same group, so that the frames of one burst are always compared on the
-same terms.
+photos because they have no image analysis yet, the culling warning names how
+many and what to do. Photos without it are ranked on sharpness, exposure and
+faces only, and so is every photo in the same group, so that the frames of one
+burst are always compared on the same terms.
+
+The AI quality score (composition, light, moment), the moment and emotion
+questions and the kiss-or-blink check all need the AI search model once, to
+prepare a set of reference phrases; those are then kept in LrGeniusAI's
+database, so later culling runs never load the model for them. If the model was
+not there for that first step, one culling warning names every score that could
+not be computed, says that ranking ran on the technical measurements alone, and
+how to fix it.
 
 ## Tips for best results
 

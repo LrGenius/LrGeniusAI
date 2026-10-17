@@ -1771,6 +1771,10 @@ end
 -- `summary` additionally reports `intentional_set_group_count` and
 -- `intentional_set_photo_count`.
 --
+-- `warning` is every caveat for the run in one string, or nil: photos never
+-- analyzed, no embeddings, or an AI quality score that could not be computed.
+-- Show it as is. `warnings` holds the same caveats as a list.
+--
 -- Each photo's `metrics` may carry `semantic` plus `semantic_axis`
 -- ("action" | "expression" | "candid") — a zero-shot score for what the genre
 -- is actually judged on, which the technical signals cannot express. Absent
@@ -4098,16 +4102,16 @@ function SearchIndexAPI.getModels(opts)
 	end
 	local body = {}
 	if opts.includeCloud then
-		body.openai_apikey = nonEmpty(prefs and prefs.chatgptApiKey)
-		body.gemini_apikey = nonEmpty(prefs and prefs.geminiApiKey)
-		body.anthropic_apikey = nonEmpty(prefs and prefs.anthropicApiKey)
+		body.openai_apikey = nonEmpty(Secrets.get("chatgptApiKey"))
+		body.gemini_apikey = nonEmpty(Secrets.get("geminiApiKey"))
+		body.anthropic_apikey = nonEmpty(Secrets.get("anthropicApiKey"))
 	end
 	if not opts.skipServer then
 		local serverUrl = opts.serverUrl
 		local serverApiKey = opts.serverApiKey
 		if serverUrl == nil then
 			serverUrl = prefs and prefs.aiServerUrl
-			serverApiKey = prefs and prefs.aiServerApiKey
+			serverApiKey = Secrets.get("aiServerApiKey")
 		end
 		body.server_url = nonEmpty(serverUrl)
 		if body.server_url then
@@ -4807,12 +4811,34 @@ function SearchIndexAPI.checkServerHealth()
 	end
 
 	if res then
-		-- 1. Check CLIP model
-		if res.clip_model == "failed" then
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
-				res.clip_error or "Unknown error loading CLIP model."
-			)
+		-- 1. Check the SigLIP2 towers. They load independently, so which one
+		-- failed decides which message is true: search and keyword lookup
+		-- embed the query with the text tower, indexing embeds photos with the
+		-- image tower. A server older than these two fields reports the pair
+		-- in `clip_model` alone, and is still handled below — reporting the
+		-- pair twice would be worse than not naming the tower.
+		local hasPerTower = (res.clip_image_model ~= nil) or (res.clip_text_model ~= nil)
+		if not hasPerTower then
+			if res.clip_model == "failed" then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
+					res.clip_error or "Unknown error loading CLIP model."
+				)
+			end
+		else
+			if res.clip_text_model == "failed" then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
+					res.clip_text_error or "Unknown error loading the search model."
+				)
+			end
+			if res.clip_image_model == "failed" then
+				ErrorHandler.handleError(
+					"AI image analysis model failed to load.",
+					res.clip_image_error
+						or "Unknown error loading the model that embeds photos. Analysis and search will not find anything until it loads."
+				)
+			end
 		end
 
 		-- 2. Check Face model
@@ -4886,9 +4912,9 @@ function SearchIndexAPI.getDetailedHealth()
 	local health = {
 		backend = SearchIndexAPI.pingServer() == true,
 		clip = SearchIndexAPI.isClipReady() == true,
-		gemini = not Util.nilOrEmpty(prefs.geminiApiKey),
-		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
-		anthropic = not Util.nilOrEmpty(prefs.anthropicApiKey),
+		gemini = Secrets.has("geminiApiKey"),
+		chatgpt = Secrets.has("chatgptApiKey"),
+		anthropic = Secrets.has("anthropicApiKey"),
 		ollama = false,
 		lmstudio = false,
 		-- The Other AI server counts once an address is set. It is not asked

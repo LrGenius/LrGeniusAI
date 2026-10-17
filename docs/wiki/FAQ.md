@@ -48,6 +48,12 @@ Yes. The installers are not code-signed (cost and complexity for an open-source 
 
 Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository.
 
+> [!WARNING]
+> **Never make a backend reachable from the internet.** The plug-in talks to the backend over plain HTTP, with no encryption and no login. With a cloud provider (OpenAI, Gemini, Anthropic, or a cloud service as the *Other AI server*), every request carries your API key, so on a remote backend that key crosses the network in plain text, along with your photos. Anyone who can reach the backend's port can also use it. That is harmless on the default `127.0.0.1`, where nothing leaves your computer. For now:
+>
+> - Run a remote backend only on a network you trust, such as your home network. Never forward its port on your router or open it on a cloud server.
+> - To reach a backend somewhere else, use a VPN (WireGuard, Tailscale) or an SSH tunnel: `ssh -L 19819:127.0.0.1:19819 user@host` lets you keep the Backend Server URL at its default.
+
 ---
 
 ## AI Model Setup
@@ -85,6 +91,8 @@ the status line names the exact reason. On Windows the section is llama.cpp rath
 ### Where do I enter my API key?
 
 *File → Plug-in Manager → LrGeniusAI* → scroll to **Optional AI providers**. Enter your Gemini, OpenAI or Anthropic key there, or the address and key of an **Other AI server** such as OpenRouter ([Other AI Server](Help-Other-AI-Server)).
+
+The keys are kept in the encrypted password storage Lightroom gives plug-ins, which uses your operating system's, not in Lightroom's preferences file, which is plain text. Earlier versions kept them in that file; the first start of a newer version moves them. If a key cannot be moved, it keeps working from the preferences file, and the status line in the Plug-in Manager says which key it is. Keys sent to a backend on another computer are not protected on the way: see [above](#can-i-run-the-backend-on-a-different-machine-or-in-docker).
 
 ### Can I use OpenRouter, a llama.cpp server, LiteLLM or vLLM?
 

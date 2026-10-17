@@ -112,6 +112,19 @@ The first photo takes a little longer while the model loads.
 
 ---
 
+## Freeing memory after a big run
+
+Analysing a catalog loads the AI models into memory, and the backend keeps them
+there for 30 minutes after the last request — so on a machine that is already
+busy, Lightroom and everything else can feel the squeeze for a while afterwards.
+
+To hand that memory back straight away, open **File → Plug-in Manager…**,
+select **LrGeniusAI** and click **Unload AI Models** under **System Health**.
+Nothing is lost: the models are not deleted and your index is untouched, and
+they load again on the next analysis or search, which takes a few seconds.
+
+---
+
 ## 4. Search your photos
 
 1. Open **Library → Plug-in Extras → Advanced Search…**

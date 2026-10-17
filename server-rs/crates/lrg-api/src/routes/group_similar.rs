@@ -14,6 +14,7 @@ use lrg_analysis::grouping::{group_and_sort_images_with_config, Group, GroupingI
 use lrg_ml::clip_iqa::PromptSet;
 use lrg_store::IMAGE_TABLE;
 
+use crate::prompt_embeddings::PromptEmbeddings;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -37,10 +38,11 @@ struct GroupingParams {
     /// Score the aesthetic term with CLIP-IQA over the stored SigLIP2
     /// embeddings instead of the contrast/colourfulness heuristic alone.
     ///
-    /// On by default. It exists as a switch because the first call in a server
-    /// lifetime loads the text tower, and because the evaluation harness needs
-    /// to be able to measure what the signal is actually worth by turning it
-    /// off.
+    /// On by default. It exists as a switch because the evaluation harness
+    /// needs to be able to measure what the signal is actually worth by
+    /// turning it off. (It used to matter for cost too, when the first call in
+    /// a server lifetime loaded the text tower; the prompt vectors now come
+    /// out of the database.)
     use_iqa: bool,
     /// Echo each photo's stored `cull_*` metadata verbatim, alongside the
     /// ranked `metrics` block.
@@ -313,14 +315,29 @@ struct GroupingOutcome {
     /// Ranked photos that came back with no moment score at all — no
     /// embedding, as a rule. Ranking drops the moment for their whole group.
     moment_missing: usize,
-    /// A prompt pass found embeddings to score but could not load the text
-    /// tower, so every CLIP-IQA signal fell back or fell away.
-    iqa_unavailable: bool,
+    /// CLIP-IQA signals the run asked for and had to do without, because
+    /// their prompt vectors were neither stored nor obtainable from the text
+    /// tower.
+    unavailable: Option<UnavailableSignals>,
     /// Per photo, the stored inputs ranking read. Empty unless
     /// `include_stored_metadata` was requested — building it clones a map per
     /// photo, which is pure waste on the normal cull path.
     stored_metadata: std::collections::HashMap<String, Map<String, Value>>,
 }
+
+/// The ranking signals a run lost, and the one reason they share.
+struct UnavailableSignals {
+    /// What each lost signal is, phrased for the user, each once.
+    signals: Vec<&'static str>,
+    /// [`PromptEmbeddings::problem`]: why the prompts are missing, which
+    /// already names the fix.
+    why: String,
+}
+
+/// The user-facing names of the signals a prompt pass feeds.
+const QUALITY_SIGNAL: &str = "the AI quality score";
+const MOMENT_SIGNAL: &str = "the AI judgement of the moment (emotion, expression, action)";
+const KISS_GATE_SIGNAL: &str = "the check whether closed eyes are a kiss or a laugh";
 
 /// The stored fields that reproduce a ranking run: every `cull_*` metric plus
 /// the two non-`cull_` inputs ranking and set detection actually read.
@@ -339,48 +356,25 @@ fn stored_cull_fields(metadata: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-/// How a prompt pass over one batch went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PromptScoring {
-    /// This many photos were scored; the rest had no embedding.
-    Scored(usize),
-    /// Nothing in the batch has an embedding, so nothing was asked.
-    NoEmbeddings,
-    /// There were embeddings to score, but the text tower would not load.
-    Unavailable,
-}
-
 /// Scores every record that carries an embedding against one prompt set and
 /// writes the result under `key`.
 ///
-/// No failure here fails the cull: no model on disk, a text tower that will
-/// not load, a photo indexed by the fast cull pass with no embedding. Ranking
-/// has a fallback for each — the aesthetic heuristic, and for the moment simply
-/// not applying the blend — so a missing score is a *worse* result, never a
-/// broken one, and refusing to cull over an optional signal would be the wrong
-/// trade. Worse is still not silent: the outcome comes back so
-/// [`grouping_warnings`] can tell the user what the run lost.
+/// No failure here fails the cull. Per photo, one that cannot be scored (no
+/// embedding — the fast cull pass stores none) is skipped: ranking has a
+/// fallback for it, the aesthetic heuristic and for the moment simply not
+/// applying the blend, and [`grouping_warnings`] counts the photos whose moment
+/// went unjudged. A set that is unavailable altogether is the caller's to
+/// report.
+///
+/// Returns how many photos were scored, or `None` when the set itself is
+/// unavailable.
 fn apply_prompt_scores(
-    state: &AppState,
+    prompts: &PromptEmbeddings,
     records: &mut [GroupingInput],
-    set: lrg_ml::clip_iqa::PromptSet,
+    set: PromptSet,
     key: &str,
-) -> PromptScoring {
-    if !records.iter().any(|r| {
-        r.embedding
-            .as_ref()
-            .is_some_and(|v| v.iter().any(|x| *x != 0.0))
-    }) {
-        return PromptScoring::NoEmbeddings;
-    }
-
-    // Locked once for the whole batch rather than per record, which is why
-    // this takes the guard instead of calling `score_prompt_set`.
-    let mut cache = state.clip_iqa.lock().unwrap();
-    let Some(prompts) = crate::routes::route_util::ensure_prompt_set(state, &mut cache, set) else {
-        return PromptScoring::Unavailable;
-    };
-
+) -> Option<usize> {
+    let prompts = prompts.prompt_set(set)?;
     let mut scored = 0usize;
     for record in records.iter_mut() {
         let Some(embedding) = record.embedding.as_ref() else {
@@ -396,7 +390,7 @@ fn apply_prompt_scores(
         set.as_str(),
         records.len()
     );
-    PromptScoring::Scored(scored)
+    Some(scored)
 }
 
 async fn compute_groups(
@@ -410,7 +404,7 @@ async fn compute_groups(
             embedded_count: 0,
             moment_asked: false,
             moment_missing: 0,
-            iqa_unavailable: false,
+            unavailable: None,
             stored_metadata: Default::default(),
         });
     };
@@ -436,9 +430,9 @@ async fn compute_groups(
     }
     let ranking = &cfg.ranking;
 
-    // The moment is judged only where the preset weights it. Each question is
-    // a text-tower call and a set of dot products, and asking a landscape
-    // whether anyone is cheering produces a number that is then discarded.
+    // The moment is judged only where the preset weights it. Asking a
+    // landscape whether anyone is cheering produces a number that is then
+    // discarded — and its prompts are not worth preparing either.
     let moment_sets: Vec<(&'static str, &'static str)> = if ranking.semantic_weight > 0.0 {
         [
             (ranking.semantic_prompt_set, "cull_semantic_iqa"),
@@ -451,14 +445,16 @@ async fn compute_groups(
         Vec::new()
     };
     let moment_asked = params.use_iqa && !moment_sets.is_empty();
-    let mut iqa_unavailable = false;
+    let mut unavailable = None;
 
-    // Before grouping, because ranking runs inside it.
-    if params.use_iqa {
-        let mut passes = vec![(PromptSet::Quality, "cull_aesthetic_iqa")];
+    // Before grouping, because ranking runs inside it. Only when some photo
+    // can be scored: preparing the prompts may mean a text-tower run the first
+    // time ever, which is not worth paying for a run with nothing to score.
+    if params.use_iqa && embedded_count > 0 {
+        let mut passes = vec![(PromptSet::Quality, "cull_aesthetic_iqa", QUALITY_SIGNAL)];
         for (name, key) in &moment_sets {
             match PromptSet::from_name(name) {
-                Some(set) => passes.push((set, key)),
+                Some(set) => passes.push((set, key, MOMENT_SIGNAL)),
                 // A config typo. Log rather than fail: the rest of the ranking
                 // is unaffected, a cull that refuses to run over it helps
                 // nobody, and the preset tests exist to catch it first.
@@ -472,12 +468,35 @@ async fn compute_groups(
         // or not: it decides whether closed eyes count as a blink, which the
         // ranking reads either way.
         if ranking.eyes_closed_intent_threshold > 0.0 {
-            passes.push((PromptSet::EyesClosedIntent, "cull_eyes_closed_intent_iqa"));
+            passes.push((
+                PromptSet::EyesClosedIntent,
+                "cull_eyes_closed_intent_iqa",
+                KISS_GATE_SIGNAL,
+            ));
         }
-        for (set, key) in passes {
-            if apply_prompt_scores(state, &mut records, set, key) == PromptScoring::Unavailable {
-                iqa_unavailable = true;
+
+        // One preparation for every set the run asks, so a first run that
+        // has to embed them pays for a single text-tower pass.
+        let sets: Vec<PromptSet> = passes.iter().map(|(set, _, _)| *set).collect();
+        let prompts =
+            crate::prompt_embeddings::prepare(state, &crate::prompt_embeddings::texts_of(&sets))
+                .await;
+        let mut lost: Vec<&'static str> = Vec::new();
+        for (set, key, signal) in passes {
+            if apply_prompt_scores(&prompts, &mut records, set, key).is_none()
+                && !lost.contains(&signal)
+            {
+                lost.push(signal);
             }
+        }
+        if !lost.is_empty() {
+            unavailable = Some(UnavailableSignals {
+                signals: lost,
+                why: prompts
+                    .problem()
+                    .unwrap_or("their prompts could not be prepared")
+                    .to_string(),
+            });
         }
     }
 
@@ -521,8 +540,17 @@ async fn compute_groups(
         embedded_count,
         moment_asked,
         moment_missing,
-        iqa_unavailable,
+        unavailable,
     })
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn join_as_prose(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// The user-facing caveats for a grouping run, most fundamental first; empty
@@ -536,6 +564,8 @@ async fn compute_groups(
 ///
 /// A list, not one slot: an unindexed photo and an unjudged moment are two
 /// problems with two different fixes, and the second must not erase the first.
+/// One cause is still said once: signals lost to the same missing model share
+/// one message rather than one each.
 fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
     const MOMENT: &str = "the moment (emotion, expression, action)";
     let mut warnings = Vec::new();
@@ -570,20 +600,21 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
         });
         return warnings;
     }
-    if outcome.iqa_unavailable {
-        warnings.push(if outcome.moment_asked {
-            format!(
-                "The image model could not be loaded, so {MOMENT} was not judged and photos \
-                 were ranked on sharpness, exposure and faces only. Run \"Download AI models\" \
-                 in Plug-in Manager, then cull again."
-            )
-        } else {
-            "The image model could not be loaded, so the aesthetic impression was judged \
-             with a simpler fallback. Run \"Download AI models\" in Plug-in Manager, then \
-             cull again."
-                .to_string()
-        });
-    } else if outcome.moment_missing > 0 {
+    let moment_lost = outcome
+        .unavailable
+        .as_ref()
+        .is_some_and(|u| u.signals.contains(&MOMENT_SIGNAL));
+    if let Some(u) = &outcome.unavailable {
+        warnings.push(format!(
+            "Ranking ran without {} because {}. Picks rest on the remaining measurements \
+             (sharpness, exposure, faces) alone.",
+            join_as_prose(&u.signals),
+            u.why
+        ));
+    }
+    // Every photo misses the moment when its prompts are missing; that is the
+    // message above, not a second one about photos to prepare.
+    if !moment_lost && outcome.moment_missing > 0 {
         warnings.push(format!(
             "{} photo(s) have no image analysis yet, so {MOMENT} was not judged for them or \
              for the photos grouped with them. Run 'Cull Similar Photos' again and choose \
@@ -621,10 +652,9 @@ async fn group_similar(State(state): State<Arc<AppState>>, body: Option<Json<Val
                 .iter()
                 .map(|g| group_to_json(g, &params, &outcome))
                 .collect();
-            let mut response = json!({"groups": json_groups});
+            let mut response = json!({"groups": json_groups, "warnings": warnings});
             if let Some(w) = joined_warning(&warnings) {
                 response["warning"] = json!(w);
-                response["warnings"] = json!(warnings);
             }
             Json(response).into_response()
         }
@@ -729,7 +759,7 @@ mod tests {
             embedded_count: embedded,
             moment_asked: true,
             moment_missing: 0,
-            iqa_unavailable: false,
+            unavailable: None,
             stored_metadata: Default::default(),
         }
     }
@@ -768,10 +798,18 @@ mod tests {
         assert!(!warnings[0].contains("moment"), "{warnings:?}");
     }
 
+    /// Signals lost to the one missing model: one message naming each of them
+    /// and the fix, not one per signal — and no second one telling the user
+    /// to prepare photos whose analysis is not what is missing.
     #[test]
-    fn an_unloadable_model_names_the_fix() {
+    fn unavailable_prompts_are_one_message_naming_the_fix() {
         let mut o = outcome(10, 0);
-        o.iqa_unavailable = true;
+        o.unavailable = Some(UnavailableSignals {
+            signals: vec![QUALITY_SIGNAL, MOMENT_SIGNAL],
+            why: "the AI search model is not downloaded yet — run \"Download AI models\" in \
+                  Plug-in Manager"
+                .into(),
+        });
         o.moment_missing = 10;
         let warnings = grouping_warnings(&o);
         assert_eq!(
@@ -779,10 +817,26 @@ mod tests {
             1,
             "the model is the one cause: {warnings:?}"
         );
-        assert!(warnings[0].contains("Download AI models") && warnings[0].contains("moment"));
+        assert!(
+            warnings[0].contains("quality score and the AI judgement of the moment")
+                && warnings[0].contains("Download AI models"),
+            "{warnings:?}"
+        );
 
-        o.moment_asked = false;
+        // Only the quality prompts missing — the moment's came from the
+        // database — leaves the unprepared photos their own message.
+        o.unavailable.as_mut().unwrap().signals = vec![QUALITY_SIGNAL];
+        o.moment_missing = 2;
         let warnings = grouping_warnings(&o);
-        assert!(warnings[0].contains("aesthetic"), "{warnings:?}");
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(!warnings[0].contains("moment"), "{warnings:?}");
+        assert!(warnings[1].starts_with("2 photo(s) have no image analysis"));
+    }
+
+    #[test]
+    fn lost_signals_are_listed_as_prose() {
+        assert_eq!(join_as_prose(&["a"]), "a");
+        assert_eq!(join_as_prose(&["a", "b"]), "a and b");
+        assert_eq!(join_as_prose(&["a", "b", "c"]), "a, b and c");
     }
 }

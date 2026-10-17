@@ -133,9 +133,10 @@ pub struct RankingConfig {
     /// **One axis per preset, never averaged with another.** Blending two
     /// dilutes both. The one exception is [`Self::emotion_prompt_set`], and it
     /// is not a blend: it is combined by max, so either question being answered
-    /// "yes" makes the moment, and neither can water the other down. The text
-    /// tower runs once per server lifetime per set, so the cost is a second set
-    /// of dot products per photo.
+    /// "yes" makes the moment, and neither can water the other down. Its
+    /// prompt vectors are embedded once per model and kept in the database
+    /// like every other set's, so the cost is a second set of dot products per
+    /// photo.
     pub semantic_prompt_set: Option<&'static str>,
     /// How much that axis moves the rank, as a convex blend over the quality
     /// score. Zero for presets with no axis.

@@ -38,7 +38,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 	-- Metadata generation options
 	props.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
-	props.prompts = prefs.prompts
+	-- A copy, edited by the dialog and assigned back on OK: LrPrefs saves a key
+	-- when it is assigned, not when the table under it changes, and editing the
+	-- stored table itself would also keep edits the user cancelled -- in memory
+	-- until a restart, or for good once some later save assigned it.
+	props.prompts = Util.deepcopy(prefs.prompts)
 	-- The stored name can point at a prompt that is no longer there. Resolving
 	-- it here is what keeps the picker's value among its items; see
 	-- Util.resolvePromptName for what a dangling name does to the dialog.
@@ -453,8 +457,11 @@ local function showAnalyzeAndIndexDialog(ctx)
 							width = share("labelWidth"),
 						}),
 						f:checkbox({ value = bind("useTopLevelKeyword") }),
-						f:edit_field({
+						f:combo_box({
 							value = bind("topLevelKeyword"),
+							-- The ones used recently first, then every other
+							-- top-level keyword LrGeniusAI knows about.
+							items = Util.historyItems(prefs.topLevelKeywordHistory, prefs.knownTopLevelKeywords),
 							width_in_chars = 20,
 							enabled = bind("useTopLevelKeyword"),
 						}),
@@ -734,13 +741,17 @@ local function showAnalyzeAndIndexDialog(ctx)
 		prefs.useCatalogKeywordStructure = props.useCatalogKeywordStructure
 		prefs.useTopLevelKeyword = props.useTopLevelKeyword
 		prefs.topLevelKeyword = props.topLevelKeyword
+		if props.useTopLevelKeyword then
+			prefs.topLevelKeywordHistory =
+				Util.pushHistory(prefs.topLevelKeywordHistory, props.topLevelKeyword, Defaults.inputHistoryLength)
+		end
 		prefs.bilingualKeywords = props.bilingualKeywords
 		prefs.keywordSecondaryLanguage = props.keywordSecondaryLanguage
 		prefs.keywordAliases = props.keywordAliases
 
 		-- Keep track of used top-level keywords
-		if props.useTopLevelKeyword and not Util.table_contains(prefs.knownTopLevelKeywords, props.topLevelKeyword) then
-			table.insert(prefs.knownTopLevelKeywords, props.topLevelKeyword)
+		if props.useTopLevelKeyword then
+			Util.appendToPrefsList(prefs, "knownTopLevelKeywords", props.topLevelKeyword)
 		end
 
 		return props
@@ -907,7 +918,7 @@ LrTasks.startAsyncTask(function()
 				return
 			end
 			local connectionErr
-			connection, connectionErr = AiProviders.connectionOptions(providerFromKey, prefs)
+			connection, connectionErr = AiProviders.connectionOptions(providerFromKey, Secrets.connectionFields(prefs))
 			if not connection then
 				LrDialogs.showError(connectionErr)
 				return

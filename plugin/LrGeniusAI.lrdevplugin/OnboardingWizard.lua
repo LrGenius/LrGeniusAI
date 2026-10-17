@@ -31,9 +31,8 @@ function OnboardingWizard.show(manualTrigger)
 			propertyTable.assetsReady = false
 			propertyTable.assetsSizeText = ""
 			propertyTable.useClip = prefs.useClip or false
-			propertyTable.geminiApiKey = prefs.geminiApiKey or ""
-			propertyTable.chatgptApiKey = prefs.chatgptApiKey or ""
-			propertyTable.anthropicApiKey = prefs.anthropicApiKey or ""
+			local loadedApiKeys =
+				Secrets.loadInto(propertyTable, { "geminiApiKey", "chatgptApiKey", "anthropicApiKey" })
 			LocalModelCatalog.initFields(propertyTable)
 
 			local f = LrView.osFactory()
@@ -488,9 +487,7 @@ function OnboardingWizard.show(manualTrigger)
 				prefs.onboardingCompleted = true
 				if result == "ok" then
 					-- Save settings
-					prefs.geminiApiKey = propertyTable.geminiApiKey
-					prefs.chatgptApiKey = propertyTable.chatgptApiKey
-					prefs.anthropicApiKey = propertyTable.anthropicApiKey
+					Secrets.saveChanged(propertyTable, loadedApiKeys)
 					prefs.useClip = propertyTable.useClip
 					log:info("Onboarding wizard completed with OK.")
 				else

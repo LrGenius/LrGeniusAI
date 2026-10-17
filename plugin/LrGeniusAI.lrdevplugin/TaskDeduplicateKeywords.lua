@@ -524,7 +524,7 @@ LrTasks.startAsyncTask(function()
 				return
 			end
 			local prov, mdl = AiProviders.splitModelKey(warnProps.modelKey)
-			local connection, connectionErr = AiProviders.connectionOptions(prov, prefs)
+			local connection, connectionErr = AiProviders.connectionOptions(prov, Secrets.connectionFields(prefs))
 			if not connection then
 				scanScope:done()
 				LrDialogs.showError(connectionErr)

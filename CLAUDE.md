@@ -169,6 +169,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
 - New top-level actions must follow the `Task*.lua` naming convention.
 - `APISearchIndex.lua` must be kept in sync with any backend API changes.
+- API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
 
 ### Rust / Backend (`server-rs/`)
 

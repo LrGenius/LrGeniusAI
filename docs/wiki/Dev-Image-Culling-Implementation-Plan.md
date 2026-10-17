@@ -569,10 +569,12 @@ Covers outstanding items 1, 2, 4, 5, 6 and 10 of the previous list.
   nominated for rejection. Surfaced as `keep_all` / `intentional_set` on each
   group and a dedicated Lightroom collection.
 - **CLIP-IQA aesthetics** (`lrg-ml::clip_iqa`). Five antonym prompt pairs
-  embedded once per server lifetime; every photo is then a handful of dot
-  products against the SigLIP2 vector already in the database. Blended against
+  embedded once per model and stored in the database's `text_embeddings`
+  table; every photo is then a handful of dot products against the SigLIP2
+  vector already in the database. Blended against
   the old heuristic at `aesthetic_iqa_weight` (0.8). Degrades silently to the
-  heuristic when there is no embedding or no reachable text tower.
+  heuristic when there is no embedding, and to the heuristic plus a caveat in
+  the response when the prompt vectors cannot be had.
 - **Group-relative exposure.** The absolute target of mean luminance 0.5 marks
   every frame of a low-key set as badly exposed and then cannot tell them apart.
   Exposure is now blended toward its position in the group's own range
@@ -813,8 +815,12 @@ model: everything is answered from the stored SigLIP2 embedding.
   counts the last one in its completion message.
 - **Warnings that reach the dialog.** `/cull/grade` and `/cull/groups` return a
   `warnings` list (and the joined `warning` for older plugins): photos whose
-  moment was not judged, or an image model that would not load.
-  `apply_prompt_scores` reports why it scored nothing instead of returning 0.
+  moment was not judged, or prompt vectors that were neither in the
+  `text_embeddings` table nor obtainable from the text tower — one message for
+  every signal that cause took out. The emotion and kiss-gate prompts are
+  prepared together with the quality set, in one text-tower pass the first time
+  and from the database after that. `apply_prompt_scores` returns `None` for a
+  set it could not score instead of 0.
 - **The plugin prepares what the preset needs**: `Util.cullPrepTasks` adds
   `embeddings` to the prep pass for every preset but `default`, and the model
   check asks for the image model as well as the face model.

@@ -256,7 +256,9 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
   with large or messy hierarchies: everything you have gets offered to the
   model.
 - **Top-level Keyword** — nests everything generated under one keyword of your
-  choosing, so AI keywords stay separable from your own.
+  choosing, so AI keywords stay separable from your own. Its drop-down menu
+  offers the ones you used recently, then the other top-level keywords
+  LrGeniusAI knows about; *Retrieve Metadata from Backend* shares the same list.
 - **Bilingual Keywords** — additionally produces keywords in a second language.
 - **Keyword aliases** — reuses keywords already in your catalog instead of
   creating near-duplicates ("bicycle" vs "bike"). See
@@ -325,6 +327,10 @@ Both are ordinary templates once they appear: edit them, add your own, delete
 what you do not want. A template you delete stays deleted, and one you rewrite
 stays rewritten — the plug-in only ever offers each built-in once. "Reset to
 defaults" in the prompt dialog brings both back.
+
+Template changes made in this dialog — edits, new templates, deletions — are
+kept when you start the run and dropped when you press **Cancel**, the same as
+every other setting here.
 
 **Clearing a template's text** is allowed and is saved: an empty template means
 "no persona of my own", and the run uses the backend's built-in one instead of
@@ -423,4 +429,5 @@ Extra information sent alongside the photo to improve accuracy:
 - **Retrieve Metadata from Backend** — apply stored results to the catalog
   later, or after a failed write.
 - **Import Metadata from Catalog** — one-way sync of your Lightroom metadata
-  into the backend database.
+  into the backend database. The top-level keyword is left out of the keywords
+  it sends: it only groups the AI keywords, it does not describe the photo.
