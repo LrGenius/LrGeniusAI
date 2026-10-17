@@ -659,6 +659,63 @@ async fn cull_warns_when_no_embeddings_are_stored() {
     assert_eq!(json["summary"]["group_count"], 1);
 }
 
+/// Binding a database stamps the embedding identity on rows written before
+/// the field existed, once, and leaves a row naming another model alone.
+#[tokio::test]
+async fn binding_stamps_the_embedding_model_on_rows_that_predate_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    {
+        // What an older build left: a store with no upgrade marker.
+        let lance_root = lrg_store::migrate::lance_root_for_db(&db_path);
+        let store = lrg_store::Store::open(&lance_root).await.unwrap();
+        let row = |id: &str, model: Option<&str>| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(true));
+            if let Some(model) = model {
+                m.insert("embedding_model".into(), serde_json::json!(model));
+            }
+            lrg_store::StoreRecord {
+                id: id.into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        };
+        store
+            .upsert(
+                lrg_store::IMAGE_TABLE,
+                &[row("old", None), row("other", Some("some-previous-model"))],
+            )
+            .await
+            .unwrap();
+    }
+
+    let (_, state) = fresh_app();
+    state
+        .ensure_db_path(db_path.to_str().unwrap())
+        .await
+        .unwrap();
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &["old".to_string(), "other".to_string()],
+        )
+        .await
+        .unwrap();
+    let model_of = |id: &str| {
+        rows.iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.metadata.get("embedding_model"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(model_of("old").as_deref(), Some(lrg_ml::siglip::MODEL_ID));
+    assert_eq!(model_of("other").as_deref(), Some("some-previous-model"));
+}
+
 #[tokio::test]
 async fn cull_rejects_unknown_preset_with_the_available_list() {
     let (app, _) = fresh_app();

@@ -31,6 +31,7 @@ use serde_json::{Map, Value};
 
 pub mod meta;
 pub mod migrate;
+pub mod upgrade;
 
 /// Table names match the Chroma collection names 1:1 so the migration and
 /// the service layer share vocabulary.

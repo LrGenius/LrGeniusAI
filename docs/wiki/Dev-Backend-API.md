@@ -223,6 +223,12 @@ existed since before this field, so an absent identity is the normal state of ev
 and re-queueing on absence would re-embed a whole catalog to settle a maybe. A present identity that
 differs always re-queues.
 
+Absence is rare in practice now: binding a database runs a one-time store upgrade
+(`lrg_store::upgrade`, step `0001-stamp-embedding-model`, recorded in `upgrades.json` in the lance
+root) that stamps this build's `embedding_model` on every stored vector that has none. That is safe
+because only one SigLIP2 export has ever shipped. A row naming another model keeps its name, and
+the absent-is-current rule stays for any row an older build writes after the upgrade has run.
+
 ### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 

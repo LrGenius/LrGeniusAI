@@ -1,6 +1,7 @@
 //! Shared application state, including the db_path bind state machine
 //! (port of `services/chroma.ensure_db_path`): binding opens the LanceDB
-//! store and auto-runs the one-time Chroma migration when needed.
+//! store, auto-runs the one-time Chroma migration when needed, and applies any
+//! pending store upgrades (`lrg_store::upgrade`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,7 +13,7 @@ use lrg_common::{config, jobs::JobRegistry, logging};
 use lrg_ml::bioclip::{BioclipModel, BioclipModelPaths};
 use lrg_ml::faces::{FaceModel, FaceModelPaths};
 use lrg_ml::siglip::{ModelPaths as SiglipModelPaths, SiglipModel};
-use lrg_store::{migrate, Store};
+use lrg_store::{migrate, upgrade, Store};
 
 use crate::llm_engine::LlmEngineSlot;
 use crate::mlx_engine::MlxEngineSlot;
@@ -204,10 +205,11 @@ impl AppState {
     }
 
     /// Bind the backend to `db_path`: open the store (running the one-time
-    /// Chroma migration when applicable) and move the log file next to the
-    /// catalog. Returns true if a switch/init happened, false when the path
-    /// was already active — matching the Python semantics where "already
-    /// bound" requires both the path to match AND the client to be open.
+    /// Chroma migration when applicable, then any pending store upgrades) and
+    /// move the log file next to the catalog. Returns true if a switch/init
+    /// happened, false when the path was already active — matching the
+    /// Python semantics where "already bound" requires both the path to match
+    /// AND the client to be open.
     pub async fn ensure_db_path(&self, db_path: &str) -> Result<bool, String> {
         if db_path.is_empty() {
             return Ok(false);
@@ -240,6 +242,26 @@ impl AppState {
             .map_err(|e| format!("failed to open store at {}: {e}", lance_root.display()))?;
         if let Some(summary) = migrate::ensure_migrated(&new_path, &lance_root, &store).await? {
             log::info!("Chroma migration completed: {summary}");
+        }
+        // After the Chroma migration, so rows it just brought over are
+        // upgraded too, and before the store is published, so no request
+        // writes alongside a step.
+        let report = upgrade::ensure_upgraded(
+            &lance_root,
+            &store,
+            &upgrade::UpgradeContext {
+                embedding_model: lrg_ml::siglip::MODEL_ID,
+            },
+        )
+        .await;
+        for (step, summary) in &report.applied {
+            log::info!("Store upgrade {step} completed: {summary}");
+        }
+        if let Some((step, e)) = &report.failed {
+            // Not reported to the user: nothing reads worse for it. The only
+            // step so far stamps an identity that, while absent, is already
+            // taken as current, and it is retried on the next bind.
+            log::warn!("Store upgrade {step} failed, will retry on the next bind: {e}");
         }
 
         *self.store.write().unwrap() = Some(Arc::new(store));
