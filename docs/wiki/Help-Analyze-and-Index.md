@@ -256,7 +256,9 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
   with large or messy hierarchies: everything you have gets offered to the
   model.
 - **Top-level Keyword** — nests everything generated under one keyword of your
-  choosing, so AI keywords stay separable from your own.
+  choosing, so AI keywords stay separable from your own. Its drop-down menu
+  offers the ones you used recently, then the other top-level keywords
+  LrGeniusAI knows about; *Retrieve Metadata from Backend* shares the same list.
 - **Bilingual Keywords** — additionally produces keywords in a second language.
 - **Keyword aliases** — reuses keywords already in your catalog instead of
   creating near-duplicates ("bicycle" vs "bike"). See
