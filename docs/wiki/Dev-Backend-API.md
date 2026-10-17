@@ -12,9 +12,27 @@ This reference is intended for developers integrating with or extending the back
 Minimal liveness check. Returns `{"status": "ok"}`.
 
 ### `GET /v1/server/health`
-Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
-`face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
-`"failed"`. It does **not** report cloud/local LLM provider availability —
+Returns local model load state. Each `*_model` field is `"loaded"`,
+`"not_loaded"`, or `"failed"`, with a matching `*_error` carrying the message
+when it is `"failed"`.
+
+| Field | What it covers |
+|---|---|
+| `clip_model` / `clip_error` | The SigLIP2 pair, as it has always been. `"failed"` if **either** tower failed, `"loaded"` if **either** is resident. |
+| `clip_image_model` / `clip_image_error` | The SigLIP2 **image** tower alone — what indexing and the training path embed with. |
+| `clip_text_model` / `clip_text_error` | The SigLIP2 **text** tower alone — what search, keyword lookup and the CLIP-IQA prompt sets embed with. |
+| `face_model` / `face_error` | YuNet + FaceNet. |
+| `species_model` / `species_error` | BioCLIP 2. |
+
+The two SigLIP2 towers load and idle-unload **independently**, so an
+embeddings-only indexing run leaves `clip_image_model: "loaded"` and
+`clip_text_model: "not_loaded"`, and a semantic search does the opposite.
+`clip_model` is kept as the pair so that a client reading only that field still
+learns that something failed rather than missing a failure on the tower it does
+not ask about; the per-tower fields are additive and a server older than them
+does not send them.
+
+It does **not** report cloud/local LLM provider availability —
 the backend has no stored API keys or base URLs to probe on a bare GET. The
 plugin checks provider availability itself (stored keys, an Other AI server
 address, and whether `POST /v1/llm/providers/models` lists anything for the
@@ -186,6 +204,31 @@ Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
 ### `POST /v1/index/unprocessed`
 Given a list of `photo_id` values, returns which ones are not yet indexed or are missing specific data.
 
+"Missing" is per task, and where the producer of a field can change it means *produced by the
+producer this build uses*, not merely present:
+
+| task | outstanding when |
+| --- | --- |
+| `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
+| `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
+| `species` | no `species_checked`, or a `species_model` that is not the head on disk |
+| `cull` | no `cull_phash`, or no `cull_faces_present` key |
+| `metadata` | no title, caption, alt_text or keywords |
+
+`regenerate_metadata` overrides all of them.
+
+The two identity fields differ in one respect, deliberately. For `faces`, a missing `face_model`
+re-queues the photo. For `embeddings`, a missing `embedding_model` does **not**: `has_embedding` has
+existed since before this field, so an absent identity is the normal state of every existing index,
+and re-queueing on absence would re-embed a whole catalog to settle a maybe. A present identity that
+differs always re-queues.
+
+Absence is rare in practice now: binding a database runs a one-time store upgrade
+(`lrg_store::upgrade`, step `0001-stamp-embedding-model`, recorded in `upgrades.json` in the lance
+root) that stamps this build's `embedding_model` on every stored vector that has none. That is safe
+because only one SigLIP2 export has ever shipped. A row naming another model keeps its name, and
+the absent-is-current rule stays for any row an older build writes after the upgrade has run.
+
 ### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 
@@ -249,9 +292,64 @@ Finds photos similar to a reference photo using perceptual hash (phash) or CLIP 
 
 ### `POST /v1/cull/groups`
 Groups a set of photos into similarity clusters (used internally by the culling workflow).
+Takes the same request fields as `/v1/cull/grade` and returns its `groups`,
+`warnings` and `warning` (see below); no `summary`.
 
 ### `POST /v1/cull/grade`
 Runs the full culling pipeline on a set of photos: grouping, scoring, and classification into picks/alternates/rejects.
+
+**Key request fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `photo_ids` | array | Photos to cull. Ids with no stored record are skipped and counted in `summary.unindexed_count` |
+| `culling_preset` | string | `default`, `portrait`, `street`, `event` or `sports`. 400 with `available_presets` for anything else |
+| `time_delta_seconds` | int | Burst window. Absent means the preset's own |
+| `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
+| `use_iqa` | bool | Score the CLIP-IQA signals (aesthetic, moment, kiss gate) over the stored SigLIP2 embeddings. Default true |
+| `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
+| `include_debug` | bool | Per-group thresholds and pairwise distances |
+
+Every preset except `default` judges the **moment**: the stronger of the
+preset's axis (`cull_semantic_iqa`: action, expression or candid) and, for
+`sports` and `event`, an emotion question (`cull_emotion_iqa`). `event` and
+`portrait` also ask whether closed eyes are a kiss or a laugh
+(`cull_eyes_closed_intent_iqa`), which lifts the blink penalty. All three are
+computed per request from the stored embedding against prompt vectors kept in
+the database (below), and never stored themselves. Within a
+group the moment applies only when every frame has it, and frames with a
+defect no edit repairs (blur, unintended closed eyes, occlusion) always rank
+below usable ones.
+
+**Response:**
+
+| Field | Type | Description |
+|---|---|---|
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
+| `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
+| `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eyes_closed_intended` when true, and always `clear_defect` |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos whose moment was not judged. Empty when there is nothing to say |
+| `warning` | string or null | The same messages joined, for clients older than `warnings` |
+
+Both routes return `warnings`, every caveat for the run as a list, and `warning`, the same
+caveats joined into the one string the plugin shows (`null` when there are none). Besides photos
+that were never analyzed and photos without embeddings, a caveat is raised when an AI signal the
+run asked for — quality, moment, kiss gate — could not be computed: each compares a photo's stored
+embedding against fixed prompt vectors, and those were neither in the database nor obtainable from
+the text tower, almost always because the SigLIP2 model is not downloaded. The signals lost to that
+one cause share one message, and ranking rests on the technical measurements alone.
+
+The prompt vectors — CLIP-IQA quality, genre and emotion sets, the culling kiss gate, the organism
+gate `/v1/index/photos` uses in front of BioCLIP, the scene probes of `/v1/edit/training` and
+`/v1/edit/style` — live in the `text_embeddings` table (`model_id`, `text`, `vector`). A request prepares the prompts it needs
+once, before any per-photo work: from memory, else from the table for this build's
+`lrg_ml::siglip::MODEL_ID`, else with the text tower, whose results are stored and which is unloaded
+again straight away if the request loaded it. So each prompt is embedded once per model per
+database, and in normal use only a free-text search or keyword clustering loads the text tower.
+Only the prompts the request needs: on a CPU without fast fp16 one text-tower pass can take many
+seconds, and a first cull must stay inside the plugin's request timeout.
 
 ---
 
@@ -533,7 +631,13 @@ answer to "will anything pick this up".
 ## Metadata Import
 
 ### `POST /v1/photos/metadata/import`
-Imports existing Lightroom catalog metadata (keywords, title, caption, rating, etc.) into the backend database for a batch of photos.
+Imports existing Lightroom catalog metadata (title, caption, alt text and keywords) into the backend database for a batch of photos.
+
+`metadata_items[].keywords` is the photo's keyword hierarchy
+(`MetadataManager.getPhotoKeywordHierarchy`) without the plugin's top-level
+container keyword ("LrGeniusAI", "ChatGPT", ...). Analysis results have no such
+root either, and "Retrieve Metadata" writes a stored hierarchy back underneath
+the container, so a root left in would come back nested inside itself.
 
 ---
 

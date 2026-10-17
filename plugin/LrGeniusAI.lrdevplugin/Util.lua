@@ -563,6 +563,88 @@ function Util.promptForRequest(text)
 	return trimmed
 end
 
+-- How many earlier inputs an editable drop-down offers when no length is given.
+local DEFAULT_HISTORY_LENGTH = 15
+
+---
+-- Puts `entry` at the top of a most-recent-first input history.
+--
+-- Backs the editable drop-downs (search term, top-level keyword, style label):
+-- what was used last is offered first next time. Blank entries are not
+-- recorded, and an earlier copy of the same entry -- compared without regard
+-- to case or surrounding space -- moves up instead of appearing twice, in the
+-- spelling used most recently.
+--
+-- Returns a new table rather than editing `history`. LrPrefs saves a table
+-- when it is assigned, not when its contents change, so a `table.insert` into
+-- the stored one would be gone the next time Lightroom starts.
+--
+-- @param history table|nil The stored list, most recent first.
+-- @param entry string|nil What was just used.
+-- @param maxEntries number|nil How many to keep; 15 when omitted.
+-- @return table The new list, to assign back to prefs.
+--
+function Util.pushHistory(history, entry, maxEntries)
+	local limit = tonumber(maxEntries) or DEFAULT_HISTORY_LENGTH
+	local result = {}
+	local seen = {}
+	local function add(value)
+		if #result >= limit or type(value) ~= "string" then
+			return
+		end
+		local trimmed = Util.trim(value)
+		local key = string.lower(trimmed)
+		if trimmed == "" or seen[key] then
+			return
+		end
+		seen[key] = true
+		table.insert(result, trimmed)
+	end
+
+	add(entry)
+	if type(history) == "table" then
+		for _, value in ipairs(history) do
+			add(value)
+		end
+	end
+	return result
+end
+
+---
+-- The items for an editable drop-down: the history first, then any of
+-- `extras` it does not already hold.
+--
+-- `extras` covers the values worth offering before anything has been typed --
+-- the top-level keywords LrGeniusAI already knows about, say. Duplicates and
+-- blanks are dropped the same way Util.pushHistory drops them, and anything
+-- that is not a string is skipped, so a damaged prefs entry yields a shorter
+-- list rather than a dialog that fails to open.
+--
+-- @param history table|nil Most recent first, as Util.pushHistory keeps it.
+-- @param extras table|nil Further values, offered after the history.
+-- @return table Array of strings, for a combo_box's `items`.
+--
+function Util.historyItems(history, extras)
+	local items = Util.pushHistory(history, nil, math.huge)
+	local seen = {}
+	for _, value in ipairs(items) do
+		seen[string.lower(value)] = true
+	end
+	if type(extras) == "table" then
+		for _, value in ipairs(extras) do
+			if type(value) == "string" then
+				local trimmed = Util.trim(value)
+				local key = string.lower(trimmed)
+				if trimmed ~= "" and not seen[key] then
+					seen[key] = true
+					table.insert(items, trimmed)
+				end
+			end
+		end
+	end
+	return items
+end
+
 ---
 -- Splits a flattened keyword list into ordinary keywords and face tags.
 --
@@ -1237,6 +1319,39 @@ function Util.deepcopy(o, seen)
 end
 
 ---
+-- Adds a value to a list kept in the preferences, in a way that gets saved.
+--
+-- LrPrefs saves a preference when its key is assigned, and the SDK warns it
+-- may not notice a change made inside a table already stored under a key. So
+-- `table.insert(prefs.someList, x)` changes the list for this session only,
+-- and the addition is gone once Lightroom restarts. The list is copied,
+-- extended and assigned back instead. The copy also leaves alone the table the
+-- preference was seeded with: `knownTopLevelKeywords` starts out as
+-- `Defaults.defaultTopLevelKeywords` itself, not a copy of it.
+--
+-- @param store table The preferences (`prefs`), or a table standing in for them.
+-- @param key string The preference holding the list.
+-- @param value any The value to add; nil adds nothing.
+-- @return boolean Whether the value was added; false when it was already there.
+--
+function Util.appendToPrefsList(store, key, value)
+	if value == nil then
+		return false
+	end
+	local current = store[key]
+	if type(current) ~= "table" then
+		current = {}
+	end
+	if Util.table_contains(current, value) then
+		return false
+	end
+	local updated = Util.deepcopy(current)
+	table.insert(updated, value)
+	store[key] = updated
+	return true
+end
+
+---
 -- Returns true if a table is a keyword leaf object.
 -- Supported shape: { name = "keyword", synonyms = { ... } }
 local function isKeywordLeafObject(value)
@@ -1669,6 +1784,48 @@ function Util.get_keys(t)
 		table.insert(keys, key)
 	end
 	return keys
+end
+
+---
+-- Frees the models the backend is holding in memory, on demand.
+--
+-- The backend loads the two SigLIP2 towers, the face pair and BioCLIP lazily
+-- and drops them again after 30 minutes without a request. Until this existed
+-- the only way to hand that memory back sooner was to quit Lightroom: the
+-- plug-in called `/server/unload` from its shutdown function and nowhere else,
+-- so a session that indexed a catalog and then sat idle kept several GB
+-- resident with no way to release it (#405).
+--
+-- Nothing is lost by unloading. Each model is loaded again the next time it is
+-- needed — the first analysis, search or cull after this costs a few seconds —
+-- and the index, the database and the models on disk are untouched.
+--
+-- Deliberately does not start the backend. Unloading is only meaningful
+-- against a running server, and starting one in order to empty it would be the
+-- opposite of what the button is for.
+function Util.unloadModelsDialog()
+	if not SearchIndexAPI.pingServer() then
+		LrDialogs.message(
+			"AI models",
+			"The backend is not running, so there are no models in memory. Nothing was changed.",
+			"info"
+		)
+		return
+	end
+
+	if SearchIndexAPI.unloadResources() then
+		log:trace("Backend models unloaded on request")
+		LrDialogs.message(
+			"AI models unloaded",
+			"The models were released and the memory they were holding is free.\n\nThe next analysis, search or cull loads them again, which takes a few seconds.",
+			"info"
+		)
+	else
+		ErrorHandler.handleError(
+			"Could not unload the AI models",
+			"The backend did not answer the unload request. It may have stopped in the meantime — check the server status and try again."
+		)
+	end
 end
 
 function Util.waitForServerDialog(options)
@@ -2557,6 +2714,91 @@ function Util.formatDownloadSize(bytes)
 		return string.format("%.1f GB", n / 1e9)
 	end
 	return string.format("%.0f MB", n / 1e6)
+end
+
+---
+-- Whether a culling preset judges the moment: emotion, expression, action.
+--
+-- Mirrors the backend presets, where every one but `default` gives the moment
+-- weight. `default` spans every genre and has no moment question that is right
+-- for all of them. The moment is read from the SigLIP2 embedding, which is
+-- why this decides what the cull prep pass computes.
+--
+-- @param preset string|nil Culling preset name.
+-- @return boolean
+--
+function Util.cullPresetJudgesMoment(preset)
+	return type(preset) == "string" and preset ~= "" and preset ~= "default"
+end
+
+---
+-- The index tasks the cull prep pass sends for a preset.
+--
+-- `cull` alone is the fast path: pHash, image metrics, face quality, no
+-- embedding. A preset that judges the moment adds `embeddings`, because
+-- without one the backend has nothing to judge it from and quietly ranks on
+-- sharpness alone — the very gap the moment exists to close.
+--
+-- @param preset string|nil Culling preset name.
+-- @return table Task names.
+--
+function Util.cullPrepTasks(preset)
+	if Util.cullPresetJudgesMoment(preset) then
+		return { "cull", "embeddings" }
+	end
+	return { "cull" }
+end
+
+---
+-- A backend response's warnings as a list of distinct messages.
+--
+-- Prefers the `warnings` list. Falls back to the single `warning` string an
+-- older backend sends, so a plugin newer than its backend still reports.
+--
+-- @param response table|nil Decoded response.
+-- @return table List of strings, possibly empty.
+--
+function Util.responseWarnings(response)
+	if type(response) ~= "table" then
+		return {}
+	end
+	local source = response.warnings
+	if type(source) ~= "table" then
+		source = { response.warning }
+	end
+	local list, seen = {}, {}
+	for _, w in ipairs(source) do
+		if type(w) == "string" and w ~= "" and not seen[w] then
+			seen[w] = true
+			table.insert(list, w)
+		end
+	end
+	return list
+end
+
+---
+-- Joins warnings for one dialog: the first `maxShown`, then a count of the
+-- rest. A wall of lines is as unreadable as none, and dropping the rest
+-- silently would hide problems.
+--
+-- @param list table List of strings.
+-- @param maxShown number|nil Defaults to 5.
+-- @return string|nil nil when the list is empty.
+--
+function Util.formatWarningList(list, maxShown)
+	if type(list) ~= "table" or #list == 0 then
+		return nil
+	end
+	maxShown = maxShown or 5
+	local shown = {}
+	for i = 1, math.min(maxShown, #list) do
+		table.insert(shown, list[i])
+	end
+	local text = table.concat(shown, "\n\n")
+	if #list > #shown then
+		text = text .. "\n\n... and " .. tostring(#list - #shown) .. " more warnings"
+	end
+	return text
 end
 
 return Util

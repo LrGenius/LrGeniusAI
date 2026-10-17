@@ -65,10 +65,15 @@ fn ablate(mut cfg: CullingConfig, knob: &str) -> CullingConfig {
         "relative" => cfg.ranking.relative_normalization_weight = 0.0,
         "iqa" => cfg.ranking.aesthetic_iqa_weight = 0.0,
         "semantic" => cfg.ranking.semantic_weight = 0.0,
+        "emotion" => cfg.ranking.emotion_prompt_set = None,
+        "usable-gate" => cfg.ranking.usable_gate = false,
+        "kiss-gate" => cfg.ranking.eyes_closed_intent_threshold = 0.0,
+        "single-rejects" => cfg.ranking.reject_blurred_without_alternative = false,
         "sets" => cfg.sets.enabled = false,
         other => panic!(
             "unknown --ablate knob {other:?}; expected one of: \
-             sharpness-peak, relative, iqa, semantic, sets"
+             sharpness-peak, relative, iqa, semantic, emotion, usable-gate, kiss-gate, \
+             single-rejects, sets"
         ),
     }
     cfg
@@ -147,7 +152,8 @@ fn main() {
              --preset NAME   override each fixture's own culling_preset\n\
              --compare       also run CullingConfig::python_parity and show the delta\n\
              --ablate KNOB   also run with one knob rolled back, and show the delta\n\
-             \x20               (sharpness-peak | relative | iqa | semantic | sets)"
+             \x20               (sharpness-peak | relative | iqa | semantic | emotion |\n\
+             \x20                usable-gate | kiss-gate | single-rejects | sets)"
         );
         std::process::exit(if args.is_empty() { 2 } else { 0 });
     }

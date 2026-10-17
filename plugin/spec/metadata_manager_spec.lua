@@ -167,3 +167,142 @@ describe("MetadataManager.speciesSummary", function()
 		assert.is_nil(summary({ rank = "species" }))
 	end)
 end)
+
+-- The import sends each photo's catalog keywords to the backend as a
+-- hierarchy, and "Retrieve Metadata" later writes that hierarchy back under
+-- the current top-level keyword. The plugin's own container ("LrGeniusAI",
+-- "ChatGPT", ...) therefore has to be left out, or it comes back nested inside
+-- itself. The check used to compare the LrKeyword object against the list of
+-- names, which is never equal, so nothing was ever left out.
+describe("MetadataManager.keywordPath", function()
+	require("Defaults")
+	local keywordPath = MetadataManager.keywordPath
+
+	local function kw(name, parent, synonyms)
+		return { name = name, parent = parent, synonyms = synonyms }
+	end
+
+	local function access(topLevelNames)
+		return {
+			getName = function(k)
+				return k.name
+			end,
+			getParent = function(k)
+				return k.parent
+			end,
+			getSynonyms = function(k)
+				return k.synonyms
+			end,
+			topLevelNames = topLevelNames,
+		}
+	end
+
+	local known = { "LrGeniusAI", "Ollama", "LM Studio", "ChatGPT", "Google Gemini" }
+
+	it("leaves out a known container at the root", function()
+		local dog = kw("Dog", kw("Animals", kw("LrGeniusAI")))
+		assert.are.same({ "Animals", "Dog" }, keywordPath(dog, access(known)))
+	end)
+
+	it("leaves out every known container name, not only the default one", function()
+		local dog = kw("Dog", kw("Animals", kw("ChatGPT")))
+		assert.are.same({ "Animals", "Dog" }, keywordPath(dog, access(known)))
+	end)
+
+	-- The prefs keep the name as it was typed in the dialog, which need not
+	-- match the catalog keyword's spelling.
+	it("matches a container name regardless of case and surrounding spaces", function()
+		local dog = kw("Dog", kw("lrgeniusai"))
+		assert.are.same({ "Dog" }, keywordPath(dog, access({ " LrGeniusAI " })))
+	end)
+
+	-- A container the prefs never heard of: prefs reset, or a catalog shared
+	-- with another machine. applyMetadata stamps this synonym on every one.
+	it("leaves out a root carrying the container synonym even when its name is unknown", function()
+		local dog = kw("Dog", kw("My AI Keywords", nil, { "Something", Defaults.topLevelKeywordSynonym }))
+		assert.are.same({ "Dog" }, keywordPath(dog, access(known)))
+	end)
+
+	it("keeps a root keyword of the user's own", function()
+		local berlin = kw("Berlin", kw("Places"))
+		assert.are.same({ "Places", "Berlin" }, keywordPath(berlin, access(known)))
+	end)
+
+	-- Containers only ever live at the top of the keyword list; one of the same
+	-- name further down was made by the user.
+	it("keeps a container name that is not at the root", function()
+		local chatgpt = kw("ChatGPT", kw("Software"))
+		assert.are.same({ "Software", "ChatGPT" }, keywordPath(chatgpt, access(known)))
+
+		local nested = kw("Dog", kw("LrGeniusAI", kw("LrGeniusAI")))
+		assert.are.same({ "LrGeniusAI", "Dog" }, keywordPath(nested, access(known)))
+	end)
+
+	it("returns an empty path for the container itself", function()
+		assert.are.same({}, keywordPath(kw("LrGeniusAI"), access(known)))
+	end)
+
+	it("keeps everything when there is no container list or synonym accessor", function()
+		local dog = kw("Dog", kw("LrGeniusAI"))
+		local bare = access(nil)
+		bare.getSynonyms = nil
+		assert.are.same({ "LrGeniusAI", "Dog" }, keywordPath(dog, bare))
+	end)
+end)
+
+-- The SDK wrapper around keywordPath: the prefs list reaches the helper and
+-- the container is gone from what the import sends.
+describe("MetadataManager.getPhotoKeywordHierarchy", function()
+	require("Defaults")
+	local savedKnown
+
+	before_each(function()
+		savedKnown = prefs.knownTopLevelKeywords
+		prefs.knownTopLevelKeywords = { "LrGeniusAI" }
+	end)
+
+	after_each(function()
+		prefs.knownTopLevelKeywords = savedKnown
+	end)
+
+	local function lrKeyword(name, parent)
+		return {
+			getName = function()
+				return name
+			end,
+			getParent = function()
+				return parent
+			end,
+			getSynonyms = function()
+				return {}
+			end,
+		}
+	end
+
+	local function photoWith(keywords)
+		return {
+			getRawMetadata = function(_, key)
+				assert.are.equal("keywords", key)
+				return keywords
+			end,
+		}
+	end
+
+	it("files keywords under their categories without the container", function()
+		local root = lrKeyword("LrGeniusAI")
+		local dog = lrKeyword("Dog", lrKeyword("Animals", root))
+		local berlin = lrKeyword("Berlin", lrKeyword("Places"))
+
+		local hierarchy = MetadataManager.getPhotoKeywordHierarchy(photoWith({ root, dog, berlin }))
+
+		assert.is_nil(hierarchy.LrGeniusAI)
+		assert.is_nil(hierarchy[1])
+		assert.are.equal("Dog", hierarchy.Animals[1])
+		assert.are.equal("Berlin", hierarchy.Places[1])
+	end)
+
+	it("returns an empty table for a photo without keywords", function()
+		assert.are.same({}, MetadataManager.getPhotoKeywordHierarchy(photoWith({})))
+		assert.are.same({}, MetadataManager.getPhotoKeywordHierarchy(photoWith(nil)))
+	end)
+end)

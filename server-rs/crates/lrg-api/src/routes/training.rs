@@ -18,7 +18,7 @@ use lrg_analysis::training::{
 };
 use lrg_store::TRAINING_TABLE;
 
-use crate::routes::route_util::{compute_scene_tags, local_hour, parse_multipart, SinglePhotoForm};
+use crate::routes::route_util::{local_hour, parse_multipart, SinglePhotoForm};
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -221,10 +221,19 @@ async fn add_training_example(
         }
     }
 
-    let scene_tags: Vec<String> = embedding
-        .as_ref()
-        .map(|img_emb| compute_scene_tags(&state.siglip, img_emb))
-        .unwrap_or_default();
+    // Read from the stored prompt embeddings, so recording an example does
+    // not load the text tower. Empty when they cannot be had, as before: the
+    // tags only weight which examples a later edit borrows from, and the
+    // example is still recorded and used without them.
+    let scene_tags: Vec<String> = match embedding.as_ref() {
+        Some(img_emb) => crate::prompt_embeddings::prepare(
+            &state,
+            &crate::prompt_embeddings::scene_probe_texts(),
+        )
+        .await
+        .scene_tags(img_emb),
+        None => Vec::new(),
+    };
     metadata.insert("scene_tags".into(), json!(json!(scene_tags).to_string()));
 
     let record = lrg_store::StoreRecord {

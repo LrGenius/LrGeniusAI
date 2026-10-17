@@ -30,6 +30,8 @@ The plugin reads the current develop settings from Lightroom and sends them to t
 
 A short name for this set of training examples (e.g. `wedding_airy`, `street_bw`, `landscape_dramatic`). Use the same label when saving multiple sessions of a consistent style.
 
+The field's drop-down menu offers the labels you used before, so the next session of the same style can reuse its label exactly instead of a near-miss spelling that would read as a second style.
+
 ### Description (optional)
 
 A free-text summary of what this edit style represents. Helps the AI understand when to apply it.

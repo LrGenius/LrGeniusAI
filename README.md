@@ -44,6 +44,9 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 
 > **New here?** Follow the [Getting Started guide](https://github.com/LrGenius/LrGeniusAI/wiki/Getting-Started) — one path from installing to your first analyzed photos, nothing to choose along the way.
 
+> [!WARNING]
+> **Back up your Lightroom catalog before the first run.** LrGeniusAI writes its results into your catalog, and Lightroom counts each of those writes as an edit: every photo LrGeniusAI processes gets a new **Edit Date**, which cannot be set back. With *Automatically write changes into XMP* turned on, Lightroom also rewrites XMP sidecars and DNG/JPEG files, so cloud or NAS sync uploads them again. See [Before you start](https://github.com/LrGenius/LrGeniusAI/wiki/Getting-Started#before-you-start-back-up-your-catalog).
+
 1. Download the latest release from the [GitHub Releases page](https://github.com/LrGenius/LrGeniusAI/releases).
 2. Extract the ZIP file and add the plugin via the **Plug-in Manager** in Lightroom Classic.
 3. **Backend Server Setup (First Launch):**
