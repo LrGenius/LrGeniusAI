@@ -54,6 +54,12 @@ jobs:
           set -o pipefail
           python3 scripts/check-docs.py 2>&1 | tee /tmp/check-docs.txt
         continue-on-error: false
+      - name: Develop fixtures carry no private data
+        # server-rs/testdata/develop is derived from the maintainer's own
+        # Lightroom edits; the check is stdlib-only Python.
+        run: >-
+          python3 server-rs/scripts/develop_registry/extract_fixtures.py --check-only
+          --out-dir server-rs/testdata/develop/lua --root server-rs/testdata/develop
       - name: Report possibly-stale pages
         if: always()
         run: |
