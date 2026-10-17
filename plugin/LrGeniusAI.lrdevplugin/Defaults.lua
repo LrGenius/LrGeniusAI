@@ -82,6 +82,11 @@ Defaults.defaultKeywordAliases = false
 -- models.
 Defaults.catalogKeywordLimit = 500
 
+-- How many earlier inputs an editable drop-down (search term, top-level
+-- keyword, style label) remembers. Enough to find last week's searches again,
+-- short enough to scan without scrolling.
+Defaults.inputHistoryLength = 15
+
 -- Sampling temperature. Only models that do not reason use it — the local
 -- ones, gpt-4.1 and Gemini 2.x; a reasoning model fixes its own (see
 -- AiProviders.appliesTemperature).
