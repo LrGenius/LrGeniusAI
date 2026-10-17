@@ -423,4 +423,5 @@ Extra information sent alongside the photo to improve accuracy:
 - **Retrieve Metadata from Backend** — apply stored results to the catalog
   later, or after a failed write.
 - **Import Metadata from Catalog** — one-way sync of your Lightroom metadata
-  into the backend database.
+  into the backend database. The top-level keyword is left out of the keywords
+  it sends: it only groups the AI keywords, it does not describe the photo.

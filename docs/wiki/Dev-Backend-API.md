@@ -570,7 +570,13 @@ answer to "will anything pick this up".
 ## Metadata Import
 
 ### `POST /v1/photos/metadata/import`
-Imports existing Lightroom catalog metadata (keywords, title, caption, rating, etc.) into the backend database for a batch of photos.
+Imports existing Lightroom catalog metadata (title, caption, alt text and keywords) into the backend database for a batch of photos.
+
+`metadata_items[].keywords` is the photo's keyword hierarchy
+(`MetadataManager.getPhotoKeywordHierarchy`) without the plugin's top-level
+container keyword ("LrGeniusAI", "ChatGPT", ...). Analysis results have no such
+root either, and "Retrieve Metadata" writes a stored hierarchy back underneath
+the container, so a root left in would come back nested inside itself.
 
 ---
 

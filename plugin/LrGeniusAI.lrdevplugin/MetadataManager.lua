@@ -1272,9 +1272,91 @@ function MetadataManager.collectCatalogKeywordNames(limit, categories)
 end
 
 ---
+-- Whether a root keyword is one of the containers the plugin files generated
+-- keywords under ("LrGeniusAI", "ChatGPT", ...), rather than a keyword of the
+-- user's own.
+--
+-- The name list is `prefs.knownTopLevelKeywords`, which only knows the names
+-- typed on this machine; the synonym is what applyMetadata stamps on every
+-- container it creates or reuses, so it also catches one the prefs never saw
+-- (prefs reset, a catalog shared between machines). Names are compared without
+-- case or surrounding spaces, so a container typed as "lrgeniusai" still counts.
+local function isTopLevelContainer(keyword, access)
+	local name = Util.trim(access.getName(keyword) or ""):lower()
+	for _, known in ipairs(access.topLevelNames or {}) do
+		if type(known) == "string" and Util.trim(known):lower() == name then
+			return true
+		end
+	end
+	local synonyms = access.getSynonyms and access.getSynonyms(keyword)
+	return type(synonyms) == "table" and Util.table_contains(synonyms, Defaults.topLevelKeywordSynonym)
+end
+
+---
+-- Names from the catalog root down to `keyword`, without the plugin's
+-- top-level container.
+--
+-- The container is dropped because it is not a description of the photo: the
+-- hierarchy the LLM returns, which is what the backend stores after analysis,
+-- has no such root, and "Retrieve Metadata" writes a stored hierarchy back
+-- *under* the current container — so with keyword hierarchy on, a root left in
+-- here comes back as "LrGeniusAI > LrGeniusAI > ...". It would also put
+-- "LrGeniusAI" into the backend's keyword search text of every photo filed
+-- under it.
+--
+-- Only the root is checked. A container is always created at the top of the
+-- keyword list, so a "ChatGPT" further down is one the user made, and stays.
+--
+-- Pure: every catalog read goes through `access`, so this runs headless
+-- (see `plugin/spec/metadata_manager_spec.lua`).
+--
+-- @param keyword any The keyword to describe (an LrKeyword in Lightroom).
+-- @param access table `getName(k)` -> string, `getParent(k)` -> keyword|nil,
+--   optional `getSynonyms(k)` -> table|nil (only asked of the root), and
+--   `topLevelNames`, the container names to drop.
+-- @return table Array of names, root first; empty for the container itself.
+function MetadataManager.keywordPath(keyword, access)
+	local chain = {}
+	local current = keyword
+	while current do
+		table.insert(chain, 1, current)
+		current = access.getParent(current)
+	end
+
+	local path = {}
+	for i, k in ipairs(chain) do
+		if i > 1 or not isTopLevelContainer(k, access) then
+			table.insert(path, access.getName(k))
+		end
+	end
+	return path
+end
+
+-- LrKeyword-backed accessors for MetadataManager.keywordPath.
+local function lrKeywordAccess()
+	return {
+		getName = function(keyword)
+			return keyword:getName()
+		end,
+		getParent = function(keyword)
+			return keyword:getParent()
+		end,
+		getSynonyms = function(keyword)
+			-- A failure only costs the marker check; the name check still runs.
+			local ok, synonyms = LrTasks.pcall(function()
+				return keyword:getSynonyms()
+			end)
+			return ok and synonyms or nil
+		end,
+		topLevelNames = prefs.knownTopLevelKeywords,
+	}
+end
+
+---
 -- Get the keyword hierarchy for a specific photo.
 -- Returns a multidimensional table containing all the photo's keywords organized under their parent keywords.
 -- Leaf keywords (last level) are stored as strings in a numeric array.
+-- The plugin's top-level container keyword is left out; see MetadataManager.keywordPath.
 -- @param photo The LrPhoto object.
 -- @return A table representing the keyword hierarchy for this photo.
 function MetadataManager.getPhotoKeywordHierarchy(photo)
@@ -1285,26 +1367,12 @@ function MetadataManager.getPhotoKeywordHierarchy(photo)
 
 	local hierarchy = {}
 	local processedKeywords = {}
-
-	-- Helper function to build the path from keyword to root
-	local function getKeywordPath(keyword)
-		local path = {}
-		local current = keyword
-		while current do
-			if not Util.table_contains(prefs.knownTopLevelKeywords, current) then
-				table.insert(path, 1, current)
-			end
-			current = current:getParent()
-		end
-		return path
-	end
+	local access = lrKeywordAccess()
 
 	-- Helper function to insert a keyword into the hierarchy following its path
 	local function insertKeywordIntoHierarchy(path)
 		local currentLevel = hierarchy
-		for i, keyword in ipairs(path) do
-			local keywordName = keyword:getName()
-
+		for i, keywordName in ipairs(path) do
 			if i == #path then
 				-- Last level: add keyword name as string in numeric array
 				if currentLevel[keywordName] == nil then
@@ -1338,8 +1406,7 @@ function MetadataManager.getPhotoKeywordHierarchy(photo)
 		-- Only process each keyword once
 		if not processedKeywords[keywordName] then
 			processedKeywords[keywordName] = true
-			local path = getKeywordPath(keyword)
-			insertKeywordIntoHierarchy(path)
+			insertKeywordIntoHierarchy(MetadataManager.keywordPath(keyword, access))
 		end
 	end
 
