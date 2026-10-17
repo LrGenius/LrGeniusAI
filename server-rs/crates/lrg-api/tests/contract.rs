@@ -379,6 +379,87 @@ async fn check_unprocessed_reports_only_missing_work() {
     assert_eq!(json["uuids"], json["photo_ids"]);
 }
 
+/// A stored embedding written by a different function is re-queued; one whose
+/// identity is simply not recorded is not.
+///
+/// The asymmetry is the point. A row that predates `embedding_model` cannot be
+/// checked either way, and treating absence as stale would re-embed an entire
+/// catalog on the first run after an upgrade — so absence is taken as current.
+/// A *different* identity is the case the field exists for.
+#[tokio::test]
+async fn check_unprocessed_re_queues_only_a_different_embedding_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    let db_path_str = db_path.to_str().unwrap().to_string();
+
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    let embedded = |model: Option<&str>| {
+        let mut m = serde_json::Map::new();
+        m.insert("has_embedding".into(), serde_json::json!(true));
+        // Required for the row to count as done at all: `any_task` is true
+        // whenever any task is asked for, so a missing `cull_phash` re-queues
+        // the photo regardless of its embedding.
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        if let Some(model) = model {
+            m.insert("embedding_model".into(), serde_json::json!(model));
+        }
+        m
+    };
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                // Another function wrote this vector — an older model, a
+                // re-export, a preprocessing change. Indistinguishable from a
+                // current one except by the identity.
+                lrg_store::StoreRecord {
+                    id: "other".into(),
+                    vector: Some(vec![0.1; 1152]),
+                    metadata: embedded(Some("some-previous-model")),
+                },
+                // Predates the field.
+                lrg_store::StoreRecord {
+                    id: "unlabelled".into(),
+                    vector: Some(vec![0.2; 1152]),
+                    metadata: embedded(None),
+                },
+                // This build's own work.
+                lrg_store::StoreRecord {
+                    id: "current".into(),
+                    vector: Some(vec![0.3; 1152]),
+                    metadata: embedded(Some(lrg_ml::siglip::MODEL_ID)),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["other", "unlabelled", "current"],
+                        "tasks": "embeddings",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["photo_ids"], serde_json::json!(["other"]));
+}
+
 // ---------------------------------------------------------------------------
 // /v1/cull/grade + /v1/cull/groups
 //
