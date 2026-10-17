@@ -224,3 +224,11 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
   "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",
 ]
+
+# The findings are point-in-time, but the page also documents how to run the
+# experiment task, which does move.
+[page."Dev-AI-Edit-XMP-Findings.md"]
+sources = [
+  "plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua",
+  "plugin/LrGeniusAI.lrdevplugin/DevelopExperiments.lua",
+]
