@@ -240,6 +240,16 @@ impl SiglipModel {
         self.text.unload_with_reason("text", "requested");
     }
 
+    /// Drops the text tower alone, leaving the image tower as it is.
+    ///
+    /// For a caller that loaded the text tower for one batch of fixed prompts
+    /// and knows nothing else is about to need it: left to the idle sweep, it
+    /// would stay resident for half an hour of an indexing run that never
+    /// calls it again.
+    pub fn unload_text(&self) {
+        self.text.unload_with_reason("text", "no longer needed");
+    }
+
     /// Call periodically (e.g. every 60s) from a background task.
     pub fn unload_if_idle(&self) {
         self.image.unload_if_idle("image");

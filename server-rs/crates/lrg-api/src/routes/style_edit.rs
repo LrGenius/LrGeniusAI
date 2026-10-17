@@ -25,7 +25,7 @@ use super::edit::{
     success_payload,
 };
 use crate::routes::route_util::{
-    compute_scene_tags, local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
+    local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
 };
 use crate::state::AppState;
 
@@ -188,10 +188,18 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             compute_exposure_metrics(&[], 0, 0)
         }
     };
-    let query_scene_tags = clip_embedding
-        .as_deref()
-        .map(|e| compute_scene_tags(&state.siglip, e))
-        .unwrap_or_default();
+    // From the stored prompt embeddings, not the text tower; empty when they
+    // cannot be had, as before — the scene match is one term of several in
+    // choosing the examples to learn from.
+    let query_scene_tags = match clip_embedding.as_deref() {
+        Some(e) => crate::prompt_embeddings::prepare(
+            &state,
+            &crate::prompt_embeddings::scene_probe_texts(),
+        )
+        .await
+        .scene_tags(e),
+        None => Vec::new(),
+    };
     let query_tod = time_of_day_bucket_for_hour(local_hour(capture_time_unix)).to_string();
     let focal_bucket = lrg_analysis::training::focal_length_bucket(focal_length);
     log::info!(

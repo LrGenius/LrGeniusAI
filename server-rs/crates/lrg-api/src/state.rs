@@ -45,18 +45,15 @@ pub struct AppState {
     /// Lightroom catalog. Global for the same reason `jobs` is: Lightroom
     /// runs one of these tasks at a time.
     pub ui_bridge: Arc<UiBridge>,
-    /// CLIP-IQA prompt embeddings, computed on first use and kept for the
-    /// process lifetime.
+    /// Text embeddings of the fixed prompts — CLIP-IQA, the organism gate,
+    /// the scene probes — read from the database's `text_embeddings` table,
+    /// or made once with the text tower and stored there. See
+    /// [`crate::prompt_embeddings`].
     ///
-    /// These are a pure function of the model weights and a compile-time list
-    /// of strings, so recomputing them would be waste — but the first call
-    /// costs a text-tower pass and, if SigLIP2 has idle-unloaded, a model load.
     /// Deliberately *not* cleared alongside `siglip.unload()`: the embeddings
-    /// stay valid across an unload/reload cycle, and dropping them would make
-    /// every cull run after an idle period pay the load again.
-    /// Keyed by prompt set, since quality and action are embedded separately
-    /// and a catalog may only ever need one of them.
-    pub clip_iqa: Arc<StdMutex<HashMap<&'static str, lrg_ml::clip_iqa::IqaPrompts>>>,
+    /// stay valid across an unload/reload cycle, and they are what lets a run
+    /// do without the text tower in the first place.
+    pub prompt_embeddings: crate::prompt_embeddings::PromptCache,
     /// Download progress, keyed by asset group (`"clip"`, `"llm"`,
     /// `"bioclip"`). Keyed
     /// rather than a single slot because a GGUF download and a SigLIP2
@@ -132,7 +129,7 @@ impl AppState {
             bioclip: Arc::new(BioclipModel::new(models.bioclip)),
             jobs: Arc::new(JobRegistry::new()),
             ui_bridge: Arc::new(UiBridge::new()),
-            clip_iqa: Arc::new(StdMutex::new(HashMap::new())),
+            prompt_embeddings: Default::default(),
             model_download: Arc::new(StdMutex::new(HashMap::new())),
             llm: Arc::default(),
             mlx: Arc::default(),

@@ -111,12 +111,12 @@ apply only when embeddings exist, so the fast cull path degrades to technical si
 
 > **Status.** The CLIP-IQA route shipped (`lrg-ml/src/clip_iqa.rs`); the LAION head did not,
 > because it would mean shipping and versioning another weights file for a signal the prompt
-> pairs already provide. Five pairs, embedded once per server lifetime and cached in `AppState`,
+> pairs already provide. Five pairs, embedded once per model and stored in the `text_embeddings` table,
 > then a two-way softmax over cosine similarity per pair. The **logit scale of 100 is load
 > bearing**: raw cosines for a prompt pair differ by a few hundredths, which a plain softmax
 > flattens to ~0.5 for every image. Blended against the heuristic at `aesthetic_iqa_weight`
-> (0.8) rather than replacing it outright, and skipped silently when there is no embedding or
-> the text tower will not load.
+> (0.8) rather than replacing it outright, and skipped when there is no embedding or the prompt
+> vectors cannot be had — the latter with a caveat in the cull response.
 >
 > Note the prompts deliberately do **not** ask about sharpness or exposure, though the passage
 > above suggests "a sharp photo" vs "a blurry photo". Those are measured directly from pixels

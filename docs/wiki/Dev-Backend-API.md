@@ -296,6 +296,24 @@ Groups a set of photos into similarity clusters (used internally by the culling 
 ### `POST /v1/cull/grade`
 Runs the full culling pipeline on a set of photos: grouping, scoring, and classification into picks/alternates/rejects.
 
+Both routes return `warnings`, every caveat for the run as a list, and `warning`, the same
+caveats joined into the one string the plugin shows (`null` when there are none). Besides photos
+that were never analyzed and photos without embeddings, a caveat is raised when the AI quality
+score could not be computed: it compares each photo's stored embedding against fixed prompt
+vectors, and those were neither in the database nor obtainable from the text tower — almost
+always because the SigLIP2 model is not downloaded. Ranking then rests on the technical
+measurements alone.
+
+The prompt vectors — CLIP-IQA quality and genre sets, the organism gate `/v1/index/photos` uses in
+front of BioCLIP, the scene probes of `/v1/edit/training` and `/v1/edit/style` — live in the
+`text_embeddings` table (`model_id`, `text`, `vector`). A request prepares the prompts it needs
+once, before any per-photo work: from memory, else from the table for this build's
+`lrg_ml::siglip::MODEL_ID`, else with the text tower, whose results are stored and which is unloaded
+again straight away if the request loaded it. So each prompt is embedded once per model per
+database, and in normal use only a free-text search or keyword clustering loads the text tower.
+Only the prompts the request needs: on a CPU without fast fp16 one text-tower pass can take many
+seconds, and a first cull must stay inside the plugin's request timeout.
+
 ---
 
 ## AI Develop Edits
