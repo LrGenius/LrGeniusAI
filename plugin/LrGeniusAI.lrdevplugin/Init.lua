@@ -44,32 +44,28 @@ require("SpeciesLinks")
 require("PhotoSelector")
 require("LocalModelCatalog")
 require("AiProviders")
+require("Secrets")
 require("OnboardingWizard")
 
 if _G.prefs.ai == nil then
 	_G.prefs.ai = ""
 end
 
-if _G.prefs.geminiApiKey == nil then
-	_G.prefs.geminiApiKey = ""
-end
-
-if _G.prefs.chatgptApiKey == nil then
-	_G.prefs.chatgptApiKey = ""
-end
-
-if _G.prefs.anthropicApiKey == nil then
-	_G.prefs.anthropicApiKey = ""
-end
+-- The API keys are not prefs any more: they live in the system's password
+-- storage (see Secrets.lua). Keys still in prefs move there, every start —
+-- going back to an older version puts them in prefs again. In a task: the
+-- SDK does not say whether LrPasswords works outside one. A key that cannot
+-- be moved keeps working from prefs; the Plug-in Manager says so.
+LrTasks.startAsyncTask(function()
+	for _, problem in ipairs(Secrets.migrate()) do
+		_G.log:error(problem)
+	end
+end)
 
 -- The "Other AI server": any OpenAI-compatible server (OpenRouter, a llama.cpp
 -- server, LiteLLM, or LM Studio / Ollama on another computer).
 if _G.prefs.aiServerUrl == nil then
 	_G.prefs.aiServerUrl = ""
-end
-
-if _G.prefs.aiServerApiKey == nil then
-	_G.prefs.aiServerApiKey = ""
 end
 
 -- Ollama and LM Studio no longer have address fields: they are found at their

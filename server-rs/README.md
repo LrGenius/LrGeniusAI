@@ -61,6 +61,18 @@ learns the address, so nothing else needs changing. Note that
 `SearchIndexAPI.startServer` still launches the *installed* binary on the
 default port, so start a custom-port build yourself.
 
+**Do not expose the server publicly.** It speaks plain HTTP, has no
+authentication, and the plug-in puts the user's cloud-provider API key
+(`api_key`, `openai_apikey`, `server_apikey`, …) in the body of every request
+that uses one. Bound to `127.0.0.1` none of that leaves the machine. Bound to
+anything else, the keys and the photos cross the network unencrypted, and
+anyone who can reach the port can use the server. Until it has TLS and a
+login, run a non-loopback server only on a network you trust, never with its
+port forwarded to the internet or open on a cloud host; reach it from
+elsewhere through a VPN or an SSH tunnel
+(`ssh -L 19819:127.0.0.1:19819 user@host`). The server does not store the
+keys; it uses each one only for the request it came with.
+
 ### Golden tests and `LRG_REQUIRE_GOLDENS`
 
 The ML golden tests — SigLIP2, BioCLIP 2 and the face pipeline — compare real
@@ -420,6 +432,11 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 ```
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
+
+`-p 19819:19819` publishes the port on every interface of the host, so the
+warning under [Host and port](#host-and-port) applies. When Lightroom runs on
+the same computer, publish it to that computer only:
+`-p 127.0.0.1:19819:19819`.
 
 The image is built **without** the `llamacpp` feature and has no MLX sidecar, so
 neither local backend is available in a container. Inside the container,

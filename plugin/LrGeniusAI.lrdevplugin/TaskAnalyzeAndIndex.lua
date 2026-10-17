@@ -907,7 +907,7 @@ LrTasks.startAsyncTask(function()
 				return
 			end
 			local connectionErr
-			connection, connectionErr = AiProviders.connectionOptions(providerFromKey, prefs)
+			connection, connectionErr = AiProviders.connectionOptions(providerFromKey, Secrets.connectionFields(prefs))
 			if not connection then
 				LrDialogs.showError(connectionErr)
 				return

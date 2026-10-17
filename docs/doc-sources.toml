@@ -89,6 +89,7 @@ generated_from = "plugin/README.md"
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/Info.lua",
   "plugin/LrGeniusAI.lrdevplugin/Init.lua",
+  "plugin/LrGeniusAI.lrdevplugin/Secrets.lua",
   "plugin/LrGeniusAI.lrdevplugin/Task*.lua",
 ]
 

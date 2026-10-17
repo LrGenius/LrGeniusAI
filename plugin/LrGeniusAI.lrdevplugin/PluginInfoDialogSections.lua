@@ -61,9 +61,9 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 		end
 	end)
 	propertyTable.logging = prefs.logging
-	propertyTable.geminiApiKey = prefs.geminiApiKey
-	propertyTable.chatgptApiKey = prefs.chatgptApiKey
-	propertyTable.anthropicApiKey = prefs.anthropicApiKey
+	-- All four keys, the Other AI server's included. Kept for endDialog, which
+	-- saves only the ones the user changed.
+	propertyTable.loadedApiKeys = Secrets.loadInto(propertyTable)
 
 	propertyTable.exportSize = prefs.exportSize
 	propertyTable.exportQuality = prefs.exportQuality
@@ -96,7 +96,6 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	-- the user leaves it, not on every keystroke. The 10 s health loop below
 	-- never asks the server: a remote one must not be polled for that.
 	propertyTable.aiServerUrl = prefs.aiServerUrl or ""
-	propertyTable.aiServerApiKey = prefs.aiServerApiKey or ""
 	local statusColors = {
 		hint = { 0.5, 0.5, 0.5 },
 		ok = { 0, 0.6, 0 },
@@ -225,6 +224,15 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 					color = { 0.8, 0.8, 0 }
 				end
 				table.insert(issues, prefs.pendingProviderNotice)
+			end
+			-- A key that could not be moved to, or read from, the password
+			-- storage. Repeats each session for as long as the cause lasts.
+			for _, problem in ipairs(Secrets.problems()) do
+				if status == "healthy" then
+					status = "warning"
+					color = { 0.8, 0.8, 0 }
+				end
+				table.insert(issues, problem)
 			end
 
 			propertyTable.healthStatus = status
@@ -1428,11 +1436,8 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	local function trimmed(value)
 		return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 	end
-	prefs.geminiApiKey = trimmed(propertyTable.geminiApiKey)
-	prefs.chatgptApiKey = trimmed(propertyTable.chatgptApiKey)
-	prefs.anthropicApiKey = trimmed(propertyTable.anthropicApiKey)
+	Secrets.saveChanged(propertyTable, propertyTable.loadedApiKeys)
 	prefs.aiServerUrl = trimmed(propertyTable.aiServerUrl)
-	prefs.aiServerApiKey = trimmed(propertyTable.aiServerApiKey)
 	-- Shown for one opening of this dialog; see updateHealth.
 	prefs.pendingProviderNotice = nil
 	prefs.exportSize = propertyTable.exportSize

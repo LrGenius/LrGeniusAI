@@ -521,9 +521,12 @@ Used for inter-process communication. See `remote_control_socket_example.lrdevpl
 ---
 
 ### LrPasswords (Namespace)
-- `LrPasswords.retrieve(serviceName, username)` → password or nil
-- `LrPasswords.store(serviceName, username, password)` — uses OS keychain
-- `LrPasswords.delete(serviceName, username)`
+Encrypted storage backed by the operating system; key strings are scoped to the plug-in ID. SDK 3.0+.
+- `LrPasswords.retrieve(keystring, salt?, pluginId?)` → plain-text password
+- `LrPasswords.store(keystring, password, salt?, pluginId?)` — encrypts and stores
+- `salt` nil → the plug-in ID is the salt; `pluginId` nil → the running plug-in
+- There is **no delete**: store `""` to clear a key
+- The SDK does not say whether it may be called outside an async task; this project writes from one and fills its key cache from one at startup (see `Secrets.lua`)
 
 ---
 

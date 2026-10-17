@@ -231,6 +231,9 @@ In the plugin settings dialog you can configure:
   (any OpenAI-compatible server) with an optional key. Ollama and LM Studio have
   no settings: they are found at their default address on this computer, and
   one running elsewhere is the Other AI server.
+  The keys are kept in the encrypted password storage Lightroom gives plug-ins
+  (`LrPasswords`, see `Secrets.lua`), not in the plug-in prefs, which Lightroom
+  writes to disk as plain text.
 - **Local AI Model (no external app)** — browse, download and select vision
   models the backend runs itself, plus the advanced knobs (context size, photos
   in parallel, layers on the GPU). Which engine backs this section is decided
@@ -271,11 +274,19 @@ If you are upgrading from an older version that stored Lightroom catalog UUIDs a
 re-run **Analyze & Index Photos** over the catalog. There is no migration path — photos already
 indexed under the current IDs are skipped.
 
+API keys from versions that kept them in the plug-in prefs move to the password storage at
+every start of Lightroom (`Secrets.migrate`, called from `Init.lua`). A key leaves the prefs only
+after the storage has returned it unchanged; one that cannot be moved keeps working from the
+prefs, and the Plug-in Manager's status line names it. Going back to an older version loses the
+keys for that version, which reads them from the prefs only — enter them again there.
+
 ---
 
 ## Troubleshooting
 
-- Verify backend connectivity in plugin settings (`backendServerUrl`).
+- Verify backend connectivity in plugin settings (`backendServerUrl`). A backend on another
+  computer receives your cloud API keys over plain HTTP — keep it on a trusted network, never
+  reachable from the internet (see the FAQ).
 - Check log files from Plugin Manager (`Show logfile` / copy logs to desktop).
 - If search returns no results, confirm photos were indexed with embeddings.
 - If faces are missing, ensure face processing was enabled during indexing.

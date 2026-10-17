@@ -4098,16 +4098,16 @@ function SearchIndexAPI.getModels(opts)
 	end
 	local body = {}
 	if opts.includeCloud then
-		body.openai_apikey = nonEmpty(prefs and prefs.chatgptApiKey)
-		body.gemini_apikey = nonEmpty(prefs and prefs.geminiApiKey)
-		body.anthropic_apikey = nonEmpty(prefs and prefs.anthropicApiKey)
+		body.openai_apikey = nonEmpty(Secrets.get("chatgptApiKey"))
+		body.gemini_apikey = nonEmpty(Secrets.get("geminiApiKey"))
+		body.anthropic_apikey = nonEmpty(Secrets.get("anthropicApiKey"))
 	end
 	if not opts.skipServer then
 		local serverUrl = opts.serverUrl
 		local serverApiKey = opts.serverApiKey
 		if serverUrl == nil then
 			serverUrl = prefs and prefs.aiServerUrl
-			serverApiKey = prefs and prefs.aiServerApiKey
+			serverApiKey = Secrets.get("aiServerApiKey")
 		end
 		body.server_url = nonEmpty(serverUrl)
 		if body.server_url then
@@ -4881,9 +4881,9 @@ function SearchIndexAPI.getDetailedHealth()
 	local health = {
 		backend = SearchIndexAPI.pingServer() == true,
 		clip = SearchIndexAPI.isClipReady() == true,
-		gemini = not Util.nilOrEmpty(prefs.geminiApiKey),
-		chatgpt = not Util.nilOrEmpty(prefs.chatgptApiKey),
-		anthropic = not Util.nilOrEmpty(prefs.anthropicApiKey),
+		gemini = Secrets.has("geminiApiKey"),
+		chatgpt = Secrets.has("chatgptApiKey"),
+		anthropic = Secrets.has("anthropicApiKey"),
 		ollama = false,
 		lmstudio = false,
 		-- The Other AI server counts once an address is set. It is not asked

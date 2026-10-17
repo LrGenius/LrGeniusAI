@@ -75,6 +75,7 @@ there too, in the same PR.
 - **Asynchronicity**: Long-running operations **must** run in `LrTasks.startAsyncTask`.
 - **Yielding**: Use `LrTasks.pcall` instead of native `pcall` to allow for yielding during asynchronous operations.
 - **Naming Conventions**: Top-level plugin actions should follow the `Task*.lua` naming convention.
+- **Secrets**: Store API keys through `Secrets.lua` (Lightroom's encrypted password storage), never in `prefs`, which Lightroom writes to disk as plain text.
 - **GUI strings**: Write user-facing strings as plain, finished English. Translations were dropped, so new code does not use `LOC`. Existing `LOC(...)` calls in older files just render their inline default — leave them alone, but don't add more.
 - **Utilities**: Use `Util.lua` for common logic.
 - **Photo Identity**: Use `Util.getGlobalPhotoIdForPhoto` (metadata-based) for cross-catalog consistency.
