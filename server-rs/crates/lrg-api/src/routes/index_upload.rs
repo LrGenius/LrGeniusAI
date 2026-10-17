@@ -1359,8 +1359,20 @@ async fn prepare_one(
         .and_then(|r| r.metadata.get("has_embedding"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let need_embedding =
-        options.compute_embeddings && (options.regenerate_metadata || !existing_has_embedding);
+    // A stored embedding from a different function is not one this build can
+    // compare against, so it is re-derived rather than kept. An *absent*
+    // identity counts as current, so a catalog indexed before the field existed
+    // is not re-embedded wholesale.
+    let existing_embedding_model_current = existing
+        .as_ref()
+        .and_then(|r| r.metadata.get(meta::EMBEDDING_MODEL_FIELD))
+        .and_then(Value::as_str)
+        .map(|stored| stored == lrg_ml::siglip::MODEL_ID)
+        .unwrap_or(true);
+    let need_embedding = options.compute_embeddings
+        && (options.regenerate_metadata
+            || !existing_has_embedding
+            || !existing_embedding_model_current);
 
     let mut new_embedding: Option<Vec<f32>> = None;
     if need_embedding {
@@ -1626,6 +1638,17 @@ async fn finish_one(
         None => existing_vector.filter(|_| existing_has_embedding),
     };
     main_metadata.insert("has_embedding".into(), json!(final_vector.is_some()));
+    // Which function the stored vector came from, kept in step with
+    // `has_embedding`: present exactly when there is a vector to describe, so
+    // a photo that lost its embedding cannot keep a stale identity.
+    if final_vector.is_some() {
+        main_metadata.insert(
+            meta::EMBEDDING_MODEL_FIELD.into(),
+            json!(lrg_ml::siglip::MODEL_ID),
+        );
+    } else {
+        main_metadata.remove(meta::EMBEDDING_MODEL_FIELD);
+    }
     meta::ensure_photo_metadata(photo_id, &mut main_metadata);
 
     if let Some(catalog_id) = &options.catalog_id {

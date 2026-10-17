@@ -322,6 +322,8 @@ pub(super) async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
+    let (clip_image_status, clip_image_error) = state.siglip.image_status();
+    let (clip_text_status, clip_text_error) = state.siglip.text_status();
     let (face_status, face_error) = state.face.status();
     let (species_status, species_error) = state.bioclip.status();
     // Deliberately no LLM provider status here: this GET carries no API keys
@@ -329,9 +331,20 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     // there is nothing to report. The plugin checks provider availability
     // itself from stored prefs plus a direct ping (SearchIndexAPI.getDetailedHealth
     // in APISearchIndex.lua) rather than through this endpoint.
+    //
+    // `clip_model` stays the pair, as it has always been: the two SigLIP2
+    // towers load independently now, so a client that reads only this field
+    // (every plug-in older than this one) still learns that *something* failed
+    // rather than missing a failure on whichever tower it does not ask about.
+    // The per-tower fields are additive, so a newer plug-in can name the tower
+    // that broke while an older server that lacks them still answers.
     Json(json!({
         "clip_model": clip_status,
         "clip_error": clip_error,
+        "clip_image_model": clip_image_status,
+        "clip_image_error": clip_image_error,
+        "clip_text_model": clip_text_status,
+        "clip_text_error": clip_text_error,
         "face_model": face_status,
         "face_error": face_error,
         "species_model": species_status,

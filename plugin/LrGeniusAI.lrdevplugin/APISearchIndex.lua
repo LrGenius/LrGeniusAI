@@ -4807,12 +4807,34 @@ function SearchIndexAPI.checkServerHealth()
 	end
 
 	if res then
-		-- 1. Check CLIP model
-		if res.clip_model == "failed" then
-			ErrorHandler.handleError(
-				LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
-				res.clip_error or "Unknown error loading CLIP model."
-			)
+		-- 1. Check the SigLIP2 towers. They load independently, so which one
+		-- failed decides which message is true: search and keyword lookup
+		-- embed the query with the text tower, indexing embeds photos with the
+		-- image tower. A server older than these two fields reports the pair
+		-- in `clip_model` alone, and is still handled below — reporting the
+		-- pair twice would be worse than not naming the tower.
+		local hasPerTower = (res.clip_image_model ~= nil) or (res.clip_text_model ~= nil)
+		if not hasPerTower then
+			if res.clip_model == "failed" then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
+					res.clip_error or "Unknown error loading CLIP model."
+				)
+			end
+		else
+			if res.clip_text_model == "failed" then
+				ErrorHandler.handleError(
+					LOC("$$$/LrGeniusAI/Health/ClipFailed=AI search model failed to load."),
+					res.clip_text_error or "Unknown error loading the search model."
+				)
+			end
+			if res.clip_image_model == "failed" then
+				ErrorHandler.handleError(
+					"AI image analysis model failed to load.",
+					res.clip_image_error
+						or "Unknown error loading the model that embeds photos. Analysis and search will not find anything until it loads."
+				)
+			end
 		end
 
 		-- 2. Check Face model
