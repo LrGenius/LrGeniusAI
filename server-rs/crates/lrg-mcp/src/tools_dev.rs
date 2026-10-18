@@ -90,7 +90,9 @@ impl LrGeniusMcp {
     /// Runs the plugin's own tests inside Lightroom — Lua helpers, backend
     /// connectivity, photo identity, the agent bridge, and (optionally)
     /// catalog writes that clean up after themselves — and reports each
-    /// result. Use it after changing plugin code.
+    /// result. Use it after changing plugin code. The tests run in the
+    /// catalog open in Lightroom: unless the user has said it is a test
+    /// catalog, name it and ask before running them there.
     #[tool(
         name = "run_plugin_tests",
         annotations(

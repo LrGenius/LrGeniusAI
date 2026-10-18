@@ -108,6 +108,8 @@ LRGENIUS_MCP_TOKEN=<token> cargo test -p lrg-mcp --test live_lightroom -- --igno
 
 The plugin uses whatever backend answers on 19819, so stop the installed one and run your build for this. With the plugin loaded from its `.lrdevplugin` folder and *Allow developer commands* ticked, an agent can also `reload_plugin_modules` after editing Lua and probe with `eval_lua` — no Lightroom restart. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
 
+The full live test, step by step (every tool, the safety switches, a report), is the runbook `.claude/skills/lrgenius-mcp-full-test/SKILL.md`; `scripts/mcp_call.py` calls single tools from a shell. All of it works on the catalog that is open in Lightroom, so *Live tests in Lightroom* under Key Rules comes first.
+
 ### Plugin — headless unit tests
 
 Pure Lua logic (string/table helpers, keyword and photo-id handling) is tested outside Lightroom with [busted]. The Lightroom SDK environment is stubbed in `plugin/spec/spec_helper.lua`.
@@ -227,6 +229,10 @@ Concretely, when writing or reviewing this path:
 
 Silence is only acceptable for something the user did not ask for and cannot
 act on — and that decision belongs in a comment at the point where it is made.
+
+### Live tests in Lightroom
+
+- **Never test in a developer's production catalog without their approval.** The MCP tools, `run_plugin_tests`, the `live_lightroom` tests and `eval_lua` all work on whatever catalog is open in Lightroom, so check which one it is (`get_status`) before you start. Unless the developer has told you it is a test catalog — one holding copies, not the originals a production catalog uses — ask first: name the catalog and say what the test would do. That applies to read-only tests too, since they send previews, metadata and the names of recognised people to the agent. Once the developer approves, test there too, within what they approved (read-only, indexing, changes or developer commands). An approval holds for that catalog in that conversation. The full procedure is in `.claude/skills/lrgenius-mcp-full-test/SKILL.md`.
 
 ### Docs
 

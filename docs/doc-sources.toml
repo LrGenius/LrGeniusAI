@@ -176,6 +176,8 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/AgentBridge.lua",
   "plugin/LrGeniusAI.lrdevplugin/AgentCommands.lua",
   "plugin/LrGeniusAI.lrdevplugin/PluginTests.lua",
+  # The full-test runbook's command-line client (its options and exit codes).
+  "scripts/mcp_call.py",
 ]
 
 [page."Help-People-Faces.md"]

@@ -542,13 +542,19 @@ impl LrGeniusMcp {
             Role::User,
             format!(
                 "Test the LrGeniusAI plugin inside Lightroom.{focus}\n\
-                 1. get_status: Lightroom must be connected; note the plugin version.\n\
-                 2. run_plugin_tests (all suites). For each failure, read the error, check \
-                 get_logs (plugin and backend) around that time, and, if developer commands are \
-                 on, probe with eval_lua.\n\
-                 3. After code changes, reload_plugin_modules and run the failing suite again.\n\
-                 Report: passed/failed counts, each failure with its likely cause and the file to \
-                 fix."
+                 1. get_status: Lightroom must be connected; note the plugin version and the \
+                 open catalog.\n\
+                 2. The tests run in that catalog. Unless the user has told you it is a test \
+                 catalog, ask before you test in it: name the catalog and say what the tests do. \
+                 Test a production catalog only with the user's approval, and only within what \
+                 they approved (read-only, or with catalog writes).\n\
+                 3. run_plugin_tests (all suites; include_catalog_writes only in a test catalog \
+                 or with approval for writes). For each failure, read the error, check get_logs \
+                 (plugin and backend) around that time, and, if developer commands are on, probe \
+                 with eval_lua.\n\
+                 4. After code changes, reload_plugin_modules and run the failing suite again.\n\
+                 Report: the catalog you tested in, passed/failed counts, each failure with its \
+                 likely cause and the file to fix."
             ),
         )]
     }

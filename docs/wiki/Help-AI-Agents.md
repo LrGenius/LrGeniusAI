@@ -173,6 +173,11 @@ LrGeniusAI:
 - `cargo test -p lrg-mcp --test live_lightroom -- --ignored --test-threads=1`
   runs all of this from a terminal. Set `LRGENIUS_MCP_TOKEN` to the agent token
   first (**Copy token**).
+- All of these work on the catalog that is open in Lightroom. Test in a test
+  catalog that holds copies of your photos. Agents are told to ask before they
+  test in any other catalog, and to stay within what you approve. The
+  repository has a [step-by-step full test](https://github.com/LrGenius/LrGeniusAI/blob/main/.claude/skills/lrgenius-mcp-full-test/SKILL.md)
+  for agents to follow.
 
 Details: [Dev: Agent Bridge](Dev-Agent-Bridge).
 

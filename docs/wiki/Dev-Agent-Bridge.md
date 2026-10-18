@@ -155,7 +155,9 @@ can write metadata itself (`view_photo`, then `update_photos`).
 3. Add a test in `crates/lrg-mcp/tests/mcp_roundtrip.rs` (simulated plugin), a
    busted spec for pure Lua helpers, and an in-Lightroom test in
    `PluginTests.lua`.
-4. Update the contract table above and [Help: AI Agents](Help-AI-Agents).
+4. Update the contract table above, [Help: AI Agents](Help-AI-Agents), and
+   the tool tables of the full-test runbook
+   (`.claude/skills/lrgenius-mcp-full-test/SKILL.md`).
 
 ---
 
@@ -176,6 +178,27 @@ failed plugin test, so one command checks the plugin end to end.
 `LRG_LIVE_WRITES=1` adds the catalog-writing tests. Run them on a test catalog:
 they put back what they change, but leave develop history steps, a test keyword
 and an empty test collection.
+
+**The full live test.** `.claude/skills/lrgenius-mcp-full-test/SKILL.md` is
+the runbook an agent follows to test everything in a real Lightroom. It covers:
+
+- setup;
+- the suites above;
+- every tool, with what to check;
+- the safety switches and failure paths;
+- timing;
+- clean-up and a report.
+
+Claude Code offers it as the skill `/lrgenius-mcp-full-test`, and `AGENTS.md`
+points other agents to it. Its first rule applies to every live test: no
+testing in a developer's production catalog without their approval. That
+includes read-only tests, and an approved test stays within the approved
+scope.
+
+The runbook's client is `scripts/mcp_call.py`, a standard-library script that
+calls one tool per run (`--list` lists them). It streams progress to stderr,
+saves images, and exits with 0 on success, 1 when the tool reports an error,
+and 2 when the call fails.
 
 **Testing a dev build.** The plugin starts the *installed* backend unless
 something already answers on 19819. Stop the installed one, start yours
