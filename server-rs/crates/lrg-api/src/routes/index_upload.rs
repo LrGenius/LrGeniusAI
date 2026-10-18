@@ -52,6 +52,7 @@ pub(crate) struct ParsedOptions {
     /// Gate threshold in `0..1`. Deliberately low: a false positive costs one
     /// wasted BioCLIP pass whose result the rank floor then discards, a false
     /// negative silently loses a species the user wanted.
+    /// [`DEFAULT_SPECIES_PREFILTER_THRESHOLD`] is the default.
     species_prefilter_threshold: f64,
     species_classify: lrg_ml::bioclip::ClassifyConfig,
     regenerate_metadata: bool,
@@ -291,6 +292,19 @@ fn original_filename_field(fields: &HashMap<String, String>, photo_count: usize)
         .filter(|s| !s.is_empty())
 }
 
+/// Default organism-gate threshold, **calibrated per SigLIP2 model**: the score
+/// is a softmax over cosines scaled by a fixed `LOGIT_SCALE`, so how far apart
+/// the prompt pairs land depends on the model.
+///
+/// Measured over a 197-photo catalog with 49 BioCLIP identifications
+/// (`examples/siglip_thresholds.rs`): the 384 center-crop model separated them
+/// cleanly at 0.35 (no identified photo below it, every other photo below it).
+/// On the NaFlex model the same 0.35 would have skipped 22 of the 49. At 0.08
+/// none of the 49 is skipped and 132 of the 148 photos without an organism
+/// still are; the lowest identified score is 0.11, so this leaves a margin.
+/// Re-measure and move it whenever `lrg_ml::siglip::MODEL_ID` changes.
+pub(crate) const DEFAULT_SPECIES_PREFILTER_THRESHOLD: f64 = 0.08;
+
 pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     let tasks: Vec<String> = match fields.get("tasks") {
         Some(s) if !s.is_empty() => {
@@ -377,7 +391,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
             .get("species_prefilter_threshold")
             .and_then(|s| s.trim().parse::<f64>().ok())
             .filter(|v| (0.0..=1.0).contains(v))
-            .unwrap_or(0.35),
+            .unwrap_or(DEFAULT_SPECIES_PREFILTER_THRESHOLD),
         species_classify: lrg_ml::bioclip::ClassifyConfig {
             min_confidence: fields
                 .get("species_min_confidence")
