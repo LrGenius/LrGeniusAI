@@ -2753,10 +2753,19 @@ function Util.searchCoverage(stats, catalogPhotoCount)
 	if searchable < 0 then
 		searchable = 0
 	end
+	-- Embeddings from a previous search model are stored but compare with
+	-- nothing the search embeds now, so they are not searchable either. They
+	-- are a part of `withEmbedding`, hence the clamp to it.
+	local outdated = math.max(0, math.min(tonumber(photos.with_outdated_embedding) or 0, searchable))
+	local current = searchable - outdated
 	return {
 		total = total,
-		searchable = searchable,
-		unsearchable = total - searchable,
+		searchable = current,
+		unsearchable = total - current,
+		-- Of the unsearchable ones: indexed with the previous model, and
+		-- never indexed at all. Different instructions in the dialog.
+		outdated = outdated,
+		unindexed = total - searchable,
 	}
 end
 

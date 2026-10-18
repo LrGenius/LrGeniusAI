@@ -154,6 +154,28 @@ describe("Util.searchCoverage", function()
 		assert.are.equal(0, coverage.unsearchable)
 	end)
 
+	it("does not count embeddings from a previous search model as searchable", function()
+		local coverage =
+			Util.searchCoverage({ photos = { total = 100, with_embedding = 80, with_outdated_embedding = 30 } }, 100)
+		assert.are.equal(50, coverage.searchable)
+		assert.are.equal(50, coverage.unsearchable)
+		assert.are.equal(30, coverage.outdated)
+		assert.are.equal(20, coverage.unindexed)
+	end)
+
+	it("reports no outdated photos when the backend does not say", function()
+		local coverage = Util.searchCoverage({ photos = { total = 100, with_embedding = 80 } }, 100)
+		assert.are.equal(0, coverage.outdated)
+		assert.are.equal(20, coverage.unindexed)
+	end)
+
+	it("never lets the outdated count exceed what is embedded", function()
+		local coverage =
+			Util.searchCoverage({ photos = { total = 10, with_embedding = 4, with_outdated_embedding = 9 } }, 10)
+		assert.are.equal(4, coverage.outdated)
+		assert.are.equal(0, coverage.searchable)
+	end)
+
 	it("returns nil when the stats response is unusable", function()
 		assert.is_nil(Util.searchCoverage(nil, 100))
 		assert.is_nil(Util.searchCoverage({}, 100))

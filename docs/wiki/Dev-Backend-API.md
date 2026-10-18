@@ -1002,7 +1002,9 @@ Progress of the current local-model download (same shape as the CLIP download st
 ### `GET /v1/db/stats`
 Returns aggregate database statistics:
 - total indexed photos
-- photos with SigLIP embeddings
+- photos with SigLIP embeddings (`with_embedding`), and how many of those were made by another
+  search model than this build's (`with_outdated_embedding`; a search cannot find them until they
+  are indexed again)
 - photos with title / caption / keywords
 - total detected faces
 - total persons

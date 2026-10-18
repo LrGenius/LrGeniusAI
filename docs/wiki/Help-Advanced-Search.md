@@ -16,7 +16,11 @@ A text search only finds photos that carry a SigLIP embedding, so a
 half-indexed catalog answers "no results" for a subject that is sitting right
 there. The dialog says so before you type: if the search model is not
 downloaded, or some of the catalog has no search index yet, an orange note at
-the top gives the count and what to run to fix it.
+the top gives the count and what to run to fix it. After an update that
+switches to a new AI search model, photos indexed with the old one count as
+not searchable too, and the note names them separately: run **Analyze &
+Index Photos** with **Enable smart photo search** again and they are brought
+up to date.
 
 The check is two cheap lookups (`/v1/db/stats` plus the catalog's photo count) and
 runs every time the dialog opens. It is a note, not a gate — the search still

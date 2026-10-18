@@ -44,12 +44,22 @@ local function buildCoverageWarning()
 		catalogCount = nil
 	end
 	local coverage = Util.searchCoverage(stats, catalogCount)
-	if coverage and coverage.unsearchable > 0 then
+	if coverage and coverage.outdated > 0 then
+		table.insert(
+			lines,
+			string.format(
+				'New AI search model: %d of %d photos were indexed with the previous one and cannot be found by a search yet.\nRun Library > Plug-in Extras > Analyze & Index Photos with "Enable smart photo search" again to bring them up to date.',
+				coverage.outdated,
+				coverage.total
+			)
+		)
+	end
+	if coverage and coverage.unindexed > 0 then
 		table.insert(
 			lines,
 			LOC(
 				'$$$/LrGeniusAI/AdvancedSearchTask/WarnUnindexed=^1 of ^2 photos have no search index yet and cannot be found by a search.\nRun Library > Plug-in Extras > Analyze & Index Photos with "Enable smart photo search" to include them.',
-				tostring(coverage.unsearchable),
+				tostring(coverage.unindexed),
 				tostring(coverage.total)
 			)
 		)
