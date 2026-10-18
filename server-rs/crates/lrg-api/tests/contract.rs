@@ -886,7 +886,13 @@ async fn binding_stamps_the_embedding_model_on_rows_that_predate_it() {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     };
-    assert_eq!(model_of("old").as_deref(), Some(lrg_ml::siglip::MODEL_ID));
+    // The earlier model, not this build's: those vectors were made by it, and
+    // labelling them as current would keep them from ever being re-embedded.
+    assert_eq!(
+        model_of("old").as_deref(),
+        Some(lrg_ml::siglip::LEGACY_MODEL_ID)
+    );
+    assert_ne!(model_of("old").as_deref(), Some(lrg_ml::siglip::MODEL_ID));
     assert_eq!(model_of("other").as_deref(), Some("some-previous-model"));
 }
 

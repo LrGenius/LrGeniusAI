@@ -169,6 +169,14 @@ async fn add_training_example(
         json!(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
     );
     metadata.insert("has_embedding".into(), json!(embedding.is_some()));
+    if embedding.is_some() {
+        // A stored vector only compares against the function that made it;
+        // `edit` and `style_edit` skip examples from another model.
+        metadata.insert(
+            lrg_store::meta::EMBEDDING_MODEL_FIELD.into(),
+            json!(lrg_ml::siglip::MODEL_ID),
+        );
+    }
     if let Some(l) = &label {
         metadata.insert("label".into(), json!(l));
     }

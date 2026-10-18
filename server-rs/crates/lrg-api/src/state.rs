@@ -253,7 +253,7 @@ impl AppState {
             &lance_root,
             &store,
             &upgrade::UpgradeContext {
-                embedding_model: lrg_ml::siglip::MODEL_ID,
+                legacy_embedding_model: lrg_ml::siglip::LEGACY_MODEL_ID,
             },
         )
         .await;

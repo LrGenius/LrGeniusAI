@@ -373,6 +373,9 @@ pub(crate) enum NoTrainingExamples {
     PhotoNotIndexed,
     /// The photo is fine; the user has not saved any usable examples yet.
     NoneStored,
+    /// Examples are stored, but every one was embedded with an earlier search
+    /// model, whose vectors mean nothing next to this photo's.
+    Outdated,
 }
 
 impl NoTrainingExamples {
@@ -387,8 +390,25 @@ impl NoTrainingExamples {
                 "Style matching was skipped: no usable training examples are stored yet. \
                  Use \"Save Edits as AI Training Examples\" on photos you have edited yourself."
             }
+            NoTrainingExamples::Outdated => OUTDATED_TRAINING_EXAMPLES,
         }
     }
+}
+
+/// Said when every stored training example predates the current search model.
+pub(crate) const OUTDATED_TRAINING_EXAMPLES: &str =
+    "Style matching was skipped: your saved training examples were made with the previous AI \
+     search model and cannot be compared with this one. Run \"Save Edits as AI Training \
+     Examples\" again on those photos to replace them.";
+
+/// Whether a stored training example's vector came from the current search
+/// model. Examples saved before the model was recorded carry no identity and
+/// count as outdated: they were all embedded with the earlier model.
+pub(crate) fn training_example_is_current(metadata: &Map<String, Value>) -> bool {
+    metadata
+        .get(meta::EMBEDDING_MODEL_FIELD)
+        .and_then(Value::as_str)
+        == Some(lrg_ml::siglip::MODEL_ID)
 }
 
 /// Lightroom's own key for white balance in a saved develop-settings blob, and
@@ -444,8 +464,10 @@ pub(crate) async fn fetch_training_examples(
     let Ok(records) = store.scan_all(TRAINING_TABLE).await else {
         return Err(NoTrainingExamples::NoneStored);
     };
+    let with_vector = records.iter().filter(|r| r.vector.is_some()).count();
     let mut scored: Vec<(f64, StoreRecord)> = records
         .into_iter()
+        .filter(|r| training_example_is_current(&r.metadata))
         .filter_map(|r| {
             let v = r.vector.clone()?;
             Some((cosine_distance(&query_embedding, &v), r))
@@ -454,7 +476,11 @@ pub(crate) async fn fetch_training_examples(
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     scored.truncate(n_results);
     if scored.is_empty() {
-        return Err(NoTrainingExamples::NoneStored);
+        return Err(if with_vector > 0 {
+            NoTrainingExamples::Outdated
+        } else {
+            NoTrainingExamples::NoneStored
+        });
     }
 
     let mut dropped_temperature = 0usize;
@@ -937,6 +963,27 @@ async fn finish_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A training example is only comparable with the model that embedded it;
+    /// one saved before the identity was recorded was embedded by the earlier
+    /// model and must not pass as current.
+    #[test]
+    fn training_examples_from_another_model_are_not_current() {
+        let with = |model: Option<&str>| {
+            let mut m = Map::new();
+            if let Some(model) = model {
+                m.insert(meta::EMBEDDING_MODEL_FIELD.into(), json!(model));
+            }
+            m
+        };
+        assert!(training_example_is_current(&with(Some(
+            lrg_ml::siglip::MODEL_ID
+        ))));
+        assert!(!training_example_is_current(&with(Some(
+            lrg_ml::siglip::LEGACY_MODEL_ID
+        ))));
+        assert!(!training_example_is_current(&with(None)));
+    }
 
     /// Exactly the multipart field names `SearchIndexAPI.generateEditRecipePhoto`
     /// and `SearchIndexAPI.styleEdit` put on the wire. Both plugin functions feed

@@ -38,8 +38,17 @@ pub const EMBED_DIM: usize = 1152;
 /// `embedding_model` is not this value.
 ///
 /// History: `siglip2-so400m-384/fp16` was the fixed-resolution
-/// `ViT-SO400M-16-SigLIP2-384` with a 384x384 center crop.
+/// `ViT-SO400M-16-SigLIP2-384` with a 384x384 center crop
+/// ([`LEGACY_MODEL_ID`]).
 pub const MODEL_ID: &str = "siglip2-so400m-naflex-576/fp16";
+
+/// The only SigLIP2 export that shipped before NaFlex, and so the identity of
+/// every stored vector that carries no `embedding_model` at all: that field
+/// was added while this model was the current one. The store upgrade stamps
+/// it on those rows (`lrg_store::upgrade`); stamping [`MODEL_ID`] instead
+/// would label 384 center-crop vectors as NaFlex and they would never be
+/// re-embedded.
+pub const LEGACY_MODEL_ID: &str = "siglip2-so400m-384/fp16";
 
 const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
 

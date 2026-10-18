@@ -231,8 +231,11 @@ differs always re-queues.
 Absence is rare in practice now: binding a database runs a one-time store upgrade
 (`lrg_store::upgrade`, step `0001-stamp-embedding-model`, recorded in `upgrades.json` in the lance
 root) that stamps this build's `embedding_model` on every stored vector that has none. That is safe
-because only one SigLIP2 export has ever shipped. A row naming another model keeps its name, and
-the absent-is-current rule stays for any row an older build writes after the upgrade has run.
+because the field was added while one SigLIP2 export was current: the step stamps
+`lrg_ml::siglip::LEGACY_MODEL_ID` (the 384 center-crop model), **not** this build's NaFlex model, so
+those vectors are re-queued by `/v1/index/unprocessed` like any other stale one. A row naming another
+model keeps its name, and the absent-is-current rule stays for any row an older build writes after
+the upgrade has run.
 
 ### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
@@ -436,6 +439,14 @@ omitted entirely, and either way the reason is in `warning`. Examples saved
 before `is_raw` was recorded count as compatible with anything. Every other
 develop setting means the same on both kinds of file and is blended normally;
 `tint` differs only in range, which the clamp handles.
+
+Only examples embedded with the current search model are compared with the photo
+(`embedding_model` in the example's metadata, written by `POST /v1/edit/training`); a vector
+from another model means nothing next to this one. Examples saved before the identity was
+recorded count as outdated. When *every* stored example is outdated, the endpoint says so
+(`error` on the 422, or `style_engine_note` when the LLM fallback runs) instead of reporting
+that there is nothing stored, and `/v1/edit/recipe` skips style matching with the same
+explanation in `warning`. Saving an example again replaces it.
 
 The `/v1/edit/recipe` few-shot path applies the same rule: an example whose raw status
 conflicts with the target has its white balance stripped before it reaches the
@@ -760,7 +771,9 @@ Applies a list of approved keyword merge pairs to the backend's metadata records
 ### `POST /v1/edit/training`
 Stores one photo's develop settings as a training example. `is_raw` is recorded
 with it and decides, later, whether the example may contribute a temperature —
-see `POST /v1/edit/style`.
+see `POST /v1/edit/style`. The SigLIP2 vector is stored together with the
+`embedding_model` that made it, which decides whether the example can still be
+matched after the search model changes.
 
 Saves a photo's Lightroom develop settings as a labeled training example.
 
@@ -828,7 +841,7 @@ BioCLIP 2 identifies animals, plants and fungi down to species. It ships as
 three assets — the ViT-L/14 image tower as fp16 ONNX, a pruned Tree-of-Life
 zero-shot head (`bioclip2_taxa.bin`) and its interned labels
 (`bioclip2_taxa.json`) — from their **own** release tag
-(`bioclip-assets-v1`), independent of the SigLIP2 `model-assets-v1` tag.
+(`bioclip-assets-v1`), independent of the SigLIP2 `model-assets-v2` tag.
 Roughly 876 MB in total.
 
 The head is pruned from upstream's 867,455 taxa; see

@@ -29,8 +29,10 @@ pub const STAMP_EMBEDDING_MODEL: &str = "0001-stamp-embedding-model";
 /// Facts about this build that a step needs and the store crate cannot know:
 /// it does not depend on `lrg-ml`, which owns the model identities.
 pub struct UpgradeContext<'a> {
-    /// `lrg_ml::siglip::MODEL_ID`, the embedding function this build writes.
-    pub embedding_model: &'a str,
+    /// `lrg_ml::siglip::LEGACY_MODEL_ID`: the embedding function that wrote
+    /// every vector still lacking an identity. Not this build's own model —
+    /// see [`stamp_embedding_model`].
+    pub legacy_embedding_model: &'a str,
 }
 
 /// What [`ensure_upgraded`] did on this bind.
@@ -68,11 +70,11 @@ pub async fn ensure_upgraded(
         .unwrap_or_default();
 
     if !applied.contains(STAMP_EMBEDDING_MODEL) {
-        match stamp_embedding_model(store, ctx.embedding_model).await {
+        match stamp_embedding_model(store, ctx.legacy_embedding_model).await {
             Ok(stamped) => {
                 let summary = json!({
                     "applied_at": chrono::Utc::now().to_rfc3339(),
-                    "embedding_model": ctx.embedding_model,
+                    "embedding_model": ctx.legacy_embedding_model,
                     "stamped": stamped,
                 });
                 record_applied(&mut marker, STAMP_EMBEDDING_MODEL, summary.clone());
@@ -96,16 +98,18 @@ pub async fn ensure_upgraded(
 }
 
 /// Sets `embedding_model` to `model_id` on every image embedding that has a
-/// vector and no identity yet. Returns how many rows it stamped.
+/// vector and no identity yet. `model_id` is the model that wrote the rows
+/// *that predate the field*, not the one this build writes. Returns how many rows it stamped.
 ///
 /// Only rows that predate the field are touched. A row that already names a
 /// model keeps it — even a different one, since that difference is exactly
 /// what `/v1/index/unprocessed` re-queues on — and a row with no vector has no
 /// embedding to describe.
 ///
-/// Stamping the absent identity as *this* build's is safe because there has
-/// only ever been one SigLIP2 export: the assets are pinned to one release
-/// tag, so every stored vector came from the function `model_id` names.
+/// Stamping the absent identity is safe because the field was added while one
+/// SigLIP2 export was current: every vector without it came from that export
+/// (`lrg_ml::siglip::LEGACY_MODEL_ID`). It must not be stamped as the current
+/// model once a different one ships, or old vectors would pass as new ones.
 pub async fn stamp_embedding_model(store: &Store, model_id: &str) -> Result<usize, String> {
     let candidates: Vec<String> = store
         .scan_meta(IMAGE_TABLE)
@@ -291,7 +295,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = seeded_store(dir.path()).await;
         let ctx = UpgradeContext {
-            embedding_model: MODEL,
+            legacy_embedding_model: MODEL,
         };
 
         let first = ensure_upgraded(dir.path(), &store, &ctx).await;
@@ -336,7 +340,7 @@ mod tests {
             dir.path(),
             &store,
             &UpgradeContext {
-                embedding_model: MODEL,
+                legacy_embedding_model: MODEL,
             },
         )
         .await;

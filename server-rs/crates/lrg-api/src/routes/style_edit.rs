@@ -22,7 +22,7 @@ use lrg_store::{StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
 use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
-    success_payload,
+    success_payload, training_example_is_current, OUTDATED_TRAINING_EXAMPLES,
 };
 use crate::routes::route_util::{
     local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
@@ -87,15 +87,24 @@ fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> Tr
 /// plain cosine distance to the Chroma-style squared-L2 value
 /// `clip_distance_to_similarity` expects), otherwise the most-recent-
 /// examples fallback with Python's neutral 0.5 distance.
+///
+/// The similarity search only considers examples embedded with the current
+/// search model. The second value says how many it had to leave out for that,
+/// so the caller can explain an empty result.
 async fn fetch_style_candidates(
     store: &lrg_store::Store,
     query_embedding: Option<&[f32]>,
     n_results: usize,
-) -> Vec<TrainingCandidate> {
+) -> (Vec<TrainingCandidate>, usize) {
     if let Some(q) = query_embedding {
         let records = store.scan_all(TRAINING_TABLE).await.unwrap_or_default();
+        let outdated = records
+            .iter()
+            .filter(|r| r.vector.is_some() && !training_example_is_current(&r.metadata))
+            .count();
         let mut scored: Vec<(f64, StoreRecord)> = records
             .into_iter()
+            .filter(|r| training_example_is_current(&r.metadata))
             .filter_map(|r| {
                 let v = r.vector.clone()?;
                 Some((cosine_distance(q, &v), r))
@@ -103,10 +112,11 @@ async fn fetch_style_candidates(
             .collect();
         scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         scored.truncate(n_results);
-        scored
+        let candidates = scored
             .into_iter()
             .map(|(cos_dist, r)| record_to_candidate(&r.id, &r.metadata, 2.0 * cos_dist))
-            .collect()
+            .collect();
+        (candidates, outdated)
     } else {
         let mut rows = store.scan_meta(TRAINING_TABLE).await.unwrap_or_default();
         rows.sort_by(|a, b| {
@@ -115,9 +125,11 @@ async fn fetch_style_candidates(
             cb.cmp(ca)
         });
         rows.truncate(n_results);
-        rows.into_iter()
+        let candidates = rows
+            .into_iter()
             .map(|(id, meta)| record_to_candidate(&id, &meta, 0.5))
-            .collect()
+            .collect();
+        (candidates, 0)
     }
 }
 
@@ -210,12 +222,17 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     );
 
     let training_count = store.count(TRAINING_TABLE).await.unwrap_or(0);
-    let candidates = fetch_style_candidates(
+    let (candidates, outdated_examples) = fetch_style_candidates(
         &store,
         clip_embedding.as_deref(),
         CANDIDATE_POOL.min(training_count.max(1)),
     )
     .await;
+
+    // With nothing current to compare against, "no result" would read as
+    // though the user had no examples; say what actually happened.
+    let outdated_note = (candidates.is_empty() && outdated_examples > 0)
+        .then_some(OUTDATED_TRAINING_EXAMPLES.to_string());
 
     // Parsed before the style engine runs, not after: the engine needs to know
     // whether this photo is raw in order to decide which examples may
@@ -273,7 +290,11 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
         payload["engine"] = json!("llm");
         payload["confidence"] = json!(round3(result.confidence));
         payload["matched_examples"] = json!(result.matched_count);
-        payload["style_engine_note"] = result.warning.map(|w| json!(w)).unwrap_or(Value::Null);
+        payload["style_engine_note"] = result
+            .warning
+            .or(outdated_note)
+            .map(|w| json!(w))
+            .unwrap_or(Value::Null);
         payload["input_tokens"] = json!(llm_response.input_tokens);
         payload["output_tokens"] = json!(llm_response.output_tokens);
         return Json(payload).into_response();
@@ -287,7 +308,7 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
                 "engine": "none",
                 "confidence": 0.0,
                 "matched_examples": 0,
-                "error": result.warning.unwrap_or_else(|| "Style engine could not produce a result.".to_string()),
+                "error": result.warning.or(outdated_note).unwrap_or_else(|| "Style engine could not produce a result.".to_string()),
             })),
         )
             .into_response();

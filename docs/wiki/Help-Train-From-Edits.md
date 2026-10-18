@@ -60,6 +60,12 @@ with **Enable smart photo search** for it to be findable. Saving an example for
 a photo without an embedding still works, but that example will never be
 retrieved — the plugin shows a warning when this happens.
 
+When LrGeniusAI switches to a new AI search model, examples saved with the old
+one can no longer be compared with your photos. If that applies to all of your
+examples, the edit tells you so — save them again with **Save Edits as AI
+Training Examples** (it replaces the old ones). The photo being edited has to be
+indexed with the new model too.
+
 The same applies to the photo being edited: if it is not indexed, there is no
 embedding to compare your saved edits against. The backend then falls back to
 scoring recent examples on exposure, scene and time of day alone, which is a
