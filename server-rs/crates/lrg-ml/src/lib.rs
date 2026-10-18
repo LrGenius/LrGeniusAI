@@ -100,6 +100,7 @@ pub mod facenet;
 pub mod faces;
 pub mod image_pre;
 pub mod model_paths;
+pub mod naflex_pre;
 pub mod siglip;
 pub mod text_pre;
 pub mod umeyama;

@@ -47,9 +47,9 @@ fn models_absent() -> ModelAssetPaths {
     let dir = NO_MODELS.path();
     ModelAssetPaths {
         siglip: lrg_ml::siglip::ModelPaths {
-            image_onnx: dir.join("siglip2_image.onnx"),
-            text_onnx: dir.join("siglip2_text.onnx"),
-            tokenizer_json: dir.join("tokenizer.json"),
+            image_onnx: dir.join("siglip2_naflex_image.onnx"),
+            text_onnx: dir.join("siglip2_naflex_text.onnx"),
+            tokenizer_json: dir.join("siglip2_naflex_tokenizer.json"),
         },
         face: lrg_ml::faces::FaceModelPaths {
             det_onnx: dir.join("yunet_face_detection.onnx"),

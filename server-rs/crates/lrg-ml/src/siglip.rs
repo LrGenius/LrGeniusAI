@@ -1,4 +1,7 @@
-//! ort-backed SigLIP2 (ViT-SO400M-16-SigLIP2-384) image + text towers.
+//! ort-backed SigLIP2 (`google/siglip2-so400m-patch16-naflex`) image + text
+//! towers. The image tower takes NaFlex patches (see [`crate::naflex_pre`]),
+//! so a photo keeps its aspect ratio instead of losing its edges to a square
+//! center crop.
 //! Port of the model-management half of `server_lifecycle.py`: lazy load,
 //! 30-minute idle unload, `/health`-style status.
 //!
@@ -15,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ort::session::Session;
 use ort::value::Tensor;
 
-use crate::image_pre;
+use crate::naflex_pre;
 use crate::text_pre::{SiglipTokenizer, TokenizeError, CONTEXT_LENGTH};
 
 pub const EMBED_DIM: usize = 1152;
@@ -29,11 +32,14 @@ pub const EMBED_DIM: usize = 1152;
 ///
 /// **Bump this whenever a change would make new embeddings incomparable with
 /// stored ones** — different weights, an export at a different optimization
-/// level, a change to [`crate::image_pre::preprocess`], or a different
-/// tokenizer. A stored vector only means something next to the function that
+/// level, a change to [`crate::naflex_pre::preprocess`] (its patch budget
+/// included), or a different tokenizer. A stored vector only means something next to the function that
 /// produced it, and `/v1/index/unprocessed` re-queues photos whose stored
 /// `embedding_model` is not this value.
-pub const MODEL_ID: &str = "siglip2-so400m-384/fp16";
+///
+/// History: `siglip2-so400m-384/fp16` was the fixed-resolution
+/// `ViT-SO400M-16-SigLIP2-384` with a 384x384 center crop.
+pub const MODEL_ID: &str = "siglip2-so400m-naflex-576/fp16";
 
 const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
 
@@ -302,12 +308,24 @@ impl SiglipModel {
             "image",
             || build_session(&self.paths.image_onnx),
             |session| {
-                let data = image_pre::preprocess(pixels, width, height);
-                let input = Tensor::from_array((
-                    [1, 3, image_pre::IMAGE_SIZE, image_pre::IMAGE_SIZE],
-                    data,
-                ))?;
-                let outputs = session.run(ort::inputs!["pixel_values" => input])?;
+                let pre =
+                    naflex_pre::preprocess(pixels, width, height, naflex_pre::MAX_NUM_PATCHES);
+                // `pos_interp_h`/`pos_interp_w` carry the position-embedding
+                // resize; see `NaflexInput::position_interpolation` for why
+                // the graph does not compute it itself.
+                let (rows, cols) = pre.position_interpolation();
+                let n = pre.max_num_patches;
+                let pixel_values =
+                    Tensor::from_array(([1, n, naflex_pre::PATCH_DIM], pre.pixel_values))?;
+                let mask = Tensor::from_array(([1, n], pre.attention_mask))?;
+                let interp_h = Tensor::from_array(([pre.grid_h, naflex_pre::POSITION_GRID], rows))?;
+                let interp_w = Tensor::from_array(([pre.grid_w, naflex_pre::POSITION_GRID], cols))?;
+                let outputs = session.run(ort::inputs![
+                    "pixel_values" => pixel_values,
+                    "pixel_attention_mask" => mask,
+                    "pos_interp_h" => interp_h,
+                    "pos_interp_w" => interp_w,
+                ])?;
                 let (_, embedding) = outputs[0].try_extract_tensor::<f32>()?;
                 Ok(embedding.to_vec())
             },
