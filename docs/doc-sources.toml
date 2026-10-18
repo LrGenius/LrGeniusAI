@@ -57,6 +57,9 @@ sources = [
   # The /ui/ section documents the browser↔plugin action queue, which lives
   # here rather than in a route module.
   "server-rs/crates/lrg-api/src/ui_bridge.rs",
+  # Likewise the agent bridge behind /v1/agent/*, and the /mcp endpoint.
+  "server-rs/crates/lrg-api/src/agent_bridge.rs",
+  "server-rs/crates/lrg-mcp/src/lib.rs",
   # The page names the release tags the download routes pull assets from, so a
   # change to how a tag is published belongs in the same review.
   ".github/workflows/model-assets-bioclip.yml",
@@ -153,6 +156,28 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskCullPhotos.lua",
   "server-rs/crates/lrg-analysis/src/culling_config.rs",
   "server-rs/crates/lrg-analysis/src/grouping.rs",
+]
+
+[page."Help-AI-Agents.md"]
+sources = [
+  # The tool table and what each tool does.
+  "server-rs/crates/lrg-mcp/src/tools_*.rs",
+  # Starting, stopping, the activity bar, polling, the agent token.
+  "plugin/LrGeniusAI.lrdevplugin/AgentBridge.lua",
+  "server-rs/crates/lrg-mcp/src/lib.rs",
+]
+
+[page."Dev-Agent-Bridge.md"]
+sources = [
+  "server-rs/crates/lrg-mcp/src/*.rs",
+  "server-rs/crates/lrg-mcp/tests/*.rs",
+  "server-rs/crates/lrg-api/src/agent_bridge.rs",
+  "server-rs/crates/lrg-api/src/routes/agent.rs",
+  "plugin/LrGeniusAI.lrdevplugin/AgentBridge.lua",
+  "plugin/LrGeniusAI.lrdevplugin/AgentCommands.lua",
+  "plugin/LrGeniusAI.lrdevplugin/PluginTests.lua",
+  # The full-test runbook's command-line client (its options and exit codes).
+  "scripts/mcp_call.py",
 ]
 
 [page."Help-People-Faces.md"]

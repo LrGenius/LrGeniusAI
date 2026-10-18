@@ -11,13 +11,14 @@ members = [
     "crates/lrg-llama",
     "crates/lrg-mlx",
     "crates/lrg-api",
+    "crates/lrg-mcp",
     "crates/lrg-server",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0"
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 lrg-common = { path = "crates/lrg-common" }
@@ -30,6 +31,7 @@ lrg-providers = { path = "crates/lrg-providers" }
 lrg-llama = { path = "crates/lrg-llama" }
 lrg-mlx = { path = "crates/lrg-mlx" }
 lrg-api = { path = "crates/lrg-api" }
+lrg-mcp = { path = "crates/lrg-mcp" }
 
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs"] }

@@ -46,6 +46,9 @@ require("LocalModelCatalog")
 require("AiProviders")
 require("Secrets")
 require("OnboardingWizard")
+require("AgentCommands")
+require("AgentBridge")
+require("PluginTests")
 
 if _G.prefs.ai == nil then
 	_G.prefs.ai = ""
@@ -248,6 +251,21 @@ if _G.prefs.useClip == nil then
 	_G.prefs.useClip = false
 end
 
+-- The AI agent bridge (AgentBridge.lua). On by default: MCP clients cannot
+-- use it without the agent token, which only the Plug-in Manager shows, and
+-- nothing is visible until an agent actually works. Agents may change photos
+-- unless the user turns that off. Developer commands only ever work from a
+-- .lrdevplugin install, whatever this says.
+if _G.prefs.agentBridgeEnabled == nil then
+	_G.prefs.agentBridgeEnabled = true
+end
+if _G.prefs.agentBridgeAllowChanges == nil then
+	_G.prefs.agentBridgeAllowChanges = true
+end
+if _G.prefs.agentBridgeDevTools == nil then
+	_G.prefs.agentBridgeDevTools = false
+end
+
 -- Advanced Search dialog options (persisted for convenience)
 if _G.prefs.searchScope == nil then
 	_G.prefs.searchScope = "all"
@@ -284,6 +302,15 @@ end
 -- if prefs.onboardingCompleted == nil then
 -- 	Do not set to false yet, let the wizard trigger
 -- end
+
+-- Init.lua runs on load and on "Reload Plug-in": retire a bridge loop left
+-- over from before the reload, then start a fresh one. AgentBridge.start makes
+-- its own function context, so the loop outlives this script; it keeps trying
+-- until the backend answers.
+AgentBridge.resetForReload()
+if _G.prefs.agentBridgeEnabled then
+	AgentBridge.start()
+end
 
 LrTasks.startAsyncTask(function()
 	-- Check if onboarding is needed

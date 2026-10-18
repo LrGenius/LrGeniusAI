@@ -264,3 +264,33 @@ describe("Secrets.connectionFields", function()
 		assert.truthy(fields.keyProblems.geminiApiKey:find("could not be read", 1, true))
 	end)
 end)
+
+describe("Secrets agent token", function()
+	it("is empty until the backend hands one out, then kept and cached", function()
+		assert.are.equal("", Secrets.getMcpToken())
+		assert.is_true(Secrets.setMcpToken(" " .. string.rep("a", 64) .. " "))
+		assert.are.equal(string.rep("a", 64), Secrets.storage.data[Secrets.MCP_TOKEN])
+		local reads = Secrets.storage.retrieves
+		assert.are.equal(string.rep("a", 64), Secrets.getMcpToken())
+		assert.are.equal(reads, Secrets.storage.retrieves, "served from the cache")
+	end)
+
+	it("stays out of the provider keys", function()
+		for _, field in ipairs(Secrets.FIELDS) do
+			assert.are_not.equal(Secrets.MCP_TOKEN, field)
+		end
+		Secrets.setMcpToken(string.rep("b", 64))
+		local fields = Secrets.connectionFields({})
+		for _, value in pairs(fields) do
+			assert.are_not.equal(string.rep("b", 64), value)
+		end
+	end)
+
+	it("still works for the session when the storage refuses it", function()
+		Secrets.storage = fakeStorage({ storeFails = true })
+		local ok, problem = Secrets.setMcpToken(string.rep("c", 64))
+		assert.is_false(ok)
+		assert.truthy(problem:find("password storage", 1, true))
+		assert.are.equal(string.rep("c", 64), Secrets.getMcpToken())
+	end)
+end)

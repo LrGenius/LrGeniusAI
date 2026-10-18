@@ -274,6 +274,23 @@ fn bool_field(fields: &HashMap<String, String>, key: &str, default: bool) -> boo
         .unwrap_or(default)
 }
 
+/// The name of the photo's original file, when the uploader sends it.
+///
+/// The plugin often uploads a JPEG rendition, which the multipart part names
+/// `018A0344.jpg` for a file that is `018A0344.CR3` in the catalog. The part's
+/// name still decides how the bytes are decoded, so this only replaces the
+/// `filename` that is stored and shown. It applies to a single-photo upload
+/// only: one name cannot stand for a batch.
+fn original_filename_field(fields: &HashMap<String, String>, photo_count: usize) -> Option<String> {
+    if photo_count != 1 {
+        return None;
+    }
+    fields
+        .get("original_filename")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     let tasks: Vec<String> = match fields.get("tasks") {
         Some(s) if !s.is_empty() => {
@@ -706,6 +723,7 @@ pub(crate) async fn process_batch(
     reject_empty_batch: bool,
 ) -> Response {
     let options = parse_options(&fields);
+    let original_filename = original_filename_field(&fields, photo_ids.len());
     if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -814,7 +832,7 @@ pub(crate) async fn process_batch(
             Ok((bytes, filename, file_location)) => normalized_photos.push(NormalizedPhoto {
                 bytes: Arc::from(bytes),
                 photo_id,
-                filename,
+                filename: original_filename.clone().unwrap_or(filename),
                 overrides: photo_overrides,
                 file_location,
             }),
@@ -1233,6 +1251,76 @@ fn precompute_cull_signals(images: &[Arc<[u8]>]) -> Vec<Result<CullSignals, Stri
         .collect()
 }
 
+/// Metadata keys written by the `metadata` task (the LLM answer).
+const METADATA_TASK_FIELDS: &[&str] = &[
+    "title",
+    "caption",
+    "alt_text",
+    "keywords",
+    "flattened_keywords",
+    "provider",
+    "model",
+];
+
+/// Metadata keys written by the `species` task. The set `apply_species_metadata`
+/// fills, plus the `species_checked` marker that says the photo was looked at.
+const SPECIES_TASK_FIELDS: &[&str] = &[
+    "species_rank",
+    "species_taxonomy",
+    "species_scientific_name",
+    "species_common_name",
+    "species_confidence",
+    "species_alternatives",
+    "species_checked",
+    "species_model",
+];
+
+/// The metadata a photo starts a run with.
+///
+/// A photo already in the index keeps everything it has. `redo`
+/// (`regenerate_metadata`) discards only what the tasks of *this* run are about
+/// to write again, so redoing one task never costs the results of another, nor
+/// the catalog membership that lives in the same row. A photo not in the index
+/// starts from the identity fields alone.
+fn starting_metadata(
+    stored: Option<&Map<String, Value>>,
+    options: &ParsedOptions,
+    filename: &str,
+    photo_id: &str,
+) -> Map<String, Value> {
+    let Some(stored) = stored else {
+        let mut m = Map::new();
+        m.insert("filename".into(), json!(filename));
+        m.insert("photo_id".into(), json!(photo_id));
+        m.insert("uuid".into(), json!(photo_id));
+        if let Some(p) = &options.provider {
+            m.insert("provider".into(), json!(p));
+        }
+        if let Some(mo) = &options.model {
+            m.insert("model".into(), json!(mo));
+        }
+        return m;
+    };
+    let mut m = stored.clone();
+    m.insert("filename".into(), json!(filename));
+    m.insert("photo_id".into(), json!(photo_id));
+    m.entry("uuid").or_insert_with(|| json!(photo_id));
+    if options.regenerate_metadata {
+        let redone = [
+            (options.compute_metadata, METADATA_TASK_FIELDS),
+            (options.compute_species, SPECIES_TASK_FIELDS),
+        ];
+        for (is_redone, fields) in redone {
+            if is_redone {
+                for key in fields {
+                    m.remove(*key);
+                }
+            }
+        }
+    }
+    m
+}
+
 // Six of these are the per-photo inputs the batch loop already carries as a
 // tuple; bundling them into a struct here would just move the same list one
 // level out without making any call site clearer.
@@ -1261,41 +1349,22 @@ async fn prepare_one(
         None
     };
 
-    let existing = if options.regenerate_metadata {
-        None
-    } else {
-        store
-            .get(IMAGE_TABLE, &[photo_id.to_string()])
-            .await
-            .ok()
-            .and_then(|mut v| v.pop())
-    };
+    // Always read the stored row, `regenerate_metadata` or not: it holds the
+    // embedding and the fields of every task this run is *not* redoing. Redo
+    // used to start from nothing, so redoing `cull` (or `species`) alone
+    // dropped the stored embedding and made the photo vanish from search.
+    let existing = store
+        .get(IMAGE_TABLE, &[photo_id.to_string()])
+        .await
+        .ok()
+        .and_then(|mut v| v.pop());
 
-    let mut main_metadata: Map<String, Value> = match &existing {
-        Some(record) if !options.regenerate_metadata => {
-            let mut m = record.metadata.clone();
-            m.insert("filename".into(), json!(filename));
-            m.insert("photo_id".into(), json!(photo_id));
-            m.insert(
-                "uuid".into(),
-                m.get("uuid").cloned().unwrap_or(json!(photo_id)),
-            );
-            m
-        }
-        _ => {
-            let mut m = Map::new();
-            m.insert("filename".into(), json!(filename));
-            m.insert("photo_id".into(), json!(photo_id));
-            m.insert("uuid".into(), json!(photo_id));
-            if let Some(p) = &options.provider {
-                m.insert("provider".into(), json!(p));
-            }
-            if let Some(mo) = &options.model {
-                m.insert("model".into(), json!(mo));
-            }
-            m
-        }
-    };
+    let mut main_metadata = starting_metadata(
+        existing.as_ref().map(|r| &r.metadata),
+        options,
+        filename,
+        photo_id,
+    );
 
     if let Some(ct) = overrides.capture_time.or(options.capture_time) {
         main_metadata.insert("capture_time".into(), json!(ct));
@@ -2462,6 +2531,109 @@ mod face_carry_over_tests {
             carry_over_person_ids(&previous, &[&embedding]),
             vec![(String::new(), true)]
         );
+    }
+}
+
+#[cfg(test)]
+mod starting_metadata_tests {
+    use super::*;
+
+    fn options(tasks: &str, regenerate: &str) -> ParsedOptions {
+        let fields: HashMap<String, String> = [
+            ("tasks".to_string(), tasks.to_string()),
+            ("regenerate_metadata".to_string(), regenerate.to_string()),
+        ]
+        .into_iter()
+        .collect();
+        parse_options(&fields)
+    }
+
+    fn stored() -> Map<String, Value> {
+        let mut m = Map::new();
+        for (k, v) in [
+            ("title", json!("A boy")),
+            ("keywords", json!("[\"boy\"]")),
+            ("provider", json!("openai")),
+            ("species_rank", json!("class")),
+            ("species_scientific_name", json!("Insecta")),
+            ("species_checked", json!(true)),
+            ("catalog_ids", json!("cat_a,cat_b")),
+            ("has_embedding", json!(true)),
+        ] {
+            m.insert(k.to_string(), v);
+        }
+        m
+    }
+
+    /// The bug: redoing `cull` alone started from an empty row, so the stored
+    /// embedding flag, the species and the catalog membership all vanished and
+    /// the photo dropped out of search.
+    #[test]
+    fn redoing_one_task_keeps_what_the_other_tasks_wrote() {
+        let m = starting_metadata(Some(&stored()), &options("cull", "true"), "a.jpg", "p1");
+        assert_eq!(m["has_embedding"], json!(true));
+        assert_eq!(m["catalog_ids"], json!("cat_a,cat_b"));
+        assert_eq!(m["species_scientific_name"], json!("Insecta"));
+        assert_eq!(m["title"], json!("A boy"));
+    }
+
+    #[test]
+    fn redoing_species_drops_only_the_species_fields() {
+        let m = starting_metadata(Some(&stored()), &options("species", "true"), "a.jpg", "p1");
+        for key in SPECIES_TASK_FIELDS {
+            assert!(!m.contains_key(*key), "{key} should be recomputed");
+        }
+        assert_eq!(m["title"], json!("A boy"));
+        assert_eq!(m["has_embedding"], json!(true));
+    }
+
+    #[test]
+    fn redoing_metadata_drops_only_the_llm_fields() {
+        let m = starting_metadata(Some(&stored()), &options("metadata", "true"), "a.jpg", "p1");
+        for key in METADATA_TASK_FIELDS {
+            assert!(!m.contains_key(*key), "{key} should be recomputed");
+        }
+        assert_eq!(m["species_rank"], json!("class"));
+        assert_eq!(m["catalog_ids"], json!("cat_a,cat_b"));
+    }
+
+    /// Without `redo` nothing is discarded, whatever the task.
+    #[test]
+    fn without_redo_the_stored_row_is_kept_whole() {
+        let m = starting_metadata(
+            Some(&stored()),
+            &options("metadata,species", "false"),
+            "a.jpg",
+            "p1",
+        );
+        assert_eq!(m["title"], json!("A boy"));
+        assert_eq!(m["species_rank"], json!("class"));
+    }
+
+    #[test]
+    fn the_original_filename_applies_to_a_single_photo_only() {
+        let fields: HashMap<String, String> = [("original_filename".to_string(), " a.CR3 ".into())]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            original_filename_field(&fields, 1).as_deref(),
+            Some("a.CR3")
+        );
+        assert_eq!(original_filename_field(&fields, 2), None);
+        assert_eq!(original_filename_field(&HashMap::new(), 1), None);
+        let blank: HashMap<String, String> = [("original_filename".to_string(), "  ".into())]
+            .into_iter()
+            .collect();
+        assert_eq!(original_filename_field(&blank, 1), None);
+    }
+
+    #[test]
+    fn a_photo_not_in_the_index_starts_from_its_identity() {
+        let m = starting_metadata(None, &options("embeddings", "true"), "a.jpg", "p1");
+        assert_eq!(m["filename"], json!("a.jpg"));
+        assert_eq!(m["photo_id"], json!("p1"));
+        assert_eq!(m["uuid"], json!("p1"));
+        assert_eq!(m.len(), 3);
     }
 }
 

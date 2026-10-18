@@ -295,13 +295,313 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 
 	checkUpdates()
 	propertyTable.manualCheckUpdates = checkUpdates
+
+	-- AI agent bridge. Saved the moment they change, not in endDialog: the
+	-- bridge may be running while this dialog is open, and it reads them
+	-- live (and re-registers, so the backend learns them too).
+	propertyTable.agentBridgeEnabled = prefs.agentBridgeEnabled ~= false
+	propertyTable.agentBridgeAllowChanges = prefs.agentBridgeAllowChanges ~= false
+	propertyTable.agentBridgeDevTools = prefs.agentBridgeDevTools == true
+	propertyTable:addObserver("agentBridgeEnabled", function(_, _, value)
+		prefs.agentBridgeEnabled = value == true
+		if value then
+			AgentBridge.start()
+		else
+			AgentBridge.stop()
+		end
+	end)
+	propertyTable:addObserver("agentBridgeAllowChanges", function(_, _, value)
+		prefs.agentBridgeAllowChanges = value == true
+		AgentBridge.refreshRegistration()
+	end)
+	-- Developer commands let an agent run code in Lightroom, so turning them
+	-- on asks first; the pref changes only once the user agreed.
+	propertyTable:addObserver("agentBridgeDevTools", function(_, _, value)
+		if value ~= true then
+			prefs.agentBridgeDevTools = false
+			AgentBridge.refreshRegistration()
+			return
+		end
+		if prefs.agentBridgeDevTools == true then
+			return
+		end
+		LrTasks.startAsyncTask(function()
+			local choice = LrDialogs.confirm(
+				"Allow developer commands?",
+				"With developer commands on, a connected AI agent can run any Lua code inside Lightroom "
+					.. "and reload the plugin's code. That can change or damage your catalog in ways Undo "
+					.. "cannot reverse.\n\nThey exist for developing LrGeniusAI. Turn them on only with a "
+					.. "test catalog.",
+				"Allow developer commands",
+				"Cancel"
+			)
+			if choice == "ok" then
+				prefs.agentBridgeDevTools = true
+				AgentBridge.refreshRegistration()
+			else
+				propertyTable.agentBridgeDevTools = false
+			end
+		end)
+	end)
+	local function refreshBridgeStatus()
+		local status = AgentBridge.status()
+		local token = Secrets.getMcpToken()
+		propertyTable.mcpTokenShown = token
+		propertyTable.mcpTokenReady = token ~= ""
+		if status.stoppedByUser then
+			propertyTable.agentBridgeStatus = "Stopped from the activity bar. Untick and tick Enable to start it again."
+		elseif not status.running then
+			propertyTable.agentBridgeStatus = "Off."
+		elseif not status.registered then
+			propertyTable.agentBridgeStatus = status.lastError and "Waiting for the LrGeniusAI backend..."
+				or "Starting..."
+		else
+			propertyTable.agentBridgeStatus = string.format(
+				"Ready for AI agents - %d request%s handled%s.",
+				status.commandsDone,
+				status.commandsDone == 1 and "" or "s",
+				status.socketConnected and "" or " (polling)"
+			)
+		end
+	end
+	refreshBridgeStatus()
+	LrTasks.startAsyncTask(function()
+		while checksStillWanted() do
+			refreshBridgeStatus()
+			LrTasks.sleep(2)
+		end
+	end)
 end
 
 function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
 	local bind = LrView.bind
 	local share = LrView.share
 
+	local mcpUrl = SearchIndexAPI.mcpUrl()
+
+	--- JSON string escaping for the setups below (a Windows path has backslashes).
+	local function jsonString(text)
+		return '"' .. tostring(text):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+	end
+
+	--- The setups, built when a button is pressed so they carry the token
+	--- as it is then. Copied to the clipboard, never shown: the token is a
+	--- secret, and a screenshot of this dialog must not leak it.
+	local setups = {
+		claudeCode = function(token)
+			return "claude mcp add --transport http lrgeniusai "
+				.. mcpUrl
+				.. ' --header "Authorization: Bearer '
+				.. token
+				.. '"'
+		end,
+		claudeDesktop = function(token)
+			local command = WIN_ENV and "C:\\Program Files\\LrGeniusAI\\backend\\lrgenius-server.exe"
+				or "/Applications/LrGeniusAI/Server/lrgenius-server"
+			return '{\n  "mcpServers": {\n    "lrgeniusai": {\n      "command": '
+				.. jsonString(command)
+				.. ',\n      "args": ["mcp"],\n      "env": { "LRGENIUS_MCP_TOKEN": '
+				.. jsonString(token)
+				.. " }\n    }\n  }\n}\n"
+		end,
+		otherApps = function(token)
+			return '{\n  "mcpServers": {\n    "lrgeniusai": {\n      "url": '
+				.. jsonString(mcpUrl)
+				.. ',\n      "headers": { "Authorization": '
+				.. jsonString("Bearer " .. token)
+				.. " }\n    }\n  }\n}\n"
+		end,
+		token = function(token)
+			return token
+		end,
+	}
+
+	--- Shown once (per version of the warning) before the first agent setup
+	--- leaves the dialog: connecting an agent is the step that hands it the
+	--- catalog, so that is where the warning belongs.
+	local function acceptAgentDisclaimer()
+		if prefs.agentDisclaimerAccepted == Defaults.agentDisclaimerVersion then
+			return true
+		end
+		local choice = LrDialogs.confirm(
+			"Before you connect an AI agent",
+			"An AI agent works in your catalog on its own and can make mistakes, including many changes "
+				.. "at once. Text in your photos' metadata can mislead it.\n\n"
+				.. "What the agent looks at - photo previews, metadata, file paths, names of recognised "
+				.. "people - goes to your AI app and, unless it runs a local model, to the company behind "
+				.. "it.\n\n"
+				.. "The token in this setup is a key to your Lightroom: keep it secret.\n\n"
+				.. "Back up your catalog and check what the agent changes. LrGeniusAI comes without any "
+				.. "warranty.",
+			"I understand",
+			"Cancel",
+			"Read the disclaimer"
+		)
+		if choice == "other" then
+			LrHttp.openUrlInBrowser(Defaults.disclaimerUrl)
+			return false
+		end
+		if choice ~= "ok" then
+			return false
+		end
+		prefs.agentDisclaimerAccepted = Defaults.agentDisclaimerVersion
+		return true
+	end
+
+	local function copySetup(which, label)
+		LrTasks.startAsyncTask(function()
+			if not acceptAgentDisclaimer() then
+				return
+			end
+			local token = Secrets.getMcpToken()
+			if token == "" then
+				LrDialogs.message(
+					"No agent token yet",
+					"It is made when the agent bridge first connects to the backend. Enable the bridge, "
+						.. "wait a moment and try again.",
+					"info"
+				)
+				return
+			end
+			local ok, err = Util.copyToClipboard(setups[which](token))
+			if ok then
+				LrDialogs.showBezel(label .. " copied to the clipboard")
+			else
+				ErrorHandler.handleError("Could not copy to the clipboard", tostring(err))
+			end
+		end)
+	end
+
 	return {
+		{
+			bind_to_object = propertyTable,
+			title = "AI Agents (MCP)",
+
+			f:group_box({
+				title = "AI Agents (MCP)",
+				width = 600,
+				f:static_text({
+					-- Manual line breaks: wrap = true does nothing on static_text.
+					title = "Let an AI agent - Claude Code, Claude Desktop, LM Studio, Cursor - search your catalog\n"
+						.. "with LrGeniusAI and work in Lightroom: find, cull, rate, keyword, collect and edit.\n"
+						.. "Every change is one step in Edit > Undo. While an agent works, a progress bar shows\n"
+						.. "what it does; its X stops the agent.",
+				}),
+				f:static_text({
+					title = "Caution: an agent changes your catalog on its own and can be wrong. Text in your\n"
+						.. "photos' metadata can mislead it. Previews, metadata and names it looks at go to\n"
+						.. "your AI app and its provider. Back up your catalog and keep the token secret.",
+					text_color = LrColor(0.75, 0.35, 0.05),
+				}),
+				f:push_button({
+					title = "Read the disclaimer",
+					action = function()
+						LrHttp.openUrlInBrowser(Defaults.disclaimerUrl)
+					end,
+				}),
+				f:checkbox({
+					value = bind("agentBridgeEnabled"),
+					title = "Enable the agent bridge (starts with Lightroom)",
+				}),
+				f:static_text({ title = bind("agentBridgeStatus"), width_in_chars = 70 }),
+				f:checkbox({
+					value = bind("agentBridgeAllowChanges"),
+					title = "Allow agents to change photos (ratings, keywords, collections, develop settings)",
+				}),
+				f:checkbox({
+					value = bind("agentBridgeDevTools"),
+					title = "Allow developer commands (run Lua in the plugin) - for plugin development only",
+					enabled = AgentBridge.isDevInstall(),
+				}),
+				f:spacer({ height = 6 }),
+				f:row({
+					f:static_text({ title = "Agent token:" }),
+					-- Shown masked: AI apps must present it, and it is as
+					-- secret as an API key.
+					f:password_field({
+						value = bind("mcpTokenShown"),
+						width_in_chars = 36,
+						enabled = false,
+					}),
+					f:push_button({
+						title = "Copy token",
+						enabled = bind("mcpTokenReady"),
+						action = function()
+							copySetup("token", "Agent token")
+						end,
+					}),
+					f:push_button({
+						title = "New token...",
+						enabled = bind("mcpTokenReady"),
+						action = function()
+							LrTasks.startAsyncTask(function()
+								local choice = LrDialogs.confirm(
+									"Make a new agent token?",
+									"Every AI app set up with the current token stops working until you copy the "
+										.. "new setup into it.",
+									"Make new token",
+									"Cancel"
+								)
+								if choice == "ok" then
+									AgentBridge.rotateMcpToken()
+									LrDialogs.showBezel("New agent token requested")
+								end
+							end)
+						end,
+					}),
+				}),
+				f:static_text({
+					title = "Set up an AI app - copies its setup, token included, to the clipboard:",
+				}),
+				f:row({
+					f:push_button({
+						title = "Claude Code",
+						enabled = bind("mcpTokenReady"),
+						action = function()
+							copySetup("claudeCode", "Claude Code command")
+						end,
+					}),
+					f:push_button({
+						title = "Claude Desktop",
+						enabled = bind("mcpTokenReady"),
+						action = function()
+							copySetup("claudeDesktop", "Claude Desktop config")
+						end,
+					}),
+					f:push_button({
+						title = "LM Studio, Cursor, others",
+						enabled = bind("mcpTokenReady"),
+						action = function()
+							copySetup("otherApps", "MCP config")
+						end,
+					}),
+				}),
+				f:static_text({
+					title = "Claude Code: paste in a terminal. Claude Desktop: merge into claude_desktop_config.json.\n"
+						.. "Others: merge into their mcp.json. Endpoint: "
+						.. mcpUrl
+						.. " (Streamable HTTP, bearer token).",
+				}),
+			}),
+		},
+		{
+			title = "Disclaimer",
+			f:group_box({
+				title = "Disclaimer",
+				width = 600,
+				f:static_text({
+					title = "LrGeniusAI comes without any warranty (AGPL-3.0). It changes your catalog: back it up.\n"
+						.. "AI results can be wrong - check them before you rely on them. With a cloud AI provider,\n"
+						.. "photo previews and metadata are sent to that provider under its terms.",
+				}),
+				f:push_button({
+					title = "Read the disclaimer",
+					action = function()
+						LrHttp.openUrlInBrowser(Defaults.disclaimerUrl)
+					end,
+				}),
+			}),
+		},
 		{
 			bind_to_object = propertyTable,
 			title = LOC("$$$/LrGeniusAI/PluginInfo/Logging=Logging"),

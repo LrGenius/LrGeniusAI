@@ -566,9 +566,9 @@ local hash = hasher:digest()  -- also resets the hasher
 ---
 
 ### LrApplicationView (Namespace)
-- `LrApplicationView.getActiveModule()` → "library" | "develop" | "slideshow" | "print" | "web"
+- `LrApplicationView.getCurrentModuleName()` → "library" | "develop" | "map" | "book" | "slideshow" | "print" | "web" (there is no `getActiveModule`)
 - `LrApplicationView.switchToModule(moduleName)`
-- `LrApplicationView.showModule(moduleName)`
+- `LrApplicationView.showView(viewName)`, `gridView()`, `toggleLoupe()`, `getSecondaryViewName()`, `showSecondaryView(viewName)`
 
 ---
 
@@ -716,3 +716,9 @@ return {
 7. **Strings** — This project dropped translations: write user-visible strings as plain finished English. `LOC "$$$/path=Default"` (which renders the inline default) is only still around in older files.
 
 8. **`LrFunctionContext.callWithContext`** is blocking; `LrFunctionContext.postAsyncTaskWithContext` is async. Use async for long operations.
+
+9. **Lua sandbox (verified with LrC 15.6)** — `loadstring` and `io` exist; `print`, `setfenv` and `getfenv` do **not** (and `xpcall`/`debug.traceback` are unreliable). A chunk from `loadstring` runs against the plugin's shared globals, where `_PLUGIN`, `import` and the modules' globals all live. Pass anything else in as chunk arguments (`local x = ...`).
+
+10. **Reload Plug-in leaves tasks running** — the reloaded plugin gets a fresh Lua environment, but a task the old instance started with `postAsyncTaskWithContext` keeps running and does not see the new instance's globals. Long-lived loops need an owner check that survives the reload (this project writes the owner into the plugin prefs: `AgentBridge.lua`). Changing a pref in the Plug-in Manager and reloading right after can lose the change.
+
+11. **LrSocket at startup** — a socket bound while Lightroom is still starting (from `LrInitPlugin`) may never call `onConnecting` with its port. Bind later and rebind when no port is reported (see `AgentBridge.lua`). Inside one `withWriteAccessDo`, a collection set you just created cannot be asked for its children; use `createCollectionSet`/`createCollection` with `canReturnPrior = true` instead of looking up.

@@ -196,7 +196,12 @@ local function cullPrepare(missingIds, photoById, progressScope, tasks)
 	-- Sharing one table across the loop would give every photo the first one's
 	-- compensation.
 	local function indexOptionsFor(photo)
-		local indexOptions = { tasks = tasks, regenerate_metadata = false }
+		local indexOptions = {
+			tasks = tasks,
+			regenerate_metadata = false,
+			-- The exported JPEG is named after the photo but is not the photo.
+			original_filename = photo:getFormattedMetadata("fileName"),
+		}
 		local exposureBias = photo:getRawMetadata("exposureBias")
 		if type(exposureBias) == "number" then
 			indexOptions.exposure_bias = exposureBias

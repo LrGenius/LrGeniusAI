@@ -310,10 +310,67 @@ function Secrets.problems()
 	return copy
 end
 
+---------------------------------------------------------------------------
+-- The agent token
+---------------------------------------------------------------------------
+
+--- The token AI agents present to LrGeniusAI's MCP endpoint. Not one of
+--- FIELDS: it is no AI provider key, nobody types it in, and it must never
+--- travel to a provider (connectionFields hands FIELDS to them). The backend
+--- makes it, with the operating system's random source, the first time the
+--- agent bridge registers; it is kept here so the agents' setup survives
+--- restarts. The LrPasswords key string, so it must never change.
+Secrets.MCP_TOKEN = "mcpAgentToken"
+
+local mcpTokenCache = nil
+
+---
+-- The agent token, or "" when the bridge has not registered yet.
+--
+-- @return string
+-- @return string|nil Why it could not be read.
+--
+function Secrets.getMcpToken()
+	if mcpTokenCache ~= nil then
+		return mcpTokenCache
+	end
+	local value, err = retrieve(Secrets.MCP_TOKEN)
+	if value == nil then
+		return "", "The agent token could not be read from the system's password storage (" .. err .. ")."
+	end
+	mcpTokenCache = value
+	return value
+end
+
+---
+-- Keeps the agent token the backend handed out. Must run in a task.
+--
+-- @param value string
+-- @return boolean Whether it is in the password storage.
+-- @return string|nil What went wrong, for the user.
+--
+function Secrets.setMcpToken(value)
+	value = trim(value)
+	-- For this session even when storing fails: the bridge offers it again at
+	-- its next registration, and the backend keeps it in the meantime.
+	mcpTokenCache = value
+	local ok, err = storeVerified(Secrets.MCP_TOKEN, value)
+	if not ok then
+		log:error("Storing the agent token failed: " .. err)
+		return false,
+			"The agent token could not be saved in the system's password storage ("
+				.. err
+				.. "). It works until Lightroom quits; after that a new one is made and AI apps "
+				.. "need the new setup."
+	end
+	return true
+end
+
 --- Forgets the cache and the problems. For specs.
 function Secrets._reset()
 	cache = {}
 	problems = {}
+	mcpTokenCache = nil
 end
 
 return Secrets

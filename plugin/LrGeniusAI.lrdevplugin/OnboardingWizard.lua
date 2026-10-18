@@ -195,7 +195,12 @@ function OnboardingWizard.show(manualTrigger)
 									.. "and DNG/JPEG files, so cloud or NAS sync will upload them again.\n"
 									.. "\n"
 									.. "Back up your catalog before the first run, and start with a few\n"
-									.. "photos.",
+									.. "photos.\n"
+									.. "\n"
+									.. "LrGeniusAI comes without any warranty. AI results can be wrong:\n"
+									.. "check keywords, captions, species and edits before you rely on\n"
+									.. "them. With a cloud AI provider, photo previews and metadata are\n"
+									.. "sent to that provider under its terms.",
 								width_in_chars = 60,
 							}),
 							f:spacer({ height = 5 }),
@@ -204,6 +209,12 @@ function OnboardingWizard.show(manualTrigger)
 									title = "How to back up",
 									action = function()
 										LrHttp.openUrlInBrowser(BACKUP_HELP_URL)
+									end,
+								}),
+								f:push_button({
+									title = "Disclaimer",
+									action = function()
+										LrHttp.openUrlInBrowser(Defaults.disclaimerUrl)
 									end,
 								}),
 							}),

@@ -55,6 +55,15 @@ API_PREFIX = "/v1"
 # spelled exactly as served. Keep in step with `build_router`.
 UNVERSIONED_ROUTE_FILES = frozenset({"bootstrap.rs", "update.rs"})
 
+# Routes served by something other than an axum router in ROUTES_DIR, so the
+# `.route(` scan cannot see them. The MCP endpoint is an rmcp service nested at
+# `lrg_mcp::MCP_PATH` by `lrg-server`; keep in step with that constant.
+SERVED_OUTSIDE_ROUTERS = {
+    ("POST", "/mcp"): "lrg-mcp",
+    ("GET", "/mcp"): "lrg-mcp",
+    ("DELETE", "/mcp"): "lrg-mcp",
+}
+
 # The only lines where `AGENTS.md` may differ from `CLAUDE.md`: the CLAUDE.md
 # line on the left, its AGENTS.md counterpart on the right. Keep this list
 # short — every entry is a place the two files are allowed to say different
@@ -129,6 +138,7 @@ def backend_routes() -> dict[tuple[str, str], str]:
             }
             for method in methods or {"get"}:
                 found[(method.upper(), path)] = src.name
+    found.update(SERVED_OUTSIDE_ROUTERS)
     return found
 
 

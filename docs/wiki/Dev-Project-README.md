@@ -40,6 +40,7 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 - **📝 Photo Context (Contextual Info):** Provide manual hints to the AI before analysis (e.g., names of people or specific background details) that aren't immediately obvious from the image itself. This can be done via a popup dialog or directly in Lightroom's metadata panel.
 - **🗂️ Keyword Management:** Interactive synonym deduplication and automatic de-clutter during indexing to keep your keyword catalog clean.
 - **🎓 Style Training:** Save your own Lightroom edits as AI training examples to teach the AI your personal editing style.
+- **🤝 AI Agents (MCP):** Let an AI assistant — Claude Code, Claude Desktop, LM Studio, Cursor or any other MCP client — search your catalog with LrGeniusAI and work in Lightroom: find, cull, rate, keyword, collect and edit, with every change one Undo step and a stop button in Lightroom. The bridge starts with Lightroom; copy your assistant's setup (agent token included) from the Plug-in Manager. Developers can also run the plugin's in-Lightroom tests through it.
 - **🗄️ Custom Backend & Database:** The plugin utilizes a high-performance local server (`geniusai-server`), written in Rust for low memory overhead. Existing metadata from your Lightroom catalog can easily be imported prior to the first AI analysis.
 
 ---
@@ -71,6 +72,16 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
 6. For AI Edit, first teach it your style: edit a few photos by hand and run **Save Edits as AI Training Examples...**. AI Edit builds every recipe from those examples and needs at least five of them — it calls no LLM. Keep **Review each proposed edit before applying it** enabled while you validate the results.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
+
+---
+
+## ⚠️ Disclaimer
+
+LrGeniusAI is provided **as is, without any warranty** (see the AGPL-3.0 license below). It changes your Lightroom catalog, so **back up your catalog** before you use it. AI-generated keywords, captions, species identifications, culling grades and edits can be wrong — check them before you rely on them. With a cloud AI provider, photo previews and metadata are sent to that provider under its terms.
+
+**AI agents (MCP):** an agent connected through the agent bridge acts on your catalog by itself and can make mistakes on many photos at once. Text in your photos' metadata can mislead it. What it looks at — previews, metadata, names of recognised people — goes to your AI app and, unless that app runs a local model, to the company behind it. Keep the agent token secret, and turn on developer commands only with a test catalog.
+
+Read the full [Disclaimer](https://lrgenius.com/help/docs/disclaimer). Adobe, Lightroom and Lightroom Classic are trademarks of Adobe Inc.; LrGeniusAI is not affiliated with Adobe.
 
 ---
 

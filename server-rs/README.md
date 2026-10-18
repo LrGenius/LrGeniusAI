@@ -10,7 +10,10 @@ Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
 clients), `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
 `lrg-mlx` (supervises the Apple silicon MLX sidecar), `lrg-api` (axum
-routers), `lrg-server` (the binary).
+routers, including the agent bridge to the plugin), `lrg-mcp` (the MCP endpoint
+AI agents connect to at `/mcp`, and the `geniusai-server mcp` stdio proxy —
+see [`docs/wiki/Dev-Agent-Bridge.md`](../docs/wiki/Dev-Agent-Bridge.md)),
+`lrg-server` (the binary).
 
 There are two *local* LLM backends, selected as the `llamacpp` and `mlx`
 providers. They are independent — a build can have either, both, or neither —

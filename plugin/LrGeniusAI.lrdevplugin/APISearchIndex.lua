@@ -18,6 +18,11 @@ local function getBaseUrl()
 	return url
 end
 
+--- Where AI agents connect: the backend's MCP endpoint.
+function SearchIndexAPI.mcpUrl()
+	return getBaseUrl() .. "/mcp"
+end
+
 function SearchIndexAPI.isLocalBackend()
 	local url = getBaseUrl()
 	return url:match("^https?://127%.0%.0%.1:") or url:match("^https?://localhost:")
@@ -143,6 +148,12 @@ local ENDPOINTS = {
 	-- LrView, and the queue they hand catalog work back through.
 	UI_PEOPLE = "/v1/ui/people",
 	UI_ACTIONS = "/v1/ui/actions",
+
+	-- The agent bridge (see AgentBridge.lua): the plugin registers, claims
+	-- commands an AI agent queued through the backend's MCP endpoint, and
+	-- answers them.
+	AGENT_BRIDGE = "/v1/agent/bridge",
+	AGENT_COMMANDS = "/v1/agent/commands", -- suffix /<id>/result, /<id>/progress
 }
 
 local EXPORT_SETTINGS = {
@@ -1453,6 +1464,11 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if type(options.exposure_bias) == "number" then
 		table.insert(mimeChunks, { name = "exposure_bias", value = tostring(options.exposure_bias) })
 	end
+	-- The original's file name, for when `filepath` is a rendition named
+	-- differently (a JPEG of a RAW). The backend keeps it as the photo's name.
+	if type(options.original_filename) == "string" and options.original_filename ~= "" then
+		table.insert(mimeChunks, { name = "original_filename", value = options.original_filename })
+	end
 	-- Whether the original is raw. Stored with the photo so later work — style
 	-- training above all, where raw and rendered Temp values are on different
 	-- scales — does not have to re-derive it. Absent when unknown.
@@ -2132,6 +2148,10 @@ local function buildPhotoOptions(photo, photoId, options)
 	for k, v in pairs(options) do
 		photoOptions[k] = v
 	end
+	-- What the file is called in the catalog. A JPEG rendition is uploaded
+	-- under its own name (`018A0344.jpg`), so without this the index would
+	-- remember the rendition's name for a photo that is `018A0344.CR3`.
+	photoOptions.original_filename = photo:getFormattedMetadata("fileName")
 	-- The catalog's own location fields, and only under `submit_gps`: this is
 	-- the same context the switch has always governed, just taken from the
 	-- source that survives. Reading it out of the image bytes found nothing at
@@ -3508,21 +3528,25 @@ _request = function(method, url, body, timeout, options)
 	local result, hdrs
 	local bodyString = (body and type(body) == "table") and JSON:encode(body) or nil
 
+	-- `options.headers`: extra request headers, { { field = ..., value = ... } }.
+	local extraHeaders = type(options.headers) == "table" and options.headers or {}
+
 	local ok, err = LrTasks.pcall(function()
 		if method == "GET" then
+			local getHeaders = (#extraHeaders > 0) and extraHeaders or nil
 			if timeout ~= nil then
-				result, hdrs = LrHttp.get(tostring(url), nil, timeout)
+				result, hdrs = LrHttp.get(tostring(url), getHeaders, timeout)
+			elseif getHeaders then
+				result, hdrs = LrHttp.get(tostring(url), getHeaders)
 			else
 				result, hdrs = LrHttp.get(tostring(url))
 			end
 		else
-			result, hdrs = LrHttp.post(
-				tostring(url),
-				bodyString or "",
-				{ { field = "Content-Type", value = "application/json" } },
-				method,
-				timeout
-			)
+			local postHeaders = { { field = "Content-Type", value = "application/json" } }
+			for _, header in ipairs(extraHeaders) do
+				postHeaders[#postHeaders + 1] = header
+			end
+			result, hdrs = LrHttp.post(tostring(url), bodyString or "", postHeaders, method, timeout)
 		end
 	end)
 
@@ -3561,6 +3585,7 @@ _request = function(method, url, body, timeout, options)
 	else
 		log:trace("_request: status=" .. tostring(status) .. " type(hdrs)=" .. type(hdrs))
 		local statusStr = httpStatusForLog(status, hdrs)
+		local errorBody = nil
 		local err_msg
 		if status == nil then
 			local urlFixed = tostring(url):gsub("%?.*", "")
@@ -3579,13 +3604,19 @@ _request = function(method, url, body, timeout, options)
 				local ok2, decoded_err = LrTasks.pcall(JSON.decode, JSON, result)
 				if ok2 and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
 					err_msg = err_msg .. " - " .. decoded_err.error
+					errorBody = decoded_err
 				else
 					err_msg = err_msg .. " Response: " .. sanitizeForLog(tostring(result):sub(1, 400))
 				end
 			end
 		end
-		log:error(err_msg)
-		return nil, err_msg
+		if not options.quiet then
+			log:error(err_msg)
+		end
+		-- The status and the decoded error body ride along for callers that
+		-- branch on them (the agent bridge re-registers on a 401); everyone
+		-- else reads two values as before.
+		return nil, err_msg, status, errorBody
 	end
 end
 
@@ -4017,6 +4048,62 @@ function SearchIndexAPI.takeUiActions()
 		return nil, err
 	end
 	return result
+end
+
+---
+-- Agent bridge: the calls AgentBridge.lua makes. Each returns the decoded
+-- answer, or nil, err, status, errorBody — the bridge re-registers when the
+-- backend no longer knows its session (status 401, errorBody.reregister).
+local function agentHeaders(token)
+	return { { field = "X-LrGenius-Bridge-Token", value = token or "" } }
+end
+
+function SearchIndexAPI.agentRegister(body)
+	return _request("POST", SearchIndexAPI.url("AGENT_BRIDGE"), body, 10, { quiet = true })
+end
+
+function SearchIndexAPI.agentUnregister(token)
+	return _request(
+		"DELETE",
+		SearchIndexAPI.url("AGENT_BRIDGE"),
+		{},
+		5,
+		{ headers = agentHeaders(token), quiet = true }
+	)
+end
+
+function SearchIndexAPI.getAgentBridgeStatus()
+	return _request("GET", SearchIndexAPI.url("AGENT_BRIDGE"), nil, 5, { quiet = true })
+end
+
+function SearchIndexAPI.agentClaimCommands(token)
+	return _request(
+		"GET",
+		SearchIndexAPI.url("AGENT_COMMANDS"),
+		nil,
+		10,
+		{ headers = agentHeaders(token), quiet = true }
+	)
+end
+
+function SearchIndexAPI.agentPostResult(token, commandId, reply)
+	return _request(
+		"POST",
+		SearchIndexAPI.url("AGENT_COMMANDS", commandId, "result"),
+		reply,
+		30,
+		{ headers = agentHeaders(token) }
+	)
+end
+
+function SearchIndexAPI.agentPostProgress(token, commandId, progress)
+	return _request(
+		"POST",
+		SearchIndexAPI.url("AGENT_COMMANDS", commandId, "progress"),
+		progress,
+		10,
+		{ headers = agentHeaders(token), quiet = true }
+	)
 end
 
 ---
