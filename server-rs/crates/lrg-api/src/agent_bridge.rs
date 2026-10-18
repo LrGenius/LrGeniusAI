@@ -575,7 +575,8 @@ impl AgentBridge {
         }
 
         log::info!(
-            "Agent bridge: plugin registered (session {session_id}, port {}, resumed {resumable})",
+            "Agent bridge: plugin registered (session {}, port {}, resumed {resumable})",
+            session.id,
             port.map_or_else(|| "none".to_string(), |p| p.to_string())
         );
         Ok(Registration {
@@ -899,7 +900,10 @@ impl AgentBridge {
             .filter(|s| s.id == session_id && s.doorbell_gen == doorbell.generation)
         {
             if session.socket != state {
-                log::info!("Agent bridge: doorbell socket {state:?} (session {session_id})");
+                log::info!(
+                    "Agent bridge: doorbell socket {state:?} (session {})",
+                    session.id
+                );
             }
             session.socket = state;
             if state == SocketState::Connected {
