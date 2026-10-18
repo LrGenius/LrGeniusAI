@@ -21,6 +21,7 @@ when it is `"failed"`.
 | `clip_model` / `clip_error` | The SigLIP2 pair, as it has always been. `"failed"` if **either** tower failed, `"loaded"` if **either** is resident. |
 | `clip_image_model` / `clip_image_error` | The SigLIP2 **image** tower alone — what indexing and the training path embed with. |
 | `clip_text_model` / `clip_text_error` | The SigLIP2 **text** tower alone — what search, keyword lookup and the CLIP-IQA prompt sets embed with. |
+| `aesthetic_model` / `aesthetic_error` | AestheticSigLIP, the photo quality scorer. Its own backbone, loaded and idle-unloaded on its own clock. |
 | `face_model` / `face_error` | YuNet + FaceNet. |
 | `species_model` / `species_error` | BioCLIP 2. |
 
@@ -114,7 +115,7 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `temperature` | float | Sampling temperature, default `0.1`. Only the local providers (`llamacpp`, `ollama`, `lmstudio`, `openai_compatible`) use it: OpenAI reasoning models get a fixed `1.0`, Anthropic and Gemini 3 are sent none, and MLX's guided generation samples on its own settings |
 | `reasoning_effort` | string | The plug-in's *Analysis depth*: `low` (default), `medium` or `high`. Sent as OpenAI `reasoning_effort`, Gemini `thinkingLevel` (3.x) or `thinkingBudget` (2.5), and Anthropic `output_config.effort` where the model lists that level; room for thinking (4096 / 8192 / 16384 tokens) is added to `max_tokens` for a model that thinks. Local providers ignore it. Any other value is a **400** naming it, not a silent fallback |
 | `generate_metadata` | bool | Generate keywords/title/caption/alt_text |
-| `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
+| `create_embeddings` | bool | Create SigLIP2 semantic embeddings. Also scores the photo's aesthetic and names its genre (see the `aesthetic` task below) |
 | `detect_faces` | bool | Run face detection on the photo |
 | `regenerate` | bool | Re-process even if data already exists |
 | `replace_ss` | bool | Rewrite `ß` as `ss` in the generated title, caption, alt text and keywords. Applied after the model answers, and only to those fields — never to the filename |
@@ -206,8 +207,22 @@ the batch.
 the group size for a `llamacpp` run, and omits it otherwise — a group formed for decode
 throughput must not override a provider's own preferred batch size.
 
+**Aesthetic score and genre.** The `embeddings` and `cull` tasks both imply the `aesthetic` task,
+which can also be asked for alone. It scores the photo with AestheticSigLIP (1 to 9, higher is
+better; its own So400m forward pass at 256 patches) and stores `aesthetic_score` with
+`aesthetic_model`, and names the photo's genre from its SigLIP2 embedding (zero-shot, thirteen
+genres or `other`) as `genre`, `genre_confidence` and `genre_version`. A photo that already has a
+score from the current export is skipped unless `regenerate_metadata` is set. When the scorer is not
+downloaded the run still indexes the photos and says so **once** in the response's `warnings` (not
+once per photo); a genre that could not be made says why the same way.
+
 ### `POST /v1/photos/lookup`
 Returns stored metadata and embedding status for one or more `photo_id` values.
+
+The response carries an `aesthetic` block next to `species`: `score`, `model`, `outdated` (the score
+is from another export than this build's, so not comparable with current ones), `genre` (the stable
+id), `genre_label` and `genre_confidence`. It is `null` for a photo with neither. It is a block of
+its own, not part of `metadata`, which is text the plug-in lets the user edit.
 
 ### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
@@ -222,6 +237,7 @@ producer this build uses*, not merely present:
 | --- | --- |
 | `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
 | `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
+| `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
 | `cull` | no `cull_phash`, or no `cull_faces_present` key |
 | `metadata` | no title, caption, alt_text or keywords |
@@ -826,8 +842,8 @@ network does which job.
 
 ### `GET /v1/models/assets`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
-for the "this will download about N GB" line. All three families — `clip`,
-`bioclip` and `face` — are `downloadable: true` and all three gate `ready`.
+for the "this will download about N GB" line. All four families — `clip`, `aesthetic`
+(the photo quality scorer), `bioclip` and `face` — are `downloadable: true` and all four gate `ready`.
 Face detection used to be the exception: its `buffalo_l` weights came from
 `INSIGHTFACE_ROOT`, were not redistributable, and had to be excluded from
 `ready` so the button did not stay red forever over something the download

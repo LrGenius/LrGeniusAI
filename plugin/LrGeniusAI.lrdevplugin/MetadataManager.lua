@@ -1633,3 +1633,31 @@ function MetadataManager.applySpecies(photo, species, options)
 
 	return warnings
 end
+
+---
+-- Writes a photo's aesthetic score and genre to its plug-in fields.
+--
+-- Both come from the backend's `aesthetic` block (see Util.aestheticFieldValues
+-- for what is written). Nothing is written when the photo has neither, so a
+-- run that did not compute them leaves what an earlier run wrote.
+--
+-- @param photo LrPhoto
+-- @param aesthetic table|nil The `aesthetic` block of /v1/photos/lookup.
+-- @return boolean Whether anything was written.
+--
+function MetadataManager.applyAesthetic(photo, aesthetic)
+	local scoreText, genre = Util.aestheticFieldValues(aesthetic)
+	if scoreText == nil and genre == "" then
+		return false
+	end
+	local catalog = LrApplication.activeCatalog()
+	catalog:withPrivateWriteAccessDo(function()
+		if scoreText ~= nil then
+			photo:setPropertyForPlugin(_PLUGIN, "aestheticScore", scoreText)
+		end
+		if genre ~= "" then
+			photo:setPropertyForPlugin(_PLUGIN, "genre", genre)
+		end
+	end, Defaults.catalogWriteAccessOptions)
+	return true
+end

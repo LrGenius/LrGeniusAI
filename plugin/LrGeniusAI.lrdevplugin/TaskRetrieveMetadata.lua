@@ -312,6 +312,9 @@ LrTasks.startAsyncTask(function()
 								table.insert(backendWarnings, fileName .. ": " .. warning)
 							end
 						end
+						-- Score and genre are model output, not text the user can
+						-- reword, so they are written whenever the photo has them.
+						MetadataManager.applyAesthetic(photo, retrievedData.aesthetic)
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 

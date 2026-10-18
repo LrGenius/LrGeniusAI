@@ -1200,6 +1200,31 @@ LrTasks.startAsyncTask(function()
 			log:trace("Saved species data for " .. speciesCount .. " photo(s)")
 		end
 
+		-- Aesthetic score and genre are computed by the "smart search" task and
+		-- are not text anyone reviews, so they have a pass of their own rather
+		-- than riding on the metadata paths below (which only run with
+		-- metadata generation on). Read back one photo at a time like the
+		-- species pass; a backend that has neither simply returns no block.
+		if status ~= "allfailed" and props.enableEmbeddings and props.saveDataToCatalog then
+			log:trace("Saving aesthetic scores for processed photos...")
+			local aestheticCount = 0
+			for _, photo in ipairs(processedPhotos) do
+				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
+				if photoId then
+					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
+					if photoDataErr then
+						log:error("getPhotoData failed while saving aesthetic scores: " .. photoDataErr)
+						photoDataErrCount = photoDataErrCount + 1
+					elseif not response then
+						photoDataMissingCount = photoDataMissingCount + 1
+					elseif MetadataManager.applyAesthetic(photo, response.aesthetic) then
+						aestheticCount = aestheticCount + 1
+					end
+				end
+			end
+			log:trace("Saved aesthetic data for " .. aestheticCount .. " photo(s)")
+		end
+
 		-- Set when the review dialog stops the save pass below: photos already
 		-- written stay written, the rest were never looked at. The run still
 		-- ends with the backend's status, so this has to be said separately.

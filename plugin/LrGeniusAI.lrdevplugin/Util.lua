@@ -2661,8 +2661,13 @@ function Util.requiredModelFamilies(tasks)
 	for _, task in ipairs(tasks) do
 		if task == "embeddings" then
 			needed.clip = true
-		elseif task == "faces" or task == "cull" then
+			needed.aesthetic = true
+		elseif task == "faces" then
 			needed.face = true
+		elseif task == "cull" then
+			-- The fast cull ingest also scores each photo's aesthetic.
+			needed.face = true
+			needed.aesthetic = true
 		elseif task == "species" then
 			needed.bioclip = true
 		end
@@ -2670,7 +2675,7 @@ function Util.requiredModelFamilies(tasks)
 	-- Fixed order rather than pairs(): the result reaches a dialog, and a list
 	-- that reshuffles between runs reads like a different problem each time.
 	local result = {}
-	for _, id in ipairs({ "clip", "face", "bioclip" }) do
+	for _, id in ipairs({ "clip", "aesthetic", "face", "bioclip" }) do
 		if needed[id] then
 			table.insert(result, id)
 		end
@@ -2872,6 +2877,35 @@ function Util.formatWarningList(list, maxShown)
 		text = text .. "\n\n... and " .. tostring(#list - #shown) .. " more warnings"
 	end
 	return text
+end
+
+---
+-- The Metadata panel values for a photo's aesthetic score and genre.
+--
+-- Pure so the formatting is tested headless. The score is one decimal, as a
+-- string, like every other numeric AI field (the metadata schema declares them
+-- all as strings). A score from another export of the model is not written: it
+-- is the model's honest answer for that export but not comparable with the
+-- scores of this one, and showing it beside current ones would mislead.
+--
+-- @param aesthetic table|nil The backend's `aesthetic` block from /v1/photos/lookup.
+-- @return string|nil The score text ("7.4"), nil when there is no current score.
+-- @return string The genre's label, "" when there is none.
+--
+function Util.aestheticFieldValues(aesthetic)
+	if type(aesthetic) ~= "table" then
+		return nil, ""
+	end
+	local score = tonumber(aesthetic.score)
+	local scoreText = nil
+	if score and aesthetic.outdated ~= true then
+		scoreText = string.format("%.1f", score)
+	end
+	local genre = aesthetic.genre_label
+	if type(genre) ~= "string" then
+		genre = ""
+	end
+	return scoreText, genre
 end
 
 return Util

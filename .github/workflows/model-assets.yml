@@ -23,9 +23,12 @@ on:
     branches: [main]
     paths:
       - 'server-rs/scripts/export_siglip2_fp16.py'
+      - 'server-rs/scripts/export_aesthetic_siglip_fp16.py'
+      - 'server-rs/scripts/naflex_towers.py'
       - 'server-rs/scripts/pyproject.toml'
       - 'server-rs/scripts/uv.lock'
       - 'server-rs/testdata/siglip_goldens.json'
+      - 'server-rs/testdata/aesthetic_goldens.json'
       - '.github/workflows/model-assets.yml'
 
 # Publishes to a FIXED release tag with overwrite_files: true, so two runs are
@@ -47,7 +50,7 @@ permissions:
 jobs:
   export-model-assets:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     name: Export SigLIP2 NaFlex fp16 ONNX
     permissions:
       contents: write
@@ -73,13 +76,28 @@ jobs:
           uv run --project server-rs/scripts \
             python server-rs/scripts/export_siglip2_fp16.py --verify-only --output-dir model-assets
 
+      # AestheticSigLIP: the authors' checkpoint and code are pinned by revision
+      # and hash inside the script, which refuses anything else.
+      - name: Export fp16 AestheticSigLIP (scorer + goldens)
+        run: |
+          set -euo pipefail
+          uv run --project server-rs/scripts --with onnxscript \
+            python server-rs/scripts/export_aesthetic_siglip_fp16.py --output-dir model-assets
+          ls -lh model-assets/
+
+      - name: Verify exported AestheticSigLIP against the authors' fp32 scores
+        run: |
+          uv run --project server-rs/scripts \
+            python server-rs/scripts/export_aesthetic_siglip_fp16.py --verify-only --output-dir model-assets
+
       - name: Publish to the stable model-assets release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: model-assets-v2
           name: "SigLIP2 NaFlex model assets (fp16 ONNX)"
           body: |
-            Pinned SigLIP2 NaFlex fp16 ONNX export (`google/siglip2-so400m-patch16-naflex`), downloaded
+            Pinned SigLIP2 NaFlex fp16 ONNX export (`google/siglip2-so400m-patch16-naflex`) and the
+            AestheticSigLIP scorer (`somepago/AestheticSigLIP`, Apache-2.0), downloaded
             at runtime by the backend's `/v1/models/clip/downloads` — **not an app release**,
             see the tagged `v*` releases for those. Regenerated only when
             `server-rs/scripts/export_siglip2_fp16.py` or its pinned deps change.

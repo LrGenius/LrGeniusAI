@@ -358,13 +358,6 @@ local function cullPrepare(missingIds, photoById, progressScope, tasks)
 	return processed, nil, combinedWarnings
 end
 
-local function joinReasonCodes(reasonCodes)
-	if type(reasonCodes) ~= "table" or #reasonCodes == 0 then
-		return ""
-	end
-	return table.concat(reasonCodes, ", ")
-end
-
 local function formatMetric(value)
 	if type(value) ~= "number" then
 		return tostring(value or "")
@@ -617,12 +610,10 @@ LrTasks.startAsyncTask(function()
 		local strongMomentRejects = 0
 		for _, group in ipairs(groups) do
 			local groupId = tostring(group["group_id"] or "")
-			local groupType = tostring(group["group_type"] or "")
 			local groupPhotos = group["photos"] or {}
 			for _, photoResult in ipairs(groupPhotos) do
 				local photoId = photoResult["photo_id"]
 				if photoId then
-					local metrics = photoResult["metrics"] or {}
 					local decision = "alternate"
 					if photoResult["winner"] then
 						decision = "pick"
@@ -635,25 +626,9 @@ LrTasks.startAsyncTask(function()
 					cullDataByPhotoId[photoId] = {
 						decision = decision,
 						groupId = groupId,
-						groupType = groupType,
 						groupRank = tostring(photoResult["rank"] or ""),
-						groupWinner = photoResult["winner"] and "true" or "false",
 						score = formatMetric(photoResult["cull_score"]),
-						reasonCodes = joinReasonCodes(photoResult["reason_codes"]),
 						explanation = tostring(photoResult["explanation"] or ""),
-						sharpness = formatMetric(metrics["sharpness"]),
-						exposure = formatMetric(metrics["exposure"]),
-						noise = formatMetric(metrics["noise"]),
-						technicalScore = formatMetric(metrics["technical_score"]),
-						aesthetic = formatMetric(metrics["aesthetic"]),
-						faceCount = tostring(metrics["face_count"] or ""),
-						faceSharpness = formatMetric(metrics["face_sharpness"]),
-						faceProminence = formatMetric(metrics["face_prominence"]),
-						faceVisibility = formatMetric(metrics["face_visibility"]),
-						faceScore = formatMetric(metrics["face_score"]),
-						occlusion = formatMetric(metrics["occlusion"]),
-						eyeOpenness = formatMetric(metrics["eye_openness"]),
-						blinkPenalty = formatMetric(metrics["blink_penalty"]),
 					}
 				end
 			end
@@ -665,25 +640,9 @@ LrTasks.startAsyncTask(function()
 				if photo then
 					photo:setPropertyForPlugin(_PLUGIN, "cullDecision", cullData.decision)
 					photo:setPropertyForPlugin(_PLUGIN, "cullGroupId", cullData.groupId)
-					photo:setPropertyForPlugin(_PLUGIN, "cullGroupType", cullData.groupType)
 					photo:setPropertyForPlugin(_PLUGIN, "cullGroupRank", cullData.groupRank)
-					photo:setPropertyForPlugin(_PLUGIN, "cullGroupWinner", cullData.groupWinner)
 					photo:setPropertyForPlugin(_PLUGIN, "cullScore", cullData.score)
-					photo:setPropertyForPlugin(_PLUGIN, "cullReasonCodes", cullData.reasonCodes)
 					photo:setPropertyForPlugin(_PLUGIN, "cullExplanation", cullData.explanation)
-					photo:setPropertyForPlugin(_PLUGIN, "cullSharpness", cullData.sharpness)
-					photo:setPropertyForPlugin(_PLUGIN, "cullExposure", cullData.exposure)
-					photo:setPropertyForPlugin(_PLUGIN, "cullNoise", cullData.noise)
-					photo:setPropertyForPlugin(_PLUGIN, "cullTechnicalScore", cullData.technicalScore)
-					photo:setPropertyForPlugin(_PLUGIN, "cullAesthetic", cullData.aesthetic)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceCount", cullData.faceCount)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceSharpness", cullData.faceSharpness)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceProminence", cullData.faceProminence)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceVisibility", cullData.faceVisibility)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceScore", cullData.faceScore)
-					photo:setPropertyForPlugin(_PLUGIN, "cullOcclusion", cullData.occlusion)
-					photo:setPropertyForPlugin(_PLUGIN, "cullEyeOpenness", cullData.eyeOpenness)
-					photo:setPropertyForPlugin(_PLUGIN, "cullBlinkPenalty", cullData.blinkPenalty)
 				end
 			end
 		end, Defaults.catalogWriteAccessOptions)

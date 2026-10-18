@@ -82,7 +82,9 @@ jobs:
             --pattern 'siglip2_naflex_image_fp16.onnx' \
             --pattern 'siglip2_naflex_text_fp16.onnx' \
             --pattern 'siglip2_naflex_tokenizer.json' \
-            --pattern 'siglip_goldens.json'
+            --pattern 'siglip_goldens.json' \
+            --pattern 'aesthetic_siglip_fp16.onnx' \
+            --pattern 'aesthetic_goldens.json'
 
           # The release assets carry an fp16 suffix the resolver does not
           # expect; model_paths.rs looks for these names.
@@ -91,6 +93,8 @@ jobs:
           # The goldens describe the published model, so they come from the
           # same release instead of the checkout.
           mv "$dest/siglip_goldens.json" "$GITHUB_WORKSPACE/server-rs/testdata/siglip_goldens.json"
+          mv "$dest/aesthetic_siglip_fp16.onnx" "$dest/aesthetic_siglip.onnx"
+          mv "$dest/aesthetic_goldens.json" "$GITHUB_WORKSPACE/server-rs/testdata/aesthetic_goldens.json"
           mv "$dest/bioclip2_image_fp16.onnx" "$dest/bioclip2_image.onnx"
 
           ls -lh "$dest"

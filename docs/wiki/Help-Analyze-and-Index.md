@@ -73,7 +73,15 @@ needed for metadata: embeddings, faces and species run without one.
 - **Enable smart photo search** — computes the SigLIP embedding that
   [Advanced Search](Help-Advanced-Search) and
   [Find Similar](Help-Find-Similar) need. Greyed out until the search model has
-  been downloaded in the Plug-in Manager.
+  been downloaded in the Plug-in Manager. It also gives each photo an
+  **Aesthetic score** (1 to 9, from a model trained to judge how good a photo
+  looks) and a **Genre** (landscape, portrait, macro … or *Other*), written to
+  those two fields in the Metadata panel. The score needs the *Photo quality
+  scoring* model, a separate download in the same **Download AI models**
+  button; without it the photos are still indexed and the run says once that
+  the scores were skipped. Both are a model's opinion of the picture, not a
+  measurement: use the score to sort and compare your own photos, not as a
+  verdict.
 - **Enable face detection** — detects and embeds faces for
   [People](Help-People-Faces).
 - **Identify animal and plant species** — runs BioCLIP 2 and writes a

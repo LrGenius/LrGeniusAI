@@ -160,7 +160,14 @@ For each photo, the backend stores culling-related fields such as:
   and Portrait)
 - explanations: `cull_reason_codes`, `cull_explanation`
 
-The plugin writes a subset of these values into plugin-specific metadata fields on each photo so they can be inspected or used for diagnostics.
+The plugin writes only the result of culling into the photo's metadata fields:
+*Culling decision*, *Culling score*, *Culling rank*, *Culling group ID* and
+*Culling explanation*. The sub-scores above (sharpness, exposure, noise, the
+face scores, the reason codes and the group type and winner) stay in the
+backend: they were never read back in Lightroom, and writing twenty fields per
+photo made every cull run touch every photo's last-edit time. The explanation
+carries the reason codes in words. Photos culled before this change keep the
+values their old fields held, but those fields are no longer shown or updated.
 
 Typical reason codes include:
 

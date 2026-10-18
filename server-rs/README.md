@@ -78,7 +78,7 @@ keys; it uses each one only for the request it came with.
 
 ### Golden tests and `LRG_REQUIRE_GOLDENS`
 
-The ML golden tests — SigLIP2, BioCLIP 2 and the face pipeline — compare real
+The ML golden tests — SigLIP2, the aesthetic scorer, BioCLIP 2 and the face pipeline — compare real
 inference against torch-computed reference values. They need their model files
 on disk and **skip when those are absent**, which the Rust test harness reports
 as a pass. That is fine on a working copy, and dangerous in CI: a green run is
@@ -93,9 +93,9 @@ LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
 LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
 ```
 
-Family names are `face`, `siglip` and `bioclip`. Per-family rather than a
+Family names are `face`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
-(89 MB, 2.2 GB and 834 MB respectively).
+(89 MB, 2.2 GB, 868 MB and 834 MB respectively).
 
 CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
 and sets `LRG_REQUIRE_GOLDENS=face`, while the nightly `golden-tests-full.yml`
@@ -243,6 +243,47 @@ export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/siglip2_naflex_tokenizer.jso
 Without these set, `lrg-ml` falls back to
 `~/.cache/lrgenius/models/{siglip2_naflex_image,siglip2_naflex_text}.onnx`
 and `~/.cache/lrgenius/models/siglip2_naflex_tokenizer.json`.
+
+### AestheticSigLIP (photo quality score)
+
+`somepago/AestheticSigLIP` (Apache-2.0) is a SigLIP 2 So400m NaFlex encoder
+fine-tuned to score a photo from 1 to 9. It is its **own backbone**, not a head
+on the search model's stored embedding, so scoring a photo is a second So400m
+forward pass — at the 256 patches it was trained with, with the authors' own
+rule for choosing the patch grid (`lrg-ml/src/aesthetic.rs`). Indexing computes
+it for the `embeddings` and `cull` tasks, and stores the score as
+`aesthetic_score` next to `aesthetic_model`, so a different export is recognised
+as stale and re-queued.
+
+It is a separate download (`aesthetic_siglip_fp16.onnx`, ~870 MB) from the same
+`model-assets-v2` release, reported as the `aesthetic` family by
+`/v1/models/assets` and fetched by the combined download; `LRG_AESTHETIC_ONNX`
+overrides the path (default `~/.cache/lrgenius/models/aesthetic_siglip.onnx`).
+Without it indexing still works and says once per run that scores were skipped.
+
+The checkpoint is a pickle and the model code is third-party Python, so
+`scripts/export_aesthetic_siglip_fp16.py` pins the upstream revision, the
+checkpoint's SHA-256 and the SHA-256 of every file it imports, and refuses
+anything else; the checkpoint loads with `weights_only=True`.
+
+```bash
+cd server-rs
+uv run --project scripts --with onnxscript \
+    python scripts/export_aesthetic_siglip_fp16.py --output-dir /path/to/models/aesthetic
+```
+
+It writes `aesthetic_siglip_fp16.onnx`, `aesthetic_goldens.json` (scores from the
+authors' own fp32 code and preprocessing) and `aesthetic_pre_goldens.json`
+(their patch grid for 41 image shapes, and their patches for the golden images),
+then verifies the fp16 graph against them. `--self-test` checks the wrapper
+against the authors' model on a tiny random-weight copy first. Copy both golden
+files to `testdata/`; `tests/aesthetic_goldens.rs` needs the ONNX file
+(`LRG_REQUIRE_GOLDENS=aesthetic` makes its absence a failure) and
+`tests/aesthetic_pre_goldens.rs` needs no model.
+
+The genre next to it (`lrg-ml/src/genre.rs`) is zero-shot from the search
+model's embedding: thirteen genres described by prompts whose text embeddings
+come from the database like the other fixed prompts, so no text tower runs.
 
 ### BioCLIP 2 (species identification)
 

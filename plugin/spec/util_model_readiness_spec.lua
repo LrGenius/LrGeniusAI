@@ -16,6 +16,7 @@ local function families(unready)
 	end
 	return {
 		{ id = "clip", name = "Smart photo search", ready = not notReady.clip, approx_bytes = 2310000000 },
+		{ id = "aesthetic", name = "Photo quality scoring", ready = not notReady.aesthetic, approx_bytes = 868000000 },
 		{ id = "bioclip", name = "Species identification", ready = not notReady.bioclip, approx_bytes = 876000000 },
 		{ id = "face", name = "Face detection", ready = not notReady.face, approx_bytes = 94200000 },
 	}
@@ -23,16 +24,17 @@ end
 
 describe("Util.requiredModelFamilies", function()
 	it("maps each task to the model the backend loads for it", function()
-		assert.are.same({ "clip" }, Util.requiredModelFamilies({ "embeddings" }))
+		assert.are.same({ "clip", "aesthetic" }, Util.requiredModelFamilies({ "embeddings" }))
 		assert.are.same({ "face" }, Util.requiredModelFamilies({ "faces" }))
 		assert.are.same({ "bioclip" }, Util.requiredModelFamilies({ "species" }))
 	end)
 
-	it("requires the face model for a cull run", function()
+	it("requires the face and scoring models for a cull run", function()
 		-- The fast cull ingest still scores face quality, which is the whole
-		-- point of face-aware ranking. Missing it does not fail the run, it
-		-- just quietly makes the picks worse — exactly what the gate is for.
-		assert.are.same({ "face" }, Util.requiredModelFamilies({ "cull" }))
+		-- point of face-aware ranking, and it scores each photo's aesthetic.
+		-- Missing either does not fail the run, it just quietly makes the
+		-- picks worse — exactly what the gate is for.
+		assert.are.same({ "aesthetic", "face" }, Util.requiredModelFamilies({ "cull" }))
 	end)
 
 	it("requires nothing on-device for an LLM-only run", function()
@@ -40,13 +42,13 @@ describe("Util.requiredModelFamilies", function()
 	end)
 
 	it("reports a stable order regardless of task order", function()
-		local expected = { "clip", "face", "bioclip" }
+		local expected = { "clip", "aesthetic", "face", "bioclip" }
 		assert.are.same(expected, Util.requiredModelFamilies({ "embeddings", "faces", "species" }))
 		assert.are.same(expected, Util.requiredModelFamilies({ "species", "faces", "embeddings" }))
 	end)
 
 	it("does not list a family twice when two tasks need it", function()
-		assert.are.same({ "face" }, Util.requiredModelFamilies({ "faces", "cull" }))
+		assert.are.same({ "aesthetic", "face" }, Util.requiredModelFamilies({ "faces", "cull" }))
 	end)
 
 	it("tolerates missing or malformed input", function()
