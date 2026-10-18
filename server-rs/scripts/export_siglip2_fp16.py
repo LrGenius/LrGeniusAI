@@ -1,42 +1,49 @@
 """
-Export SigLIP2 (ViT-SO400M-16-SigLIP2-384) to ONNX for the Rust `ort`
-runtime, with fp16 internal weights to cut distribution size while
-keeping fp32 inputs/outputs so the existing Rust tensor-construction
-code in `lrg-ml::siglip` needs no changes.
+Export SigLIP2 So400m NaFlex (google/siglip2-so400m-patch16-naflex) to ONNX
+for the Rust `ort` runtime, with fp16 internal weights to cut distribution
+size while keeping fp32 inputs/outputs.
 
 The fp16 graph is produced by tracing the model with `.half()` weights
-directly (casting fp32<->fp16 only at the wrapper's input/output
-boundary), NOT by post-hoc graph conversion. An earlier version of this
-script used `onnxconverter_common.float16.convert_float_to_float16` and
-hit two distinct ONNX Runtime load-time type-mismatch errors on this
-model's attention blocks (a known class of issue with that library on
-this kind of architecture) — tracing natively in fp16 sidesteps the
-problem entirely since there's no mixed-dtype graph for a converter to
-get wrong.
+directly (casting only at the wrapper's input/output boundary), NOT by
+post-hoc graph conversion: `convert_float_to_float16` produced ONNX Runtime
+load-time type mismatches on this architecture's attention blocks.
 
-Run once per release, e.g.:
+Image tower inputs (what `lrg-ml::siglip` feeds, see `naflex_pre.rs`):
+
+    pixel_values          [1, 576, 768] f32   patchified, normalized, padded
+    pixel_attention_mask  [1, 576]      i64   1 for real patches
+    pos_interp_h          [gh, 16]      f32   rows of the position-embedding resize
+    pos_interp_w          [gw, 16]      f32   columns of the same
+
+Why `pos_interp_*` exist: transformers resizes the 16x16 position-embedding
+grid to the image's (gh, gw) with `F.interpolate(..., antialias=True)`, whose
+output size is data dependent, which no ONNX export survives. A bilinear
+resize is separable, so it is `rows @ grid @ cols^T`; the Rust side computes
+`rows`/`cols` (Pillow's resampling weights, the same ones the image resize
+uses) and the graph does the two matmuls. Likewise the additive attention
+mask is built here instead of tracing `create_bidirectional_mask`, and the
+attention-pooling head is written out instead of `nn.MultiheadAttention`
+(whose fast path does not export).
+
+Run once per release:
     cd server-rs
     uv run --project scripts --with onnxscript \
         python scripts/export_siglip2_fp16.py --output-dir /tmp/siglip2-export
 
 (`--with onnxscript`: torch >=2.9's `torch.onnx.export` imports it
-unconditionally at call time, even with `dynamo=False` — it's a
-throwaway overlay for this one script, not a real project dependency,
-which is why it's a `uv run --with` flag rather than `uv add`.)
+unconditionally at call time, even with `dynamo=False`.)
 
-Then verify the exported fp16 model against the fp32 torch goldens —
-this half only needs onnxruntime/numpy/tokenizers, no torch:
+That writes, next to the ONNX files, `siglip2_naflex_tokenizer.json` and
+`siglip_goldens.json` (reference embeddings from transformers' own
+`Siglip2Model` in fp32, driven by its own processor), and verifies the fp16
+ONNX against them. Copy `siglip_goldens.json` to `testdata/` and publish it
+as a release asset with the models.
+
+Re-verify existing output without re-exporting:
     uv run --project scripts python scripts/export_siglip2_fp16.py --verify-only --output-dir /tmp/siglip2-export
 
-Verified end-to-end in development: both towers score cosine
->0.99999 against the fp32 torch goldens (`testdata/siglip_goldens.json`),
-and pointing lrg-ml at the exported files via LRG_SIGLIP_IMAGE_ONNX/
-LRG_SIGLIP_TEXT_ONNX/LRG_SIGLIP_TOKENIZER env vars and running
-`cargo test -p lrg-ml --release` passes the same `goldens.rs` test
-that validates the fp32 model — no Rust code changes needed. Total
-size ~2.3 GB (image tower ~860 MB + text tower ~1.4 GB, the latter
-dominated by Gemma's 256k-vocab embedding table), down from ~4.2 GB
-fp32.
+Check the wrappers on a tiny random-weight model first (no download, seconds):
+    uv run --project scripts --with onnxscript python scripts/export_siglip2_fp16.py --self-test
 """
 
 from __future__ import annotations
@@ -45,137 +52,220 @@ import argparse
 import faulthandler
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 
-# A bare "Process completed with exit code 139" (SIGSEGV) with no
-# traceback is otherwise all CI gives us for a native crash in
-# torch/onnxruntime. faulthandler dumps the interpreter's current Python
-# stack on a fatal signal, which at least says which line was running.
+# A bare SIGSEGV with no traceback is otherwise all CI gives us for a native
+# crash in torch/onnxruntime.
 faulthandler.enable()
-# Line-buffer stdout so progress prints actually reach the CI log before
-# a native crash, instead of sitting lost in a block buffer.
 sys.stdout.reconfigure(line_buffering=True)
 
-MODEL_NAME = "ViT-SO400M-16-SigLIP2-384"
-IMAGE_SIZE = 384
+REPO = "google/siglip2-so400m-patch16-naflex"
+# Must match lrg-ml: naflex_pre::{MAX_NUM_PATCHES, POSITION_GRID}, siglip::MODEL_ID.
+MAX_NUM_PATCHES = 576
+POSITION_GRID = 16
+PATCH_DIM = 16 * 16 * 3
+MODEL_ID = "siglip2-so400m-naflex-576/fp16"
 CONTEXT_LENGTH = 64
 OPSET = 18
 
+IMAGE_ONNX = "siglip2_naflex_image_fp16.onnx"
+TEXT_ONNX = "siglip2_naflex_text_fp16.onnx"
+TOKENIZER_JSON = "siglip2_naflex_tokenizer.json"
+GOLDENS_JSON = "siglip_goldens.json"
+
+# fp16 holds -1e4 and exp(-1e4) is exactly 0 in the fp32 softmax; the real
+# finfo.min would overflow to -inf as soon as a score is added to it.
+MASK_FILL = -1.0e4
+
 
 def load_model():
-    import open_clip
-    from huggingface_hub import hf_hub_download
+    from transformers import Siglip2Model
 
-    weights = hf_hub_download(f"timm/{MODEL_NAME}", "open_clip_model.safetensors")
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        MODEL_NAME, pretrained=weights
-    )
-    tokenizer = open_clip.get_tokenizer(MODEL_NAME)
+    # eager: the SDPA path would trace a mask-handling branch we do not want.
+    model = Siglip2Model.from_pretrained(REPO, attn_implementation="eager")
     model.eval()
-    return model, preprocess, tokenizer
+    return model
+
+
+def make_tiny_model():
+    """Random-weight model with the real architecture's shape rules, small
+    enough to export in seconds. The position grid must be 16x16."""
+    import torch
+    from transformers import Siglip2Config, Siglip2Model
+
+    torch.manual_seed(0)
+    config = Siglip2Config(
+        text_config=dict(
+            vocab_size=1000,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            max_position_embeddings=CONTEXT_LENGTH,
+            projection_size=64,
+        ),
+        vision_config=dict(
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_patches=POSITION_GRID * POSITION_GRID,
+            patch_size=16,
+        ),
+        attn_implementation="eager",
+    )
+    model = Siglip2Model(config)
+    model.eval()
+    return model
+
+
+def build_wrappers(model):
+    import torch
+    import torch.nn.functional as F
+
+    class ImageTower(torch.nn.Module):
+        """fp32 in -> fp16 compute -> fp32 out, exactly the NaFlex forward of
+        `Siglip2VisionTransformer` with the data-dependent parts replaced."""
+
+        def __init__(self, vision):
+            super().__init__()
+            self.v = vision
+
+        def forward(self, pixel_values, pixel_attention_mask, pos_interp_h, pos_interp_w):
+            v = self.v
+            emb = v.embeddings
+            dtype = emb.patch_embedding.weight.dtype
+            x = emb.patch_embedding(pixel_values.to(dtype))  # [1, N, D]
+            n, dim = x.shape[1], x.shape[2]
+
+            # Position embeddings: rows @ grid @ cols^T, in fp32 like
+            # transformers (it upcasts for the antialiased interpolate).
+            grid = emb.position_embedding.weight.reshape(POSITION_GRID, POSITION_GRID * dim)
+            t = torch.matmul(pos_interp_h.float(), grid.float())  # [gh, 16*D]
+            t = t.reshape(-1, POSITION_GRID, dim).permute(0, 2, 1)  # [gh, D, 16]
+            pos = torch.matmul(t, pos_interp_w.float().T)  # [gh, D, gw]
+            pos = pos.permute(0, 2, 1).reshape(-1, dim).to(dtype)  # [gh*gw, D]
+            # Rows past gh*gw repeat row 0, as transformers pads them. They
+            # are masked everywhere, so this is only for parity.
+            pos = torch.cat([pos, pos[:1].expand(n, dim)], dim=0)[:n]
+            h = x + pos.unsqueeze(0)
+
+            mask = pixel_attention_mask.to(dtype)
+            add_mask = ((1.0 - mask) * MASK_FILL)[:, None, None, :]  # [1,1,1,N]
+            for layer in v.encoder.layers:
+                h = layer(h, add_mask)
+            h = v.post_layernorm(h)
+
+            # Multihead attention pooling, written out.
+            head = v.head
+            heads = head.num_heads
+            attn = head.attention
+            wq, wk, wv = attn.in_proj_weight.chunk(3, dim=0)
+            bq, bk, bv = attn.in_proj_bias.chunk(3, dim=0)
+            hd = dim // heads
+            probe = head.probe.to(dtype)
+            q = F.linear(probe, wq, bq).reshape(1, 1, heads, hd).transpose(1, 2)
+            k = F.linear(h, wk, bk).reshape(1, n, heads, hd).transpose(1, 2)
+            val = F.linear(h, wv, bv).reshape(1, n, heads, hd).transpose(1, 2)
+            scores = torch.matmul(q, k.transpose(-1, -2)) * (hd**-0.5) + add_mask
+            probs = torch.softmax(scores.float(), dim=-1).to(dtype)
+            pooled = torch.matmul(probs, val).transpose(1, 2).reshape(1, 1, dim)
+            pooled = attn.out_proj(pooled)
+            pooled = pooled + head.mlp(head.layernorm(pooled))
+            return pooled[:, 0].float()
+
+    class TextTower(torch.nn.Module):
+        def __init__(self, text_model):
+            super().__init__()
+            self.t = text_model
+
+        def forward(self, input_ids):
+            # No attention mask: the model was trained on max_length padding
+            # and transformers' own recipe passes none. ids stay int64.
+            return self.t(input_ids=input_ids).pooler_output.float()
+
+    return ImageTower(model.vision_model), TextTower(model.text_model)
+
+
+def example_inputs(gh=18, gw=32):
+    import torch
+
+    n = MAX_NUM_PATCHES
+    mask = torch.zeros(1, n, dtype=torch.long)
+    mask[0, : gh * gw] = 1  # padding in the dummy so the mask path is traced
+    return (
+        torch.zeros(1, n, PATCH_DIM),
+        mask,
+        torch.full((gh, POSITION_GRID), 1.0 / POSITION_GRID),
+        torch.full((gw, POSITION_GRID), 1.0 / POSITION_GRID),
+    )
 
 
 def export_fp16(model, output_dir: Path) -> tuple[Path, Path]:
-    # Imported lazily (not at module level) so `--verify-only` runs need
-    # neither torch nor open_clip installed — only onnxruntime/numpy/
-    # tokenizers, which is a much lighter environment to verify with.
     import torch
 
-    class ImageTower(torch.nn.Module):
-        """Casts fp32 in -> fp16 compute -> fp32 out, so the traced ONNX
-        graph is internally fp16 throughout with fp32 I/O — no post-hoc
-        graph conversion, no mixed-dtype boundary for a converter to get
-        wrong."""
-
-        def __init__(self, model):
-            super().__init__()
-            self.model = model
-
-        def forward(self, pixel_values):
-            return self.model.encode_image(pixel_values.half()).float()
-
-    class TextTower(torch.nn.Module):
-        def __init__(self, model):
-            super().__init__()
-            self.model = model
-
-        def forward(self, input_ids):
-            # input_ids stay int64 — embedding lookup indices don't need
-            # to match the (now fp16) embedding table's dtype.
-            return self.model.encode_text(input_ids).float()
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    image_path = output_dir / "siglip2_image_fp16.onnx"
-    text_path = output_dir / "siglip2_text_fp16.onnx"
+    image_path = output_dir / IMAGE_ONNX
+    text_path = output_dir / TEXT_ONNX
 
-    half_model = model.half()
+    image_tower, text_tower = build_wrappers(model.half())
 
-    # dynamo=False: force the legacy TorchScript-tracer exporter. Torch's
-    # newer dynamo-based exporter (the default as of torch 2.11) silently
-    # writes large weights as separate external-data files here — this is
-    # also the exact exporter spike S1 validated against real torch
-    # output (cosine >0.9999998), so matching it isn't just a
-    # workaround, it's the already-proven path.
-    dummy_pixels = torch.zeros(1, 3, IMAGE_SIZE, IMAGE_SIZE, dtype=torch.float32)
-    torch.onnx.export(
-        ImageTower(half_model),
-        (dummy_pixels,),
-        str(image_path),
-        input_names=["pixel_values"],
-        output_names=["image_embeds"],
-        dynamic_axes={"pixel_values": {0: "batch"}, "image_embeds": {0: "batch"}},
-        opset_version=OPSET,
-        dynamo=False,
-    )
-    print(
-        f"Exported fp16 image tower -> {image_path} ({image_path.stat().st_size / 1e6:.1f} MB)"
-    )
+    # dynamo=False: the legacy TorchScript tracer. The dynamo exporter writes
+    # large weights as external-data files, and this is the path the earlier
+    # 384 export was validated on.
+    with torch.no_grad():
+        torch.onnx.export(
+            image_tower,
+            example_inputs(),
+            str(image_path),
+            input_names=["pixel_values", "pixel_attention_mask", "pos_interp_h", "pos_interp_w"],
+            output_names=["image_embeds"],
+            dynamic_axes={"pos_interp_h": {0: "grid_h"}, "pos_interp_w": {0: "grid_w"}},
+            opset_version=OPSET,
+            dynamo=False,
+        )
+    print(f"Exported fp16 image tower -> {image_path} ({image_path.stat().st_size / 1e6:.1f} MB)")
 
     dummy_ids = torch.zeros(1, CONTEXT_LENGTH, dtype=torch.long)
-    torch.onnx.export(
-        TextTower(half_model),
-        (dummy_ids,),
-        str(text_path),
-        input_names=["input_ids"],
-        output_names=["text_embeds"],
-        dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}},
-        opset_version=OPSET,
-        dynamo=False,
-    )
-    print(
-        f"Exported fp16 text tower -> {text_path} ({text_path.stat().st_size / 1e6:.1f} MB)"
-    )
+    with torch.no_grad():
+        torch.onnx.export(
+            text_tower,
+            (dummy_ids,),
+            str(text_path),
+            input_names=["input_ids"],
+            output_names=["text_embeds"],
+            dynamic_axes={"input_ids": {0: "batch"}, "text_embeds": {0: "batch"}},
+            opset_version=OPSET,
+            dynamo=False,
+        )
+    print(f"Exported fp16 text tower -> {text_path} ({text_path.stat().st_size / 1e6:.1f} MB)")
     return image_path, text_path
 
 
-def export_tokenizer(tokenizer, output_dir: Path) -> Path:
-    # open_clip.get_tokenizer() wraps a transformers `GemmaTokenizer` (its
-    # class name doesn't say "Fast", but it's still backed by the Rust
-    # `tokenizers` crate via `.backend_tokenizer` — that's what has the
-    # raw `.save()` producing the tokenizer.json lrg-ml's
-    # `tokenizers::Tokenizer::from_file` loads; `save_pretrained` instead
-    # writes an HF-directory layout we don't want here).
-    dest = output_dir / "tokenizer.json"
-    inner = getattr(tokenizer, "tokenizer", None)
-    backend = getattr(inner, "backend_tokenizer", None) if inner is not None else None
-    if backend is None:
-        raise RuntimeError(
-            "Could not locate the backend `tokenizers` object on the open_clip tokenizer wrapper"
-        )
+def export_tokenizer(output_dir: Path) -> Path:
+    """The repo's own tokenizer already is the shape lrg-ml expects: Gemma
+    BPE, `<eos>` (id 1) appended by a TemplateProcessing post-processor, no
+    `<bos>`, pad id 0, 64 tokens. Assert that rather than assume it, then
+    save the raw `tokenizers` object (not `save_pretrained`'s directory)."""
+    from transformers import AutoTokenizer
+
+    backend = AutoTokenizer.from_pretrained(REPO).backend_tokenizer
+    # The saved tokenizer pads to 64; the real tokens end before the first pad.
+    ids = [i for i in backend.encode("a photo of a dog").ids if i != 0]
+    if ids[-1] != 1 or ids[0] == 2:
+        raise RuntimeError(f"unexpected special tokens in tokenizer output: {ids}")
+    dest = output_dir / TOKENIZER_JSON
     backend.save(str(dest))
     print(f"Exported tokenizer -> {dest}")
     return dest
 
 
-# Mirrors lrg-ml::text_pre::clean_text exactly (html-unescape twice +
-# trim, underscore->space, strip this exact punctuation set, lowercase,
-# collapse whitespace) — the goldens were generated through open_clip's
-# tokenizer wrapper, which applies the same cleaning internally, so
-# skipping it here would make texts with case/punctuation differences
-# (unlike plain lowercase English or Japanese) fail for a harness
-# reason having nothing to do with the exported model's own quality.
+# Mirrors lrg-ml::text_pre::clean_text (html-unescape twice + trim, underscore
+# to space, strip this punctuation set, lowercase, collapse whitespace). The
+# goldens go through it so they test the Rust cleaning too.
 _PUNCTUATION = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 
 
@@ -188,9 +278,13 @@ def _clean_text(text: str) -> str:
     return " ".join(stripped.lower().split())
 
 
-# Must match testdata/make_siglip_goldens.py's synthetic image
-# generators exactly (same seeds/formulas) since siglip_goldens.json
-# stores only the resulting embeddings, not the source pixels.
+def _token_ids(tok, text: str) -> np.ndarray:
+    ids = tok.encode(_clean_text(text)).ids[:CONTEXT_LENGTH]
+    return np.array([ids + [0] * (CONTEXT_LENGTH - len(ids))], dtype=np.int64)
+
+
+# Must match goldens.rs / naflex_pre_goldens.rs `build_image` (same seeds and
+# formulas): the goldens store embeddings, not pixels.
 def _lcg_bytes(n, seed=42):
     out = np.empty(n, dtype=np.uint8)
     x = seed
@@ -213,118 +307,204 @@ def _make_golden_image(name: str) -> np.ndarray:
         return _lcg_bytes(800 * 600 * 3).reshape(600, 800, 3)
     if name == "small_320x240":
         return _lcg_bytes(320 * 240 * 3, seed=99).reshape(240, 320, 3)
+    if name == "portrait_300x900":
+        return _lcg_bytes(300 * 900 * 3, seed=7).reshape(900, 300, 3)
+    if name == "panorama_1200x200":
+        return _gradient(1200, 200)
     raise ValueError(f"unknown golden image name: {name}")
 
 
-def verify(output_dir: Path, goldens_path: Path, preprocess=None) -> bool:
+GOLDEN_IMAGES = [
+    "gradient_640x480",
+    "lcg_noise_800x600",
+    "small_320x240",
+    "portrait_300x900",
+    "panorama_1200x200",
+]
+GOLDEN_TEXTS = [
+    "a photo of a dog on a beach at sunset",
+    "portrait of a woman with red hair",
+    "ein Foto von einem Hund am Strand",
+    "夕日のビーチにいる犬の写真",
+    "Photo_of a CAT!!!  with   spaces",
+]
+
+
+def _interp_matrix(out_size: int):
+    """Rows of torch's antialiased bilinear resize 16 -> out_size, taken by
+    resizing the identity: the same matrix the Rust side builds from Pillow's
+    weights (checked by tests/naflex_pre_goldens.rs)."""
+    import torch
+    import torch.nn.functional as F
+
+    eye = torch.eye(POSITION_GRID)[None, None]
+    out = F.interpolate(eye, size=(out_size, POSITION_GRID), mode="bilinear", align_corners=False, antialias=True)
+    return out[0, 0].contiguous()
+
+
+def image_inputs(arr: np.ndarray, processor):
+    """The tensors `siglip.rs` would feed, from transformers' own processor."""
+    out = processor(images=[arr], return_tensors="np")
+    gh, gw = (int(v) for v in out["spatial_shapes"][0])
+    return {
+        "pixel_values": out["pixel_values"].astype(np.float32),
+        "pixel_attention_mask": out["pixel_attention_mask"].astype(np.int64),
+        "pos_interp_h": _interp_matrix(gh).numpy(),
+        "pos_interp_w": _interp_matrix(gw).numpy(),
+    }, out["spatial_shapes"]
+
+
+def reference_image_embedding(model, ort_inputs, spatial_shapes) -> np.ndarray:
+    """fp32 transformers forward, with spatial_shapes and its own resize."""
+    import torch
+
+    with torch.no_grad():
+        out = model.get_image_features(
+            pixel_values=torch.from_numpy(ort_inputs["pixel_values"]),
+            pixel_attention_mask=torch.from_numpy(ort_inputs["pixel_attention_mask"]),
+            spatial_shapes=torch.from_numpy(np.asarray(spatial_shapes)),
+        )
+    return out.pooler_output[0].float().numpy()
+
+
+def reference_text_embedding(model, ids: np.ndarray) -> np.ndarray:
+    import torch
+
+    with torch.no_grad():
+        out = model.get_text_features(input_ids=torch.from_numpy(ids))
+    return out.pooler_output[0].float().numpy()
+
+
+def _cosine(a, b) -> float:
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+
+def _session(path: Path):
     import onnxruntime as ort
 
-    # Leaving intra/inter_op_num_threads on ONNX Runtime's default
-    # (auto-detect from visible CPU count) is a known segfault trigger
-    # on cgroup/cpuset-restricted hosts, where the visible core count
-    # doesn't match the actual scheduling quota — exactly the situation
-    # on GitHub Actions runners. See microsoft/onnxruntime#7207: pinning
-    # both to a small explicit value is the confirmed fix across that
-    # whole issue thread.
-    session_options = ort.SessionOptions()
-    session_options.intra_op_num_threads = 1
-    session_options.inter_op_num_threads = 1
+    # Pinning threads avoids a known segfault on cgroup-restricted hosts
+    # (microsoft/onnxruntime#7207), i.e. GitHub Actions runners.
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1
+    opts.inter_op_num_threads = 1
+    return ort.InferenceSession(str(path), sess_options=opts, providers=["CPUExecutionProvider"])
+
+
+def write_goldens(model, output_dir: Path) -> Path:
+    from tokenizers import Tokenizer
+    from transformers.models.siglip2.image_processing_pil_siglip2 import Siglip2ImageProcessorPil
+
+    processor = Siglip2ImageProcessorPil(max_num_patches=MAX_NUM_PATCHES)
+    images = {}
+    for name in GOLDEN_IMAGES:
+        arr = _make_golden_image(name)
+        inputs, shapes = image_inputs(arr, processor)
+        images[name] = {
+            "width": int(arr.shape[1]),
+            "height": int(arr.shape[0]),
+            "embedding": reference_image_embedding(model, inputs, shapes).tolist(),
+        }
+    tok = Tokenizer.from_file(str(output_dir / TOKENIZER_JSON))
+    texts = {t: reference_text_embedding(model, _token_ids(tok, t)).tolist() for t in GOLDEN_TEXTS}
+    dest = output_dir / GOLDENS_JSON
+    dest.write_text(json.dumps({"model_id": MODEL_ID, "images": images, "texts": texts}))
+    print(f"Wrote goldens -> {dest}")
+    return dest
+
+
+def verify(output_dir: Path, goldens_path: Path) -> bool:
+    from tokenizers import Tokenizer
+    from transformers.models.siglip2.image_processing_pil_siglip2 import Siglip2ImageProcessorPil
 
     goldens = json.loads(goldens_path.read_text())
-    image_sess = ort.InferenceSession(
-        str(output_dir / "siglip2_image_fp16.onnx"),
-        sess_options=session_options,
-        providers=["CPUExecutionProvider"],
-    )
-    text_sess = ort.InferenceSession(
-        str(output_dir / "siglip2_text_fp16.onnx"),
-        sess_options=session_options,
-        providers=["CPUExecutionProvider"],
-    )
+    image_sess = _session(output_dir / IMAGE_ONNX)
+    text_sess = _session(output_dir / TEXT_ONNX)
+    processor = Siglip2ImageProcessorPil(max_num_patches=MAX_NUM_PATCHES)
 
     ok = True
-    print("\n=== Verifying fp16 ONNX against fp32 torch goldens ===")
-    if preprocess is not None:
-        from PIL import Image
+    print("\n=== Verifying fp16 ONNX against fp32 transformers goldens ===")
+    for name, entry in goldens["images"].items():
+        inputs, _ = image_inputs(_make_golden_image(name), processor)
+        (emb,) = image_sess.run(["image_embeds"], inputs)
+        cos = _cosine(emb[0], entry["embedding"])
+        ok &= cos > 0.999
+        print(f"  image '{name}': cosine={cos:.6f} [{'OK' if cos > 0.999 else 'FAIL'}]")
 
-        for name, entry in goldens["images"].items():
-            arr = _make_golden_image(name)
-            pil = Image.fromarray(arr, "RGB")
-            tensor = preprocess(pil).unsqueeze(0).numpy().astype(np.float32)
-            (fp16_emb,) = image_sess.run(["image_embeds"], {"pixel_values": tensor})
-            golden = np.array(entry["embedding"], dtype=np.float32)
-            cos = float(
-                np.dot(fp16_emb[0], golden)
-                / (np.linalg.norm(fp16_emb[0]) * np.linalg.norm(golden))
-            )
-            status = "OK" if cos > 0.999 else "FAIL"
-            if cos <= 0.999:
-                ok = False
-            print(f"  image '{name}': cosine={cos:.6f} [{status}]")
-    else:
-        for name in goldens["images"]:
-            # `--verify-only` has no torch/open_clip, hence no access to
-            # the exact preprocessing transform — this path only runs
-            # right after a fresh export, where `preprocess` is on hand.
-            print(
-                f"  (image golden '{name}': skipped in --verify-only mode — needs open_clip's preprocess transform, not just the ONNX graph)"
-            )
+    tok = Tokenizer.from_file(str(output_dir / TOKENIZER_JSON))
+    for text, golden in goldens["texts"].items():
+        (emb,) = text_sess.run(["text_embeds"], {"input_ids": _token_ids(tok, text)})
+        cos = _cosine(emb[0], golden)
+        ok &= cos > 0.999
+        print(f"  text '{text[:40]}': cosine={cos:.6f} [{'OK' if cos > 0.999 else 'FAIL'}]")
+    return ok
 
-    tokenizer_path = output_dir / "tokenizer.json"
-    if tokenizer_path.exists():
-        from tokenizers import Tokenizer
 
-        tok = Tokenizer.from_file(str(tokenizer_path))
-        for text, golden_emb in goldens["texts"].items():
-            enc = tok.encode(_clean_text(text))
-            ids = enc.ids[:CONTEXT_LENGTH]
-            ids = ids + [0] * (CONTEXT_LENGTH - len(ids))
-            input_ids = np.array([ids], dtype=np.int64)
-            (fp16_emb,) = text_sess.run(["text_embeds"], {"input_ids": input_ids})
-            golden = np.array(golden_emb, dtype=np.float32)
-            cos = float(
-                np.dot(fp16_emb[0], golden)
-                / (np.linalg.norm(fp16_emb[0]) * np.linalg.norm(golden))
-            )
-            status = "OK" if cos > 0.999 else "FAIL"
-            if cos <= 0.999:
-                ok = False
-            print(f"  text '{text[:40]}...': cosine={cos:.6f} [{status}]")
-    else:
-        print("  tokenizer.json not found; skipping text verification")
+def self_test() -> bool:
+    """Export a tiny random-weight model and compare the ONNX graphs with the
+    transformers forward, over grids that pad, fill, and are non-square. This
+    is the check that the hand-written wrappers equal the real forward."""
+    from transformers.models.siglip2.image_processing_pil_siglip2 import Siglip2ImageProcessorPil
 
+    model = make_tiny_model()
+    ok = True
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        export_fp16(model, out)  # converts `model` to half in place
+        # Reference in fp32: rebuild with the same seed.
+        reference = make_tiny_model()
+        image_sess = _session(out / IMAGE_ONNX)
+        text_sess = _session(out / TEXT_ONNX)
+        processor = Siglip2ImageProcessorPil(max_num_patches=MAX_NUM_PATCHES)
+        print("\n=== Self-test: tiny random model ===")
+        references = []
+        for name in GOLDEN_IMAGES:
+            inputs, shapes = image_inputs(_make_golden_image(name), processor)
+            (emb,) = image_sess.run(["image_embeds"], inputs)
+            want = reference_image_embedding(reference, inputs, shapes)
+            references.append(want)
+            cos = _cosine(emb[0], want)
+            ok &= cos > 0.999
+            print(f"  image '{name}' grid {tuple(shapes[0])}: cosine={cos:.6f} [{'OK' if cos > 0.999 else 'FAIL'}]")
+        # A near-constant random model would pass any comparison; make sure
+        # the references actually tell the images apart.
+        spread = max(1.0 - _cosine(a, b) for a in references for b in references)
+        ok &= spread > 1e-3
+        print(f"  reference spread (1 - min pairwise cosine): {spread:.4f} [{'OK' if spread > 1e-3 else 'FAIL'}]")
+        rng = np.random.default_rng(0)
+        ids = rng.integers(2, 1000, size=(1, CONTEXT_LENGTH)).astype(np.int64)
+        (emb,) = text_sess.run(["text_embeds"], {"input_ids": ids})
+        cos = _cosine(emb[0], reference_text_embedding(reference, ids))
+        ok &= cos > 0.999
+        print(f"  text: cosine={cos:.6f} [{'OK' if cos > 0.999 else 'FAIL'}]")
     return ok
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--verify-only",
-        action="store_true",
-        help="Skip export, only verify existing output-dir contents",
-    )
-    parser.add_argument(
-        "--goldens",
-        type=Path,
-        default=Path(__file__).resolve().parent.parent
-        / "testdata"
-        / "siglip_goldens.json",
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--verify-only", action="store_true", help="Skip export; verify existing output-dir contents")
+    parser.add_argument("--self-test", action="store_true", help="Check the wrappers on a tiny random model")
     args = parser.parse_args()
 
-    preprocess = None
-    if not args.verify_only:
-        model, preprocess, tokenizer = load_model()
-        export_fp16(model, args.output_dir)
-        export_tokenizer(tokenizer, args.output_dir)
+    if args.self_test:
+        sys.exit(0 if self_test() else 1)
+    if args.output_dir is None:
+        parser.error("--output-dir is required")
 
-    ok = verify(args.output_dir, args.goldens, preprocess=preprocess)
-    if not ok:
-        print(
-            "\nVerification FAILED — fp16 conversion degraded text embeddings beyond tolerance.",
-            file=sys.stderr,
-        )
+    goldens_path = args.output_dir / GOLDENS_JSON
+    if not args.verify_only:
+        model = load_model()
+        # Goldens first: they need the fp32 weights, and export_fp16 halves
+        # the model in place.
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        export_tokenizer(args.output_dir)
+        write_goldens(model, args.output_dir)
+        export_fp16(model, args.output_dir)
+
+    if not verify(args.output_dir, goldens_path):
+        print("\nVerification FAILED — fp16 export differs from the fp32 reference beyond tolerance.", file=sys.stderr)
         sys.exit(1)
     print("\nVerification passed.")
 

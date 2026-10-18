@@ -177,24 +177,33 @@ cargo test -p lrg-mlx --test sidecar_smoke -- --ignored
 
 ## Model files
 
-### SigLIP2 (semantic embeddings)
+### SigLIP2 NaFlex (semantic embeddings)
 
+`google/siglip2-so400m-patch16-naflex`: the image keeps its aspect ratio
+(at most 576 patches of 16x16) instead of being center-cropped to a square.
 `POST /v1/models/clip/downloads` + `GET /v1/models/clip/downloads` fetch the fp16
-ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
-`tokenizer.json`) and place them at the `LRG_SIGLIP_*` paths below,
+ONNX assets (`siglip2_naflex_image_fp16.onnx`, `siglip2_naflex_text_fp16.onnx`,
+`siglip2_naflex_tokenizer.json`) and place them at the `LRG_SIGLIP_*` paths below,
 pulling CI-exported ONNX assets from a release instead of the fp32
 checkpoint from Hugging Face.
 
-They come from the fixed `model-assets-v1` tag
+They come from the fixed `model-assets-v2` tag
 (`MODEL_ASSETS_RELEASE_TAG` in `routes/clip.rs`), **not** from the binary's
 own version tag: the assets change far less often than the app, so
 re-uploading them on every release would be wasted. Bumping them means
-bumping that constant and the tag together (e.g. `model-assets-v2`).
+bumping that constant and the tag together. `model-assets-v2` was that bump
+away from the fixed-resolution 384 export, which stays on `model-assets-v1`
+for the builds that predate NaFlex. The `.github/workflows/model-assets.yml`
+workflow publishes the tag; a build is only usable once it has run.
 
-That release exists with all three assets attached, so the endpoint works
-on any build. To export the models yourself instead — for a local change,
-or to avoid the download — run the same script the `build-model-assets` CI
-job runs:
+The image tower takes four inputs (`pixel_values`, `pixel_attention_mask`,
+`pos_interp_h`, `pos_interp_w`; see the script's docstring and
+`lrg-ml/src/naflex_pre.rs`). The position-embedding resize is done by the
+caller as two matmuls because transformers' own data-dependent
+`F.interpolate` does not export to ONNX.
+
+To export the models yourself instead — for a local change, or to avoid the
+download — run the script the `model-assets.yml` CI job runs:
 
 ```bash
 cd server-rs
@@ -204,29 +213,40 @@ uv run --project scripts --with onnxscript \
 
 `--with onnxscript` is required: torch >=2.9's `torch.onnx.export` imports
 it unconditionally even with `dynamo=False`. This downloads the SigLIP2
-checkpoint from Hugging Face, traces it natively in fp16, and writes
-`siglip2_image_fp16.onnx` (~860 MB), `siglip2_text_fp16.onnx` (~1.4 GB),
-and `tokenizer.json` into the output directory.
+checkpoint from Hugging Face, traces it natively in fp16, and writes the two
+`.onnx` files, `siglip2_naflex_tokenizer.json` and `siglip_goldens.json`
+(reference embeddings from transformers' own fp32 `Siglip2Model`) into the
+output directory, then verifies the fp16 graphs against them. Copy
+`siglip_goldens.json` to `testdata/` — `tests/goldens.rs` checks its
+`model_id` against `lrg_ml::siglip::MODEL_ID`.
 
-Verify the export against the checked-in goldens (no torch/open_clip
-needed for this half, just onnxruntime/numpy/tokenizers):
+Before a real export, `--self-test` checks the hand-written wrappers against
+the transformers forward on a tiny random-weight model (seconds, no download):
+
+```bash
+uv run --project scripts --with onnxscript \
+    python scripts/export_siglip2_fp16.py --self-test
+```
+
+Re-verify existing output without exporting again:
 
 ```bash
 uv run --project scripts python scripts/export_siglip2_fp16.py \
     --verify-only --output-dir /path/to/models/siglip2
 ```
 
-Both towers should score cosine similarity >0.99999 against the fp32
+Both towers should score cosine similarity >0.999 against the fp32
 goldens. Then point the server at the files:
 
 ```bash
-export LRG_SIGLIP_IMAGE_ONNX=/path/to/models/siglip2/siglip2_image_fp16.onnx
-export LRG_SIGLIP_TEXT_ONNX=/path/to/models/siglip2/siglip2_text_fp16.onnx
-export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/tokenizer.json
+export LRG_SIGLIP_IMAGE_ONNX=/path/to/models/siglip2/siglip2_naflex_image_fp16.onnx
+export LRG_SIGLIP_TEXT_ONNX=/path/to/models/siglip2/siglip2_naflex_text_fp16.onnx
+export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/siglip2_naflex_tokenizer.json
 ```
 
-Without these set, `lrg-ml` falls back to `~/.cache/lrgenius/models/{siglip2_image,siglip2_text}.onnx`
-and `~/.cache/lrgenius/models/tokenizer.json`.
+Without these set, `lrg-ml` falls back to
+`~/.cache/lrgenius/models/{siglip2_naflex_image,siglip2_naflex_text}.onnx`
+and `~/.cache/lrgenius/models/siglip2_naflex_tokenizer.json`.
 
 ### BioCLIP 2 (species identification)
 
@@ -281,7 +301,7 @@ the plugin actually calls — put them. Note the fallback name for the tower is
 `bioclip2_image.onnx`, without the export script's `_fp16` suffix.
 
 Assets are published by `.github/workflows/model-assets-bioclip.yml` to the
-fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v1`.
+fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v2`.
 **That release does not exist yet**, so the download route reports a 404 until
 the workflow has run once; an export placed in the cache directory by hand works
 in the meantime.

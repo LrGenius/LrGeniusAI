@@ -78,15 +78,19 @@ jobs:
             --pattern 'bioclip2_taxa.bin' \
             --pattern 'bioclip2_taxa.json'
 
-          gh release download model-assets-v1 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
-            --pattern 'siglip2_image_fp16.onnx' \
-            --pattern 'siglip2_text_fp16.onnx' \
-            --pattern 'tokenizer.json'
+          gh release download model-assets-v2 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
+            --pattern 'siglip2_naflex_image_fp16.onnx' \
+            --pattern 'siglip2_naflex_text_fp16.onnx' \
+            --pattern 'siglip2_naflex_tokenizer.json' \
+            --pattern 'siglip_goldens.json'
 
           # The release assets carry an fp16 suffix the resolver does not
           # expect; model_paths.rs looks for these names.
-          mv "$dest/siglip2_image_fp16.onnx" "$dest/siglip2_image.onnx"
-          mv "$dest/siglip2_text_fp16.onnx" "$dest/siglip2_text.onnx"
+          mv "$dest/siglip2_naflex_image_fp16.onnx" "$dest/siglip2_naflex_image.onnx"
+          mv "$dest/siglip2_naflex_text_fp16.onnx" "$dest/siglip2_naflex_text.onnx"
+          # The goldens describe the published model, so they come from the
+          # same release instead of the checkout.
+          mv "$dest/siglip_goldens.json" "$GITHUB_WORKSPACE/server-rs/testdata/siglip_goldens.json"
           mv "$dest/bioclip2_image_fp16.onnx" "$dest/bioclip2_image.onnx"
 
           ls -lh "$dest"

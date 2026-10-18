@@ -5,7 +5,8 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 ## Core Backend Dependencies
 - **YuNet**: Fast, lightweight face detector from the OpenCV Model Zoo; provides the face boxes and five landmarks. [GitHub](https://github.com/opencv/opencv_zoo)
 - **FaceNet (facenet-pytorch)**: Inception-ResNet-v1 with VGGFace2 weights; produces the face embeddings that group photos by person. [GitHub](https://github.com/timesler/facenet-pytorch)
-- **SigLIP2 / OpenCLIP**: The vision-language models behind semantic search, and the framework both SigLIP2 and BioCLIP 2 are loaded and exported with. [GitHub](https://github.com/mlfoundations/open_clip)
+- **SigLIP2 (NaFlex)**: Google's `siglip2-so400m-patch16-naflex`, the vision-language model behind semantic search; it keeps each photo's aspect ratio. Exported with Hugging Face Transformers. [Model](https://huggingface.co/google/siglip2-so400m-patch16-naflex)
+- **OpenCLIP**: The framework BioCLIP 2 is loaded and exported with. [GitHub](https://github.com/mlfoundations/open_clip)
 - **ONNX Runtime**: Cross-platform, high performance ML inferencing, used via the `ort` crate for SigLIP2, BioCLIP 2, YuNet and FaceNet. [Website](https://onnxruntime.ai/)
 - **LanceDB**: Embedded vector database storing embeddings and metadata. [Website](https://lancedb.com/)
 - **axum / tokio**: Async HTTP server and runtime for `geniusai-server`. [GitHub](https://github.com/tokio-rs/axum)

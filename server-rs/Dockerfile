@@ -67,9 +67,9 @@ ENV GENIUSAI_PORT=19819
 # see server-rs/scripts/export_siglip2_fp16.py and
 # server-rs/scripts/export_face_models.py for how to produce them until a
 # signed release asset exists.
-ENV LRG_SIGLIP_IMAGE_ONNX=/models/siglip2/siglip2_image_fp16.onnx
-ENV LRG_SIGLIP_TEXT_ONNX=/models/siglip2/siglip2_text_fp16.onnx
-ENV LRG_SIGLIP_TOKENIZER=/models/siglip2/tokenizer.json
+ENV LRG_SIGLIP_IMAGE_ONNX=/models/siglip2/siglip2_naflex_image_fp16.onnx
+ENV LRG_SIGLIP_TEXT_ONNX=/models/siglip2/siglip2_naflex_text_fp16.onnx
+ENV LRG_SIGLIP_TOKENIZER=/models/siglip2/siglip2_naflex_tokenizer.json
 ENV LRG_YUNET_ONNX=/models/face/yunet_face_detection.onnx
 ENV LRG_FACENET_ONNX=/models/face/facenet_vggface2.onnx
 

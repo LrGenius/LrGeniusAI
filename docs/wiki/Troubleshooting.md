@@ -64,7 +64,7 @@ re-detection proceeds.
   - macOS/Linux: `~/.cache/lrgenius/models/`
   - Windows: `%USERPROFILE%\.cache\lrgenius\models\`
 
-  The search model is `siglip2_*` plus `tokenizer.json`; the species model is
+  The search model is `siglip2_naflex_*` (including `siglip2_naflex_tokenizer.json`); the species model is
   `bioclip2_*`. Delete only the family that is failing, restart the backend, and
   press **Download AI models** — the healthy family is skipped.
 
