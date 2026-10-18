@@ -98,7 +98,6 @@ pub mod cv2_resize;
 pub mod face_quality;
 pub mod facenet;
 pub mod faces;
-pub mod image_pre;
 pub mod model_paths;
 pub mod naflex_pre;
 pub mod siglip;
