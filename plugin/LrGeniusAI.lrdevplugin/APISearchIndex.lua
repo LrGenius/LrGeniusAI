@@ -1464,6 +1464,11 @@ function SearchIndexAPI.analyzeAndIndexPhoto(photoId, filepath, options)
 	if type(options.exposure_bias) == "number" then
 		table.insert(mimeChunks, { name = "exposure_bias", value = tostring(options.exposure_bias) })
 	end
+	-- The original's file name, for when `filepath` is a rendition named
+	-- differently (a JPEG of a RAW). The backend keeps it as the photo's name.
+	if type(options.original_filename) == "string" and options.original_filename ~= "" then
+		table.insert(mimeChunks, { name = "original_filename", value = options.original_filename })
+	end
 	-- Whether the original is raw. Stored with the photo so later work — style
 	-- training above all, where raw and rendered Temp values are on different
 	-- scales — does not have to re-derive it. Absent when unknown.
@@ -2143,6 +2148,10 @@ local function buildPhotoOptions(photo, photoId, options)
 	for k, v in pairs(options) do
 		photoOptions[k] = v
 	end
+	-- What the file is called in the catalog. A JPEG rendition is uploaded
+	-- under its own name (`018A0344.jpg`), so without this the index would
+	-- remember the rendition's name for a photo that is `018A0344.CR3`.
+	photoOptions.original_filename = photo:getFormattedMetadata("fileName")
 	-- The catalog's own location fields, and only under `submit_gps`: this is
 	-- the same context the switch has always governed, just taken from the
 	-- source that survives. Reading it out of the image bytes found nothing at

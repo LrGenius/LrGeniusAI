@@ -120,6 +120,7 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `replace_ss` | bool | Rewrite `ß` as `ss` in the generated title, caption, alt text and keywords. Applied after the model answers, and only to those fields — never to the filename |
 | `exposure_bias` | float | Exposure compensation in EV. Stored, and the decisive signal for culling's bracket detection. Omit when the camera did not record it; never default it to 0 |
 | `is_raw` | bool | Whether the original is raw. Stored on the photo so later work (style training above all) can keep raw and rendered originals apart. Omit when unknown |
+| `original_filename` | string | Single-photo upload only. The original file's name in the catalog (`018A0344.CR3`), for when the uploaded part is a rendition (`018A0344.jpg`). Stored and shown as the photo's `filename`; the part's own name still decides how the bytes are decoded. Ignored for a batch |
 | `extra_context` | object | Optional context hints (folder, date, GPS, keywords) |
 | `prompt` | string | The system prompt (the plug-in's "Instructions / Prompt" template). It *replaces* the built-in persona rather than extending it. Trimmed, and dropped when blank: a template the user emptied means "no persona of my own", so the built-in default applies instead of an empty system prompt. The edit routes read the same field the same way |
 | `existing_keywords` | string[] | The photo's keywords, *without* face tags. Only reaches the prompt when `submit_keywords` is set |
@@ -216,6 +217,10 @@ producer this build uses*, not merely present:
 | `metadata` | no title, caption, alt_text or keywords |
 
 `regenerate_metadata` overrides all of them.
+
+It redoes only the tasks of that request. Fields written by a task that is *not* in the request — the
+stored embedding, the species, the AI title, caption and keywords, the catalog membership — are kept: redoing
+`cull` alone does not remove a photo from search.
 
 The two identity fields differ in one respect, deliberately. For `faces`, a missing `face_model`
 re-queues the photo. For `embeddings`, a missing `embedding_model` does **not**: `has_embedding` has

@@ -120,7 +120,7 @@ know comes back as "update the plugin".
 | `view_photo` | `render_preview` | – | `LrExportSession` JPEG in the temp folder; the backend reads and deletes it |
 | `show_in_lightroom` | `show_photos` | own collection only | allowed when read-only; "LrGeniusAI Agent" set |
 | `update_photos` | `update_photos` | yes | one undo step; keywords by "Parent > Child" |
-| `manage_collection` | `collection` | yes | |
+| `manage_collection` | `collection` | yes | adding creates the collection (inside `collection_set` when given); removing without `collection_set` searches the whole tree and refuses when several collections share the name |
 | `list_collections` | `list_collections` | – | |
 | `get_develop_settings` | `get_develop_settings` | – | |
 | `apply_develop_settings` | `apply_develop_settings` | yes | snapshot per photo; chunks of 50 photos (one write gate each) |

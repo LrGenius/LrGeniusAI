@@ -156,7 +156,8 @@ pub struct CollectionArgs {
     /// Collection name. Created when it does not exist (unless removing).
     pub collection: String,
     /// Collection set to put a new collection in (optional; nested sets as
-    /// "Parent > Child").
+    /// "Parent > Child"). When removing without it, the collection is looked
+    /// up anywhere in the catalog; name the set if several share the name.
     #[serde(default)]
     pub collection_set: Option<String>,
     /// Remove the photos from the collection instead of adding them.

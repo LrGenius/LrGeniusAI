@@ -715,6 +715,29 @@ local function findCollection(cat, name, parent)
 	return nil
 end
 
+--- Every collection called `name` anywhere in the catalog, with the path it
+--- lives at ("Set > Child > name", or just "name" at the top). Read-only.
+local function collectionsNamed(cat, name)
+	local found = {}
+	local function walk(parent, prefix, depth)
+		if depth > 10 then
+			return
+		end
+		local collections = parent and parent:getChildCollections() or cat:getChildCollections()
+		for _, collection in ipairs(collections) do
+			if collection:getName() == name then
+				found[#found + 1] = { collection = collection, path = prefix .. name }
+			end
+		end
+		local sets = parent and parent:getChildCollectionSets() or cat:getChildCollectionSets()
+		for _, set in ipairs(sets) do
+			walk(set, prefix .. set:getName() .. " > ", depth + 1)
+		end
+	end
+	walk(nil, "", 0)
+	return found
+end
+
 function handlers.show_photos(args, env)
 	local photos, missing = AgentCommands.resolvePhotos(env, args.photo_ids)
 	if #photos == 0 then
@@ -763,14 +786,40 @@ function handlers.collection(args, env)
 	local remove = args.op == "remove"
 	local where = (args.collection_set and args.collection_set ~= "") and args.collection_set or nil
 	local changed = 0
+	local shownPath = ((where and where ~= "") and (where .. " > ") or "") .. name
 	if remove then
 		-- Found before the gate opens; nothing is created on this path.
 		local cat = catalog()
-		local parent = where and collectionSetAt(cat, where) or nil
-		if where and not parent then
-			error('There is no collection set "' .. where .. '".')
+		local collection
+		if where then
+			local parent = collectionSetAt(cat, where)
+			if not parent then
+				error('There is no collection set "' .. where .. '".')
+			end
+			collection = findCollection(cat, name, parent)
+		else
+			-- No set named: the collection may sit anywhere in the tree, as
+			-- one made with a collection_set does. Several of the same name
+			-- are not guessed between.
+			local matches = collectionsNamed(cat, name)
+			if #matches > 1 then
+				local paths = {}
+				for _, match in ipairs(matches) do
+					paths[#paths + 1] = '"' .. match.path .. '"'
+				end
+				error(
+					'Several collections are called "'
+						.. name
+						.. '": '
+						.. table.concat(paths, ", ")
+						.. ". Say which one with collection_set."
+				)
+			end
+			if matches[1] then
+				collection = matches[1].collection
+				shownPath = matches[1].path
+			end
 		end
-		local collection = findCollection(cat, name, parent)
 		if not collection then
 			error('There is no collection "' .. name .. '" to remove photos from.')
 		end
@@ -791,7 +840,7 @@ function handlers.collection(args, env)
 		end)
 	end
 	return {
-		collection = ((where and where ~= "") and (where .. " > ") or "") .. name,
+		collection = shownPath,
 		[remove and "removed" or "added"] = changed,
 		skipped = #missing,
 	}, { missingWarning(missing) }
