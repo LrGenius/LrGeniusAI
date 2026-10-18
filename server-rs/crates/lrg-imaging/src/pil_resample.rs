@@ -220,39 +220,33 @@ pub fn resize_plane(
     filter: Filter,
 ) -> Vec<u8> {
     assert_eq!(input.len(), in_w * in_h);
-    // Pillow's pass order (`ImagingResampleInner`, Resample.c): horizontal
-    // first, unless the height shrinks by more than twice what the width does,
-    // in which case vertical goes first to make the second pass cheaper. The
-    // 8-bit path rounds after every pass, so the order changes the output.
-    let height_drop = in_h as i64 - out_h as i64;
-    let width_drop = in_w as i64 - out_w as i64;
-    let horizontal_first = !(height_drop > 0 && height_drop > width_drop * 2);
-
-    let horizontal = |data: Vec<u8>, h: usize| {
-        if out_w == in_w {
-            return data;
-        }
+    // Horizontal pass first, then vertical.
+    //
+    // This is Pillow <= 12 (12.3.0 is what `scripts/uv.lock` pins, and what the
+    // goldens are made with). Pillow 13.0 changed it: it runs the vertical pass
+    // first when the height shrinks by more than twice what the width does
+    // (`horizontal_first` in `ImagingResampleInner`, Resample.c). The 8-bit path
+    // rounds after every pass, so the two orders differ by one level on a few
+    // percent of the pixels of such images.
+    //
+    // Deliberately not following 13: everything this has to agree with was made
+    // with the older order — pHashes already stored in catalogs, and the
+    // preprocessing the SigLIP2 and aesthetic models were trained and
+    // evaluated with. Move this and the goldens together if that ever changes.
+    let mut data = input.to_vec();
+    let mut w = in_w;
+    if out_w != in_w {
         let (ksize, bounds, kk) = precompute_coeffs(in_w, out_w, filter);
         let kk = normalize_coeffs_8bpc(&kk);
-        resample_horizontal(&data, in_w, h, out_w, ksize, &bounds, &kk)
-    };
-    let vertical = |data: Vec<u8>, w: usize| {
-        if out_h == in_h {
-            return data;
-        }
+        data = resample_horizontal(&data, in_w, in_h, out_w, ksize, &bounds, &kk);
+        w = out_w;
+    }
+    if out_h != in_h {
         let (ksize, bounds, kk) = precompute_coeffs(in_h, out_h, filter);
         let kk = normalize_coeffs_8bpc(&kk);
-        resample_vertical(&data, w, out_h, ksize, &bounds, &kk)
-    };
-
-    let data = input.to_vec();
-    if horizontal_first {
-        let data = horizontal(data, in_h);
-        vertical(data, out_w)
-    } else {
-        let data = vertical(data, in_w);
-        horizontal(data, out_h)
+        data = resample_vertical(&data, w, out_h, ksize, &bounds, &kk);
     }
+    data
 }
 
 fn resample_horizontal_f32(
@@ -378,11 +372,11 @@ mod tests {
         }
     }
 
-    /// Pillow runs the vertical pass first when the height drops by more than
-    /// twice what the width does. Each pass rounds to `u8`, so the order is
-    /// visible in the output; this pins both orders to the 1-D passes.
+    /// Horizontal pass first, whatever the shape: Pillow <= 12's order (see
+    /// `resize_plane`). A tall image is the case Pillow 13 changed, so it is
+    /// the one that would notice a drift.
     #[test]
-    fn pass_order_follows_pillow() {
+    fn passes_run_horizontal_first_like_pillow_12() {
         let (w, h) = (30usize, 90usize);
         let mut x = 7u64;
         let input: Vec<u8> = (0..w * h)
@@ -393,12 +387,11 @@ mod tests {
             .collect();
         let f = Filter::Bilinear;
 
-        // Height drops 90 -> 60 (30) against width 30 -> 22 (8 * 2 = 16): vertical first.
+        // Height drops 90 -> 60 (30) against width 30 -> 22 (8 * 2 = 16): the
+        // shape Pillow 13 would run vertical first.
+        let hv = resize_plane(&resize_plane(&input, w, h, 22, h, f), 22, h, 22, 60, f);
+        assert_eq!(resize_plane(&input, w, h, 22, 60, f), hv);
         let vh = resize_plane(&resize_plane(&input, w, h, w, 60, f), w, 60, 22, 60, f);
-        assert_eq!(resize_plane(&input, w, h, 22, 60, f), vh);
-
-        // Height drops 90 -> 80 (10) against width 30 -> 10 (20 * 2 = 40): horizontal first.
-        let hv = resize_plane(&resize_plane(&input, w, h, 10, h, f), 10, h, 10, 80, f);
-        assert_eq!(resize_plane(&input, w, h, 10, 80, f), hv);
+        assert_ne!(hv, vh, "the shape must be one where the order matters");
     }
 }

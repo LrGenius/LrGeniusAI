@@ -7,6 +7,9 @@ Needs no model weights and no network — only `transformers`, `numpy`,
 
     uv run --project server-rs/scripts python server-rs/testdata/make_naflex_pre_goldens.py
 
+Pillow is pinned below 13 in the export project (see its pyproject.toml): the
+resize pass order, and with it the 8-bit output, changed in Pillow 13.
+
 Uses `Siglip2ImageProcessorPil` on purpose: the Rust port mirrors Pillow's
 8-bit resize bit for bit, and the torchvision backend resizes differently.
 The full pixel arrays are too large to commit, so each image keeps its patch

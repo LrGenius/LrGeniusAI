@@ -8,7 +8,10 @@ dependencies = [
     "numpy>=2.4.4",
     "onnxruntime>=1.25.0",
     "open-clip-torch>=3.3.0",
-    "pillow>=12.2.0",
+    # <13: Pillow 13 runs the vertical resize pass first on tall images, which
+    # changes 8-bit output by one level on some pixels. lrg-imaging's
+    # `resize_plane` and every preprocessing golden follow the older order.
+    "pillow>=12.2.0,<13",
     "timm>=1.0.26",
     "tokenizers>=0.22.0",
     "torch>=2.11.0",

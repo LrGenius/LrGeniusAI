@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12.0"
 resolution-markers = [
     "sys_platform == 'linux'",
@@ -223,7 +223,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "onnxruntime", specifier = ">=1.25.0" },
     { name = "open-clip-torch", specifier = ">=3.3.0" },
-    { name = "pillow", specifier = ">=12.2.0" },
+    { name = "pillow", specifier = ">=12.2.0,<13" },
     { name = "timm", specifier = ">=1.0.26" },
     { name = "tokenizers", specifier = ">=0.22.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.11.0" },
