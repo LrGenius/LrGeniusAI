@@ -122,8 +122,33 @@ pub fn preprocess(
     height: usize,
     max_num_patches: usize,
 ) -> NaflexInput {
-    debug_assert_eq!(pixels.len(), width * height * 3);
     let (th, tw) = target_size(height, width, PATCH_SIZE, max_num_patches);
+    preprocess_with_grid(
+        pixels,
+        width,
+        height,
+        th / PATCH_SIZE,
+        tw / PATCH_SIZE,
+        max_num_patches,
+    )
+}
+
+/// [`preprocess`] with the patch grid chosen by the caller.
+///
+/// For a model whose authors pick the grid with their own rule rather than
+/// transformers': AestheticSigLIP does (`crate::aesthetic::patch_grid`). The
+/// resize, normalization and patch order are the same.
+pub fn preprocess_with_grid(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    grid_h: usize,
+    grid_w: usize,
+    max_num_patches: usize,
+) -> NaflexInput {
+    debug_assert_eq!(pixels.len(), width * height * 3);
+    debug_assert!(grid_h * grid_w <= max_num_patches);
+    let (th, tw) = (grid_h * PATCH_SIZE, grid_w * PATCH_SIZE);
 
     let mut planes = [Vec::new(), Vec::new(), Vec::new()];
     for (c, plane_out) in planes.iter_mut().enumerate() {
@@ -131,7 +156,6 @@ pub fn preprocess(
         *plane_out = resize_plane(&plane, width, height, tw, th, Filter::Bilinear);
     }
 
-    let (grid_h, grid_w) = (th / PATCH_SIZE, tw / PATCH_SIZE);
     let mut pixel_values = vec![0.0f32; max_num_patches * PATCH_DIM];
     let mut attention_mask = vec![0i64; max_num_patches];
     for gy in 0..grid_h {

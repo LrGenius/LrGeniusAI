@@ -255,6 +255,7 @@ async fn restart(State(state): State<Arc<AppState>>) -> Json<Value> {
 async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Unload request received via API");
     state.siglip.unload();
+    state.aesthetic.unload();
     state.face.unload();
     state.bioclip.unload();
     // Store handles stay open (LanceDB keeps its own lazy IO, nothing to
@@ -324,6 +325,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
     let (clip_image_status, clip_image_error) = state.siglip.image_status();
     let (clip_text_status, clip_text_error) = state.siglip.text_status();
+    let (aesthetic_status, aesthetic_error) = state.aesthetic.status();
     let (face_status, face_error) = state.face.status();
     let (species_status, species_error) = state.bioclip.status();
     // Deliberately no LLM provider status here: this GET carries no API keys
@@ -345,6 +347,8 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "clip_image_error": clip_image_error,
         "clip_text_model": clip_text_status,
         "clip_text_error": clip_text_error,
+        "aesthetic_model": aesthetic_status,
+        "aesthetic_error": aesthetic_error,
         "face_model": face_status,
         "face_error": face_error,
         "species_model": species_status,

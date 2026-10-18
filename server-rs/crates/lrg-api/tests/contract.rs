@@ -36,7 +36,7 @@ fn app(state: Arc<AppState>) -> axum::Router {
 /// and it would do the same to any developer who had run the plugin's model
 /// download before `cargo test`.
 ///
-/// Pointing all three families at an empty directory makes the suite
+/// Pointing every family at an empty directory makes the suite
 /// hermetic: same assertions, same cost, whether or not the assets are on the
 /// machine. Numerical coverage of the real weights belongs to the golden
 /// tests in `lrg-ml`, which is where `LRG_REQUIRE_GOLDENS` enforces it.
@@ -50,6 +50,9 @@ fn models_absent() -> ModelAssetPaths {
             image_onnx: dir.join("siglip2_naflex_image.onnx"),
             text_onnx: dir.join("siglip2_naflex_text.onnx"),
             tokenizer_json: dir.join("siglip2_naflex_tokenizer.json"),
+        },
+        aesthetic: lrg_ml::aesthetic::AestheticPaths {
+            onnx: dir.join("aesthetic_siglip.onnx"),
         },
         face: lrg_ml::faces::FaceModelPaths {
             det_onnx: dir.join("yunet_face_detection.onnx"),
@@ -377,6 +380,180 @@ async fn check_unprocessed_reports_only_missing_work() {
     // p1 is complete; p2 lacks an embedding; p3 is unknown.
     assert_eq!(json["photo_ids"], serde_json::json!(["p2", "p3"]));
     assert_eq!(json["uuids"], json["photo_ids"]);
+}
+
+/// An app whose aesthetic model *file* exists (empty: nothing here loads it), so
+/// routes that only ask whether the model is on disk behave as with the real one.
+fn app_with_aesthetic_file() -> (axum::Router, Arc<AppState>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let onnx = dir.path().join("aesthetic_siglip.onnx");
+    std::fs::write(&onnx, b"").unwrap();
+    let mut models = models_absent();
+    models.aesthetic = lrg_ml::aesthetic::AestheticPaths { onnx };
+    let state = Arc::new(AppState::with_model_paths(None, false, models));
+    (app(state.clone()), state, dir)
+}
+
+async fn seed_embedded_photos(
+    state: &Arc<AppState>,
+    rows: &[(&str, Option<(f64, &str)>)],
+) -> serde_json::Value {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, aesthetic)| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(true));
+            m.insert(
+                "embedding_model".into(),
+                serde_json::json!(lrg_ml::siglip::MODEL_ID),
+            );
+            m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+            if let Some((score, model)) = aesthetic {
+                m.insert("aesthetic_score".into(), serde_json::json!(score));
+                m.insert("aesthetic_model".into(), serde_json::json!(model));
+            }
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+    serde_json::json!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>())
+}
+
+/// A photo is only done for the embedding tasks once it carries a score from
+/// the current export, and only when the model that makes one is on disk —
+/// otherwise the same run would be offered for ever.
+#[tokio::test]
+async fn check_unprocessed_re_queues_photos_without_a_current_aesthetic_score() {
+    let (app, state, _models) = app_with_aesthetic_file();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids = seed_embedded_photos(
+        &state,
+        &[
+            ("scored", Some((7.1, lrg_ml::aesthetic::MODEL_ID))),
+            ("unscored", None),
+            ("stale", Some((6.0, "aesthetic-from-another-export"))),
+        ],
+    )
+    .await;
+
+    // `cull` is left out: it also wants `cull_faces_present`, which none of
+    // these rows have, so it would re-queue all of them for that reason.
+    for tasks in ["embeddings", "aesthetic"] {
+        let (status, json) = post_json(
+            &app,
+            "/v1/index/unprocessed",
+            serde_json::json!({
+                "photo_ids": ids, "tasks": tasks,
+                "regenerate_metadata": "false", "db_path": db_path,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let mut queued: Vec<&str> = json["photo_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        queued.sort();
+        assert_eq!(queued, ["stale", "unscored"], "tasks={tasks}");
+    }
+}
+
+/// Without the model on disk nothing can be brought up to date, so the score
+/// does not keep the photos in the queue.
+#[tokio::test]
+async fn check_unprocessed_ignores_the_aesthetic_score_without_the_model() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids = seed_embedded_photos(&state, &[("unscored", None)]).await;
+    let (_, json) = post_json(
+        &app,
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ids, "tasks": "embeddings",
+            "regenerate_metadata": "false", "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(json["photo_ids"], serde_json::json!([]));
+}
+
+/// The plug-in reads the score and genre back from the lookup, in a block of
+/// their own that does not leak into the LLM metadata the review dialog edits.
+#[tokio::test]
+async fn photo_lookup_reports_the_aesthetic_score_and_genre() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    seed_embedded_photos(
+        &state,
+        &[
+            ("scored", Some((7.1, lrg_ml::aesthetic::MODEL_ID))),
+            ("stale", Some((6.0, "aesthetic-from-another-export"))),
+            ("bare", None),
+        ],
+    )
+    .await;
+    // Genre lives on the same row; add it to one photo.
+    let store = state.store().unwrap();
+    let mut row = store
+        .get(lrg_store::IMAGE_TABLE, &["scored".to_string()])
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    row.metadata
+        .insert("genre".into(), serde_json::json!("macro"));
+    row.metadata
+        .insert("genre_confidence".into(), serde_json::json!(0.74));
+    store.upsert(lrg_store::IMAGE_TABLE, &[row]).await.unwrap();
+
+    let lookup = |id: &'static str| {
+        let app = app.clone();
+        let db_path = db_path.clone();
+        async move {
+            post_json(
+                &app,
+                "/v1/photos/lookup",
+                serde_json::json!({"photo_id": id, "db_path": db_path}),
+            )
+            .await
+            .1
+        }
+    };
+
+    let scored = lookup("scored").await;
+    assert_eq!(scored["aesthetic"]["score"], 7.1);
+    assert_eq!(scored["aesthetic"]["outdated"], false);
+    assert_eq!(scored["aesthetic"]["genre"], "macro");
+    assert_eq!(scored["aesthetic"]["genre_label"], "Macro");
+    assert_eq!(scored["aesthetic"]["genre_confidence"], 0.74);
+    assert!(
+        scored["metadata"].get("aesthetic_score").is_none(),
+        "the score must not reach the review dialog's metadata"
+    );
+
+    let stale = lookup("stale").await;
+    assert_eq!(stale["aesthetic"]["score"], 6.0);
+    assert_eq!(stale["aesthetic"]["outdated"], true);
+    assert!(stale["aesthetic"]["genre"].is_null());
+
+    assert!(lookup("bare").await["aesthetic"].is_null());
 }
 
 /// A stored embedding written by a different function is re-queued; one whose

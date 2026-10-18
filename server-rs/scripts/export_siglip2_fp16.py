@@ -57,6 +57,8 @@ from pathlib import Path
 
 import numpy as np
 
+from naflex_towers import MASK_FILL, PATCH_DIM, POSITION_GRID, encode_vision, example_inputs, interp_matrix  # noqa: F401
+
 # A bare SIGSEGV with no traceback is otherwise all CI gives us for a native
 # crash in torch/onnxruntime.
 faulthandler.enable()
@@ -65,8 +67,6 @@ sys.stdout.reconfigure(line_buffering=True)
 REPO = "google/siglip2-so400m-patch16-naflex"
 # Must match lrg-ml: naflex_pre::{MAX_NUM_PATCHES, POSITION_GRID}, siglip::MODEL_ID.
 MAX_NUM_PATCHES = 576
-POSITION_GRID = 16
-PATCH_DIM = 16 * 16 * 3
 MODEL_ID = "siglip2-so400m-naflex-576/fp16"
 CONTEXT_LENGTH = 64
 OPSET = 18
@@ -76,9 +76,6 @@ TEXT_ONNX = "siglip2_naflex_text_fp16.onnx"
 TOKENIZER_JSON = "siglip2_naflex_tokenizer.json"
 GOLDENS_JSON = "siglip_goldens.json"
 
-# fp16 holds -1e4 and exp(-1e4) is exactly 0 in the fp32 softmax; the real
-# finfo.min would overflow to -inf as soon as a score is added to it.
-MASK_FILL = -1.0e4
 
 
 def load_model():
@@ -124,58 +121,18 @@ def make_tiny_model():
 
 def build_wrappers(model):
     import torch
-    import torch.nn.functional as F
 
     class ImageTower(torch.nn.Module):
         """fp32 in -> fp16 compute -> fp32 out, exactly the NaFlex forward of
-        `Siglip2VisionTransformer` with the data-dependent parts replaced."""
+        `Siglip2VisionTransformer` (see `naflex_towers.encode_vision`)."""
 
         def __init__(self, vision):
             super().__init__()
             self.v = vision
 
         def forward(self, pixel_values, pixel_attention_mask, pos_interp_h, pos_interp_w):
-            v = self.v
-            emb = v.embeddings
-            dtype = emb.patch_embedding.weight.dtype
-            x = emb.patch_embedding(pixel_values.to(dtype))  # [1, N, D]
-            n, dim = x.shape[1], x.shape[2]
-
-            # Position embeddings: rows @ grid @ cols^T, in fp32 like
-            # transformers (it upcasts for the antialiased interpolate).
-            grid = emb.position_embedding.weight.reshape(POSITION_GRID, POSITION_GRID * dim)
-            t = torch.matmul(pos_interp_h.float(), grid.float())  # [gh, 16*D]
-            t = t.reshape(-1, POSITION_GRID, dim).permute(0, 2, 1)  # [gh, D, 16]
-            pos = torch.matmul(t, pos_interp_w.float().T)  # [gh, D, gw]
-            pos = pos.permute(0, 2, 1).reshape(-1, dim).to(dtype)  # [gh*gw, D]
-            # Rows past gh*gw repeat row 0, as transformers pads them. They
-            # are masked everywhere, so this is only for parity.
-            pos = torch.cat([pos, pos[:1].expand(n, dim)], dim=0)[:n]
-            h = x + pos.unsqueeze(0)
-
-            mask = pixel_attention_mask.to(dtype)
-            add_mask = ((1.0 - mask) * MASK_FILL)[:, None, None, :]  # [1,1,1,N]
-            for layer in v.encoder.layers:
-                h = layer(h, add_mask)
-            h = v.post_layernorm(h)
-
-            # Multihead attention pooling, written out.
-            head = v.head
-            heads = head.num_heads
-            attn = head.attention
-            wq, wk, wv = attn.in_proj_weight.chunk(3, dim=0)
-            bq, bk, bv = attn.in_proj_bias.chunk(3, dim=0)
-            hd = dim // heads
-            probe = head.probe.to(dtype)
-            q = F.linear(probe, wq, bq).reshape(1, 1, heads, hd).transpose(1, 2)
-            k = F.linear(h, wk, bk).reshape(1, n, heads, hd).transpose(1, 2)
-            val = F.linear(h, wv, bv).reshape(1, n, heads, hd).transpose(1, 2)
-            scores = torch.matmul(q, k.transpose(-1, -2)) * (hd**-0.5) + add_mask
-            probs = torch.softmax(scores.float(), dim=-1).to(dtype)
-            pooled = torch.matmul(probs, val).transpose(1, 2).reshape(1, 1, dim)
-            pooled = attn.out_proj(pooled)
-            pooled = pooled + head.mlp(head.layernorm(pooled))
-            return pooled[:, 0].float()
+            pooled, _ = encode_vision(self.v, pixel_values, pixel_attention_mask, pos_interp_h, pos_interp_w)
+            return pooled.float()
 
     class TextTower(torch.nn.Module):
         def __init__(self, text_model):
@@ -188,20 +145,6 @@ def build_wrappers(model):
             return self.t(input_ids=input_ids).pooler_output.float()
 
     return ImageTower(model.vision_model), TextTower(model.text_model)
-
-
-def example_inputs(gh=18, gw=32):
-    import torch
-
-    n = MAX_NUM_PATCHES
-    mask = torch.zeros(1, n, dtype=torch.long)
-    mask[0, : gh * gw] = 1  # padding in the dummy so the mask path is traced
-    return (
-        torch.zeros(1, n, PATCH_DIM),
-        mask,
-        torch.full((gh, POSITION_GRID), 1.0 / POSITION_GRID),
-        torch.full((gw, POSITION_GRID), 1.0 / POSITION_GRID),
-    )
 
 
 def export_fp16(model, output_dir: Path) -> tuple[Path, Path]:
@@ -219,7 +162,7 @@ def export_fp16(model, output_dir: Path) -> tuple[Path, Path]:
     with torch.no_grad():
         torch.onnx.export(
             image_tower,
-            example_inputs(),
+            example_inputs(MAX_NUM_PATCHES, 18, 32),
             str(image_path),
             input_names=["pixel_values", "pixel_attention_mask", "pos_interp_h", "pos_interp_w"],
             output_names=["image_embeds"],
@@ -330,18 +273,6 @@ GOLDEN_TEXTS = [
 ]
 
 
-def _interp_matrix(out_size: int):
-    """Rows of torch's antialiased bilinear resize 16 -> out_size, taken by
-    resizing the identity: the same matrix the Rust side builds from Pillow's
-    weights (checked by tests/naflex_pre_goldens.rs)."""
-    import torch
-    import torch.nn.functional as F
-
-    eye = torch.eye(POSITION_GRID)[None, None]
-    out = F.interpolate(eye, size=(out_size, POSITION_GRID), mode="bilinear", align_corners=False, antialias=True)
-    return out[0, 0].contiguous()
-
-
 def image_inputs(arr: np.ndarray, processor):
     """The tensors `siglip.rs` would feed, from transformers' own processor."""
     out = processor(images=[arr], return_tensors="np")
@@ -349,8 +280,8 @@ def image_inputs(arr: np.ndarray, processor):
     return {
         "pixel_values": out["pixel_values"].astype(np.float32),
         "pixel_attention_mask": out["pixel_attention_mask"].astype(np.int64),
-        "pos_interp_h": _interp_matrix(gh).numpy(),
-        "pos_interp_w": _interp_matrix(gw).numpy(),
+        "pos_interp_h": interp_matrix(gh).numpy(),
+        "pos_interp_w": interp_matrix(gw).numpy(),
     }, out["spatial_shapes"]
 
 

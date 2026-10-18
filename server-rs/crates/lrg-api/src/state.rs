@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::sync::{Mutex, Notify};
 
 use lrg_common::{config, jobs::JobRegistry, logging};
+use lrg_ml::aesthetic::{AestheticModel, AestheticPaths};
 use lrg_ml::bioclip::{BioclipModel, BioclipModelPaths};
 use lrg_ml::faces::{FaceModel, FaceModelPaths};
 use lrg_ml::siglip::{ModelPaths as SiglipModelPaths, SiglipModel};
@@ -32,6 +33,9 @@ pub struct AppState {
     /// Global (not per-catalog) — lazily loaded on first use, matching
     /// server_lifecycle.py's model lifecycle.
     pub siglip: Arc<SiglipModel>,
+    /// AestheticSigLIP: scores a photo 1..9. Its own So400m backbone, so it has
+    /// its own lazy-load and idle-unload clock apart from `siglip`.
+    pub aesthetic: Arc<AestheticModel>,
     /// Global — lazily loaded, matching `services/face.py`'s `_get_face_app`.
     pub face: Arc<FaceModel>,
     /// Global — BioCLIP 2 plus its pruned Tree-of-Life head, same lazy-load
@@ -96,6 +100,7 @@ pub struct AppState {
 /// shapes. See `tests/contract.rs` for the failure that motivated this.
 pub struct ModelAssetPaths {
     pub siglip: SiglipModelPaths,
+    pub aesthetic: AestheticPaths,
     pub face: FaceModelPaths,
     pub bioclip: BioclipModelPaths,
 }
@@ -105,6 +110,7 @@ impl ModelAssetPaths {
     pub fn from_env() -> Self {
         Self {
             siglip: lrg_ml::model_paths::resolve(),
+            aesthetic: lrg_ml::model_paths::resolve_aesthetic(),
             face: lrg_ml::model_paths::resolve_face(),
             bioclip: lrg_ml::model_paths::resolve_bioclip(),
         }
@@ -130,6 +136,7 @@ impl AppState {
             shutdown: Notify::new(),
             debug,
             siglip: Arc::new(SiglipModel::new(models.siglip)),
+            aesthetic: Arc::new(AestheticModel::new(models.aesthetic)),
             face: Arc::new(FaceModel::new(models.face)),
             bioclip: Arc::new(BioclipModel::new(models.bioclip)),
             jobs: Arc::new(JobRegistry::new()),
@@ -168,6 +175,7 @@ impl AppState {
     /// an OOM kill around ~3600 photos.
     pub async fn run_maintenance(&self) {
         self.siglip.unload_if_idle();
+        self.aesthetic.unload_if_idle();
         self.face.unload_if_idle();
         self.bioclip.unload_if_idle();
         self.llm.unload_if_idle();

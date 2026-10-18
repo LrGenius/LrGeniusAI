@@ -159,10 +159,12 @@ model only for small exported JPEGs, and silently vanished for anyone using
 **Organism gate.** `species_prefilter` (default true) runs BioCLIP only on photos whose SigLIP2
 embedding scores at least `species_prefilter_threshold` on a fixed set of "is there an animal or
 plant" prompts; the rest are checked and stored as `rank = none`. The default threshold
-(`DEFAULT_SPECIES_PREFILTER_THRESHOLD`, 0.08) belongs to the current SigLIP2 model, because the score
+(`DEFAULT_SPECIES_PREFILTER_THRESHOLD`, 0.10) belongs to the current SigLIP2 model, because the score
 depends on how far apart that model puts the prompt pairs. It was 0.35 for the 384 center-crop model,
-where the same value would skip almost half of the identifiable photos on NaFlex. Re-measure it with
-`examples/siglip_thresholds.rs` whenever `lrg_ml::siglip::MODEL_ID` changes.
+where the same value would skip almost half of the identifiable photos on NaFlex. The NaFlex scores
+separate organisms from other photos less cleanly, so the gate is generous and a few non-organisms
+reach BioCLIP, which answers them at a coarse rank. Re-measure it with `examples/siglip_thresholds.rs`
+whenever `lrg_ml::siglip::MODEL_ID` changes.
 
 **Species reaches the prompt, not the request.** When `tasks` includes
 `species`, BioCLIP 2 runs *before* the LLM call rather than after it, and the

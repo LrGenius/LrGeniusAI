@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::aesthetic::AestheticPaths;
 use crate::bioclip::BioclipModelPaths;
 use crate::faces::FaceModelPaths;
 use crate::siglip::ModelPaths;
@@ -55,6 +56,18 @@ pub fn resolve() -> ModelPaths {
         tokenizer_json: env_or_default(
             "LRG_SIGLIP_TOKENIZER",
             dir.join("siglip2_naflex_tokenizer.json"),
+        ),
+    }
+}
+
+/// The AestheticSigLIP scorer. One file, no tokenizer: it only has an image side.
+///
+/// Same per-artifact env-var convention as SigLIP2 (`LRG_AESTHETIC_ONNX`).
+pub fn resolve_aesthetic() -> AestheticPaths {
+    AestheticPaths {
+        onnx: env_or_default(
+            "LRG_AESTHETIC_ONNX",
+            default_models_dir().join("aesthetic_siglip.onnx"),
         ),
     }
 }

@@ -119,6 +119,18 @@ async fn main() {
         percentiles(set.as_str(), scores);
 
         if set == PromptSet::Organism {
+            // Scores of named photos, e.g. to see where a known false
+            // positive sits: SIGLIP_THRESHOLDS_IDS=meta1:abc,meta1:def
+            if let Ok(ids) = std::env::var("SIGLIP_THRESHOLDS_IDS") {
+                for id in ids.split(',') {
+                    if let Some((_, v)) = rows.iter().find(|(r, _)| r.id == id.trim()) {
+                        println!(
+                            "    organism score {:.3}  {id}",
+                            prompts.score(v).unwrap_or(f64::NAN)
+                        );
+                    }
+                }
+            }
             let (mut with_species, mut without) = (Vec::new(), Vec::new());
             for (r, v) in &rows {
                 let Some(score) = prompts.score(v) else {
@@ -146,6 +158,36 @@ async fn main() {
                     below(&without, t),
                     without.len()
                 );
+            }
+        }
+    }
+
+    // --- Genre: which photos land where, so the prompts can be judged by eye.
+    {
+        let texts: Vec<String> = lrg_ml::genre::texts().map(str::to_string).collect();
+        let embeddings = model.embed_text(&texts).expect("text tower");
+        let lookup: BTreeMap<&str, &[f32]> = texts
+            .iter()
+            .map(String::as_str)
+            .zip(embeddings.iter().map(Vec::as_slice))
+            .collect();
+        let classifier = lrg_ml::genre::GenreClassifier::from_lookup(|t| lookup.get(t).copied())
+            .expect("genre prompts incomplete");
+        let mut by_genre: BTreeMap<&str, Vec<(String, f64)>> = BTreeMap::new();
+        for (r, v) in &rows {
+            if let Some(res) = classifier.classify(v) {
+                by_genre
+                    .entry(res.id)
+                    .or_default()
+                    .push((r.id.clone(), res.confidence));
+            }
+        }
+        println!("\ngenre assignment (photo ids per genre, with the winner's softmax share)");
+        for (genre, mut photos) in by_genre {
+            photos.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            println!("  {genre:14} {:3} photos", photos.len());
+            for (id, conf) in photos.iter().take(4) {
+                println!("      {conf:.2} {id}");
             }
         }
     }

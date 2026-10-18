@@ -34,6 +34,11 @@ pub fn router() -> axum::Router<Arc<AppState>> {
 
 pub(crate) struct ParsedOptions {
     compute_embeddings: bool,
+    /// Score the photo with AestheticSigLIP and name its genre. Set by the
+    /// `aesthetic` task and by both tasks that read the pixels, `embeddings` and
+    /// `cull`, so a photo indexed either way carries a score without anyone
+    /// asking for it separately.
+    compute_aesthetic: bool,
     compute_faces: bool,
     /// How much of the face pipeline to run. The `cull` task only reads the
     /// quality proxies, so it skips FaceNet and the thumbnail encode.
@@ -298,12 +303,20 @@ fn original_filename_field(fields: &HashMap<String, String>, photo_count: usize)
 ///
 /// Measured over a 197-photo catalog with 49 BioCLIP identifications
 /// (`examples/siglip_thresholds.rs`): the 384 center-crop model separated them
-/// cleanly at 0.35 (no identified photo below it, every other photo below it).
-/// On the NaFlex model the same 0.35 would have skipped 22 of the 49. At 0.08
-/// none of the 49 is skipped and 132 of the 148 photos without an organism
-/// still are; the lowest identified score is 0.11, so this leaves a margin.
-/// Re-measure and move it whenever `lrg_ml::siglip::MODEL_ID` changes.
-pub(crate) const DEFAULT_SPECIES_PREFILTER_THRESHOLD: f64 = 0.08;
+/// cleanly at 0.35 (no identified photo below it, every other photo below it),
+/// yet still skipped three of that catalog's nine cats. On the NaFlex model the
+/// same 0.35 would have skipped 22 of the 49. At 0.10 none of the 49 is skipped
+/// (the lowest identified score is 0.114) and 136 of the 148 photos without an
+/// organism still are.
+///
+/// The NaFlex scores separate worse than the old ones did: the cats that the
+/// 0.35 gate lost sit at 0.12-0.22, among photos that are *not* organisms (a
+/// birthday cake at 0.31, cupcakes at 0.28). So a lower gate buys back animals
+/// and also lets a few non-organisms through to BioCLIP, which then answers at a
+/// coarse rank ("Fungi" for cupcakes, 0.52). Going lower than 0.10 only adds
+/// more of those; going higher loses the cats again. Re-measure and move it
+/// whenever `lrg_ml::siglip::MODEL_ID` changes.
+pub(crate) const DEFAULT_SPECIES_PREFILTER_THRESHOLD: f64 = 0.10;
 
 pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
     let tasks: Vec<String> = match fields.get("tasks") {
@@ -378,6 +391,7 @@ pub(crate) fn parse_options(fields: &HashMap<String, String>) -> ParsedOptions {
 
     ParsedOptions {
         compute_embeddings: has_task("embeddings"),
+        compute_aesthetic: has_task("aesthetic") || has_task("embeddings") || cull_pass,
         compute_faces: has_task("faces") || cull_pass,
         face_pass: if has_task("faces") {
             FacePass::Full
@@ -897,6 +911,17 @@ pub(crate) async fn process_batch(
 
     let store = state.store();
 
+    // Aesthetic scores need the photo quality model. Said once for the run: a
+    // degraded success (the photos are otherwise indexed), never one line per
+    // photo.
+    if options.compute_aesthetic && !state.aesthetic.is_cached() {
+        warnings.push(
+            "Photos were indexed without an aesthetic score: the photo quality model is not \
+             downloaded yet. Run \"Download AI models\" in Plug-in Manager and index them again."
+                .to_string(),
+        );
+    }
+
     // Phase 0 — decode, culling metrics and pHash for the whole batch, in
     // parallel. Pure CPU work with no model behind it, so unlike phase 1 there
     // is nothing here that wants the whole machine to itself.
@@ -943,6 +968,21 @@ pub(crate) async fn process_batch(
             log::warn!(
                 "Organism gate unavailable for this batch, running BioCLIP on every photo: {problem}"
             );
+        }
+    }
+
+    // The genre prompts, made ready once for the batch like the organism gate's:
+    // a lookup per photo afterwards, and a read from the database after the
+    // first run ever.
+    //
+    // Not for an aesthetic-only or cull run on a machine without the search
+    // model: such a run produces no embedding to classify, and the missing
+    // model is not something it was asked to care about.
+    if options.compute_embeddings || (options.compute_aesthetic && state.siglip.is_cached()) {
+        let wanted = crate::prompt_embeddings::genre_texts();
+        let prompts = crate::prompt_embeddings::prepare(&state, &wanted).await;
+        if let Some(problem) = prompts.problem() {
+            warnings.push(format!("Photos were indexed without a genre: {problem}"));
         }
     }
 
@@ -1351,9 +1391,10 @@ async fn prepare_one(
     cull: CullSignals,
 ) -> Result<PreparedPhoto, String> {
     // The cull signals arrive precomputed from the parallel pass, so the only
-    // reason left to decode here is the SigLIP2 embedding. A cull-only run
+    // reasons left to decode here are the SigLIP2 embedding and the aesthetic
+    // score. A cull-only run
     // therefore never decodes in this function at all.
-    let decoded_for_embedding = if options.compute_embeddings {
+    let decoded_for_embedding = if options.compute_embeddings || options.compute_aesthetic {
         let decoded = image::load_from_memory(image_bytes)
             .map_err(|e| format!("could not decode image: {e}"))?
             .to_rgb8();
@@ -1492,6 +1533,94 @@ async fn prepare_one(
         new_embedding = Some(emb);
     }
 
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Aesthetic score: its own So400m forward pass, at the 256 patches the
+    // model was trained with. Skipped when this photo already carries a score
+    // from the current export, unless the run redoes everything.
+    if options.compute_aesthetic {
+        let current = main_metadata
+            .get(meta::AESTHETIC_MODEL_FIELD)
+            .and_then(Value::as_str)
+            == Some(lrg_ml::aesthetic::MODEL_ID)
+            && main_metadata.contains_key(meta::AESTHETIC_SCORE_FIELD);
+        if options.regenerate_metadata || !current {
+            // Not cached: nothing to do per photo. `process_batch` says so once
+            // for the whole run, rather than once per photo.
+            if state.aesthetic.is_cached() {
+                let t0 = Instant::now();
+                match decoded_for_embedding.as_ref() {
+                    Some((pixels, width, height)) => {
+                        match state.aesthetic.score_image(pixels, *width, *height) {
+                            Ok(score) => {
+                                log::debug!(
+                                    "Photo {photo_id}: aesthetic score {score:.2} took {:?}",
+                                    t0.elapsed()
+                                );
+                                main_metadata.insert(
+                                    meta::AESTHETIC_SCORE_FIELD.into(),
+                                    json!((f64::from(score) * 100.0).round() / 100.0),
+                                );
+                                main_metadata.insert(
+                                    meta::AESTHETIC_MODEL_FIELD.into(),
+                                    json!(lrg_ml::aesthetic::MODEL_ID),
+                                );
+                            }
+                            Err(e) => {
+                                log::warn!("Aesthetic scoring failed for {photo_id}: {e}");
+                                warnings.push(format!("{filename}: no aesthetic score — {e}"));
+                            }
+                        }
+                    }
+                    None => warnings.push(format!(
+                        "{filename}: no aesthetic score — internal: scoring requested without \
+                         decoded pixels"
+                    )),
+                }
+            }
+        }
+    }
+
+    // Genre: a few dot products on the embedding, from this pass's or the stored
+    // one. Recomputed with a new embedding or a new genre list, and otherwise
+    // only when there is none yet.
+    if options.compute_embeddings || options.compute_aesthetic {
+        let current_genre = main_metadata.contains_key(meta::GENRE_FIELD)
+            && main_metadata
+                .get(meta::GENRE_VERSION_FIELD)
+                .and_then(Value::as_str)
+                == Some(lrg_ml::genre::VERSION);
+        if new_embedding.is_some() || !current_genre {
+            let vector = match &new_embedding {
+                Some(v) => Some(v.as_slice()),
+                None => existing
+                    .as_ref()
+                    .filter(|_| existing_has_embedding && existing_embedding_model_current)
+                    .and_then(|r| r.vector.as_deref()),
+            };
+            // Not a warning when there is no vector: a run that did not ask for
+            // embeddings has none to read, and the plug-in already says so.
+            if let Some(vector) = vector {
+                match state.prompt_embeddings.current().genre(vector) {
+                    Some(genre) => {
+                        main_metadata.insert(meta::GENRE_FIELD.into(), json!(genre.id));
+                        main_metadata.insert(
+                            meta::GENRE_CONFIDENCE_FIELD.into(),
+                            json!((genre.confidence * 100.0).round() / 100.0),
+                        );
+                        main_metadata.insert(
+                            meta::GENRE_VERSION_FIELD.into(),
+                            json!(lrg_ml::genre::VERSION),
+                        );
+                    }
+                    // The prompts could not be had; `process_batch` has already
+                    // said why for the whole batch.
+                    None => log::debug!("Photo {photo_id}: no genre (prompts unavailable)"),
+                }
+            }
+        }
+    }
+
     // Species identification, ahead of the LLM call rather than after it.
     // Identifying the organism is the one thing a general vision model is
     // reliably bad at — issue #326 had a photo captioned "Sheep in Green
@@ -1500,7 +1629,6 @@ async fn prepare_one(
     // exists before the prompt is built. Everything it writes still goes into
     // `main_metadata`, which phase 3 persists in its one coalesced upsert.
     let mut species_vector: Option<Vec<f32>> = None;
-    let mut warnings: Vec<String> = Vec::new();
     if options.compute_species {
         let already_checked = main_metadata
             .get("species_checked")

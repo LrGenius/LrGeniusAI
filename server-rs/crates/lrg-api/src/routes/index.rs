@@ -77,6 +77,10 @@ async fn check_unprocessed(
     // off stored faces would report every cull-processed photo as outstanding
     // forever. It has its own completion flag below.
     let compute_cull = has_task("cull");
+    // Scoring a photo's aesthetic rides along with both indexing tasks that
+    // read the pixels (see `index_upload::parse_options`), and can be asked for
+    // alone.
+    let compute_aesthetic = has_task("aesthetic") || compute_embeddings || compute_cull;
     let any_task =
         compute_embeddings || compute_metadata || compute_faces || compute_cull || compute_species;
 
@@ -103,6 +107,12 @@ async fn check_unprocessed(
     // Which embedding function this build writes. A compile-time constant, like
     // the detector/recognizer pair below and unlike the BioCLIP head above.
     let current_embedding_model = state.siglip.model_id();
+    // Which scoring function this build writes, and whether it can write one at
+    // all: a photo cannot be brought up to date by a model that is not on disk,
+    // so without it nothing is re-queued for the score — the plug-in tells the
+    // user the model is missing rather than offering the same run forever.
+    let current_aesthetic_model = state.aesthetic.model_id();
+    let aesthetic_available = state.aesthetic.is_cached();
     // Which detector/recognizer pair this build writes. A compile-time
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
@@ -204,6 +214,12 @@ async fn check_unprocessed(
                     && (regenerate_metadata
                         || !has_flag("has_embedding")
                         || !embedding_model_current);
+                let aesthetic_current = has_flag(meta::AESTHETIC_SCORE_FIELD)
+                    && m.get(meta::AESTHETIC_MODEL_FIELD).and_then(Value::as_str)
+                        == Some(current_aesthetic_model);
+                let needs_aesthetic = compute_aesthetic
+                    && aesthetic_available
+                    && (regenerate_metadata || !aesthetic_current);
                 let has_any_metadata = has_flag("title")
                     || has_flag("caption")
                     || has_flag("alt_text")
@@ -233,6 +249,7 @@ async fn check_unprocessed(
                         || !has_flag("species_checked")
                         || !species_head_current);
                 needs_embedding
+                    || needs_aesthetic
                     || needs_metadata
                     || needs_faces
                     || needs_cull_phash
@@ -683,6 +700,41 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         Value::Null
     };
 
+    // The aesthetic score and genre, in their own block for the same reason as
+    // species: they are model output the plug-in writes to its own catalog
+    // fields, not text for the review dialog. `null` when the photo has neither,
+    // so "not scored" is not mistaken for a score of zero.
+    //
+    // `outdated` is true for a score from another export than this build's: the
+    // number is still the model's honest answer for that export, but it is not
+    // comparable with scores from this one.
+    let aesthetic_score = metadata_dict
+        .get(meta::AESTHETIC_SCORE_FIELD)
+        .filter(|v| v.is_number())
+        .cloned();
+    let genre_id = metadata_dict
+        .get(meta::GENRE_FIELD)
+        .and_then(Value::as_str)
+        .filter(|g| !g.is_empty());
+    let aesthetic = if aesthetic_score.is_some() || genre_id.is_some() {
+        json!({
+            "score": aesthetic_score.unwrap_or(Value::Null),
+            "model": metadata_dict.get(meta::AESTHETIC_MODEL_FIELD).cloned().unwrap_or(Value::Null),
+            "outdated": metadata_dict
+                .get(meta::AESTHETIC_MODEL_FIELD)
+                .and_then(Value::as_str)
+                .is_some_and(|m| m != lrg_ml::aesthetic::MODEL_ID),
+            "genre": genre_id,
+            "genre_label": genre_id.and_then(lrg_ml::genre::label_for),
+            "genre_confidence": metadata_dict
+                .get(meta::GENRE_CONFIDENCE_FIELD)
+                .cloned()
+                .unwrap_or(Value::Null),
+        })
+    } else {
+        Value::Null
+    };
+
     log::info!(
         "Retrieved data for photo {photo_id}: {} metadata fields",
         metadata_fields.len()
@@ -693,6 +745,7 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         "uuid": photo_id,
         "metadata": metadata_fields,
         "species": species,
+        "aesthetic": aesthetic,
         "edit": edit_recipe,
         "edit_summary": metadata_dict.get("edit_summary").cloned().unwrap_or(Value::Null),
         "edit_warnings": edit_warnings,

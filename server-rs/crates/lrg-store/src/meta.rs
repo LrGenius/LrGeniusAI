@@ -14,6 +14,15 @@ pub const HAS_EMBEDDING_FIELD: &str = "has_embedding";
 /// [`HAS_EMBEDDING_FIELD`] for the same reason: "has an embedding" and "has an
 /// embedding this build can compare against" are different questions.
 pub const EMBEDDING_MODEL_FIELD: &str = "embedding_model";
+/// The AestheticSigLIP score, `1..9`, and which export produced it. As with the
+/// embedding, a score from another export is stale rather than wrong-shaped.
+pub const AESTHETIC_SCORE_FIELD: &str = "aesthetic_score";
+pub const AESTHETIC_MODEL_FIELD: &str = "aesthetic_model";
+/// The zero-shot genre id (`lrg_ml::genre`), the winner's softmax share, and the
+/// version of the genre list and thresholds that produced it.
+pub const GENRE_FIELD: &str = "genre";
+pub const GENRE_CONFIDENCE_FIELD: &str = "genre_confidence";
+pub const GENRE_VERSION_FIELD: &str = "genre_version";
 
 /// Parse catalog_ids from metadata (JSON list string or plain list).
 pub fn parse_catalog_ids(metadata: &Map<String, Value>) -> BTreeSet<String> {

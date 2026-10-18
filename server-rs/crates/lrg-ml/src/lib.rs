@@ -91,6 +91,7 @@ pub(crate) fn apply_kleidiai_policy(
     Ok(builder)
 }
 
+pub mod aesthetic;
 pub mod bioclip;
 pub mod bioclip_pre;
 pub mod clip_iqa;
@@ -98,9 +99,11 @@ pub mod cv2_resize;
 pub mod face_quality;
 pub mod facenet;
 pub mod faces;
+pub mod genre;
 pub mod model_paths;
 pub mod naflex_pre;
 pub mod siglip;
 pub mod text_pre;
+pub(crate) mod tower;
 pub mod umeyama;
 pub mod yunet;

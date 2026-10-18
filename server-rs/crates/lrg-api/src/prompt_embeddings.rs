@@ -2,9 +2,10 @@
 //! database so that indexing, culling and the edit routes never need the
 //! SigLIP2 text tower.
 //!
-//! Three things score a stored image embedding against fixed text: the
+//! Four things score a stored image embedding against fixed text: the
 //! CLIP-IQA prompt sets culling ranks with, the organism gate in front of
-//! BioCLIP, and the scene probes the training and style routes tag with. The
+//! BioCLIP, the scene probes the training and style routes tag with, and the
+//! genre classifier indexing names a photo's kind with. The
 //! text side of each is a pure function of the model and a compile-time list
 //! of strings, yet each used to run the text tower to get it — about a
 //! gigabyte loaded into an indexing run that otherwise only uses the image
@@ -31,6 +32,7 @@ use std::sync::{Arc, RwLock};
 
 use lrg_analysis::training::{scene_tags_from_similarities, SCENE_PROBES};
 use lrg_ml::clip_iqa::{IqaPrompts, PromptSet};
+use lrg_ml::genre::{GenreClassifier, GenreResult};
 use lrg_ml::siglip::{l2_normalize, EMBED_DIM, MODEL_ID};
 use lrg_store::TextEmbedding;
 
@@ -47,6 +49,7 @@ const MODEL_MISSING: &str = "the AI search model is not downloaded yet — run \
 pub fn fixed_prompts() -> Vec<&'static str> {
     let mut texts = texts_of(&PromptSet::ALL);
     texts.extend(scene_probe_texts());
+    texts.extend(genre_texts());
     dedup(texts)
 }
 
@@ -54,6 +57,11 @@ pub fn fixed_prompts() -> Vec<&'static str> {
 /// asks [`prepare`] for.
 pub(crate) fn texts_of(sets: &[PromptSet]) -> Vec<&'static str> {
     dedup(sets.iter().flat_map(|set| set.texts()).collect())
+}
+
+/// The genres' prompt texts, what [`PromptEmbeddings::genre`] needs.
+pub(crate) fn genre_texts() -> Vec<&'static str> {
+    lrg_ml::genre::texts().collect()
 }
 
 /// The scene probes' texts, what [`PromptEmbeddings::scene_tags`] needs.
@@ -80,6 +88,8 @@ pub struct PromptEmbeddings {
     /// Every set whose prompts are all present, built once here rather than
     /// per photo.
     sets: HashMap<PromptSet, IqaPrompts>,
+    /// The genre classifier, when every genre prompt is present.
+    genre: Option<GenreClassifier>,
     /// Why some prompts have no embedding, phrased for the user.
     problem: Option<String>,
 }
@@ -93,9 +103,11 @@ impl PromptEmbeddings {
                     .map(|prompts| (set, prompts))
             })
             .collect();
+        let genre = GenreClassifier::from_lookup(|text| by_text.get(text).map(Vec::as_slice));
         PromptEmbeddings {
             by_text,
             sets,
+            genre,
             problem,
         }
     }
@@ -113,6 +125,12 @@ impl PromptEmbeddings {
     /// or the embedding cannot be scored.
     pub(crate) fn score(&self, set: PromptSet, embedding: &[f32]) -> Option<f64> {
         self.prompt_set(set)?.score(embedding)
+    }
+
+    /// The photo's genre, or `None` when the genre prompts are not all
+    /// available or the embedding cannot be scored.
+    pub(crate) fn genre(&self, embedding: &[f32]) -> Option<GenreResult> {
+        self.genre.as_ref()?.classify(embedding)
     }
 
     /// Why prompts are missing, when they are, phrased for the user.
@@ -340,6 +358,9 @@ mod tests {
         for (_, text) in SCENE_PROBES {
             assert!(unique.contains(text), "scene probe {text:?} missing");
         }
+        for text in lrg_ml::genre::texts() {
+            assert!(unique.contains(text), "genre prompt {text:?} missing");
+        }
     }
 
     /// A request asks for its own sets' prompts and nothing else: on a slow
@@ -391,6 +412,22 @@ mod tests {
         assert!(partial.prompt_set(PromptSet::Organism).is_none());
         assert!(partial.prompt_set(PromptSet::Quality).is_some());
         assert_eq!(partial.problem(), Some("why"));
+    }
+
+    /// The genre classifier exists exactly when every genre prompt does.
+    #[test]
+    fn genre_needs_every_genre_prompt() {
+        let all = PromptEmbeddings::new(embeddings_for(&fixed_prompts()), None);
+        let image = vec![1.0f32, 0.0, 0.0, 0.0];
+        assert!(all.genre(&image).is_some());
+
+        let dropped = lrg_ml::genre::texts().next().unwrap();
+        let texts: Vec<&'static str> = fixed_prompts()
+            .into_iter()
+            .filter(|text| *text != dropped)
+            .collect();
+        let partial = PromptEmbeddings::new(embeddings_for(&texts), None);
+        assert!(partial.genre(&image).is_none());
     }
 
     #[test]

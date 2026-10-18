@@ -47,6 +47,10 @@ const ASSET_NAMES: [&str; 3] = [
     "siglip2_naflex_tokenizer.json",
 ];
 
+/// The AestheticSigLIP scorer, published next to the SigLIP2 towers under the
+/// same tag (one export script run per model release, one release to bump).
+const AESTHETIC_ASSET_NAME: &str = "aesthetic_siglip_fp16.onnx";
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/models/clip", get(clip_status)).route(
         "/models/clip/downloads",
@@ -320,6 +324,18 @@ pub(crate) async fn download_release_assets(
         s.current_file = None;
         s.set_done();
     });
+}
+
+/// The aesthetic scorer's asset and where it goes, for the combined download in
+/// `routes::assets`. Not part of [`clip_assets`]: it is its own model family
+/// with its own readiness, and a build with the search model but not this one
+/// must still search.
+pub(crate) fn aesthetic_assets(paths: &lrg_ml::aesthetic::AestheticPaths) -> Vec<ReleaseAsset<'_>> {
+    vec![(
+        MODEL_ASSETS_RELEASE_TAG,
+        AESTHETIC_ASSET_NAME,
+        paths.onnx.as_path(),
+    )]
 }
 
 /// The SigLIP2 assets and where they go, for this route and for the combined

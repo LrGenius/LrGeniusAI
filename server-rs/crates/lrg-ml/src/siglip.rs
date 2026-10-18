@@ -10,16 +10,14 @@
 //! to avoid VRAM contention with local CUDA LLMs; Linux/Docker CUDA is a
 //! later EP addition here).
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
 
 use ort::session::Session;
 use ort::value::Tensor;
 
 use crate::naflex_pre;
 use crate::text_pre::{SiglipTokenizer, TokenizeError, CONTEXT_LENGTH};
+use crate::tower::{build_session, NotLoaded, Tower};
 
 pub const EMBED_DIM: usize = 1152;
 
@@ -50,8 +48,6 @@ pub const MODEL_ID: &str = "siglip2-so400m-naflex-576/fp16";
 /// re-embedded.
 pub const LEGACY_MODEL_ID: &str = "siglip2-so400m-384/fp16";
 
-const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
-
 #[derive(Debug, thiserror::Error)]
 pub enum SiglipError {
     #[error("ort error: {0}")]
@@ -60,6 +56,12 @@ pub enum SiglipError {
     Tokenize(#[from] TokenizeError),
     #[error("model not loaded")]
     NotLoaded,
+}
+
+impl From<NotLoaded> for SiglipError {
+    fn from(_: NotLoaded) -> Self {
+        SiglipError::NotLoaded
+    }
 }
 
 pub struct ModelPaths {
@@ -84,96 +86,6 @@ struct TextTower {
     tokenizer: SiglipTokenizer,
 }
 
-/// One lazily-loaded, independently idle-unloaded tower.
-///
-/// The image and text towers each hold one of these. They used to share a
-/// single `Option<Loaded>` that owned both sessions behind one mutex and one
-/// idle clock, so anything that touched either tower built both: an
-/// embeddings-only run paid for the text tower it never calls, and a semantic
-/// search paid for the image tower. Nothing about either tower's cost changes
-/// here — only which of them a call makes resident.
-struct Tower<T> {
-    loaded: Mutex<Option<T>>,
-    /// This tower's own clock. A shared one meant image work refreshing the
-    /// text tower's idle timer, so a tower nothing ever called could not be
-    /// dropped while the other one was busy.
-    last_used_unix: AtomicI64,
-    load_error: Mutex<Option<String>>,
-}
-
-impl<T> Tower<T> {
-    fn new() -> Self {
-        Tower {
-            loaded: Mutex::new(None),
-            last_used_unix: AtomicI64::new(0),
-            load_error: Mutex::new(None),
-        }
-    }
-
-    /// Runs `f` against this tower's loaded value, building it first when it is
-    /// not there yet.
-    ///
-    /// `name` reaches the failure log and is only for the human reading it: a
-    /// load that fails on a background path has to say which tower it was.
-    /// `build` fails with an ort error, `f` with a `SiglipError`, so the
-    /// tokenizer's own error type reaches the caller unchanged.
-    fn with<R>(
-        &self,
-        name: &str,
-        build: impl FnOnce() -> ort::Result<T>,
-        f: impl FnOnce(&mut T) -> Result<R, SiglipError>,
-    ) -> Result<R, SiglipError> {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.is_none() {
-            match build() {
-                Ok(value) => {
-                    *guard = Some(value);
-                    *self.load_error.lock().unwrap() = None;
-                }
-                Err(e) => {
-                    log::warn!("Could not load the SigLIP2 {name} tower: {e}");
-                    *self.load_error.lock().unwrap() = Some(e.to_string());
-                    return Err(e.into());
-                }
-            }
-        }
-        self.last_used_unix.store(now_unix(), Ordering::Relaxed);
-        let loaded = guard.as_mut().ok_or(SiglipError::NotLoaded)?;
-        f(loaded)
-    }
-
-    /// Drops this tower's session(s). Safe to call when nothing is loaded.
-    ///
-    /// The reason is a parameter because this is reached two ways — the
-    /// `/unload` route and the idle sweep — and the log line used to say
-    /// "due to inactivity" for both. A real `/unload` from the plugin then
-    /// looked like an idle timeout in the log, which is the kind of small lie
-    /// that costs an hour the next time someone reads it.
-    fn unload_with_reason(&self, name: &str, reason: &str) {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.take().is_some() {
-            log::info!("Unloading SigLIP2 {name} tower ({reason})");
-        }
-    }
-
-    fn unload_if_idle(&self, name: &str) {
-        let last = self.last_used_unix.load(Ordering::Relaxed);
-        if last != 0 && now_unix() - last >= IDLE_UNLOAD_SECONDS {
-            self.unload_with_reason(name, "idle");
-        }
-    }
-
-    fn status(&self) -> (&'static str, Option<String>) {
-        if self.loaded.lock().unwrap().is_some() {
-            ("loaded", None)
-        } else if let Some(err) = self.load_error.lock().unwrap().clone() {
-            ("failed", Some(err))
-        } else {
-            ("not_loaded", None)
-        }
-    }
-}
-
 /// Lazily-loaded, idle-unloadable SigLIP2 model handle. One instance is
 /// shared behind an `Arc` in `AppState`.
 pub struct SiglipModel {
@@ -182,53 +94,12 @@ pub struct SiglipModel {
     text: Tower<TextTower>,
 }
 
-fn now_unix() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// EP selection is env-gated rather than automatic-on-macOS for now:
-/// spike S2 found CoreML's MLProgram format needs a *static*-batch export
-/// to hit its good numbers (123ms/img vs MPS's 141ms) and to avoid
-/// crashing — the dynamic-batch graphs used here/in CI don't qualify yet.
-/// M9's model export pipeline will ship per-purpose static exports and
-/// this can default to CoreML on macOS at that point.
-///
-/// Optimization level pinned per [`crate::OPTIMIZATION_LEVEL`] — onnxruntime
-/// segfaults loading `siglip2_text.onnx` at its own `ORT_ENABLE_ALL` default,
-/// and triples the image tower's resident memory.
-fn build_session(path: &Path) -> ort::Result<Session> {
-    let mut builder = Session::builder()?.with_optimization_level(crate::OPTIMIZATION_LEVEL)?;
-    #[cfg(target_os = "macos")]
-    if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
-        use ort::ep::coreml::{ComputeUnits, ModelFormat};
-        use ort::ep::CoreML;
-        builder = builder.with_execution_providers([CoreML::default()
-            .with_model_format(ModelFormat::MLProgram)
-            .with_compute_units(ComputeUnits::All)
-            .with_model_cache_dir(std::env::temp_dir().join("lrg-coreml-cache").display())
-            .build()])?;
-    }
-    // The CPU EP's default arena only ever grows (never returns memory to
-    // the OS) — confirmed via per-photo RSS logging showing this same
-    // pattern on lrg-ml::faces's sessions. CoreML falls back to CPU for
-    // unsupported ops, so this matters on macOS too, not just the
-    // CPU-only platforms. See faces::build_session for the full writeup.
-    builder = builder
-        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
-    // KleidiAI is left enabled: it is worth ~4x on this tower and no longer
-    // leaks on onnxruntime 1.28. See `crate::DISABLE_KLEIDIAI`.
-    crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
-}
-
 impl SiglipModel {
     pub fn new(paths: ModelPaths) -> Self {
         SiglipModel {
             paths,
-            image: Tower::new(),
-            text: Tower::new(),
+            image: Tower::new("SigLIP2"),
+            text: Tower::new("SigLIP2"),
         }
     }
 
