@@ -76,7 +76,7 @@ If you are using cloud providers (Gemini, ChatGPT, Anthropic) or an Other AI ser
 
 - **Symptom:** "Unauthorized", 401/403 HTTP errors, or "Gemini API not configured" despite entering a key.
 - **Resolution:**
-  1. Double-check the key in *Plug-in Manager → Optional AI providers*. Copy-paste directly from the provider dashboard; surrounding spaces are removed when you save.
+  1. Paste the key again in *Plug-in Manager → Optional AI providers*, copied directly from the provider dashboard. The field shows dots instead of the key, so pasting it fresh is the way to be sure it is right; surrounding spaces are removed when you save.
   2. Ensure the key has not expired and has sufficient billing quota attached.
   3. For Gemini: make sure the Gemini API is enabled in your Google Cloud project.
   4. For Anthropic: the task's model list shows why the key was not accepted (rejected, no credit left) right under the picker. Anthropic keys go in the **Anthropic key** field — not the Other AI server, where `https://api.anthropic.com/v1` fails with *"HTTP 400 (anthropic-version: header is required)"*.

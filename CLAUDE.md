@@ -170,6 +170,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - New top-level actions must follow the `Task*.lua` naming convention.
 - `APISearchIndex.lua` must be kept in sync with any backend API changes.
 - API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
+- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS`.
 
 ### Rust / Backend (`server-rs/`)
 

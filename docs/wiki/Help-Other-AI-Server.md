@@ -98,7 +98,7 @@ The status line and the task's error dialog say what went wrong, in words:
 | Message | What to do |
 |---|---|
 | *Could not reach …* | Check the address and that the server is running and reachable from this computer (firewall, VPN). |
-| *… rejected the API key* / *… needs an API key* | Check the key; copy it again from the provider's page. |
+| *… rejected the API key* / *… needs an API key* | Copy the key again from the provider's page and paste it in — the field shows only dots, so you cannot check it by eye. |
 | *… has no OpenAI-compatible API at this address* | The address usually ends in `/v1` — check the server's documentation. |
 | *… does not know the model …* | The model was removed or renamed; pick another in the AI Model list. |
 | *… cannot read photos* | Pick a vision model; for `llama-server`, add `--mmproj`. |

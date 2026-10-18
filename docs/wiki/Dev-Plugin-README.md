@@ -243,6 +243,8 @@ In the plugin settings dialog you can configure:
   The keys are kept in the encrypted password storage Lightroom gives plug-ins
   (`LrPasswords`, see `Secrets.lua`), not in the plug-in prefs, which Lightroom
   writes to disk as plain text.
+  The fields show dots, not the key (`f:password_field`, in the onboarding
+  wizard as well).
 - **Local AI Model (no external app)** — browse, download and select vision
   models the backend runs itself, plus the advanced knobs (context size, photos
   in parallel, layers on the GPU). Which engine backs this section is decided

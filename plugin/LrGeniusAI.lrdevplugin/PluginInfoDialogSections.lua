@@ -991,7 +991,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					alignment = "right",
 					width = share("apiKeyLabelWidth"),
 				}),
-				f:edit_field({
+				f:password_field({
 					value = bind("geminiApiKey"),
 					fill_horizontal = 1,
 				}),
@@ -1010,7 +1010,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					alignment = "right",
 					width = share("apiKeyLabelWidth"),
 				}),
-				f:edit_field({
+				f:password_field({
 					value = bind("chatgptApiKey"),
 					fill_horizontal = 1,
 				}),
@@ -1031,7 +1031,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					alignment = "right",
 					width = share("apiKeyLabelWidth"),
 				}),
-				f:edit_field({
+				f:password_field({
 					value = bind("anthropicApiKey"),
 					fill_horizontal = 1,
 				}),
@@ -1070,7 +1070,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					alignment = "right",
 					width = share("apiKeyLabelWidth"),
 				}),
-				f:edit_field({
+				f:password_field({
 					value = bind("aiServerApiKey"),
 					placeholder_string = "only if the server needs one",
 					fill_horizontal = 1,
