@@ -15,6 +15,10 @@ LrGeniusAI adds a backend-powered AI layer to Lightroom Classic. It helps you:
 - Generate and apply Develop edits, optionally trained on your own edits
 - Deduplicate and declutter the keywords already in your catalog
 - Re-import generated metadata back into Lightroom
+- Let AI agents — Claude Code, Claude Desktop, LM Studio, any MCP client — search
+  the catalog and work in Lightroom through the agent bridge (`AgentBridge.lua`,
+  `AgentCommands.lua`); see `docs/wiki/Help-AI-Agents.md` and read
+  `docs/wiki/Disclaimer.md` first
 
 The plugin is designed to work with local and cloud providers, while keeping Lightroom as your main workspace.
 
@@ -261,6 +265,15 @@ In the plugin settings dialog you can configure:
   for that run. `Default` cannot be deleted, and is put back if an older
   install lost it.
 - Optional CLIP model download for advanced search
+- **AI Agents (MCP)** — the agent bridge's switch (on by default; it starts with
+  Lightroom and shows a progress bar only while an agent works), whether agents
+  may change photos, and developer commands (`.lrdevplugin` installs only; ticking
+  the box asks for confirmation). The agent token is kept like the API keys, in
+  `LrPasswords` (`Secrets.getMcpToken`), shown as dots, and copied into an AI
+  app's setup by one button per app. The first copy shows the agent warning and
+  needs *I understand*.
+- In-Lightroom tests (`PluginTests.lua`): *Help → Developer: Run Automated
+  Tests...*, or headless through the agent bridge (`run_plugin_tests`).
 
 ---
 

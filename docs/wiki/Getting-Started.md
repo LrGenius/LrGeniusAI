@@ -49,6 +49,10 @@ it also undoes everything else you changed in the catalog since. A catalog
 backup does not include your image files, so it cannot undo what Lightroom wrote
 into them.
 
+LrGeniusAI comes without any warranty, and AI results can be wrong. With a
+cloud AI provider, photo previews and metadata go to that provider. Read the
+[Disclaimer](Disclaimer) before you start, and before you connect an AI agent.
+
 ---
 
 ## 1. Install

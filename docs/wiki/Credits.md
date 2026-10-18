@@ -10,6 +10,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **LanceDB**: Embedded vector database storing embeddings and metadata. [Website](https://lancedb.com/)
 - **axum / tokio**: Async HTTP server and runtime for `geniusai-server`. [GitHub](https://github.com/tokio-rs/axum)
 - **Hugging Face Tokenizers**: Fast tokenizers used for the SigLIP2 text tower. [GitHub](https://github.com/huggingface/tokenizers)
+- **rmcp** (Apache-2.0): The official Rust SDK for the Model Context Protocol; serves the `/mcp` endpoint AI agents connect to. [GitHub](https://github.com/modelcontextprotocol/rust-sdk)
 
 ## Species Identification
 
@@ -37,7 +38,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **Hugging Face Hub**: Distribution for the downloadable local models.
 
 ## Tooling & Project Infrastructure
-- **Automaat/lightroom-mcp** (MIT): A second open-source Lightroom Classic plugin, by Marcin Skalski, pairing an `.lrplugin` with an MCP server. Its CI/CD setup is where this project's workflow trigger scoping, per-workflow concurrency groups, commit-SHA pinning of *every* action (not just third-party ones), the pinned `busted` revision, and the "stamp the version, then read the stamp back" rule came from — the last of which turned up a bug that had shipped in every release. Its plugin also documents a couple of Lightroom SDK behaviours worth knowing. [GitHub](https://github.com/Automaat/lightroom-mcp)
+- **Automaat/lightroom-mcp** (MIT): A second open-source Lightroom Classic plugin, by Marcin Skalski, pairing an `.lrplugin` with an MCP server. Its CI/CD setup is where this project's workflow trigger scoping, per-workflow concurrency groups, commit-SHA pinning of *every* action (not just third-party ones), the pinned `busted` revision, and the "stamp the version, then read the stamp back" rule came from — the last of which turned up a bug that had shipped in every release. Its plugin also documents a couple of Lightroom SDK behaviours worth knowing — among them how LrSocket behaves across plug-in reloads and on Windows (its issues #110, #121, #128, #134, #137), which decided the shape of LrGeniusAI's agent bridge: a receive-only socket as a doorbell, everything else over HTTP. No code was taken from it. [GitHub](https://github.com/Automaat/lightroom-mcp)
 - **StyLua, luacheck, busted**: Formatting, linting and headless unit tests for the plugin's Lua.
 - **pre-commit**: Runs the formatters, linters and the docs checker before every commit.
 

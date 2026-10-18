@@ -23,6 +23,7 @@ Welcome to the project wiki.
 - [Help: Find Similar Images](Help-Find-Similar) — near-duplicate and content-similar search
 - [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter) — synonym merging and auto de-clutter
 - [Help: Train from Edits](Help-Train-From-Edits) — save your edits as AI style examples
+- [Help: AI Agents (MCP)](Help-AI-Agents) — let Claude, LM Studio or another AI agent search your catalog and work in Lightroom
 - [Plugin Guide](Plugin-Guide) — complete menu reference and workflow overview
 
 ### AI model setup
@@ -35,6 +36,7 @@ Welcome to the project wiki.
 
 ### Other
 
+- [Disclaimer](Disclaimer) — no warranty, AI results, cloud providers, faces, AI agents
 - [Credits & Dependencies](Credits)
 
 ---
@@ -43,6 +45,7 @@ Welcome to the project wiki.
 
 - [Build Environment Setup](Dev-Build-Environment-Setup) — Windows & macOS toolchain setup for `server-rs`, including the `llamacpp` feature and MLX sidecar
 - [Backend API Reference](Dev-Backend-API) — all REST endpoints documented
+- [Dev: Agent Bridge and MCP Endpoint](Dev-Agent-Bridge) — how agents drive Lightroom, the command contract, and testing the plugin through MCP
 - [Server Guide](Dev-Server-Guide) — backend architecture, database backup, lifecycle
 - [Dev: Feature Priority Decision](Dev-Feature-Priority-Decision)
 - [Dev: Image Culling Implementation Plan](Dev-Image-Culling-Implementation-Plan)
@@ -68,6 +71,7 @@ LrGeniusAI is an AI extension for Lightroom Classic. It runs a local backend ser
 - **Face & person workflows** — face detection, clustering, named person collections
 - **Find similar images** — near-duplicate and visually similar search
 - **Keyword management** — automatic de-clutter and interactive synonym deduplication
+- **AI agents (MCP)** — Claude, LM Studio and other AI apps can search your catalog and work in Lightroom, with every change undoable
 - **Style training** — save your own edits as the examples AI develop edits are built from
 
 For project overview and release info, see [Project README](Dev-Project-README).

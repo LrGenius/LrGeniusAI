@@ -95,7 +95,18 @@ through `crates/lrg-ml/tests/common/assets_ready` rather than an early
 
 ### Plugin — load into Lightroom
 
-Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua`.
+Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua` (the suites live in `PluginTests.lua`).
+
+### Plugin — test inside Lightroom over MCP
+
+With Lightroom open (the agent bridge starts with it), the same in-Lightroom tests run headless through the backend's MCP endpoint — from an agent (`run_plugin_tests`) or from cargo. Both need the agent token from Plug-in Manager → LrGeniusAI → AI Agents (*Copy token*):
+
+```bash
+cd server-rs
+LRGENIUS_MCP_TOKEN=<token> cargo test -p lrg-mcp --test live_lightroom -- --ignored --test-threads=1   # LRG_LIVE_WRITES=1 adds catalog-writing tests
+```
+
+The plugin uses whatever backend answers on 19819, so stop the installed one and run your build for this. With the plugin loaded from its `.lrdevplugin` folder and *Allow developer commands* ticked, an agent can also `reload_plugin_modules` after editing Lua and probe with `eval_lua` — no Lightroom restart. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
 
 ### Plugin — headless unit tests
 
@@ -146,8 +157,9 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
 - `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
-- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
-- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
+- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin, and the `agent_bridge` that hands MCP tool calls to the plugin (`/v1/agent/*`).
+- `lrg-mcp` — the MCP endpoint (`/mcp`, bearer agent token required) AI agents connect to: tools over the index (calling the REST routes in-process) and over Lightroom (through `agent_bridge` to the plugin's `AgentBridge.lua`/`AgentCommands.lua`, which starts with Lightroom), result sets, prompts, and `geniusai-server mcp`, a stdio proxy for Claude Desktop. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
+- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` and `mcp` (stdio proxy) subcommands; merges the `lrg-mcp` router next to `lrg_api::build_router`'s.
 
 `APISearchIndex.lua` on the plugin side defines the API contract; keep it in sync with any endpoint changes here.
 
@@ -169,6 +181,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
 - New top-level actions must follow the `Task*.lua` naming convention.
 - `APISearchIndex.lua` must be kept in sync with any backend API changes.
+- An agent bridge command (`AgentCommands.lua`) and the MCP tool that sends it (`lrg-mcp`) change together, with the contract table in `docs/wiki/Dev-Agent-Bridge.md`. Commands that change photos are listed in `CHANGES`, so the user's read-only switch covers them.
 - API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
 - A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS`.
 

@@ -15,6 +15,7 @@ use lrg_ml::faces::{FaceModel, FaceModelPaths};
 use lrg_ml::siglip::{ModelPaths as SiglipModelPaths, SiglipModel};
 use lrg_store::{migrate, upgrade, Store};
 
+use crate::agent_bridge::AgentBridge;
 use crate::llm_engine::LlmEngineSlot;
 use crate::mlx_engine::MlxEngineSlot;
 use crate::routes::clip::ModelDownloadStatus;
@@ -45,6 +46,10 @@ pub struct AppState {
     /// Lightroom catalog. Global for the same reason `jobs` is: Lightroom
     /// runs one of these tasks at a time.
     pub ui_bridge: Arc<UiBridge>,
+    /// Hands commands from the MCP endpoint (an AI agent) to the plugin and
+    /// their answers back. Global, like `ui_bridge`: one Lightroom plugin at a
+    /// time drives a backend. See [`crate::agent_bridge`].
+    pub agent_bridge: Arc<AgentBridge>,
     /// Text embeddings of the fixed prompts — CLIP-IQA, the organism gate,
     /// the scene probes — read from the database's `text_embeddings` table,
     /// or made once with the text tower and stored there. See
@@ -129,6 +134,7 @@ impl AppState {
             bioclip: Arc::new(BioclipModel::new(models.bioclip)),
             jobs: Arc::new(JobRegistry::new()),
             ui_bridge: Arc::new(UiBridge::new()),
+            agent_bridge: Arc::new(AgentBridge::new()),
             prompt_embeddings: Default::default(),
             model_download: Arc::new(StdMutex::new(HashMap::new())),
             llm: Arc::default(),

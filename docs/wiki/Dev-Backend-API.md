@@ -628,6 +628,86 @@ answer to "will anything pick this up".
 
 ---
 
+## AI Agents: MCP endpoint and agent bridge
+
+An AI agent — Claude Code, Claude Desktop, LM Studio, Cursor, any MCP client —
+connects to `/mcp` and gets tools over LrGeniusAI's index (search, people,
+culling) and over Lightroom itself (catalog queries, previews, metadata,
+collections, develop settings, the plugin's own tests). The backend cannot
+touch the catalog, so the Lightroom tools queue commands on the **agent
+bridge** and the plugin carries them out. Full design, the command list and how
+to test it: [Dev: Agent Bridge](Dev-Agent-Bridge). For users:
+[Help: AI Agents](Help-AI-Agents).
+
+These routes refuse anything a web page could send: a request with an `Origin`
+header (a browser — Lightroom's `LrHttp` sends none) or a `Host` that is not
+this computer (a DNS-rebinding page) gets a 403. All but registration and the
+status read also need the session token from registration, in the
+`X-LrGenius-Bridge-Token` header; an unknown token gets a 401 with
+`reregister: true`, which is how the plugin notices a backend restart.
+
+### `POST /mcp`
+### `GET /mcp`
+### `DELETE /mcp`
+The MCP endpoint (Streamable HTTP, served by `lrg-mcp` and mounted next to
+these routes rather than under `/v1` — MCP negotiates its own version). `POST`
+carries JSON-RPC messages and answers as JSON or as an event stream (tool
+progress arrives as `notifications/progress` on it); `GET` opens the
+server-to-client stream; `DELETE` ends the session named in `Mcp-Session-Id`.
+Only answers when `Host` is this computer, rejects every browser `Origin`, and
+needs the agent token as `Authorization: Bearer <token>`. A missing or wrong
+token gets a 403 with a JSON-RPC error saying where to copy the setup, and so
+does every request while no plugin session is registered. `geniusai-server
+mcp` is a stdio proxy to it for clients that only start commands (Claude
+Desktop); it takes the token from `LRGENIUS_MCP_TOKEN` or `--token`.
+
+### `POST /v1/agent/bridge`
+The plugin registers. Body: `port` (its LrSocket doorbell; absent when the
+socket could not be opened — the plugin then polls), `previous_token` (keeps an
+existing session when only the port changed), and what it reports about itself:
+`plugin_version`, `lightroom_version`, `catalog_path`, `catalog_name`,
+`catalog_id`, `db_path`, `allow_changes`, `dev_tools`, `platform`, plus
+`mcp_token` (the agent token it keeps; absent on its first registration),
+`rotate_mcp_token` (make a new one) and `started_at` (when this bridge loop
+started). A registration whose `started_at` is older than the newest one seen
+since the backend started gets **409** with `superseded: true`; the plugin's
+loop then stops. That ends the fight between the old and the new loop after
+"Reload Plug-in". Returns `token`, `session`, `resumed`,
+`ping_interval_seconds` and `mcp_token`: the agent token `/mcp` now requires,
+newly made when the plugin had none, asked for a new one, or sent something
+too short to be a secret. The backend then
+connects to the port and writes `wake` per queued command and `ping` on that
+interval. Any other registration replaces the old session; its unfinished
+commands fail as "plugin reloaded".
+
+### `GET /v1/agent/bridge`
+Bridge status: `connected`, `socket` (`none`/`connecting`/`connected`/`down`),
+`plugin` (as registered), `registered_at`, `last_seen_seconds`, `queued`,
+`in_progress`, `commands_done`. Never includes the token.
+
+### `DELETE /v1/agent/bridge`
+The plugin stops on purpose (the user cancelled the bridge, or Lightroom is
+quitting). Pending commands fail with "the user stopped agent control" so a
+waiting agent stops instead of retrying.
+
+### `GET /v1/agent/commands`
+The plugin claims every queued command, oldest first: `commands` is a list of
+`{id, action, args, timeout_seconds}`. Claiming also counts as the plugin being
+alive while its socket is down.
+
+### `POST /v1/agent/commands/<id>/result`
+The plugin's answer: `ok`, `result`, `error`, `warnings` (always passed on to
+the agent, also on success), and `refused` (`"changes"` or `"dev_tools"` when
+the plugin's settings forbid the command). Returns `accepted: false` when the
+caller already gave up (timeout or cancellation).
+
+### `POST /v1/agent/commands/<id>/progress`
+`{done, total, message}` while a long command runs; forwarded to the MCP client
+as progress notifications. The answer's `cancel` is true once nobody waits for
+the command any more, and the plugin stops between photos.
+
+---
+
 ## Metadata Import
 
 ### `POST /v1/photos/metadata/import`

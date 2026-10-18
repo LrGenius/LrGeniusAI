@@ -188,6 +188,33 @@ function Util.getCatalogIdentifier(catalog)
 	return catalogId, nil
 end
 
+---
+-- Puts text on the system clipboard. The SDK has no clipboard of its own, so
+-- this goes through a temporary file and the system's own tool: pbcopy on
+-- macOS, clip on Windows. The file is deleted straight away — it may hold a
+-- secret (the agent setup carries its token).
+-- @param text string
+-- @return boolean true when the text is on the clipboard
+-- @return string|nil why not
+--
+function Util.copyToClipboard(text)
+	local name = "lrgenius-clipboard-" .. tostring(math.floor(LrDate.currentTime() * 1000)) .. ".txt"
+	local path = LrPathUtils.child(LrPathUtils.getStandardFilePath("temp"), name)
+	local fh = io.open(path, "wb")
+	if not fh then
+		return false, "a temporary file could not be written"
+	end
+	fh:write(tostring(text or ""))
+	fh:close()
+	local command = WIN_ENV and ('cmd /c clip < "' .. path .. '"') or ('/usr/bin/pbcopy < "' .. path .. '"')
+	local status = LrTasks.execute(command)
+	LrFileUtils.delete(path)
+	if status ~= 0 then
+		return false, "the system clipboard tool failed (exit " .. tostring(status) .. ")"
+	end
+	return true
+end
+
 function Util.string_split(s, delimiter)
 	local t = {}
 	for str in string.gmatch(s, "([^" .. delimiter .. "]+)") do
@@ -942,6 +969,43 @@ local function readPhotoIdentity(catalog, key)
 		error("Invalid photo identity cache entry. Restore the catalog from a backup before retrying.")
 	end
 	return record
+end
+
+---
+-- Backend photo ID -> photo, for every photo whose identity is already
+-- cached, read without touching any file. Finding a photo *by* its ID needs
+-- the ID the backend knows, which is the last one cached, even when the
+-- original is offline or has changed since; checking each file (what
+-- getGlobalPhotoIdForPhoto does for older hash IDs) is what made a lookup
+-- across a large catalog take tens of seconds.
+-- @param catalog LrCatalog
+-- @param photos table LrPhoto list
+-- @param onProgress function|nil called with (done, total) every few hundred photos
+-- @return table id -> LrPhoto
+-- @return table photos with no cached identity yet
+--
+function Util.indexCachedPhotoIds(catalog, photos, onProgress)
+	local byId, uncached = {}, {}
+	local uuids = catalog:batchGetRawMetadata(photos, { "uuid" })
+	for index, photo in ipairs(photos) do
+		local uuid = uuids[photo] and uuids[photo].uuid
+		local ok, record = false, nil
+		if not Util.nilOrEmpty(uuid) then
+			ok, record = LrTasks.pcall(readPhotoIdentity, catalog, PHOTO_ID_CACHE_PREFIX .. uuid)
+		end
+		if ok and record then
+			byId[record.id] = photo
+		else
+			uncached[#uncached + 1] = photo
+		end
+		if index % 500 == 0 then
+			if onProgress then
+				onProgress(index, #photos)
+			end
+			LrTasks.yield()
+		end
+	end
+	return byId, uncached
 end
 
 local function photoIdentityIsCurrent(record, attributes)

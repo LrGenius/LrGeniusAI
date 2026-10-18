@@ -43,10 +43,44 @@ enum Command {
         #[arg(long)]
         verify_only: bool,
     },
+    /// MCP over stdio, for AI clients that start local servers as a command
+    /// (Claude Desktop). Forwards to the running server's /mcp endpoint; it
+    /// does not start a server of its own.
+    Mcp {
+        /// The endpoint to forward to. Default: this computer's server, on
+        /// the port GENIUSAI_PORT names (19819 unless changed).
+        #[arg(long)]
+        url: Option<String>,
+        /// The agent token from the Plug-in Manager. Default: the
+        /// LRGENIUS_MCP_TOKEN environment variable, which is how a client
+        /// config passes it without putting it on the command line.
+        #[arg(long)]
+        token: Option<String>,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
+
+    // Before any logging is set up: the proxy must not touch the server's
+    // log file, and nothing but protocol messages may reach its stdout.
+    if let Some(Command::Mcp { url, token }) = &cli.command {
+        let url = url
+            .clone()
+            .unwrap_or_else(|| format!("http://127.0.0.1:{}{}", config::port(), lrg_mcp::MCP_PATH));
+        let token = token
+            .clone()
+            .or_else(|| std::env::var("LRGENIUS_MCP_TOKEN").ok());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime");
+        if let Err(e) = runtime.block_on(lrg_mcp::stdio::run(url, token)) {
+            eprintln!("lrgenius mcp: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     if let Some(Command::Migrate { verify_only }) = &cli.command {
         let verify_only = *verify_only;
@@ -211,7 +245,14 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     }
 
     let state = Arc::new(AppState::new(cli.db_path.clone(), cli.debug));
-    let app = lrg_api::build_router(state.clone());
+    let api = lrg_api::build_router(state.clone());
+    // The MCP endpoint calls the REST routes in-process, so it gets its own
+    // handle on them; it is merged in after the REST layers on purpose (no
+    // db_path peeking, its own body limit).
+    let mcp_shutdown = tokio_util::sync::CancellationToken::new();
+    let app = api
+        .clone()
+        .merge(lrg_mcp::router(state.clone(), api, mcp_shutdown.clone()));
 
     tokio::spawn(maintenance_loop(state.clone()));
 
@@ -224,7 +265,15 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal(state.clone()))
+    .with_graceful_shutdown({
+        let state = state.clone();
+        async move {
+            shutdown_signal(state).await;
+            // An MCP client's open event stream would otherwise keep the
+            // graceful shutdown waiting forever.
+            mcp_shutdown.cancel();
+        }
+    })
     .await?;
 
     let relaunch_path = state.relaunch_after_shutdown.lock().unwrap().take();
