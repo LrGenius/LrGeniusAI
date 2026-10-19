@@ -27,7 +27,11 @@ pub struct Genre {
 /// every genre as `genre_version`. **Bump it whenever any of them changes**: a
 /// stored genre is only comparable with the rules that produced it, and indexing
 /// recomputes the ones from another version.
-pub const VERSION: &str = "1";
+///
+/// History: "1" had two prompts about *wild* animals in nature, which no cat or
+/// pet ever matched (nine known cats and birds were all read as portrait or
+/// still life, none as wildlife). "2" names the animals instead.
+pub const VERSION: &str = "2";
 
 /// What a photo gets when no genre is clearly the closest one.
 pub const OTHER_ID: &str = "other";
@@ -62,8 +66,10 @@ pub const GENRES: &[Genre] = &[
         id: "wildlife",
         label: "Wildlife & animals",
         prompts: &[
-            "a photo of a wild animal in nature.",
-            "a wildlife photo of a bird or a mammal.",
+            "a photo of a cat.",
+            "a photo of a dog.",
+            "a photo of a bird.",
+            "a photo of a wild animal.",
         ],
     },
     Genre {

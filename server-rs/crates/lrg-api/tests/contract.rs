@@ -556,6 +556,330 @@ async fn photo_lookup_reports_the_aesthetic_score_and_genre() {
     assert!(lookup("bare").await["aesthetic"].is_null());
 }
 
+/// `(id, score, model, genre, title)` of a photo for the search tests; a `None`
+/// score is a photo never scored.
+type SearchableRow<'a> = (&'a str, Option<f64>, &'a str, Option<&'a str>, &'a str);
+
+/// Photos with a stored aesthetic score and genre, for the search tests.
+async fn seed_searchable(state: &Arc<AppState>, rows: &[SearchableRow<'_>]) {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, score, model, genre, title)| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(false));
+            m.insert("title".into(), serde_json::json!(title));
+            if let Some(score) = score {
+                m.insert("aesthetic_score".into(), serde_json::json!(score));
+                m.insert("aesthetic_model".into(), serde_json::json!(model));
+            }
+            if let Some(genre) = genre {
+                m.insert("genre".into(), serde_json::json!(genre));
+            }
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: None,
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+fn result_ids(json: &serde_json::Value) -> Vec<&str> {
+    json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["photo_id"].as_str().unwrap())
+        .collect()
+}
+
+/// No term: "the best N", by stored score, best first. A photo with no score
+/// from the current export is not on the scale and is left out — and said so.
+#[tokio::test]
+async fn search_without_a_term_returns_the_best_photos_by_aesthetic_score() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    seed_searchable(
+        &state,
+        &[
+            ("mid", Some(6.0), current, Some("street"), "a"),
+            ("best", Some(7.5), current, Some("macro"), "b"),
+            ("worst", Some(4.0), current, None, "c"),
+            ("never", None, current, None, "d"),
+            ("stale", Some(9.0), "another-export", None, "e"),
+        ],
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"max_results": 10, "db_path": db}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(result_ids(&json), ["best", "mid", "worst"]);
+    let first = &json["results"][0];
+    assert_eq!(first["aesthetic_score"], 7.5);
+    assert_eq!(first["genre"], "macro");
+    assert_eq!(first["genre_label"], "Macro");
+    assert!(first["distance"].is_null());
+    // The two without a current score are counted, once.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .starts_with("2 photo(s) in scope have no aesthetic score"));
+    assert_eq!(json["warning"], warnings[0]);
+
+    // The count is a cap on what comes back, not on what is considered.
+    let (_, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"max_results": 10, "min_aesthetic": 6.0, "db_path": db}),
+    )
+    .await;
+    assert_eq!(result_ids(&json), ["best", "mid"]);
+}
+
+#[tokio::test]
+async fn search_restricts_by_genre_and_minimum_score() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    seed_searchable(
+        &state,
+        &[
+            ("macro_hi", Some(7.0), current, Some("macro"), "flower"),
+            ("macro_lo", Some(5.0), current, Some("macro"), "flower"),
+            ("street_hi", Some(8.0), current, Some("street"), "flower"),
+            ("macro_noscore", None, current, Some("macro"), "flower"),
+        ],
+    )
+    .await;
+
+    // A term that matches by title only (no model in this test app), restricted.
+    let (status, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({
+            "term": "flower", "genres": ["macro"], "min_aesthetic": 6.0,
+            "sort": "aesthetic", "search_sources": {"semantic_siglip": false},
+            "db_path": db,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(result_ids(&json), ["macro_hi"]);
+    // The photo that could not be judged against the minimum is named, once;
+    // the ones judged and found short or of another genre are just not matches.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .starts_with("1 matching photo(s) have no aesthetic score"));
+}
+
+/// With a term and `sort=aesthetic` the metadata matches are ordered by score,
+/// unscored ones last.
+#[tokio::test]
+async fn search_orders_matches_by_aesthetic_score_when_asked() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    seed_searchable(
+        &state,
+        &[
+            ("plain", Some(5.0), current, None, "cat on a sofa"),
+            ("none", None, current, None, "cat in a box"),
+            ("lovely", Some(7.0), current, None, "cat in the sun"),
+        ],
+    )
+    .await;
+    let search = |sort: &'static str| {
+        let app = app.clone();
+        let db = db.clone();
+        async move {
+            post_json(
+                &app,
+                "/v1/search",
+                serde_json::json!({
+                    "term": "cat", "sort": sort,
+                    "search_sources": {"semantic_siglip": false}, "db_path": db,
+                }),
+            )
+            .await
+            .1
+        }
+    };
+    let by_score = search("aesthetic").await;
+    assert_eq!(result_ids(&by_score), ["lovely", "plain", "none"]);
+    assert!(by_score["warning"]
+        .as_str()
+        .unwrap()
+        .contains("1 matching photo(s) have no aesthetic score"));
+    // Relevance leaves the search's own order, and says nothing about scores.
+    let by_relevance = search("relevance").await;
+    assert_eq!(by_relevance["results"].as_array().unwrap().len(), 3);
+    assert!(by_relevance["warning"].is_null(), "{by_relevance}");
+}
+
+/// Relevance is how close a photo is to the term; without one there is nothing
+/// to be relevant to, which is said rather than quietly reinterpreted.
+#[tokio::test]
+async fn search_rejects_relevance_ordering_without_a_term_and_unknown_sorts() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    for sort in ["relevance", "combined"] {
+        let (status, json) = post_json(
+            &app,
+            "/v1/search",
+            serde_json::json!({"sort": sort, "db_path": db}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert!(json["error"]
+            .as_str()
+            .unwrap()
+            .contains("need a search term"));
+    }
+    let (status, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"term": "x", "sort": "best", "db_path": db}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(json["error"].as_str().unwrap().contains("Unknown sort"));
+}
+
+/// The dialog's genre list comes from the classifier's own, `other` included.
+#[tokio::test]
+async fn search_genres_lists_what_the_classifier_can_name() {
+    let (app, _state) = fresh_app();
+    let json = get_json(&app, "/v1/search/genres").await;
+    let genres = json["genres"].as_array().unwrap();
+    assert_eq!(genres.len(), lrg_ml::genre::GENRES.len() + 1);
+    assert!(genres
+        .iter()
+        .any(|g| g["id"] == "macro" && g["label"] == "Macro"));
+    assert_eq!(genres.last().unwrap()["id"], lrg_ml::genre::OTHER_ID);
+}
+
+/// A genre made under another version of the genre list, or never made, is
+/// re-queued from the stored embedding — but only when the search model that makes
+/// it is on disk.
+#[tokio::test]
+async fn check_unprocessed_re_queues_photos_with_a_stale_genre() {
+    let dir = tempfile::tempdir().unwrap();
+    // This test's own directory, never the shared empty one the other tests rely
+    // on to have no model files.
+    let mut models = models_absent();
+    models.siglip = lrg_ml::siglip::ModelPaths {
+        image_onnx: dir.path().join("siglip2_naflex_image.onnx"),
+        text_onnx: dir.path().join("siglip2_naflex_text.onnx"),
+        tokenizer_json: dir.path().join("siglip2_naflex_tokenizer.json"),
+    };
+    for file in [
+        &models.siglip.image_onnx,
+        &models.siglip.text_onnx,
+        &models.siglip.tokenizer_json,
+    ] {
+        std::fs::write(file, b"").unwrap();
+    }
+    let present = Arc::new(AppState::with_model_paths(None, false, {
+        let onnx = dir.path().join("aesthetic_siglip.onnx");
+        std::fs::write(&onnx, b"").unwrap();
+        models.aesthetic = lrg_ml::aesthetic::AestheticPaths { onnx };
+        models
+    }));
+    let app = app(present.clone());
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    present.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    let ids = seed_embedded_photos(
+        &present,
+        &[
+            ("current", Some((7.0, current))),
+            ("old_version", Some((7.0, current))),
+            ("no_genre", Some((7.0, current))),
+        ],
+    )
+    .await;
+    let store = present.store().unwrap();
+    let mut rows = store
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &["current".to_string(), "old_version".to_string()],
+        )
+        .await
+        .unwrap();
+    for row in &mut rows {
+        row.metadata
+            .insert("genre".into(), serde_json::json!("landscape"));
+        let version = if row.id == "current" {
+            lrg_ml::genre::VERSION
+        } else {
+            "an-older-version"
+        };
+        row.metadata
+            .insert("genre_version".into(), serde_json::json!(version));
+    }
+    store.upsert(lrg_store::IMAGE_TABLE, &rows).await.unwrap();
+
+    let (_, json) = post_json(
+        &app,
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ids, "tasks": "embeddings",
+            "regenerate_metadata": "false", "db_path": db,
+        }),
+    )
+    .await;
+    let mut queued: Vec<&str> = json["photo_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    queued.sort();
+    assert_eq!(queued, ["no_genre", "old_version"]);
+
+    // Without the search model there is nothing to make a genre with.
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let ids = seed_embedded_photos(&state, &[("no_genre", Some((7.0, current)))]).await;
+    let (_, json) = post_json(
+        &app,
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ids, "tasks": "embeddings",
+            "regenerate_metadata": "false", "db_path": db,
+        }),
+    )
+    .await;
+    assert_eq!(json["photo_ids"], serde_json::json!([]));
+}
+
 /// A stored embedding written by a different function is re-queued; one whose
 /// identity is simply not recorded is not.
 ///

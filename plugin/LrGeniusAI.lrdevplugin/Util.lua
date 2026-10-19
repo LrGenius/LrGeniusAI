@@ -2908,4 +2908,105 @@ function Util.aestheticFieldValues(aesthetic)
 	return scoreText, genre
 end
 
+---
+-- The minimum aesthetic score a slider position stands for, nil for "off".
+--
+-- The slider is integral and runs in half-points so a step is meaningful:
+-- 0 is off, and positions from 2 to 18 are 1.0 to 9.0 (the model's range).
+-- Position 1 would be 0.5, below anything the model can say, so it is off too.
+--
+-- @param position number|nil Slider position, 0-18.
+-- @return number|nil The score, or nil when the minimum is off.
+--
+function Util.minAestheticFromSlider(position)
+	local n = tonumber(position)
+	if n == nil or n < 2 then
+		return nil
+	end
+	if n > 18 then
+		n = 18
+	end
+	return n / 2
+end
+
+---
+-- What the minimum-aesthetic slider shows beside it.
+--
+-- @param position number|nil Slider position, 0-18.
+-- @return string "Off" or "7.5".
+--
+function Util.minAestheticLabel(position)
+	local score = Util.minAestheticFromSlider(position)
+	if score == nil then
+		return "Off"
+	end
+	return string.format("%.1f", score)
+end
+
+---
+-- The ranking options of a search, from what the dialog holds.
+--
+-- Pure so the rules are tested headless:
+-- - without a search term there is nothing to be relevant to, so the order is
+--   always the aesthetic score, whatever the popup says ("the best N");
+-- - a minimum of "off" and a genre of "all" are simply not sent;
+-- - `aestheticWeight` is only meaningful when combining.
+--
+-- @param ui table `{ hasTerm, sortBy, minAestheticPosition, genre }`
+--   (`sortBy` "relevance"|"aesthetic"|"combined", `genre` "all" or a genre id).
+-- @return table `{ sort, minAesthetic, genres, aestheticWeight }`, absent keys nil.
+--
+function Util.searchRankingOptions(ui)
+	ui = ui or {}
+	local sort = ui.sortBy
+	if sort ~= "relevance" and sort ~= "aesthetic" and sort ~= "combined" then
+		sort = ui.hasTerm and "relevance" or "aesthetic"
+	end
+	if not ui.hasTerm then
+		sort = "aesthetic"
+	end
+	local options = { sort = sort }
+	options.minAesthetic = Util.minAestheticFromSlider(ui.minAestheticPosition)
+	if type(ui.genre) == "string" and ui.genre ~= "" and ui.genre ~= "all" then
+		options.genres = { ui.genre }
+	end
+	if sort == "combined" then
+		options.aestheticWeight = 0.5
+	end
+	return options
+end
+
+---
+-- The name of the collection a search fills.
+--
+-- A search by term keeps its old name (`'term' @ time`); the ranking only adds
+-- what is not the default, so a plain search reads as it always did. Without a
+-- term it is "Best N", with the filters that shaped it.
+--
+-- @param args table `{ term, maxResults, sort, minAesthetic, genreLabel, time }`
+--   (`time` already formatted).
+-- @return string
+--
+function Util.searchCollectionName(args)
+	local term = Util.trim(args.term or "")
+	local parts = {}
+	if term == "" then
+		table.insert(parts, "Best " .. tostring(args.maxResults or ""))
+	else
+		table.insert(parts, "'" .. term .. "'")
+		if args.sort == "aesthetic" then
+			table.insert(parts, "by aesthetic")
+		elseif args.sort == "combined" then
+			table.insert(parts, "relevance + aesthetic")
+		end
+	end
+	if args.minAesthetic then
+		table.insert(parts, string.format("\226\137\165%.1f", args.minAesthetic))
+	end
+	if args.genreLabel and args.genreLabel ~= "" then
+		table.insert(parts, args.genreLabel)
+	end
+	return table.concat(parts, " \194\183 ") .. " @ " .. tostring(args.time or "")
+end
+
 return Util

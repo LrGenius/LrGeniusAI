@@ -39,6 +39,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Semantic search using image/text embeddings
 - Metadata field search (`keywords`, `caption`, `title`, `alt_text`)
 - Scope search to current selection/view/catalog
+- Order or restrict results by aesthetic score and genre; with no search term, list the best photos by score
 
 ### People Workflows
 

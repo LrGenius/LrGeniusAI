@@ -90,6 +90,7 @@ local ENDPOINTS = {
 
 	-- Search and culling
 	SEARCH = "/v1/search",
+	SEARCH_GENRES = "/v1/search/genres",
 	FIND_SIMILAR = "/v1/search/similar",
 	GROUP_SIMILAR = "/v1/cull/groups",
 	CULL = "/v1/cull/grade",
@@ -1534,8 +1535,10 @@ end
 -- it was the wire half of a "prettiest / ugliest" feature that had no UI
 -- either — so it is gone rather than left as a field the backend ignores.
 function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
+	local hasTerm = type(searchTerm) == "string" and searchTerm ~= ""
 	local params = {
-		term = searchTerm,
+		-- Optional: without one the backend answers "the best N" by aesthetic score.
+		term = hasTerm and searchTerm or nil,
 	}
 	local cid = getCatalogId()
 	if cid then
@@ -1548,6 +1551,9 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 	local search_sources = nil
 	local relevance_strictness = nil
 	local max_results = nil
+	-- Ranking: `sort`, `minAesthetic`, `genres`, `aestheticWeight` (see
+	-- Util.searchRankingOptions). Absent keys are simply not sent.
+	local ranking = nil
 	if searchOptions then
 		search_sources = {
 			semantic_siglip = searchOptions.semanticSiglip ~= false,
@@ -1556,6 +1562,37 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 		}
 		relevance_strictness = searchOptions.relevanceStrictness
 		max_results = searchOptions.maxResults
+		if
+			searchOptions.sort
+			or searchOptions.minAesthetic
+			or searchOptions.genres
+			or searchOptions.aestheticWeight
+		then
+			ranking = {
+				sort = searchOptions.sort,
+				min_aesthetic = searchOptions.minAesthetic,
+				genres = searchOptions.genres,
+				aesthetic_weight = searchOptions.aestheticWeight,
+			}
+		end
+	end
+
+	local function addTuning(body)
+		if search_sources then
+			body.search_sources = search_sources
+		end
+		if relevance_strictness ~= nil then
+			body.relevance_strictness = relevance_strictness
+		end
+		if max_results ~= nil then
+			body.max_results = max_results
+		end
+		if ranking then
+			for key, value in pairs(ranking) do
+				body[key] = value
+			end
+		end
+		return body
 	end
 
 	if photosToSearch and #photosToSearch > 0 then
@@ -1570,37 +1607,19 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 			end
 		end
 
-		local body = {
-			term = searchTerm,
+		local body = addTuning({
+			term = hasTerm and searchTerm or nil,
 			photo_ids = photoIds,
 			catalog_id = getCatalogId(),
-		}
-		if search_sources then
-			body.search_sources = search_sources
-		end
-		if relevance_strictness ~= nil then
-			body.relevance_strictness = relevance_strictness
-		end
-		if max_results ~= nil then
-			body.max_results = max_results
-		end
+		})
 		local postUrl = buildUrlWithParams(url, params)
 
 		log:trace("Searching index via POST (scoped): " .. postUrl)
 		return _request("POST", postUrl, body)
 	else
 		-- Global search: use POST when search_sources or tuning params are provided so we can send JSON body
-		if search_sources or relevance_strictness ~= nil or max_results ~= nil then
-			local body = { term = searchTerm, catalog_id = getCatalogId() }
-			if search_sources then
-				body.search_sources = search_sources
-			end
-			if relevance_strictness ~= nil then
-				body.relevance_strictness = relevance_strictness
-			end
-			if max_results ~= nil then
-				body.max_results = max_results
-			end
+		if search_sources or relevance_strictness ~= nil or max_results ~= nil or ranking or not hasTerm then
+			local body = addTuning({ term = hasTerm and searchTerm or nil, catalog_id = getCatalogId() })
 			local postUrl = buildUrlWithParams(url, params)
 			log:trace("Searching index via POST (global with options): " .. postUrl)
 			return _request("POST", postUrl, body)
@@ -1609,6 +1628,26 @@ function SearchIndexAPI.searchIndex(searchTerm, photosToSearch, searchOptions)
 		log:trace("Searching index via GET (global): " .. getUrl)
 		return _request("GET", getUrl)
 	end
+end
+
+---
+-- The genres a search can be restricted to, from the classifier's own list.
+--
+-- @return table|nil `{ { id = "macro", label = "Macro" }, ... }` — `other` last — or nil
+--   when the backend is older than the endpoint or unreachable (the dialog then
+--   offers no genre filter rather than a made-up one).
+-- @return string|nil The error, when there is one.
+--
+function SearchIndexAPI.getSearchGenres()
+	local result, err = _request("GET", SearchIndexAPI.url("SEARCH_GENRES"))
+	if err then
+		log:warn("Could not read the genre list: " .. tostring(err))
+		return nil, err
+	end
+	if type(result) ~= "table" or type(result.genres) ~= "table" then
+		return nil, "unexpected answer"
+	end
+	return result.genres
 end
 
 function SearchIndexAPI.getStats()

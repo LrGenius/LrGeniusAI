@@ -238,6 +238,7 @@ producer this build uses*, not merely present:
 | `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
 | `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
+| genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
 | `cull` | no `cull_phash`, or no `cull_faces_present` key |
 | `metadata` | no title, caption, alt_text or keywords |
@@ -294,7 +295,11 @@ Runs a semantic search query against indexed photos.
 
 | Field | Type | Description |
 |---|---|---|
-| `term` | string | Natural language search query. Also accepted as a query-string parameter |
+| `term` | string | Natural language search query. Also accepted as a query-string parameter. **Optional**: without one the search is "the best N" of the scope, ordered by stored aesthetic score, from metadata alone (no text tower, no vectors) |
+| `sort` | string | `relevance`, `aesthetic` or `combined`. Default `relevance` with a term, `aesthetic` without. `relevance` and `combined` without a term are a **400** ("need a search term"), as is an unknown value |
+| `min_aesthetic` | float | Only photos whose current aesthetic score is at least this (1–9). A photo with no score from the current export cannot be judged and is left out |
+| `genres` | array | Only photos whose `genre` is one of these ids (see `GET /v1/search/genres`). A photo with no genre is left out |
+| `aesthetic_weight` | float | `combined` only, 0–1, default 0.5: the share of the ordering that is the aesthetic score rather than relevance |
 | `catalog_id` | string | Restrict to a specific catalog |
 | `photo_ids` | array | Restrict search to specific `photo_id` values (`uuids` is accepted as an alias) |
 | `max_results` | int | Upper bound on results, across **both** halves of the search |
@@ -307,9 +312,31 @@ Runs a semantic search query against indexed photos.
 their intersection. (Until August 2026 the metadata half skipped the catalog
 check whenever `photo_ids` was present, leaking results from other catalogs.)
 
-**Response:** `results` array of `{photo_id, uuid, distance}`. Semantic matches
-come first, ordered by ascending distance; metadata matches follow with
+**Response:** `results` array of `{photo_id, uuid, distance, aesthetic_score, genre, genre_label}`
+(`aesthetic_score` is `null` for a photo with no score from the current export). By
+default semantic matches come first, ordered by ascending distance; metadata matches follow with
 `distance: null` and fill whatever is left of `max_results`.
+
+`sort=aesthetic` orders every match by score, best first. `sort=combined` orders by
+`(1 - w) * relevance + w * (score - 1) / 8`, where relevance is a semantic hit's distance scaled
+between the closest and the farthest of the result set (1 best) and a metadata hit — a literal
+match in the title, caption or keywords, which has no distance — counts as fully relevant. In both,
+matches without a current score go **last**, in their earlier order: they are not on the scale, and
+a warning says how many.
+
+`min_aesthetic` and `genres` are applied **after** the relevance cut, so they never move the cut
+(it is computed over the whole candidate list) and can leave fewer than `max_results`. What they
+drop for want of data, rather than for its value, is counted in `warnings`, since that is a problem
+the user can fix by indexing; a photo that was judged and found short of the minimum is simply not a
+match. Without a term, photos in scope with no score are counted the same way.
+
+`warnings` (a list) and `warning` (the same joined, for clients that predate it) appear whenever
+there is something to say; before this the route only ever returned `warning` for a missing model.
+
+### `GET /v1/search/genres`
+The genres a search can be restricted to, `{"genres": [{"id": "macro", "label": "Macro"}, ...]}`,
+`other` last. From `lrg_ml::genre::GENRES`, the list the classifier itself uses, so a UI never
+offers one the backend cannot name.
 
 ### `POST /v1/search/similar`
 Finds photos similar to a reference photo using perceptual hash (phash) or CLIP embeddings.

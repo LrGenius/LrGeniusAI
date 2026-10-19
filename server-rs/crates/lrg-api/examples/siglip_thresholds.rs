@@ -182,6 +182,17 @@ async fn main() {
                     .push((r.id.clone(), res.confidence));
             }
         }
+        // Named photos, to see how known cases are classified:
+        // SIGLIP_THRESHOLDS_IDS=meta1:abc,meta1:def
+        if let Ok(ids) = std::env::var("SIGLIP_THRESHOLDS_IDS") {
+            for id in ids.split(',') {
+                if let Some((_, v)) = rows.iter().find(|(r, _)| r.id == id.trim()) {
+                    if let Some(res) = classifier.classify(v) {
+                        println!("    genre {:.2} {:14} {id}", res.confidence, res.id);
+                    }
+                }
+            }
+        }
         println!("\ngenre assignment (photo ids per genre, with the winner's softmax share)");
         for (genre, mut photos) in by_genre {
             photos.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());

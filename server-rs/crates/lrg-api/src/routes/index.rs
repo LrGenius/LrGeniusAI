@@ -113,6 +113,9 @@ async fn check_unprocessed(
     // user the model is missing rather than offering the same run forever.
     let current_aesthetic_model = state.aesthetic.model_id();
     let aesthetic_available = state.aesthetic.is_cached();
+    // The genre is made from the stored embedding with prompts the search model
+    // embeds, so there is nothing to bring up to date without that model.
+    let genre_available = state.siglip.is_cached();
     // Which detector/recognizer pair this build writes. A compile-time
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
@@ -220,6 +223,17 @@ async fn check_unprocessed(
                 let needs_aesthetic = compute_aesthetic
                     && aesthetic_available
                     && (regenerate_metadata || !aesthetic_current);
+                // A genre from another version of the genre list (or none yet)
+                // is brought up to date from the stored embedding. A photo with
+                // no embedding is already queued by `needs_embedding`.
+                let genre_current = has_flag(meta::GENRE_FIELD)
+                    && m.get(meta::GENRE_VERSION_FIELD).and_then(Value::as_str)
+                        == Some(lrg_ml::genre::VERSION);
+                let needs_genre = (compute_embeddings || compute_aesthetic)
+                    && genre_available
+                    && has_flag("has_embedding")
+                    && embedding_model_current
+                    && !genre_current;
                 let has_any_metadata = has_flag("title")
                     || has_flag("caption")
                     || has_flag("alt_text")
@@ -250,6 +264,7 @@ async fn check_unprocessed(
                         || !species_head_current);
                 needs_embedding
                     || needs_aesthetic
+                    || needs_genre
                     || needs_metadata
                     || needs_faces
                     || needs_cull_phash
