@@ -152,8 +152,9 @@ For each photo, the backend stores culling-related fields such as:
 - face scores: `cull_face_score`, `cull_face_count`, `cull_face_sharpness`,
   `cull_face_prominence`, `cull_face_visibility`, `cull_eye_openness`,
   `cull_blink_penalty`, `cull_occlusion`
-- aesthetic scores: `cull_aesthetic`, and, computed at cull time from the
-  image analysis, `cull_aesthetic_iqa`
+- aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
+  photo's **Aesthetic score** from the AestheticSigLIP model, stored at
+  indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`
 - moment scores, also computed at cull time: `cull_semantic_iqa` (action,
   expression or candid moment, depending on the preset), `cull_emotion_iqa`
   (Sports and Event) and `cull_eyes_closed_intent_iqa` (kiss or laugh, Event
@@ -209,13 +210,23 @@ many and what to do. Photos without it are ranked on sharpness, exposure and
 faces only, and so is every photo in the same group, so that the frames of one
 burst are always compared on the same terms.
 
-The AI quality score (composition, light, moment), the moment and emotion
-questions and the kiss-or-blink check all need the AI search model once, to
-prepare a set of reference phrases; those are then kept in LrGeniusAI's
-database, so later culling runs never load the model for them. If the model was
-not there for that first step, one culling warning names every score that could
-not be computed, says that ranking ran on the technical measurements alone, and
-how to fix it.
+The moment and emotion questions and the kiss-or-blink check need the AI
+search model once, to prepare a set of reference phrases; those are then kept
+in LrGeniusAI's database, so later culling runs never load the model for them.
+If the model was not there for that first step, one culling warning names every
+score that could not be computed, says that ranking ran on the technical
+measurements alone, and how to fix it.
+
+**The aesthetic score** is separate: every photo gets one when it is indexed (or
+prepared for culling) by the *Photo quality scoring* model, a second download in
+the same **Download AI models** button, and culling reads it from there. It is
+one input among several (sharpness, exposure and faces weigh more) and it only
+orders frames *within* a group, so a photo that scores low is not rejected for
+that alone. Photos indexed before it existed, or scored by an older version of
+the model, have none; the culling warning then says how many and that they were
+ranked on a simpler contrast-and-colour estimate instead, which can compare
+unevenly with scored frames in the same group. Run **Analyze & Index Photos** on
+them to fill it in.
 
 ## Tips for best results
 

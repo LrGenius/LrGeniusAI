@@ -1,56 +1,38 @@
-//! CLIP-IQA: an aesthetic / quality score read straight off the SigLIP2
-//! embedding that indexing already computed and stored.
-//!
-//! What this replaces is `cull_aesthetic`, a weighted sum of contrast,
-//! colourfulness and exposure. That heuristic rewards punchy, saturated frames
-//! and floors muted fine-art portraiture, fog, snow, low-key work and every
-//! desaturated editorial look — it measures how loud a picture is, not how good
-//! it is, and no amount of re-weighting fixes a signal that is asking the wrong
-//! question.
+//! CLIP-IQA: zero-shot scores read straight off the SigLIP2 embedding that
+//! indexing already computed and stored.
 //!
 //! The method (Wang, Chan & Loy, *Exploring CLIP for Assessing the Look and
 //! Feel of Images*) is to ask the model directly, with pairs of opposed
-//! prompts: embed "a good photo" and "a bad photo", and score an image by which
-//! it sits closer to. The prompts cost one text-tower pass, once per model:
-//! the backend keeps their vectors in the database's `text_embeddings` table
-//! (`lrg-api`'s `prompt_embeddings`), so after the first run nothing loads the
-//! text tower for them at all. Every photo is then a handful of dot products
-//! against a vector the database already holds. There is no per-photo image
-//! inference, which is what makes this affordable in the culling hot path
-//! where a learned IQA model would not be.
+//! prompts: embed "a photo of an athlete in mid-air" and "a photo of an
+//! athlete standing still", and score an image by which it sits closer to. The
+//! prompts cost one text-tower pass, once per model: the backend keeps their
+//! vectors in the database's `text_embeddings` table (`lrg-api`'s
+//! `prompt_embeddings`), so after the first run nothing loads the text tower for
+//! them at all. Every photo is then a handful of dot products against a vector
+//! the database already holds. There is no per-photo image inference, which is
+//! what makes this affordable in the culling hot path.
+//!
+//! **What this no longer does is judge overall quality.** A "good photo / bad
+//! photo" pair set used to feed the aesthetic term of culling; that is now the
+//! AestheticSigLIP score stored with every photo (`crate::aesthetic`), a model
+//! trained for exactly that question. What remains here are the questions a
+//! general aesthetic model cannot answer: the *moment* (action, expression,
+//! candid, emotion), whether closed eyes are meant, and whether an organism is
+//! in the frame.
 //!
 //! It applies only to photos that carry an embedding, so the fast `tasks=cull`
-//! ingest — which deliberately skips SigLIP2 — degrades to the old heuristic
+//! ingest — which deliberately skips SigLIP2 — degrades to ranking without it
 //! rather than failing.
 
 use crate::siglip::l2_normalize;
 
-/// Opposed prompt pairs, `(positive, negative)`.
+/// Opposed prompt pairs are `(positive, negative)`; every set below follows the
+/// CLIP-IQA recipe. Kept few and plainly worded on purpose: its own ablation
+/// finds short unadorned antonyms beat elaborate prompts, and every pair added
+/// is another text-tower row plus another axis along which the score can be
+/// diluted.
 ///
-/// Kept few and plainly worded on purpose. CLIP-IQA's own ablation finds short
-/// unadorned antonyms beat elaborate prompts, and every pair added is another
-/// text-tower row plus another axis along which the score can be diluted.
-///
-/// The set spans the three judgements culling's other signals cannot make:
-/// whether the frame reads as a *good photograph* at all, whether its light is
-/// working, and whether it is composed. Sharpness and exposure are deliberately
-/// *not* asked about — those are measured directly and far more reliably from
-/// pixels, and duplicating them here would just add a noisy second opinion.
-pub const DEFAULT_PROMPT_PAIRS: &[(&str, &str)] = &[
-    ("a good photo.", "a bad photo."),
-    ("a beautiful photo.", "an ugly photo."),
-    (
-        "a well-composed photograph.",
-        "a badly composed photograph.",
-    ),
-    (
-        "a photo with beautiful lighting.",
-        "a photo with bad lighting.",
-    ),
-    ("an interesting photo.", "a boring photo."),
-];
-
-/// Prompt pairs for *moment* rather than quality: is this the frame where
+/// Prompt pairs for the *moment*: is this the frame where
 /// something is happening?
 ///
 /// This exists because of a concrete complaint about a soccer series. In a
@@ -306,8 +288,6 @@ pub const ORGANISM_PROMPT_PAIRS: &[(&str, &str)] = &[
 /// - *Animal eye sharpness.* Needs detection, not a global scene judgement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PromptSet {
-    /// Is this a good photograph? [`DEFAULT_PROMPT_PAIRS`].
-    Quality,
     /// Is something happening in it? [`ACTION_PROMPT_PAIRS`].
     Action,
     /// Is the face working? [`EXPRESSION_PROMPT_PAIRS`].
@@ -333,7 +313,6 @@ pub enum PromptSet {
 impl PromptSet {
     pub fn pairs(self) -> &'static [(&'static str, &'static str)] {
         match self {
-            PromptSet::Quality => DEFAULT_PROMPT_PAIRS,
             PromptSet::Action => ACTION_PROMPT_PAIRS,
             PromptSet::Expression => EXPRESSION_PROMPT_PAIRS,
             PromptSet::Candid => CANDID_PROMPT_PAIRS,
@@ -356,7 +335,6 @@ impl PromptSet {
     /// cannot depend on this crate.
     pub fn as_str(self) -> &'static str {
         match self {
-            PromptSet::Quality => "quality",
             PromptSet::Action => "action",
             PromptSet::Expression => "expression",
             PromptSet::Candid => "candid",
@@ -371,7 +349,6 @@ impl PromptSet {
     /// config typo the caller should ignore and log, not an error to propagate.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "quality" => Some(PromptSet::Quality),
             "action" => Some(PromptSet::Action),
             "expression" => Some(PromptSet::Expression),
             "candid" => Some(PromptSet::Candid),
@@ -383,8 +360,7 @@ impl PromptSet {
         }
     }
 
-    /// The genre-selectable grading axes: every set except
-    /// [`PromptSet::Quality`], which always applies, and the two gates —
+    /// The genre-selectable grading axes: every set except the two gates —
     /// [`PromptSet::Organism`] for the species task and
     /// [`PromptSet::EyesClosedIntent`] for the blink penalty — which decide
     /// whether something runs rather than grading anything.
@@ -397,8 +373,7 @@ impl PromptSet {
     ];
 
     /// Every set, so the invariant tests cannot silently skip a new one.
-    pub const ALL: [PromptSet; 8] = [
-        PromptSet::Quality,
+    pub const ALL: [PromptSet; 7] = [
         PromptSet::Action,
         PromptSet::Expression,
         PromptSet::Candid,
@@ -585,8 +560,8 @@ mod tests {
     fn from_lookup_normalizes_what_it_is_given() {
         let pos = vec![10.0, 0.0];
         let neg = vec![0.0, 0.5];
-        let p = IqaPrompts::from_lookup(PromptSet::Quality, |t| {
-            if PromptSet::Quality.pairs().iter().any(|(a, _)| *a == t) {
+        let p = IqaPrompts::from_lookup(PromptSet::Candid, |t| {
+            if PromptSet::Candid.pairs().iter().any(|(a, _)| *a == t) {
                 Some(pos.as_slice())
             } else {
                 Some(neg.as_slice())

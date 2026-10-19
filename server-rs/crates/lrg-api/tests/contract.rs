@@ -666,6 +666,17 @@ async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
             );
             meta.insert("cull_exposure".into(), serde_json::json!(0.8));
             meta.insert("cull_noise".into(), serde_json::json!(0.1));
+            // A current score, so a cull over these photos has nothing to say
+            // about missing ones; descending like the sharpness, so the winner
+            // is still photo 0.
+            meta.insert(
+                "aesthetic_score".into(),
+                serde_json::json!(7.0 - 0.1 * i as f64),
+            );
+            meta.insert(
+                "aesthetic_model".into(),
+                serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+            );
             lrg_store::StoreRecord {
                 id: format!("burst{i}"),
                 vector: with_embedding.then(|| vec![0.5f32; 1152]),
@@ -953,18 +964,18 @@ async fn cull_warns_when_no_embeddings_are_stored() {
 }
 
 /// Photos with embeddings, but no stored prompt vectors and no model to make
-/// them: neither the quality score nor the moment can be computed, and the
-/// ranking that skipped them has to say so — and say how to fix it.
+/// them: the moment cannot be judged, and the ranking that skipped it has to
+/// say so — and say how to fix it.
 #[tokio::test]
-async fn cull_warns_when_quality_scoring_has_no_prompts() {
+async fn cull_warns_when_the_moment_has_no_prompts() {
     let dir = tempfile::tempdir().unwrap();
     let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
     let (app, state) = fresh_app();
     state.ensure_db_path(&db_path_str).await.unwrap();
     seed_burst(&state, 3, true).await;
 
-    // `sports` ranks with quality, the action set and the sport emotion set,
-    // so three sets miss for one cause.
+    // `sports` ranks with the action set and the sport emotion set, so two sets
+    // miss for one cause.
     let json = cull_request(
         app,
         serde_json::json!({
@@ -985,9 +996,7 @@ async fn cull_warns_when_quality_scoring_has_no_prompts() {
     assert_eq!(warnings.len(), 1, "{json}");
     let warning = warnings[0].as_str().unwrap();
     assert!(
-        warning.contains("quality score")
-            && warning.contains("moment")
-            && warning.contains("Download AI models"),
+        warning.contains("moment") && warning.contains("Download AI models"),
         "expected one caveat naming every lost signal and the fix, got {warning:?}"
     );
     // The string the plug-in shows carries it too.
@@ -1000,6 +1009,16 @@ async fn cull_warns_when_quality_scoring_has_no_prompts() {
 async fn a_second_database_is_filled_with_prompts_from_memory() {
     let (app, state) = fresh_app();
 
+    // `sports` is a preset that asks the prompts questions: the default one
+    // ranks on stored numbers alone and reads none.
+    let cull = |db: &str| {
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "culling_preset": "sports",
+            "db_path": db,
+        })
+    };
+
     let first = tempfile::tempdir().unwrap();
     let first_db = first
         .path()
@@ -1010,11 +1029,7 @@ async fn a_second_database_is_filled_with_prompts_from_memory() {
     state.ensure_db_path(&first_db).await.unwrap();
     seed_burst(&state, 3, true).await;
     seed_prompt_embeddings(&state).await;
-    let json = cull_request(
-        app.clone(),
-        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": first_db}),
-    )
-    .await;
+    let json = cull_request(app.clone(), cull(&first_db)).await;
     assert!(json["warning"].is_null(), "{json}");
 
     let second = tempfile::tempdir().unwrap();
@@ -1026,28 +1041,172 @@ async fn a_second_database_is_filled_with_prompts_from_memory() {
         .to_string();
     state.ensure_db_path(&second_db).await.unwrap();
     seed_burst(&state, 3, true).await;
+    let json = cull_request(app, cull(&second_db)).await;
+    assert!(json["warning"].is_null(), "{json}");
+
+    // What this cull read: the sets the preset ranks with, nothing else copied.
+    let ranking = lrg_analysis::culling_config::get_culling_config("sports").ranking;
+    let mut wanted: Vec<String> = [ranking.semantic_prompt_set, ranking.emotion_prompt_set]
+        .into_iter()
+        .flatten()
+        .filter_map(lrg_ml::clip_iqa::PromptSet::from_name)
+        .flat_map(|set| set.texts().map(str::to_string).collect::<Vec<_>>())
+        .collect();
+    if ranking.eyes_closed_intent_threshold > 0.0 {
+        wanted.extend(
+            lrg_ml::clip_iqa::PromptSet::EyesClosedIntent
+                .texts()
+                .map(str::to_string),
+        );
+    }
+    wanted.sort();
+    wanted.dedup();
+    assert!(!wanted.is_empty());
+    let store = state.store().unwrap();
+    let copied = store
+        .get_text_embeddings(lrg_ml::siglip::MODEL_ID, &wanted)
+        .await
+        .unwrap();
+    assert_eq!(copied.len(), wanted.len());
+    assert_eq!(
+        store.count(lrg_store::TEXT_EMBEDDING_TABLE).await.unwrap(),
+        wanted.len()
+    );
+}
+
+/// The default preset asks the prompts nothing, so a cull on it neither needs
+/// nor writes any — and has no text tower to miss.
+#[tokio::test]
+async fn the_default_cull_reads_no_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    seed_burst(&state, 3, true).await;
     let json = cull_request(
         app,
-        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": second_db}),
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db}),
     )
     .await;
     assert!(json["warning"].is_null(), "{json}");
-    // What this cull read: the quality set, which the default preset is
-    // ranked with. Nothing it did not need is copied over.
-    let quality: Vec<String> = lrg_ml::clip_iqa::PromptSet::Quality
-        .texts()
-        .map(str::to_string)
+    assert_eq!(
+        state
+            .store()
+            .unwrap()
+            .count(lrg_store::TEXT_EMBEDDING_TABLE)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// Seeds two frames that differ in nothing but their aesthetic score (and the
+/// heuristic, which prefers the other one), and returns the id the cull picks.
+async fn winner_among_equal_frames(scores: [(f64, &str); 2], heuristic: [f64; 2]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let records: Vec<lrg_store::StoreRecord> = (0..2)
+        .map(|i| {
+            let mut m = serde_json::Map::new();
+            m.insert("filename".into(), serde_json::json!(format!("f{i}.jpg")));
+            m.insert("capture_time".into(), serde_json::json!(1_700_000_000 + i));
+            m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+            m.insert("cull_sharpness".into(), serde_json::json!(0.7));
+            m.insert("cull_exposure".into(), serde_json::json!(0.8));
+            m.insert("cull_noise".into(), serde_json::json!(0.1));
+            m.insert("cull_aesthetic".into(), serde_json::json!(heuristic[i]));
+            m.insert("aesthetic_score".into(), serde_json::json!(scores[i].0));
+            m.insert("aesthetic_model".into(), serde_json::json!(scores[i].1));
+            lrg_store::StoreRecord {
+                id: format!("frame{i}"),
+                vector: None,
+                metadata: m,
+            }
+        })
         .collect();
-    let store = state.store().unwrap();
-    let copied = store
-        .get_text_embeddings(lrg_ml::siglip::MODEL_ID, &quality)
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
         .await
         .unwrap();
-    assert_eq!(copied.len(), quality.len());
-    assert_eq!(
-        store.count(lrg_store::TEXT_EMBEDDING_TABLE).await.unwrap(),
-        quality.len()
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["frame0", "frame1"], "db_path": db}),
+    )
+    .await;
+    json["groups"][0]["winner_photo_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The stored model score moves the pick, against the heuristic: frame 0 looks
+/// punchier to the heuristic, the model scores frame 1 higher.
+#[tokio::test]
+async fn cull_prefers_the_frame_the_aesthetic_model_scores_higher() {
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    let winner = winner_among_equal_frames([(5.0, current), (7.5, current)], [0.9, 0.2]).await;
+    assert_eq!(winner, "frame1");
+}
+
+/// A score from another export is not comparable with this one's, so it must
+/// not decide anything: the heuristic does, and the cull says the scores are
+/// missing.
+#[tokio::test]
+async fn cull_ignores_a_score_from_another_export() {
+    let winner = winner_among_equal_frames(
+        [(5.0, "another-export"), (7.5, "another-export")],
+        [0.9, 0.2],
+    )
+    .await;
+    assert_eq!(winner, "frame0");
+}
+
+/// Photos indexed before scoring existed rank on the heuristic and say so, once.
+#[tokio::test]
+async fn cull_warns_once_about_photos_without_an_aesthetic_score() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    // Strip the scores the helper adds: these are photos from before scoring.
+    let store = state.store().unwrap();
+    let mut rows = store
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &[
+                "burst0".to_string(),
+                "burst1".to_string(),
+                "burst2".to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+    for row in &mut rows {
+        row.metadata.remove("aesthetic_score");
+        row.metadata.remove("aesthetic_model");
+    }
+    store.upsert(lrg_store::IMAGE_TABLE, &rows).await.unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db}),
+    )
+    .await;
+    assert_eq!(json["status"], "success");
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.starts_with("3 photo(s) have no aesthetic score"),
+        "{warning:?}"
     );
+    // The test app has no scorer on disk, so the fix named is the download.
+    assert!(warning.contains("Download AI models"), "{warning:?}");
 }
 
 /// Binding a database stamps the embedding identity on rows written before

@@ -369,10 +369,10 @@ mod tests {
     fn texts_of_lists_exactly_the_sets_asked_for() {
         let texts = texts_of(&[PromptSet::Organism]);
         assert_eq!(texts, PromptSet::Organism.texts().collect::<Vec<_>>());
-        let both = texts_of(&[PromptSet::Quality, PromptSet::Action]);
+        let both = texts_of(&[PromptSet::Candid, PromptSet::Action]);
         assert_eq!(
             both.len(),
-            2 * (PromptSet::Quality.pairs().len() + PromptSet::Action.pairs().len())
+            2 * (PromptSet::Candid.pairs().len() + PromptSet::Action.pairs().len())
         );
         assert!(!both.contains(&PromptSet::Organism.texts().next().unwrap()));
     }
@@ -410,7 +410,7 @@ mod tests {
         let partial = PromptEmbeddings::new(embeddings_for(&texts), Some("why".into()));
         assert!(!partial.has_all(&fixed_prompts()));
         assert!(partial.prompt_set(PromptSet::Organism).is_none());
-        assert!(partial.prompt_set(PromptSet::Quality).is_some());
+        assert!(partial.prompt_set(PromptSet::Candid).is_some());
         assert_eq!(partial.problem(), Some("why"));
     }
 

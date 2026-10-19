@@ -109,7 +109,17 @@ desaturated editorial look.
 Both are ~zero marginal cost per photo and replace a heuristic that is actively wrong. They
 apply only when embeddings exist, so the fast cull path degrades to technical signals.
 
-> **Status.** The CLIP-IQA route shipped (`lrg-ml/src/clip_iqa.rs`); the LAION head did not,
+> **Status (superseded).** The aesthetic term is now the **AestheticSigLIP** score stored with
+> each photo at index time (`lrg-ml/src/aesthetic.rs`; a SigLIP 2 NaFlex model fine-tuned to
+> score photos 1 to 9), scaled to 0..1 and blended with the heuristic at `aesthetic_model_weight`
+> (0.9). It replaced the five "good photo / bad photo" prompt pairs described next, which a
+> model trained for exactly that question outperforms, and which cost a text-tower pass and an
+> embedding. The CLIP-IQA machinery stays for the questions a general aesthetic model cannot
+> answer: the moment, the kiss gate and the organism gate. The weight is chosen, not tuned: the
+> fixtures are synthetic and carry no model scores. What follows is the earlier status, kept
+> because the reasoning about prompts still holds for those sets.
+>
+> **Earlier status.** The CLIP-IQA route shipped (`lrg-ml/src/clip_iqa.rs`); the LAION head did not,
 > because it would mean shipping and versioning another weights file for a signal the prompt
 > pairs already provide. Five pairs, embedded once per model and stored in the `text_embeddings` table,
 > then a two-way softmax over cosine similarity per pair. The **logit scale of 100 is load

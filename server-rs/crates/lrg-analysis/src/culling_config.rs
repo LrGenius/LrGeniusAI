@@ -118,11 +118,19 @@ pub struct RankingConfig {
     /// relative normalisation engages. Below this the group agrees, and
     /// stretching noise to fill 0..1 would manufacture a ranking out of it.
     pub relative_min_spread: f64,
-    /// How much of the aesthetic signal comes from CLIP-IQA over the stored
-    /// SigLIP2 embedding rather than the contrast/colourfulness heuristic.
-    /// Only applies to photos that actually have an embedding *and* a
-    /// reachable text tower; otherwise the heuristic carries the full weight.
-    pub aesthetic_iqa_weight: f64,
+    /// How much of the aesthetic signal comes from the AestheticSigLIP score
+    /// stored with the photo (`aesthetic_score`, scaled to `0..1` by the API
+    /// layer as `cull_aesthetic_model`) rather than the contrast/colourfulness
+    /// heuristic. Only applies to photos that have a score from the current
+    /// export; otherwise the heuristic carries the full weight.
+    ///
+    /// High because the heuristic is the weaker judge: it floors muted and
+    /// low-key work and cannot tell composition from contrast. It is not 1.0 so
+    /// that a frame the model is unsure about is still moved by what the pixels
+    /// say about exposure and colour. **Chosen, not tuned**: the fixtures under
+    /// `testdata/cull_eval` are synthetic and carry no model scores, so no
+    /// number here has been fitted to real picks.
+    pub aesthetic_model_weight: f64,
     /// Which zero-shot semantic axis this genre is judged on, if any:
     /// `"action"`, `"expression"` or `"candid"`. `None` disables the pass.
     ///
@@ -307,7 +315,7 @@ impl CullingConfig {
     ///   cannot see the fix (outstanding item 1)
     /// - `relative_normalization_weight` — absolute exposure/noise targets are
     ///   the wrong question inside a group (item 5)
-    /// - `aesthetic_iqa_weight` — the contrast/colourfulness heuristic floors
+    /// - `aesthetic_model_weight` — the contrast/colourfulness heuristic floors
     ///   muted and low-key work (item 4)
     /// - `sets.enabled` and `grouping.bracket_edges` — brackets and stacks were
     ///   being culled, and could not even be grouped (item 2)
@@ -319,7 +327,7 @@ impl CullingConfig {
         cfg.ranking.sharpness_peak_weight = 0.0;
         cfg.ranking.recompute_technical_score = false;
         cfg.ranking.relative_normalization_weight = 0.0;
-        cfg.ranking.aesthetic_iqa_weight = 0.0;
+        cfg.ranking.aesthetic_model_weight = 0.0;
         cfg.sets.enabled = false;
         cfg.grouping.bracket_edges = false;
         cfg.ranking.usable_gate = false;
@@ -370,7 +378,7 @@ const BASE: CullingConfig = CullingConfig {
         recompute_technical_score: true,
         relative_normalization_weight: 0.5,
         relative_min_spread: 0.03,
-        aesthetic_iqa_weight: 0.8,
+        aesthetic_model_weight: 0.9,
         // No axis by default: "default" spans every genre, and there is no
         // question that is right for all of them.
         semantic_prompt_set: None,

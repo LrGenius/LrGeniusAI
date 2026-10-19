@@ -543,7 +543,7 @@ restores the one-at-a-time behaviour.
 
 The SigLIP2 text tower (about 1 GB resident) is kept out of indexing, culling
 and the edit routes altogether. What they score photos against is fixed text —
-the CLIP-IQA prompts, the organism gate in front of BioCLIP, the scene probes —
+the CLIP-IQA moment prompts, the genre classifier, the organism gate in front of BioCLIP, the scene probes —
 and its vectors are stored in the `text_embeddings` LanceDB table, keyed by
 `model_id` and `text` (`lrg-api/src/prompt_embeddings.rs`). A request that needs
 a prompt the table lacks runs the text tower for it once, stores the result, and

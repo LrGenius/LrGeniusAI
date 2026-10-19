@@ -340,7 +340,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `culling_preset` | string | `default`, `portrait`, `street`, `event` or `sports`. 400 with `available_presets` for anything else |
 | `time_delta_seconds` | int | Burst window. Absent means the preset's own |
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
-| `use_iqa` | bool | Score the CLIP-IQA signals (aesthetic, moment, kiss gate) over the stored SigLIP2 embeddings. Default true |
+| `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
@@ -367,6 +367,14 @@ below usable ones.
 | `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
+The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a
+photo whose `aesthetic_model` is this build's, scaled `(s - 1) / 8` to `0..1`, injected as
+`cull_aesthetic_model` (so it appears in `stored_metadata`) and blended with the heuristic at
+`aesthetic_model_weight` (0.9, a chosen value rather than a tuned one). A score from another export
+counts as missing. It needs no embedding and no text tower, so it is independent of `use_iqa`. The
+number of ranked photos without one is said once in `warnings`, with the fix that fits: scoring them,
+or downloading the model first.
+
 Both routes return `warnings`, every caveat for the run as a list, and `warning`, the same
 caveats joined into the one string the plugin shows (`null` when there are none). Besides photos
 that were never analyzed and photos without embeddings, a caveat is raised when an AI signal the
@@ -375,7 +383,7 @@ embedding against fixed prompt vectors, and those were neither in the database n
 the text tower, almost always because the SigLIP2 model is not downloaded. The signals lost to that
 one cause share one message, and ranking rests on the technical measurements alone.
 
-The prompt vectors — CLIP-IQA quality, genre and emotion sets, the culling kiss gate, the organism
+The prompt vectors — the CLIP-IQA moment and emotion sets, the genre classifier, the culling kiss gate, the organism
 gate `/v1/index/photos` uses in front of BioCLIP, the scene probes of `/v1/edit/training` and
 `/v1/edit/style` — live in the `text_embeddings` table (`model_id`, `text`, `vector`). A request prepares the prompts it needs
 once, before any per-photo work: from memory, else from the table for this build's

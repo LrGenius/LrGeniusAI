@@ -387,14 +387,15 @@ fn rank_group_records(
             } else {
                 metric(m, "cull_technical_score", technical_default)
             };
-            // `cull_aesthetic_iqa` is injected by the API layer from a CLIP-IQA
-            // pass over the stored SigLIP2 embedding. Absent for photos with no
-            // embedding, or when the text tower could not be reached.
+            // `cull_aesthetic_model` is injected by the API layer from the
+            // AestheticSigLIP score stored with the photo, scaled to 0..1.
+            // Absent for a photo that has no score from the current export, in
+            // which case the heuristic carries the whole aesthetic term.
             let aesthetic_heuristic = metric(m, "cull_aesthetic", 0.0);
-            let aesthetic_score = match m.get("cull_aesthetic_iqa").and_then(Value::as_f64) {
-                Some(iqa) => {
-                    let w = cfg.ranking.aesthetic_iqa_weight.clamp(0.0, 1.0);
-                    unit((1.0 - w) * aesthetic_heuristic + w * unit(iqa))
+            let aesthetic_score = match m.get("cull_aesthetic_model").and_then(Value::as_f64) {
+                Some(model) => {
+                    let w = cfg.ranking.aesthetic_model_weight.clamp(0.0, 1.0);
+                    unit((1.0 - w) * aesthetic_heuristic + w * unit(model))
                 }
                 None => aesthetic_heuristic,
             };
@@ -1525,13 +1526,13 @@ mod tests {
         assert!(code_for("defocused").contains(&"blurred".to_string()));
     }
 
-    /// The IQA score, when the API layer supplies one, must move the aesthetic
-    /// term — otherwise the whole CLIP-IQA path is decorative.
+    /// The model's score, when the API layer supplies one, must move the
+    /// aesthetic term — otherwise the whole path is decorative.
     #[test]
-    fn an_injected_iqa_score_overrides_the_heuristic() {
+    fn an_injected_model_score_overrides_the_heuristic() {
         let hash = Some(0x5555_5555_5555_5555);
-        // Identical technically; the heuristic prefers `punchy`, IQA prefers
-        // `muted`. IQA carries 0.8 of the aesthetic term by default.
+        // Identical technically; the heuristic prefers `punchy`, the model
+        // prefers `muted`. The model carries 0.9 of the aesthetic term by default.
         let punchy = with_metrics(
             rec("punchy", Some(1000.0), hash),
             &[
@@ -1539,7 +1540,7 @@ mod tests {
                 ("cull_exposure", 0.7),
                 ("cull_noise", 0.1),
                 ("cull_aesthetic", 0.9),
-                ("cull_aesthetic_iqa", 0.2),
+                ("cull_aesthetic_model", 0.2),
             ],
         );
         let muted = with_metrics(
@@ -1549,7 +1550,7 @@ mod tests {
                 ("cull_exposure", 0.7),
                 ("cull_noise", 0.1),
                 ("cull_aesthetic", 0.2),
-                ("cull_aesthetic_iqa", 0.9),
+                ("cull_aesthetic_model", 0.9),
             ],
         );
         assert_eq!(winner_of(&run(vec![punchy, muted])), "muted");

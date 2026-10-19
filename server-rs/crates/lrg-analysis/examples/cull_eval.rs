@@ -63,7 +63,7 @@ fn ablate(mut cfg: CullingConfig, knob: &str) -> CullingConfig {
             cfg.ranking.recompute_technical_score = false;
         }
         "relative" => cfg.ranking.relative_normalization_weight = 0.0,
-        "iqa" => cfg.ranking.aesthetic_iqa_weight = 0.0,
+        "aesthetic-model" => cfg.ranking.aesthetic_model_weight = 0.0,
         "semantic" => cfg.ranking.semantic_weight = 0.0,
         "emotion" => cfg.ranking.emotion_prompt_set = None,
         "usable-gate" => cfg.ranking.usable_gate = false,

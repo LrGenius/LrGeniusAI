@@ -568,13 +568,12 @@ Covers outstanding items 1, 2, 4, 5, 6 and 10 of the previous list.
   still happens so the set has a representative frame, but nothing is ever
   nominated for rejection. Surfaced as `keep_all` / `intentional_set` on each
   group and a dedicated Lightroom collection.
-- **CLIP-IQA aesthetics** (`lrg-ml::clip_iqa`). Five antonym prompt pairs
-  embedded once per model and stored in the database's `text_embeddings`
-  table; every photo is then a handful of dot products against the SigLIP2
-  vector already in the database. Blended against
-  the old heuristic at `aesthetic_iqa_weight` (0.8). Degrades silently to the
-  heuristic when there is no embedding, and to the heuristic plus a caveat in
-  the response when the prompt vectors cannot be had.
+- **Aesthetics** (`lrg-ml::aesthetic`). *Superseded:* this first used five
+  CLIP-IQA antonym prompt pairs over the SigLIP2 embedding. It is now the
+  AestheticSigLIP score stored with each photo at index time, scaled to 0..1
+  and blended against the old heuristic at `aesthetic_model_weight` (0.9). A
+  photo without a score from the current export ranks on the heuristic alone,
+  and the cull says how many did, once.
 - **Group-relative exposure.** The absolute target of mean luminance 0.5 marks
   every frame of a low-key set as badly exposed and then cannot tell them apart.
   Exposure is now blended toward its position in the group's own range
@@ -818,7 +817,8 @@ model: everything is answered from the stored SigLIP2 embedding.
   moment was not judged, or prompt vectors that were neither in the
   `text_embeddings` table nor obtainable from the text tower — one message for
   every signal that cause took out. The emotion and kiss-gate prompts are
-  prepared together with the quality set, in one text-tower pass the first time
+  prepared together (formerly with a quality set, since replaced by the stored
+  aesthetic score), in one text-tower pass the first time
   and from the database after that. `apply_prompt_scores` returns `None` for a
   set it could not score instead of 0.
 - **The plugin prepares what the preset needs**: `Util.cullPrepTasks` adds
