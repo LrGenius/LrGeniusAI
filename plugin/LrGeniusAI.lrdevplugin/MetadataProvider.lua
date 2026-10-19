@@ -241,7 +241,7 @@ return {
 		},
 	},
 
-	schemaVersion = 34,
+	schemaVersion = 35,
 	updateFromEarlierSchemaVersion = function(catalog, previousSchemaVersion, progressScope)
 		catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then
