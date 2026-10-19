@@ -76,6 +76,7 @@ return {
 		},
 		{
 			id = "aiEditRecipe",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/AiEditRecipeJson=AI edit recipe JSON"),
 			dataType = "string",
 			readOnly = true,
 			searchable = false,
@@ -205,6 +206,7 @@ return {
 		-- clearing or rewriting these photo fields would change lastEditTime.
 		{
 			id = "globalPhotoId",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoId=Global Photo ID"),
 			dataType = "string",
 			readOnly = true,
 			searchable = true,
@@ -213,6 +215,7 @@ return {
 		},
 		{
 			id = "globalPhotoIdFileSize",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoIdFileSize=Global Photo ID File Size"),
 			dataType = "string",
 			readOnly = true,
 			searchable = false,
@@ -220,6 +223,9 @@ return {
 		},
 		{
 			id = "globalPhotoIdFileModificationDate",
+			title = LOC(
+				"$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoIdModificationDate=Global Photo ID File Modification Date"
+			),
 			dataType = "string",
 			readOnly = true,
 			searchable = false,
@@ -227,6 +233,7 @@ return {
 		},
 		{
 			id = "globalPhotoIdAlgorithm",
+			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoIdAlgorithm=Global Photo ID Algorithm"),
 			dataType = "string",
 			readOnly = true,
 			searchable = false,
