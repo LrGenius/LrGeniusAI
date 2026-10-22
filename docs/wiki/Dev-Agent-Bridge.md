@@ -115,7 +115,7 @@ know comes back as "update the plugin".
 |---|---|---|---|
 | `get_status` (part) | `status` | – | catalog, selection, sources, versions |
 | any tool given `set: "selection"`/`"view"` | `get_photos` | – | `view` = photos of the active folders/collections; filter bar not applied |
-| `find_photos_in_catalog` | `find_photos` | – | `catalog:findPhotos`; capture dates filtered in Lua |
+| `find_photos_in_catalog` | `find_photos` | – | `catalog:findPhotos` for text, folder, collection, camera, lens, keywords and `edited`; rating, flag, colour label and file type checked per photo against `batchGetRawMetadata` (findPhotos returned no photos for those in LrC 15.6); capture dates filtered in Lua |
 | `get_photo_details` (part) | `photo_info` | – | batched metadata reads |
 | `view_photo` | `render_preview` | – | `LrExportSession` JPEG in the temp folder; the backend reads and deletes it |
 | `show_in_lightroom` | `show_photos` | own collection only | allowed when read-only; "LrGeniusAI Agent" set |

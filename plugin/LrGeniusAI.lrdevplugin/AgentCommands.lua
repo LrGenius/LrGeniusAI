@@ -92,37 +92,28 @@ function AgentCommands.splitPath(path)
 	return parts
 end
 
+--- Lightroom's colour name for a photo's label, as the agent sends them.
+--- Photos without a label come back as "gray" (LrC 15.6) or "white", not as
+--- nil, so anything that is not one of the five label colours is "none".
+function AgentCommands.labelName(raw)
+	local name = type(raw) == "string" and raw:lower() or nil
+	if name and LABEL_NUMBERS[name] then
+		return name
+	end
+	return "none"
+end
+
 --- Turns the agent's find_photos criteria into a catalog:findPhotos search
---- descriptor. Capture dates are not part of it: they are filtered in Lua
---- afterwards (see dateRange), which is exact where the smart-collection date
---- operators are not. Returns nil when no criterion maps to findPhotos, which
---- means "start from every photo".
+--- descriptor, for the criteria that search text and catalog structure.
+--- Capture dates, ratings, flags, colour labels and file types are not part
+--- of it: they are checked against each photo's own metadata afterwards (see
+--- buildMetadataFilter). Returns nil when no criterion maps to findPhotos,
+--- which means "start from every photo".
 function AgentCommands.buildSearchDesc(criteria)
 	criteria = criteria or {}
 	local entries = {}
 	local function add(entry)
 		entries[#entries + 1] = entry
-	end
-	if criteria.rating_min ~= nil then
-		add({ criteria = "rating", operation = ">=", value = tonumber(criteria.rating_min) })
-	end
-	if criteria.rating_max ~= nil then
-		add({ criteria = "rating", operation = "<=", value = tonumber(criteria.rating_max) })
-	end
-	if criteria.flag ~= nil then
-		local value = FLAG_VALUES[tostring(criteria.flag):lower()]
-		if value == nil then
-			error('flag must be "pick", "reject" or "unflagged".')
-		end
-		add({ criteria = "pick", operation = "==", value = value })
-	end
-	if criteria.color_label ~= nil then
-		local label = tostring(criteria.color_label):lower()
-		local value = LABEL_NUMBERS[label] or (label == "none" and "none" or nil)
-		if value == nil then
-			error("color_label must be red, yellow, green, blue, purple or none.")
-		end
-		add({ criteria = "labelColor", operation = "==", value = value })
 	end
 	if criteria.text then
 		add({ criteria = "all", operation = "all", value = criteria.text })
@@ -138,13 +129,6 @@ function AgentCommands.buildSearchDesc(criteria)
 	end
 	if criteria.lens then
 		add({ criteria = "lens", operation = "all", value = criteria.lens })
-	end
-	if criteria.file_type then
-		local format = FILE_FORMATS[tostring(criteria.file_type):lower()]
-		if not format then
-			error("file_type must be raw, dng, jpeg, tiff, png, psd, psb, avif, jxl or video.")
-		end
-		add({ criteria = "fileFormat", operation = "==", value = format })
 	end
 	if criteria.edited ~= nil then
 		add({ criteria = "hasAdjustments", operation = criteria.edited and "isTrue" or "isFalse", value = true })
@@ -164,6 +148,87 @@ function AgentCommands.buildSearchDesc(criteria)
 	end
 	entries.combine = "intersect"
 	return entries
+end
+
+--- The find_photos criteria that are checked against each photo's own
+--- metadata (catalog:batchGetRawMetadata), not with catalog:findPhotos.
+--- findPhotos answered the rating, pick, labelColor and fileFormat criteria
+--- with no photos at all in LrC 15.6 — rating_min 1 found nothing in a
+--- catalog full of 4-star photos — while photo_info reads the same values
+--- correctly. Matching them here is exact and does not depend on the
+--- smart-collection operators.
+---
+--- Returns the raw metadata keys to fetch and a predicate over one photo's
+--- raw metadata, or nil when no such criterion is given.
+function AgentCommands.buildMetadataFilter(criteria)
+	criteria = criteria or {}
+	local keys, checks = {}, {}
+	local function need(key)
+		for _, k in ipairs(keys) do
+			if k == key then
+				return
+			end
+		end
+		keys[#keys + 1] = key
+	end
+
+	local ratingMin = criteria.rating_min ~= nil and tonumber(criteria.rating_min) or nil
+	local ratingMax = criteria.rating_max ~= nil and tonumber(criteria.rating_max) or nil
+	if ratingMin or ratingMax then
+		need("rating")
+		checks[#checks + 1] = function(raw)
+			-- Unrated photos have no rating at all, which is 0 stars.
+			local rating = tonumber(raw.rating) or 0
+			return (not ratingMin or rating >= ratingMin) and (not ratingMax or rating <= ratingMax)
+		end
+	end
+
+	if criteria.flag ~= nil then
+		local wanted = FLAG_VALUES[tostring(criteria.flag):lower()]
+		if wanted == nil then
+			error('flag must be "pick", "reject" or "unflagged".')
+		end
+		need("pickStatus")
+		checks[#checks + 1] = function(raw)
+			return (tonumber(raw.pickStatus) or 0) == wanted
+		end
+	end
+
+	if criteria.color_label ~= nil then
+		local wanted = tostring(criteria.color_label):lower()
+		if not LABEL_NUMBERS[wanted] and wanted ~= "none" then
+			error("color_label must be red, yellow, green, blue, purple or none.")
+		end
+		need("colorNameForLabel")
+		checks[#checks + 1] = function(raw)
+			return AgentCommands.labelName(raw.colorNameForLabel) == wanted
+		end
+	end
+
+	if criteria.file_type then
+		local wanted = FILE_FORMATS[tostring(criteria.file_type):lower()]
+		if not wanted then
+			error("file_type must be raw, dng, jpeg, tiff, png, psd, psb, avif, jxl or video.")
+		end
+		need("fileFormat")
+		checks[#checks + 1] = function(raw)
+			return type(raw.fileFormat) == "string" and raw.fileFormat:upper() == wanted
+		end
+	end
+
+	if #checks == 0 then
+		return nil
+	end
+	return keys,
+		function(raw)
+			raw = raw or {}
+			for _, check in ipairs(checks) do
+				if not check(raw) then
+					return false
+				end
+			end
+			return true
+		end
 end
 
 --- "YYYY-MM-DD" -> year, month, day (numbers), or nil.
@@ -551,12 +616,28 @@ function handlers.find_photos(args, env)
 	local criteria = args.criteria or {}
 	local limit = tonumber(args.limit) or 1000
 	local searchDesc = AgentCommands.buildSearchDesc(criteria)
+	local metadataKeys, matchesMetadata = AgentCommands.buildMetadataFilter(criteria)
 	local cat = catalog()
 	local photos
 	if searchDesc then
 		photos = cat:findPhotos({ searchDesc = searchDesc, sort = "captureTime", ascending = false })
 	else
 		photos = cat:getAllPhotos()
+	end
+
+	-- Ratings, flags, colour labels and file types, checked photo by photo.
+	if matchesMetadata then
+		local raw = cat:batchGetRawMetadata(photos, metadataKeys)
+		local kept = {}
+		for index, photo in ipairs(photos) do
+			if matchesMetadata(raw[photo]) then
+				kept[#kept + 1] = photo
+			end
+			if index % 500 == 0 then
+				LrTasks.yield()
+			end
+		end
+		photos = kept
 	end
 
 	-- Capture dates, filtered here: whole days, in the computer's time zone.
@@ -583,15 +664,6 @@ function handlers.find_photos(args, env)
 			string.format("%d matching photo(s) have no LrGeniusAI photo ID yet and were left out.", unidentified)
 	end
 	return { photo_ids = ids, count = #ids, truncated = (#photos > #ids + unidentified) or nil }, warnings
-end
-
---- Lightroom's colour name for a photo's label, as the agent sends them.
---- Photos without a label come back as "gray" (LrC 15.6), not as nil.
-local function labelName(raw)
-	if raw == nil or raw == "" or raw == "gray" or raw == "grey" then
-		return "none"
-	end
-	return raw
 end
 
 local RAW_INFO_KEYS = { "path", "rating", "pickStatus", "colorNameForLabel", "dateTimeOriginal", "isVirtualCopy" }
@@ -642,7 +714,7 @@ function handlers.photo_info(args, env)
 			captured = type(r.dateTimeOriginal) == "number" and LrDate.timeToW3CDate(r.dateTimeOriginal) or nil,
 			rating = r.rating or 0,
 			flag = flags[r.pickStatus or 0] or "none",
-			color_label = labelName(r.colorNameForLabel),
+			color_label = AgentCommands.labelName(r.colorNameForLabel),
 			title = text("title"),
 			caption = text("caption"),
 			headline = text("headline"),

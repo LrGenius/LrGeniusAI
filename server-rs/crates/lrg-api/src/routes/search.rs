@@ -104,7 +104,8 @@ struct Hit {
 
 /// The photo's aesthetic score, when it is from the current export. A score
 /// from another export is not comparable with this one's, so it counts as none.
-fn current_aesthetic(m: &Map<String, Value>) -> Option<f64> {
+/// Public so the MCP tools report the same score this search ranks by.
+pub fn current_aesthetic(m: &Map<String, Value>) -> Option<f64> {
     let current = m.get(meta::AESTHETIC_MODEL_FIELD).and_then(Value::as_str)
         == Some(lrg_ml::aesthetic::MODEL_ID);
     m.get(meta::AESTHETIC_SCORE_FIELD)
@@ -112,11 +113,34 @@ fn current_aesthetic(m: &Map<String, Value>) -> Option<f64> {
         .filter(|_| current)
 }
 
-fn genre_of(m: &Map<String, Value>) -> Option<&str> {
+/// The photo's stored genre id, if it has one.
+pub fn genre_of(m: &Map<String, Value>) -> Option<&str> {
     m.get(meta::GENRE_FIELD)
         .and_then(Value::as_str)
         .filter(|g| !g.is_empty())
 }
+
+/// Every genre id a search can be restricted to, `other` last — the same list
+/// `/search/genres` serves.
+pub fn genre_ids() -> Vec<&'static str> {
+    lrg_ml::genre::GENRES
+        .iter()
+        .map(|g| g.id)
+        .chain(std::iter::once(lrg_ml::genre::OTHER_ID))
+        .collect()
+}
+
+/// The display label of a genre id, `None` for one this build does not know.
+pub fn genre_label(id: &str) -> Option<&'static str> {
+    lrg_ml::genre::label_for(id)
+}
+
+/// The model export whose scores are current; others count as no score.
+pub const AESTHETIC_MODEL_ID: &str = lrg_ml::aesthetic::MODEL_ID;
+
+/// The aesthetic score's range, (lowest, highest).
+pub const AESTHETIC_RANGE: (f32, f32) =
+    (lrg_ml::aesthetic::SCORE_MIN, lrg_ml::aesthetic::SCORE_MAX);
 
 /// What `min_aesthetic` and `genres` ask of a photo.
 #[derive(Default)]

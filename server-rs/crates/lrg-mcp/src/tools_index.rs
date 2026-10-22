@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use lrg_api::agent_bridge::{BridgeError, CallOptions};
+use lrg_api::routes::search;
 
 use crate::server::{
     json_result, string_list, tool_error, LrGeniusMcp, Photos, MAX_PHOTOS_PER_CALL,
@@ -24,8 +25,11 @@ use crate::sets::{combine, SetOperation};
 pub struct SearchArgs {
     /// What to look for, in plain words: "dog running on a beach", "red car
     /// at night", "people laughing at a table". Matches the image content
-    /// and the photos' AI titles, captions and keywords.
-    pub query: String,
+    /// and the photos' AI titles, captions and keywords. Leave it out to rank
+    /// photos by aesthetic score alone ("the best N", optionally of some
+    /// genres or within a set).
+    #[serde(default)]
+    pub query: Option<String>,
     /// Most photos to return (default 100, between 10 and 2000).
     #[serde(default)]
     pub limit: Option<i64>,
@@ -36,6 +40,129 @@ pub struct SearchArgs {
     /// loosely related photos; 0 turns the cut off.
     #[serde(default)]
     pub strictness: Option<i64>,
+    /// Order of the results: "relevance" (best match first; the default with
+    /// a query), "aesthetic" (LrGeniusAI's aesthetic score, best first; the
+    /// default without a query) or "combined" (a mix of both, see
+    /// aesthetic_weight; needs a query). Photos without a score come last.
+    #[serde(default)]
+    pub sort: Option<SearchSort>,
+    /// For sort "combined": how much the aesthetic score counts against the
+    /// match, 0-1 (default 0.5). 0 is pure relevance, 1 pure aesthetics.
+    #[serde(default)]
+    pub aesthetic_weight: Option<f64>,
+    /// Only photos with at least this aesthetic score, 1-9. Typical photos
+    /// score about 4.5-7; the score sorts and thins out a user's own photos,
+    /// it is not a verdict. Photos without a score are left out.
+    #[serde(default)]
+    pub min_aesthetic: Option<f64>,
+    /// Only photos of these genres: landscape, portrait, street, wildlife,
+    /// sport, event, architecture, macro, food, still_life, astro, concert,
+    /// aerial or other.
+    #[serde(default)]
+    pub genres: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchSort {
+    /// Best match first.
+    Relevance,
+    /// Highest aesthetic score first.
+    Aesthetic,
+    /// A weighted mix of match and aesthetic score.
+    Combined,
+}
+
+impl SearchSort {
+    fn name(self) -> &'static str {
+        match self {
+            SearchSort::Relevance => "relevance",
+            SearchSort::Aesthetic => "aesthetic",
+            SearchSort::Combined => "combined",
+        }
+    }
+}
+
+/// The `/v1/search` body for `args`, validated, and a label describing it.
+/// Separate from the tool so the checks are unit-testable without a backend.
+fn search_body(args: &SearchArgs) -> Result<(Value, String), String> {
+    let query = args
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
+    let sort = args.sort.unwrap_or(if query.is_some() {
+        SearchSort::Relevance
+    } else {
+        SearchSort::Aesthetic
+    });
+    if query.is_none() && sort != SearchSort::Aesthetic {
+        return Err(format!(
+            "sort \"{}\" ranks photos by how well they match a query, so it needs one. Without a \
+             query, use sort \"aesthetic\" (the best photos), optionally with genres.",
+            sort.name()
+        ));
+    }
+
+    let mut body = json!({
+        "max_results": args.limit.unwrap_or(100),
+        "sort": sort.name(),
+    });
+    let mut parts: Vec<String> = Vec::new();
+    match query {
+        Some(q) => {
+            body["term"] = json!(q);
+            parts.push(format!("search \"{q}\""));
+        }
+        None => parts.push("best photos by aesthetic score".into()),
+    }
+    if query.is_some() && sort != SearchSort::Relevance {
+        parts.push(format!("sorted by {}", sort.name()));
+    }
+    if let Some(strictness) = args.strictness {
+        body["relevance_strictness"] = json!(strictness);
+    }
+    if let Some(weight) = args.aesthetic_weight {
+        if sort != SearchSort::Combined {
+            return Err("aesthetic_weight only applies to sort \"combined\".".into());
+        }
+        if !(0.0..=1.0).contains(&weight) {
+            return Err("aesthetic_weight must be between 0 and 1.".into());
+        }
+        body["aesthetic_weight"] = json!(weight);
+    }
+    if let Some(min) = args.min_aesthetic {
+        let (lo, hi) = search::AESTHETIC_RANGE;
+        if !(lo as f64..=hi as f64).contains(&min) {
+            return Err(format!("min_aesthetic must be between {lo} and {hi}."));
+        }
+        body["min_aesthetic"] = json!(min);
+        parts.push(format!("aesthetic ≥ {min}"));
+    }
+    if let Some(genres) = &args.genres {
+        let known = search::genre_ids();
+        let mut wanted: Vec<String> = Vec::new();
+        for g in genres {
+            let id = g.trim().to_lowercase().replace([' ', '-'], "_");
+            if id.is_empty() {
+                continue;
+            }
+            if !known.contains(&id.as_str()) {
+                return Err(format!(
+                    "Unknown genre \"{g}\". Use one of: {}.",
+                    known.join(", ")
+                ));
+            }
+            if !wanted.contains(&id) {
+                wanted.push(id);
+            }
+        }
+        if !wanted.is_empty() {
+            parts.push(format!("genre {}", wanted.join("/")));
+            body["genres"] = json!(wanted);
+        }
+    }
+    Ok((body, parts.join(", ")))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -254,7 +381,10 @@ impl LrGeniusMcp {
     }
 
     /// Semantic search over the photos LrGeniusAI has indexed: describe what
-    /// is in the picture. Returns a result set (e.g. "s3") and a preview.
+    /// is in the picture. Can also rank by LrGeniusAI's aesthetic score and
+    /// keep only some genres; without a query it returns the best photos.
+    /// Returns a result set (e.g. "s3") and a preview that shows each
+    /// photo's aesthetic score and genre.
     #[tool(
         name = "search_photos",
         annotations(title = "Search photos", read_only_hint = true)
@@ -263,17 +393,10 @@ impl LrGeniusMcp {
         &self,
         Parameters(args): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let query = args.query.trim();
-        if query.is_empty() {
-            return Ok(tool_error("query must not be empty."));
-        }
-        let mut body = json!({
-            "term": query,
-            "max_results": args.limit.unwrap_or(100),
-        });
-        if let Some(strictness) = args.strictness {
-            body["relevance_strictness"] = json!(strictness);
-        }
+        let (mut body, label) = match search_body(&args) {
+            Ok(b) => b,
+            Err(e) => return Ok(tool_error(e)),
+        };
         if let Some(cid) = self.catalog_id() {
             body["catalog_id"] = json!(cid);
         }
@@ -296,17 +419,19 @@ impl LrGeniusMcp {
             .iter()
             .filter_map(|r| r["photo_id"].as_str().map(str::to_string))
             .collect();
-        let set = self
-            .sets()
-            .create(format!("search \"{query}\"{scope_label}"), ids);
+        let set = self.sets().create(format!("{label}{scope_label}"), ids);
         let mut extra = json!({});
-        if let Some(w) = response["warning"].as_str() {
+        let warnings = string_list(&response["warnings"]);
+        if !warnings.is_empty() {
+            extra["warnings"] = json!(warnings);
+        } else if let Some(w) = response["warning"].as_str() {
             extra["warnings"] = json!([w]);
         }
         if set.photo_ids.is_empty() {
             extra["hint"] = json!(
-                "Nothing matched. Try other words, a lower strictness, or check get_status: \
-                 photos that are not indexed cannot be found."
+                "Nothing matched. Try other words, a lower strictness or min_aesthetic, fewer \
+                 genres, or check get_status: photos that are not indexed cannot be found, and \
+                 photos without an aesthetic score or genre are left out by those filters."
             );
         }
         Ok(json_result(self.set_answer(&set, extra).await))
@@ -749,5 +874,103 @@ mod tests {
     fn query_values_are_encoded() {
         assert_eq!(encode("abc-1_2.3~"), "abc-1_2.3~");
         assert_eq!(encode("a b/c&d"), "a%20b%2Fc%26d");
+    }
+
+    fn args(v: Value) -> SearchArgs {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn a_query_alone_searches_by_relevance_as_before() {
+        let (body, label) = search_body(&args(json!({"query": " lake at dawn "}))).unwrap();
+        assert_eq!(body["term"], "lake at dawn");
+        assert_eq!(body["sort"], "relevance");
+        assert_eq!(body["max_results"], 100);
+        assert!(body.get("genres").is_none());
+        assert_eq!(label, "search \"lake at dawn\"");
+    }
+
+    #[test]
+    fn without_a_query_it_ranks_by_aesthetic_score() {
+        let (body, label) =
+            search_body(&args(json!({"genres": ["Landscape"], "limit": 10}))).unwrap();
+        assert!(body.get("term").is_none());
+        assert_eq!(body["sort"], "aesthetic");
+        assert_eq!(body["genres"], json!(["landscape"]));
+        assert_eq!(body["max_results"], 10);
+        assert_eq!(label, "best photos by aesthetic score, genre landscape");
+
+        // An empty query is no query.
+        let (body, _) = search_body(&args(json!({"query": "  "}))).unwrap();
+        assert_eq!(body["sort"], "aesthetic");
+    }
+
+    #[test]
+    fn relevance_and_combined_need_a_query() {
+        for sort in ["relevance", "combined"] {
+            let err = search_body(&args(json!({"sort": sort}))).unwrap_err();
+            assert!(err.contains("needs one"), "{sort}: {err}");
+        }
+    }
+
+    #[test]
+    fn combined_takes_a_weight_and_only_combined_does() {
+        let (body, label) = search_body(&args(
+            json!({"query": "fog", "sort": "combined", "aesthetic_weight": 0.7}),
+        ))
+        .unwrap();
+        assert_eq!(body["aesthetic_weight"], 0.7);
+        assert_eq!(label, "search \"fog\", sorted by combined");
+        assert!(search_body(&args(json!({"query": "fog", "aesthetic_weight": 0.7}))).is_err());
+        assert!(search_body(&args(
+            json!({"query": "fog", "sort": "combined", "aesthetic_weight": 1.5})
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn min_aesthetic_is_checked_against_the_score_range() {
+        let (body, label) = search_body(&args(json!({"min_aesthetic": 6.5}))).unwrap();
+        assert_eq!(body["min_aesthetic"], 6.5);
+        assert!(label.contains("aesthetic ≥ 6.5"));
+        assert!(search_body(&args(json!({"min_aesthetic": 0.5}))).is_err());
+        assert!(search_body(&args(json!({"min_aesthetic": 10}))).is_err());
+    }
+
+    #[test]
+    fn genres_are_normalised_deduplicated_and_unknown_ones_named() {
+        let (body, _) = search_body(&args(
+            json!({"genres": ["still life", "Still-Life", "astro", ""]}),
+        ))
+        .unwrap();
+        assert_eq!(body["genres"], json!(["still_life", "astro"]));
+        let err = search_body(&args(json!({"genres": ["landscapes"]}))).unwrap_err();
+        assert!(
+            err.contains("landscapes") && err.contains("landscape,"),
+            "{err}"
+        );
+    }
+
+    /// The genre list in `genres`' description is written out by hand; it
+    /// must name exactly the genres the backend knows.
+    #[test]
+    fn the_documented_genres_are_the_real_ones() {
+        let schema = serde_json::to_value(schemars::schema_for!(SearchArgs)).unwrap();
+        let described = schema["properties"]["genres"]["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let listed: Vec<String> = described
+            .split_once("genres:")
+            .unwrap()
+            .1
+            .replace(" or ", ", ")
+            .trim_end_matches('.')
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let known: Vec<String> = search::genre_ids().iter().map(|s| s.to_string()).collect();
+        assert_eq!(listed, known);
     }
 }

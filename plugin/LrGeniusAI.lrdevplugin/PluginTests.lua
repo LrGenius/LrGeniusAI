@@ -117,8 +117,10 @@ test("agent command helpers", function()
 	local parts = AgentCommands.splitPath(" Places > Hamburg ")
 	assertEqual(2, #parts, "keyword path splits in two")
 	assertEqual("Hamburg", parts[2], "parts are trimmed")
-	local desc = AgentCommands.buildSearchDesc({ rating_min = 3, flag = "pick" })
+	local desc = AgentCommands.buildSearchDesc({ text = "a", camera = "b" })
 	assertEqual("intersect", desc.combine, "two criteria are intersected")
+	local _, match = AgentCommands.buildMetadataFilter({ rating_min = 3, flag = "pick" })
+	assertTrue(match({ rating = 4, pickStatus = 1 }), "a 4-star pick matches rating_min 3 + pick")
 	local cyclic = {}
 	cyclic.self = cyclic
 	assertEqual("<cycle>", AgentCommands.toJsonSafe(cyclic).self, "cycles are cut")
@@ -231,6 +233,50 @@ test("find_photos runs a catalog query", function(ctx)
 	local result = command(ctx, "find_photos", { criteria = { rating_min = 0 }, limit = 5 })
 	assertTrue(type(result.photo_ids) == "table", "photo_ids is a list")
 	assertTrue(#result.photo_ids <= 5, "the limit holds")
+end)
+
+-- A query that comes back empty also passes the test above, which is how
+-- rating_min finding nothing in a catalog of rated photos went unnoticed.
+-- This one has to find a known photo by its own stars and label.
+test("find_photos finds a rated photo by its rating", function(ctx)
+	local cat = LrApplication.activeCatalog()
+	local photos = cat:getAllPhotos()
+	local sample = {}
+	for i = 1, math.min(#photos, 2000) do
+		sample[i] = photos[i]
+	end
+	local raw = cat:batchGetRawMetadata(sample, { "rating", "colorNameForLabel" })
+	local rated
+	for _, photo in ipairs(sample) do
+		local r = raw[photo] or {}
+		if (tonumber(r.rating) or 0) > 0 and SearchIndexAPI.getPhotoIdForPhoto(photo) then
+			rated = photo
+			break
+		end
+	end
+	if not rated then
+		skip("no rated photo with a photo ID among the first 2000 in this catalog")
+	end
+	local rating = tonumber(raw[rated].rating)
+	local label = AgentCommands.labelName(raw[rated].colorNameForLabel)
+	local id = SearchIndexAPI.getPhotoIdForPhoto(rated)
+	ctx.env.cache.byId[id] = rated
+
+	local result = command(ctx, "find_photos", {
+		criteria = { rating_min = rating, rating_max = rating, color_label = label },
+		limit = 5000,
+	})
+	assertTrue(#result.photo_ids > 0, string.format("%d-star photos are found", rating))
+	if not result.truncated then
+		local found = false
+		for _, pid in ipairs(result.photo_ids) do
+			if pid == id then
+				found = true
+				break
+			end
+		end
+		assertTrue(found, "the rated photo is among them")
+	end
 end)
 
 test("render_preview renders a JPEG", function(ctx)

@@ -22,6 +22,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 
 use lrg_api::agent_bridge::{BridgeError, CallOptions, CommandReply, Progress};
+use lrg_api::routes::search;
 use lrg_api::state::AppState;
 use lrg_store::IMAGE_TABLE;
 
@@ -360,10 +361,21 @@ pub(crate) fn summarize(photo_id: &str, meta: Option<&Map<String, Value>>) -> Va
     if let Some(species) = text("species_common_name").or_else(|| text("species")) {
         out.insert("species".into(), json!(species));
     }
+    if let Some(score) = search::current_aesthetic(m) {
+        out.insert("aesthetic".into(), json!(round2(score)));
+    }
+    if let Some(genre) = search::genre_of(m) {
+        out.insert("genre".into(), json!(genre));
+    }
     if !lrg_store::meta::has_embedding(m) {
         out.insert("searchable".into(), json!(false));
     }
     Value::Object(out)
+}
+
+/// An aesthetic score to two decimals: finer than that is noise to a reader.
+pub(crate) fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
 }
 
 pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
@@ -392,7 +404,8 @@ pub(crate) fn string_list(value: &Value) -> Vec<String> {
 
 pub(crate) const INSTRUCTIONS: &str = "\
 LrGeniusAI connects you to the user's Adobe Lightroom Classic catalog and to LrGeniusAI's AI index \
-of it (semantic image search, recognised people, species, culling grades, AI titles and keywords).
+of it (semantic image search, recognised people, species, culling grades, aesthetic scores and \
+genres, AI titles and keywords).
 
 How to work with it:
 - Start with get_status: it says whether Lightroom is connected, which catalog is open, how much of \
@@ -403,6 +416,12 @@ next tool instead of copying photo IDs. `set: \"selection\"` means the photos th
 selected in Lightroom right now; `set: \"view\"` means everything Lightroom is showing.
 - Look before you judge: view_photo returns the photo as Lightroom renders it now, including \
 develop settings. get_photo_details gives metadata.
+- \"The best\" photos: search_photos with sort \"aesthetic\" ranks by LrGeniusAI's aesthetic score \
+(1-9, higher is better); without a query it ranks the whole catalog, and `genres` (e.g. \
+[\"landscape\"]) narrows it to a kind of photo. sort \"combined\" weighs the score against how \
+well a photo matches the query. The user's own stars and flags (find_photos_in_catalog) are \
+their judgement; prefer them where they exist. cull_photos compares frames within a burst, not \
+unrelated photos.
 - Show your results with show_in_lightroom, which fills a collection and selects it, so the user \
 sees exactly what you found.
 - Changes (update_photos, apply_develop_settings, collections) go through Lightroom. Each call is \
@@ -563,6 +582,28 @@ impl LrGeniusMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summaries_carry_the_current_aesthetic_score_and_genre() {
+        let mut meta = Map::new();
+        meta.insert(lrg_store::meta::AESTHETIC_SCORE_FIELD.into(), json!(7.1234));
+        meta.insert(
+            lrg_store::meta::AESTHETIC_MODEL_FIELD.into(),
+            json!(search::AESTHETIC_MODEL_ID),
+        );
+        meta.insert(lrg_store::meta::GENRE_FIELD.into(), json!("landscape"));
+        let s = summarize("p1", Some(&meta));
+        assert_eq!(s["aesthetic"], 7.12);
+        assert_eq!(s["genre"], "landscape");
+
+        // A score from another export would rank wrongly next to current
+        // ones, so summaries leave it out, like search does.
+        meta.insert(
+            lrg_store::meta::AESTHETIC_MODEL_FIELD.into(),
+            json!("older-export"),
+        );
+        assert!(summarize("p1", Some(&meta)).get("aesthetic").is_none());
+    }
 
     #[test]
     fn summaries_carry_what_tells_photos_apart() {

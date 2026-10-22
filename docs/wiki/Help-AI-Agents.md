@@ -30,6 +30,7 @@ Ask in plain words, for example:
 - "Cull the photos I have selected: keep the best frame of each burst and
   reject the blurry ones."
 - "Which bird species did I photograph in 2025?"
+- "Put my 10 best landscape photos in a collection."
 - "Make these three photos a bit warmer and lift the shadows, then show me."
 - "Add the keywords *Hamburg* and *Harbour* to every photo of the harbour from
   yesterday."
@@ -39,12 +40,12 @@ Behind those requests the agent uses these tools:
 | Tool | What it does |
 |---|---|
 | `get_status` | Whether Lightroom is connected, the open catalog, the selection, how much is indexed |
-| `search_photos` | Semantic search: describe what is in the picture |
+| `search_photos` | Semantic search: describe what is in the picture. Can also rank by aesthetic score and keep only some genres; with no description it returns your best photos (see [Advanced Search](Help-Advanced-Search#ranking)) |
 | `find_similar_photos` | Photos that look alike, or near-duplicates |
 | `list_people`, `find_photos_of_people` | People from LrGeniusAI's face recognition |
 | `find_photos_in_catalog` | Lightroom's own filters: rating, flag, label, keywords, folder, dates, camera, lens |
 | `cull_photos` | Groups bursts and duplicates, names winners and reject candidates |
-| `get_photo_details`, `view_photo` | Metadata, and the photo as Lightroom renders it now |
+| `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre), and the photo as Lightroom renders it now |
 | `show_in_lightroom` | Fills a collection and switches Lightroom to it |
 | `update_photos` | Rating, flag, colour label, title, caption, keywords, IPTC fields |
 | `manage_collection`, `list_collections` | Collections |

@@ -18,10 +18,11 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use lrg_api::agent_bridge::CallOptions;
+use lrg_api::routes::search;
 
 use crate::server::{
-    bridge_error, json_result, string_list, tool_error, truncate, with_warnings, LrGeniusMcp,
-    Photos, MAX_PHOTOS_PER_CALL,
+    bridge_error, json_result, round2, string_list, tool_error, truncate, with_warnings,
+    LrGeniusMcp, Photos, MAX_PHOTOS_PER_CALL,
 };
 
 /// Previews come back as a JPEG file the plugin rendered. Anything bigger
@@ -298,6 +299,30 @@ fn update_payload(args: &UpdateArgs) -> Result<Value, String> {
     Ok(Value::Object(changes))
 }
 
+/// A photo's aesthetic score and genre as get_photo_details reports them.
+/// A score from another model export is still shown — it is that model's
+/// honest answer — but flagged, because search does not rank by it and it is
+/// not comparable with current scores.
+fn aesthetic_fields(m: &Map<String, Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    if let Some(score) = m
+        .get(lrg_store::meta::AESTHETIC_SCORE_FIELD)
+        .and_then(Value::as_f64)
+    {
+        out.insert("aesthetic_score".into(), json!(round2(score)));
+        if search::current_aesthetic(m).is_none() {
+            out.insert("aesthetic_outdated".into(), json!(true));
+        }
+    }
+    if let Some(genre) = search::genre_of(m) {
+        out.insert("genre".into(), json!(genre));
+        if let Some(label) = search::genre_label(genre) {
+            out.insert("genre_label".into(), json!(label));
+        }
+    }
+    out
+}
+
 /// The plugin's `find_photos` criteria, validated.
 fn find_criteria(args: &FindInCatalogArgs) -> Result<Value, String> {
     let mut c = Map::new();
@@ -436,7 +461,8 @@ impl LrGeniusMcp {
     /// Everything known about up to 50 photos: Lightroom's metadata (file,
     /// capture time, camera and exposure, rating, flag, label, keywords,
     /// title, caption, whether it is edited) merged with LrGeniusAI's index
-    /// (AI title, caption, keywords, species, search status).
+    /// (AI title, caption, keywords, species, aesthetic score 1-9, genre,
+    /// search status).
     #[tool(
         name = "get_photo_details",
         annotations(title = "Photo details", read_only_hint = true)
@@ -535,6 +561,7 @@ impl LrGeniusMcp {
                                 ai.insert(name.into(), json!(v));
                             }
                         }
+                        ai.extend(aesthetic_fields(m));
                         ai.insert(
                             "searchable".into(),
                             json!(lrg_store::meta::has_embedding(m)),
@@ -938,6 +965,38 @@ impl LrGeniusMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scored(score: f64, model: &str, genre: Option<&str>) -> Map<String, Value> {
+        let mut m = Map::new();
+        m.insert(lrg_store::meta::AESTHETIC_SCORE_FIELD.into(), json!(score));
+        m.insert(lrg_store::meta::AESTHETIC_MODEL_FIELD.into(), json!(model));
+        if let Some(g) = genre {
+            m.insert(lrg_store::meta::GENRE_FIELD.into(), json!(g));
+        }
+        m
+    }
+
+    #[test]
+    fn photo_details_show_the_aesthetic_score_and_genre() {
+        let f = aesthetic_fields(&scored(
+            6.4567,
+            search::AESTHETIC_MODEL_ID,
+            Some("landscape"),
+        ));
+        assert_eq!(f["aesthetic_score"], 6.46);
+        assert!(f.get("aesthetic_outdated").is_none());
+        assert_eq!(f["genre"], "landscape");
+        assert_eq!(f["genre_label"], search::genre_label("landscape").unwrap());
+    }
+
+    #[test]
+    fn a_score_from_another_model_is_shown_but_flagged() {
+        let f = aesthetic_fields(&scored(7.0, "an-older-export", None));
+        assert_eq!(f["aesthetic_score"], 7.0);
+        assert_eq!(f["aesthetic_outdated"], true);
+        assert!(f.get("genre").is_none());
+        assert!(aesthetic_fields(&Map::new()).is_empty());
+    }
 
     fn update(f: impl FnOnce(&mut UpdateArgs)) -> UpdateArgs {
         let mut args = UpdateArgs {
