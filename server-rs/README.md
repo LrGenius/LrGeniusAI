@@ -469,10 +469,12 @@ export HF_ENDPOINT=https://huggingface.co
 
 There are no tuning knobs to match llama.cpp's `n_ctx`/`n_parallel`/GPU layers,
 and that is not an oversight: `GuidedGenerationLoop.run` in mlx-swift-lm
-allocates a fresh KV cache per call, so there is no pinned prompt prefix to
+allocates a fresh KV cache per call, so indexing has no pinned prompt prefix to
 size a context window around, the preferred batch size is 1, and the grammar is
-compiled per request. The prompt is still sent pre-split and stable-first so the
-ordering is right if that changes upstream.
+compiled per photo. The prompt is still sent pre-split and stable-first so the
+ordering is right if that changes upstream. (The agent chat runs its own copy
+of that loop, which keeps a conversation's cache between turns — see
+`native/mlx-sidecar/README.md`.)
 
 ### Troubleshooting: `LRG_DISABLE_KLEIDIAI`
 

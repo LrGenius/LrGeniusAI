@@ -21,11 +21,15 @@
 //!
 //! # Differences from the llama.cpp backend
 //!
-//! There is no pinned prompt prefix here. `GuidedGenerationLoop.run` allocates
-//! a fresh KV cache per call, so the run-constant half of the prompt is
-//! re-prefilled for every photo and [`GenerationOutput::prefix_reused`] is
-//! always false. The split prompt is still sent, and still ordered
+//! There is no pinned prompt prefix for indexing here. `GuidedGenerationLoop.run`
+//! allocates a fresh KV cache per call, so the run-constant half of the prompt
+//! is re-prefilled for every photo and [`GenerationOutput::prefix_reused`] is
+//! false for every photo. The split prompt is still sent, and still ordered
 //! stable-then-volatile, so the ordering is right the day that changes.
+//!
+//! A chat is different: the sidecar keeps the cache a turn leaves and starts
+//! the next turn of the same conversation from it (`chat` in the sidecar's
+//! `Engine.swift`), and `prefix_reused` says when it did.
 
 mod engine;
 mod protocol;
@@ -106,7 +110,7 @@ pub struct GenerationOutput {
     pub text: String,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
-    /// Always false on this backend — see the module docs.
+    /// Only ever true for a chat turn — see the module docs.
     pub prefix_reused: bool,
 }
 

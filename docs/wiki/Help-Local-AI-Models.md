@@ -153,9 +153,9 @@ through. Leave the fields empty for sensible defaults. Changing any of them
 reloads the model on the next request.
 
 **MLX has no equivalent knobs**, and that is a deliberate limitation rather than
-an oversight: the MLX decoder allocates a fresh cache per request, so there is
-no shared prompt prefix to size a context window around, and it processes one
-photo at a time.
+an oversight: when indexing, the MLX decoder allocates a fresh cache per photo,
+so there is no shared prompt prefix to size a context window around, and it
+processes one photo at a time.
 
 ---
 

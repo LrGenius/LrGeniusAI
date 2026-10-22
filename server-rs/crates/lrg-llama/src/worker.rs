@@ -26,6 +26,13 @@
 //! (see [`WorkerState::split_render`]). A template whose output does not
 //! contain that text verbatim simply falls back to evaluating the whole prompt
 //! per photo, so an unusual template costs speed but never correctness.
+//!
+//! # A conversation
+//!
+//! A chat turn takes sequence 0 over and leaves its prompt and answer there;
+//! the next turn keeps what it shares with them and evaluates only the rest
+//! (see [`WorkerState::chat`]). An indexing batch takes sequence 0 back for its
+//! prefix.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -39,7 +46,8 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use llama_cpp_2::mtmd::{
-    mtmd_default_marker, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText,
+    mtmd_default_marker, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunkType,
+    MtmdInputChunks, MtmdInputText,
 };
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
@@ -75,6 +83,41 @@ const MIN_CTX_PER_SEQ: u32 = 4096;
 struct PinnedPrefix {
     hash: u64,
     len: i32,
+}
+
+/// One piece of what a conversation left in sequence 0.
+#[derive(Debug, Clone, PartialEq)]
+enum Held {
+    Token(LlamaToken),
+    /// An image chunk, known by the hash of its pixels (the bitmap's id), and
+    /// the positions it takes — not always its token count (M-RoPE).
+    Image {
+        id: String,
+        positions: i32,
+    },
+}
+
+impl Held {
+    fn positions(&self) -> i32 {
+        match self {
+            Held::Token(_) => 1,
+            Held::Image { positions, .. } => *positions,
+        }
+    }
+}
+
+/// How much of the next prompt sequence 0 already holds: the number of
+/// leading items `next` shares with `held`, and the positions they take.
+///
+/// At least the last item of `next` is left to evaluate, since sampling reads
+/// its logits. A prompt always ends in text (the template's opening of the
+/// answer), so what is left starts with a token.
+fn shared_prefix(held: &[Held], next: &[Held]) -> (usize, i32) {
+    let mut n = held.iter().zip(next).take_while(|(a, b)| a == b).count();
+    if n == next.len() {
+        n = n.saturating_sub(1);
+    }
+    (n, next[..n].iter().map(Held::positions).sum())
 }
 
 /// The prefix a whole chunk shares, already evaluated into sequence 0 and
@@ -254,6 +297,7 @@ pub(crate) fn run(
         chat_template,
         tok_env,
         prefix: None,
+        conversation: None,
         n_parallel,
         n_ctx_seq: i32::try_from(n_ctx_seq).unwrap_or(i32::MAX),
     };
@@ -262,6 +306,8 @@ pub(crate) fn run(
     while let Ok(job) = rx.recv() {
         match job {
             Job::Generate { requests, reply } => {
+                // Indexing takes sequence 0 over for its own prefix.
+                state.conversation = None;
                 let results = state.generate_batch(&mut ctx, &requests);
                 let _ = reply.send(results);
             }
@@ -364,6 +410,9 @@ struct WorkerState<'a> {
     chat_template: Option<LlamaChatTemplate>,
     tok_env: toktrie::TokEnv,
     prefix: Option<PinnedPrefix>,
+    /// What the last conversation left in sequence 0: its prompt and the
+    /// answer's tokens. `None` when sequence 0 holds anything else.
+    conversation: Option<Vec<Held>>,
     n_parallel: u32,
     /// The per-photo window, i.e. what every budget check has to measure
     /// against. Never `ctx.n_ctx()`, which is the whole cache.
@@ -513,7 +562,7 @@ impl WorkerState<'_> {
         }
 
         // A catalog vocabulary of a few hundred keywords can outgrow `n_batch`.
-        eval_tokens(ctx, &tokens, PREFIX_SEQ)?;
+        eval_tokens(ctx, &tokens, PREFIX_SEQ, 0)?;
 
         self.prefix = Some(PinnedPrefix { hash, len });
         log::debug!("llama prefix cache miss: evaluated {len} tokens");
@@ -885,9 +934,12 @@ impl WorkerState<'_> {
     /// Answer a conversation in sequence 0, sending text to `deltas` as it
     /// is decoded.
     ///
-    /// The whole cache is cleared first. Sequence 0 holds the pinned indexing
-    /// prefix and the other sequences copies of it, and a conversation shares
-    /// nothing with either; the next indexing batch pins its prefix again.
+    /// Sequence 0 keeps what the turn evaluated, and the next turn evaluates
+    /// only what follows the part it shares with it ([`shared_prefix`]): the
+    /// tool list and the history up to the last turn are most of every
+    /// prompt. Anything else in the cache — the pinned indexing prefix and its
+    /// copies — is cleared first; the next indexing batch pins its prefix
+    /// again.
     fn chat(
         &mut self,
         ctx: &mut LlamaContext,
@@ -895,6 +947,22 @@ impl WorkerState<'_> {
         deltas: Option<&UnboundedSender<String>>,
         abandoned: &dyn Fn() -> bool,
     ) -> Result<GenerationOutput, LlamaError> {
+        let held = self.conversation.take();
+        // On failure what the cache holds is not known, so `conversation`
+        // stays `None` and the next turn starts from scratch.
+        let (output, items) = self.chat_turn(ctx, request, held, deltas, abandoned)?;
+        self.conversation = Some(items);
+        Ok(output)
+    }
+
+    fn chat_turn(
+        &mut self,
+        ctx: &mut LlamaContext,
+        request: &ChatRequest,
+        held: Option<Vec<Held>>,
+        deltas: Option<&UnboundedSender<String>>,
+        abandoned: &dyn Fn() -> bool,
+    ) -> Result<(GenerationOutput, Vec<Held>), LlamaError> {
         let images: Vec<&crate::RgbImage> =
             request.messages.iter().flat_map(|m| &m.images).collect();
         if !images.is_empty() && self.mtmd.is_none() {
@@ -905,18 +973,12 @@ impl WorkerState<'_> {
         }
 
         let prompt = self.render_chat(&request.messages)?;
-        self.prefix = None;
-        ctx.clear_kv_cache();
-
         let n_ctx_seq = self.n_ctx_seq;
-        let (mut n_past, prompt_tokens) = match self.mtmd {
+        let (mut items, chunks) = match self.mtmd {
             Some(mtmd) => {
                 let bitmaps = images
                     .iter()
-                    .map(|image| {
-                        MtmdBitmap::from_image_data(image.width, image.height, &image.data)
-                            .map_err(|e| LlamaError::Image(e.to_string()))
-                    })
+                    .map(|image| bitmap_with_id(image))
                     .collect::<Result<Vec<_>, _>>()?;
                 let bitmaps: Vec<&MtmdBitmap> = bitmaps.iter().collect();
                 let chunks = mtmd
@@ -931,15 +993,7 @@ impl WorkerState<'_> {
                     .map_err(|e| {
                         LlamaError::Prompt(format!("preparing the conversation failed: {e}"))
                     })?;
-                let tokens = i32::try_from(chunks.total_tokens()).unwrap_or(i32::MAX);
-                check_chat_budget(tokens, request.max_tokens, n_ctx_seq)?;
-                let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
-                let n_past = chunks
-                    .eval_chunks(mtmd, ctx, 0, PREFIX_SEQ, n_batch, true)
-                    .map_err(|e| {
-                        LlamaError::Inference(format!("evaluating the conversation failed: {e}"))
-                    })?;
-                (n_past, tokens)
+                (held_items(&chunks), Some(chunks))
             }
             None => {
                 let tokens = self
@@ -948,10 +1002,39 @@ impl WorkerState<'_> {
                     .map_err(|e| {
                         LlamaError::Prompt(format!("tokenizing the conversation failed: {e}"))
                     })?;
-                let count = i32::try_from(tokens.len()).unwrap_or(i32::MAX);
-                check_chat_budget(count, request.max_tokens, n_ctx_seq)?;
-                eval_tokens(ctx, &tokens, PREFIX_SEQ)?;
-                (count, count)
+                (tokens.into_iter().map(Held::Token).collect(), None)
+            }
+        };
+        let prompt_tokens = match &chunks {
+            Some(chunks) => i32::try_from(chunks.total_tokens()).unwrap_or(i32::MAX),
+            None => i32::try_from(items.len()).unwrap_or(i32::MAX),
+        };
+        check_chat_budget(prompt_tokens, request.max_tokens, n_ctx_seq)?;
+
+        let continued = self.continue_conversation(ctx, held.as_deref(), &items)?;
+        let reused = continued.is_some();
+        let mut n_past = match continued {
+            Some(n_past) => n_past,
+            None => {
+                self.prefix = None;
+                ctx.clear_kv_cache();
+                match (self.mtmd, &chunks) {
+                    (Some(mtmd), Some(chunks)) => {
+                        let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
+                        chunks
+                            .eval_chunks(mtmd, ctx, 0, PREFIX_SEQ, n_batch, true)
+                            .map_err(|e| {
+                                LlamaError::Inference(format!(
+                                    "evaluating the conversation failed: {e}"
+                                ))
+                            })?
+                    }
+                    _ => {
+                        let tokens: Vec<LlamaToken> = items.iter().filter_map(token_of).collect();
+                        eval_tokens(ctx, &tokens, PREFIX_SEQ, 0)?;
+                        prompt_tokens
+                    }
+                }
             }
         };
 
@@ -982,6 +1065,9 @@ impl WorkerState<'_> {
                 .map_err(|e| LlamaError::Inference(format!("building the batch failed: {e}")))?;
             ctx.decode(&mut batch)
                 .map_err(|e| LlamaError::Inference(format!("decode failed: {e}")))?;
+            // The answer stays in the cache too: the next turn's prompt
+            // repeats it, and when it repeats it token for token, it is shared.
+            items.push(Held::Token(token));
             n_past += 1;
             token = sampler.sample(ctx, -1);
         }
@@ -989,12 +1075,54 @@ impl WorkerState<'_> {
             let _ = deltas.send(rest);
         }
 
-        Ok(GenerationOutput {
+        let output = GenerationOutput {
             text: String::from_utf8_lossy(&bytes).into_owned(),
             prompt_tokens: prompt_tokens.cast_unsigned(),
             completion_tokens,
-            prefix_reused: false,
-        })
+            prefix_reused: reused,
+        };
+        Ok((output, items))
+    }
+
+    /// Keep what sequence 0 shares with the next prompt and evaluate the
+    /// rest. Returns the new `n_past`, or `None` when the turn has to start
+    /// from scratch: nothing is shared, a new image follows the shared part
+    /// (the bindings evaluate image chunks only as a whole prompt), or the
+    /// cache would not give up the end of the sequence.
+    fn continue_conversation(
+        &self,
+        ctx: &mut LlamaContext,
+        held: Option<&[Held]>,
+        next: &[Held],
+    ) -> Result<Option<i32>, LlamaError> {
+        let Some(held) = held else {
+            return Ok(None);
+        };
+        let (shared, keep) = shared_prefix(held, next);
+        let rest: Option<Vec<LlamaToken>> = next[shared..].iter().map(token_of).collect();
+        let Some(rest) = rest.filter(|_| shared > 0) else {
+            return Ok(None);
+        };
+        let keep_u32 = u32::try_from(keep).unwrap_or(0);
+        if ctx
+            .kv_cache_seq_rm(PREFIX_SEQ, Some(keep_u32), None)
+            .is_err()
+        {
+            return Ok(None);
+        }
+        // Sliding-window layers may have let go of early positions; then what
+        // is left is not the shared part any more.
+        if ctx.kv_cache_seq_pos_min(PREFIX_SEQ) > 0
+            || ctx.kv_cache_seq_pos_max(PREFIX_SEQ) != keep - 1
+        {
+            return Ok(None);
+        }
+        eval_tokens(ctx, &rest, PREFIX_SEQ, keep)?;
+        log::debug!(
+            "llama chat: reused {keep} positions of the conversation, evaluated {}",
+            rest.len()
+        );
+        Ok(Some(keep + i32::try_from(rest.len()).unwrap_or(i32::MAX)))
     }
 
     fn build_sampler(
@@ -1134,7 +1262,56 @@ fn token_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, LlamaEr
     }
 }
 
-/// Evaluate `tokens` into `seq_id` from position 0.
+/// The bitmap mtmd tokenizes, named by a hash of its pixels so its chunk can
+/// be recognised in the next turn's prompt ([`Held::Image`]).
+fn bitmap_with_id(image: &crate::RgbImage) -> Result<MtmdBitmap, LlamaError> {
+    let bitmap = MtmdBitmap::from_image_data(image.width, image.height, &image.data)
+        .map_err(|e| LlamaError::Image(e.to_string()))?;
+    let mut hasher = DefaultHasher::new();
+    (image.width, image.height, &image.data).hash(&mut hasher);
+    bitmap
+        .set_id(&format!("{:016x}", hasher.finish()))
+        .map_err(|e| LlamaError::Image(e.to_string()))?;
+    Ok(bitmap)
+}
+
+/// A tokenized prompt as [`Held`] items. An image chunk without an id is
+/// never shared: it gets one no other image has.
+fn held_items(chunks: &MtmdInputChunks) -> Vec<Held> {
+    let mut items = Vec::new();
+    for index in 0..chunks.len() {
+        let Some(chunk) = chunks.get(index) else {
+            continue;
+        };
+        match chunk.chunk_type() {
+            MtmdInputChunkType::Text => {
+                items.extend(
+                    chunk
+                        .text_tokens()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|t| Held::Token(*t)),
+                );
+            }
+            _ => items.push(Held::Image {
+                id: chunk
+                    .id()
+                    .unwrap_or_else(|| format!("unnamed-{index}-{}", items.len())),
+                positions: chunk.n_positions(),
+            }),
+        }
+    }
+    items
+}
+
+fn token_of(item: &Held) -> Option<LlamaToken> {
+    match item {
+        Held::Token(token) => Some(*token),
+        Held::Image { .. } => None,
+    }
+}
+
+/// Evaluate `tokens` into `seq_id`, the first at position `start`.
 ///
 /// Fed in slices of `n_batch`, since a larger batch is rejected outright.
 /// Only the very last token requests logits, which is all a following
@@ -1143,14 +1320,16 @@ fn eval_tokens(
     ctx: &mut LlamaContext,
     tokens: &[LlamaToken],
     seq_id: i32,
+    start: i32,
 ) -> Result<(), LlamaError> {
     let n_batch = usize::try_from(ctx.n_batch()).unwrap_or(512).max(1);
+    let first = usize::try_from(start).unwrap_or(0);
     let mut start = 0usize;
     for slice in tokens.chunks(n_batch) {
         let mut batch = LlamaBatch::new(slice.len(), 1);
         for (offset, token) in slice.iter().enumerate() {
             let index = start + offset;
-            let pos = i32::try_from(index).unwrap_or(i32::MAX);
+            let pos = i32::try_from(first + index).unwrap_or(i32::MAX);
             batch
                 .add(*token, pos, &[seq_id], index + 1 == tokens.len())
                 .map_err(|e| {
@@ -1266,6 +1445,41 @@ fn clone_err(e: &LlamaError) -> LlamaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tokens(ids: &[i32]) -> Vec<Held> {
+        ids.iter().map(|&id| Held::Token(LlamaToken(id))).collect()
+    }
+
+    fn image(id: &str) -> Held {
+        Held::Image {
+            id: id.into(),
+            positions: 10,
+        }
+    }
+
+    #[test]
+    fn the_next_turn_shares_what_it_repeats() {
+        // The held answer (4, 5) is repeated as 4, 6: shared up to 4.
+        let held = tokens(&[1, 2, 3, 4, 5]);
+        let next = tokens(&[1, 2, 3, 4, 6, 7]);
+        assert_eq!(shared_prefix(&held, &next), (4, 4));
+
+        // An image counts its positions, and a different image ends the run.
+        let mut held = tokens(&[1, 2]);
+        held.push(image("a"));
+        held.extend(tokens(&[3]));
+        let mut next = held.clone();
+        next.extend(tokens(&[8, 9]));
+        assert_eq!(shared_prefix(&held, &next), (4, 13));
+        next[2] = image("b");
+        assert_eq!(shared_prefix(&held, &next), (2, 2));
+
+        // The same prompt again: the last token is evaluated anew, for its
+        // logits.
+        let same = tokens(&[1, 2, 3]);
+        assert_eq!(shared_prefix(&same, &same), (2, 2));
+        assert_eq!(shared_prefix(&[], &tokens(&[1])), (0, 0));
+    }
 
     #[test]
     fn utf8_stream_holds_a_character_split_across_tokens() {

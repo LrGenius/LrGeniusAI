@@ -175,10 +175,12 @@ struct GenerationResultPayload: Encodable {
         case error
     }
 
-    static func success(text: String, promptTokens: Int, completionTokens: Int) -> Self {
+    static func success(
+        text: String, promptTokens: Int, completionTokens: Int, prefixReused: Bool = false
+    ) -> Self {
         .init(
             ok: true, text: text, promptTokens: promptTokens,
-            completionTokens: completionTokens, prefixReused: false, error: nil)
+            completionTokens: completionTokens, prefixReused: prefixReused, error: nil)
     }
 
     static func failure(_ message: String) -> Self {

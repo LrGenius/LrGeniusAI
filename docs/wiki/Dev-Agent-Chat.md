@@ -7,7 +7,7 @@ the backend serves. Route reference: [Backend API](Dev-Backend-API#agent-chat).
 
 > **Status:** working end to end with local models (llama.cpp, MLX): the
 > backend, the page and the menu item *Chat with Your Catalog...*. Still to
-> come: reusing the conversation's cache across turns, cloud models.
+> come: cloud models.
 
 ---
 
@@ -136,11 +136,25 @@ results give up their text and photos first — the model can run a tool again
 (`n_ctx` divided by Photos in parallel, since a conversation runs in one
 sequence); MLX does not, and 32,768 is assumed.
 
-A conversation runs in llama.cpp's sequence 0 and clears the cache first, so
-the next indexing batch pins its prefix again. Nothing is cached across turns
-yet: each turn evaluates the whole conversation (~4–5 s per turn for Gemma 4
-E4B on MLX, ~15–18 s for 12B, mostly prefill). Reusing the common prefix across turns
-is the obvious next speed-up.
+**The cache carries over between turns.** Every turn sends the whole
+conversation, but the engine keeps the KV cache the last turn left and
+prefills only what follows the part both share — the tool list and the history
+are most of every prompt.
+
+* llama.cpp: the conversation stays in sequence 0, and the worker remembers
+  its tokens and image chunks (`Held`); the next turn drops what differs from
+  the end of the sequence and evaluates the rest. A new photo after the shared
+  part means evaluating all of it (the bindings evaluate image chunks only for
+  a whole prompt). Indexing clears it and pins its own prefix again.
+* MLX: see the sidecar README. The sidecar keeps the cache, and a copy from
+  right after the prompt for sliding-window layers that cannot be trimmed back;
+  it also keeps the compiled grammar and rolls it back after each turn.
+
+Measured with Gemma 4 E4B on MLX and the full tool list (~4,000 tokens): a
+message that takes two model turns went from ~8–10 s to ~2.5 s, the first
+token of a turn coming after 70–210 ms instead of 3.7 s. Only the first turn
+of a chat still prefills everything and compiles the grammar (~6 s plus
+loading the model).
 
 ---
 

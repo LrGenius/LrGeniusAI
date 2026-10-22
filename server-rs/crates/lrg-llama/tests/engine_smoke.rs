@@ -392,3 +392,51 @@ async fn a_length_cap_in_the_schema_holds() {
     let text = parsed["text"].as_str().unwrap();
     assert!(text.chars().count() <= 20, "{text:?}");
 }
+
+#[tokio::test]
+#[ignore = "requires LRG_TEST_MODEL_GGUF"]
+async fn the_next_turn_reuses_the_conversation_and_answers_the_same() {
+    let Some(config) = config_from_env(1) else {
+        return;
+    };
+    let vision = config.mmproj_path.is_some();
+    let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
+        .await
+        .unwrap()
+        .expect("engine should load");
+
+    let mut first = message("user", "What colour is this photo? Answer in one sentence.");
+    if vision {
+        // In the shared part: the next turn still reuses it.
+        first.images.push(red_image());
+    }
+    let mut messages = vec![message("system", "You answer briefly."), first];
+    let turn = |messages: &Vec<ChatMessage>| ChatRequest {
+        messages: messages.clone(),
+        max_tokens: 48,
+        temperature: 0.0,
+        ..Default::default()
+    };
+    let one = engine.chat(turn(&messages), None).await.expect("turn 1");
+    assert!(!one.prefix_reused, "nothing to reuse yet");
+
+    messages.push(message("assistant", one.text.trim()));
+    messages.push(message("user", "Now say it in one word."));
+    let two = engine.chat(turn(&messages), None).await.expect("turn 2");
+    assert!(two.prefix_reused, "turn 2 starts with all of turn 1");
+
+    // Indexing takes sequence 0 over; the same turn then starts from scratch
+    // and, decoded greedily, must say exactly the same.
+    engine.generate(vec![base_request()]).await.unwrap()[0]
+        .as_ref()
+        .expect("indexing in between should succeed");
+    let fresh = engine
+        .chat(turn(&messages), None)
+        .await
+        .expect("turn 2 again");
+    assert!(!fresh.prefix_reused, "indexing replaced the conversation");
+    assert_eq!(
+        two.text, fresh.text,
+        "a reused cache must not change the answer"
+    );
+}
