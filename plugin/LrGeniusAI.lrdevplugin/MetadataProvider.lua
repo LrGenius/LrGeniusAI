@@ -130,6 +130,18 @@ return {
 			searchable = true,
 			browsable = true,
 		},
+		-- What the last cull wrote on this photo (flag, stars, label), encoded
+		-- by Util.cullWrittenEncode. It is how a re-run tells its own marks
+		-- from the photographer's: a flag equal to what the cull wrote is the
+		-- cull's to change, anything else is theirs and is left alone.
+		{
+			id = "cullWritten",
+			title = "Culling wrote",
+			dataType = "string",
+			readOnly = true,
+			searchable = false,
+			browsable = false,
+		},
 		-- Not necessarily English: GBIF's vernacular data has no reliable
 		-- per-language coverage, so where no English name exists the backend
 		-- passes through whatever language GBIF listed first (Swedish and
@@ -241,7 +253,7 @@ return {
 		},
 	},
 
-	schemaVersion = 35,
+	schemaVersion = 36,
 	updateFromEarlierSchemaVersion = function(catalog, previousSchemaVersion, progressScope)
 		catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then

@@ -225,11 +225,27 @@ struct Scored<'a> {
     /// The eyes-closed gate cleared: closed eyes here are a kiss or a laugh,
     /// and do not count as a blink.
     eyes_closed_intended: bool,
+    /// The blur defect on its own: soft, and under the relative rules clearly
+    /// softer than the sharpest frame of the group.
+    soft: bool,
+    /// The blink and occlusion *labels*: the reason thresholds, which are
+    /// looser than the reject ones, and relative to the group where the
+    /// rules are.
+    blink: bool,
+    occluded: bool,
     /// Blurred, eyes shut or face obstructed: the defects that make a frame
     /// unusable however strong its moment, because no edit repairs them.
     hard_defect: bool,
+    /// The composite face score fell below the reject threshold — and, under
+    /// the relative rules, clearly below the group's best.
+    weak_face: bool,
     cull_exposure: f64,
+    /// The noise penalty the score uses: `cull_noise_flat` when the row has
+    /// it, else the frame-wide `cull_noise`.
     cull_noise: f64,
+    /// The frame-wide estimate, kept only when the flat-region one was used
+    /// in its place, so the response can show both when they disagree.
+    cull_noise_frame_wide: Option<f64>,
     cull_highlight_clip: f64,
     cull_shadow_clip: f64,
     cull_technical_score: f64,
@@ -331,6 +347,17 @@ fn rank_group_records(
         .iter()
         .map(|r| metric(&r.metadata, "cull_exposure", 0.0))
         .collect();
+    // `cull_noise_flat` is read only when every frame of the group has it.
+    // The two estimators answer different questions (the frame-wide one reads
+    // detail as grain), so a group indexed half before and half after the
+    // flat one shipped must not compare one frame's grain with another's
+    // texture. All or nothing per group, like the moment.
+    let all_have_flat_noise = records.iter().all(|r| {
+        r.metadata
+            .get("cull_noise_flat")
+            .and_then(Value::as_f64)
+            .is_some()
+    });
 
     let mut scored: Vec<Scored> = records
         .iter()
@@ -359,10 +386,20 @@ fn rank_group_records(
             // The stated reason for normalizing it does not survive contact
             // either: a whole group shot at the same high ISO is penalised
             // *equally*, and a constant offset cannot change a within-group
-            // ranking. Relative noise buys nothing and costs this. Fixing the
-            // estimator so it stops competing with sharpness is real work and
-            // stays on the outstanding list.
-            let noise_penalty = metric(m, "cull_noise", 1.0);
+            // ranking. Relative noise buys nothing and costs this.
+            //
+            // The fix is `cull_noise_flat`: the same residual, measured only
+            // where the smoothed frame carries no gradient, so detail no
+            // longer reads as grain. Preferred whenever the row has it; rows
+            // indexed before it existed fall back to the frame-wide number,
+            // and both are reported so a disagreement between them is visible.
+            let noise_frame_wide = metric(m, "cull_noise", 1.0);
+            let noise_flat = if all_have_flat_noise {
+                m.get("cull_noise_flat").and_then(Value::as_f64).map(unit)
+            } else {
+                None
+            };
+            let noise_penalty = noise_flat.unwrap_or(noise_frame_wide);
             let highlight_clip = metric(m, "cull_highlight_clip", 0.0);
             let shadow_clip = metric(m, "cull_shadow_clip", 0.0);
             let clipping_penalty = unit(highlight_clip + shadow_clip);
@@ -444,9 +481,14 @@ fn rank_group_records(
                     .map(unit),
                 moment: None,
                 eyes_closed_intended,
+                soft: false,
+                blink: false,
+                occluded: false,
                 hard_defect: false,
+                weak_face: false,
                 cull_exposure: exposure,
                 cull_noise: noise_penalty,
+                cull_noise_frame_wide: noise_flat.map(|_| noise_frame_wide),
                 cull_highlight_clip: highlight_clip,
                 cull_shadow_clip: shadow_clip,
                 cull_technical_score: technical_score,
@@ -487,6 +529,28 @@ fn rank_group_records(
     for (item, moment) in scored.iter_mut().zip(moments) {
         item.moment = if moment_active { moment } else { None };
     }
+
+    // The group's best face readings, for the relative defect rules: a proxy
+    // that reads "closed" on every frame of a burst says nothing about any one
+    // of them, but a frame that reads clearly worse than its siblings does.
+    let faced = scored.iter().filter(|s| s.cull_face_count > 0);
+    let best_eye_openness = faced
+        .clone()
+        .map(|s| s.cull_eye_openness)
+        .fold(f64::MIN, f64::max);
+    let least_occlusion = faced
+        .clone()
+        .map(|s| s.cull_occlusion)
+        .fold(f64::MAX, f64::min);
+    let best_face_score = faced.map(|s| s.cull_face_score).fold(f64::MIN, f64::max);
+    let best_sharpness = scored
+        .iter()
+        .map(|s| s.sharpness_effective)
+        .fold(f64::MIN, f64::max);
+    let group_size = scored.len();
+    let relative = rk.relative_defect_rules;
+    let margin = rk.relative_defect_margin.max(0.0);
+    let occlusion_margin = rk.relative_occlusion_margin.max(0.0);
 
     for item in scored.iter_mut() {
         // A kiss or a laugh with the eyes shut is not a blink, so the gate
@@ -545,12 +609,51 @@ fn rank_group_records(
         // darker celebration must still be able to beat a bright empty frame.
         // Nor is the composite face score, which also falls for a face that
         // is merely small in the frame.
-        item.hard_defect = item.sharpness_effective < rk.reason_blur_threshold
-            || (group_has_faces
-                && item.cull_face_count > 0
-                && ((!item.eyes_closed_intended
-                    && item.cull_blink_penalty > rk.reject_blink_penalty_threshold)
-                    || item.cull_occlusion > rk.reject_occlusion_threshold));
+        //
+        // Under `relative_defect_rules` the two face proxies also have to be
+        // clearly worse than the group's best before they count: measured on a
+        // real shoot they sat past their absolute thresholds on almost every
+        // frame, which made every non-pick a "clear defect".
+        let blink_defect = !item.eyes_closed_intended
+            && item.cull_blink_penalty > rk.reject_blink_penalty_threshold
+            && (!relative || item.cull_eye_openness < best_eye_openness - margin);
+        // Occlusion gets its own, wider margin: head turns and side light move
+        // it by 0.1–0.35 inside one group of people (median 0.11 measured),
+        // so the shared margin fired on a frame in most multi-face groups.
+        let occlusion_defect = item.cull_occlusion > rk.reject_occlusion_threshold
+            && (!relative || item.cull_occlusion > least_occlusion + occlusion_margin);
+        // Blur too: inside one burst the frames are within 0.01–0.10 of each
+        // other, so an absolute threshold either rejects the whole burst or
+        // none of it. A frame is a blur defect when it is soft *and*, where
+        // it has siblings, clearly softer than the sharpest of them. A single
+        // keeps the absolute test — there is nothing to compare it with.
+        // When the sharpest frame is itself soft there is no usable sibling
+        // to measure against, and the burst missed focus throughout: every
+        // frame is a defect, as before.
+        let blur_defect = item.sharpness_effective < rk.reason_blur_threshold
+            && (!relative
+                || !rk.relative_blur_rule
+                || group_size == 1
+                || best_sharpness < rk.reason_blur_threshold
+                || item.sharpness_effective < best_sharpness - margin);
+        item.soft = blur_defect;
+        // Labelled at the *reason* thresholds (looser than the reject ones),
+        // relative to the group where the rules are relative.
+        item.blink = group_has_faces
+            && item.cull_face_count > 0
+            && !item.eyes_closed_intended
+            && item.cull_blink_penalty > rk.reason_possible_blink_threshold
+            && (!relative || item.cull_eye_openness < best_eye_openness - margin);
+        item.occluded = group_has_faces
+            && item.cull_face_count > 0
+            && item.cull_occlusion > rk.reason_occlusion_threshold
+            && (!relative || item.cull_occlusion > least_occlusion + occlusion_margin);
+        item.hard_defect = blur_defect
+            || (group_has_faces && item.cull_face_count > 0 && (blink_defect || occlusion_defect));
+        item.weak_face = group_has_faces
+            && item.cull_face_count > 0
+            && item.cull_face_score < rk.reject_face_score_threshold
+            && (!relative || item.cull_face_score < best_face_score - margin);
     }
 
     // First usable, then the moment: every frame without a clear defect ranks
@@ -627,9 +730,7 @@ fn rank_group_records(
             item.cull_score <= (winner_score - rk.reject_score_delta).max(0.0)
                 || item.hard_defect
                 || item.cull_exposure < rk.reject_exposure_threshold
-                || (group_has_faces
-                    && item.cull_face_count > 0
-                    && item.cull_face_score < rk.reject_face_score_threshold)
+                || item.weak_face
         })
         .collect();
     let winner_index = rejects.iter().position(|r| !r);
@@ -641,7 +742,9 @@ fn rank_group_records(
         let reject_candidate = rejects[i];
         let is_winner = winner_index == Some(i);
         let mut reason_codes = Vec::new();
-        let is_soft = item.sharpness_effective < rk.reason_blur_threshold;
+        // The label follows the defect decision, so a frame is not called
+        // "blurred" in the explanation while ranking as usable.
+        let is_soft = item.soft;
         if is_soft {
             // Same threshold, different diagnosis. A soft frame whose gradients
             // all point one way is camera shake; one whose gradients point
@@ -684,19 +787,23 @@ fn rank_group_records(
             } else if item.cull_face_score < (max_face_score - rk.reason_weak_face_delta).max(0.0) {
                 reason_codes.push("weak_face_quality".to_string());
             }
-            if item.cull_occlusion > rk.reason_occlusion_threshold {
+            // The labels follow the defect decisions. Under the relative
+            // rules a proxy that reads the same on every frame of a burst is
+            // not reported on any of them — "possible blink" on 400 frames of
+            // one shoot explained nothing.
+            if item.occluded {
                 reason_codes.push("possible_occlusion".to_string());
             }
             if item.cull_eye_openness >= (max_eye_openness - rk.reason_eyes_open_delta).max(0.0)
                 && is_winner
             {
                 reason_codes.push("eyes_open_best".to_string());
-            } else if item.cull_blink_penalty > rk.reason_possible_blink_threshold {
-                reason_codes.push(if item.eyes_closed_intended {
-                    "eyes_closed_intentional".to_string()
-                } else {
-                    "possible_blink".to_string()
-                });
+            } else if item.eyes_closed_intended
+                && item.cull_blink_penalty > rk.reason_possible_blink_threshold
+            {
+                reason_codes.push("eyes_closed_intentional".to_string());
+            } else if item.blink {
+                reason_codes.push("possible_blink".to_string());
             }
         }
         // Explains the pick a technical reading would not have made. Emitted
@@ -747,6 +854,11 @@ fn rank_group_records(
         metrics.insert("sharpness".into(), Value::from(round4(item.cull_sharpness)));
         metrics.insert("exposure".into(), Value::from(round4(item.cull_exposure)));
         metrics.insert("noise".into(), Value::from(round4(item.cull_noise)));
+        // Present only when `noise` came from the flat-region estimate, so a
+        // reader can see what the frame-wide residual would have said.
+        if let Some(frame_wide) = item.cull_noise_frame_wide {
+            metrics.insert("noise_frame_wide".into(), Value::from(round4(frame_wide)));
+        }
         metrics.insert(
             "highlight_clip".into(),
             Value::from(round4(item.cull_highlight_clip)),
@@ -1074,6 +1186,11 @@ pub fn group_and_sort_images_with_config(
                 exposure_bias: r.metadata.get("exposure_bias").and_then(Value::as_f64),
                 phash: r.phash,
                 embedding: effective_embedding(&r.embedding),
+                faces: r
+                    .metadata
+                    .get("cull_face_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize,
                 sharp_region: match (
                     r.metadata
                         .get("cull_sharp_region_x")
@@ -1357,6 +1474,141 @@ mod tests {
         let groups =
             group_and_sort_images_with_config(vec![shallow, busy], None, None, Some(1), &cfg);
         assert_eq!(winner_of(&groups), "busy");
+    }
+
+    /// The real-shoot failure: on small faces the eye proxy reads "closed" on
+    /// every frame (0.07–0.26 across a whole baptism), and occlusion and the
+    /// face score sit past their thresholds just as uniformly. Under the
+    /// absolute rules every non-pick of such a burst is a clear defect and a
+    /// reject candidate; under the relative rules a frame is only a blink,
+    /// occluded or weak-faced when it reads clearly worse than its siblings.
+    #[test]
+    fn uniformly_poor_face_proxies_do_not_reject_a_whole_burst() {
+        let hash = Some(0xffff_ffff_ffff_ffff);
+        let frame = |id: &str, t: f64, eye: f64, occlusion: f64| {
+            let mut r = with_metrics(
+                rec(id, Some(t), hash),
+                &[
+                    ("cull_sharpness", 0.5),
+                    ("cull_sharpness_peak", 0.5),
+                    ("cull_exposure", 0.7),
+                    ("cull_noise", 0.1),
+                    ("cull_face_score", 0.25),
+                    ("cull_face_sharpness", 0.4),
+                    ("cull_eye_openness", eye),
+                    ("cull_blink_penalty", 1.0 - eye),
+                    ("cull_occlusion", occlusion),
+                ],
+            );
+            // Read as an integer by ranking, so it must be stored as one.
+            r.metadata.insert("cull_face_count".into(), Value::from(3));
+            r
+        };
+        // Every frame reads as a blink (penalty 0.85 > 0.75), obstructed
+        // and weak-faced (0.25 < 0.30) under the absolute rules.
+        let burst = vec![
+            frame("a", 1000.0, 0.15, 0.70),
+            frame("b", 1000.5, 0.14, 0.70),
+            frame("c", 1001.0, 0.15, 0.70),
+        ];
+        let groups = run(burst.clone());
+        assert_eq!(groups.len(), 1);
+        assert!(
+            groups[0].reject_candidate_photo_ids.is_empty(),
+            "nothing is clearly worse than its siblings: {:?}",
+            groups[0].reject_candidate_photo_ids
+        );
+        assert!(groups[0]
+            .photos
+            .iter()
+            .all(|p| p.metrics["clear_defect"] == false));
+
+        // ...but a frame whose eyes are visibly less open than the best, or
+        // whose face is visibly more obstructed, still is.
+        let mut worse = burst.clone();
+        worse.push(frame("blink", 1001.5, 0.02, 0.80));
+        // 0.25 above the clearest face: past occlusion's own, wider margin.
+        worse.push(frame("covered", 1002.0, 0.15, 0.95));
+        let groups = run(worse);
+        let rejects = &groups[0].reject_candidate_photo_ids;
+        assert!(rejects.contains(&"blink".to_string()), "{rejects:?}");
+        assert!(rejects.contains(&"covered".to_string()), "{rejects:?}");
+        assert!(!rejects.contains(&"a".to_string()), "{rejects:?}");
+
+        // The absolute rules are what the Python port pinned.
+        let mut cfg = get_culling_config("default");
+        cfg.ranking.relative_defect_rules = false;
+        let groups = group_and_sort_images_with_config(burst, None, None, Some(1), &cfg);
+        assert_eq!(groups[0].reject_candidate_photo_ids.len(), 2);
+    }
+
+    /// Two frames of one scene, differing only in focus. The frame-wide noise
+    /// residual reads the sharp frame's detail as grain (0.08 vs 0.01 measured
+    /// on real frames), so on that signal alone the *soft* frame looks
+    /// cleaner. With `cull_noise_flat` present, ranking must read it instead,
+    /// and report the frame-wide number alongside so the disagreement shows.
+    #[test]
+    fn flat_region_noise_is_preferred_over_the_frame_wide_residual() {
+        let hash = Some(0xffff_ffff_ffff_ffff);
+        // Sharpness is held equal so that noise is the only thing deciding.
+        let sharp_detail = with_metrics(
+            rec("sharp_detail", Some(1000.0), hash),
+            &[
+                ("cull_sharpness", 0.6),
+                ("cull_sharpness_peak", 0.6),
+                ("cull_exposure", 0.7),
+                ("cull_noise", 0.95),
+                ("cull_noise_flat", 0.05),
+            ],
+        );
+        let soft_detail = with_metrics(
+            rec("soft_detail", Some(1000.5), hash),
+            &[
+                ("cull_sharpness", 0.6),
+                ("cull_sharpness_peak", 0.6),
+                ("cull_exposure", 0.7),
+                ("cull_noise", 0.15),
+                ("cull_noise_flat", 0.60),
+            ],
+        );
+        let groups = run(vec![sharp_detail.clone(), soft_detail]);
+        assert_eq!(winner_of(&groups), "sharp_detail");
+        let winner = &groups[0].photos[0];
+        assert_eq!(winner.metrics["noise"], 0.05);
+        assert_eq!(winner.metrics["noise_frame_wide"], 0.95);
+
+        // Rows indexed before the flat estimate existed rank on the frame-wide
+        // value and do not pretend otherwise.
+        let legacy = with_metrics(
+            rec("legacy", Some(2000.0), hash),
+            &[
+                ("cull_sharpness", 0.6),
+                ("cull_exposure", 0.7),
+                ("cull_noise", 0.3),
+            ],
+        );
+        let groups = run(vec![legacy.clone()]);
+        let only = &groups[0].photos[0];
+        assert_eq!(only.metrics["noise"], 0.3);
+        assert!(only.metrics.get("noise_frame_wide").is_none());
+
+        // ...and a group indexed half before and half after must compare all
+        // its frames on the same estimator: the flat value is read only when
+        // every frame has it, otherwise the frame-wide one for all.
+        let mut mixed_legacy = legacy;
+        mixed_legacy.capture_time = Some(1000.2);
+        let groups = run(vec![sharp_detail, mixed_legacy]);
+        assert_eq!(groups.len(), 1, "same burst");
+        for p in &groups[0].photos {
+            assert!(
+                p.metrics.get("noise_frame_wide").is_none(),
+                "{}",
+                p.photo_id
+            );
+        }
+        let by_id = |id: &str| groups[0].photos.iter().find(|p| p.photo_id == id).unwrap();
+        assert_eq!(by_id("sharp_detail").metrics["noise"], 0.95);
+        assert_eq!(by_id("legacy").metrics["noise"], 0.3);
     }
 
     /// A three-stop bracket must come back with every frame kept. Before set

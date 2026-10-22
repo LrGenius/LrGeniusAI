@@ -63,6 +63,17 @@ struct GroupingParams {
     /// it does when it leads — without a rebuild. It is the fastest way to find
     /// out whether the signal suits a particular photographer's eye.
     semantic_weight: Option<f64>,
+    /// Scales the preset's `reject_score_delta` — how far below the pick a
+    /// frame's score must fall before it is a reject candidate.
+    ///
+    /// How hard to cull is the photographer's call, not the preset's: the same
+    /// wedding is culled to one frame per burst for a client gallery and to
+    /// three for an album edit. Above 1 fewer frames are nominated (a wider
+    /// margin), below 1 more. It moves only the score-margin rule; the
+    /// defect rules (blur, blink, occlusion, exposure) fire at their usual
+    /// thresholds, because a blink is a blink however gentle the cull.
+    /// Clamped to 0.25..4.
+    reject_margin_scale: Option<f64>,
 }
 
 /// Mirrors `_parse_grouping_params`. `Err` carries the (status, body) to
@@ -176,6 +187,19 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         },
     };
 
+    // Clamped like `semantic_weight`: a factor of 0 would reject every frame
+    // but the pick, and anything past 4 is indistinguishable from "never".
+    let reject_margin_scale = match data.get("reject_margin_scale") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        {
+            Some(n) if n.is_finite() => Some(n.clamp(0.25, 4.0)),
+            _ => return bad("Invalid reject_margin_scale value"),
+        },
+    };
+
     Ok(GroupingParams {
         photo_ids,
         phash_threshold,
@@ -186,6 +210,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         use_iqa,
         include_stored_metadata,
         semantic_weight,
+        reject_margin_scale,
     })
 }
 
@@ -480,6 +505,11 @@ async fn compute_groups(
     let mut cfg = get_culling_config(&params.culling_preset);
     if let Some(weight) = params.semantic_weight {
         cfg.ranking.semantic_weight = weight;
+    }
+    // The photographer's cull strength, applied on top of the preset's own
+    // margin so every preset keeps its relative calibration.
+    if let Some(scale) = params.reject_margin_scale {
+        cfg.ranking.reject_score_delta *= scale;
     }
     let ranking = &cfg.ranking;
 

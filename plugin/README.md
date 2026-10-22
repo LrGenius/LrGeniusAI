@@ -98,7 +98,13 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Detect exposure brackets, focus stacks and panoramas and route them to a
   `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
   off — every frame of such a set is part of one picture
-- Create a dedicated Lightroom collection set for each culling run and switch you directly to the picks collection for review
+- Choose how hard to cull (gentle / balanced / strict) without changing preset
+- Write the result as Lightroom flags, star ratings and a purple "look before
+  deleting" label, in one undo step, leaving photos you already flagged, rated
+  or labelled alone unless you say otherwise
+- Create a dedicated Lightroom collection set for each culling run, filled in
+  review order (picks best first, rejects worst first), and switch you directly
+  to the picks collection for review
 
 ---
 

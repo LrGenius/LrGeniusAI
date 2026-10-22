@@ -1111,6 +1111,73 @@ async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
     assert!(winner["metrics"].is_object());
 }
 
+/// `reject_margin_scale` is the plugin's "how hard to cull" control. The seeded
+/// burst's scores sit ~0.047 apart per frame, under the default 0.18 margin,
+/// so nothing is rejected until the margin is scaled down — and then the
+/// frames fall one by one, furthest from the pick first.
+#[tokio::test]
+async fn cull_reject_margin_scale_moves_the_score_margin_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let rejects = |scale: Option<f64>| {
+        let app = app.clone();
+        let db = db_path_str.clone();
+        async move {
+            let mut body = serde_json::json!({
+                "photo_ids": ["burst0", "burst1", "burst2"],
+                "db_path": db,
+            });
+            if let Some(scale) = scale {
+                body["reject_margin_scale"] = serde_json::json!(scale);
+            }
+            let json = cull_request(app, body).await;
+            assert_eq!(json["groups"][0]["winner_photo_id"], "burst0");
+            json["summary"]["reject_candidate_count"].as_u64().unwrap()
+        }
+    };
+
+    assert_eq!(rejects(None).await, 0, "preset margin: a gentle cull");
+    assert_eq!(
+        rejects(Some(1.0)).await,
+        0,
+        "1.0 is the preset's own margin"
+    );
+    assert_eq!(
+        rejects(Some(0.5)).await,
+        1,
+        "half the margin takes the weakest frame"
+    );
+    assert_eq!(
+        rejects(Some(0.25)).await,
+        2,
+        "a quarter leaves only the pick"
+    );
+    // Out-of-range values are clamped, not refused: 0 would mean 0.25.
+    assert_eq!(rejects(Some(0.0)).await, 2);
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/cull/grade")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["burst0"],
+                        "db_path": db_path_str,
+                        "reject_margin_scale": "wide",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn cull_omits_debug_block_unless_requested() {
     let dir = tempfile::tempdir().unwrap();
@@ -1644,6 +1711,8 @@ async fn check_unprocessed_understands_the_cull_task() {
     state.ensure_db_path(&db_path_str).await.unwrap();
     let store = state.store().unwrap();
 
+    // A prepared row carries a capture time: grouping runs on it, and a row
+    // without one is reported again (see `undated` below).
     let row = |phash: Option<&str>, faces_present: Option<bool>| {
         let mut m = serde_json::Map::new();
         if let Some(p) = phash {
@@ -1652,6 +1721,7 @@ async fn check_unprocessed_understands_the_cull_task() {
         if let Some(f) = faces_present {
             m.insert("cull_faces_present".into(), serde_json::json!(f));
         }
+        m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
         m
     };
 
@@ -1683,6 +1753,30 @@ async fn check_unprocessed_understands_the_cull_task() {
                     vector: Some(vec![0.1; 1152]),
                     metadata: row(None, None),
                 },
+                // Culled by a version whose fast path sent no capture time:
+                // the signals are there, the date is not, and it groups
+                // wrongly until prepared again.
+                lrg_store::StoreRecord {
+                    id: "undated".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0126"), Some(true));
+                        m.remove("capture_time");
+                        m
+                    },
+                },
+                // ...unless neither the catalog nor the file had one, which
+                // is stamped so the photo is not asked for on every run.
+                lrg_store::StoreRecord {
+                    id: "undated_for_good".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0127"), Some(true));
+                        m.remove("capture_time");
+                        m.insert("capture_time_unknown".into(), serde_json::json!(true));
+                        m
+                    },
+                },
             ],
         )
         .await
@@ -1697,6 +1791,7 @@ async fn check_unprocessed_understands_the_cull_task() {
                         "photo_ids": [
                             "done_faceless", "done_with_faces",
                             "needs_face_pass", "needs_everything", "unknown",
+                            "undated", "undated_for_good",
                         ],
                         "tasks": "cull",
                         "regenerate_metadata": "false",
@@ -1713,8 +1808,9 @@ async fn check_unprocessed_understands_the_cull_task() {
     let json = body_json(response).await;
     assert_eq!(
         json["photo_ids"],
-        serde_json::json!(["needs_face_pass", "needs_everything", "unknown"]),
-        "a faceless photo that has been culled must not be reported forever"
+        serde_json::json!(["needs_face_pass", "needs_everything", "unknown", "undated"]),
+        "a faceless photo that has been culled must not be reported forever, and \
+         neither is one whose capture time is known to be unavailable"
     );
 }
 

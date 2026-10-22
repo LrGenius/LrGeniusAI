@@ -281,7 +281,7 @@ producer this build uses*, not merely present:
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
-| `cull` | no `cull_phash`, or no `cull_faces_present` key |
+| `cull` | no `cull_phash`, no `cull_faces_present` key, or no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again) |
 | `metadata` | no title, caption, alt_text or keywords |
 
 `regenerate_metadata` overrides all of them.
@@ -451,6 +451,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
 

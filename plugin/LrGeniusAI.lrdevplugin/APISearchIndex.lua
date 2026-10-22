@@ -972,6 +972,10 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 			{
 				path = filePath,
 				photo_id = photoId,
+				-- Same per-photo fields the grouped variant forwards; the
+				-- capture time is what burst grouping runs on.
+				date_time = options.date_time,
+				date_time_unix = options.date_time_unix,
 				exposure_bias = options.exposure_bias,
 				is_raw = options.is_raw,
 			},
@@ -1979,9 +1983,14 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		photo_ids = photoIds,
 		phash_threshold = options.phash_threshold or "auto",
 		clip_threshold = options.clip_threshold or "auto",
-		time_delta_seconds = options.time_delta_seconds or 2,
 		culling_preset = options.culling_preset or "default",
 	}
+	-- "auto" leaves the field out, and the backend then uses the preset's own
+	-- burst window (1s default, 2s event, 3s sports). Sending the string would
+	-- be a 400. Anything else goes through as before, 2 when unset.
+	if options.time_delta_seconds ~= "auto" then
+		body.time_delta_seconds = options.time_delta_seconds or 2
+	end
 	if options.include_stored_metadata then
 		body.include_stored_metadata = true
 	end
@@ -1990,6 +1999,11 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	-- from outside without a backend rebuild; nil leaves the preset in charge.
 	if type(options.semantic_weight) == "number" then
 		body.semantic_weight = options.semantic_weight
+	end
+	-- How hard to cull: scales the preset's reject margin (see
+	-- `Util.cullRejectMarginScale`). nil keeps the preset's own margin.
+	if type(options.reject_margin_scale) == "number" then
+		body.reject_margin_scale = options.reject_margin_scale
 	end
 
 	local result, err = _request("POST", SearchIndexAPI.url("CULL"), body, 300)

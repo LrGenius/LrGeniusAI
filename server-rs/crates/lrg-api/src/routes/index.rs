@@ -248,6 +248,14 @@ async fn check_unprocessed(
                 // outstanding on every run.
                 let needs_cull_faces =
                     compute_cull && (regenerate_metadata || !m.contains_key("cull_faces_present"));
+                // A photo prepared for culling before the fast path sent a
+                // capture time has signals but no date, and groups wrongly.
+                // Re-preparing fills it in from the plugin or the file's EXIF;
+                // `capture_time_unknown` marks the ones where neither had it,
+                // so they are not asked for again on every run.
+                let needs_cull_time = compute_cull
+                    && !m.contains_key("capture_time")
+                    && !has_flag("capture_time_unknown");
                 // A photo is done for `species` only if it was checked *and*
                 // checked by the head currently on disk. Widening the taxa
                 // whitelist changes what BioCLIP can answer, so results from an
@@ -269,6 +277,7 @@ async fn check_unprocessed(
                     || needs_faces
                     || needs_cull_phash
                     || needs_cull_faces
+                    || needs_cull_time
                     || needs_species
             })
             .cloned()
