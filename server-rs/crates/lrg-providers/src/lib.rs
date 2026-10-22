@@ -3,12 +3,14 @@
 //! providers.
 
 pub mod anthropic;
+pub mod chat;
 pub mod edit_recipe;
 pub mod gemini;
 pub mod gemini_schema;
 pub mod image_encode;
 pub mod keyword_taxonomy;
 pub mod local;
+pub mod local_chat;
 pub mod local_provider;
 pub mod normalize;
 pub mod ollama;

@@ -21,6 +21,10 @@ and both are served by the same `LocalEngine` trait in
 `lrg-providers/src/local.rs`. Besides indexing photos in batches
 (`generate`), the trait answers a whole conversation with one turn,
 streaming its text as it is decoded (`chat`) — the agent chat is built on that.
+The chat itself talks to a model-neutral `ChatModel` (`lrg-providers/src/chat.rs`);
+`local_chat.rs` puts a local engine behind it, calling tools by decoding
+against a JSON Schema with one branch per tool, since llama.cpp cannot render
+the Jinja templates that carry a model's native tool-call format.
 Their build requirements differ, so they are covered separately below.
 
 **Which one ships is a per-platform decision.** Release builds enable

@@ -42,8 +42,9 @@ can never answer.
 `MLXFoundationModels`.** That module wraps Apple's FoundationModels and was
 written against a beta SDK. Nothing here uses it, and `Package.swift` turns off
 the `FoundationModelsIntegration` trait that pulls it in — but Xcode keeps the
-package graph it resolved earlier. If an existing `.build/xcode` still fails
-this way, delete `.build/xcode/SourcePackages` (or build into a fresh
+package graph it resolved earlier, and deleting only
+`.build/xcode/SourcePackages` is not enough. If an existing `.build/xcode`
+still fails this way, delete the whole `.build/xcode` (or build into a fresh
 `-derivedDataPath`) and build again.
 
 The products land in `.build/xcode/Build/Products/Release/`:
