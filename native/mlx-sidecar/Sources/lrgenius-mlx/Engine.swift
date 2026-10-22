@@ -314,16 +314,76 @@ final class Engine {
         messages.append(
             .user(userText, images: image.map { [.ciImage($0)] } ?? []))
 
-        let userInput = UserInput(chat: messages)
-
         // The same turns without the photo. Used only to price the image half
-        // of the prompt — see `textOnlyTokens` below.
+        // of the prompt — see `textOnlyTokens` in `run`.
         var textOnlyMessages: [Chat.Message] = []
         if !spec.systemPrompt.isEmpty {
             textOnlyMessages.append(.system(spec.systemPrompt))
         }
         textOnlyMessages.append(.user(userText))
-        let textOnlyInput = UserInput(chat: textOnlyMessages)
+
+        return try await run(
+            messages: messages, textOnlyMessages: image != nil ? textOnlyMessages : nil,
+            maxTokens: spec.maxTokens, temperature: spec.temperature, loaded: loaded,
+            grammar: grammar, onDelta: nil)
+    }
+
+    /// Answer a conversation with one assistant turn, handing its text to
+    /// `onDelta` as it is decoded. Mirrors `LlamaEngine::chat`.
+    ///
+    /// Where a turn's photo lands relative to its text is the model's message
+    /// generator's call (see the ordering note in `generateOne`). Nothing is
+    /// cached between calls: like a photo, every turn re-prefills the whole
+    /// conversation (see `GenerationResultPayload.prefixReused`).
+    func chat(spec: ChatSpec, onDelta: @escaping (String) -> Void) async throws
+        -> GenerationResultPayload
+    {
+        guard let loaded else { throw EngineError.noModelLoaded }
+        let hasImages = spec.messages.contains { !($0.images ?? []).isEmpty }
+        if hasImages && !loaded.supportsVision {
+            throw EngineError.visionUnsupported
+        }
+
+        var messages: [Chat.Message] = []
+        var textOnlyMessages: [Chat.Message] = []
+        for message in spec.messages {
+            switch message.role {
+            case "system":
+                messages.append(.system(message.text))
+                textOnlyMessages.append(.system(message.text))
+            case "assistant":
+                messages.append(.assistant(message.text))
+                textOnlyMessages.append(.assistant(message.text))
+            default:
+                let images = try (message.images ?? []).map {
+                    UserInput.Image.ciImage(try Self.loadImage($0))
+                }
+                messages.append(.user(message.text, images: images))
+                textOnlyMessages.append(.user(message.text))
+            }
+        }
+
+        var grammar: Grammar?
+        if let schema = spec.schema, !schema.isEmpty {
+            try await prepareGrammarVocabulary(loaded)
+            grammar = try await takeConstraint(for: schema)
+        }
+        return try await run(
+            messages: messages, textOnlyMessages: hasImages ? textOnlyMessages : nil,
+            maxTokens: spec.maxTokens, temperature: spec.temperature, loaded: loaded,
+            grammar: grammar, onDelta: onDelta)
+    }
+
+    /// Prefill `messages` and decode one answer, constrained when `grammar` is
+    /// given. `textOnlyMessages` are the same turns without their photos, and
+    /// only serve to price the image share of the prompt in the stage log;
+    /// `nil` when there is no photo.
+    private func run(
+        messages: [Chat.Message], textOnlyMessages: [Chat.Message]?, maxTokens: Int,
+        temperature: Float, loaded: Loaded, grammar: Grammar?, onDelta: ((String) -> Void)?
+    ) async throws -> GenerationResultPayload {
+        let userInput = UserInput(chat: messages)
+        let textOnlyInput = textOnlyMessages.map { UserInput(chat: $0) }
 
         return try await loaded.container.perform { context in
             let tStart = DispatchTime.now().uptimeNanoseconds
@@ -343,7 +403,7 @@ final class Engine {
             // the only way to tell the two apart. Best effort: a failure here
             // must never cost the photo its answer.
             var textOnlyTokens = promptTokens
-            if image != nil,
+            if let textOnlyInput,
                 let textOnly = try? await context.processor.prepare(input: textOnlyInput)
             {
                 textOnlyTokens = textOnly.text.tokens.size
@@ -351,7 +411,7 @@ final class Engine {
 
             guard let grammar else {
                 let parameters = GenerateParameters(
-                    maxTokens: spec.maxTokens, temperature: spec.temperature)
+                    maxTokens: maxTokens, temperature: temperature)
                 let genStart = DispatchTime.now().uptimeNanoseconds
                 var firstTokenNs: UInt64?
                 // The closure parameter is spelled out because `generate` is
@@ -367,6 +427,10 @@ final class Engine {
                     prepareMs: prepareMs, grammarMs: nil, genStart: genStart,
                     firstTokenNs: firstTokenNs, textTokens: textOnlyTokens,
                     promptTokens: promptTokens, produced: result.tokenIds.count)
+                // Unconstrained decoding hands back token ids, not text, so
+                // the answer goes out in one piece. Every chat the server
+                // sends today is constrained.
+                if !result.output.isEmpty { onDelta?(result.output) }
                 return .success(
                     text: result.output,
                     promptTokens: promptTokens,
@@ -401,7 +465,7 @@ final class Engine {
                         input: input,
                         context: context,
                         constraint: constraint,
-                        maxTokens: spec.maxTokens,
+                        maxTokens: maxTokens,
                         vocabSize: vocabSize,
                         // Soft zone only (the library's default 64-token
                         // reserve). Deliberately no `hardReserve`: the hard zone
@@ -425,7 +489,7 @@ final class Engine {
                         // emitted `{"keywords": ["19000000000...`. A quarter of
                         // the budget keeps the nudge to the tail where it
                         // belongs.
-                        completionReserve: min(64, max(1, spec.maxTokens / 4)),
+                        completionReserve: min(64, max(1, maxTokens / 4)),
                         closingBias: self.bias(for: context),
                         whitespaceBias: whitespace.bias,
                         whitespaceTokenIDs: whitespace.tokenIDs
@@ -434,6 +498,7 @@ final class Engine {
                             firstTokenNs = DispatchTime.now().uptimeNanoseconds
                         }
                         output += delta
+                        onDelta?(delta)
                         return true
                     }
                 }
@@ -441,7 +506,7 @@ final class Engine {
                 Log.info(
                     "guided generation failed after \(output.count) chars "
                         + "(\(Self.whitespaceShare(of: output))% whitespace, budget "
-                        + "\(spec.maxTokens) tokens); tail: \(String(output.suffix(120)))")
+                        + "\(maxTokens) tokens); tail: \(String(output.suffix(120)))")
                 throw error
             }
             Self.logStages(

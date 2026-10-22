@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use lrg_mlx::{GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
+use lrg_mlx::{ChatMessage, ChatRequest, GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
 
 fn model_dir() -> PathBuf {
     PathBuf::from(
@@ -106,6 +106,73 @@ async fn describes_a_photo_as_schema_valid_json() {
 
 /// Every photo in a batch must get its own slot, in order — this is what the
 /// provider relies on to zip results back to photos.
+fn message(role: &'static str, text: &str) -> ChatMessage {
+    ChatMessage {
+        role,
+        text: text.to_string(),
+        images: Vec::new(),
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs Apple silicon, a built sidecar and a real MLX model"]
+async fn answers_a_conversation_and_streams_exactly_its_text() {
+    let engine = engine().await;
+    let mut last = message("user", "What colours does this photo show?");
+    last.images.push(test_image());
+    let request = ChatRequest {
+        messages: vec![
+            message("system", "You answer briefly, as JSON."),
+            message("user", "Say hello."),
+            message("assistant", r#"{"answer": "Hello."}"#),
+            last,
+        ],
+        schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": false
+        })),
+        max_tokens: 96,
+        temperature: 0.0,
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let out = engine
+        .chat(request, Some(tx))
+        .await
+        .expect("chat should succeed");
+    let mut streamed = String::new();
+    let mut pieces = 0;
+    while let Ok(piece) = rx.try_recv() {
+        streamed.push_str(&piece);
+        pieces += 1;
+    }
+    println!("{pieces} deltas: {}", out.text);
+    assert_eq!(streamed, out.text, "the deltas must add up to the answer");
+    assert!(
+        pieces > 1,
+        "the answer should arrive in pieces, not at once"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(out.text.trim())
+        .unwrap_or_else(|e| panic!("constrained output must be valid JSON: {e}\n{}", out.text));
+    assert!(parsed["answer"].is_string(), "{parsed}");
+
+    // The engine still indexes afterwards: a chat leaves nothing behind.
+    let outputs = engine
+        .generate(vec![GenerationRequest {
+            system_prompt: "You are a photo tagger.".into(),
+            stable_prompt: "Describe the photo.".into(),
+            image: Some(test_image()),
+            schema: Some(metadata_schema()),
+            max_tokens: 256,
+            ..Default::default()
+        }])
+        .await
+        .expect("the sidecar is still there");
+    outputs[0].as_ref().expect("indexing after a chat works");
+}
+
 #[tokio::test]
 #[ignore = "needs Apple silicon, a built sidecar and a real MLX model"]
 async fn a_batch_returns_one_result_per_request() {

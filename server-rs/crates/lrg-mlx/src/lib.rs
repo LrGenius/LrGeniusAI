@@ -79,6 +79,28 @@ pub struct GenerationRequest {
     pub temperature: f32,
 }
 
+/// One turn of a conversation. Mirrors `lrg_llama::ChatMessage`.
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    /// `system`, `user` or `assistant`.
+    pub role: &'static str,
+    pub text: String,
+    /// Where they land relative to the text is the model's message format's
+    /// call.
+    pub images: Vec<RgbImage>,
+}
+
+/// A whole conversation, answered with one assistant turn. Mirrors
+/// `lrg_llama::ChatRequest`.
+#[derive(Debug, Clone, Default)]
+pub struct ChatRequest {
+    pub messages: Vec<ChatMessage>,
+    /// JSON Schema to constrain the answer with. `None` decodes freely.
+    pub schema: Option<serde_json::Value>,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GenerationOutput {
     pub text: String,

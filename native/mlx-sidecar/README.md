@@ -72,9 +72,22 @@ printf '%s\n' \
   | ./.build/xcode/Build/Products/Release/lrgenius-mlx
 ```
 
-Operations: `ping`, `load`, `generate`, `status`, `unload`, `shutdown`. Only
-`load` and `generate` are used by the Rust side; the rest exist for exactly this
-kind of manual poking.
+Operations: `ping`, `load`, `generate`, `chat`, `status`, `unload`,
+`shutdown`. The Rust side uses `load`, `generate` and `chat`; the rest exist for
+exactly this kind of manual poking.
+
+`chat` answers a conversation with one assistant turn:
+
+```bash
+'{"id":2,"op":"chat","chat":{"messages":[{"role":"system","text":"Be brief."},{"role":"user","text":"Name three primary colours."}],"max_tokens":40,"temperature":0.0}}'
+```
+
+`role` is `system`, `user` or `assistant`; a turn may carry `images` (a list
+of the payloads described below), and `schema` constrains the answer as in
+`generate`. While it decodes, the sidecar writes `{"id":2,"delta":"..."}` lines
+with the next piece of text, then the usual response with the whole answer as
+the one entry in `results`. Unconstrained answers arrive as a single delta at
+the end: that decode path hands back token ids, not text.
 
 stdout carries protocol lines *only*. Logs go to stderr, which the Rust
 supervisor inherits so they land in the server log. Nothing in the target may

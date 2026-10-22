@@ -8,7 +8,9 @@
 //! cargo test -p lrg-llama --test engine_smoke -- --ignored --nocapture
 //! ```
 
-use lrg_llama::{GenerationRequest, LlamaEngine, LlamaEngineConfig, RgbImage};
+use lrg_llama::{
+    ChatMessage, ChatRequest, GenerationRequest, LlamaEngine, LlamaEngineConfig, RgbImage,
+};
 
 fn config_from_env(n_parallel: u32) -> Option<LlamaEngineConfig> {
     let model_path = std::env::var("LRG_TEST_MODEL_GGUF").ok()?;
@@ -228,5 +230,126 @@ async fn refuses_to_overrun_the_context_window() {
     assert!(
         message.contains("context"),
         "the error must explain the context window: {message}"
+    );
+}
+
+fn message(role: &'static str, text: &str) -> ChatMessage {
+    ChatMessage {
+        role,
+        text: text.to_string(),
+        images: Vec::new(),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires LRG_TEST_MODEL_GGUF"]
+async fn answers_a_conversation_and_streams_exactly_its_text() {
+    let Some(config) = config_from_env(1) else {
+        return;
+    };
+    let vision = config.mmproj_path.is_some();
+    let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
+        .await
+        .unwrap()
+        .expect("engine should load");
+
+    let mut last = message("user", "And what colour is this photo?");
+    if vision {
+        last.images.push(red_image());
+    }
+    let request = ChatRequest {
+        messages: vec![
+            message("system", "You answer briefly, as JSON."),
+            message("user", "Say hello."),
+            message("assistant", r#"{"answer": "Hello."}"#),
+            last,
+        ],
+        schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": false
+        })),
+        max_tokens: 64,
+        temperature: 0.0,
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let out = engine
+        .chat(request, Some(tx))
+        .await
+        .expect("chat should succeed");
+    let mut streamed = String::new();
+    while let Ok(piece) = rx.try_recv() {
+        streamed.push_str(&piece);
+    }
+    assert_eq!(streamed, out.text, "the deltas must add up to the answer");
+    let parsed: serde_json::Value = serde_json::from_str(out.text.trim())
+        .unwrap_or_else(|e| panic!("constrained output must be valid JSON: {e}\n{}", out.text));
+    assert!(parsed["answer"].is_string(), "{parsed}");
+}
+
+#[tokio::test]
+#[ignore = "requires LRG_TEST_MODEL_GGUF"]
+async fn indexing_after_a_chat_pins_its_prefix_again() {
+    let Some(config) = config_from_env(1) else {
+        return;
+    };
+    let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
+        .await
+        .unwrap()
+        .expect("engine should load");
+
+    engine.generate(vec![base_request()]).await.unwrap()[0]
+        .as_ref()
+        .expect("first generation should succeed");
+    engine
+        .chat(
+            ChatRequest {
+                messages: vec![message("user", "Say hello.")],
+                max_tokens: 16,
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("chat should succeed");
+
+    let out = engine.generate(vec![base_request()]).await.unwrap();
+    let after = out[0]
+        .as_ref()
+        .expect("generation after a chat should succeed");
+    assert!(
+        !after.prefix_reused,
+        "the chat evicted the prefix, so reusing it would read the conversation"
+    );
+    assert!(!after.text.trim().is_empty(), "no output");
+}
+
+#[tokio::test]
+#[ignore = "requires LRG_TEST_MODEL_GGUF"]
+async fn a_conversation_beyond_the_window_is_refused() {
+    let Some(config) = config_from_env(1) else {
+        return;
+    };
+    let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
+        .await
+        .unwrap()
+        .expect("engine should load");
+
+    let err = engine
+        .chat(
+            ChatRequest {
+                messages: vec![message("user", &"word ".repeat(6000))],
+                max_tokens: 64,
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect_err("should refuse, not truncate");
+    assert!(
+        matches!(err, lrg_llama::LlamaError::ContextOverflow(_)),
+        "{err}"
     );
 }

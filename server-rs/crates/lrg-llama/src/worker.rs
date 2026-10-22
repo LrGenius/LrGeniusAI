@@ -43,16 +43,24 @@ use llama_cpp_2::mtmd::{
 };
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::device;
-use crate::engine::{EngineInfo, GenerationOutput, GenerationRequest, LlamaEngineConfig};
+use crate::engine::{
+    ChatMessage, ChatRequest, EngineInfo, GenerationOutput, GenerationRequest, LlamaEngineConfig,
+};
 use crate::LlamaError;
 
 pub(crate) enum Job {
     Generate {
         requests: Vec<GenerationRequest>,
         reply: oneshot::Sender<Vec<Result<GenerationOutput, LlamaError>>>,
+    },
+    Chat {
+        request: ChatRequest,
+        deltas: Option<UnboundedSender<String>>,
+        reply: oneshot::Sender<Result<GenerationOutput, LlamaError>>,
     },
 }
 
@@ -256,6 +264,17 @@ pub(crate) fn run(
             Job::Generate { requests, reply } => {
                 let results = state.generate_batch(&mut ctx, &requests);
                 let _ = reply.send(results);
+            }
+            Job::Chat {
+                request,
+                deltas,
+                reply,
+            } => {
+                // A caller that stopped waiting dropped its receiver; the
+                // decode checks this between tokens and stops early.
+                let abandoned = || reply.is_closed();
+                let result = state.chat(&mut ctx, &request, deltas.as_ref(), &abandoned);
+                let _ = reply.send(result);
             }
         }
     }
@@ -493,26 +512,8 @@ impl WorkerState<'_> {
             )));
         }
 
-        // A catalog vocabulary of a few hundred keywords can outgrow `n_batch`,
-        // and a batch larger than that is rejected outright, so feed the prefix
-        // in slices. Only the very last token needs logits, matching what
-        // `add_sequence` would have requested.
-        let n_batch = usize::try_from(ctx.n_batch()).unwrap_or(512).max(1);
-        let mut pos = 0i32;
-        for slice in tokens.chunks(n_batch) {
-            let mut batch = LlamaBatch::new(slice.len(), 1);
-            for (offset, token) in slice.iter().enumerate() {
-                let at = pos + i32::try_from(offset).unwrap_or(0);
-                batch
-                    .add(*token, at, &[PREFIX_SEQ], at + 1 == len)
-                    .map_err(|e| {
-                        LlamaError::Inference(format!("building the prompt batch failed: {e}"))
-                    })?;
-            }
-            ctx.decode(&mut batch)
-                .map_err(|e| LlamaError::Inference(format!("evaluating the prompt failed: {e}")))?;
-            pos += i32::try_from(slice.len()).unwrap_or(0);
-        }
+        // A catalog vocabulary of a few hundred keywords can outgrow `n_batch`.
+        eval_tokens(ctx, &tokens, PREFIX_SEQ)?;
 
         self.prefix = Some(PinnedPrefix { hash, len });
         log::debug!("llama prefix cache miss: evaluated {len} tokens");
@@ -747,7 +748,7 @@ impl WorkerState<'_> {
 
         let n_ctx_seq = self.n_ctx_seq;
         let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
-        let mut sampler = self.build_sampler(request)?;
+        let mut sampler = self.build_sampler(request.schema.as_ref(), request.temperature)?;
 
         let (n_past, tail_tokens) = match self.mtmd {
             Some(mtmd) => {
@@ -845,9 +846,164 @@ impl WorkerState<'_> {
         Ok(slot)
     }
 
-    fn build_sampler(&self, request: &GenerationRequest) -> Result<LlamaSampler, LlamaError> {
+    /// Render a conversation through the chat template, with the media
+    /// marker after the text of every turn that carries a photo. mtmd hands
+    /// the bitmaps out in marker order, which is turn order.
+    fn render_chat(&self, messages: &[ChatMessage]) -> Result<String, LlamaError> {
+        let marker = mtmd_default_marker();
+        let content = |message: &ChatMessage| {
+            // A marker that arrived inside the text (a caption, a tool
+            // result) would claim a photo nobody sent.
+            let mut text = message.text.replace(marker, "");
+            for _ in &message.images {
+                text.push('\n');
+                text.push_str(marker);
+            }
+            text
+        };
+        let Some(template) = &self.chat_template else {
+            let mut prompt = messages
+                .iter()
+                .map(|m| format!("{}: {}", m.role, content(m)))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            prompt.push_str("\n\nassistant:");
+            return Ok(prompt);
+        };
+        let turns = messages
+            .iter()
+            .map(|m| {
+                LlamaChatMessage::new(m.role.to_string(), content(m))
+                    .map_err(|e| LlamaError::Prompt(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.model
+            .apply_chat_template(template, &turns, true)
+            .map_err(|e| LlamaError::Prompt(e.to_string()))
+    }
+
+    /// Answer a conversation in sequence 0, sending text to `deltas` as it
+    /// is decoded.
+    ///
+    /// The whole cache is cleared first. Sequence 0 holds the pinned indexing
+    /// prefix and the other sequences copies of it, and a conversation shares
+    /// nothing with either; the next indexing batch pins its prefix again.
+    fn chat(
+        &mut self,
+        ctx: &mut LlamaContext,
+        request: &ChatRequest,
+        deltas: Option<&UnboundedSender<String>>,
+        abandoned: &dyn Fn() -> bool,
+    ) -> Result<GenerationOutput, LlamaError> {
+        let images: Vec<&crate::RgbImage> =
+            request.messages.iter().flat_map(|m| &m.images).collect();
+        if !images.is_empty() && self.mtmd.is_none() {
+            return Err(LlamaError::Prompt(
+                "this model has no multimodal projector loaded, so it cannot look at photos"
+                    .to_string(),
+            ));
+        }
+
+        let prompt = self.render_chat(&request.messages)?;
+        self.prefix = None;
+        ctx.clear_kv_cache();
+
+        let n_ctx_seq = self.n_ctx_seq;
+        let (mut n_past, prompt_tokens) = match self.mtmd {
+            Some(mtmd) => {
+                let bitmaps = images
+                    .iter()
+                    .map(|image| {
+                        MtmdBitmap::from_image_data(image.width, image.height, &image.data)
+                            .map_err(|e| LlamaError::Image(e.to_string()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let bitmaps: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+                let chunks = mtmd
+                    .tokenize(
+                        MtmdInputText {
+                            text: prompt,
+                            add_special: true,
+                            parse_special: true,
+                        },
+                        &bitmaps,
+                    )
+                    .map_err(|e| {
+                        LlamaError::Prompt(format!("preparing the conversation failed: {e}"))
+                    })?;
+                let tokens = i32::try_from(chunks.total_tokens()).unwrap_or(i32::MAX);
+                check_chat_budget(tokens, request.max_tokens, n_ctx_seq)?;
+                let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(512);
+                let n_past = chunks
+                    .eval_chunks(mtmd, ctx, 0, PREFIX_SEQ, n_batch, true)
+                    .map_err(|e| {
+                        LlamaError::Inference(format!("evaluating the conversation failed: {e}"))
+                    })?;
+                (n_past, tokens)
+            }
+            None => {
+                let tokens = self
+                    .model
+                    .str_to_token(&prompt, AddBos::Always)
+                    .map_err(|e| {
+                        LlamaError::Prompt(format!("tokenizing the conversation failed: {e}"))
+                    })?;
+                let count = i32::try_from(tokens.len()).unwrap_or(i32::MAX);
+                check_chat_budget(count, request.max_tokens, n_ctx_seq)?;
+                eval_tokens(ctx, &tokens, PREFIX_SEQ)?;
+                (count, count)
+            }
+        };
+
+        // `sample()` accepts the token into the chain itself — see the note
+        // in `prefill_one` on why accepting again breaks the grammar.
+        let mut sampler = self.build_sampler(request.schema.as_ref(), request.temperature)?;
+        let mut token = sampler.sample(ctx, -1);
+        let budget = request.max_tokens.max(1);
+        let mut bytes = Vec::new();
+        let mut stream = Utf8Stream::default();
+        let mut completion_tokens = 0u32;
+        let mut batch = LlamaBatch::new(1, 1);
+        while !self.model.is_eog_token(token) {
+            // A piece that will not render costs its text, not the answer —
+            // the same as `Slot::push_token`.
+            let piece = token_bytes(self.model, token).unwrap_or_default();
+            bytes.extend_from_slice(&piece);
+            completion_tokens += 1;
+            if let (Some(deltas), Some(text)) = (deltas, stream.push(&piece)) {
+                let _ = deltas.send(text);
+            }
+            if completion_tokens >= budget || n_past >= n_ctx_seq || abandoned() {
+                break;
+            }
+            batch.clear();
+            batch
+                .add(token, n_past, &[PREFIX_SEQ], true)
+                .map_err(|e| LlamaError::Inference(format!("building the batch failed: {e}")))?;
+            ctx.decode(&mut batch)
+                .map_err(|e| LlamaError::Inference(format!("decode failed: {e}")))?;
+            n_past += 1;
+            token = sampler.sample(ctx, -1);
+        }
+        if let (Some(deltas), Some(rest)) = (deltas, stream.finish()) {
+            let _ = deltas.send(rest);
+        }
+
+        Ok(GenerationOutput {
+            text: String::from_utf8_lossy(&bytes).into_owned(),
+            prompt_tokens: prompt_tokens.cast_unsigned(),
+            completion_tokens,
+            prefix_reused: false,
+        })
+    }
+
+    fn build_sampler(
+        &self,
+        schema: Option<&serde_json::Value>,
+        temperature: f32,
+    ) -> Result<LlamaSampler, LlamaError> {
         let mut stages = Vec::new();
-        if let Some(schema) = &request.schema {
+        if let Some(schema) = schema {
             let factory = llguidance::ParserFactory::new_simple(&self.tok_env)
                 .map_err(|e| LlamaError::Prompt(format!("grammar setup failed: {e}")))?;
             let grammar = llguidance::api::TopLevelGrammar::from_json_schema(schema.clone());
@@ -861,10 +1017,10 @@ impl WorkerState<'_> {
             })?;
             stages.push(LlamaSampler::from(llguidance::Matcher::new(Ok(parser))));
         }
-        if request.temperature <= 0.0 {
+        if temperature <= 0.0 {
             stages.push(LlamaSampler::greedy());
         } else {
-            stages.push(LlamaSampler::temp(request.temperature));
+            stages.push(LlamaSampler::temp(temperature));
             stages.push(LlamaSampler::dist(0));
         }
         Ok(LlamaSampler::chain_simple(stages))
@@ -978,6 +1134,100 @@ fn token_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, LlamaEr
     }
 }
 
+/// Evaluate `tokens` into `seq_id` from position 0.
+///
+/// Fed in slices of `n_batch`, since a larger batch is rejected outright.
+/// Only the very last token requests logits, which is all a following
+/// `sample(ctx, -1)` reads.
+fn eval_tokens(
+    ctx: &mut LlamaContext,
+    tokens: &[LlamaToken],
+    seq_id: i32,
+) -> Result<(), LlamaError> {
+    let n_batch = usize::try_from(ctx.n_batch()).unwrap_or(512).max(1);
+    let mut start = 0usize;
+    for slice in tokens.chunks(n_batch) {
+        let mut batch = LlamaBatch::new(slice.len(), 1);
+        for (offset, token) in slice.iter().enumerate() {
+            let index = start + offset;
+            let pos = i32::try_from(index).unwrap_or(i32::MAX);
+            batch
+                .add(*token, pos, &[seq_id], index + 1 == tokens.len())
+                .map_err(|e| {
+                    LlamaError::Inference(format!("building the prompt batch failed: {e}"))
+                })?;
+        }
+        ctx.decode(&mut batch)
+            .map_err(|e| LlamaError::Inference(format!("evaluating the prompt failed: {e}")))?;
+        start += slice.len();
+    }
+    Ok(())
+}
+
+/// Turns token bytes into text without splitting a character. A UTF-8
+/// character can straddle two tokens, so an incomplete tail waits for the
+/// next token.
+#[derive(Default)]
+struct Utf8Stream {
+    pending: Vec<u8>,
+}
+
+impl Utf8Stream {
+    /// The text the bytes so far complete, if any. Invalid bytes become
+    /// U+FFFD, exactly as `String::from_utf8_lossy` renders the final text.
+    fn push(&mut self, bytes: &[u8]) -> Option<String> {
+        self.pending.extend_from_slice(bytes);
+        let mut out = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(text) => {
+                    out.push_str(text);
+                    self.pending.clear();
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    out.push_str(std::str::from_utf8(&self.pending[..valid]).unwrap_or_default());
+                    match e.error_len() {
+                        None => {
+                            self.pending.drain(..valid);
+                            break;
+                        }
+                        Some(len) => {
+                            out.push(char::REPLACEMENT_CHARACTER);
+                            self.pending.drain(..valid + len);
+                        }
+                    }
+                }
+            }
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// Whatever was still waiting for the rest of a character.
+    fn finish(&mut self) -> Option<String> {
+        let rest = std::mem::take(&mut self.pending);
+        (!rest.is_empty()).then(|| String::from_utf8_lossy(&rest).into_owned())
+    }
+}
+
+/// A conversation has the window of sequence 0, which is `n_ctx_seq`.
+fn check_chat_budget(
+    prompt_tokens: i32,
+    max_tokens: u32,
+    n_ctx_seq: i32,
+) -> Result<(), LlamaError> {
+    let needed = i64::from(prompt_tokens) + i64::from(max_tokens);
+    if needed > i64::from(n_ctx_seq) {
+        return Err(LlamaError::ContextOverflow(format!(
+            "the conversation ({prompt_tokens} tokens) plus room for a {max_tokens}-token answer \
+             does not fit the {n_ctx_seq}-token context window. Start a new chat, or raise the \
+             context size (or lower Photos in parallel) in the plugin settings."
+        )));
+    }
+    Ok(())
+}
+
 /// `n_ctx_seq` is the window *one photo* gets, not the whole cache — see
 /// [`ctx_per_seq`].
 fn check_budget(
@@ -1016,6 +1266,34 @@ fn clone_err(e: &LlamaError) -> LlamaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_stream_holds_a_character_split_across_tokens() {
+        let mut stream = Utf8Stream::default();
+        let bytes = "ä!".as_bytes();
+        assert_eq!(stream.push(&bytes[..1]), None);
+        assert_eq!(stream.push(&bytes[1..]).as_deref(), Some("ä!"));
+        assert_eq!(stream.finish(), None);
+    }
+
+    #[test]
+    fn utf8_stream_renders_invalid_bytes_like_the_final_text() {
+        let raw = [b'a', 0xFF, b'b', 0xE2, 0x82];
+        let mut stream = Utf8Stream::default();
+        let mut streamed = String::new();
+        for byte in raw {
+            streamed.push_str(&stream.push(&[byte]).unwrap_or_default());
+        }
+        streamed.push_str(&stream.finish().unwrap_or_default());
+        assert_eq!(streamed, String::from_utf8_lossy(&raw));
+    }
+
+    #[test]
+    fn chat_budget_names_the_way_out() {
+        assert!(check_chat_budget(1000, 1000, 2000).is_ok());
+        let err = check_chat_budget(1500, 1000, 2000).unwrap_err().to_string();
+        assert!(err.contains("Start a new chat"), "{err}");
+    }
 
     #[test]
     fn budget_check_rejects_overflow_before_any_decode() {

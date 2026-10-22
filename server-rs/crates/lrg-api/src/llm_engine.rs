@@ -59,8 +59,12 @@ mod imp {
     use std::time::Instant;
 
     use async_trait::async_trait;
-    use lrg_llama::{GenerationRequest, LlamaEngine, LlamaEngineConfig, RgbImage};
-    use lrg_providers::local::{LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine};
+    use lrg_llama::{
+        ChatMessage, ChatRequest, GenerationRequest, LlamaEngine, LlamaEngineConfig, RgbImage,
+    };
+    use lrg_providers::local::{
+        LocalChatRequest, LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine, TextDeltas,
+    };
 
     /// Wraps a loaded engine so `lrg-providers` can drive it without knowing
     /// anything about llama.cpp.
@@ -130,6 +134,52 @@ mod imp {
             // value to fit the context window, so read it back off the engine
             // rather than off the settings.
             self.engine.info().n_parallel.max(1) as usize
+        }
+
+        async fn chat(
+            &self,
+            request: LocalChatRequest,
+            deltas: Option<TextDeltas>,
+        ) -> Result<LocalResponse, String> {
+            let mut messages = Vec::with_capacity(request.messages.len());
+            for message in request.messages {
+                let images = message
+                    .images
+                    .into_iter()
+                    .map(|image| RgbImage::new(image.width, image.height, image.rgb))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                messages.push(ChatMessage {
+                    role: message.role.as_str(),
+                    text: message.text,
+                    images,
+                });
+            }
+            let output = self
+                .engine
+                .chat(
+                    ChatRequest {
+                        messages,
+                        schema: request.schema,
+                        max_tokens: request.max_tokens,
+                        temperature: request.temperature,
+                    },
+                    deltas,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(LocalResponse {
+                text: output.text,
+                prompt_tokens: output.prompt_tokens,
+                completion_tokens: output.completion_tokens,
+                prefix_reused: output.prefix_reused,
+            })
+        }
+
+        fn context_window(&self) -> Option<u32> {
+            // A conversation runs in one sequence, so it gets one sequence's
+            // share of the cache, not the whole of it.
+            Some(self.engine.info().n_ctx_seq)
         }
     }
 

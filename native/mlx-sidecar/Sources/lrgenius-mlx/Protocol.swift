@@ -22,6 +22,7 @@ enum RequestOp: String, Codable {
     case ping
     case load
     case generate
+    case chat
     case status
     case unload
     case shutdown
@@ -41,11 +42,15 @@ struct SidecarRequest: Decodable {
     /// `generate` only.
     let requests: [GenerationSpec]?
 
+    /// `chat` only.
+    let chat: ChatSpec?
+
     enum CodingKeys: String, CodingKey {
         case id
         case op
         case modelDir = "model_dir"
         case requests
+        case chat
     }
 }
 
@@ -86,7 +91,39 @@ struct GenerationSpec: Decodable {
     }
 }
 
+/// One turn of a conversation. Mirrors `lrg_mlx::protocol::ChatMessageSpec`.
+struct ChatMessageSpec: Decodable {
+    /// `system`, `user` or `assistant`.
+    let role: String
+    let text: String
+    /// Absent when the turn has none.
+    let images: [ImagePayload]?
+}
+
+/// A conversation, answered with one assistant turn. While it decodes, the
+/// answer's text goes out as `SidecarDelta` lines; the final response then
+/// carries the whole of it as the single entry in `results`.
+struct ChatSpec: Decodable {
+    let messages: [ChatMessageSpec]
+    let schema: String?
+    let maxTokens: Int
+    let temperature: Float
+
+    enum CodingKeys: String, CodingKey {
+        case messages
+        case schema
+        case maxTokens = "max_tokens"
+        case temperature
+    }
+}
+
 // MARK: - Responses
+
+/// The next piece of a `chat` answer's text, sent before its final response.
+struct SidecarDelta: Encodable {
+    let id: Int
+    let delta: String
+}
 
 /// What the engine settled on after loading. Mirrors `lrg_llama::EngineInfo`
 /// closely enough that `/llm/status` can report either backend uniformly.

@@ -18,8 +18,10 @@ see [`docs/wiki/Dev-Agent-Bridge.md`](../docs/wiki/Dev-Agent-Bridge.md)),
 There are two *local* LLM backends, selected as the `llamacpp` and `mlx`
 providers. They are independent — a build can have either, both, or neither —
 and both are served by the same `LocalEngine` trait in
-`lrg-providers/src/local_provider.rs`. Their build requirements differ, so they
-are covered separately below.
+`lrg-providers/src/local.rs`. Besides indexing photos in batches
+(`generate`), the trait answers a whole conversation with one turn,
+streaming its text as it is decoded (`chat`) — the agent chat is built on that.
+Their build requirements differ, so they are covered separately below.
 
 **Which one ships is a per-platform decision.** Release builds enable
 `llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not
