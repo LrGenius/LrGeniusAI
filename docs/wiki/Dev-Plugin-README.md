@@ -23,6 +23,8 @@ LrGeniusAI adds a backend-powered AI layer to Lightroom Classic. It helps you:
   the catalog and work in Lightroom through the agent bridge (`AgentBridge.lua`,
   `AgentCommands.lua`); see `docs/wiki/Help-AI-Agents.md` and read
   `docs/wiki/Disclaimer.md` first
+- Chat with the catalog in the browser (*Chat with Your Catalog*, `TaskChat.lua`):
+  a local model does that same work, asking before it changes anything
 
 The plugin is designed to work with local and cloud providers, while keeping Lightroom as your main workspace.
 
