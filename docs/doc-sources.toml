@@ -133,6 +133,7 @@ sources = [
 # LLM edit path, so the page documents the style engine only.
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskAiEditPhotos.lua",
+  "plugin/LrGeniusAI.lrdevplugin/AestheticRefine.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopEditManager.lua",
   "server-rs/crates/lrg-api/src/routes/style_edit.rs",
   "server-rs/crates/lrg-analysis/src/style_engine.rs",

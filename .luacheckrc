@@ -3,6 +3,7 @@ std = "lua51"
 -- Lightroom globals and project-specific globals
 globals = {
     "import",
+    "AestheticRefine",
     "AgentBridge",
     "AgentCommands",
     "PluginTests",

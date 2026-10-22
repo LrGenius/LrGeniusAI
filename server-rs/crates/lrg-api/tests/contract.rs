@@ -2018,6 +2018,58 @@ async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
 }
 
 // ---------------------------------------------------------------------------
+// /v1/edit/score
+//
+// The plugin's aesthetic refinement loop scores each candidate render through
+// this route. Its two failure shapes decide what the user is told, so both are
+// pinned: a request with nothing to score, and a backend without the model.
+// ---------------------------------------------------------------------------
+
+async fn score_request(
+    app: axum::Router,
+    image: Option<(&str, &[u8])>,
+) -> (StatusCode, serde_json::Value) {
+    let (content_type, body) = multipart_body(&[], image);
+    let response = app
+        .oneshot(
+            Request::post("/v1/edit/score")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn edit_score_rejects_a_request_without_an_image() {
+    let (app, _) = fresh_app();
+    let (status, json) = score_request(app, None).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert_eq!(json["status"], "error");
+    assert!(json["error"].is_string(), "{json}");
+}
+
+#[tokio::test]
+async fn edit_score_names_the_missing_model_and_what_to_do_about_it() {
+    let (app, _) = fresh_app();
+    let (status, json) = score_request(app, Some(("render.jpg", b"not-a-real-jpeg"))).await;
+
+    // Not a 500: nothing is broken, the model just is not on disk. The plugin
+    // shows this string as it stands, so it has to be the instruction.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert_eq!(json["status"], "error");
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("aesthetic model") && error.contains("Download AI models"),
+        "{json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Analysis depth (`reasoning_effort`): a value that is not a level is refused
 // by name rather than quietly run — and billed — at another level.
 // ---------------------------------------------------------------------------

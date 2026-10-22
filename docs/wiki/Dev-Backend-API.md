@@ -555,6 +555,25 @@ conflicts with the target has its white balance stripped before it reaches the
 prompt, so the model is never anchored on a number the schema it must answer in
 cannot express.
 
+### `POST /v1/edit/score`
+The aesthetic score of one rendered image, and nothing else: nothing is stored and no
+photo record is touched. Multipart with a single `image` part (any format the `image`
+crate decodes; the plugin sends the JPEG it exports). Answers
+`{"status": "success", "score": 5.87, "model": "<aesthetic model id>"}`, the score on the
+scorer's 1–9 scale rounded to two decimals — the same figure `POST /v1/index/photos`
+stores for a photo.
+
+It exists for AI Edit's optional refinement loop (`AestheticRefine.lua`), which applies a
+candidate edit to a photo, renders it and asks what the scorer makes of it, several times
+per photo. The score of an intermediate render belongs to no photo, which is why this is
+not an indexing task.
+
+| Status | Body | When |
+|---|---|---|
+| 400 | `{"status": "error", "error": ...}` | No `image` part, or an empty one |
+| 503 | `{"status": "error", "error": ...}` | The aesthetic model is not downloaded. The message is the instruction ("run "Download AI models" in Plug-in Manager") and is shown as it stands |
+| 500 | `{"status": "error", "error": ...}` | The image could not be decoded, or the model failed |
+
 ---
 
 ## Face Detection & Persons

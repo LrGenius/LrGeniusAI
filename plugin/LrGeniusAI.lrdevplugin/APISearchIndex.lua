@@ -106,6 +106,7 @@ local ENDPOINTS = {
 	EDIT = "/v1/edit/recipe",
 	EDIT_BASE64 = "/v1/edit/recipe/base64",
 	STYLE_EDIT = "/v1/edit/style",
+	EDIT_SCORE = "/v1/edit/score",
 	TRAINING_ADD = "/v1/edit/training",
 	TRAINING_LIST = "/v1/edit/training",
 	TRAINING_CLEAR = "/v1/edit/training", -- DELETE /v1/edit/training (all)
@@ -5495,6 +5496,40 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	end
 	log:error("styleEdit unexpected status: " .. tostring(response.status))
 	return false, response.error or "Unexpected response"
+end
+
+---
+-- The aesthetic score (1..9, higher is better) of one rendered image.
+--
+-- Stores nothing on the backend: the caller is trying candidate edits, and the
+-- score of an intermediate render belongs to no photo record. AI Edit's
+-- aesthetic refinement (AestheticRefine.lua) is the caller.
+-- @param filepath string A rendered JPEG, as exportPhotoForIndexing produces.
+-- @return number|nil score, string|nil error The error is the backend's own
+--   words, which for a missing model already say what to do.
+---
+function SearchIndexAPI.scoreEditedPhoto(filepath)
+	if not filepath or not LrFileUtils.exists(filepath) then
+		return nil, "No rendered image to score"
+	end
+	local url = SearchIndexAPI.url("EDIT_SCORE")
+	local mimeChunks = {
+		{
+			name = "image",
+			fileName = LrPathUtils.leafName(filepath),
+			filePath = filepath,
+			contentType = "image/jpeg",
+		},
+	}
+	local response, err = _requestMultipart(url, mimeChunks, 60)
+	if not response then
+		return nil, err or "Unknown error"
+	end
+	local score = tonumber(response.score)
+	if response.status == "success" and score then
+		return score, nil
+	end
+	return nil, response.error or "Unexpected response"
 end
 
 --- Sends the update manifest and plugin path to the backend to perform a code-only update.
