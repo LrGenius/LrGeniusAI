@@ -295,30 +295,35 @@ async fn the_page_is_served_with_strict_headers() {
 /// An OpenAI-compatible server that first calls `get_status`, then answers,
 /// and keeps what it was sent.
 async fn fake_server(seen: Arc<std::sync::Mutex<Vec<Value>>>) -> String {
-    use axum::routing::post;
-    let app = axum::Router::new().route(
-        "/v1/chat/completions",
-        post(move |axum::Json(body): axum::Json<Value>| {
-            let seen = seen.clone();
-            async move {
-                let first = {
-                    let mut seen = seen.lock().unwrap();
-                    seen.push(body);
-                    seen.len() == 1
-                };
-                let message = if first {
-                    json!({"content": null, "tool_calls": [{"id": "call_1", "type": "function",
+    use axum::routing::{get, post};
+    let app = axum::Router::new()
+        .route(
+            "/v1/models",
+            get(|| async { axum::Json(json!({"data": [{"id": "served-model"}]})) }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let seen = seen.clone();
+                async move {
+                    let first = {
+                        let mut seen = seen.lock().unwrap();
+                        seen.push(body);
+                        seen.len() == 1
+                    };
+                    let message = if first {
+                        json!({"content": null, "tool_calls": [{"id": "call_1", "type": "function",
                         "function": {"name": "get_status", "arguments": "{}"}}]})
-                } else {
-                    json!({"content": "Your catalog is fine."})
-                };
-                axum::Json(json!({
-                    "choices": [{"finish_reason": "stop", "message": message}],
-                    "usage": {"prompt_tokens": 900, "completion_tokens": 12}
-                }))
-            }
-        }),
-    );
+                    } else {
+                        json!({"content": "Your catalog is fine."})
+                    };
+                    axum::Json(json!({
+                        "choices": [{"finish_reason": "stop", "message": message}],
+                        "usage": {"prompt_tokens": 900, "completion_tokens": 12}
+                    }))
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -447,4 +452,125 @@ async fn a_chat_on_an_ai_server_runs_the_tools_through_its_tool_calls() {
         result["content"].as_str().unwrap().contains("lightroom"),
         "{result}"
     );
+}
+
+async fn info_of(router: &axum::Router, id: &str, token: &str) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/chat/sessions/{id}"),
+            Some(token),
+            None,
+        ))
+        .await
+        .unwrap();
+    (response.status(), json_of(response).await)
+}
+
+#[tokio::test]
+async fn the_page_lists_every_model_set_up_and_starts_over_on_another() {
+    let (state, router) = app();
+    let agent_token = register(&state);
+    let server = fake_server(Arc::default()).await;
+
+    // Opened on a local model, with the user's AI server among the
+    // connections the plugin hands over.
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/chat/sessions",
+            Some(&agent_token),
+            Some(json!({"provider": "llamacpp", "model": "no-such-model",
+                        "connections": {"server_url": server, "server_apikey": "sk-secret"}})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_of(response).await;
+    let (id, token) = (
+        body["session_id"].as_str().unwrap().to_string(),
+        body["token"].as_str().unwrap().to_string(),
+    );
+
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/chat/sessions/{id}/models"),
+            Some(&token),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let offer = json_of(response).await;
+    assert!(!offer.to_string().contains("sk-secret"), "{offer}");
+    assert_eq!(offer["current"]["provider"], "llamacpp");
+    assert_eq!(offer["current"]["model"], "no-such-model");
+    let providers = offer["providers"].as_array().unwrap();
+    let served = providers
+        .iter()
+        .find(|p| p["provider"] == "openai_compatible")
+        .expect("the AI server is offered");
+    assert_eq!(served["models"], json!(["served-model"]));
+    assert!(
+        served["sends_to"].as_str().unwrap().contains("127.0.0.1"),
+        "{served}"
+    );
+    assert!(
+        providers
+            .iter()
+            .all(|p| !["chatgpt", "gemini", "anthropic"].contains(&p["provider"].as_str().unwrap())),
+        "no key, no cloud models: {offer}"
+    );
+
+    // A provider whose key was never handed over cannot be chosen, and the
+    // chat stays as it was.
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/chat/sessions/{id}/model"),
+            Some(&token),
+            Some(json!({"provider": "anthropic", "model": "claude"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(info_of(&router, &id, &token).await.0, StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/chat/sessions/{id}/model"),
+            Some(&token),
+            Some(json!({"provider": "openai_compatible", "model": "served-model"})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_of(response).await;
+    assert!(!body.to_string().contains("sk-secret"));
+    let (new_id, new_token) = (
+        body["session_id"].as_str().unwrap().to_string(),
+        body["token"].as_str().unwrap().to_string(),
+    );
+    assert_ne!(new_id, id);
+    assert_eq!(
+        body["page"],
+        format!("/v1/ui/chat#session={new_id}&token={new_token}")
+    );
+
+    // The old chat has ended; the new one runs on the server.
+    assert_eq!(info_of(&router, &id, &token).await.0, StatusCode::FORBIDDEN);
+    let (status, info) = info_of(&router, &new_id, &new_token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        info["model"].as_str().unwrap().contains("served-model"),
+        "{info}"
+    );
+    assert!(info["sends_to"].as_str().unwrap().contains("127.0.0.1"));
 }

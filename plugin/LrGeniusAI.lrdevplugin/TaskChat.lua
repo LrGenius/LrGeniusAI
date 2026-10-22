@@ -4,9 +4,10 @@
     The chat is the backend's /v1/ui/chat page. Its model works the catalog
     through the agent bridge (AgentBridge.lua), which runs whenever Lightroom
     does — so unlike People, nothing has to stay open here. This task only
-    picks the model, opens a chat session with the agent token and hands the
-    browser the page. The page asks before the model changes anything; what
-    it may do without asking is set on the page itself.
+    picks the model to start with, opens a chat session with the agent token
+    and hands the browser the page. The page asks before the model changes
+    anything; what it may do without asking, and which model it runs on, are
+    set on the page itself.
 ]]
 
 --- The engines on this computer.
@@ -113,16 +114,24 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		local body = { provider = provider, model = model }
-		if LOCAL_PROVIDERS[provider] then
+		local fields = Secrets.connectionFields(prefs)
+		local body = {
+			provider = provider,
+			model = model,
 			-- The same engine settings indexing uses, so opening the chat does
-			-- not make the backend reload the model with other ones.
-			body.llm_n_ctx = prefs.llmContextSize and tostring(prefs.llmContextSize) or nil
-			body.llm_n_parallel = prefs.llmParallel and tostring(prefs.llmParallel) or nil
-			body.llm_gpu_layers = prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil
-		else
+			-- not make the backend reload the model with other ones. Sent for
+			-- a cloud model too: the page can switch to a local one.
+			llm_n_ctx = prefs.llmContextSize and tostring(prefs.llmContextSize) or nil,
+			llm_n_parallel = prefs.llmParallel and tostring(prefs.llmParallel) or nil,
+			llm_gpu_layers = prefs.llmGpuLayers and tostring(prefs.llmGpuLayers) or nil,
+			-- Every provider the user has set up, so the page's model menu
+			-- offers them all. The backend keeps the keys in memory for this
+			-- chat only and never hands them to the page.
+			connections = AiProviders.modelListConnections(fields),
+		}
+		if not LOCAL_PROVIDERS[provider] then
 			-- The key and server address the provider needs, as for indexing.
-			local connection, problem = AiProviders.connectionOptions(provider, Secrets.connectionFields(prefs))
+			local connection, problem = AiProviders.connectionOptions(provider, fields)
 			if not connection then
 				ErrorHandler.handleError("Could not open the chat", problem)
 				return

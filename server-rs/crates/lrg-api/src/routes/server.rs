@@ -55,21 +55,92 @@ pub(super) async fn list_models(
 ) -> Json<Value> {
     log::info!("Models request received - checking all providers");
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let field = |key: &str| {
-        data.get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-    };
+    Json(available_models(&state, &ProviderConnections::from_json(&data)).await)
+}
 
-    let openai_key = field("openai_apikey");
-    let gemini_key = field("gemini_apikey");
-    let anthropic_key = field("anthropic_apikey");
-    let ollama_base_url = field("ollama_base_url");
-    let lmstudio_base_url = field("lmstudio_base_url");
-    let server_url = field("server_url");
-    let server_key = field("server_apikey");
+/// The keys and addresses a model listing probes with, under the names the
+/// `/models` body gives them. No `Debug`: it holds API keys.
+#[derive(Clone, Default)]
+pub struct ProviderConnections {
+    pub openai_key: Option<String>,
+    pub gemini_key: Option<String>,
+    pub anthropic_key: Option<String>,
+    pub ollama_base_url: Option<String>,
+    pub lmstudio_base_url: Option<String>,
+    pub server_url: Option<String>,
+    pub server_key: Option<String>,
+}
+
+impl ProviderConnections {
+    /// Read from a `/models` body: `openai_apikey`, `gemini_apikey`,
+    /// `anthropic_apikey`, `ollama_base_url`, `lmstudio_base_url`,
+    /// `server_url`, `server_apikey`. Blank values count as absent.
+    #[must_use]
+    pub fn from_json(data: &Value) -> Self {
+        let field = |key: &str| {
+            data.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        ProviderConnections {
+            openai_key: field("openai_apikey"),
+            gemini_key: field("gemini_apikey"),
+            anthropic_key: field("anthropic_apikey"),
+            ollama_base_url: field("ollama_base_url"),
+            lmstudio_base_url: field("lmstudio_base_url"),
+            server_url: field("server_url"),
+            server_key: field("server_apikey"),
+        }
+    }
+
+    /// Put `key` where `provider`'s key belongs; a provider that takes no key
+    /// ignores it.
+    pub fn set_key(&mut self, provider: &str, key: String) {
+        let slot = match provider {
+            "chatgpt" | "openai" => &mut self.openai_key,
+            "gemini" => &mut self.gemini_key,
+            "anthropic" => &mut self.anthropic_key,
+            "openai_compatible" => &mut self.server_key,
+            _ => return,
+        };
+        *slot = Some(key);
+    }
+
+    /// What it takes to build `provider` with these connections.
+    #[must_use]
+    pub fn selection(&self, provider: &str) -> ProviderSelection {
+        let api_key = match provider {
+            "chatgpt" | "openai" => &self.openai_key,
+            "gemini" => &self.gemini_key,
+            "anthropic" => &self.anthropic_key,
+            "openai_compatible" => &self.server_key,
+            _ => &None,
+        };
+        ProviderSelection {
+            name: provider.to_string(),
+            api_key: api_key.clone(),
+            ollama_base_url: self.ollama_base_url.clone(),
+            lmstudio_base_url: self.lmstudio_base_url.clone(),
+            server_url: self.server_url.clone(),
+            local_engine: None,
+        }
+    }
+}
+
+/// The models every provider offers right now, as `/models` answers. See
+/// [`list_models`].
+pub async fn available_models(state: &AppState, connections: &ProviderConnections) -> Value {
+    let ProviderConnections {
+        openai_key,
+        gemini_key,
+        anthropic_key,
+        ollama_base_url,
+        lmstudio_base_url,
+        server_url,
+        server_key,
+    } = connections.clone();
 
     // `build_provider` returns Err for a cloud provider whose key is missing,
     // which is exactly the "offer no models" case — hence the empty list
@@ -210,7 +281,7 @@ pub(super) async fn list_models(
         Vec::new()
     };
 
-    Json(json!({
+    json!({
         "models": {
             "llamacpp": llamacpp_models,
             "mlx": mlx_models,
@@ -224,7 +295,7 @@ pub(super) async fn list_models(
         "servers": servers,
         "aliases": { "mlx": mlx_aliases },
         "warnings": warnings,
-    }))
+    })
 }
 
 pub(super) async fn ping() -> &'static str {

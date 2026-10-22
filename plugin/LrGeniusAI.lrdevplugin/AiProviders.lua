@@ -388,6 +388,34 @@ function AiProviders.connectionOptions(provider, p)
 end
 
 ---
+-- Every key and address the user has set up, under the names the backend's
+-- model listing takes (`openai_apikey`, …, `server_url`, `server_apikey`).
+-- The agent chat sends this when it opens, so its page can offer every
+-- provider. A key that is not set, or could not be read, is left out, and so
+-- is the provider it belongs to.
+--
+-- @param p table Secrets.connectionFields(prefs).
+-- @return table
+--
+function AiProviders.modelListConnections(p)
+	p = p or {}
+	local out = {}
+	local function put(name, value)
+		if not blank(value) then
+			out[name] = trim(value)
+		end
+	end
+	put("openai_apikey", p.chatgptApiKey)
+	put("gemini_apikey", p.geminiApiKey)
+	put("anthropic_apikey", p.anthropicApiKey)
+	put("server_url", p.aiServerUrl)
+	if out.server_url then
+		put("server_apikey", p.aiServerApiKey)
+	end
+	return out
+end
+
+---
 -- The line shown under the Other AI server fields.
 --
 -- @param serverUrl string|nil The address as entered.
