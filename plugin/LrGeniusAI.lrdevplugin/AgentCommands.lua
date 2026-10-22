@@ -296,6 +296,48 @@ function AgentCommands.toJsonSafe(value, depth, seen)
 	return ok and described or ("<" .. t .. ">")
 end
 
+--- Whether a value is or holds a Lightroom object (another photo, a keyword),
+--- which has no JSON form worth sending.
+local function holdsObjects(value, depth)
+	local t = type(value)
+	if t == "userdata" or t == "function" or t == "thread" then
+		return true
+	end
+	if t == "table" and (depth or 0) < 4 then
+		for _, v in pairs(value) do
+			if holdsObjects(v, (depth or 0) + 1) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+--- Every metadata field Lightroom keeps for a photo (get_photo_details with
+--- all_metadata): `formatted` as Lightroom shows it, and `raw` for what the
+--- formatted text loses — numbers, GPS coordinates, other plug-ins' fields.
+--- Left out of `raw`: what `formatted` already says the same way, empty
+--- values, Lightroom objects (other photos, keyword objects; `formatted`
+--- names them), and the seconds-since-2001 dates that have an ISO 8601 twin.
+--- @param raw table|nil photo:getRawMetadata()
+--- @param formatted table|nil photo:getFormattedMetadata()
+function AgentCommands.fullMetadata(raw, formatted)
+	raw = raw or {}
+	local out = { formatted = {}, raw = {} }
+	for key, value in pairs(formatted or {}) do
+		if value ~= "" and not holdsObjects(value) then
+			out.formatted[key] = AgentCommands.toJsonSafe(value)
+		end
+	end
+	for key, value in pairs(raw) do
+		local twin = type(key) == "string" and raw[key .. "ISO8601"] ~= nil
+		if value ~= "" and not twin and not holdsObjects(value) and out.formatted[key] ~= value then
+			out.raw[key] = AgentCommands.toJsonSafe(value)
+		end
+	end
+	return out
+end
+
 --- A one-line caption for the progress bar, saying what the agent asked for.
 function AgentCommands.describe(command)
 	local action = command and command.action or "?"
@@ -733,6 +775,17 @@ function handlers.photo_info(args, env)
 			file_type = text("fileType"),
 			virtual_copy = r.isVirtualCopy or nil,
 		}
+		if args.all_metadata == true then
+			-- No key: every field Lightroom has. One photo at a time; the
+			-- backend asks for a handful only.
+			local all = AgentCommands.fullMetadata(photo:getRawMetadata(), photo:getFormattedMetadata())
+			local collections = {}
+			for _, collection in ipairs(photo:getContainedCollections()) do
+				collections[#collections + 1] = collection:getName()
+			end
+			all.collections = collections
+			out[#out].all_metadata = all
+		end
 	end
 	return { photos = out, missing = missing }
 end

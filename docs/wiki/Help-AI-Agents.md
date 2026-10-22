@@ -45,7 +45,7 @@ Behind those requests the agent uses these tools:
 | `list_people`, `find_photos_of_people` | People from LrGeniusAI's face recognition |
 | `find_photos_in_catalog` | Lightroom's own filters: rating, flag, label, keywords, folder, dates, camera, lens |
 | `cull_photos` | Groups bursts and duplicates, names winners and reject candidates |
-| `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre), and the photo as Lightroom renders it now |
+| `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre) — on request every field Lightroom keeps, IPTC, EXIF, GPS and other plug-ins' fields included — and the photo as Lightroom renders it now |
 | `show_in_lightroom` | Fills a collection and switches Lightroom to it |
 | `update_photos` | Rating, flag, colour label, title, caption, keywords, IPTC fields |
 | `manage_collection`, `list_collections` | Collections |

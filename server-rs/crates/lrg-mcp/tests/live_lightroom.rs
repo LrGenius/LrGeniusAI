@@ -263,6 +263,20 @@ async fn the_selection_resolves_and_has_details() {
         first["lightroom"]["file_name"].is_string(),
         "Lightroom details missing: {first}"
     );
+
+    let full = client
+        .tool_json(
+            "get_photo_details",
+            json!({"set": set["set_id"], "all_metadata": true}),
+        )
+        .await;
+    let all = &full["photos"][0]["lightroom"]["all_metadata"];
+    assert!(
+        all["formatted"]["fileName"].is_string(),
+        "every field missing: {full}"
+    );
+    assert!(all["collections"].is_array(), "{all}");
+    assert!(full["photos"].as_array().unwrap().len() <= 10);
 }
 
 #[tokio::test]

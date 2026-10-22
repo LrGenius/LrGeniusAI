@@ -218,6 +218,15 @@ test("photo_info describes a photo", function(ctx)
 	assertTrue(result.photos[1].file_name ~= nil, "it has a file name")
 end)
 
+test("photo_info gives every metadata field when asked", function(ctx)
+	local id = testPhotoId(ctx)
+	local all = command(ctx, "photo_info", { photo_ids = { id }, all_metadata = true }).photos[1].all_metadata
+	assertTrue(type(all) == "table", "all_metadata comes back")
+	assertTrue(type(all.formatted.fileName) == "string", "formatted fields include the file name")
+	assertTrue(all.raw.path ~= nil or all.formatted.path ~= nil, "the path is in there")
+	assertTrue(type(all.collections) == "table", "collections is a list")
+end)
+
 test("get_develop_settings reads settings", function(ctx)
 	local id = testPhotoId(ctx)
 	local result = command(ctx, "get_develop_settings", { photo_id = id, keys = { "Exposure2012" } })
