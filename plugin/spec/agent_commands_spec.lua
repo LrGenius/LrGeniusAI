@@ -190,6 +190,39 @@ describe("AgentCommands.toJsonSafe", function()
 	end)
 end)
 
+describe("AgentCommands.fullMetadata", function()
+	-- Userdata, as Lightroom's photo and keyword objects are.
+	local lrObject = io.stdout
+
+	it("keeps every formatted field and the raw ones it does not repeat", function()
+		local out = AgentCommands.fullMetadata({
+			rating = 4,
+			title = "Dune",
+			gps = { latitude = 52.5, longitude = 13.4 },
+			customMetadata = { { sourcePlugin = "com.other", id = "client", value = "ACME" } },
+		}, { rating = "4", title = "Dune", creator = "Kim", jobIdentifier = "" })
+		assert.same({ rating = "4", title = "Dune", creator = "Kim" }, out.formatted)
+		assert.same({
+			rating = 4,
+			gps = { latitude = 52.5, longitude = 13.4 },
+			customMetadata = { { sourcePlugin = "com.other", id = "client", value = "ACME" } },
+		}, out.raw)
+	end)
+
+	it("leaves out Lightroom objects and dates that have an ISO 8601 twin", function()
+		local out = AgentCommands.fullMetadata({
+			masterPhoto = lrObject,
+			virtualCopies = { lrObject },
+			keywords = { lrObject },
+			isVirtualCopy = false,
+			dateTimeOriginal = 774000000,
+			dateTimeOriginalISO8601 = "2025-07-14T10:40:00",
+		}, nil)
+		assert.same({ isVirtualCopy = false, dateTimeOriginalISO8601 = "2025-07-14T10:40:00" }, out.raw)
+		assert.same({}, out.formatted)
+	end)
+end)
+
 describe("AgentCommands.describe", function()
 	it("says what the agent is doing, with a photo count", function()
 		assert.equals(

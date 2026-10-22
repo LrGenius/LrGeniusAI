@@ -280,6 +280,31 @@ describe("AiProviders.connectionOptions", function()
 	end)
 end)
 
+describe("AiProviders.modelListConnections", function()
+	it("names every key that is set the way the model listing takes it", function()
+		assert.are.same(
+			{
+				openai_apikey = "sk-1",
+				anthropic_apikey = "sk-ant",
+				server_url = "https://openrouter.ai/api/v1",
+				server_apikey = "sk-or",
+			},
+			AiProviders.modelListConnections({
+				chatgptApiKey = " sk-1 ",
+				geminiApiKey = "  ",
+				anthropicApiKey = "sk-ant",
+				aiServerUrl = "https://openrouter.ai/api/v1",
+				aiServerApiKey = "sk-or",
+			})
+		)
+	end)
+
+	it("sends no server key without a server", function()
+		assert.are.same({}, AiProviders.modelListConnections({ aiServerUrl = "", aiServerApiKey = "sk-or" }))
+		assert.are.same({}, AiProviders.modelListConnections(nil))
+	end)
+end)
+
 describe("AiProviders.describeServerStatus", function()
 	it("shows the hint while no address is set", function()
 		local text, state = AiProviders.describeServerStatus("", nil)

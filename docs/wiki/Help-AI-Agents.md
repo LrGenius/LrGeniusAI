@@ -45,7 +45,7 @@ Behind those requests the agent uses these tools:
 | `list_people`, `find_photos_of_people` | People from LrGeniusAI's face recognition |
 | `find_photos_in_catalog` | Lightroom's own filters: rating, flag, label, keywords, folder, dates, camera, lens |
 | `cull_photos` | Groups bursts and duplicates, names winners and reject candidates |
-| `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre), and the photo as Lightroom renders it now |
+| `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre) — on request every field Lightroom keeps, IPTC, EXIF, GPS and other plug-ins' fields included — and the photo as Lightroom renders it now |
 | `show_in_lightroom` | Fills a collection and switches Lightroom to it |
 | `update_photos` | Rating, flag, colour label, title, caption, keywords, IPTC fields |
 | `manage_collection`, `list_collections` | Collections |
@@ -111,7 +111,7 @@ You do not need another app to try this. **Library → Plug-in Extras → Chat w
 Your Catalog...** opens a chat page in your browser, and an AI model works with
 the same tools.
 
-The chat uses **the model chosen for Analyze & Index**:
+The chat starts with **the model chosen for Analyze & Index**:
 
 - **A model on this computer** (`Plug-in Manager → LrGeniusAI → Local AI
   Model`), LM Studio or Ollama: nothing leaves your computer.
@@ -125,6 +125,13 @@ The chat uses **the model chosen for Analyze & Index**:
 If the model for Analyze & Index cannot chat, the chat uses a local model if
 one is installed. It also needs the **agent bridge** (Step 1). You do not
 need the token or Step 2.
+
+**Choosing another model.** The **Model** menu at the top of the chat page
+lists every model you can use right now: the ones on this computer, LM Studio
+and Ollama while they run, your own AI server, and every cloud provider you
+entered a key for. Another model starts a **new chat** — the conversation so
+far is cleared, and the page asks before it does that. For a cloud model it
+also says where the new chat goes.
 
 **You decide what it may do on its own.** Each step the model wants to take
 appears as a card. When your settings ask first, the card has buttons:

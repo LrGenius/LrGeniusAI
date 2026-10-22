@@ -862,7 +862,14 @@ provider needs:
   wants one. `lmstudio`, `ollama`: optional `lmstudio_base_url`,
   `ollama_base_url`.
 
-The key is kept in the chat's memory only — never logged, saved or returned.
+`connections`, optional: every key and address the user has set up, under the
+names [`POST /v1/llm/providers/models`](#post-v1llmprovidersmodels) takes
+(`openai_apikey`, `gemini_apikey`, `anthropic_apikey`, `server_url`,
+`server_apikey`, …), so the page can offer every provider in its model menu.
+The fields above win for the chosen provider. The engine settings are kept as
+well, for a switch to a local model.
+
+The keys are kept in the chat's memory only — never logged, saved or returned.
 A missing key, address or model is a **400** naming what to set. Returns
 `session_id`, `token` and
 `page`, the path to open with the token in its fragment
@@ -906,6 +913,24 @@ for approval are denied, nothing new starts. A tool already running in
 Lightroom finishes and its result is recorded. The event stream gets a
 `stopped` event, and the model is told in the history that the user stopped
 there. **204**.
+
+### `GET /v1/chat/sessions/{id}/models`
+What the page's model menu offers, probed with the chat's `connections` the
+way `POST /v1/llm/providers/models` probes: `current` (`provider`, `model`,
+`label` — the model this chat runs on, an old MLX name mapped to the one it is
+listed under), `providers` (in the plugin's picker order, each with
+`provider`, `label` — "On this Mac", "LM Studio", the AI server's name, … —,
+`sends_to` as on `GET /v1/chat/sessions/{id}`, and `models`, sorted), and
+`warnings` (an AI server or key the user set up that did not answer). A
+provider with nothing to offer — not running, no key — is left out.
+
+### `POST /v1/chat/sessions/{id}/model`
+`{"provider": "…", "model": "…"}`: start over on another model. A conversation
+is not carried from one model to another: a new chat with the same connections
+and engine settings, and nothing in it, replaces this one, which ends (its
+token gets **403** from then on). Returns what `POST /v1/chat/sessions` does —
+the page opens the new `page`. **400** names a missing key, address or model
+(this chat stays as it was); **409** while a message is being worked on.
 
 ### `GET /v1/chat/sessions/{id}/permissions`
 ### `PUT /v1/chat/sessions/{id}/permissions`

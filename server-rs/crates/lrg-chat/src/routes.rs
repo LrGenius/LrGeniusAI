@@ -24,14 +24,11 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
 
 use lrg_api::agent_bridge::McpAccess;
-use lrg_api::routes::llm::engine_overrides_from_json;
-use lrg_providers::cloud_chat::build_chat_model;
-use lrg_providers::openai_compatible::ServerUrl;
-use lrg_providers::provider::ProviderSelection;
 
 use crate::events::Sequenced;
+use crate::models::{offered, ChatSetup};
 use crate::permissions::Permissions;
-use crate::session::{Approval, ChatSession, CloudModel, LocalModels, ModelSource};
+use crate::session::{Approval, ChatSession};
 use crate::ChatHub;
 
 const NO_BRIDGE: &str = "LrGeniusAI's agent bridge is not running, so a chat cannot be opened. \
@@ -60,6 +57,8 @@ pub(crate) fn router(hub: Arc<ChatHub>) -> Router {
         .route("/v1/chat/sessions/{id}/messages", post(send_message))
         .route("/v1/chat/sessions/{id}/approvals/{call_id}", post(approve))
         .route("/v1/chat/sessions/{id}/stop", post(stop))
+        .route("/v1/chat/sessions/{id}/models", get(models))
+        .route("/v1/chat/sessions/{id}/model", post(switch_model))
         .route(
             "/v1/chat/sessions/{id}/permissions",
             get(get_permissions).put(put_permissions),
@@ -145,46 +144,18 @@ async fn create_session(
         McpAccess::NoToken => return error(StatusCode::FORBIDDEN, NO_BRIDGE),
         McpAccess::Denied => return error(StatusCode::FORBIDDEN, WRONG_AGENT_TOKEN),
     }
-    let text = |key: &str| {
-        body.get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    };
-    let provider = text("provider").unwrap_or_default().to_lowercase();
-    let Some(model) = text("model") else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "No AI model is chosen for the chat. Pick one in the plugin settings.",
-        );
-    };
+    match ChatSetup::from_json(&body) {
+        Ok(setup) => start_chat(&hub, setup, None).await,
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
 
-    let models: Box<dyn ModelSource> = if matches!(provider.as_str(), "llamacpp" | "mlx") {
-        Box::new(LocalModels {
-            state: hub.state.clone(),
-            provider,
-            model,
-            overrides: engine_overrides_from_json(&body),
-        })
-    } else {
-        // The key stays in this session's memory: it is never logged, never
-        // written anywhere and never handed to the page.
-        let selection = ProviderSelection {
-            name: provider.clone(),
-            api_key: text("api_key"),
-            server_url: text("server_url"),
-            ollama_base_url: text("ollama_base_url"),
-            lmstudio_base_url: text("lmstudio_base_url"),
-            local_engine: None,
-        };
-        match build_chat_model(&selection, &model) {
-            Ok(chat_model) => Box::new(CloudModel {
-                model: chat_model,
-                recipient: recipient(&selection),
-            }),
-            Err(message) => return error(StatusCode::BAD_REQUEST, message),
-        }
+/// Open a chat on `setup`, in place of the chat `replacing` names once the
+/// new one is open, and answer with what the page needs to reach it.
+async fn start_chat(hub: &ChatHub, setup: ChatSetup, replacing: Option<&str>) -> Response {
+    let models = match setup.source(&hub.state) {
+        Ok(models) => models,
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
     };
     let session = match ChatSession::open(
         hub.state.clone(),
@@ -197,7 +168,7 @@ async fn create_session(
         Ok(session) => session,
         Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
-    if let Err(message) = hub.insert(session.clone()) {
+    if let Err(message) = hub.insert(session.clone(), setup, replacing) {
         return error(StatusCode::SERVICE_UNAVAILABLE, message);
     }
     session.warm_up();
@@ -208,24 +179,6 @@ async fn create_session(
         "page": format!("/v1/ui/chat#session={}&token={}", session.id, session.token()),
     }))
     .into_response()
-}
-
-/// Who a cloud chat's conversation goes to, as the page names them; `None`
-/// for a server on this computer.
-fn recipient(selection: &ProviderSelection) -> Option<String> {
-    match selection.name.as_str() {
-        "anthropic" => Some("Anthropic".into()),
-        "gemini" => Some("Google".into()),
-        "chatgpt" | "openai" => Some("OpenAI".into()),
-        "openai_compatible" => selection
-            .server_url
-            .as_deref()
-            .and_then(|url| ServerUrl::parse(url).ok())
-            .map(|url| format!("your AI server ({})", url.label)),
-        // LM Studio and Ollama: the server the plugin reaches on this
-        // computer unless the user moved it, and then it is theirs.
-        _ => None,
-    }
 }
 
 async fn session_info(
@@ -351,6 +304,63 @@ async fn stop(
         }
         Err(refused) => refused.into_response(),
     }
+}
+
+/// The models the page can start a new chat on, probed with the
+/// connections this chat was opened with.
+async fn models(
+    State(hub): State<Arc<ChatHub>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(refused) = authorized(&hub, &id, &headers) {
+        return refused.into_response();
+    }
+    match hub.setup(&id) {
+        Some(setup) => Json(offered(&hub.state, &setup).await).into_response(),
+        None => Refused.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ModelChoice {
+    provider: String,
+    model: String,
+}
+
+/// Start over on another model. A conversation is not carried from one model
+/// to another: a new chat, with the same connections and nothing in it,
+/// replaces this one, which ends. The page then opens the new one.
+async fn switch_model(
+    State(hub): State<Arc<ChatHub>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(choice): Json<ModelChoice>,
+) -> Response {
+    let session = match authorized(&hub, &id, &headers) {
+        Ok(session) => session,
+        Err(refused) => return refused.into_response(),
+    };
+    if session.is_busy() {
+        return error(
+            StatusCode::CONFLICT,
+            "Still working on the last message. Stop it first, then choose another model.",
+        );
+    }
+    let Some(setup) = hub.setup(&id) else {
+        return Refused.into_response();
+    };
+    let response = start_chat(
+        &hub,
+        setup.with_model(&choice.provider, &choice.model),
+        Some(&id),
+    )
+    .await;
+    if response.status().is_success() {
+        session.stop();
+        log::info!("Chat {id} closed for a new one on another model");
+    }
+    response
 }
 
 async fn get_permissions(

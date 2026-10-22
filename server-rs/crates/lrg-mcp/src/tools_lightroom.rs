@@ -32,6 +32,10 @@ const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
 /// Most photos `get_photo_details` describes in one call.
 const MAX_DETAILS: usize = 50;
 
+/// Most photos it describes with `all_metadata`: each brings every field
+/// Lightroom has, a few thousand characters.
+const MAX_FULL_DETAILS: usize = 10;
+
 /// How long a command that changes photos may take: a base plus a little
 /// per photo, so a big batch is not cut off but a stuck one is noticed.
 fn write_timeout(photos: usize) -> Duration {
@@ -99,6 +103,12 @@ pub struct FindInCatalogArgs {
 pub struct DetailsArgs {
     #[serde(flatten)]
     pub photos: Photos,
+    /// Also every metadata field Lightroom keeps for each photo — all IPTC
+    /// and EXIF fields, file details, GPS coordinates, copyright and
+    /// contact info, other plug-ins' fields, the collections it is in — both
+    /// as Lightroom shows them and raw. Much longer: at most 10 photos.
+    #[serde(default)]
+    pub all_metadata: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -462,7 +472,8 @@ impl LrGeniusMcp {
     /// capture time, camera and exposure, rating, flag, label, keywords,
     /// title, caption, whether it is edited) merged with LrGeniusAI's index
     /// (AI title, caption, keywords, species, aesthetic score 1-9, genre,
-    /// search status).
+    /// search status). With `all_metadata`, every field Lightroom keeps for
+    /// up to 10 photos.
     #[tool(
         name = "get_photo_details",
         annotations(title = "Photo details", read_only_hint = true)
@@ -476,7 +487,12 @@ impl LrGeniusMcp {
             Err(e) => return Ok(tool_error(e)),
         };
         let total = resolved.photo_ids.len();
-        let ids: Vec<String> = resolved.photo_ids.into_iter().take(MAX_DETAILS).collect();
+        let max = if args.all_metadata {
+            MAX_FULL_DETAILS
+        } else {
+            MAX_DETAILS
+        };
+        let ids: Vec<String> = resolved.photo_ids.into_iter().take(max).collect();
 
         let index: HashMap<String, Map<String, Value>> = match self.state().store() {
             Some(store) => store
@@ -494,7 +510,7 @@ impl LrGeniusMcp {
             match self
                 .lightroom(
                     "photo_info",
-                    json!({"photo_ids": ids}),
+                    json!({"photo_ids": ids, "all_metadata": args.all_metadata}),
                     CallOptions::read(Duration::from_secs(60)),
                     None,
                 )
@@ -505,6 +521,17 @@ impl LrGeniusMcp {
                         if let Some(id) = p["photo_id"].as_str() {
                             lightroom.insert(id.to_string(), p.clone());
                         }
+                    }
+                    // A plugin from before `all_metadata` ignores it.
+                    if args.all_metadata
+                        && !lightroom.is_empty()
+                        && lightroom.values().all(|p| p.get("all_metadata").is_none())
+                    {
+                        warnings.push(
+                            "Lightroom sent only the usual details, not every metadata field: \
+                             the LrGeniusAI plugin is older than this backend. Update the plugin."
+                                .into(),
+                        );
                     }
                     let missing = string_list(&reply.result["missing"]);
                     if !missing.is_empty() {
@@ -580,7 +607,7 @@ impl LrGeniusMcp {
         if total > ids.len() {
             answer["more"] = json!(total - ids.len());
             answer["hint"] = json!(format!(
-                "Only the first {MAX_DETAILS} are described; ask for the rest in smaller groups."
+                "Only the first {max} are described; ask for the rest in smaller groups."
             ));
         }
         Ok(json_result(with_warnings(answer, &warnings)))

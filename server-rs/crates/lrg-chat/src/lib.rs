@@ -8,6 +8,8 @@
 //!   so a chat call takes exactly the path an external agent's call takes.
 //! * [`permissions`] decides what runs without asking.
 //! * [`events`] is what the page is told, numbered so it can reconnect.
+//! * [`models`] is which model a chat runs on, and what the page offers in
+//!   its place.
 //! * [`routes`] is the HTTP surface, merged by `lrg-server` beside `/mcp`.
 //!
 //! The model answers through `lrg_providers::chat::ChatModel`, so a cloud
@@ -19,6 +21,7 @@
 
 pub mod events;
 pub mod mcp;
+pub mod models;
 pub mod permissions;
 pub mod prompt;
 mod routes;
@@ -32,6 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 use lrg_api::state::AppState;
 
+use crate::models::ChatSetup;
 use crate::permissions::PermissionStore;
 use crate::session::ChatSession;
 
@@ -45,31 +49,53 @@ const IDLE_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
 
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
+/// An open chat and what it was opened with.
+struct OpenChat {
+    session: Arc<ChatSession>,
+    setup: Arc<ChatSetup>,
+}
+
 pub struct ChatHub {
     state: Arc<AppState>,
     /// The backend's own router, which the chat's tools call in-process.
     api: axum::Router,
-    sessions: Mutex<HashMap<String, Arc<ChatSession>>>,
+    sessions: Mutex<HashMap<String, OpenChat>>,
     permissions: Arc<PermissionStore>,
     shutdown: CancellationToken,
 }
 
 impl ChatHub {
     fn session(&self, id: &str) -> Option<Arc<ChatSession>> {
-        self.sessions.lock().unwrap().get(id).cloned()
+        let sessions = self.sessions.lock().unwrap();
+        sessions.get(id).map(|chat| chat.session.clone())
+    }
+
+    fn setup(&self, id: &str) -> Option<Arc<ChatSetup>> {
+        let sessions = self.sessions.lock().unwrap();
+        sessions.get(id).map(|chat| chat.setup.clone())
     }
 
     fn remove(&self, id: &str) {
         self.sessions.lock().unwrap().remove(id);
     }
 
-    /// Keep a new chat, making room by closing the longest-idle one that is
-    /// neither working nor watched.
-    fn insert(&self, session: Arc<ChatSession>) -> Result<(), String> {
+    /// Keep a new chat in place of the one `replacing` names, if any, making
+    /// room by closing the longest-idle one that is neither working nor
+    /// watched.
+    fn insert(
+        &self,
+        session: Arc<ChatSession>,
+        setup: ChatSetup,
+        replacing: Option<&str>,
+    ) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
+        if let Some(old) = replacing {
+            sessions.remove(old);
+        }
         if sessions.len() >= MAX_SESSIONS {
             let evict = sessions
                 .values()
+                .map(|chat| &chat.session)
                 .filter(|s| !s.is_busy() && s.events.listeners() == 0)
                 .max_by_key(|s| s.idle_for())
                 .map(|s| s.id.clone());
@@ -85,20 +111,30 @@ impl ChatHub {
                 }
             }
         }
-        sessions.insert(session.id.clone(), session);
+        let id = session.id.clone();
+        sessions.insert(
+            id,
+            OpenChat {
+                session,
+                setup: Arc::new(setup),
+            },
+        );
         Ok(())
     }
 
     fn sweep(&self) {
-        self.sessions.lock().unwrap().retain(|id, session| {
-            let keep = session.is_busy()
-                || session.events.listeners() > 0
-                || session.idle_for() < IDLE_LIMIT;
-            if !keep {
-                log::info!("Chat {id} closed after being idle");
-            }
-            keep
-        });
+        self.sessions
+            .lock()
+            .unwrap()
+            .retain(|id, OpenChat { session, .. }| {
+                let keep = session.is_busy()
+                    || session.events.listeners() > 0
+                    || session.idle_for() < IDLE_LIMIT;
+                if !keep {
+                    log::info!("Chat {id} closed after being idle");
+                }
+                keep
+            });
     }
 }
 

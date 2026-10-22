@@ -40,10 +40,11 @@ browser page ──fetch + event stream, chat token──► lrg-chat routes (/v
 | `…/lrg-chat/src/mcp.rs` | The chat's in-process MCP connection |
 | `…/lrg-chat/src/permissions.rs` | What runs without asking; `chat_permissions.json` |
 | `…/lrg-chat/src/events.rs` | What the page is told, numbered for reconnects |
+| `…/lrg-chat/src/models.rs` | Which model a chat runs on (`ChatSetup`), and the model menu |
 | `…/lrg-chat/src/routes.rs` | The HTTP routes and their two tokens |
 | `…/lrg-chat/src/prompt.rs` | What the model is told about its job |
 | `…/lrg-chat/src/ui/chat.html` | The page (`/v1/ui/chat`), one file with no external resources |
-| `plugin/…/TaskChat.lua` | The menu item: picks the model, opens a chat, opens the page |
+| `plugin/…/TaskChat.lua` | The menu item: picks the first model, opens a chat, opens the page |
 
 The chat is an MCP *client* of the tools rather than a caller of their code,
 so a chat call takes exactly the path an external agent's takes: the same
@@ -142,11 +143,14 @@ attached: every turn sends the whole conversation again and is billed for it.
 Answers get 8,192 tokens on top for thinking (2,048 on a server, whose window
 may be small).
 
-**Keys** come from the plugin with the request that opens the chat, as for
-indexing, and stay in that chat's memory. When the conversation leaves this
-computer, the session says to whom (`sends_to`), the page says so above the
-conversation, and the plugin asks once per provider before the first such
-chat.
+**Keys** come from the plugin with the request that opens the chat — every
+key and address the user has set up, not only the chosen provider's, so the
+page's model menu can offer them all — and stay in that chat's memory
+(`ChatSetup`), never logged, saved or handed to the page. When the
+conversation leaves this computer, the session says to whom (`sends_to`), the
+page says so above the conversation, the plugin asks once per provider before
+the first such chat, and the page asks before it starts one on a cloud model
+from its menu.
 
 ---
 
@@ -275,10 +279,11 @@ stream ends; it reconnects and catches up from the log.
 ## The page and the menu item
 
 *Library → Plug-in Extras → Chat with Your Catalog...* (`TaskChat.lua`)
-picks the model — the one chosen for Analyze & Index when it is local,
-otherwise the first installed one, MLX first on a Mac — opens a chat with the
-agent token and the same engine settings indexing uses (so the backend does
-not reload the model with other ones), and opens the page in the browser.
+picks the model to start with — the one chosen for Analyze & Index, whichever
+provider it is on, otherwise the first installed local one, MLX first on a Mac
+— opens a chat with the agent token, every connection the user has set up and
+the same engine settings indexing uses (so the backend does not reload the
+model with other ones), and opens the page in the browser.
 Nothing stays open in Lightroom: the model works through the agent bridge,
 which runs whenever Lightroom does. Without a local model or with AI agents
 turned off, the task says what to set up instead.
@@ -299,7 +304,22 @@ conversation. It draws:
   optional note;
 * *What it may do...*: the mode, a rule per tool, the bulk limit, and whether
   the settings are saved;
+* the **model menu** in the header: every model reachable now with the chat's
+  connections (`GET …/models`) — the local ones, LM Studio and Ollama when
+  they run, the user's AI server, and the cloud providers with a key — grouped
+  by provider; the current one stays listed, marked *not available now*, when
+  it is not;
 * how much of the context the last turn used.
+
+**Another model starts a new chat.** A conversation is not carried over: what
+one model wrote — Claude's thinking blocks, Gemini's signatures, a local
+model's JSON — is no history another should continue from, and a cloud model
+would be handed a conversation the user had kept on this computer. So
+choosing another model asks first (*Clear and start a new chat*, with who
+receives it for a cloud model; no question for an empty local chat), then
+`POST …/model` opens a new chat with the same connections in place of this
+one, which ends, and the page reloads onto the new one and says the previous
+conversation was cleared. Not offered while a message is being worked on.
 
 ---
 
@@ -335,3 +355,4 @@ answers approvals the way the page does; without Lightroom, the Lightroom tools
 fail with the bridge's own error, which is exercised too. `tests/routes.rs`
 also runs a whole chat on a fake OpenAI-compatible server: its tool call runs
 the real `get_status`, and the result goes back as the call's `tool` message.
+And it lists that server in a local chat's model menu and switches to it.
