@@ -38,6 +38,14 @@ xcodebuild build \
 plugin (`CudaBuild`) that Xcode otherwise stops to ask about — which a CI runner
 can never answer.
 
+**Xcode 27.1: `extraneous argument label 'capabilities:'` in
+`MLXFoundationModels`.** That module wraps Apple's FoundationModels and was
+written against a beta SDK. Nothing here uses it, and `Package.swift` turns off
+the `FoundationModelsIntegration` trait that pulls it in — but Xcode keeps the
+package graph it resolved earlier. If an existing `.build/xcode` still fails
+this way, delete `.build/xcode/SourcePackages` (or build into a fresh
+`-derivedDataPath`) and build again.
+
 The products land in `.build/xcode/Build/Products/Release/`:
 
 | File | Why it matters |
