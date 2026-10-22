@@ -35,7 +35,7 @@ pub(crate) const PREVIEW_PHOTOS: usize = 20;
 /// The most photos one tool call resolves. A set can be larger; tools that
 /// change photos refuse beyond this and say so, so a runaway agent cannot
 /// rewrite a whole catalog in one call.
-pub(crate) const MAX_PHOTOS_PER_CALL: usize = 5000;
+pub const MAX_PHOTOS_PER_CALL: usize = 5000;
 
 /// Everything the tools share. One per backend process; each MCP session
 /// gets its own [`LrGeniusMcp`] around the same `Shared`.
@@ -59,6 +59,16 @@ impl LrGeniusMcp {
             tool_router: Self::index_tools() + Self::lightroom_tools() + Self::dev_tools(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    /// Names of the tools that test and change the plugin itself
+    /// (`tools_dev.rs`). The in-app chat never offers them to a model.
+    pub fn developer_tool_names() -> Vec<String> {
+        Self::dev_tools()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect()
     }
 
     /// Names of every tool, for tests and the docs check.

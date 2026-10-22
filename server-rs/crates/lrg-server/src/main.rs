@@ -250,9 +250,16 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     // handle on them; it is merged in after the REST layers on purpose (no
     // db_path peeking, its own body limit).
     let mcp_shutdown = tokio_util::sync::CancellationToken::new();
+    // The in-app chat calls the same tools as `/mcp`, through the same
+    // in-process router, and is merged beside it for the same reasons.
     let app = api
         .clone()
-        .merge(lrg_mcp::router(state.clone(), api, mcp_shutdown.clone()));
+        .merge(lrg_mcp::router(
+            state.clone(),
+            api.clone(),
+            mcp_shutdown.clone(),
+        ))
+        .merge(lrg_chat::router(state.clone(), api, mcp_shutdown.clone()));
 
     tokio::spawn(maintenance_loop(state.clone()));
 
@@ -269,8 +276,8 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
         let state = state.clone();
         async move {
             shutdown_signal(state).await;
-            // An MCP client's open event stream would otherwise keep the
-            // graceful shutdown waiting forever.
+            // An MCP client's or a chat page's open event stream would
+            // otherwise keep the graceful shutdown waiting forever.
             mcp_shutdown.cancel();
         }
     })

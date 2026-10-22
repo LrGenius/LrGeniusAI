@@ -826,6 +826,75 @@ the command any more, and the plugin stops between photos.
 
 ---
 
+## Agent chat
+
+The in-app chat: a local AI model works the catalog through the same tools as
+`/mcp`, and the user chats with it — and approves its changes — in the
+browser. Design, the permission model and the event list:
+[Dev: Agent Chat](Dev-Agent-Chat). Served by `lrg-chat`, merged next to `/mcp`
+and written as served (not nested by `build_router`).
+
+Opening a chat takes the agent token as `Authorization: Bearer <token>`, like
+`/mcp`. Every other route takes the chat's own token the same way, and refuses
+a request whose `Origin` is not this server even with the right token. A wrong
+token, a foreign origin and a chat that has ended all get the same **403**.
+Errors are `{"error": "<what to do>"}`.
+
+### `POST /v1/chat/sessions`
+Opens a chat. Body: `provider` (`llamacpp` or `mlx` — anything else is a 400
+saying the chat needs a local model for now), `model` (as for indexing), and
+the engine knobs `llm_n_ctx`, `llm_n_parallel`, `llm_gpu_layers` as on the
+indexing routes. Starts loading the model in the background; a model that
+cannot load is reported as an `error` event. Returns `session_id`, `token` and
+`page`, the path to open with the token in its fragment
+(`/v1/ui/chat#session=…&token=…`). **503** when 8 chats are open and none is
+idle enough to close. No plugin session registered: 403 saying to turn the
+agent bridge on.
+
+### `GET /v1/chat/sessions/{id}`
+### `DELETE /v1/chat/sessions/{id}`
+`GET` returns what the page draws from: `model`, `busy`, `tools` (each with
+`name`, `title`, `class` — `read`/`change`/`destructive` — and its `rule`),
+`permissions`, `permissions_saved` (false while no index is bound, so a change
+would not survive a restart) and `lightroom` (`catalog_name`,
+`may_change_photos`; null when the plugin is not connected). `DELETE` stops the
+chat and forgets it (**204**). A chat nobody has listened to for two hours is
+closed by the backend.
+
+### `GET /v1/chat/sessions/{id}/events`
+Server-sent events, one JSON object per `data:` line, with a `type` and — for
+everything except the streamed `delta` pieces — a `seq`. `?after=<seq>`
+replays what was logged after it, then continues live. A page that falls too
+far behind gets `event: resync` and the stream ends; reconnecting with `after`
+catches up. The event types are listed in [Dev: Agent Chat](Dev-Agent-Chat#events).
+
+### `POST /v1/chat/sessions/{id}/messages`
+`{"text": "…"}`. **202** and the work starts; its progress arrives on the event
+stream. **409** while the previous message is still being worked on, **400**
+for an empty one.
+
+### `POST /v1/chat/sessions/{id}/approvals/{call_id}`
+The answer to an `approval_needed` event: `{"decision": "once"}`, `"chat"`
+(this tool for the rest of the chat), `"always"` (sets the tool's rule to
+`allow`), or `{"decision": "deny", "note": "…"}` — the note is passed to the
+model. **204**; **409** when that call is not waiting any more.
+
+### `POST /v1/chat/sessions/{id}/stop`
+Stops after the step in progress: the model's turn is cancelled, calls waiting
+for approval are denied, nothing new starts. A tool already running in
+Lightroom finishes and its result is recorded. **204**.
+
+### `GET /v1/chat/sessions/{id}/permissions`
+### `PUT /v1/chat/sessions/{id}/permissions`
+What runs without asking: `mode` (`ask_all`, `auto_read` — the default —,
+`auto_safe`, `auto_all`), `tools` (tool name → `allow`, `ask` or `block`) and
+`bulk_limit` (a change to photos aimed at more than this many asks even when
+allowed; 0 turns it off). The settings are the user's, not the chat's: every
+chat uses them, and they are saved as `chat_permissions.json` beside the index.
+`PUT` takes the whole object and returns `{saved, permissions}`.
+
+---
+
 ## Metadata Import
 
 ### `POST /v1/photos/metadata/import`

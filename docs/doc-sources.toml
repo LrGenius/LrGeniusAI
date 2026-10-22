@@ -60,6 +60,8 @@ sources = [
   # Likewise the agent bridge behind /v1/agent/*, and the /mcp endpoint.
   "server-rs/crates/lrg-api/src/agent_bridge.rs",
   "server-rs/crates/lrg-mcp/src/lib.rs",
+  # The agent chat's routes, merged at the root beside /mcp.
+  "server-rs/crates/lrg-chat/src/routes.rs",
   # The page names the release tags the download routes pull assets from, so a
   # change to how a tag is published belongs in the same review.
   ".github/workflows/model-assets-bioclip.yml",
@@ -178,6 +180,16 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/PluginTests.lua",
   # The full-test runbook's command-line client (its options and exit codes).
   "scripts/mcp_call.py",
+]
+
+[page."Dev-Agent-Chat.md"]
+sources = [
+  "server-rs/crates/lrg-chat/src/*.rs",
+  "server-rs/crates/lrg-chat/tests/*.rs",
+  # The model side: the conversation types and tool calling by grammar.
+  "server-rs/crates/lrg-providers/src/chat.rs",
+  "server-rs/crates/lrg-providers/src/local_chat.rs",
+  "server-rs/crates/lrg-providers/src/local.rs",
 ]
 
 [page."Help-People-Faces.md"]

@@ -44,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 use lrg_api::agent_bridge::McpAccess;
 use lrg_api::state::AppState;
 
-pub use server::{LrGeniusMcp, Shared};
+pub use server::{LrGeniusMcp, Shared, MAX_PHOTOS_PER_CALL};
 
 /// Where the endpoint is mounted. Unversioned like `/ping`: MCP negotiates
 /// its own protocol version.

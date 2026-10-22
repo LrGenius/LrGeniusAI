@@ -3,7 +3,8 @@
 
 Four checks, three of them exact and one advisory:
 
-1. Every axum route in `server-rs/crates/lrg-api/src/routes/` has a heading in
+1. Every axum route in `server-rs/crates/lrg-api/src/routes/` (and the agent
+   chat's, `server-rs/crates/lrg-chat/src/routes.rs`) has a heading in
    `docs/wiki/Dev-Backend-API.md`, and every heading in that page names a route
    that exists. Method and path both have to match.
 2. Every endpoint the plugin calls (the `ENDPOINTS` table in
@@ -39,6 +40,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 ROUTES_DIR = REPO / "server-rs/crates/lrg-api/src/routes"
+# The agent chat's router is merged at the root by `lrg-server`, so its paths
+# are written as served, `/v1` included.
+CHAT_ROUTES = REPO / "server-rs/crates/lrg-chat/src/routes.rs"
 API_DOC = REPO / "docs/wiki/Dev-Backend-API.md"
 PLUGIN_API = REPO / "plugin/LrGeniusAI.lrdevplugin/APISearchIndex.lua"
 DOC_MAP = REPO / "docs/doc-sources.toml"
@@ -120,13 +124,13 @@ def _matching_paren(text: str, open_idx: int) -> int:
 def backend_routes() -> dict[tuple[str, str], str]:
     """(METHOD, path) -> "file.rs" for every route the axum routers register."""
     found: dict[tuple[str, str], str] = {}
-    for src in sorted(ROUTES_DIR.rglob("*.rs")):
+    for src in [*sorted(ROUTES_DIR.rglob("*.rs")), CHAT_ROUTES]:
         text = src.read_text(encoding="utf-8")
         for m in re.finditer(r"\.route\(\s*\n?\s*\"([^\"]+)\"", text):
             open_idx = text.index("(", m.start())
             body = text[open_idx : _matching_paren(text, open_idx) + 1]
             path = m.group(1)
-            if src.name not in UNVERSIONED_ROUTE_FILES:
+            if src.name not in UNVERSIONED_ROUTE_FILES and src != CHAT_ROUTES:
                 path = API_PREFIX + path
             path = normalize_path(path)
             methods = {
