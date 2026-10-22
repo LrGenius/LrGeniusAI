@@ -5,9 +5,9 @@ through the same tools the [MCP endpoint](Dev-Agent-Bridge) offers external
 agents, and the user talks to it — and approves what it may change — in a page
 the backend serves. Route reference: [Backend API](Dev-Backend-API#agent-chat).
 
-> **Status:** the backend is in place (engines, model adapter, loop,
-> permissions, routes). The browser page and the Lightroom menu item that
-> opens it are the next step.
+> **Status:** working end to end with local models (llama.cpp, MLX): the
+> backend, the page and the menu item *Chat with Your Catalog...*. Still to
+> come: reusing the conversation's cache across turns, cloud models.
 
 ---
 
@@ -37,6 +37,8 @@ browser page ──fetch + event stream, chat token──► lrg-chat routes (/v
 | `…/lrg-chat/src/events.rs` | What the page is told, numbered for reconnects |
 | `…/lrg-chat/src/routes.rs` | The HTTP routes and their two tokens |
 | `…/lrg-chat/src/prompt.rs` | What the model is told about its job |
+| `…/lrg-chat/src/ui/chat.html` | The page (`/v1/ui/chat`), one file with no external resources |
+| `plugin/…/TaskChat.lua` | The menu item: picks the local model, opens a chat, opens the page |
 
 The chat is an MCP *client* of the tools rather than a caller of their code,
 so a chat call takes exactly the path an external agent's takes: the same
@@ -78,6 +80,15 @@ false`, and `format` (`int64`, `double` from schemars), defaults, descriptions
 and numeric bounds dropped. The prompt carries the descriptions; the tool still
 validates its arguments.
 
+**A choice of required arguments becomes one schema per choice.** A tool
+that works on photos takes `set` *or* `photo_ids`, and needs exactly one. The
+MCP schema cannot say so — it would take a `oneOf` at the top of the tool's
+schema, which Anthropic's and OpenAI's APIs refuse — so `lrg-chat/src/mcp.rs`
+adds `oneOf: [{required: [set]}, {required: [photo_ids]}]` for the chat only,
+and `grammar_schema` turns it into two closed objects, each requiring one and
+leaving the other out (`split_choice`). Before, Gemma 4 E4B left both out and
+the call failed. A cloud model adapter has to leave such a `oneOf` out again.
+
 **Every string is capped** — 1,000 characters for an argument, 600 for
 `analysis`, 6,000 for `reply` — and both engines enforce `maxLength` (checked
 by the engine smoke tests). Small models fall into repeating a phrase inside a
@@ -112,7 +123,10 @@ Per user message, at most 12 model turns (`MAX_STEPS`):
 **Stop** cancels the model's turn (llama.cpp stops at the next token; the MLX
 sidecar finishes its answer and the next request skips its lines), denies
 calls waiting for approval, and starts nothing new. A tool already running in
-Lightroom is not interrupted; its result is recorded.
+Lightroom is not interrupted; its result is recorded. What the model had
+streamed of the cut-off turn is dropped, on the page too, and the history gets
+a note that the user stopped there (`STOPPED`): without it the unanswered
+request was merged with the next message, and Gemma 4 E4B answered both.
 
 **Context.** The history is estimated at 3 characters per token and 600 per
 photo; the system prompt and tools cost what the first turn's prompt tokens
@@ -192,8 +206,40 @@ stream ends; it reconnects and catches up from the log.
 | `tool_done` | `call_id`, `ok`, `text`, `set_id`, `count`, `warnings`, `images` |
 | `tool_skipped` | `call_id`, `reason` (`not allowed`, `stopped`, `repeated call`, `turned off`) |
 | `warning`, `error` | `message` |
+| `stopped` | — (the user stopped the chat; streamed text of an unfinished turn is dropped) |
 | `busy` | `busy` |
 | `usage` | `prompt_tokens`, `context_window` |
+
+---
+
+## The page and the menu item
+
+*Library → Plug-in Extras → Chat with Your Catalog...* (`TaskChat.lua`)
+picks the model — the one chosen for Analyze & Index when it is local,
+otherwise the first installed one, MLX first on a Mac — opens a chat with the
+agent token and the same engine settings indexing uses (so the backend does
+not reload the model with other ones), and opens the page in the browser.
+Nothing stays open in Lightroom: the model works through the agent bridge,
+which runs whenever Lightroom does. Without a local model or with AI agents
+turned off, the task says what to set up instead.
+
+The page (`ui/chat.html`) is one file: no external resources, which its
+`Content-Security-Policy` enforces. It reads the event stream with `fetch`
+(EventSource cannot send the token), reconnects with `?after=` and backs off,
+and rebuilds everything from the numbered events, so a reload shows the same
+conversation. It draws:
+
+* the model's turns with their reasoning (*Thinking:*), streamed as decoded;
+* a card per tool call — its title, kind, the photos it aims at, its
+  arguments in words (`set: selection` reads "the photos selected in
+  Lightroom"), its status, warnings, and the tool's answer folded away;
+* the approval box on a card that waits: *Allow once*, *Allow in this chat*,
+  *Always allow* (not offered for a bulk question: the limit asks even for an
+  allowed tool, so "never ask again" would not hold), and *Don't allow* with an
+  optional note;
+* *What it may do...*: the mode, a rule per tool, the bulk limit, and whether
+  the settings are saved;
+* how much of the context the last turn used.
 
 ---
 

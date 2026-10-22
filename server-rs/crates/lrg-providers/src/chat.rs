@@ -71,7 +71,10 @@ impl ChatMessage {
 }
 
 /// A tool as the model is told about it. `input_schema` is the tool's JSON
-/// Schema as the MCP server publishes it.
+/// Schema as the MCP server publishes it, except that it may carry a
+/// top-level `oneOf`/`anyOf` whose branches hold only `required` — "give one
+/// of these arguments". An adapter whose API refuses that at the top of a
+/// tool schema (Anthropic's and OpenAI's do) leaves it out.
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
     pub name: String,

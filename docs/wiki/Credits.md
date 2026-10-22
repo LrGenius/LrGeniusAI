@@ -13,7 +13,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **LanceDB**: Embedded vector database storing embeddings and metadata. [Website](https://lancedb.com/)
 - **axum / tokio**: Async HTTP server and runtime for `geniusai-server`. [GitHub](https://github.com/tokio-rs/axum)
 - **Hugging Face Tokenizers**: Fast tokenizers used for the SigLIP2 text tower. [GitHub](https://github.com/huggingface/tokenizers)
-- **rmcp** (Apache-2.0): The official Rust SDK for the Model Context Protocol; serves the `/mcp` endpoint AI agents connect to. [GitHub](https://github.com/modelcontextprotocol/rust-sdk)
+- **rmcp** (Apache-2.0): The official Rust SDK for the Model Context Protocol; serves the `/mcp` endpoint AI agents connect to, and connects the in-app chat to the same tools. [GitHub](https://github.com/modelcontextprotocol/rust-sdk)
 
 ## Species Identification
 

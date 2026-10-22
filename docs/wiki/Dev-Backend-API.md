@@ -840,6 +840,16 @@ a request whose `Origin` is not this server even with the right token. A wrong
 token, a foreign origin and a chat that has ended all get the same **403**.
 Errors are `{"error": "<what to do>"}`.
 
+### `GET /v1/ui/chat`
+The chat page (`lrg-chat/src/ui/chat.html`), no token needed: it is the same
+for everyone and holds nothing until it is given a chat. It reads `session` and
+`token` from its fragment, keeps them in `sessionStorage` so a reload works,
+and removes them from the address bar. Sent with a strict
+`Content-Security-Policy` (`default-src 'none'`, `connect-src 'self'`,
+`frame-ancestors 'none'`), `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. A new chat's address opened in the same tab
+changes only the fragment; the page reloads itself for it.
+
 ### `POST /v1/chat/sessions`
 Opens a chat. Body: `provider` (`llamacpp` or `mlx` — anything else is a 400
 saying the chat needs a local model for now), `model` (as for indexing), and
@@ -882,7 +892,9 @@ model. **204**; **409** when that call is not waiting any more.
 ### `POST /v1/chat/sessions/{id}/stop`
 Stops after the step in progress: the model's turn is cancelled, calls waiting
 for approval are denied, nothing new starts. A tool already running in
-Lightroom finishes and its result is recorded. **204**.
+Lightroom finishes and its result is recorded. The event stream gets a
+`stopped` event, and the model is told in the history that the user stopped
+there. **204**.
 
 ### `GET /v1/chat/sessions/{id}/permissions`
 ### `PUT /v1/chat/sessions/{id}/permissions`

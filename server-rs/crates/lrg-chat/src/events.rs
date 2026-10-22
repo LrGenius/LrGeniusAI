@@ -81,6 +81,9 @@ pub enum ChatEvent {
     Error {
         message: String,
     },
+    /// The user stopped the chat; sent just before it goes idle. Whatever
+    /// the model had streamed of an unfinished turn is not kept.
+    Stopped,
     /// The chat started or finished working on a message.
     Busy {
         busy: bool,

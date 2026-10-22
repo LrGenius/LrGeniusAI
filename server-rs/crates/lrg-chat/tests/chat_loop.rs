@@ -282,12 +282,30 @@ async fn stopping_denies_the_call_that_waits_and_ends_the_turn() {
     let events = run(&session, "Rate them.", |_| Answer::Stop).await;
 
     assert_eq!(skipped(&events), vec!["stopped".to_string()]);
+    assert!(events.contains(&ChatEvent::Stopped), "the page is told");
     assert_eq!(
         model.seen.lock().unwrap().len(),
         1,
         "no turn after the stop"
     );
     assert!(!session.is_busy());
+
+    // The next message reaches the model with the stop marked before it, so
+    // it does not take up the stopped request again.
+    run(&session, "Something else.", never_asked).await;
+    let seen = model.seen.lock().unwrap();
+    let texts: Vec<&str> = seen[1]
+        .messages
+        .iter()
+        .flat_map(|m| &m.parts)
+        .filter_map(|p| match p {
+            ChatPart::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let stop = texts.iter().position(|t| t.contains("stopped this"));
+    let next = texts.iter().position(|t| *t == "Something else.");
+    assert!(stop.is_some() && stop < next, "{texts:?}");
 }
 
 #[tokio::test]

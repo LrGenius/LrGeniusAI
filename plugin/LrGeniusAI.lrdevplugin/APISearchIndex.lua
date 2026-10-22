@@ -150,6 +150,10 @@ local ENDPOINTS = {
 	UI_PEOPLE = "/v1/ui/people",
 	UI_ACTIONS = "/v1/ui/actions",
 
+	-- The agent chat (TaskChat.lua): opening a session takes the agent token;
+	-- the page it returns talks to the backend on its own after that.
+	CHAT_SESSIONS = "/v1/chat/sessions",
+
 	-- The agent bridge (see AgentBridge.lua): the plugin registers, claims
 	-- commands an AI agent queued through the backend's MCP endpoint, and
 	-- answers them.
@@ -4148,6 +4152,33 @@ function SearchIndexAPI.takeUiActions()
 		return nil, err
 	end
 	return result
+end
+
+---
+-- Opens an agent chat. Needs the agent token — the same one AI apps use for
+-- /mcp — and the local model to chat with. Returns { session_id, token, page },
+-- where `page` is the path to open, carrying the chat's own token in its
+-- fragment; or nil, err when the backend refused (its message says why, e.g.
+-- that the agent bridge is off).
+-- @param agentToken string
+-- @param body table { provider, model, llm_n_ctx?, llm_n_parallel?, llm_gpu_layers? }
+function SearchIndexAPI.openChatSession(agentToken, body)
+	local result, err = _request(
+		"POST",
+		SearchIndexAPI.url("CHAT_SESSIONS"),
+		body,
+		30,
+		{ headers = { { field = "Authorization", value = "Bearer " .. (agentToken or "") } } }
+	)
+	if err then
+		log:error("openChatSession failed: " .. tostring(err))
+	end
+	return result, err
+end
+
+--- A path the backend returned (such as a chat page), as a full URL.
+function SearchIndexAPI.pageUrl(path)
+	return getBaseUrl() .. path
 end
 
 ---

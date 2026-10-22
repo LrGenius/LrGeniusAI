@@ -24,6 +24,13 @@ plugin: AgentBridge.lua ◄─────────────────�
         AgentCommands.lua runs each command against the catalog (SDK)
 ```
 
+The in-app chat ([Dev: Agent Chat](Dev-Agent-Chat)) is one more client of the
+same tools: `lrg-chat` serves an `LrGeniusMcp` over an in-memory pipe for each
+chat and connects to it, so its calls take this path too. It leaves out the
+developer tools (`LrGeniusMcp::developer_tool_names`), and when it counts a
+selection for its bulk-change question it asks the plugin for at most
+`MAX_PHOTOS_PER_CALL` photos, as the tools do.
+
 | Where | What |
 |---|---|
 | `server-rs/crates/lrg-mcp/src/lib.rs` | Mounts the rmcp `StreamableHttpService` at `/mcp` behind the agent-token check (Host check on, every browser `Origin` refused) |

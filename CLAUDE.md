@@ -143,6 +143,9 @@ performs them against the catalog. Reach for this when a task is a grid of
 server-side data that LrView cannot re-render (see
 [Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);
 keep settings and short forms native.
+`TaskChat.lua` goes further: the chat page at `/v1/ui/chat` works through
+the agent bridge, which runs whenever Lightroom does, so the task only opens
+a chat and hands the browser its address.
 
 All long-running operations run inside `LrTasks.startAsyncTask`. Use `LrTasks.pcall` (never native `pcall`) so tasks can yield.
 

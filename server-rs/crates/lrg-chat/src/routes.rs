@@ -40,8 +40,14 @@ const WRONG_AGENT_TOKEN: &str = "Missing or wrong LrGeniusAI agent token. Open t
 const WRONG_CHAT: &str = "This chat has ended or the link is not valid. Open the chat again from \
                           Lightroom: Library > Plug-in Extras > LrGeniusAI.";
 
+/// Baked into the binary, like the People page: a page that could go missing
+/// or go stale next to an updated binary is a support problem the size does
+/// not justify.
+const CHAT_HTML: &str = include_str!("ui/chat.html");
+
 pub(crate) fn router(hub: Arc<ChatHub>) -> Router {
     Router::new()
+        .route("/v1/ui/chat", get(chat_page))
         .route("/v1/chat/sessions", post(create_session))
         .route(
             "/v1/chat/sessions/{id}",
@@ -56,6 +62,26 @@ pub(crate) fn router(hub: Arc<ChatHub>) -> Router {
             get(get_permissions).put(put_permissions),
         )
         .with_state(hub)
+}
+
+/// The page holds no data of its own — everything comes through the routes
+/// below, with the token from its address — so it is served to anyone. The
+/// headers keep it from loading anything from elsewhere or being framed.
+async fn chat_page() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+                 connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
+            ),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        CHAT_HTML,
+    )
+        .into_response()
 }
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {

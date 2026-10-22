@@ -12,7 +12,7 @@ use base64::Engine as _;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::RunningService;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 
 use lrg_mcp::{LrGeniusMcp, Shared};
 use lrg_providers::chat::{ChatImage, ToolCall, ToolResult, ToolSpec};
@@ -92,7 +92,7 @@ impl Connection {
                 spec: ToolSpec {
                     name: tool.name.to_string(),
                     description: tool.description.as_deref().unwrap_or_default().to_string(),
-                    input_schema: Value::Object((*tool.input_schema).clone()),
+                    input_schema: with_photo_choice((*tool.input_schema).clone()),
                 },
             })
             .collect();
@@ -126,6 +126,32 @@ impl Connection {
     }
 }
 
+/// Says in the schema that a tool taking photos needs exactly one of `set`
+/// and `photo_ids` (`lrg_mcp::Photos`, flattened into its arguments).
+///
+/// The MCP schema leaves both optional because it cannot say "one of" where
+/// it would have to — at the top of the tool's schema, which Anthropic's and
+/// OpenAI's APIs refuse, so external agents would lose the tool. The chat's
+/// local models decode against the schema, so for them it matters: Gemma 4
+/// E4B left both out and the call failed.
+fn with_photo_choice(mut schema: Map<String, Value>) -> Value {
+    let free = |name: &str| {
+        let listed = schema.get("properties").and_then(|p| p.get(name)).is_some();
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|r| r.iter().any(|v| v == name));
+        listed && !required
+    };
+    if free("set") && free("photo_ids") && !schema.contains_key("oneOf") {
+        schema.insert(
+            "oneOf".into(),
+            json!([{"required": ["set"]}, {"required": ["photo_ids"]}]),
+        );
+    }
+    Value::Object(schema)
+}
+
 fn tool_result(call: &ToolCall, result: &CallToolResult) -> ToolResult {
     let text = result
         .content
@@ -154,5 +180,34 @@ fn tool_result(call: &ToolCall, result: &CallToolResult) -> ToolResult {
         text,
         images,
         is_error: result.is_error.unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schema(value: Value) -> Map<String, Value> {
+        value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_tool_taking_photos_needs_a_set_or_photo_ids() {
+        let photos = schema(json!({
+            "type": "object",
+            "properties": {"set": {}, "photo_ids": {}, "rating": {}}
+        }));
+        assert_eq!(
+            with_photo_choice(photos)["oneOf"],
+            json!([{"required": ["set"]}, {"required": ["photo_ids"]}])
+        );
+        // Neither field, only one, or one already required: unchanged.
+        for unchanged in [
+            json!({"type": "object", "properties": {"query": {}}}),
+            json!({"type": "object", "properties": {"set": {}}}),
+            json!({"type": "object", "properties": {"set": {}, "photo_ids": {}}, "required": ["set"]}),
+        ] {
+            assert_eq!(with_photo_choice(schema(unchanged.clone())), unchanged);
+        }
     }
 }

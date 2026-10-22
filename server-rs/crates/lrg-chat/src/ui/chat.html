@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat — LrGeniusAI</title>
+    <style>
+      :root {
+        --bg: #1e1e1e;
+        --panel: #2b2b2b;
+        --panel-hi: #333;
+        --line: #3d3d3d;
+        --text: #d8d8d8;
+        --dim: #8f8f8f;
+        --accent: #4a90d9;
+        --warn: #c9962f;
+        --error: #d05252;
+        --ok: #5fa85f;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-hi);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 11px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) { background: #3c3c3c; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.primary:hover:not(:disabled) { background: #5a9fe4; }
+      button.danger { border-color: #6d3a3a; }
+      button.danger:hover:not(:disabled) { background: #4a2c2c; }
+      input, select, textarea {
+        font: inherit;
+        color: var(--text);
+        background: #232323;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 5px 7px;
+      }
+      input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
+      .spacer { flex: 1; }
+      .pill { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
+      .dot.on { background: var(--ok); }
+      .dot.busy { background: var(--warn); }
+
+      #log { flex: 1; overflow-y: auto; padding: 16px 16px 8px; }
+      .inner { max-width: 860px; margin: 0 auto; }
+      .msg { margin: 10px 0; display: flex; }
+      .msg.user { justify-content: flex-end; }
+      .bubble {
+        max-width: 80%;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .msg.user .bubble { background: #26384d; border-color: #31506f; }
+      .thought { color: var(--dim); font-style: italic; margin: 6px 0; white-space: pre-wrap; }
+      .thought::before { content: "Thinking: "; font-style: normal; }
+      code { background: #171717; padding: 0 4px; border-radius: 3px; }
+
+      .tool {
+        margin: 8px 0;
+        padding: 8px 12px;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--accent);
+        border-radius: 4px;
+        background: #252525;
+      }
+      .tool.change { border-left-color: var(--warn); }
+      .tool.destructive { border-left-color: var(--error); }
+      .tool .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+      .tool .title { font-weight: 600; }
+      .tool .status { color: var(--dim); font-size: 12px; }
+      .tool .status.ok { color: var(--ok); }
+      .tool .status.failed { color: var(--error); }
+      .badge { font-size: 11px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); color: var(--dim); }
+      .args { margin: 4px 0 0; padding: 0; list-style: none; color: var(--dim); }
+      .args b { color: var(--text); font-weight: 500; }
+      details { margin-top: 4px; }
+      details summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+      details pre {
+        max-height: 260px;
+        overflow: auto;
+        background: #171717;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .warnings { color: var(--warn); margin: 4px 0 0; padding-left: 18px; }
+      .approve {
+        margin-top: 8px;
+        padding: 8px;
+        border-radius: 4px;
+        background: #33302a;
+        border: 1px solid #5a4d2f;
+      }
+      .approve .why { margin-bottom: 6px; }
+      .approve .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      .approve input { flex: 1; min-width: 180px; }
+
+      .notice { margin: 8px 0; padding: 8px 12px; border-radius: 4px; border-left: 3px solid var(--warn); background: #33302a; }
+      .notice.error { border-left-color: var(--error); background: #382a2a; }
+      .notice.info { border-left-color: var(--accent); background: #26303a; }
+
+      footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; }
+      #composer { display: flex; gap: 8px; align-items: flex-end; }
+      #input { flex: 1; resize: none; min-height: 38px; max-height: 160px; }
+      #meta { display: flex; gap: 12px; color: var(--dim); font-size: 12px; margin-top: 6px; }
+
+      #settings {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 40px 16px;
+        overflow-y: auto;
+      }
+      #settings[hidden] { display: none; }
+      .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; width: 100%; max-width: 620px; }
+      .sheet h2 { font-size: 14px; margin: 0 0 10px; }
+      .sheet h3 { font-size: 13px; margin: 16px 0 6px; }
+      .mode { display: block; padding: 6px 0; }
+      .mode small { display: block; color: var(--dim); margin-left: 22px; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 4px 6px; border-top: 1px solid var(--line); }
+      .sheet .buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+      .muted { color: var(--dim); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Chat with your catalog</h1>
+      <span class="pill" id="model"></span>
+      <span class="pill"><span class="dot" id="lr-dot"></span><span id="lr-text">Lightroom</span></span>
+      <span class="spacer"></span>
+      <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-text">Connecting…</span></span>
+      <button id="open-settings">What it may do…</button>
+    </header>
+
+    <div id="log"><div class="inner" id="entries"></div></div>
+
+    <footer>
+      <div class="inner">
+        <div id="composer">
+          <textarea id="input" rows="1" placeholder="Ask about your photos, or tell the assistant what to do. Enter sends, Shift+Enter adds a line."></textarea>
+          <button class="primary" id="send">Send</button>
+          <button class="danger" id="stop" hidden>Stop</button>
+        </div>
+        <div id="meta"><span id="state"></span><span class="spacer"></span><span id="usage"></span></div>
+      </div>
+    </footer>
+
+    <div id="settings" hidden>
+      <div class="sheet">
+        <h2>What the assistant may do without asking</h2>
+        <div id="modes"></div>
+        <h3>Per tool</h3>
+        <p class="muted">"Default" follows the choice above. "Off" hides a tool from the assistant entirely.</p>
+        <table id="tools"></table>
+        <h3>Large changes</h3>
+        <label>Ask before changing more than
+          <input type="number" id="bulk" min="0" step="10" style="width: 80px" /> photos at once, even when allowed (0 = never ask).</label>
+        <p class="muted" id="saved-note"></p>
+        <div class="buttons">
+          <button id="cancel-settings">Cancel</button>
+          <button class="primary" id="save-settings">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      "use strict";
+
+      const MODES = [
+        ["ask_all", "Ask before every step", "Even searching and looking at photos waits for you."],
+        ["auto_read", "Look freely, ask before changes", "Searching and reading run on their own; anything that changes something asks first. Recommended."],
+        ["auto_safe", "Also allow easy-to-undo changes", "Collections, showing results and indexing run on their own; changes to the photos themselves (ratings, keywords, develop settings) ask."],
+        ["auto_all", "Allow everything", "Nothing asks, except changes to more photos than the limit below. Lightroom's undo still works."],
+      ];
+      const CLASS_LABEL = { read: "looks", change: "changes", destructive: "changes photos" };
+      const SKIP_LABEL = {
+        "not allowed": "Not allowed",
+        "stopped": "Stopped",
+        "repeated call": "Skipped: the same call as before",
+        "turned off": "Turned off in the settings",
+        "unknown tool": "Unknown tool",
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const entries = $("entries");
+
+      // The fragment carries the chat's token. It is moved into this tab's
+      // storage and off the address bar, so a screenshot or a copied link
+      // does not hand it on; a reload still finds it.
+      const auth = (() => {
+        const params = new URLSearchParams(location.hash.slice(1));
+        let session = params.get("session");
+        let token = params.get("token");
+        try {
+          if (session && token) {
+            sessionStorage.setItem("lrg-chat", JSON.stringify({ session, token }));
+          } else {
+            ({ session, token } = JSON.parse(sessionStorage.getItem("lrg-chat") || "{}"));
+          }
+        } catch (_) {}
+        if (location.hash) history.replaceState(null, "", location.pathname);
+        return { session, token };
+      })();
+      const base = "/v1/chat/sessions/" + encodeURIComponent(auth.session || "");
+
+      let info = null;
+      let lastSeq = 0;
+      let busy = false;
+      let ended = false;
+      let live = null; // the bubble a turn is streaming into
+      const cards = new Map(); // call_id -> card element
+
+      async function api(method, path, body) {
+        const response = await fetch(base + path, {
+          method,
+          headers: { Authorization: "Bearer " + auth.token, "Content-Type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        if (response.status === 403) {
+          endChat();
+          throw new Error("ended");
+        }
+        if (!response.ok) {
+          let message = response.statusText;
+          try { message = (await response.json()).error || message; } catch (_) {}
+          throw new Error(message);
+        }
+        return response.status === 204 || response.status === 202 ? null : response.json();
+      }
+
+      function endChat() {
+        if (ended) return;
+        ended = true;
+        setConnection("ended");
+        notice("error", "This chat has ended. Open a new one from Lightroom: Library > Plug-in Extras > Chat with Your Catalog.");
+        $("send").disabled = true;
+        $("input").disabled = true;
+      }
+
+      // ------------------------------------------------------------------
+      // Rendering
+      // ------------------------------------------------------------------
+
+      function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
+      // **bold** and `code`, nothing else; built from nodes, never HTML.
+      function formatted(text) {
+        const out = document.createDocumentFragment();
+        const parts = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`)/);
+        for (const part of parts) {
+          if (part.startsWith("**") && part.endsWith("**") && part.length > 4) out.append(el("b", "", part.slice(2, -2)));
+          else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) out.append(el("code", "", part.slice(1, -1)));
+          else if (part) out.append(document.createTextNode(part));
+        }
+        return out;
+      }
+
+      function scrollDown() {
+        const log = $("log");
+        log.scrollTop = log.scrollHeight;
+      }
+
+      function notice(kind, text) {
+        entries.append(el("div", "notice " + kind, text));
+        scrollDown();
+      }
+
+      function userMessage(text) {
+        const row = el("div", "msg user");
+        row.append(el("div", "bubble", text));
+        entries.append(row);
+      }
+
+      function liveBubble() {
+        if (!live) {
+          const row = el("div", "msg");
+          const bubble = el("div", "bubble");
+          const thought = el("div", "thought");
+          const text = el("div");
+          thought.hidden = true;
+          bubble.append(thought, text);
+          row.append(bubble);
+          entries.append(row);
+          live = { row, thought, text, raw: "" };
+        }
+        return live;
+      }
+
+      function finishTurn(reasoning, text) {
+        const bubble = liveBubble();
+        bubble.thought.textContent = reasoning || "";
+        bubble.thought.hidden = !reasoning;
+        bubble.text.replaceChildren(formatted(text || ""));
+        bubble.text.hidden = !text;
+        if (!reasoning && !text) bubble.row.remove();
+        live = null;
+      }
+
+      function describeSet(value) {
+        if (value === "selection") return "the photos selected in Lightroom";
+        if (value === "view") return "the photos Lightroom is showing";
+        return "result set " + value;
+      }
+
+      function argumentList(args) {
+        const list = el("ul", "args");
+        for (const [key, value] of Object.entries(args || {})) {
+          const item = el("li");
+          let shown;
+          if (key === "set") shown = describeSet(value);
+          else if (Array.isArray(value)) shown = value.length > 6 ? value.length + " items" : value.join(", ");
+          else if (value && typeof value === "object") shown = JSON.stringify(value);
+          else shown = String(value);
+          if (shown.length > 160) shown = shown.slice(0, 160) + "…";
+          item.append(el("b", "", key.replace(/_/g, " ") + ": "), document.createTextNode(shown));
+          list.append(item);
+        }
+        return list;
+      }
+
+      function toolCard(event) {
+        const card = el("div", "tool " + event.class);
+        const head = el("div", "head");
+        head.append(el("span", "title", event.title), el("span", "badge", CLASS_LABEL[event.class] || event.class));
+        if (event.photos != null) head.append(el("span", "badge", event.photos + (event.photos === 1 ? " photo" : " photos")));
+        const status = el("span", "status", "proposed");
+        head.append(status);
+        card.append(head, argumentList(event.arguments));
+        card.status = status;
+        entries.append(card);
+        cards.set(event.call_id, card);
+        return card;
+      }
+
+      function setStatus(callId, text, kind) {
+        const card = cards.get(callId);
+        if (!card) return;
+        card.status.textContent = text;
+        card.status.className = "status" + (kind ? " " + kind : "");
+        if (kind || text !== "waiting for you") card.querySelector(".approve")?.remove();
+      }
+
+      function askReason(reason, card) {
+        if (reason.kind === "bulk") return `This would change ${reason.photos} photos — more than your limit of ${reason.limit}.`;
+        if (reason.kind === "rule") return "You set this tool to always ask.";
+        return card.classList.contains("read") ? "Your settings ask before every step." : "Your settings ask before changes like this.";
+      }
+
+      function approvalBox(event) {
+        const card = cards.get(event.call_id);
+        if (!card) return;
+        setStatus(event.call_id, "waiting for you");
+        const box = el("div", "approve");
+        box.append(el("div", "why", askReason(event.reason, card)));
+        const row = el("div", "row");
+        const note = el("input");
+        note.placeholder = "Optional: what to do instead";
+        const answer = (decision) => async () => {
+          const body = { decision };
+          if (decision === "deny" && note.value.trim()) body.note = note.value.trim();
+          box.querySelectorAll("button, input").forEach((b) => (b.disabled = true));
+          try {
+            await api("POST", "/approvals/" + encodeURIComponent(event.call_id), body);
+          } catch (e) {
+            if (e.message !== "ended") notice("error", "Could not send your answer: " + e.message);
+            box.querySelectorAll("button, input").forEach((b) => (b.disabled = false));
+          }
+        };
+        const allow = el("button", "primary", "Allow once");
+        allow.onclick = answer("once");
+        const chat = el("button", "", "Allow in this chat");
+        chat.onclick = answer("chat");
+        const always = el("button", "", "Always allow");
+        always.title = "Never ask again for this tool (changeable under \"What it may do\").";
+        always.onclick = answer("always");
+        const deny = el("button", "danger", "Don't allow");
+        deny.onclick = answer("deny");
+        row.append(allow, chat);
+        if (event.reason.kind !== "bulk") row.append(always);
+        row.append(note, deny);
+        box.append(row);
+        card.append(box);
+        scrollDown();
+      }
+
+      function toolDone(event) {
+        const card = cards.get(event.call_id);
+        if (!card) return;
+        let summary = event.ok ? "done" : "failed";
+        if (event.count != null) summary += ` · ${event.count} photo${event.count === 1 ? "" : "s"}`;
+        if (event.set_id) summary += ` (${event.set_id})`;
+        setStatus(event.call_id, summary, event.ok ? "ok" : "failed");
+        if (event.warnings && event.warnings.length) {
+          const list = el("ul", "warnings");
+          event.warnings.slice(0, 5).forEach((w) => list.append(el("li", "", w)));
+          if (event.warnings.length > 5) list.append(el("li", "", `…and ${event.warnings.length - 5} more`));
+          card.append(list);
+        }
+        if (!event.ok) card.append(el("div", "warnings", event.text.split("\n")[0]));
+        const details = el("details");
+        details.append(el("summary", "", "What the tool answered"));
+        details.append(el("pre", "", event.text));
+        card.append(details);
+      }
+
+      function setBusy(value) {
+        busy = value;
+        $("send").hidden = value;
+        $("stop").hidden = !value;
+        $("stop").disabled = false;
+        $("state").textContent = value ? "Working…" : "";
+        if (!value) {
+          // A question nobody answered before the turn ended is void.
+          entries.querySelectorAll(".approve").forEach((box) => box.remove());
+          if (live) finishTurn(live.thought.textContent, live.raw);
+        }
+      }
+
+      function apply(event) {
+        if (event.seq) lastSeq = Math.max(lastSeq, event.seq);
+        switch (event.type) {
+          case "user_message": userMessage(event.text); break;
+          case "busy": setBusy(event.busy); break;
+          case "delta": {
+            const bubble = liveBubble();
+            if (event.kind === "reasoning") {
+              bubble.thought.hidden = false;
+              bubble.thought.textContent += event.text;
+            } else {
+              bubble.raw += event.text;
+              bubble.text.textContent = bubble.raw;
+            }
+            break;
+          }
+          case "assistant_turn": finishTurn(event.reasoning, event.text); break;
+          case "tool_call": toolCard(event); break;
+          case "approval_needed": approvalBox(event); break;
+          case "tool_running": setStatus(event.call_id, "running…"); break;
+          case "tool_done": toolDone(event); break;
+          case "tool_skipped": setStatus(event.call_id, SKIP_LABEL[event.reason] || event.reason, "failed"); break;
+          case "warning": notice("", event.message); break;
+          case "error": notice("error", event.message); break;
+          case "stopped":
+            // A turn cut short is not part of the conversation; don't show it as if it were.
+            if (live) live.row.remove();
+            live = null;
+            notice("info", "Stopped.");
+            break;
+          case "usage":
+            $("usage").textContent = event.context_window
+              ? `Context: ${event.prompt_tokens.toLocaleString()} of ${event.context_window.toLocaleString()} tokens`
+              : `Context: ${event.prompt_tokens.toLocaleString()} tokens`;
+            break;
+        }
+        scrollDown();
+      }
+
+      // ------------------------------------------------------------------
+      // The event stream: fetch, not EventSource, which cannot send the token.
+      // ------------------------------------------------------------------
+
+      function setConnection(state) {
+        const dot = $("conn-dot");
+        dot.className = "dot" + (state === "live" ? " on" : state === "connecting" ? " busy" : "");
+        $("conn-text").textContent = { live: "Connected", connecting: "Connecting…", lost: "Reconnecting…", ended: "Ended" }[state];
+      }
+
+      async function listen() {
+        let delay = 500;
+        while (!ended) {
+          try {
+            setConnection(lastSeq ? "lost" : "connecting");
+            const response = await fetch(`${base}/events?after=${lastSeq}`, {
+              headers: { Authorization: "Bearer " + auth.token },
+            });
+            if (response.status === 403) { endChat(); return; }
+            if (!response.ok || !response.body) throw new Error(response.statusText);
+            setConnection("live");
+            delay = 500;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            read: for (;;) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              let cut;
+              while ((cut = buffer.indexOf("\n\n")) >= 0) {
+                const block = buffer.slice(0, cut);
+                buffer = buffer.slice(cut + 2);
+                let name = "message";
+                let data = "";
+                for (const line of block.split("\n")) {
+                  if (line.startsWith("event:")) name = line.slice(6).trim();
+                  else if (line.startsWith("data:")) data += line.slice(5).trim();
+                }
+                if (name === "resync") {
+                  // Fell behind: reconnect and catch up from the log.
+                  reader.cancel().catch(() => {});
+                  break read;
+                }
+                if (data) apply(JSON.parse(data));
+              }
+            }
+          } catch (_) {}
+          if (ended) return;
+          setConnection("lost");
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay = Math.min(delay * 2, 8000);
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // Sending, stopping, settings
+      // ------------------------------------------------------------------
+
+      async function send() {
+        const input = $("input");
+        const text = input.value.trim();
+        if (!text || busy || ended) return;
+        $("send").disabled = true;
+        try {
+          await api("POST", "/messages", { text });
+          input.value = "";
+          autosize();
+        } catch (e) {
+          if (e.message !== "ended") notice("error", e.message);
+        } finally {
+          $("send").disabled = false;
+        }
+      }
+
+      function autosize() {
+        const input = $("input");
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 160) + "px";
+      }
+
+      $("send").onclick = send;
+      $("input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          send();
+        }
+      });
+      $("input").addEventListener("input", autosize);
+      $("stop").onclick = async () => {
+        $("stop").disabled = true;
+        $("state").textContent = "Stopping after this step…";
+        try { await api("POST", "/stop"); } catch (_) {}
+      };
+
+      function showSettings() {
+        const p = info.permissions;
+        const modes = $("modes");
+        modes.replaceChildren();
+        for (const [value, title, help] of MODES) {
+          const label = el("label", "mode");
+          const radio = el("input");
+          radio.type = "radio";
+          radio.name = "mode";
+          radio.value = value;
+          radio.checked = p.mode === value;
+          label.append(radio, document.createTextNode(" " + title), el("small", "", help));
+          modes.append(label);
+        }
+        const table = $("tools");
+        table.replaceChildren();
+        for (const tool of info.tools) {
+          const row = el("tr");
+          const select = el("select");
+          select.dataset.tool = tool.name;
+          for (const [value, title] of [["", "Default"], ["allow", "Allow"], ["ask", "Ask"], ["block", "Off"]]) {
+            const option = el("option", "", title);
+            option.value = value;
+            option.selected = (p.tools[tool.name] || "") === value;
+            select.append(option);
+          }
+          const cell = el("td");
+          cell.append(select);
+          row.append(el("td", "", tool.title), el("td", "muted", CLASS_LABEL[tool.class] || tool.class), cell);
+          table.append(row);
+        }
+        $("bulk").value = p.bulk_limit;
+        $("saved-note").textContent = info.permissions_saved
+          ? "These settings apply to every chat."
+          : "LrGeniusAI does not know where its index is yet, so these settings last until it restarts.";
+        $("settings").hidden = false;
+      }
+
+      $("open-settings").onclick = () => info && showSettings();
+      $("cancel-settings").onclick = () => ($("settings").hidden = true);
+      $("save-settings").onclick = async () => {
+        const tools = {};
+        document.querySelectorAll("#tools select").forEach((s) => { if (s.value) tools[s.dataset.tool] = s.value; });
+        const mode = document.querySelector('input[name="mode"]:checked')?.value || "auto_read";
+        const bulk = Math.max(0, parseInt($("bulk").value, 10) || 0);
+        try {
+          const answer = await api("PUT", "/permissions", { mode, tools, bulk_limit: bulk });
+          info.permissions = answer.permissions;
+          $("settings").hidden = true;
+        } catch (e) {
+          if (e.message !== "ended") notice("error", "Could not save the settings: " + e.message);
+        }
+      };
+
+      async function start() {
+        if (!auth.session || !auth.token) {
+          endChat();
+          return;
+        }
+        try {
+          info = await api("GET", "");
+        } catch (e) {
+          if (e.message !== "ended") notice("error", e.message);
+          return;
+        }
+        $("model").textContent = "Model: " + info.model;
+        const lr = info.lightroom;
+        $("lr-dot").className = "dot" + (lr ? " on" : "");
+        $("lr-text").textContent = lr ? (lr.catalog_name || "Lightroom") : "Lightroom not connected";
+        if (!lr) {
+          notice("info", "Lightroom is not connected: the assistant can search LrGeniusAI's index, but cannot show results in Lightroom or change photos.");
+        } else if (!lr.may_change_photos) {
+          notice("info", "AI agents are set to read-only in the Plug-in Manager, so Lightroom will refuse any change, whatever you allow here.");
+        }
+        listen();
+        $("input").focus();
+      }
+
+      // A new chat's address opened in this tab changes only the fragment,
+      // which does not reload the page.
+      window.addEventListener("hashchange", () => location.reload());
+      start();
+    </script>
+  </body>
+</html>

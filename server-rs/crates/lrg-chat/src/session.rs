@@ -52,6 +52,12 @@ const TOKENS_PER_IMAGE: usize = 600;
 /// What a dropped tool result says instead.
 const OMITTED: &str = "[result omitted to make room — run the tool again if you need it]";
 
+/// Added to the history where the user stopped the chat. Without it the
+/// request left unanswered is merged with the next message, and the model
+/// answers both (seen with Gemma 4 E4B).
+const STOPPED: &str =
+    "[The user stopped this before it was finished. Do not go on with it unless they ask again.]";
+
 /// Where the model for the next turn comes from. Resolved per turn rather
 /// than held: the engine slots unload an idle model and swap it when indexing
 /// asks for another, and a session holding its own reference would keep the
@@ -301,6 +307,19 @@ impl ChatSession {
         self.events.emit(ChatEvent::Busy { busy: true });
         if let Err(message) = self.work(&cancel).await {
             self.events.emit(ChatEvent::Error { message });
+        }
+        if cancel.is_cancelled() {
+            let mut inner = self.inner.lock().unwrap();
+            // Stopped after the model's last word, nothing was left unfinished.
+            if let Some(last) = inner
+                .messages
+                .last_mut()
+                .filter(|m| m.role == ChatRole::User)
+            {
+                last.parts.push(ChatPart::Text(STOPPED.into()));
+            }
+            drop(inner);
+            self.events.emit(ChatEvent::Stopped);
         }
         {
             let mut inner = self.inner.lock().unwrap();

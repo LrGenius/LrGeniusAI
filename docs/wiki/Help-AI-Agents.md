@@ -105,6 +105,59 @@ Credential Manager on Windows), like your AI provider keys.
 
 ---
 
+## Or chat right here: Chat with Your Catalog
+
+You do not need another app to try this. **Library → Plug-in Extras → Chat with
+Your Catalog...** opens a chat page in your browser, and an AI model on your
+own computer works with the same tools. Nothing leaves your computer.
+
+It needs a **local AI model** (download one under `Plug-in Manager →
+LrGeniusAI → Local AI Model`; the chat uses the one chosen for Analyze & Index
+when that is local) and the **agent bridge** (Step 1). You do not need the
+token or Step 2.
+
+**You decide what it may do on its own.** Each step the model wants to take
+appears as a card. When your settings ask first, the card has buttons:
+
+- **Allow once** — just this step.
+- **Allow in this chat** — this tool, until you close the chat.
+- **Always allow** — this tool from now on, in every chat.
+- **Don't allow** — optionally with a note saying what to do instead, for
+  example "only the three best ones". The model gets your note.
+
+**What it may do...** at the top right sets this for every chat:
+
+- *Ask before every step* — even searching waits for you.
+- *Look freely, ask before changes* — the default. Searching and looking run on
+  their own; anything that changes something asks first.
+- *Also allow easy-to-undo changes* — collections, showing results and
+  indexing run on their own; changes to the photos themselves (ratings,
+  keywords, develop settings) ask.
+- *Allow everything* — nothing asks, except large changes (below).
+
+Per tool you can also choose *Allow*, *Ask* or *Off* (the model is not even
+told about a tool that is off). And a change to more photos than your limit
+(200 unless you change it) always asks, whatever else you allowed.
+
+**Stop** ends what the model is doing: a step waiting for you is not done, and
+nothing new starts. A step already running in Lightroom finishes.
+
+Everything under *Staying in control* below applies to the chat too: read-only
+mode, Undo, the develop snapshots and the stop button on the progress bar.
+
+**Expect mistakes from small models.** The chat runs on the model on your
+computer, and small models misunderstand more often than the large ones behind
+Claude or ChatGPT: they pick a wrong field, or act on more photos than you
+meant. Read what a card says before you allow it. Bigger models do better —
+Gemma 4 12B handles one- and two-step tasks such as "find my beach photos and
+show them" or "give the selected photos four stars"; Gemma 4 E4B often gets the
+details of a change wrong.
+
+Two hours after you close its browser tab, a chat is gone; open a new one from
+the menu. So is every chat when LrGeniusAI's backend restarts.
+
+---
+
 ## Staying in control
 
 - **Watch it work.** While an agent works in Lightroom, a progress bar named

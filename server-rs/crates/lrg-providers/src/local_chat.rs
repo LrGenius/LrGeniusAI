@@ -206,8 +206,48 @@ fn describe_tools(tools: &[ToolSpec]) -> String {
             }
             out.push('\n');
         }
+        if let Some((branches, exclusive)) = required_choice(schema) {
+            let options: Vec<String> = branches.iter().map(|b| b.join(" + ")).collect();
+            out.push_str(&format!(
+                "- required: {} of {}\n",
+                if exclusive {
+                    "exactly one"
+                } else {
+                    "at least one"
+                },
+                options.join(", ")
+            ));
+        }
     }
     out
+}
+
+/// The branches of a "give one of these arguments" choice — a `oneOf` or
+/// `anyOf` whose branches hold nothing but `required` — and whether it is
+/// exclusive (`oneOf`).
+fn required_choice(schema: &Value) -> Option<(Vec<Vec<String>>, bool)> {
+    let (branches, exclusive) = match (schema.get("oneOf"), schema.get("anyOf")) {
+        (Some(branches), _) => (branches, true),
+        (None, Some(branches)) => (branches, false),
+        (None, None) => return None,
+    };
+    let branches = branches
+        .as_array()?
+        .iter()
+        .map(|branch| {
+            let branch = branch.as_object()?;
+            if branch.len() != 1 {
+                return None;
+            }
+            branch
+                .get("required")?
+                .as_array()?
+                .iter()
+                .map(|name| name.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!branches.is_empty()).then_some((branches, exclusive))
 }
 
 /// A `$ref` resolved against the tool's own definitions.
@@ -438,7 +478,9 @@ fn turn_schema(tools: &[ToolSpec]) -> Value {
 ///
 /// One grammar holds every tool, but each tool's schema brings its own
 /// `$defs`, so references are inlined. `oneOf` cannot be enforced while
-/// decoding and is read as `anyOf`. Objects are closed, or a model could add
+/// decoding and is read as `anyOf` — except a choice of required arguments
+/// ([`required_choice`]), which becomes one object per branch
+/// ([`split_choice`]). Objects are closed, or a model could add
 /// keys the tool ignores. Everything else — descriptions, defaults, `format`
 /// (`schemars` writes `int64`, `double`, which grammar engines reject or
 /// ignore unevenly), numeric bounds — is dropped: the prompt carries the
@@ -465,12 +507,14 @@ fn clean_schema(schema: &Value, defs: Option<&Value>, depth: usize) -> Value {
             .map_or_else(|| json!({}), |target| clean_schema(target, defs, depth + 1));
     }
 
+    let choice = required_choice(schema);
     let mut out = Map::new();
     for (key, value) in object {
         match key.as_str() {
             "type" | "enum" | "const" | "required" => {
                 out.insert(key.clone(), value.clone());
             }
+            "anyOf" | "oneOf" if choice.is_some() => {}
             "properties" => {
                 let properties = value
                     .as_object()
@@ -510,7 +554,52 @@ fn clean_schema(schema: &Value, defs: Option<&Value>, depth: usize) -> Value {
         out.entry("properties").or_insert_with(|| json!({}));
         out.insert("additionalProperties".into(), Value::Bool(false));
     }
-    Value::Object(out)
+    match choice {
+        Some((branches, exclusive)) if is_object => split_choice(out, &branches, exclusive),
+        _ => Value::Object(out),
+    }
+}
+
+/// An object with a choice of required arguments, as one object per branch:
+/// both grammar engines enforce `required`, but not a choice made beside
+/// `properties`. An exclusive choice leaves the other branches' arguments out
+/// of each object, so a model cannot give both. A choice naming an argument
+/// the object does not have is dropped, as it could never be met.
+fn split_choice(base: Map<String, Value>, branches: &[Vec<String>], exclusive: bool) -> Value {
+    let listed = |name: &String| {
+        base.get("properties")
+            .and_then(Value::as_object)
+            .is_some_and(|p| p.contains_key(name))
+    };
+    if !branches.iter().flatten().all(listed) {
+        return Value::Object(base);
+    }
+    let variants: Vec<Value> = branches
+        .iter()
+        .map(|branch| {
+            let mut variant = base.clone();
+            let mut required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for name in branch {
+                if !required.iter().any(|r| r == name) {
+                    required.push(json!(name));
+                }
+            }
+            variant.insert("required".into(), Value::Array(required));
+            if exclusive {
+                if let Some(Value::Object(properties)) = variant.get_mut("properties") {
+                    for other in branches.iter().flatten().filter(|n| !branch.contains(n)) {
+                        properties.remove(other);
+                    }
+                }
+            }
+            Value::Object(variant)
+        })
+        .collect();
+    json!({ "anyOf": variants })
 }
 
 // ---------------------------------------------------------------------------
@@ -791,6 +880,62 @@ mod tests {
                 "required": ["query"],
                 "additionalProperties": false
             })
+        );
+    }
+
+    fn update_tool() -> ToolSpec {
+        tool(
+            "update_photos",
+            json!({
+                "type": "object",
+                "properties": {
+                    "set": {"type": ["string", "null"]},
+                    "photo_ids": {"type": ["array", "null"], "items": {"type": "string"}},
+                    "rating": {"type": ["integer", "null"]}
+                },
+                "oneOf": [{"required": ["set"]}, {"required": ["photo_ids"]}]
+            }),
+        )
+    }
+
+    #[test]
+    fn a_choice_of_required_arguments_becomes_one_object_per_branch() {
+        let cleaned = grammar_schema(&update_tool().input_schema);
+        let variants = cleaned["anyOf"].as_array().expect("split into branches");
+        assert_eq!(variants.len(), 2, "{cleaned}");
+        assert_eq!(variants[0]["required"], json!(["set"]));
+        assert_eq!(variants[1]["required"], json!(["photo_ids"]));
+        // Exclusive: neither branch can give the other's argument.
+        assert!(variants[0]["properties"].get("photo_ids").is_none());
+        assert!(variants[1]["properties"].get("set").is_none());
+        for variant in variants {
+            assert_eq!(variant["additionalProperties"], json!(false));
+            assert!(variant["properties"].get("rating").is_some());
+        }
+
+        // Not exclusive: both stay possible.
+        let mut schema = update_tool().input_schema;
+        let branches = schema.as_object_mut().unwrap().remove("oneOf").unwrap();
+        schema["anyOf"] = branches;
+        let cleaned = grammar_schema(&schema);
+        assert!(cleaned["anyOf"][0]["properties"].get("photo_ids").is_some());
+
+        // A choice the object cannot meet is not enforced.
+        let cleaned = grammar_schema(&json!({
+            "type": "object",
+            "properties": {"set": {"type": "string"}},
+            "oneOf": [{"required": ["set"]}, {"required": ["photo_ids"]}]
+        }));
+        assert!(cleaned.get("anyOf").is_none(), "{cleaned}");
+        assert_eq!(cleaned["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn the_tool_list_states_a_choice_of_arguments() {
+        let listed = describe_tools(&[update_tool()]);
+        assert!(
+            listed.contains("- required: exactly one of set, photo_ids\n"),
+            "{listed}"
         );
     }
 

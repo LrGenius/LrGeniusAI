@@ -264,3 +264,25 @@ async fn an_empty_message_or_an_unknown_approval_is_refused() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn the_page_is_served_with_strict_headers() {
+    let (_, router) = app();
+    let response = router
+        .oneshot(request("GET", "/v1/ui/chat", None, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let csp = response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        csp.contains("default-src 'none'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let page = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(page.contains("Chat with your catalog"));
+}
