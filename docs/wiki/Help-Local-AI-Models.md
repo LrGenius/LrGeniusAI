@@ -122,6 +122,8 @@ elsewhere:
   `~/.cache/huggingface/hub`. A model from that cache is listed under its repo
   name (`gemma-3-12b-it-qat-4bit`), not under the snapshot hash the cache
   stores it as; a model you had picked under the old hash name keeps working.
+  Only models that come with a chat template are listed, so other models in
+  that cache (such as the SigLIP2 search model) are skipped.
 - **llama.cpp** pairs a model with the vision projector (`mmproj`) in the
   *same folder* only, so each LM Studio model folder is paired on its own.
 

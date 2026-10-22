@@ -434,8 +434,13 @@ templates llama.cpp will accept — start there if a new model misbehaves.
 Same role as the section above, different artifacts: **an MLX model is a
 directory, not a file** — a Hugging Face repo snapshot with `config.json`, one
 or more safetensors shards, and the tokenizer files. Discovery therefore looks
-for directories that contain a `config.json` *and* at least one `.safetensors`
-(the config alone would match a half-finished download).
+for directories that contain a `config.json`, at least one `.safetensors` (the
+config alone would match a half-finished download) *and* a chat template
+(`chat_template.jinja`, `chat_template.json` or `chat_template` in
+`tokenizer_config.json`). The template is what separates a language model from
+an image encoder with the same layout: `google/siglip2-so400m-patch16-naflex`,
+which the search model's export script leaves in the Hugging Face cache, was
+otherwise offered as a chat model.
 
 `GET /v1/llm/catalog` reports MLX under a nested `mlx` key alongside the GGUF half,
 including `supported`/`reason`, and `POST /v1/llm/downloads` takes an MLX
