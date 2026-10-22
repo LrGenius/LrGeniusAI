@@ -4,7 +4,8 @@
 -- Scans the plug-in's Lua files for bindings to the keys in Secrets.FIELDS —
 -- `bind("chatgptApiKey")` or `key = "chatgptApiKey"` — and checks that the
 -- view each one belongs to, the last factory call before it, is
--- f:password_field. A key added to Secrets.FIELDS is covered without a new line.
+-- f:password_field. A key added to Secrets.FIELDS is covered without a new line;
+-- the backend's access token (Secrets.BACKEND_TOKEN) is checked the same way.
 --
 -- Run from the repo root with:  busted
 
@@ -41,6 +42,8 @@ describe("API key fields", function()
 		for _, field in ipairs(Secrets.FIELDS) do
 			isSecret[field] = true
 		end
+		-- Not provider keys, but as secret: the backend's access token.
+		isSecret[Secrets.BACKEND_TOKEN] = true
 
 		local bindings, plainText = 0, {}
 		for file in lfs.dir(PLUGIN_DIR) do

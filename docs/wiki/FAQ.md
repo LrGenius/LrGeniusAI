@@ -48,11 +48,13 @@ Yes. The installers are not code-signed (cost and complexity for an open-source 
 
 Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository.
 
+The backend only works for whoever has its **access token**. On the computer it runs on, run `geniusai-server token` (in Docker: `docker exec geniusai-server /app/geniusai-server token`) and paste what it prints under *Plug-in Manager → LrGeniusAI → Backend Server → Access token*. A backend on the same computer as Lightroom needs nothing: the plug-in reads the token itself. `geniusai-server token --new` replaces the token (restart the backend afterwards, then paste the new one).
+
 > [!WARNING]
-> **Never make a backend reachable from the internet.** The plug-in talks to the backend over plain HTTP, with no encryption and no login. With a cloud provider (OpenAI, Gemini, Anthropic, or a cloud service as the *Other AI server*), every request carries your API key, so on a remote backend that key crosses the network in plain text, along with your photos. Anyone who can reach the backend's port can also use it. That is harmless on the default `127.0.0.1`, where nothing leaves your computer. For now:
+> **Never make a backend reachable from the internet.** The plug-in talks to the backend over plain HTTP, with no encryption. The access token keeps out anyone who does not have it, but on the network it travels in plain text with every request — as does your API key for a cloud provider (OpenAI, Gemini, Anthropic, or a cloud service as the *Other AI server*), and your photos. Someone who can watch your network traffic can read all of it. That is harmless on the default `127.0.0.1`, where nothing leaves your computer. For now:
 >
 > - Run a remote backend only on a network you trust, such as your home network. Never forward its port on your router or open it on a cloud server.
-> - To reach a backend somewhere else, use a VPN (WireGuard, Tailscale) or an SSH tunnel: `ssh -L 19819:127.0.0.1:19819 user@host` lets you keep the Backend Server URL at its default.
+> - To reach a backend somewhere else, use a VPN (WireGuard, Tailscale), an SSH tunnel, or a reverse proxy with HTTPS (the Backend Server URL accepts `https://`). With an SSH tunnel, `ssh -L 19819:127.0.0.1:19819 user@host` lets you keep the Backend Server URL at its default; the access token is still the one from that host.
 
 ---
 

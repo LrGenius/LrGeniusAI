@@ -277,7 +277,12 @@ If strict cross-catalog identity is important for your workflow, plan for re-ind
 
 In the plugin settings dialog you can configure:
 
-- Backend server URL
+- Backend server URL, and the **Access token** of a backend on another computer
+  or in Docker (`geniusai-server token` prints it there). A backend on this
+  computer needs nothing typed: the plugin reads the token from the file the
+  backend keeps (`SearchIndexAPI.backendToken`). Kept in `LrPasswords`
+  (`Secrets.BACKEND_TOKEN`), shown as dots. See *Access* in
+  [Dev: Backend API](https://github.com/LrGenius/LrGeniusAI/wiki/Dev-Backend-API).
 - Optional AI providers: the OpenAI, Gemini and Anthropic keys, and an **Other AI server**
   (any OpenAI-compatible server) with an optional key. Ollama and LM Studio have
   no settings: they are found at their default address on this computer, and

@@ -63,6 +63,13 @@ ENV LD_LIBRARY_PATH=/app
 ENV GENIUSAI_HOST=0.0.0.0
 ENV GENIUSAI_PORT=19819
 
+# The access token the plug-in needs (`geniusai-server token`) is kept under
+# $XDG_CONFIG_HOME/LrGeniusAI: in the /data volume, so it survives the
+# container being recreated. Print it with
+#   docker exec geniusai-server /app/geniusai-server token
+# or set LRG_API_TOKEN to use a fixed one.
+ENV XDG_CONFIG_HOME=/data
+
 # Model files (SigLIP2, the aesthetic scorer + face models) — mount a populated /models volume;
 # see server-rs/scripts/export_siglip2_fp16.py and
 # server-rs/scripts/export_face_models.py for how to produce them until a

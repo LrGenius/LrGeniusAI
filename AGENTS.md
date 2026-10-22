@@ -189,7 +189,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `APISearchIndex.lua` must be kept in sync with any backend API changes.
 - An agent bridge command (`AgentCommands.lua`) and the MCP tool that sends it (`lrg-mcp`) change together, with the contract table in `docs/wiki/Dev-Agent-Bridge.md`. Commands that change photos are listed in `CHANGES`, so the user's read-only switch covers them.
 - API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
-- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS`.
+- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS` and for the backend's access token.
+- Requests to the backend go through `_request`/`_requestMultipart` in `APISearchIndex.lua`, which add the backend's access token. A call that has to use `LrHttp` directly passes `withAuthHeader(...)` as its headers, and nothing logs a URL or header that carries the token.
 
 ### Rust / Backend (`server-rs/`)
 
@@ -197,7 +198,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Always use the `log` facade (`log::info!`/`warn!`/`error!`).
 - Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
 - Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
-- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed.
+- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed. Every route but a few needs the access token: `curl -H "Authorization: Bearer $(cargo run -q -p lrg-server -- token 2>/dev/null)" …` (see *Access* in `docs/wiki/Dev-Backend-API.md`).
+- A new route is behind the access token (`lrg_api::api_auth`) without anything to do. Exempting one (`exempt` there) is a security decision: say why in its comment and in *Access*.
 
 ### Errors must surface
 

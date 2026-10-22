@@ -92,6 +92,10 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
 	propertyTable.dbStoragePath = prefs.dbStoragePath or ""
 	propertyTable.backendServerUrl = prefs.backendServerUrl or Defaults.defaultBackendServerUrl
+	-- The access token of a backend on another computer. Kept for endDialog,
+	-- which saves it only when changed.
+	propertyTable.backendApiToken = Secrets.getBackendToken()
+	propertyTable.loadedBackendToken = propertyTable.backendApiToken
 
 	-- The Other AI server. Its status line is checked when the dialog opens
 	-- and whenever the address or key changes — an edit field commits when
@@ -1499,6 +1503,33 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({
+						title = "Access token",
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:password_field({
+						value = bind("backendApiToken"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = "",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						title = "Only for a backend on another computer or in Docker: run "
+							.. '"geniusai-server token" there and paste what it prints. '
+							.. "A backend on this computer needs nothing here.",
+						fill_horizontal = 1,
+						height_in_lines = 2,
+						width_in_chars = 60,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
 						title = LOC("$$$/LrGeniusAI/PluginInfo/DbStoragePath=Database storage folder"),
 						alignment = "right",
 						width = share("labelWidth"),
@@ -1799,6 +1830,15 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 	end
 	Secrets.saveChanged(propertyTable, propertyTable.loadedApiKeys)
+	local backendToken = trimmed(propertyTable.backendApiToken)
+	if backendToken ~= trimmed(propertyTable.loadedBackendToken) then
+		LrTasks.startAsyncTask(function()
+			local ok, problem = Secrets.setBackendToken(backendToken)
+			if not ok then
+				LrDialogs.message("Access token not stored securely", problem, "warning")
+			end
+		end)
+	end
 	prefs.aiServerUrl = trimmed(propertyTable.aiServerUrl)
 	-- Shown for one opening of this dialog; see updateHealth.
 	prefs.pendingProviderNotice = nil
