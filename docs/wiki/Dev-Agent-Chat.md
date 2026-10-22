@@ -78,6 +78,14 @@ false`, and `format` (`int64`, `double` from schemars), defaults, descriptions
 and numeric bounds dropped. The prompt carries the descriptions; the tool still
 validates its arguments.
 
+**Every string is capped** — 1,000 characters for an argument, 600 for
+`analysis`, 6,000 for `reply` — and both engines enforce `maxLength` (checked
+by the engine smoke tests). Small models fall into repeating a phrase inside a
+string until the token budget runs out: Gemma 4 12B once filled a search text
+with `rating_max_5_rating_min_1_…` for 1,500 tokens, which then sat in the
+history. And the MLX sidecar keeps control tokens out of answers (see its
+README): Gemma 4 had written `<|channel>thought{` into its reasoning.
+
 **The prompt** lists each tool with one line per argument and describes a
 shared argument only once — `set` and `photo_ids` repeated cost about 600
 tokens. With every tool offered it is about 3,000 tokens. Tool results are
@@ -151,6 +159,14 @@ memory, and the page is told they are not saved.
 Probing local models with the real tools showed why the default asks before
 any change: Gemma 4 E4B set the *title* to "5 Sterne vergeben" instead of the
 rating, and Gemma 4 12B rated the whole selection when asked for the best five.
+
+What to expect from local models (probed 2026-10-22, simulated tool results
+and over HTTP): Gemma 4 12B handles one- and two-step tasks — search and show
+the results, status questions, a rating change with the right arguments. It is
+unreliable beyond that: after a denial with a note ("only the best three") it
+restated the request instead of acting on it. Gemma 4 E4B picks wrong
+arguments for changes and repeats a denied call unchanged (the repeat check
+catches it). SmolVLM 500M is for testing the plumbing only.
 
 ---
 

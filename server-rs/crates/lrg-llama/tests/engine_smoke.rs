@@ -353,3 +353,42 @@ async fn a_conversation_beyond_the_window_is_refused() {
         "{err}"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires LRG_TEST_MODEL_GGUF"]
+async fn a_length_cap_in_the_schema_holds() {
+    let Some(config) = config_from_env(1) else {
+        return;
+    };
+    let engine = tokio::task::spawn_blocking(move || LlamaEngine::new(config))
+        .await
+        .unwrap()
+        .expect("engine should load");
+
+    // The agent chat caps every string it lets a model write; a model that
+    // falls into repeating itself must stop at the cap, not at the budget.
+    let out = engine
+        .chat(
+            ChatRequest {
+                messages: vec![message(
+                    "user",
+                    "Write the word 'photo' fifty times, separated by spaces.",
+                )],
+                schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {"text": {"type": "string", "maxLength": 20}},
+                    "required": ["text"],
+                    "additionalProperties": false
+                })),
+                max_tokens: 200,
+                temperature: 0.0,
+            },
+            None,
+        )
+        .await
+        .expect("chat should succeed");
+    let parsed: serde_json::Value = serde_json::from_str(out.text.trim())
+        .unwrap_or_else(|e| panic!("constrained output must be valid JSON: {e}\n{}", out.text));
+    let text = parsed["text"].as_str().unwrap();
+    assert!(text.chars().count() <= 20, "{text:?}");
+}

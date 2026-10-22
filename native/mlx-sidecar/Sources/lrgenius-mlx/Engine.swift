@@ -596,12 +596,16 @@ final class Engine {
         try await loaded.container.perform { context in
             let tVocab = DispatchTime.now().uptimeNanoseconds
             let vocab = TokenizerVocabExtractor.extractForGrammar(from: context.tokenizer)
+            let eos = context.tokenizer.eosTokenId ?? 0
+            let (entries, blanked) = Self.withoutControlTokens(
+                vocab.vocab, tokenizer: context.tokenizer, keep: eos)
             self.grammarTokenizer = try GrammarTokenizer(
-                vocab: vocab.vocab,
+                vocab: entries,
                 vocabType: vocab.vocabType,
-                eosTokenId: Int32(context.tokenizer.eosTokenId ?? 0))
+                eosTokenId: Int32(eos))
             self.hostTokenizer = context.tokenizer
             let vocabMs = Self.msSince(tVocab)
+            Log.info("grammar vocabulary: \(blanked) control tokens kept out of answers")
 
             // Warmed here rather than on first use so the whole one-time cost
             // lands in this line instead of inflating the first photo's stage
@@ -616,6 +620,41 @@ final class Engine {
                     format: "grammar vocabulary ready: extract=%.1fms bias=%.1fms (%d tokens)",
                     vocabMs, Self.msSince(tBias), vocab.vocab.count))
         }
+    }
+
+    /// The vocabulary with every control token's text blanked, and how many
+    /// were.
+    ///
+    /// The extractor hands control tokens over as plain text (Gemma 4's
+    /// `<|channel>`, `<start_of_turn>`, ...), so the grammar let a model write
+    /// one inside a JSON string. Seen in the agent chat: Gemma 4 12B emitted
+    /// `<|channel>thought{` into its reasoning and lost the thread. XGrammar
+    /// treats a token whose text is empty as special and never accepts it
+    /// (`TokenizerInfo::IsSpecialToken`), so blanking is how they are taken off
+    /// the table. `keep` (EOS) stays: it is the stop token that ends an answer.
+    ///
+    /// A token counts as control when decoding it alone with special tokens
+    /// skipped yields nothing while decoding it plainly does not. Only tokens
+    /// written like `<...>` or `[...]` are checked, which keeps the walk over a
+    /// 262k vocabulary cheap.
+    static func withoutControlTokens(
+        _ vocab: [String], tokenizer: any MLXLMCommon.Tokenizer, keep: Int
+    ) -> ([String], Int) {
+        var entries = vocab
+        var blanked = 0
+        for (id, token) in vocab.enumerated() where id != keep && !token.isEmpty {
+            let bracketed =
+                (token.hasPrefix("<") && token.hasSuffix(">"))
+                || (token.hasPrefix("[") && token.hasSuffix("]"))
+            guard bracketed else { continue }
+            if tokenizer.decode(tokenIds: [id], skipSpecialTokens: true).isEmpty,
+                !tokenizer.decode(tokenIds: [id], skipSpecialTokens: false).isEmpty
+            {
+                entries[id] = ""
+                blanked += 1
+            }
+        }
+        return (entries, blanked)
     }
 
     /// Start compiling `schema` in the background, to be picked up by

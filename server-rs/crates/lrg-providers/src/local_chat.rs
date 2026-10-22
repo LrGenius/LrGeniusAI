@@ -44,6 +44,16 @@ const MAX_IMAGES: usize = 2;
 /// Longest argument description in the tool list, in characters.
 const MAX_ARG_DESCRIPTION: usize = 200;
 
+/// Longest string the grammar lets a model write, in characters: a tool
+/// argument, the reasoning, the reply. Small models fall into repeating a
+/// phrase inside a string until the token budget runs out — Gemma 4 12B
+/// filled a search text with `rating_max_5_rating_min_1_…` for 1,500
+/// tokens — and a cap ends that early instead of carrying it in the history.
+/// Captions are the longest real argument and fit easily.
+const MAX_ARGUMENT_CHARS: u64 = 1000;
+const MAX_ANALYSIS_CHARS: u64 = 600;
+const MAX_REPLY_CHARS: u64 = 6000;
+
 pub struct LocalChatModel {
     engine: SharedLocalEngine,
 }
@@ -388,11 +398,12 @@ fn compact_json(text: &str) -> String {
 
 /// The schema every answer is decoded against.
 fn turn_schema(tools: &[ToolSpec]) -> Value {
+    let analysis = json!({"type": "string", "maxLength": MAX_ANALYSIS_CHARS});
     let reply = json!({
         "type": "object",
         "properties": {
-            "analysis": {"type": "string"},
-            "reply": {"type": "string"},
+            "analysis": analysis,
+            "reply": {"type": "string", "maxLength": MAX_REPLY_CHARS},
         },
         "required": ["analysis", "reply"],
         "additionalProperties": false,
@@ -414,7 +425,7 @@ fn turn_schema(tools: &[ToolSpec]) -> Value {
     let call = json!({
         "type": "object",
         "properties": {
-            "analysis": {"type": "string"},
+            "analysis": analysis,
             "call": {"anyOf": calls},
         },
         "required": ["analysis", "call"],
@@ -431,7 +442,8 @@ fn turn_schema(tools: &[ToolSpec]) -> Value {
 /// keys the tool ignores. Everything else — descriptions, defaults, `format`
 /// (`schemars` writes `int64`, `double`, which grammar engines reject or
 /// ignore unevenly), numeric bounds — is dropped: the prompt carries the
-/// descriptions, and the tool still validates its arguments.
+/// descriptions, and the tool still validates its arguments. Strings get a
+/// length cap ([`MAX_ARGUMENT_CHARS`]); both engines enforce `maxLength`.
 fn grammar_schema(schema: &Value) -> Value {
     let defs = schema.get("$defs").or_else(|| schema.get("definitions"));
     clean_schema(schema, defs, 0)
@@ -484,11 +496,16 @@ fn clean_schema(schema: &Value, defs: Option<&Value>, depth: usize) -> Value {
         }
     }
 
-    let is_object = match out.get("type") {
-        Some(Value::String(t)) => t == "object",
-        Some(Value::Array(ts)) => ts.iter().any(|t| t == "object"),
-        _ => out.contains_key("properties"),
+    let has_type = |out: &Map<String, Value>, name: &str| match out.get("type") {
+        Some(Value::String(t)) => t == name,
+        Some(Value::Array(ts)) => ts.iter().any(|t| t == name),
+        _ => false,
     };
+    if has_type(&out, "string") && !out.contains_key("enum") && !out.contains_key("const") {
+        out.insert("maxLength".into(), json!(MAX_ARGUMENT_CHARS));
+    }
+    let is_object =
+        has_type(&out, "object") || (!out.contains_key("type") && out.contains_key("properties"));
     if is_object && !out.contains_key("additionalProperties") {
         out.entry("properties").or_insert_with(|| json!({}));
         out.insert("additionalProperties".into(), Value::Bool(false));
@@ -759,7 +776,7 @@ mod tests {
             json!({
                 "type": "object",
                 "properties": {
-                    "query": {"type": ["string", "null"]},
+                    "query": {"type": ["string", "null"], "maxLength": 1000},
                     "limit": {"type": ["integer", "null"]},
                     "sort": {"anyOf": [
                         {"const": "relevance", "type": "string"},
@@ -767,7 +784,7 @@ mod tests {
                     ]},
                     "within": {
                         "type": "object",
-                        "properties": {"set": {"type": ["string", "null"]}},
+                        "properties": {"set": {"type": ["string", "null"], "maxLength": 1000}},
                         "additionalProperties": false
                     }
                 },

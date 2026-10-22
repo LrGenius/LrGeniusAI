@@ -146,6 +146,14 @@ saturates the GPU), and the JSON-Schema grammar is compiled per request rather
 than cloned, because `GrammarConstraint.clone()` — xgrammar's
 `GrammarMatcher::Fork()` — fails with `forkFailed` in this build.
 
+**Control tokens are kept out of answers.** `TokenizerVocabExtractor` hands
+them to XGrammar as plain text (`<|channel>`, `<start_of_turn>`, …), so a
+model could write one inside a JSON string — Gemma 4 12B did, mid-answer, in
+the agent chat. `Engine.withoutControlTokens` blanks their entries before the
+grammar vocabulary is built, because XGrammar never accepts a token whose text
+is empty; EOS is kept, since it ends an answer. The load log says how many
+(23 for Gemma 4). llama.cpp's llguidance excludes them already.
+
 ## Dependency pinning
 
 `Package.swift` pins mlx-swift-lm to an exact commit rather than a tag, because

@@ -26,8 +26,9 @@ pub fn system_prompt(instructions: &str, today: &str) -> String {
          never the whole selection.\n\
          - Pass result sets with `set`. Only use a photo ID that appeared in a tool result, \
          never one you made up.\n\
-         - The user may have to approve a change. When a call comes back as not allowed, do not \
-         try it another way; ask what they want instead.\n\
+         - The user may have to approve a change. When a call comes back as not allowed, do what \
+         the user said about it, if they said anything — with corrected arguments, not the same \
+         call again. If they said nothing, do not try it another way; ask what they want.\n\
          - Keep replies short: what you found (how many photos) or what you changed. Do not \
          repeat tool output the user can see.\n\
          - Answer in the language the user writes in.",
