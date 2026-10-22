@@ -77,17 +77,53 @@ learns the address, so nothing else needs changing. Note that
 `SearchIndexAPI.startServer` still launches the *installed* binary on the
 default port, so start a custom-port build yourself.
 
-**Do not expose the server publicly.** It speaks plain HTTP, has no
-authentication, and the plug-in puts the user's cloud-provider API key
-(`api_key`, `openai_apikey`, `server_apikey`, …) in the body of every request
-that uses one. Bound to `127.0.0.1` none of that leaves the machine. Bound to
-anything else, the keys and the photos cross the network unencrypted, and
-anyone who can reach the port can use the server. Until it has TLS and a
-login, run a non-loopback server only on a network you trust, never with its
-port forwarded to the internet or open on a cloud host; reach it from
-elsewhere through a VPN or an SSH tunnel
-(`ssh -L 19819:127.0.0.1:19819 user@host`). The server does not store the
-keys; it uses each one only for the request it came with.
+**Do not expose the server publicly.** It speaks plain HTTP, and the plug-in
+puts the user's cloud-provider API key (`api_key`, `openai_apikey`,
+`server_apikey`, …) in the body of every request that uses one. Bound to
+`127.0.0.1` none of that leaves the machine. Bound to anything else, the keys,
+the photos and the access token (below) cross the network unencrypted. The
+token keeps out whoever does not have it, but not someone who can read the
+traffic. Until the server has TLS, run a non-loopback server only on a network
+you trust, never with its port forwarded to the internet or open on a cloud
+host; reach it from elsewhere through a VPN, an SSH tunnel
+(`ssh -L 19819:127.0.0.1:19819 user@host`) or a reverse proxy with HTTPS. The
+server does not store the keys; it uses each one only for the request it came
+with.
+
+### Access token
+
+Every request needs the server's access token as
+`Authorization: Bearer <token>`; without it the answer is a 403 with
+`"error_code": "api_token"`. Only `/ping`, `/version`, `/version/check`, the
+browser pages' HTML and the routes with tokens of their own (`/mcp`,
+`/v1/chat/*`) go without (`lrg_api::api_auth`; the full rules are under
+*Access* in [Dev: Backend API](../docs/wiki/Dev-Backend-API.md)).
+
+The server makes the token on its first start and keeps it in a file only the
+user can read (`lrg_common::api_token`):
+
+| OS | File |
+|---|---|
+| macOS | `~/Library/Application Support/LrGeniusAI/api-token` |
+| Windows | `%USERPROFILE%\AppData\Local\LrGeniusAI\api-token` |
+| Linux | `$XDG_CONFIG_HOME/LrGeniusAI/api-token`, or `~/.config/LrGeniusAI/api-token` |
+
+A plug-in on the same computer reads that file itself. For one on another
+computer, print the token and paste it under *Plug-in Manager → Backend
+Server → Access token*:
+
+```bash
+geniusai-server token          # prints it (makes it if there is none yet)
+geniusai-server token --new    # replaces it; restart the server afterwards
+```
+
+`LRG_API_TOKEN` (32–256 letters, digits, `-`, `_`) replaces the file with a
+fixed token. To call the API by hand:
+
+```bash
+curl -H "Authorization: Bearer $(geniusai-server token 2>/dev/null)" \
+    http://127.0.0.1:19819/v1/server/health
+```
 
 ### Golden tests and `LRG_REQUIRE_GOLDENS`
 
@@ -516,6 +552,11 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 ```
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
+
+The image keeps the access token in its `/data` volume
+(`XDG_CONFIG_HOME=/data`), so it survives the container being recreated. Print
+it for the plug-in with
+`docker exec geniusai-server /app/geniusai-server token`.
 
 `-p 19819:19819` publishes the port on every interface of the host, so the
 warning under [Host and port](#host-and-port) applies. When Lightroom runs on

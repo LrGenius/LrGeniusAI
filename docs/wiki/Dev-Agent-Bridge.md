@@ -267,7 +267,11 @@ The SDK facts among these are in `.claude/skills/lrc-plugin-dev.md` under
   of displaying them.
 - `/v1/agent/*`: same Host/Origin rules in `routes/agent.rs`, plus the session
   token on everything after registration. The status read never shows the
-  token.
+  token. Like every REST route, they also need the backend's access token
+  (`lrg_api::api_auth`, see *Access* in [Dev: Backend API](Dev-Backend-API)),
+  which the plugin's requests carry by themselves; so registering — and with
+  it choosing the agent token — is open only to a program that can read the
+  user's token file. `/mcp` is exempt from it: it checks the agent token.
 - The doorbell carries no data and triggers nothing by itself.
 - Changes can be turned off (read-only), and developer commands need a
   `.lrdevplugin` install *and* a switch. Ticking that switch asks the user to

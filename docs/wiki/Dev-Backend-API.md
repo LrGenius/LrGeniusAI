@@ -4,6 +4,42 @@ The `geniusai-server` exposes a REST API over HTTP (default port 19819). All res
 
 This reference is intended for developers integrating with or extending the backend. Regular users interact through the Lightroom plugin and do not need to call these endpoints directly.
 
+## Access
+
+Every request needs the backend's **access token** as
+`Authorization: Bearer <token>`. Without it, or with another one, the answer is
+a **403** with `"error_code": "api_token"` (the status alone would be ambiguous:
+the agent bridge answers 401 for a session that has to register again). The
+check sits in front of the whole app (`lrg_api::api_auth`), outside the router
+the MCP tools and the chat call in-process.
+
+- **Where the token comes from.** The backend makes it once and keeps it in a
+  file only the user can read: `~/Library/Application Support/LrGeniusAI/api-token`
+  on macOS, `%USERPROFILE%\AppData\Local\LrGeniusAI\api-token` on Windows,
+  `$XDG_CONFIG_HOME/LrGeniusAI/api-token` (or `~/.config/…`) elsewhere
+  (`lrg_common::api_token`). `LRG_API_TOKEN` replaces the file with a fixed
+  token. `geniusai-server token` prints it; `geniusai-server token --new`
+  makes a new one, which a running backend uses once it restarts. The Docker
+  image keeps the file in its `/data` volume.
+- **How the plugin gets it.** For a backend on this computer it reads the
+  file (that it can is the proof of being the same user). For one elsewhere
+  the user pastes it under *Plug-in Manager → Backend Server → Access token*
+  (`Secrets.BACKEND_TOKEN`); a "local" address without a file, such as a
+  container's published port, falls back to that too. When the backend
+  refuses the token, the plugin reads the file once more and retries once
+  (a token made since), then tells the user what to do.
+- **Without the token:** `GET /ping`, `GET /version` and `POST /version/check`
+  (a plugin must learn what it is talking to, and that it is too old, before
+  it can get in), `/mcp` and `/v1/chat/*` (they check their own tokens), and
+  the HTML of `GET /v1/ui/people` and `GET /v1/ui/chat` (a browser cannot add
+  a header when it opens an address; the page takes the token from the
+  `#fragment` and sends it itself).
+- **Also refused, token or not:** a request from a page on another site (an
+  `Origin` that is not this server), and — when the backend listens only on
+  this computer (`GENIUSAI_HOST` is a loopback address, the default) — any
+  request whose `Host` does not name this computer, which is how a
+  DNS-rebinding page arrives.
+
 ---
 
 ## Server & Health
@@ -91,6 +127,11 @@ Unloads heavy ML models from memory without shutting the server down (useful to 
 
 ### `POST /update/apply`
 Triggers an in-place backend self-update from the latest GitHub release.
+Loopback-only. The caller supplies the manifest, so its checksums say nothing
+about where the files come from: a binary URL other than
+`https://github.com/LrGenius/LrGeniusAI/releases/download/…` is a **403**, a
+plugin file from anywhere but `https://raw.githubusercontent.com/LrGenius/LrGeniusAI/…`
+or with a path that leaves the plugin folder is skipped with a warning.
 
 ---
 
@@ -712,7 +753,10 @@ stale against the server serving them.
 A page can call the rest of this API directly — it is served from the
 backend's own origin, so no CORS setup is involved — and it forwards the
 `db_path` the plugin put in its URL on every request, which the auto-bind
-middleware honours exactly like the plugin's own calls.
+middleware honours exactly like the plugin's own calls. It sends the access
+token (see [Access](#access)) the plugin put in the URL's `#fragment`, which
+the browser sends nowhere; the page takes it out of the address bar and keeps
+it in `sessionStorage` for reloads.
 
 What a page *cannot* do is touch the Lightroom catalog. Those actions are
 queued instead: the page POSTs one, and the plugin task that is waiting on it

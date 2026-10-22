@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
+use lrg_api::api_auth::{self, ApiAuth};
 use lrg_api::state::AppState;
-use lrg_common::{config, lifecycle, logging, version};
+use lrg_common::{api_token, config, lifecycle, logging, version};
 
 #[derive(Parser)]
 #[command(name = "geniusai-server", about = "LrGenius Server")]
@@ -57,6 +58,16 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Prints the access token the plug-in needs for this backend. Only to
+    /// copy into a plug-in on another computer: one on this computer reads it
+    /// by itself. Makes the token if there is none yet.
+    Token {
+        /// Replace the token with a new one, which a running backend uses
+        /// once it restarts. Every plug-in on another computer then needs
+        /// the new one.
+        #[arg(long)]
+        new: bool,
+    },
 }
 
 fn main() {
@@ -78,6 +89,33 @@ fn main() {
         if let Err(e) = runtime.block_on(lrg_mcp::stdio::run(url, token)) {
             eprintln!("lrgenius mcp: {e}");
             std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Some(Command::Token { new }) = &cli.command {
+        let result = if *new {
+            api_token::renew()
+        } else {
+            api_token::load_or_create()
+        };
+        match result {
+            Ok(token) => {
+                println!("{}", token.token);
+                match &token.source {
+                    api_token::Source::Env => {
+                        eprintln!("(from {})", api_token::ENV_TOKEN)
+                    }
+                    api_token::Source::File(path) => eprintln!("(kept in {})", path.display()),
+                }
+                if *new {
+                    eprintln!("Restart the backend for it to use the new token.");
+                }
+            }
+            Err(e) => {
+                eprintln!("lrgenius token: {e}");
+                std::process::exit(1);
+            }
         }
         return;
     }
@@ -238,6 +276,16 @@ fn lrg_chroma_reader_counts(db_path: &std::path::Path) -> Result<serde_json::Val
 }
 
 async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    // Before anything says the server is ready: without its token nobody can
+    // use it, so failing to make one stops the start.
+    let token = api_token::load_or_create()?;
+    match &token.source {
+        api_token::Source::Env => {
+            log::info!("Access token: from {}", api_token::ENV_TOKEN)
+        }
+        api_token::Source::File(path) => log::info!("Access token: kept in {}", path.display()),
+    }
+
     // Mark server as ready for startup scripts.
     if let Some(db_path) = &cli.db_path {
         lifecycle::write_ok_file(db_path)?;
@@ -265,6 +313,9 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
 
     let host = config::host();
     let port = config::port();
+    // Around everything, outside the router the MCP tools and the chat call
+    // in-process (see `lrg_api::api_auth`).
+    let app = api_auth::protect(app, ApiAuth::new(token.token, &host));
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
     log::info!("Starting production server on http://{host}:{port}");
 

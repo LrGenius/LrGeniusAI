@@ -73,7 +73,11 @@ too, within the scope they approved.
 
    ```bash
    cd server-rs && cargo build --release -p lrg-server
-   curl -s -X POST http://127.0.0.1:19819/shutdown   # stops whichever backend runs there
+   # The backend's access token, from the file every backend of this user
+   # shares (see *Access* in docs/wiki/Dev-Backend-API.md). Environment only.
+   export LRGENIUS_API_TOKEN=$(./target/release/geniusai-server token 2>/dev/null)
+   AUTH="Authorization: Bearer $LRGENIUS_API_TOKEN"
+   curl -s -X POST -H "$AUTH" http://127.0.0.1:19819/shutdown   # stops whichever backend runs there
    ./target/release/geniusai-server                  # keep it running in the background
    ```
 
@@ -113,7 +117,7 @@ too, within the scope they approved.
 
 ```bash
 python3 scripts/mcp_call.py get_status
-curl -s http://127.0.0.1:19819/v1/agent/bridge
+curl -s -H "$AUTH" http://127.0.0.1:19819/v1/agent/bridge
 ```
 
 - Check that `lightroom.connected` is `true`.
@@ -227,11 +231,12 @@ Before each change, record what it will overwrite with `get_photo_details` or
 | Developer commands off | The developer unticks *Allow developer commands*. | `eval_lua` is refused with "Developer commands are off…". |
 | Bad input | `update_photos {"photo_ids": ["x"], "flag": "maybe"}`; `get_set {"set_id": "s999"}` | The message names the valid values or the unknown set; exit code 1. |
 | Wrong token | `LRGENIUS_MCP_TOKEN=wrong python3 scripts/mcp_call.py get_status` | "Missing or wrong LrGeniusAI agent token…"; exit code 2. |
-| Browsers kept out | `curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: http://example.com' http://127.0.0.1:19819/v1/agent/bridge` | `403` |
+| Browsers kept out | `curl -s -o /dev/null -w '%{http_code}\n' -H "$AUTH" -H 'Origin: http://example.com' http://127.0.0.1:19819/v1/agent/bridge` | `403` |
+| No access token | `curl -s http://127.0.0.1:19819/v1/agent/bridge` | `403` with `"error_code": "api_token"` |
 | One command at a time | Start a long `analyze_photos`, then call `get_photo_details` from a second shell. | The second call waits, then says what Lightroom is busy with. |
 | Stop button | While a long command runs, ask the developer to click the X on *LrGeniusAI: AI agent at work*. | The command ends early and a bezel says the agent stopped. After that every tool answers "agent bridge is not running". Untick and tick *Enable the agent bridge* to start it again. |
 | Reload Plug-in | The developer clicks *Reload Plug-in*. | Within seconds `GET /v1/agent/bridge` shows one session, and tools work with the same token. `get_logs {"contains": "took over"}` shows the old loop stopping. |
-| Backend restart | `curl -X POST http://127.0.0.1:19819/shutdown`, then start the backend again. | The plugin registers again within about 5 s, `mcp_call.py` reconnects by itself, and the token is unchanged. |
+| Backend restart | `curl -X POST -H "$AUTH" http://127.0.0.1:19819/shutdown`, then start the backend again. | The plugin registers again within about 5 s, `mcp_call.py` reconnects by itself, and the token is unchanged. |
 
 ## Phase 5: timing
 
@@ -303,7 +308,7 @@ The report contains:
   return "restarting"
   ```
 
-- **Backend.** Rebuild, run `curl -X POST http://127.0.0.1:19819/shutdown`,
+- **Backend.** Rebuild, run `curl -X POST -H "$AUTH" http://127.0.0.1:19819/shutdown`,
   and start the new binary. The plugin registers again by itself and
   `mcp_call.py` reconnects.
 - **A new tool.** Follow *Adding a tool* in `docs/wiki/Dev-Agent-Bridge.md`,

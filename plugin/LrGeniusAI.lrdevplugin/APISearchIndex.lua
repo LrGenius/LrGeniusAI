@@ -28,6 +28,125 @@ function SearchIndexAPI.isLocalBackend()
 	return url:match("^https?://127%.0%.0%.1:") or url:match("^https?://localhost:")
 end
 
+-- The backend's access token: every request but a handful (/ping, /version,
+-- the browser pages' HTML) carries it as a bearer token, or the backend
+-- refuses it (server-rs/crates/lrg-api/src/api_auth.rs).
+--
+-- A backend on this computer keeps it in a file only this user can read, at
+-- the path below — the same one `lrg_common::api_token::token_dir` builds.
+-- Reading it is how the plug-in proves it runs as the same user, so nobody
+-- types anything. A backend elsewhere (another computer, a Docker container)
+-- has its file there; the user pastes its token into the Backend Server
+-- settings, from `geniusai-server token`.
+
+function SearchIndexAPI.localTokenFilePath()
+	local home = LrPathUtils.getStandardFilePath("home")
+	local parts = WIN_ENV and { "AppData", "Local", "LrGeniusAI", "api-token" }
+		or { "Library", "Application Support", "LrGeniusAI", "api-token" }
+	local path = home
+	for _, part in ipairs(parts) do
+		path = LrPathUtils.child(path, part)
+	end
+	return path
+end
+
+-- Read once, then kept: the file only changes when someone makes a new
+-- token, and a refused request reads it again (forgetLocalToken).
+local localTokenCache = nil
+
+local function readLocalToken()
+	if localTokenCache ~= nil then
+		return localTokenCache
+	end
+	local path = SearchIndexAPI.localTokenFilePath()
+	if LrFileUtils.exists(path) ~= "file" then
+		return nil
+	end
+	local ok, text = LrTasks.pcall(LrFileUtils.readFile, path)
+	local token = ok and type(text) == "string" and text:match("^%s*(.-)%s*$") or ""
+	if token == "" then
+		return nil
+	end
+	localTokenCache = token
+	return token
+end
+
+local function forgetLocalToken()
+	local had = localTokenCache ~= nil
+	localTokenCache = nil
+	return had
+end
+
+--- Forgets the token read from the file. For specs.
+function SearchIndexAPI._forgetLocalToken()
+	forgetLocalToken()
+end
+
+--- The token to send, or nil when there is none to send (an old backend that
+--- has none needs none).
+function SearchIndexAPI.backendToken()
+	if SearchIndexAPI.isLocalBackend() then
+		local token = readLocalToken()
+		if token then
+			return token
+		end
+	end
+	-- A remote backend, or a "local" address that is really a container's
+	-- port: the token the user entered.
+	local entered = Secrets.getBackendToken()
+	if entered ~= "" then
+		return entered
+	end
+	return nil
+end
+
+--- `headers` plus the access token, unless the caller already sends an
+--- Authorization header of its own (the chat sends the agent token).
+local function withAuthHeader(headers)
+	local out = {}
+	for _, header in ipairs(headers or {}) do
+		if tostring(header.field):lower() == "authorization" then
+			return headers
+		end
+		out[#out + 1] = header
+	end
+	local token = SearchIndexAPI.backendToken()
+	if token then
+		out[#out + 1] = { field = "Authorization", value = "Bearer " .. token }
+	end
+	return out
+end
+
+--- Whether the backend refused a request for want of the right token.
+local function isTokenRefusal(status, body)
+	return status == 403 and type(body) == "table" and body.error_code == "api_token"
+end
+
+--- What to tell the user when the backend refuses the token: what to do about
+--- it, which depends on where the backend runs.
+function SearchIndexAPI.tokenRefusedMessage()
+	local paste = "paste what it prints under Plug-in Manager → LrGeniusAI → Backend Server → Access token."
+	if SearchIndexAPI.isLocalBackend() then
+		local path = SearchIndexAPI.localTokenFilePath()
+		if LrFileUtils.exists(path) ~= "file" then
+			return "The backend refused LrGeniusAI: it wants its access token, and there is none in "
+				.. path
+				.. ". If the backend runs in Docker, run `docker exec geniusai-server /app/geniusai-server token` and "
+				.. paste
+				.. " Otherwise quit and reopen Lightroom, so the backend starts again and writes the file."
+		end
+		return "The backend did not accept the access token in "
+			.. path
+			.. ". If a new token was made, quit and reopen Lightroom so the backend uses it too. "
+			.. "If the backend is newer than this plug-in, update the plug-in."
+	end
+	return "The backend at "
+		.. getBaseUrl()
+		.. " wants its access token. On the computer it runs on, run `geniusai-server token` "
+		.. "(in Docker: `docker exec geniusai-server /app/geniusai-server token`) and "
+		.. paste
+end
+
 -- Whether the names Lightroom's face recognition put on a photo may be sent
 -- with this request.
 --
@@ -3537,7 +3656,7 @@ _requestMultipart = function(url, mimeChunks, timeout)
 			.. " chunks="
 			.. tostring(type(mimeChunks) == "table" and #mimeChunks or "n/a")
 	)
-	local result, hdrs = LrHttp.postMultipart(url, mimeChunks, nil, timeout)
+	local result, hdrs = LrHttp.postMultipart(url, mimeChunks, withAuthHeader(), timeout)
 	log:trace(
 		"_requestMultipart raw return: resultType="
 			.. tostring(type(result))
@@ -3575,7 +3694,11 @@ _requestMultipart = function(url, mimeChunks, timeout)
 			local ok, decoded_err = LrTasks.pcall(function()
 				return JSON:decode(result)
 			end)
-			if ok and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
+			if ok and isTokenRefusal(status, decoded_err) then
+				-- Read the file again next time; a new token may be there.
+				forgetLocalToken()
+				err_msg = SearchIndexAPI.tokenRefusedMessage()
+			elseif ok and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
 				err_msg = err_msg .. " - " .. decoded_err.error
 			else
 				err_msg = err_msg .. " Response: " .. tostring(result)
@@ -3603,7 +3726,7 @@ _urlEncode = function(s)
 	end))
 end
 
-_request = function(method, url, body, timeout, options)
+local requestOnce = function(method, url, body, timeout, options)
 	options = options or {}
 
 	-- Auto-inject db_path so the backend can transparently re-bind after a
@@ -3633,7 +3756,7 @@ _request = function(method, url, body, timeout, options)
 	local bodyString = (body and type(body) == "table") and JSON:encode(body) or nil
 
 	-- `options.headers`: extra request headers, { { field = ..., value = ... } }.
-	local extraHeaders = type(options.headers) == "table" and options.headers or {}
+	local extraHeaders = withAuthHeader(type(options.headers) == "table" and options.headers or {})
 
 	local ok, err = LrTasks.pcall(function()
 		if method == "GET" then
@@ -3722,6 +3845,22 @@ _request = function(method, url, body, timeout, options)
 		-- else reads two values as before.
 		return nil, err_msg, status, errorBody
 	end
+end
+
+_request = function(method, url, body, timeout, options)
+	local result, err, status, errorBody = requestOnce(method, url, body, timeout, options)
+	if result == nil and isTokenRefusal(status, errorBody) then
+		-- The token read earlier may be stale (a new one was made since):
+		-- read the file again and try once more.
+		if forgetLocalToken() and SearchIndexAPI.backendToken() then
+			result, err, status, errorBody = requestOnce(method, url, body, timeout, options)
+		end
+		if result == nil and isTokenRefusal(status, errorBody) then
+			err = SearchIndexAPI.tokenRefusedMessage()
+			log:error(err)
+		end
+	end
+	return result, err, status, errorBody
 end
 
 ---
@@ -4137,6 +4276,13 @@ function SearchIndexAPI.getPeopleUiUrl()
 			url = url .. "?db_path=" .. _urlEncode(dbPath)
 		end
 	end
+	-- The page sends the access token with its own requests. In the
+	-- fragment, which the browser never sends anywhere: not to the backend's
+	-- log, not in a Referer.
+	local token = SearchIndexAPI.backendToken()
+	if token then
+		url = url .. "#token=" .. _urlEncode(token)
+	end
 	return url
 end
 
@@ -4358,7 +4504,7 @@ function SearchIndexAPI.downloadRawLog(logType, targetPath)
 	log:trace("Downloading raw " .. logType .. " log from: " .. url)
 
 	local ok, res, hdrs = LrTasks.pcall(function()
-		return LrHttp.get(url, nil, 60)
+		return LrHttp.get(url, withAuthHeader(), 60)
 	end)
 
 	-- Status can be in hdrs.status (table) or hdrs itself (number) depending on LR version

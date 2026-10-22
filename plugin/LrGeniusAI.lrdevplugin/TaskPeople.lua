@@ -338,7 +338,8 @@ LrTasks.startAsyncTask(function()
 		end
 
 		local pageUrl = SearchIndexAPI.getPeopleUiUrl()
-		log:info("Opening the People page at " .. pageUrl)
+		-- Without the #fragment: it holds the access token.
+		log:info("Opening the People page at " .. (pageUrl:gsub("#.*", "")))
 		LrHttp.openUrlInBrowser(pageUrl)
 
 		local scope = LrProgressScope({
