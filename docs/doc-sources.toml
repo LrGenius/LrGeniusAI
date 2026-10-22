@@ -193,6 +193,7 @@ sources = [
   # The model side: the conversation types and tool calling by grammar.
   "server-rs/crates/lrg-providers/src/chat.rs",
   "server-rs/crates/lrg-providers/src/local_chat.rs",
+  "server-rs/crates/lrg-providers/src/cloud_chat.rs",
   "server-rs/crates/lrg-providers/src/local.rs",
   # The conversation's cache across turns on MLX (the llama.cpp half lives in
   # lrg-llama's worker.rs, which is mostly indexing and stays unlisted).

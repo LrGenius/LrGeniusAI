@@ -68,6 +68,12 @@ pub trait ModelSource: Send + Sync {
 
     /// The model as the page names it, before it has loaded.
     fn label(&self) -> String;
+
+    /// Who receives the conversation — its photos, metadata and the names of
+    /// recognised people — when that is not this computer. The page says so.
+    fn recipient(&self) -> Option<String> {
+        None
+    }
 }
 
 /// One of the two local engines, chosen the way an indexing request chooses
@@ -90,6 +96,28 @@ impl ModelSource for LocalModels {
 
     fn label(&self) -> String {
         self.model.clone()
+    }
+}
+
+/// A cloud model or an AI server: one client serves the whole chat.
+pub struct CloudModel {
+    pub model: Arc<dyn ChatModel>,
+    /// See [`ModelSource::recipient`]; `None` for a server on this computer.
+    pub recipient: Option<String>,
+}
+
+#[async_trait]
+impl ModelSource for CloudModel {
+    async fn model(&self) -> Result<Arc<dyn ChatModel>, String> {
+        Ok(self.model.clone())
+    }
+
+    fn label(&self) -> String {
+        self.model.name()
+    }
+
+    fn recipient(&self) -> Option<String> {
+        self.recipient.clone()
     }
 }
 
@@ -237,6 +265,7 @@ impl ChatSession {
         json!({
             "session_id": self.id,
             "model": self.models.label(),
+            "sends_to": self.models.recipient(),
             "busy": self.is_busy(),
             "tools": tools,
             "permissions": permissions,
@@ -643,6 +672,9 @@ fn estimate(messages: &[ChatMessage]) -> usize {
             ChatPart::ToolResult(result) => {
                 result.text.len() / CHARS_PER_TOKEN + result.images.len() * TOKENS_PER_IMAGE
             }
+            // The same turn again, in the API's own form; its neutral parts
+            // are already counted.
+            ChatPart::Native(_) => 0,
         })
         .sum()
 }

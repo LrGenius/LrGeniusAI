@@ -108,13 +108,23 @@ Credential Manager on Windows), like your AI provider keys.
 ## Or chat right here: Chat with Your Catalog
 
 You do not need another app to try this. **Library → Plug-in Extras → Chat with
-Your Catalog...** opens a chat page in your browser, and an AI model on your
-own computer works with the same tools. Nothing leaves your computer.
+Your Catalog...** opens a chat page in your browser, and an AI model works with
+the same tools.
 
-It needs a **local AI model** (download one under `Plug-in Manager →
-LrGeniusAI → Local AI Model`; the chat uses the one chosen for Analyze & Index
-when that is local) and the **agent bridge** (Step 1). You do not need the
-token or Step 2.
+The chat uses **the model chosen for Analyze & Index**:
+
+- **A model on this computer** (`Plug-in Manager → LrGeniusAI → Local AI
+  Model`), LM Studio or Ollama: nothing leaves your computer.
+- **A cloud model** (OpenAI, Anthropic, Google Gemini) or **your own AI
+  server**: the chat uses the key or address you entered for it. What the
+  model reads — your messages, photo previews, metadata and the names of
+  recognised people — goes to that company or server with every step, under
+  its terms, and it costs what that provider charges. LrGeniusAI asks once per
+  provider before the first such chat, and the chat page says where it runs.
+
+If the model for Analyze & Index cannot chat, the chat uses a local model if
+one is installed. It also needs the **agent bridge** (Step 1). You do not
+need the token or Step 2.
 
 **You decide what it may do on its own.** Each step the model wants to take
 appears as a card. When your settings ask first, the card has buttons:
@@ -145,10 +155,9 @@ nothing new starts. A step already running in Lightroom finishes.
 Everything under *Staying in control* below applies to the chat too: read-only
 mode, Undo, the develop snapshots and the stop button on the progress bar.
 
-**Expect mistakes from small models.** The chat runs on the model on your
-computer, and small models misunderstand more often than the large ones behind
-Claude or ChatGPT: they pick a wrong field, or act on more photos than you
-meant. Read what a card says before you allow it. Bigger models do better —
+**Expect mistakes, more so from small models.** Models on your computer
+misunderstand more often than the large ones behind Claude or ChatGPT: they
+pick a wrong field, or act on more photos than you meant. Read what a card says before you allow it. Bigger models do better —
 Gemma 4 12B handles one- and two-step tasks such as "find my beach photos and
 show them" or "give the selected photos four stars"; Gemma 4 E4B often gets the
 details of a change wrong.

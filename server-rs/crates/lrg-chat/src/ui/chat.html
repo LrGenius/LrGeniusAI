@@ -656,6 +656,9 @@
           return;
         }
         $("model").textContent = "Model: " + info.model;
+        if (info.sends_to) {
+          notice("info", `This chat's model runs at ${info.sends_to}, so what it reads — your messages, photo previews, metadata and the names of recognised people — is sent there.`);
+        }
         const lr = info.lightroom;
         $("lr-dot").className = "dot" + (lr ? " on" : "");
         $("lr-text").textContent = lr ? (lr.catalog_name || "Lightroom") : "Lightroom not connected";

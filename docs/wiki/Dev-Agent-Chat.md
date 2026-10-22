@@ -1,13 +1,16 @@
 # Dev: Agent Chat
 
-The in-app chat: a local AI model (llama.cpp or MLX) works the user's catalog
-through the same tools the [MCP endpoint](Dev-Agent-Bridge) offers external
+The in-app chat: an AI model — on this computer (llama.cpp, MLX), on an AI
+server (LM Studio, Ollama, the user's own) or in the cloud (OpenAI, Anthropic,
+Gemini) — works the user's catalog through the same tools the [MCP endpoint](Dev-Agent-Bridge) offers external
 agents, and the user talks to it — and approves what it may change — in a page
 the backend serves. Route reference: [Backend API](Dev-Backend-API#agent-chat).
 
-> **Status:** working end to end with local models (llama.cpp, MLX): the
-> backend, the page and the menu item *Chat with Your Catalog...*. Still to
-> come: cloud models.
+> **Status:** working end to end — the backend, the page and the menu item
+> *Chat with Your Catalog...* — with local models (tested with Gemma 4 on
+> MLX and SmolVLM on llama.cpp) and with cloud models and AI servers (tested
+> against fakes of each API; not yet against the real services). Cloud
+> answers are not streamed yet.
 
 ---
 
@@ -19,9 +22,10 @@ browser page ──fetch + event stream, chat token──► lrg-chat routes (/v
                                        ChatSession: the loop
                      ┌───────────────────────────────┴───────────────────────┐
      ChatModel (lrg-providers::chat)                      in-memory MCP client (lrg-chat::mcp)
-     └ LocalChatModel ─► LocalEngine::chat                └► LrGeniusMcp — the same tools as /mcp
-          ├ lrg-llama (worker thread, llguidance)              ├ index tools ─► REST routes in-process
-          └ lrg-mlx ─► lrgenius-mlx sidecar (XGrammar)         └ Lightroom tools ─► agent bridge ─► plugin
+     ├ LocalChatModel ─► LocalEngine::chat                └► LrGeniusMcp — the same tools as /mcp
+     │    ├ lrg-llama (worker thread, llguidance)              ├ index tools ─► REST routes in-process
+     │    └ lrg-mlx ─► lrgenius-mlx sidecar (XGrammar)         └ Lightroom tools ─► agent bridge ─► plugin
+     └ cloud_chat: OpenAiChat · AnthropicChat · GeminiChat ─► the provider's API
 ```
 
 | Where | What |
@@ -31,6 +35,7 @@ browser page ──fetch + event stream, chat token──► lrg-chat routes (/v
 | `…/lrg-mlx/src/engine.rs`, `native/mlx-sidecar/` | MLX: the sidecar's `chat` op and its `delta` lines |
 | `…/lrg-providers/src/chat.rs` | `ChatModel` and the model-neutral conversation types |
 | `…/lrg-providers/src/local_chat.rs` | `LocalChatModel`: tool calling by constrained decoding |
+| `…/lrg-providers/src/cloud_chat.rs` | Cloud models and AI servers, through each API's own tool calling |
 | `server-rs/crates/lrg-chat/src/session.rs` | One conversation and its loop |
 | `…/lrg-chat/src/mcp.rs` | The chat's in-process MCP connection |
 | `…/lrg-chat/src/permissions.rs` | What runs without asking; `chat_permissions.json` |
@@ -38,7 +43,7 @@ browser page ──fetch + event stream, chat token──► lrg-chat routes (/v
 | `…/lrg-chat/src/routes.rs` | The HTTP routes and their two tokens |
 | `…/lrg-chat/src/prompt.rs` | What the model is told about its job |
 | `…/lrg-chat/src/ui/chat.html` | The page (`/v1/ui/chat`), one file with no external resources |
-| `plugin/…/TaskChat.lua` | The menu item: picks the local model, opens a chat, opens the page |
+| `plugin/…/TaskChat.lua` | The menu item: picks the model, opens a chat, opens the page |
 
 The chat is an MCP *client* of the tools rather than a caller of their code,
 so a chat call takes exactly the path an external agent's takes: the same
@@ -101,6 +106,47 @@ README): Gemma 4 had written `<|channel>thought{` into its reasoning.
 shared argument only once — `set` and `photo_ids` repeated cost about 600
 tokens. With every tool offered it is about 3,000 tokens. Tool results are
 re-serialized without indentation, and only the last two photos stay pixels.
+
+---
+
+## Cloud models and AI servers
+
+These call tools the way their APIs do (`cloud_chat.rs`), so none of the
+grammar above applies. Three formats cover every provider:
+
+* **OpenAI's Chat Completions** (`OpenAiChat`) — OpenAI, LM Studio, Ollama at
+  its `/v1` endpoint, and the user's own server. A `tool` message takes text
+  only, so a photo a tool returned follows in a user message. OpenAI itself
+  gets `max_completion_tokens` and no temperature (its reasoning models reject
+  one); servers get `max_tokens` and the chat's temperature.
+* **Anthropic's Messages** (`AnthropicChat`) — the system prompt and the
+  conversation up to its last block are marked for prompt caching, so a turn
+  pays full price only for what is new.
+* **Gemini's `generateContent`** (`GeminiChat`) — tools as
+  `parametersJsonSchema`, and every `functionResponse` carries the id and name
+  of the call it answers, which Gemini 3 needs to pair them.
+
+**A turn goes back as its API wrote it.** Claude's thinking blocks and
+Gemini's thought signatures must return unchanged with the tool results, and
+the neutral parts cannot carry them. So a turn keeps its API's own form
+(`ChatPart::Native`), the same adapter sends that back, and every other model
+ignores it.
+
+**Schemas** go out with references inlined and without the top-level
+`set`-or-`photo_ids` choice, which Anthropic's and OpenAI's APIs refuse there
+(`portable_tool_schema`).
+
+**Budget.** A cloud model gets 64,000 tokens of context in the chat's
+accounting — far below its window — and only the newest four photos stay
+attached: every turn sends the whole conversation again and is billed for it.
+Answers get 8,192 tokens on top for thinking (2,048 on a server, whose window
+may be small).
+
+**Keys** come from the plugin with the request that opens the chat, as for
+indexing, and stay in that chat's memory. When the conversation leaves this
+computer, the session says to whom (`sends_to`), the page says so above the
+conversation, and the plugin asks once per provider before the first such
+chat.
 
 ---
 
@@ -278,6 +324,7 @@ The chat can change the catalog whenever Lightroom is open.
 cd server-rs
 cargo test -p lrg-chat                     # permissions, events, the loop with a scripted model, the routes
 cargo test -p lrg-providers local_chat     # schema, prompt, parsing, streaming
+cargo test -p lrg-providers --test cloud_chat_fake   # each cloud API's wire format, against a fake server
 # Engines, against real weights (ignored by default):
 LRG_TEST_MODEL_GGUF=… LRG_TEST_MMPROJ_GGUF=… cargo test -p lrg-llama --test engine_smoke -- --ignored
 LRG_MLX_SIDECAR=… LRG_TEST_MLX_MODEL_DIR=… cargo test -p lrg-mlx --test sidecar_smoke -- --ignored
@@ -285,4 +332,6 @@ LRG_MLX_SIDECAR=… LRG_TEST_MLX_MODEL_DIR=… cargo test -p lrg-mlx --test side
 
 `tests/chat_loop.rs` drives the real MCP tools with a scripted `ChatModel` and
 answers approvals the way the page does; without Lightroom, the Lightroom tools
-fail with the bridge's own error, which is exercised too.
+fail with the bridge's own error, which is exercised too. `tests/routes.rs`
+also runs a whole chat on a fake OpenAI-compatible server: its tool call runs
+the real `get_status`, and the result goes back as the call's `tool` message.

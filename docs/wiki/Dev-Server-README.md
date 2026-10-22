@@ -17,8 +17,8 @@ clients), `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
 routers, including the agent bridge to the plugin), `lrg-mcp` (the MCP endpoint
 AI agents connect to at `/mcp`, and the `geniusai-server mcp` stdio proxy —
 see [`docs/wiki/Dev-Agent-Bridge.md`](../docs/wiki/Dev-Agent-Bridge.md)),
-`lrg-chat` (the in-app agent chat at `/v1/chat/*` and its page, a local model
-working through the same tools — see
+`lrg-chat` (the in-app agent chat at `/v1/chat/*` and its page, a local or
+cloud model working through the same tools — see
 [`docs/wiki/Dev-Agent-Chat.md`](../docs/wiki/Dev-Agent-Chat.md)),
 `lrg-server` (the binary).
 

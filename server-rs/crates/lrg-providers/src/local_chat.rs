@@ -380,7 +380,7 @@ fn render_messages(
                                 }
                             }
                         }
-                        ChatPart::Reasoning(_) | ChatPart::ToolCall(_) => {}
+                        ChatPart::Reasoning(_) | ChatPart::ToolCall(_) | ChatPart::Native(_) => {}
                     }
                 }
             }

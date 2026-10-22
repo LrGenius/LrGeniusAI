@@ -25,10 +25,13 @@ use tokio::sync::broadcast::error::RecvError;
 
 use lrg_api::agent_bridge::McpAccess;
 use lrg_api::routes::llm::engine_overrides_from_json;
+use lrg_providers::cloud_chat::build_chat_model;
+use lrg_providers::openai_compatible::ServerUrl;
+use lrg_providers::provider::ProviderSelection;
 
 use crate::events::Sequenced;
 use crate::permissions::Permissions;
-use crate::session::{Approval, ChatSession, LocalModels};
+use crate::session::{Approval, ChatSession, CloudModel, LocalModels, ModelSource};
 use crate::ChatHub;
 
 const NO_BRIDGE: &str = "LrGeniusAI's agent bridge is not running, so a chat cannot be opened. \
@@ -150,30 +153,43 @@ async fn create_session(
             .map(str::to_string)
     };
     let provider = text("provider").unwrap_or_default().to_lowercase();
-    if !matches!(provider.as_str(), "llamacpp" | "mlx") {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "The chat works with a local AI model for now. Choose the local model (llama.cpp or \
-             MLX) as the AI provider in the plugin settings.",
-        );
-    }
     let Some(model) = text("model") else {
         return error(
             StatusCode::BAD_REQUEST,
-            "No local AI model is chosen. Pick one in the plugin settings.",
+            "No AI model is chosen for the chat. Pick one in the plugin settings.",
         );
     };
 
-    let models = LocalModels {
-        state: hub.state.clone(),
-        provider,
-        model,
-        overrides: engine_overrides_from_json(&body),
+    let models: Box<dyn ModelSource> = if matches!(provider.as_str(), "llamacpp" | "mlx") {
+        Box::new(LocalModels {
+            state: hub.state.clone(),
+            provider,
+            model,
+            overrides: engine_overrides_from_json(&body),
+        })
+    } else {
+        // The key stays in this session's memory: it is never logged, never
+        // written anywhere and never handed to the page.
+        let selection = ProviderSelection {
+            name: provider.clone(),
+            api_key: text("api_key"),
+            server_url: text("server_url"),
+            ollama_base_url: text("ollama_base_url"),
+            lmstudio_base_url: text("lmstudio_base_url"),
+            local_engine: None,
+        };
+        match build_chat_model(&selection, &model) {
+            Ok(chat_model) => Box::new(CloudModel {
+                model: chat_model,
+                recipient: recipient(&selection),
+            }),
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        }
     };
     let session = match ChatSession::open(
         hub.state.clone(),
         hub.api.clone(),
-        Box::new(models),
+        models,
         hub.permissions.clone(),
     )
     .await
@@ -192,6 +208,24 @@ async fn create_session(
         "page": format!("/v1/ui/chat#session={}&token={}", session.id, session.token()),
     }))
     .into_response()
+}
+
+/// Who a cloud chat's conversation goes to, as the page names them; `None`
+/// for a server on this computer.
+fn recipient(selection: &ProviderSelection) -> Option<String> {
+    match selection.name.as_str() {
+        "anthropic" => Some("Anthropic".into()),
+        "gemini" => Some("Google".into()),
+        "chatgpt" | "openai" => Some("OpenAI".into()),
+        "openai_compatible" => selection
+            .server_url
+            .as_deref()
+            .and_then(|url| ServerUrl::parse(url).ok())
+            .map(|url| format!("your AI server ({})", url.label)),
+        // LM Studio and Ollama: the server the plugin reaches on this
+        // computer unless the user moved it, and then it is theirs.
+        _ => None,
+    }
 }
 
 async fn session_info(

@@ -828,7 +828,7 @@ the command any more, and the plugin stops between photos.
 
 ## Agent chat
 
-The in-app chat: a local AI model works the catalog through the same tools as
+The in-app chat: a local or cloud AI model works the catalog through the same tools as
 `/mcp`, and the user chats with it — and approves its changes — in the
 browser. Design, the permission model and the event list:
 [Dev: Agent Chat](Dev-Agent-Chat). Served by `lrg-chat`, merged next to `/mcp`
@@ -851,11 +851,20 @@ and removes them from the address bar. Sent with a strict
 changes only the fragment; the page reloads itself for it.
 
 ### `POST /v1/chat/sessions`
-Opens a chat. Body: `provider` (`llamacpp` or `mlx` — anything else is a 400
-saying the chat needs a local model for now), `model` (as for indexing), and
-the engine knobs `llm_n_ctx`, `llm_n_parallel`, `llm_gpu_layers` as on the
-indexing routes. Starts loading the model in the background; a model that
-cannot load is reported as an `error` event. Returns `session_id`, `token` and
+Opens a chat. Body: `provider` and `model` as for indexing, and what that
+provider needs:
+
+* `llamacpp`, `mlx`: `llm_n_ctx`, `llm_n_parallel`, `llm_gpu_layers` as on the
+  indexing routes. The model loads in the background; one that cannot load is
+  reported as an `error` event.
+* `chatgpt`, `anthropic`, `gemini`: `api_key`, required.
+* `openai_compatible`: `server_url`, required, and `api_key` if the server
+  wants one. `lmstudio`, `ollama`: optional `lmstudio_base_url`,
+  `ollama_base_url`.
+
+The key is kept in the chat's memory only — never logged, saved or returned.
+A missing key, address or model is a **400** naming what to set. Returns
+`session_id`, `token` and
 `page`, the path to open with the token in its fragment
 (`/v1/ui/chat#session=…&token=…`). **503** when 8 chats are open and none is
 idle enough to close. No plugin session registered: 403 saying to turn the
@@ -866,7 +875,9 @@ agent bridge on.
 `GET` returns what the page draws from: `model`, `busy`, `tools` (each with
 `name`, `title`, `class` — `read`/`change`/`destructive` — and its `rule`),
 `permissions`, `permissions_saved` (false while no index is bound, so a change
-would not survive a restart) and `lightroom` (`catalog_name`,
+would not survive a restart), `sends_to` (who receives the conversation when
+that is not this computer — "Anthropic", "your AI server (host:port)" — or
+null) and `lightroom` (`catalog_name`,
 `may_change_photos`; null when the plugin is not connected). `DELETE` stops the
 chat and forgets it (**204**). A chat nobody has listened to for two hours is
 closed by the backend.
