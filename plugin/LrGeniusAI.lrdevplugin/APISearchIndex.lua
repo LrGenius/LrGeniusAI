@@ -1981,11 +1981,83 @@ function SearchIndexAPI.removePhotoMetadata(photoId)
 end
 
 ---
--- Sync cleanup: disassociate this catalog from backend photos that are no longer in the catalog.
--- Does not delete backend data; works with global photo ID and cross-catalog backends.
--- @return boolean success, string|nil error message
+-- Every backend photo ID in the active catalog, for the index cleanup.
 --
-function SearchIndexAPI.syncCleanup()
+-- Cached identities are read as they are, without touching any file: the ID
+-- the backend knows a photo by is the one cached when it was indexed, even if
+-- the original has changed or is offline since. Only photos with no cached
+-- identity yet (imported since) are resolved, which caches theirs, so each
+-- photo costs that once.
+-- @param progressScope LrProgressScope
+-- @return table|nil list of IDs; nil, error message on failure ("canceled" when canceled)
+--
+local function catalogInventory(progressScope)
+	local catalog = LrApplication.activeCatalog()
+	local allPhotos = catalog:getAllPhotos()
+	local total = #allPhotos
+	local function progress(done, caption)
+		progressScope:setPortionComplete(done, total)
+		progressScope:setCaption(caption)
+	end
+
+	local ids = {}
+	if not shouldUseGlobalPhotoId() then
+		local uuids = catalog:batchGetRawMetadata(allPhotos, { "uuid" })
+		for _, photo in ipairs(allPhotos) do
+			local uuid = uuids[photo] and uuids[photo].uuid
+			if Util.nilOrEmpty(uuid) then
+				return nil, "Could not resolve photo identity for cleanup: Photo UUID is missing"
+			end
+			ids[#ids + 1] = uuid
+		end
+		return ids
+	end
+
+	local byId, uncached = Util.indexCachedPhotoIds(catalog, allPhotos, function(done)
+		progress(done, string.format("Reading photo IDs: %d of %d", done, total))
+	end)
+	if progressScope:isCanceled() then
+		return nil, "canceled"
+	end
+	for id in pairs(byId) do
+		ids[#ids + 1] = id
+	end
+	local cachedCount = total - #uncached
+	for index, photo in ipairs(uncached) do
+		if progressScope:isCanceled() then
+			return nil, "canceled"
+		end
+		local photoId, idErr = getPhotoIdForPhoto(photo)
+		if not photoId then
+			-- An incomplete inventory would release the photos it misses.
+			return nil, "Could not resolve photo identity for cleanup: " .. tostring(idErr)
+		end
+		ids[#ids + 1] = photoId
+		if index % 100 == 0 or index == #uncached then
+			progress(cachedCount + index, string.format("Identifying new photos: %d of %d", index, #uncached))
+		end
+	end
+	return ids
+end
+
+---
+-- The index cleanup: lets the backend know every photo in this catalog, so it
+-- releases the indexed photos that are no longer in it. A photo another
+-- catalog still has stays indexed there. One in no catalog is deleted for good
+-- after a grace period (`grace_days`), unless it comes back before that.
+--
+-- When the cleanup would release more than half of what the catalog has
+-- indexed, the backend changes nothing and asks for confirmation instead; pass
+-- `confirmLargeRemoval` to go ahead.
+--
+-- @param options table|nil { progressScope = LrProgressScope|nil, confirmLargeRemoval = boolean|nil }
+-- @return true, table backend result ({ disassociated, orphaned, readopted, purged, waiting,
+--   next_purge_at, grace_days, warnings, ... })
+-- @return false, string error message ("canceled" when canceled),
+--   table|nil { needsConfirmation = true, wouldRemove = n, indexed = n } when held back
+--
+function SearchIndexAPI.syncCleanup(options)
+	options = options or {}
 	local catalogId = getCatalogId()
 	if not catalogId then
 		log:warn("syncCleanup: no catalog identifier")
@@ -1996,64 +2068,59 @@ function SearchIndexAPI.syncCleanup()
 		return false, "Backend not reachable"
 	end
 
-	local catalog = LrApplication.activeCatalog()
-	local allPhotos = catalog:getAllPhotos()
-	local photoIds = {}
-	local updateInterval = math.max(1, math.floor(#allPhotos / 50))
-
-	local progressScope = LrProgressScope({
-		title = LOC("$$$/LrGeniusAI/SearchIndexAPI/cleaningIndex=Cleaning search index"),
-		functionContext = nil,
-	})
-
-	for i, photo in ipairs(allPhotos) do
-		if progressScope:isCanceled() then
+	local ownScope = options.progressScope == nil
+	local progressScope = options.progressScope
+		or LrProgressScope({
+			title = "Cleaning up the search index",
+			functionContext = nil,
+		})
+	local function finish(...)
+		if ownScope then
 			progressScope:done()
-			return false, "canceled"
 		end
-		local photoId, idErr = getPhotoIdForPhoto(photo)
-		if not photoId then
-			progressScope:done()
-			return false, "Could not resolve photo identity for cleanup: " .. tostring(idErr)
-		end
-		photoIds[#photoIds + 1] = photoId
-		if i % updateInterval == 0 or i == #allPhotos then
-			progressScope:setPortionComplete(i, #allPhotos)
-			progressScope:setCaption(
-				LOC("$$$/LrGeniusAI/SearchIndexAPI/cleaningIndexProgress=Cleaning index. Photo ^1/^2"),
-				tostring(i),
-				tostring(#allPhotos)
-			)
-		end
+		return ...
 	end
 
-	progressScope:setCaption(LOC("$$$/LrGeniusAI/SearchIndexAPI/syncCleanupSending=Syncing with backend..."))
+	local photoIds, inventoryErr = catalogInventory(progressScope)
+	if not photoIds then
+		return finish(false, inventoryErr)
+	end
 	if progressScope:isCanceled() then
-		progressScope:done()
-		return false, "canceled"
+		return finish(false, "canceled")
 	end
+	progressScope:setCaption("Removing deleted photos from the index...")
 	-- Cleanup is a complete inventory, not an additive claim. Sending batches
 	-- would disassociate every photo outside each batch (and an empty catalog
 	-- must still be sent so its former associations can be removed).
-	local result, err = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
+	local result, err, status, errorBody = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
 		catalog_id = catalogId,
 		photo_ids = photoIds,
-	}, 120)
+		confirm_large_removal = options.confirmLargeRemoval == true,
+	}, 300)
 	if err then
-		progressScope:done()
+		if status == 409 and type(errorBody) == "table" and errorBody.needs_confirmation then
+			log:warn("syncCleanup held back by the backend: " .. tostring(errorBody.error))
+			return finish(false, errorBody.error, {
+				needsConfirmation = true,
+				wouldRemove = tonumber(errorBody.would_disassociate) or 0,
+				indexed = tonumber(errorBody.checked) or 0,
+			})
+		end
 		log:error("syncCleanup failed: " .. tostring(err))
-		return false, err
+		return finish(false, err)
 	end
-	local disassociated = result and result.disassociated or 0
-	progressScope:done()
+	result = type(result) == "table" and result or {}
 	log:info(
-		"syncCleanup finished: "
-			.. tostring(#photoIds)
-			.. " photos in catalog, "
-			.. tostring(disassociated)
-			.. " disassociated"
+		string.format(
+			"syncCleanup finished: %d photos in catalog, %s released, %s re-adopted, %s purged, %s waiting",
+			#photoIds,
+			tostring(result.disassociated or 0),
+			tostring(result.readopted or 0),
+			tostring(result.purged or 0),
+			tostring(result.waiting or 0)
+		)
 	)
-	return true
+	return finish(true, result)
 end
 
 ---
@@ -2171,12 +2238,6 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
 			result
 	end
 	return true, nil, result
-end
-
-function SearchIndexAPI.removeMissingFromIndex()
-	-- Use sync cleanup (soft state): disassociate this catalog from photos no longer in catalog.
-	-- Works with global photo ID and cross-catalog backends; no backend data is deleted.
-	return SearchIndexAPI.syncCleanup()
 end
 
 -- Build per-photo analysis options by merging shared options with catalog-derived

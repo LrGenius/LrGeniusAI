@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::{json, Map, Value};
 
-use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
+use lrg_store::{cleanup, meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
 
 use crate::state::AppState;
 
@@ -376,8 +376,14 @@ async fn sync_claim(State(state): State<Arc<AppState>>, body: Option<Json<Value>
     Json(json!({"status": "ok", "claimed": claimed, "errors": errors})).into_response()
 }
 
-/// Port of `chroma_service.sync_cleanup`: disassociate catalog_id from
-/// photos no longer in the active list (soft state only, never deletes).
+/// The index cleanup (see `lrg_store::cleanup`): `photo_ids` is every photo
+/// in the catalog, and the catalog lets go of the photos it no longer has.
+/// Photos left in no catalog are deleted for good after the grace period;
+/// photos that came back get their data back.
+///
+/// Letting go of more than half of what the catalog has indexed is refused
+/// with a 409 that changes nothing, unless `confirm_large_removal` is set —
+/// see `CleanupPlan::is_large_removal`.
 async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
     let catalog_id = data
@@ -400,63 +406,109 @@ async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Valu
         )
             .into_response();
     }
-    let active: std::collections::HashSet<&str> = photo_ids
+    let inventory: std::collections::HashSet<String> = photo_ids
         .and_then(Value::as_array)
-        .map(|list| list.iter().filter_map(Value::as_str).collect())
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
+    let confirmed = data
+        .get("confirm_large_removal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let Some(store) = state.store() else {
-        return Json(json!({"status": "ok", "checked": 0, "disassociated": 0})).into_response();
+        return Json(json!({
+            "status": "ok", "checked": 0, "disassociated": 0, "orphaned": 0,
+            "readopted": 0, "purged": 0, "waiting": 0, "next_purge_at": null,
+            "grace_days": cleanup::ORPHAN_GRACE_DAYS, "warnings": [],
+        }))
+        .into_response();
     };
 
-    let result: Result<(usize, usize), String> = async {
-        let rows = store
-            .scan_meta(IMAGE_TABLE)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut checked = 0usize;
-        let mut disassociated = 0usize;
-        for (id, metadata) in rows {
-            let mut ids_set = meta::parse_catalog_ids(&metadata);
-            if !ids_set.contains(catalog_id) {
-                continue;
-            }
-            checked += 1;
-            if active.contains(id.as_str()) {
-                continue;
-            }
-            // Read-modify-write keeping the vector (Python _remove_catalog_id).
-            let mut records = store
-                .get(IMAGE_TABLE, std::slice::from_ref(&id))
-                .await
-                .map_err(|e| e.to_string())?;
-            let Some(record) = records.first_mut() else {
-                continue;
-            };
-            ids_set.remove(catalog_id);
-            record.metadata.insert(
-                meta::CATALOG_IDS_FIELD.into(),
-                Value::String(meta::serialize_catalog_ids(&ids_set)),
-            );
-            meta::ensure_photo_metadata(&id, &mut record.metadata);
-            store
-                .upsert(IMAGE_TABLE, &records)
-                .await
-                .map_err(|e| e.to_string())?;
-            disassociated += 1;
+    let now = chrono::Utc::now().timestamp();
+    let rows = match store.scan_meta(IMAGE_TABLE).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::error!("Index cleanup failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
-        Ok((checked, disassociated))
-    }
-    .await;
+    };
+    let plan = cleanup::plan(rows, catalog_id, &inventory, now);
 
-    match result {
-        Ok((checked, disassociated)) => {
-            Json(json!({"status": "ok", "checked": checked, "disassociated": disassociated}))
-                .into_response()
+    if plan.is_large_removal() && !confirmed {
+        log::warn!(
+            "Index cleanup for {catalog_id} held back: {} of {} indexed photos are not in the \
+             catalog's inventory of {}",
+            plan.release.len(),
+            plan.indexed,
+            inventory.len()
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "{} of the {} photos indexed for this catalog are no longer in it. \
+                     Nothing was removed: confirm the cleanup to remove them from the index.",
+                    plan.release.len(),
+                    plan.indexed
+                ),
+                "needs_confirmation": true,
+                "would_disassociate": plan.release.len(),
+                "checked": plan.indexed,
+            })),
+        )
+            .into_response();
+    }
+
+    match cleanup::apply(&store, catalog_id, &plan, now).await {
+        Ok(outcome) => {
+            let waiting = plan.waiting + outcome.orphaned;
+            // The next purge is due one grace period after the oldest stamp
+            // still waiting; rows stamped by this run are the newest there are.
+            let oldest = match (plan.oldest_waiting, outcome.orphaned > 0) {
+                (Some(at), _) => Some(at),
+                (None, true) => Some(now),
+                (None, false) => None,
+            };
+            let next_purge_at = oldest.map(|at| at + cleanup::ORPHAN_GRACE_SECS);
+            log::info!(
+                "Index cleanup for {catalog_id}: {} of {} indexed photos released ({} now in no \
+                 catalog), {} re-adopted, {} purged, {waiting} waiting",
+                outcome.released,
+                plan.indexed,
+                outcome.orphaned,
+                outcome.readopted,
+                outcome.purged
+            );
+            Json(json!({
+                "status": "ok",
+                "checked": plan.indexed,
+                "disassociated": outcome.released,
+                "orphaned": outcome.orphaned,
+                "readopted": outcome.readopted,
+                "purged": outcome.purged,
+                "waiting": waiting,
+                "next_purge_at": next_purge_at,
+                "grace_days": cleanup::ORPHAN_GRACE_DAYS,
+                "warnings": outcome.warnings,
+            }))
+            .into_response()
         }
         Err(e) => {
-            log::error!("Sync cleanup failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response()
+            log::error!("Index cleanup failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
         }
     }
 }

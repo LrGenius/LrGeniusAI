@@ -3175,3 +3175,130 @@ async fn a_check_needs_a_repo_and_a_known_engine() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json["error"].as_str().unwrap().contains("engine must be"));
 }
+
+// ---------------------------------------------------------------------------
+// /v1/photos/catalogs/cleanup
+//
+// The plugin runs this unattended, so the two things it must never do are
+// remove a photo another catalog still has and act on an inventory that lost
+// most of the catalog.
+// ---------------------------------------------------------------------------
+
+async fn seed_catalog_rows(state: &Arc<AppState>, rows: &[(&str, &[&str])]) {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, catalogs)| {
+            let set = catalogs.iter().map(|c| c.to_string()).collect();
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "catalog_ids".into(),
+                serde_json::json!(lrg_store::meta::serialize_catalog_ids(&set)),
+            );
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+async fn catalogs_of(state: &Arc<AppState>, id: &str) -> Vec<String> {
+    let rows = state
+        .store()
+        .unwrap()
+        .get_meta(lrg_store::IMAGE_TABLE, &[id.to_string()])
+        .await
+        .unwrap();
+    lrg_store::meta::parse_catalog_ids(&rows[0].1)
+        .into_iter()
+        .collect()
+}
+
+#[tokio::test]
+async fn cleanup_releases_deleted_photos_and_reports_what_waits_for_deletion() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    seed_catalog_rows(
+        &state,
+        &[
+            ("kept", &["cat"]),
+            ("deleted", &["cat"]),
+            ("shared", &["cat", "other"]),
+            ("came_back", &[]),
+        ],
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/photos/catalogs/cleanup",
+        serde_json::json!({
+            "catalog_id": "cat",
+            "photo_ids": ["kept", "came_back"],
+            "db_path": db_path,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["checked"], 3, "{json}");
+    assert_eq!(json["disassociated"], 2, "{json}");
+    assert_eq!(json["orphaned"], 1, "{json}");
+    assert_eq!(json["readopted"], 1, "{json}");
+    assert_eq!(json["purged"], 0, "{json}");
+    assert_eq!(json["waiting"], 1, "{json}");
+    assert_eq!(json["grace_days"], 30, "{json}");
+    assert!(json["next_purge_at"].as_i64().is_some(), "{json}");
+    assert_eq!(json["warnings"], serde_json::json!([]), "{json}");
+
+    assert!(catalogs_of(&state, "deleted").await.is_empty());
+    assert_eq!(catalogs_of(&state, "shared").await, vec!["other"]);
+    assert_eq!(catalogs_of(&state, "came_back").await, vec!["cat"]);
+    assert_eq!(catalogs_of(&state, "kept").await, vec!["cat"]);
+}
+
+#[tokio::test]
+async fn cleanup_holds_back_a_removal_of_most_of_the_catalog_until_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids: Vec<String> = (0..60).map(|i| format!("p{i}")).collect();
+    let rows: Vec<(&str, &[&str])> = ids.iter().map(|id| (id.as_str(), &["cat"][..])).collect();
+    seed_catalog_rows(&state, &rows).await;
+
+    // What an inventory resolved under another identity looks like: none of
+    // the catalog's ids.
+    let request = |confirm: bool| {
+        serde_json::json!({
+            "catalog_id": "cat",
+            "photo_ids": ["unknown_1", "unknown_2"],
+            "confirm_large_removal": confirm,
+            "db_path": db_path,
+        })
+    };
+    let (status, json) = post_json(&app, "/v1/photos/catalogs/cleanup", request(false)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(json["needs_confirmation"], true, "{json}");
+    assert_eq!(json["would_disassociate"], 60, "{json}");
+    assert_eq!(json["checked"], 60, "{json}");
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("Nothing was removed"));
+    assert_eq!(catalogs_of(&state, "p0").await, vec!["cat"]);
+
+    let (status, json) = post_json(&app, "/v1/photos/catalogs/cleanup", request(true)).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["disassociated"], 60, "{json}");
+    assert!(catalogs_of(&state, "p0").await.is_empty());
+}

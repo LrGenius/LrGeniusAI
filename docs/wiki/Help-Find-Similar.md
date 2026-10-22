@@ -16,7 +16,11 @@ The collection is named `Similar images @ <timestamp>` and goes into the
 were added. If fewer photos ended up in the collection than the search found,
 a **Not in the collection** line says why: matches that are not in the current
 catalog, photos in the current view that have no photo ID and so were not
-searched, or result rows the backend sent without a photo ID.
+searched, or result rows the backend sent without a photo ID. Matches that are
+not in the catalog are usually photos you deleted from Lightroom: when the
+automatic index cleanup is on, the line also says that a cleanup has started
+in the background, and the next search no longer finds them (see the
+[FAQ](FAQ.md#what-happens-to-the-index-when-i-delete-photos-in-lightroom)).
 
 If the selected photo has not been indexed for the mode you picked (no
 embedding for **Similar content (AI)**, no perceptual hash for **Near

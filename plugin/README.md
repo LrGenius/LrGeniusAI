@@ -197,14 +197,14 @@ culling results or develop edits remains an intentional photo modification.
 
 ---
 
-## Breaking Change: Cross-Catalog Backend (Soft State, No Deletion)
+## Cross-Catalog Backend (Soft State) and the Index Cleanup
 
-When using a **shared remote backend** with multiple Lightroom catalogs, the backend no longer deletes photo data when a photo is removed from one catalog. Instead it only marks that catalog as no longer “having” that photo (**catalog_ids**). Other catalogs that still have the photo keep seeing it.
+When using a **shared backend** with multiple Lightroom catalogs, the backend does not delete photo data when a photo is removed from one catalog. Instead it only marks that catalog as no longer “having” that photo (**catalog_ids**). Other catalogs that still have the photo keep seeing it. Only a photo that is in no catalog at all is deleted, 30 days later (see *Index cleanup* below).
 
 ### What the plugin does
 
 - Sends a stable **catalog_id** with all index and read requests so the backend can scope data per catalog.
-- **Sync cleanup**: When you run “Remove missing photos from index” (or the equivalent), the plugin calls the backend to **disassociate** this catalog from photos that are no longer in the current catalog. It does **not** ask the backend to delete those photos.
+- **Index cleanup**: takes photos deleted from the catalog out of its index — see below.
 - **Claim photos**: So that existing indexed photos are visible to this catalog under the new behavior, the plugin runs an automatic one-time “claim” on first use: it tells the backend to add this catalog’s **catalog_id** to all photos that are currently in the catalog. This runs in the background once per catalog with progress and a completion message. It resolves IDs without writing photo metadata.
 
 ### Manual “Claim photos for this catalog”
@@ -215,6 +215,40 @@ In `Plug-in Manager -> LrGeniusAI -> Backend Server` you can click **Claim photo
 - Manually fix visibility if automatic claim did not run or failed.
 
 This adds the current catalog’s id to the listed photos on the backend; it does not delete any data.
+
+### Index cleanup (deleted photos)
+
+`IndexCleanup.lua` decides when; the backend does the work (`POST /v1/photos/catalogs/cleanup`,
+`lrg_store::cleanup`). The plugin sends every photo ID in the catalog, and the backend:
+
+- **releases** the photos this catalog indexed that are no longer in it. A photo another
+  catalog still has stays indexed there;
+- stamps a photo left in **no catalog** and keeps its data for **30 days**, so a photo removed by
+  mistake and imported again gets its AI data back (it has the same photo ID) instead of being
+  indexed from scratch;
+- **purges** a photo that has been in no catalog for longer, with its faces and species
+  embedding. Training examples are kept.
+
+When it runs:
+
+- on its own, about two minutes after Lightroom starts and then once a day (checked hourly), as
+  long as *Remove photos deleted from Lightroom from the search index automatically* is ticked in
+  `Plug-in Manager -> LrGeniusAI -> Backend Server` (on by default);
+- soon after **Advanced Search** or **Find Similar Images** found matches the catalog no longer
+  has — those are deleted photos still in the index (at most every ten minutes);
+- when you click **Clean up index now** in the same section. That run reports what it did.
+
+Safeguards:
+
+- The inventory takes cached photo identities as they are, without touching the originals, so
+  an offline or changed file keeps its photo indexed. Photos with no identity yet are resolved
+  once; if any cannot be, nothing is sent.
+- If more than half of what the catalog has indexed (at least 50 photos) would be released, the
+  backend changes nothing and the plugin asks first. That is what an inventory under different
+  photo IDs looks like — a restored backup, a changed ID setting — and those IDs would never come
+  back to stop the purge. The automatic run asks at most once a week.
+- An automatic run that fails shows no dialog; it is retried within the hour and its error is
+  in the section's status line. A run that changed something shows a short notice.
 
 ---
 

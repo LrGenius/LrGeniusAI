@@ -105,3 +105,10 @@ named after the query and scope.
 **Set the collection sort order to `Custom Order`** — that is the only order in
 which Lightroom shows the best matches at the top. Any other sort order throws
 the ranking away.
+
+If the search matched photos that are no longer in the catalog, a **Search
+Results Are Incomplete** message says how many. Those are usually photos you
+deleted from Lightroom that are still in the index: when the automatic index
+cleanup is on, the message also says that a cleanup has started in the
+background, and the next search no longer finds them (see the
+[FAQ](FAQ.md#what-happens-to-the-index-when-i-delete-photos-in-lightroom)).

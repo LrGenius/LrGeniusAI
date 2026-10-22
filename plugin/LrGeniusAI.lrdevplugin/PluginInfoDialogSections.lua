@@ -371,6 +371,22 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 			LrTasks.sleep(2)
 		end
 	end)
+
+	-- Index cleanup (IndexCleanup.lua). Saved the moment it changes, like the
+	-- agent bridge switches: the background schedule reads it live. The status
+	-- is polled so a run that finishes while the dialog is open shows up.
+	propertyTable.autoIndexCleanup = prefs.autoIndexCleanup ~= false
+	propertyTable:addObserver("autoIndexCleanup", function(_, _, value)
+		prefs.autoIndexCleanup = value == true
+		propertyTable.indexCleanupStatus = IndexCleanup.statusText()
+	end)
+	propertyTable.indexCleanupStatus = ""
+	LrTasks.startAsyncTask(function()
+		while checksStillWanted() do
+			propertyTable.indexCleanupStatus = IndexCleanup.statusText()
+			LrTasks.sleep(3)
+		end
+	end)
 end
 
 function PluginInfoDialogSections.sectionsForBottomOfDialog(f, propertyTable)
@@ -1531,6 +1547,33 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						fill_horizontal = 1,
 						wrap = true,
 					}),
+				}),
+				f:checkbox({
+					value = bind("autoIndexCleanup"),
+					title = "Remove photos deleted from Lightroom from the search index automatically",
+				}),
+				f:static_text({
+					-- Manual line breaks: wrap = true does nothing on static_text.
+					title = "Checked once a day, and when a search finds photos that are gone. A photo another catalog\n"
+						.. "still has stays indexed there; one in no catalog keeps its AI data for 30 days in case it\n"
+						.. "comes back. Before removing more than half of a catalog's index, LrGeniusAI asks.",
+					size = "small",
+				}),
+				f:push_button({
+					title = "Clean up index now",
+					width = share("backendButtonWidth"),
+					action = function()
+						IndexCleanup.runNow(function()
+							propertyTable.indexCleanupStatus = IndexCleanup.statusText()
+						end)
+					end,
+				}),
+				f:static_text({
+					-- Sized up front: a bound title does not resize the view.
+					title = bind("indexCleanupStatus"),
+					size = "small",
+					width_in_chars = 95,
+					height_in_lines = 2,
 				}),
 				f:row({
 					f:push_button({

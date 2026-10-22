@@ -23,6 +23,11 @@ pub const AESTHETIC_MODEL_FIELD: &str = "aesthetic_model";
 pub const GENRE_FIELD: &str = "genre";
 pub const GENRE_CONFIDENCE_FIELD: &str = "genre_confidence";
 pub const GENRE_VERSION_FIELD: &str = "genre_version";
+/// When the row lost its last catalog (Unix seconds), set by the index
+/// cleanup — see [`crate::cleanup`]. Only read while `catalog_ids` is empty: a
+/// row that is indexed again in some catalog may keep a stale value, which the
+/// next cleanup that empties it overwrites.
+pub const ORPHANED_AT_FIELD: &str = "orphaned_at";
 
 /// Parse catalog_ids from metadata (JSON list string or plain list).
 pub fn parse_catalog_ids(metadata: &Map<String, Value>) -> BTreeSet<String> {

@@ -26,6 +26,17 @@ describe("photo identity without photo metadata writes", function()
 		function cat:getAllPhotos()
 			return photos
 		end
+		function cat:batchGetRawMetadata(list, keys)
+			local out = {}
+			for _, photo in ipairs(list) do
+				local row = {}
+				for _, key in ipairs(keys) do
+					row[key] = photo.raw[key]
+				end
+				out[photo] = row
+			end
+			return out
+		end
 		function cat:findPhotoByUuid(uuid)
 			for _, photo in ipairs(photos) do
 				if photo.raw.uuid == uuid then
@@ -486,6 +497,81 @@ describe("photo identity without photo metadata writes", function()
 		assert.is_true(SearchIndexAPI.syncCleanup())
 		assert.are.equal(1, #requests)
 		assert.same({}, requests[1].body.photo_ids)
+	end)
+
+	it("takes cached identities into the cleanup inventory without reading the originals", function()
+		-- Indexed under a partial hash, original offline since, and one changed
+		-- on disk since: the inventory must carry the IDs the backend knows.
+		newPhoto("offline")
+		newPhoto("changed")
+		catalog.properties.photoIdentityV1_offline =
+			json:encode({ id = "md5p:100:7:offline", algorithm = "md5_partial", fileSize = 100 })
+		catalog.properties.photoIdentityV1_changed =
+			json:encode({ id = "md5p:5:5:changed", algorithm = "md5_partial", fileSize = 5 })
+		attributes = nil
+		local fresh = newPhoto("fresh")
+		local ok, result = SearchIndexAPI.syncCleanup()
+		assert.is_true(ok)
+		assert.are.equal(0, result.disassociated)
+		local sent = requests[1].body.photo_ids
+		table.sort(sent)
+		local expected = { "md5p:100:7:offline", "md5p:5:5:changed", Util.computeStableMetadataPhotoId(fresh) }
+		table.sort(expected)
+		assert.same(expected, sent)
+		-- Only the photo with no identity yet was resolved (and cached).
+		assert.are.equal(1, catalog.writes)
+	end)
+
+	it("sends Lightroom UUIDs as the cleanup inventory in UUID mode, without cache writes", function()
+		prefs.useGlobalPhotoId = false
+		newPhoto("one")
+		newPhoto("two")
+		assert.is_true(SearchIndexAPI.syncCleanup())
+		assert.same({ "one", "two" }, requests[1].body.photo_ids)
+		assert.are.equal(0, catalog.writes)
+	end)
+
+	it("reports a cleanup the backend held back, and confirms it on request", function()
+		newPhoto("one")
+		_G.LrHttp = {
+			post = function(url, body)
+				local request = json:decode(body)
+				requests[#requests + 1] = { url = url, body = request }
+				if not request.confirm_large_removal then
+					return json:encode({
+						error = "60 of the 61 photos indexed for this catalog are no longer in it.",
+						needs_confirmation = true,
+						would_disassociate = 60,
+						checked = 61,
+					}),
+						{ status = 409 }
+				end
+				return json:encode({ disassociated = 60, orphaned = 60, waiting = 60 }), { status = 200 }
+			end,
+		}
+		local ok, err, held = SearchIndexAPI.syncCleanup()
+		assert.is_false(ok)
+		assert.matches("60 of the 61", err, 1, true)
+		assert.same({ needsConfirmation = true, wouldRemove = 60, indexed = 61 }, held)
+		assert.is_false(requests[1].body.confirm_large_removal)
+
+		local result
+		ok, result = SearchIndexAPI.syncCleanup({ confirmLargeRemoval = true })
+		assert.is_true(ok)
+		assert.are.equal(60, result.disassociated)
+		assert.is_true(requests[2].body.confirm_large_removal)
+	end)
+
+	it("reports other cleanup failures without a confirmation request", function()
+		_G.LrHttp = {
+			post = function()
+				return '{"error":"disk full"}', { status = 500 }
+			end,
+		}
+		local ok, err, held = SearchIndexAPI.syncCleanup()
+		assert.is_false(ok)
+		assert.matches("disk full", err, 1, true)
+		assert.is_nil(held)
 	end)
 
 	it("does not complete a claim migration when the backend reports partial errors", function()

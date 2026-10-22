@@ -169,7 +169,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 
 - Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
 - Vector search: LanceDB tables `IMAGE_TABLE`/`FACE_TABLE`/`SPECIES_TABLE` in `lrg_store` (SigLIP2, face, and BioCLIP 2 embeddings respectively).
-- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
+- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. A catalog letting go of a photo never deletes its data: only the index cleanup (`lrg_store::cleanup`, run by `IndexCleanup.lua`) purges a photo, after it has been in no catalog for 30 days.
 
 ---
 

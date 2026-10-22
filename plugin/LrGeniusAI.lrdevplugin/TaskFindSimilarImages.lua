@@ -134,13 +134,16 @@ local function createCollectionFromPhotoIds(photoIds, collectionName, skipped)
 	local notes = skipped or {}
 	local missingFromCatalog = #photoIds - #photos
 	if missingFromCatalog > 0 then
-		table.insert(
-			notes,
-			tostring(missingFromCatalog)
-				.. " of the "
-				.. tostring(#photoIds)
-				.. " matched photo(s) are not in the current catalog, so the collection is smaller than the number of matches"
-		)
+		local note = tostring(missingFromCatalog)
+			.. " of the "
+			.. tostring(#photoIds)
+			.. " matched photo(s) are not in the current catalog, so the collection is smaller than the number of matches"
+		-- See TaskSemanticSearch: deleted photos the index cleanup has not
+		-- caught up with yet.
+		if IndexCleanup.requestSoon() then
+			note = note .. ". Photos deleted from Lightroom are taken out of the search index now, in the background"
+		end
+		table.insert(notes, note)
 	end
 
 	local collectionSet, collection

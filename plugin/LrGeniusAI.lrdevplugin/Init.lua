@@ -40,6 +40,7 @@ require("PromptConfigProvider")
 require("UpdateCheck")
 require("ErrorHandler")
 require("APISearchIndex")
+require("IndexCleanup")
 require("SpeciesLinks")
 require("PhotoSelector")
 require("LocalModelCatalog")
@@ -235,6 +236,13 @@ if _G.prefs.useGlobalPhotoId == nil then
 	_G.prefs.useGlobalPhotoId = true
 end
 
+-- Taking deleted photos out of the search index (IndexCleanup.lua). On by
+-- default: what it removes is kept for 30 days, and it asks before removing
+-- most of a catalog.
+if _G.prefs.autoIndexCleanup == nil then
+	_G.prefs.autoIndexCleanup = true
+end
+
 if _G.prefs.useLightroomKeywords == nil then
 	_G.prefs.useLightroomKeywords = false
 end
@@ -311,6 +319,10 @@ AgentBridge.resetForReload()
 if _G.prefs.agentBridgeEnabled then
 	AgentBridge.start()
 end
+
+-- Always started: it checks the "remove deleted photos automatically" switch
+-- on every round, so turning it on in the Plug-in Manager needs no restart.
+IndexCleanup.start()
 
 LrTasks.startAsyncTask(function()
 	-- Check if onboarding is needed

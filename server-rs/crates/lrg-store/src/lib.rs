@@ -32,6 +32,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::{CompactionOptions, Duration, OptimizeAction, OptimizeOptions};
 use serde_json::{Map, Value};
 
+pub mod cleanup;
 pub mod meta;
 pub mod migrate;
 pub mod upgrade;
@@ -78,6 +79,11 @@ const RETIRED_VERTEX_TABLE: &str = "image_embeddings_vertex";
 /// Chunk size for `id IN (...)` predicates, mirroring the Python
 /// GET_IDS_CHUNK_SIZE rationale (bounded query size on large catalogs).
 const GET_IDS_CHUNK_SIZE: usize = 1000;
+
+/// `LIKE` terms per `DELETE` in [`Store::delete_by_id_prefixes`]. Each term is
+/// a pattern match, not an index lookup, so this stays well under
+/// `GET_IDS_CHUNK_SIZE`.
+const PREFIX_DELETE_CHUNK_SIZE: usize = 200;
 
 /// How many write ops must pile up before the maintenance loop compacts.
 ///
@@ -632,6 +638,26 @@ impl Store {
     pub async fn delete_by_id_prefix(&self, table: &str, prefix: &str) -> Result<()> {
         let tbl = self.table(table).await?;
         tbl.delete(&id_prefix_predicate(prefix)).await?;
+        Ok(())
+    }
+
+    /// [`Store::delete_by_id_prefix`] for many prefixes at once, a few hundred
+    /// per `DELETE`. Each `DELETE` mints a dataset version, so purging the
+    /// faces of a thousand photos one prefix at a time would leave a thousand
+    /// versions for the maintenance loop to prune.
+    pub async fn delete_by_id_prefixes(&self, table: &str, prefixes: &[String]) -> Result<()> {
+        if prefixes.is_empty() {
+            return Ok(());
+        }
+        let tbl = self.table(table).await?;
+        for chunk in prefixes.chunks(PREFIX_DELETE_CHUNK_SIZE) {
+            let predicate = chunk
+                .iter()
+                .map(|p| format!("({})", id_prefix_predicate(p)))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            tbl.delete(&predicate).await?;
+        }
         Ok(())
     }
 
@@ -1194,6 +1220,44 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(remaining.contains(&"photo_10_0".to_string()));
         assert!(remaining.contains(&"other_0".to_string()));
+    }
+
+    /// The batched form covers exactly what the single form covers, per
+    /// prefix, across more prefixes than fit in one `DELETE`.
+    #[tokio::test]
+    async fn delete_by_id_prefixes_matches_each_prefix_across_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        let photos = PREFIX_DELETE_CHUNK_SIZE + 3;
+        let mut rows: Vec<StoreRecord> = (0..photos)
+            .map(|i| {
+                record(
+                    &format!("p{i}_0"),
+                    Some(vec![0.0; 512]),
+                    json!({"photo_id": format!("p{i}")}),
+                )
+            })
+            .collect();
+        // "p1_" must not reach "p10_0" (whose prefix is "p10_"), and an
+        // unlisted photo keeps its face.
+        rows.push(record("keep_0", Some(vec![0.0; 512]), json!({})));
+        store.append(FACE_TABLE, &rows).await.unwrap();
+
+        let prefixes: Vec<String> = (0..photos)
+            .filter(|i| *i != 10)
+            .map(|i| format!("p{i}_"))
+            .collect();
+        store
+            .delete_by_id_prefixes(FACE_TABLE, &prefixes)
+            .await
+            .unwrap();
+
+        let mut remaining = store.scan_ids(FACE_TABLE).await.unwrap();
+        remaining.sort();
+        assert_eq!(remaining, vec!["keep_0".to_string(), "p10_0".to_string()]);
+        // An empty list is a no-op, not a `DELETE` with no predicate.
+        store.delete_by_id_prefixes(FACE_TABLE, &[]).await.unwrap();
+        assert_eq!(store.count(FACE_TABLE).await.unwrap(), 2);
     }
 
     /// The read side has to cover exactly the rows the delete side clears —

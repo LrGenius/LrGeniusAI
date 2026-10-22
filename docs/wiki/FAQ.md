@@ -143,6 +143,15 @@ Yes. Advanced Search only works on photos that have been indexed (embeddings cre
 
 Enable **Regenerate all data (overwrite existing)** in the Analyze & Index dialog.
 
+### What happens to the index when I delete photos in Lightroom?
+
+LrGeniusAI takes them out of the search index on its own: a couple of minutes after Lightroom starts, then once a day, and right after a search finds photos that are no longer in the catalog. You can also run it yourself: *Plug-in Manager → LrGeniusAI → Backend Server → Clean up index now*, which tells you what it did. The checkbox above that button turns the automatic cleanup off.
+
+- A photo that another catalog using the same LrGeniusAI database still has stays indexed there.
+- A photo that is in no catalog any more keeps its AI data for **30 days**. If you import it again in that time, it gets its keywords, captions and faces back instead of being analyzed again. After 30 days the data is deleted for good.
+- If more than half of a catalog's indexed photos seem to be gone at once, LrGeniusAI asks before removing anything. That happens after deleting a big shoot, but also when the catalog was restored from an older backup — in that case, keep them.
+- Faces of deleted photos still show in **People** until their data is deleted for good.
+
 ---
 
 ## Advanced Search

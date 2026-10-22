@@ -16,6 +16,7 @@ globals = {
     "Util",
     "AiProviders",
     "ErrorHandler",
+    "IndexCleanup",
     "Info",
     "UpdateCheck",
     "Defaults",

@@ -271,12 +271,53 @@ Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 Removes only the AI-generated metadata fields for a given `photo_id`, leaving embeddings intact.
 
 ### `POST /v1/photos/catalogs/cleanup`
-Disassociates the catalog from backend records for photos no longer present in
-the supplied catalog inventory; it does not physically delete photo data. The
-plugin resolves IDs without changing photo metadata and aborts if it cannot
-resolve the complete inventory. The inventory is sent in one request (including
-for an empty catalog), since separate batches would each remove associations
-for photos outside that batch.
+The index cleanup: takes photos deleted from a catalog out of its index. The
+plugin runs it on its own (a couple of minutes after Lightroom starts, then once
+a day, and when a search turns up photos the catalog no longer has) and from
+*Plug-in Manager → Backend Server → Clean up index now* (`IndexCleanup.lua`).
+The logic is `lrg_store::cleanup`.
+
+**Request:** `catalog_id` (required), `photo_ids` — every photo ID in the
+catalog — and `confirm_large_removal` (bool, default false).
+
+The inventory is sent in one request (including for an empty catalog), since
+separate batches would each release the photos outside that batch. The plugin
+takes cached identities as they are (no file access) and resolves only photos
+that have none yet; it aborts rather than send an incomplete inventory.
+
+Against that inventory, every image row is one of:
+
+| Row | Effect |
+|---|---|
+| claimed by this catalog, not in the inventory | the catalog lets go (`catalog_id` removed). Other catalogs keep theirs. A row left in no catalog is stamped `orphaned_at` (Unix seconds) |
+| in the inventory, in no catalog | re-adopted: the catalog is added back and the stamp cleared — a photo removed by mistake and imported again gets its AI data back |
+| in no catalog, stamped more than 30 days ago | purged for good: image row, its faces (`{photo_id}_n`) and its species embedding. Training examples stay |
+| in no catalog, no stamp | left alone — rows from before `catalog_ids` existed look like this |
+
+Every row is read again before it is written, and a purge candidate some
+catalog claimed since the scan is skipped.
+
+**Large removals:** when the catalog would let go of more than half of what it
+has indexed (and at least 50 photos), nothing changes and the answer is a
+**409**: `{"error", "needs_confirmation": true, "would_disassociate": n,
+"checked": indexed}`. That is what an inventory resolved another way than at
+indexing time looks like, and the grace period does not cover it — those IDs
+never come back. The plugin asks the user and repeats the request with
+`confirm_large_removal: true`.
+
+**Response:**
+
+| Field | Meaning |
+|---|---|
+| `checked` | photos this catalog had indexed |
+| `disassociated` | photos the catalog let go of |
+| `orphaned` | of those, how many are now in no catalog |
+| `readopted` | photos that came back |
+| `purged` | photos deleted for good in this run |
+| `waiting` | photos in no catalog, still within the grace period |
+| `next_purge_at` | Unix seconds when the oldest of those falls due, or `null` |
+| `grace_days` | the grace period (30) |
+| `warnings` | purges that failed; the next run retries them |
 
 ### `POST /v1/photos/catalogs/claim`
 Associates an existing backend record with a (potentially new) catalog ID.
