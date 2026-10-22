@@ -1,4 +1,5 @@
 require("DevelopEditManager")
+require("AestheticRefine")
 
 -- AI Edit runs on the Style Engine only. The LLM edit path (`/v1/edit/recipe`, provider
 -- and model choice, prompts, intent presets, creative controls, per-photo
@@ -112,6 +113,39 @@ local function createVirtualCopyFor(photo)
 	return copies[1], nil
 end
 
+-- Refinement scores every candidate with the aesthetic model, which is a
+-- download of its own. Asked once, before the run, rather than failing the same
+-- way on every photo. Never blocks on its own failure: a status call that does
+-- not answer lets the run go on, and each photo then says what went wrong.
+--
+-- @return string "ok" to go on as asked, "other" to go on without refining,
+--   "cancel" to stop.
+local function aestheticModelPreflight()
+	local status, err = SearchIndexAPI.getAssetStatus()
+	if not status or type(status.families) ~= "table" then
+		log:warn("AI Edit aesthetic model preflight skipped: " .. tostring(err or "no families in /v1/models/assets"))
+		return "ok"
+	end
+	if #Util.missingModelFamilies(status.families, { "aesthetic" }) == 0 then
+		return "ok"
+	end
+	local answer = LrDialogs.confirm(
+		"The aesthetic model is not downloaded yet",
+		'Refining an edit scores it with the aesthetic model, which is not on disk yet. Run "Download AI models" in Plug-in Manager to get it, or carry on with plain edits.',
+		"Edit without refinement",
+		"Cancel"
+	)
+	return answer == "ok" and "other" or "cancel"
+end
+
+local function refinementSummary(refinedCount, reducedCount)
+	return "Refined with the aesthetic score: "
+		.. tostring(refinedCount)
+		.. " photo(s), "
+		.. tostring(reducedCount)
+		.. " of them at a gentler strength than the full recipe."
+end
+
 local function showAiEditDialog(ctx, stats)
 	log:trace("showAiEditDialog: start")
 	local f = LrView.osFactory()
@@ -122,6 +156,7 @@ local function showAiEditDialog(ctx, stats)
 	props.scope = prefs.aiEditScope or "selected"
 	props.reviewBeforeApply = prefs.aiEditReviewBeforeApply ~= false
 	props.createVirtualCopy = prefs.aiEditCreateVirtualCopy == true
+	props.refineWithAesthetic = prefs.aiEditRefineAesthetic == true
 
 	local readinessText, readinessColor, trainingCount = styleReadinessDisplay(stats)
 
@@ -200,6 +235,20 @@ local function showAiEditDialog(ctx, stats)
 					),
 				}),
 			}),
+			f:row({
+				f:checkbox({
+					value = bind("refineWithAesthetic"),
+				}),
+				f:static_text({
+					title = "Refine each edit with the aesthetic score (slower: tries gentler strengths)",
+				}),
+			}),
+			f:row({
+				f:static_text({
+					title = "Every try is a step in the Edit History; a virtual copy keeps the original's clean.",
+					text_color = LrColor(0.5, 0.5, 0.5),
+				}),
+			}),
 		}),
 	})
 
@@ -217,11 +266,13 @@ local function showAiEditDialog(ctx, stats)
 	prefs.aiEditScope = props.scope
 	prefs.aiEditReviewBeforeApply = props.reviewBeforeApply
 	prefs.aiEditCreateVirtualCopy = props.createVirtualCopy
+	prefs.aiEditRefineAesthetic = props.refineWithAesthetic
 
 	return {
 		scope = props.scope,
 		reviewBeforeApply = props.reviewBeforeApply,
 		createVirtualCopy = props.createVirtualCopy,
+		refineWithAesthetic = props.refineWithAesthetic,
 	}
 end
 
@@ -299,7 +350,19 @@ LrTasks.startAsyncTask(function()
 				.. tostring(options.reviewBeforeApply)
 				.. " virtualCopy="
 				.. tostring(options.createVirtualCopy)
+				.. " refine="
+				.. tostring(options.refineWithAesthetic)
 		)
+
+		if options.refineWithAesthetic then
+			local answer = aestheticModelPreflight()
+			if answer == "cancel" then
+				log:info("AI Edit task canceled at the aesthetic model preflight")
+				return
+			elseif answer == "other" then
+				options.refineWithAesthetic = false
+			end
+		end
 
 		local photos = PhotoSelector.getPhotosInScope(options.scope)
 		if not photos or #photos == 0 then
@@ -323,6 +386,8 @@ LrTasks.startAsyncTask(function()
 		local errorCount = 0
 		local errorMessages = {}
 		local backendWarnings = {}
+		local refinedCount = 0
+		local reducedCount = 0
 
 		local canceled = false
 
@@ -352,6 +417,7 @@ LrTasks.startAsyncTask(function()
 			end
 
 			local response = nil
+			local baselineScore = nil
 			if continueProcessing then
 				local photoOptions = enrichPhotoOptions(photo, options)
 				local exportedPath = SearchIndexAPI.exportPhotoForIndexing(photo)
@@ -367,6 +433,21 @@ LrTasks.startAsyncTask(function()
 					local ok, apiOk, apiResponse = LrTasks.pcall(function()
 						return SearchIndexAPI.styleEdit(photoId, exportedPath, photoOptions)
 					end)
+					-- The export is the photo as it is before the edit, so its score is what the
+					-- refinement has to beat. A photo that cannot be scored is still edited, just
+					-- not refined, and says so.
+					if ok and apiOk and options.refineWithAesthetic then
+						local okScore, score, scoreErr = LrTasks.pcall(function()
+							return SearchIndexAPI.scoreEditedPhoto(exportedPath)
+						end)
+						if okScore and type(score) == "number" then
+							baselineScore = score
+						else
+							local reason = okScore and Util.userFacingError(tostring(scoreErr)) or tostring(score)
+							log:warn("AI Edit could not score " .. fileName .. " before editing: " .. reason)
+							table.insert(backendWarnings, fileName .. ": not refined — " .. reason)
+						end
+					end
 					LrTasks.pcall(function()
 						if exportedPath and LrFileUtils.exists(exportedPath) then
 							LrFileUtils.delete(exportedPath)
@@ -486,7 +567,38 @@ LrTasks.startAsyncTask(function()
 							.. " applyMasks="
 							.. tostring(applyOptions.applyMasks)
 					)
-					local applied, warnings = DevelopEditManager.applyRecipe(target, response, applyOptions)
+					local applied, warnings, refined
+					local refineWarnings = nil
+					if baselineScore and applyOptions.applyGlobal then
+						applied, warnings, refined = AestheticRefine.run({
+							photo = target,
+							response = response,
+							baselineScore = baselineScore,
+							applyOptions = applyOptions,
+							isCanceled = function()
+								return progressScope:isCanceled()
+							end,
+							onTrial = function(strength)
+								local percent = math.floor(strength * 100 + 0.5)
+								progressScope:setCaption("Refining " .. fileName .. " (trying " .. percent .. "%)")
+							end,
+						})
+						if applied == nil then
+							-- Nothing was touched; the plain recipe still goes on.
+							refineWarnings = warnings
+						elseif refined then
+							refinedCount = refinedCount + 1
+							if refined.strength < 1 then
+								reducedCount = reducedCount + 1
+							end
+						end
+					end
+					if applied == nil then
+						applied, warnings = DevelopEditManager.applyRecipe(target, response, applyOptions)
+						for _, warning in ipairs(refineWarnings or {}) do
+							table.insert(warnings, warning)
+						end
+					end
 					log:trace(
 						"Apply result for "
 							.. fileName
@@ -531,6 +643,9 @@ LrTasks.startAsyncTask(function()
 
 			local combinedReport =
 				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/Summary=Applied edits to ^1 photo(s).", tostring(successCount))
+			if refinedCount > 0 then
+				combinedReport = combinedReport .. "\n" .. refinementSummary(refinedCount, reducedCount)
+			end
 			if skippedCount > 0 then
 				combinedReport = combinedReport
 					.. "\n"
@@ -590,6 +705,9 @@ LrTasks.startAsyncTask(function()
 				tostring(successCount),
 				tostring(skippedCount)
 			)
+			if refinedCount > 0 then
+				summary = summary .. "\n" .. refinementSummary(refinedCount, reducedCount)
+			end
 			if canceled then
 				summary = summary .. "\n\n" .. "Canceled before all photos were processed."
 			end

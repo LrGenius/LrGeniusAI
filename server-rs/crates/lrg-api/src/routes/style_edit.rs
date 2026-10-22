@@ -30,7 +30,80 @@ use crate::routes::route_util::{
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new().route("/edit/style", axum::routing::post(style_edit))
+    axum::Router::new()
+        .route("/edit/style", axum::routing::post(style_edit))
+        .route("/edit/score", axum::routing::post(score_edit))
+}
+
+/// `POST /v1/edit/score` — the aesthetic score of one rendered image, nothing
+/// stored.
+///
+/// The plugin's optional refinement loop renders a photo with a candidate edit
+/// applied and asks what the scorer makes of it, several times per photo, so
+/// this must not touch the index: the score of an intermediate render belongs
+/// to no photo record. Takes the same `image` part as the other edit routes.
+async fn score_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+    let form = match parse_multipart(&mut multipart).await {
+        Ok(form) => form,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+    let Some(image_bytes) = form
+        .images
+        .into_iter()
+        .next()
+        .map(|image| image.bytes)
+        .filter(|bytes| !bytes.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "error": "No image provided to score."})),
+        )
+            .into_response();
+    };
+
+    if !state.aesthetic.is_cached() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "error",
+                "error": "the aesthetic model is not downloaded yet — run \"Download AI models\" \
+                          in Plug-in Manager",
+            })),
+        )
+            .into_response();
+    }
+
+    let aesthetic = state.aesthetic.clone();
+    let scored = tokio::task::spawn_blocking(move || -> Result<f32, String> {
+        let rgb = image::load_from_memory(&image_bytes)
+            .map_err(|e| format!("could not decode the image: {e}"))?
+            .to_rgb8();
+        let (width, height) = (rgb.width() as usize, rgb.height() as usize);
+        aesthetic
+            .score_image(&rgb.into_raw(), width, height)
+            .map_err(|e| format!("aesthetic scoring failed: {e}"))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("aesthetic scoring task failed: {e}")));
+
+    match scored {
+        // Two decimals, as the index stores it: a difference smaller than that
+        // is not one the scorer can be trusted to have meant.
+        Ok(score) => Json(json!({
+            "status": "success",
+            "score": (f64::from(score) * 100.0).round() / 100.0,
+            "model": lrg_ml::aesthetic::MODEL_ID,
+        }))
+        .into_response(),
+        Err(e) => {
+            log::warn!("Edit score request failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "error": e})),
+            )
+                .into_response()
+        }
+    }
 }
 
 fn record_to_candidate(id: &str, meta: &Map<String, Value>, distance: f64) -> TrainingCandidate {
