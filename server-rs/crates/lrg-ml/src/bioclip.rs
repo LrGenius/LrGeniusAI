@@ -430,7 +430,8 @@ fn now_unix() -> i64 {
 /// Optimization level pinned per [`crate::OPTIMIZATION_LEVEL`] — onnxruntime
 /// segfaults on this exact graph at its own `ORT_ENABLE_ALL` default.
 fn build_session(path: &Path) -> ort::Result<Session> {
-    let builder = Session::builder()?
+    let env = crate::ort_environment()?;
+    let builder = Session::builder(&env)?
         .with_optimization_level(crate::OPTIMIZATION_LEVEL)?
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
     crate::apply_kleidiai_policy(builder)?.commit_from_file(path)

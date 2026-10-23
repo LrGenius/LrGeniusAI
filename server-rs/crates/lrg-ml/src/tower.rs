@@ -132,7 +132,8 @@ fn now_unix() -> i64 {
 /// segfaults loading `siglip2_text.onnx` at its own `ORT_ENABLE_ALL` default,
 /// and triples the image tower's resident memory.
 pub(crate) fn build_session(path: &Path) -> ort::Result<Session> {
-    let mut builder = Session::builder()?.with_optimization_level(crate::OPTIMIZATION_LEVEL)?;
+    let env = crate::ort_environment()?;
+    let mut builder = Session::builder(&env)?.with_optimization_level(crate::OPTIMIZATION_LEVEL)?;
     #[cfg(target_os = "macos")]
     if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
         use ort::ep::coreml::{ComputeUnits, ModelFormat};

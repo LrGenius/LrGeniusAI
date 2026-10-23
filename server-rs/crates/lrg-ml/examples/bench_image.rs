@@ -16,7 +16,8 @@ fn main() -> ort::Result<()> {
     let batch: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let iters: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(10);
 
-    let builder = Session::builder()?;
+    let env = ort::init().build()?;
+    let builder = Session::builder(&env)?;
     let mut builder = match ep.as_str() {
         // CoreML is only linked in on macOS — see the target-scoped `ort`
         // dependency in Cargo.toml.
