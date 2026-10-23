@@ -376,7 +376,8 @@ LrTasks.startAsyncTask(function()
 		if #topKeywords == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoKeywordsTitle=No Keywords"),
-				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoKeywordsMessage=The catalog has no keywords to process.")
+				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoKeywordsMessage=The catalog has no keywords to process."),
+				"info"
 			)
 			return
 		end
@@ -468,7 +469,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoSelectionTitle=Nothing Selected"),
 				LOC(
 					"$$$/LrGeniusAI/DeduplicateKeywords/NoSelectionMessage=No keyword branches were selected. Please select at least one branch."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -522,7 +524,7 @@ LrTasks.startAsyncTask(function()
 				return
 			end
 			local prov, mdl = AiProviders.splitModelKey(warnProps.modelKey)
-			local connection, connectionErr = AiProviders.connectionOptions(prov, prefs)
+			local connection, connectionErr = AiProviders.connectionOptions(prov, Secrets.connectionFields(prefs))
 			if not connection then
 				scanScope:done()
 				LrDialogs.showError(connectionErr)
@@ -654,7 +656,8 @@ LrTasks.startAsyncTask(function()
 		-- act on them — reused by the no-duplicates and preview messages.
 		local scanStoppedNote
 		if scanAborted then
-			scanStoppedNote = "The scan was stopped before all branches were checked, so this list may be incomplete."
+			scanStoppedNote =
+				"The scan was stopped before all branches were checked, so this list may be incomplete. Re-run the scan to check the remaining branches."
 		end
 
 		if #semanticPairs == 0 then
@@ -667,7 +670,11 @@ LrTasks.startAsyncTask(function()
 			if semanticWarning then
 				msg = msg .. "\n\n" .. semanticWarning
 			end
-			LrDialogs.message(LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesTitle=No Duplicates Found"), msg)
+			LrDialogs.message(
+				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoDuplicatesTitle=No Duplicates Found"),
+				msg,
+				"info"
+			)
 			return
 		end
 
@@ -798,7 +805,8 @@ LrTasks.startAsyncTask(function()
 		if #finalPairs == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoSelectionTitle=Nothing Selected"),
-				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoMergesSelected=No pairs were selected for merging.")
+				LOC("$$$/LrGeniusAI/DeduplicateKeywords/NoMergesSelected=No pairs were selected for merging."),
+				"info"
 			)
 			return
 		end
@@ -944,7 +952,11 @@ LrTasks.startAsyncTask(function()
 				)
 		end
 
-		LrDialogs.message(LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultTitle=Deduplication Complete"), resultMsg)
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/DeduplicateKeywords/ResultTitle=Deduplication Complete"),
+			resultMsg,
+			"info"
+		)
 
 		log:info(
 			"DeduplicateKeywords complete: merged="

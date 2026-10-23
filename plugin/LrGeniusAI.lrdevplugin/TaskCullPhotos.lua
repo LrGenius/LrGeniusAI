@@ -8,6 +8,15 @@ local function showCullDialog(ctx)
 	props.timeDeltaSeconds = prefs.cullTimeDeltaSeconds or 2
 	props.cullingPreset = prefs.cullPreset or "default"
 	props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
+	props.cullStrength = prefs.cullStrength or "balanced"
+	-- Flags are what a photographer culls *with*, so picks are flagged by
+	-- default; rejects are opt-in because a reject flag is one menu command
+	-- away from deleting files. Both honour existing flags unless told not to.
+	props.flagPicks = prefs.cullFlagPicks ~= false
+	props.flagRejects = prefs.cullFlagRejects == true
+	props.overwriteUserMarks = prefs.cullOverwriteUserMarks == true
+	props.rateByDecision = prefs.cullRateByDecision == true
+	props.labelStrongMoment = prefs.cullLabelStrongMoment ~= false
 
 	local contents = f:column({
 		bind_to_object = props,
@@ -41,12 +50,32 @@ local function showCullDialog(ctx)
 				f:combo_box({
 					value = bind("timeDeltaSeconds"),
 					items = {
+						{ title = "Auto (from preset)", value = "auto" },
 						{ title = "1", value = 1 },
 						{ title = "2", value = 2 },
 						{ title = "3", value = 3 },
 						{ title = "5", value = 5 },
 					},
-					width = 120,
+					width = 160,
+					tooltip = "Auto uses the preset's own window: 1 s for Default, Portrait and Street, "
+						.. "2 s for Event, 3 s for Sports.",
+				}),
+			}),
+			f:row({
+				f:static_text({
+					title = "Cull strength:",
+					width = share("labelWidth"),
+				}),
+				f:popup_menu({
+					value = bind("cullStrength"),
+					items = {
+						{ title = "Gentle (keep more alternates)", value = "gentle" },
+						{ title = "Balanced", value = "balanced" },
+						{ title = "Strict (one keeper per burst where possible)", value = "strict" },
+					},
+					width = 260,
+					tooltip = "How far below the pick a frame must score to become a reject candidate. "
+						.. "Blur, blinks and blocked faces are rejected at the same thresholds whatever you choose.",
 				}),
 			}),
 			f:row({
@@ -57,21 +86,21 @@ local function showCullDialog(ctx)
 				f:popup_menu({
 					value = bind("cullingPreset"),
 					items = {
-						{ title = LOC("$$$/LrGeniusAI/CullTask/PresetDefault=Default (balanced)"), value = "default" },
+						{ title = "Default (sharpness, exposure, faces)", value = "default" },
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetPortrait=Portrait (face-focused)"),
+							title = "Portrait (faces and expression)",
 							value = "portrait",
 						},
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetStreet=Street (technical-focused)"),
+							title = "Street (candid moments)",
 							value = "street",
 						},
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetEvent=Event (people + moments)"),
+							title = "Event (people, emotion, moments)",
 							value = "event",
 						},
 						{
-							title = LOC("$$$/LrGeniusAI/CullTask/PresetSports=Sports (motion-tolerant)"),
+							title = "Sports (action and emotion)",
 							value = "sports",
 						},
 					},
@@ -83,6 +112,41 @@ local function showCullDialog(ctx)
 				title = LOC(
 					"$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection"
 				),
+			}),
+		}),
+		f:group_box({
+			title = "Lightroom flags and ratings",
+			fill_horizontal = 1,
+			f:checkbox({
+				value = bind("flagPicks"),
+				title = "Flag picks (P)",
+				tooltip = "Sets the Pick flag on the best usable frame of every group.",
+			}),
+			f:checkbox({
+				value = bind("flagRejects"),
+				title = "Flag reject candidates as rejected (X)",
+				tooltip = "Sets the Reject flag on reject candidates. Nothing is deleted: "
+					.. "Photo > Delete Rejected Photos is still your decision.",
+			}),
+			f:checkbox({
+				value = bind("rateByDecision"),
+				title = "Star ratings: picks 3 stars, alternates 2 stars",
+				tooltip = "Reject candidates get no stars; the reject flag is their mark.",
+			}),
+			f:checkbox({
+				value = bind("labelStrongMoment"),
+				title = "Purple label on rejects with the group's strongest moment ('look before deleting')",
+			}),
+			f:checkbox({
+				value = bind("overwriteUserMarks"),
+				title = "Also overwrite flags, stars and labels I set myself",
+				tooltip = "Marks an earlier cull wrote are always updated to this run's decisions. "
+					.. "Your own flags, stars and labels are left alone unless this is on. "
+					.. "Everything is one undo step either way.",
+			}),
+			f:static_text({
+				title = "Brackets, focus stacks and panoramas are never flagged or rated.",
+				text_color = LrColor(0.5, 0.5, 0.5),
 			}),
 		}),
 	})
@@ -102,13 +166,77 @@ local function showCullDialog(ctx)
 	prefs.cullTimeDeltaSeconds = props.timeDeltaSeconds
 	prefs.cullPreset = props.cullingPreset
 	prefs.cullCreateDuplicatesCollection = props.createDuplicatesCollection
+	prefs.cullStrength = props.cullStrength
+	prefs.cullFlagPicks = props.flagPicks
+	prefs.cullFlagRejects = props.flagRejects
+	prefs.cullOverwriteUserMarks = props.overwriteUserMarks
+	prefs.cullRateByDecision = props.rateByDecision
+	prefs.cullLabelStrongMoment = props.labelStrongMoment
 
 	return {
 		scope = props.scope,
 		timeDeltaSeconds = props.timeDeltaSeconds,
 		cullingPreset = props.cullingPreset,
 		createDuplicatesCollection = props.createDuplicatesCollection,
+		cullStrength = props.cullStrength,
+		flagPicks = props.flagPicks,
+		flagRejects = props.flagRejects,
+		overwriteUserMarks = props.overwriteUserMarks,
+		rateByDecision = props.rateByDecision,
+		labelStrongMoment = props.labelStrongMoment,
 	}
+end
+
+---
+-- What the catalog holds now for the photos a cull touched — flag, stars and
+-- colour label — plus what the last cull wrote (`cullWritten`), by photo ID.
+-- `Util.cullFlagPlan` compares the two to tell the cull's own marks from the
+-- photographer's.
+--
+-- One batched read; falls back to per-photo reads if the batch call fails, as
+-- `PhotoSelector` does, so a read error degrades to slower rather than to
+-- "no flags applied".
+-- @return table photoId -> { pickStatus, rating, colorNameForLabel }
+local function currentFlagsByPhotoId(catalog, photoById)
+	local photos = {}
+	local idByPhoto = {}
+	for photoId, photo in pairs(photoById) do
+		table.insert(photos, photo)
+		idByPhoto[photo] = photoId
+	end
+	local keys = { "pickStatus", "rating", "colorNameForLabel" }
+	local current = {}
+	local ok, batch = LrTasks.pcall(function()
+		return catalog:batchGetRawMetadata(photos, keys)
+	end)
+	if ok and type(batch) == "table" then
+		for photo, values in pairs(batch) do
+			local photoId = idByPhoto[photo]
+			if photoId and type(values) == "table" then
+				current[photoId] = values
+			end
+		end
+	else
+		log:warn("batchGetRawMetadata failed before applying cull flags; reading per photo: " .. tostring(batch))
+		for photoId, photo in pairs(photoById) do
+			current[photoId] = {
+				pickStatus = photo:getRawMetadata("pickStatus"),
+				rating = photo:getRawMetadata("rating"),
+				colorNameForLabel = photo:getRawMetadata("colorNameForLabel"),
+			}
+		end
+	end
+	-- What the last cull wrote. Read per photo with `noThrow`: a catalog that
+	-- never saw this field (older plugin) simply has nothing recorded, which
+	-- makes every existing mark the photographer's — the safe reading.
+	for photoId, photo in pairs(photoById) do
+		local okProp, written = LrTasks.pcall(function()
+			return photo:getPropertyForPlugin(_PLUGIN, "cullWritten", nil, true)
+		end)
+		current[photoId] = current[photoId] or {}
+		current[photoId].written = Util.cullWrittenDecode(okProp and written or nil)
+	end
+	return current
 end
 
 local function dedupePhotoIds(photoIds)
@@ -140,17 +268,20 @@ local function photosFromIds(photoIds, photoById, missing)
 end
 
 ---
--- Runs the fast cull-only ingest for photos the backend has no culling data
--- for. Sends `tasks = {"cull"}`, which computes exactly what culling reads —
--- pHash, image metrics and face quality — and skips the SigLIP2 embedding and
--- the LLM. That is the difference between seconds and tens of minutes on a
--- freshly imported shoot.
+-- Runs the fast cull ingest for photos the backend is missing culling data
+-- for. `tasks` comes from `Util.cullPrepTasks`: `{"cull"}` computes exactly
+-- what technical culling reads — pHash, image metrics and face quality — and
+-- skips the SigLIP2 embedding and the LLM. That is the difference between
+-- seconds and tens of minutes on a freshly imported shoot. A preset that
+-- judges the moment adds `embeddings`, because the moment is read from it;
+-- still no LLM.
 --
 -- Originals are sent by path when the backend is on this machine; otherwise
 -- each photo is exported to a temporary JPEG and uploaded, and the temp file
 -- is removed afterwards.
+-- @param tasks table Index tasks to send.
 -- @return number|nil processed count, string|nil error, string|nil warnings
-local function cullPrepare(missingIds, photoById, progressScope)
+local function cullPrepare(missingIds, photoById, progressScope, tasks)
 	local total = #missingIds
 	local processed = 0
 	local failures = 0
@@ -193,10 +324,25 @@ local function cullPrepare(missingIds, photoById, progressScope)
 	-- Sharing one table across the loop would give every photo the first one's
 	-- compensation.
 	local function indexOptionsFor(photo)
-		local indexOptions = { tasks = { "cull" }, regenerate_metadata = false }
+		local indexOptions = {
+			tasks = tasks,
+			regenerate_metadata = false,
+			-- The exported JPEG is named after the photo but is not the photo.
+			original_filename = photo:getFormattedMetadata("fileName"),
+		}
 		local exposureBias = photo:getRawMetadata("exposureBias")
 		if type(exposureBias) == "number" then
 			indexOptions.exposure_bias = exposureBias
+		end
+		-- The capture time is what burst grouping runs on. This path used to
+		-- leave it out, so every photo it prepared was undated to the backend
+		-- and the grouper matched it against the whole selection by hash and
+		-- embedding alone: on a real ceremony that chained 123 frames into one
+		-- group with a single pick. Same fields as Analyze & Index sends.
+		local datetime = photo:getRawMetadata("dateTime")
+		if type(datetime) == "number" then
+			indexOptions.date_time = LrDate.timeToW3CDate(datetime)
+			indexOptions.date_time_unix = LrDate.timeToPosixDate(datetime)
 		end
 		return indexOptions
 	end
@@ -232,7 +378,7 @@ local function cullPrepare(missingIds, photoById, progressScope)
 		return false
 	end
 
-	-- `tasks = {"cull"}` never reaches an LLM, so the group is sized for the
+	-- The prep tasks never reach an LLM, so the group is sized for the
 	-- server's decode throughput rather than a context window. Grouping only
 	-- pays off when the backend reads the originals itself; the upload path
 	-- still sends one exported JPEG at a time.
@@ -280,7 +426,7 @@ local function cullPrepare(missingIds, photoById, progressScope)
 					)
 				end
 				local ok, response = SearchIndexAPI.analyzeAndIndexPhotosByReference(entries, {
-					tasks = { "cull" },
+					tasks = tasks,
 					regenerate_metadata = false,
 				})
 				-- A transport-level failure has no per-photo detail, so every
@@ -350,13 +496,6 @@ local function cullPrepare(missingIds, photoById, progressScope)
 	return processed, nil, combinedWarnings
 end
 
-local function joinReasonCodes(reasonCodes)
-	if type(reasonCodes) ~= "table" or #reasonCodes == 0 then
-		return ""
-	end
-	return table.concat(reasonCodes, ", ")
-end
-
 local function formatMetric(value)
 	if type(value) ~= "number" then
 		return tostring(value or "")
@@ -383,12 +522,14 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+					"info"
 				)
 			end
 			return
@@ -413,7 +554,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/CullTask/NoPhotoIdsTitle=No usable photos"),
 				LOC(
 					"$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=None of the selected photos could be prepared for culling."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -422,33 +564,54 @@ LrTasks.startAsyncTask(function()
 		-- unanalyzed folder used to come back as an empty result with no
 		-- explanation. Ask first, and offer the fast cull-only ingest, which
 		-- computes just what culling reads (pHash, image metrics, face quality)
-		-- and skips the embedding and the LLM entirely.
-		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, { "cull" })
+		-- and skips the LLM entirely. Presets that judge the moment also need
+		-- the embedding, so a photo culled before with the default preset
+		-- counts as unprepared for them.
+		local prepTasks = Util.cullPrepTasks(options.cullingPreset)
+		local judgesMoment = Util.cullPresetJudgesMoment(options.cullingPreset)
+		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, prepTasks)
 		if missingErr then
 			log:warn("Cull pre-flight check failed, continuing anyway: " .. tostring(missingErr))
 		elseif missing and #missing > 0 then
-			local answer = LrDialogs.confirm(
-				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepTitle=Some photos need preparing"),
-				LOC(
+			local prepMessage, skipVerb
+			if judgesMoment then
+				prepMessage = string.format(
+					"%d of %d selected photos are not fully prepared for this preset. Prepare them now?\n\n"
+						.. "This computes the culling signals and the image analysis the moment "
+						.. "(emotion, expression, action) is judged from. It takes longer than the culling "
+						.. "signals alone, but no AI descriptions are generated. Without it, photos with no "
+						.. "culling data are skipped and the rest are ranked without their moment.",
+					#missing,
+					#photoIds
+				)
+				skipVerb = "Cull without preparing"
+			else
+				prepMessage = LOC(
 					"$$$/LrGeniusAI/CullTask/NeedsPrepMessage=^1 of ^2 selected photos have no culling data yet and would be skipped. Prepare them now? This only computes culling signals, so it is much faster than a full Analyze & Index.",
 					tostring(#missing),
 					tostring(#photoIds)
-				),
+				)
+				skipVerb = LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
+			end
+			local answer = LrDialogs.confirm(
+				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepTitle=Some photos need preparing"),
+				prepMessage,
 				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepPrepare=Prepare now"),
-				LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
+				skipVerb
 			)
 			if answer == "ok" then
 				-- Same gate as Analyze & Index, for the same reason: the prep
-				-- pass scores face quality, and without the face model it
-				-- produces photos culling can only grade on technical metrics.
-				if not SearchIndexAPI.confirmModelsReadyForTasks({ "cull" }) then
+				-- pass scores face quality, and for a moment preset reads the
+				-- image model too. Without either it produces photos culling
+				-- can only grade on technical metrics.
+				if not SearchIndexAPI.confirmModelsReadyForTasks(prepTasks) then
 					return
 				end
 				local prepScope = LrProgressScope({
 					title = LOC("$$$/LrGeniusAI/CullTask/PrepProgressTitle=Preparing photos for culling..."),
 					functionContext = context,
 				})
-				local prepared, prepErr, prepWarnings = cullPrepare(missing, photoById, prepScope)
+				local prepared, prepErr, prepWarnings = cullPrepare(missing, photoById, prepScope, prepTasks)
 				prepScope:done()
 				if prepErr then
 					ErrorHandler.handleError(LOC("$$$/LrGeniusAI/CullTask/PrepErrorTitle=Preparation failed"), prepErr)
@@ -480,6 +643,7 @@ LrTasks.startAsyncTask(function()
 			clip_threshold = "auto",
 			time_delta_seconds = options.timeDeltaSeconds,
 			culling_preset = options.cullingPreset,
+			reject_margin_scale = Util.cullRejectMarginScale(options.cullStrength),
 		})
 		local groups = cullResult and cullResult.groups or nil
 		local summary = (cullResult and cullResult.summary) or {}
@@ -495,10 +659,14 @@ LrTasks.startAsyncTask(function()
 			return
 		end
 
-		if cullResult and cullResult.warning then
+		-- Every caveat the backend raised, not just the first: a skipped photo
+		-- and an unjudged moment have different fixes.
+		local cullWarnings = Util.responseWarnings(cullResult)
+		if #cullWarnings > 0 then
+			log:warn("Culling warnings: " .. table.concat(cullWarnings, " | "))
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/BackendWarning=Culling warning"),
-				cullResult.warning,
+				Util.formatWarningList(cullWarnings),
 				"warning"
 			)
 		end
@@ -506,7 +674,8 @@ LrTasks.startAsyncTask(function()
 		if #groups == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/CullTask/NoGroupsTitle=No groups found"),
-				LOC("$$$/LrGeniusAI/CullTask/NoGroupsMessage=The selected photos could not be grouped for culling.")
+				LOC("$$$/LrGeniusAI/CullTask/NoGroupsMessage=The selected photos could not be grouped for culling."),
+				"info"
 			)
 			return
 		end
@@ -558,6 +727,14 @@ LrTasks.startAsyncTask(function()
 			end
 		end
 
+		-- Collections are review queues, so they are filled in score order:
+		-- picks and alternates best first, reject candidates worst first.
+		-- Lightroom shows that order under the Custom Order sort.
+		local scores = Util.cullScoresById(groups)
+		picksIds = Util.cullSortByScore(picksIds, scores)
+		alternateIds = Util.cullSortByScore(alternateIds, scores)
+		rejectIds = Util.cullSortByScore(rejectIds, scores, true)
+
 		-- Photo IDs the backend grouped but this catalog no longer has. They are
 		-- collected rather than only logged, so the completion dialog can say
 		-- how much of the selection the collections are missing (#375).
@@ -574,77 +751,114 @@ LrTasks.startAsyncTask(function()
 		local picksCollection = nil
 
 		local cullDataByPhotoId = {}
+		-- Reject candidates that had their group's strongest moment. The
+		-- usable gate demoted them for a flaw no edit repairs, which is usually
+		-- right, but a blurred winning goal is still the user's call to delete.
+		local strongMomentRejects = 0
 		for _, group in ipairs(groups) do
 			local groupId = tostring(group["group_id"] or "")
-			local groupType = tostring(group["group_type"] or "")
 			local groupPhotos = group["photos"] or {}
 			for _, photoResult in ipairs(groupPhotos) do
 				local photoId = photoResult["photo_id"]
 				if photoId then
-					local metrics = photoResult["metrics"] or {}
-					local decision = "alternate"
-					if photoResult["winner"] then
-						decision = "pick"
-					elseif photoResult["reject_candidate"] then
-						decision = "reject_candidate"
+					local decision = Util.cullDecisionOf(photoResult)
+					if
+						decision == "reject_candidate"
+						and Util.table_contains(photoResult["reason_codes"] or {}, "strong_moment_but_unusable")
+					then
+						strongMomentRejects = strongMomentRejects + 1
 					end
 					cullDataByPhotoId[photoId] = {
 						decision = decision,
 						groupId = groupId,
-						groupType = groupType,
 						groupRank = tostring(photoResult["rank"] or ""),
-						groupWinner = photoResult["winner"] and "true" or "false",
 						score = formatMetric(photoResult["cull_score"]),
-						reasonCodes = joinReasonCodes(photoResult["reason_codes"]),
 						explanation = tostring(photoResult["explanation"] or ""),
-						sharpness = formatMetric(metrics["sharpness"]),
-						exposure = formatMetric(metrics["exposure"]),
-						noise = formatMetric(metrics["noise"]),
-						technicalScore = formatMetric(metrics["technical_score"]),
-						aesthetic = formatMetric(metrics["aesthetic"]),
-						faceCount = tostring(metrics["face_count"] or ""),
-						faceSharpness = formatMetric(metrics["face_sharpness"]),
-						faceProminence = formatMetric(metrics["face_prominence"]),
-						faceVisibility = formatMetric(metrics["face_visibility"]),
-						faceScore = formatMetric(metrics["face_score"]),
-						occlusion = formatMetric(metrics["occlusion"]),
-						eyeOpenness = formatMetric(metrics["eye_openness"]),
-						blinkPenalty = formatMetric(metrics["blink_penalty"]),
 					}
 				end
 			end
 		end
 
-		catalog:withPrivateWriteAccessDo(function()
+		-- `with*WriteAccessDo` returns "aborted" (without throwing) when the
+		-- catalog could not be locked within the timeout, so every write block
+		-- here checks its return value instead of assuming it ran.
+		local metadataWrite = catalog:withPrivateWriteAccessDo(function()
 			for photoId, cullData in pairs(cullDataByPhotoId) do
 				local photo = photoById[photoId]
 				if photo then
 					photo:setPropertyForPlugin(_PLUGIN, "cullDecision", cullData.decision)
 					photo:setPropertyForPlugin(_PLUGIN, "cullGroupId", cullData.groupId)
-					photo:setPropertyForPlugin(_PLUGIN, "cullGroupType", cullData.groupType)
 					photo:setPropertyForPlugin(_PLUGIN, "cullGroupRank", cullData.groupRank)
-					photo:setPropertyForPlugin(_PLUGIN, "cullGroupWinner", cullData.groupWinner)
 					photo:setPropertyForPlugin(_PLUGIN, "cullScore", cullData.score)
-					photo:setPropertyForPlugin(_PLUGIN, "cullReasonCodes", cullData.reasonCodes)
 					photo:setPropertyForPlugin(_PLUGIN, "cullExplanation", cullData.explanation)
-					photo:setPropertyForPlugin(_PLUGIN, "cullSharpness", cullData.sharpness)
-					photo:setPropertyForPlugin(_PLUGIN, "cullExposure", cullData.exposure)
-					photo:setPropertyForPlugin(_PLUGIN, "cullNoise", cullData.noise)
-					photo:setPropertyForPlugin(_PLUGIN, "cullTechnicalScore", cullData.technicalScore)
-					photo:setPropertyForPlugin(_PLUGIN, "cullAesthetic", cullData.aesthetic)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceCount", cullData.faceCount)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceSharpness", cullData.faceSharpness)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceProminence", cullData.faceProminence)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceVisibility", cullData.faceVisibility)
-					photo:setPropertyForPlugin(_PLUGIN, "cullFaceScore", cullData.faceScore)
-					photo:setPropertyForPlugin(_PLUGIN, "cullOcclusion", cullData.occlusion)
-					photo:setPropertyForPlugin(_PLUGIN, "cullEyeOpenness", cullData.eyeOpenness)
-					photo:setPropertyForPlugin(_PLUGIN, "cullBlinkPenalty", cullData.blinkPenalty)
 				end
 			end
 		end, Defaults.catalogWriteAccessOptions)
+		local metadataAborted = metadataWrite == "aborted"
+		if metadataAborted then
+			log:error("Writing culling metadata was aborted: the catalog was busy")
+		end
 
-		catalog:withWriteAccessDo("Create culling collections", function()
+		-- Flags, stars and labels: the result in the form a photographer culls
+		-- with, so the filter bar and Photo > Delete Rejected Photos work on it
+		-- directly. One write-access block, so one Cmd/Ctrl+Z undoes the lot.
+		-- The plan is computed first, from what the catalog holds now, so that
+		-- the photographer's own flags survive a re-run.
+		local flagCounts
+		local flagsFailed
+		if options.flagPicks or options.flagRejects or options.rateByDecision or options.labelStrongMoment then
+			local current = currentFlagsByPhotoId(catalog, photoById)
+			local plan
+			plan, flagCounts = Util.cullFlagPlan(groups, {
+				flagPicks = options.flagPicks,
+				flagRejects = options.flagRejects,
+				overwriteUserMarks = options.overwriteUserMarks,
+				rateByDecision = options.rateByDecision,
+				labelStrongMoment = options.labelStrongMoment,
+			}, current)
+			local hasChanges = next(plan) ~= nil
+			if hasChanges then
+				local ok, writeResult = LrTasks.pcall(function()
+					return catalog:withWriteAccessDo("Apply culling flags and ratings", function()
+						for photoId, change in pairs(plan) do
+							local photo = photoById[photoId]
+							if photo then
+								if change.pickStatus ~= nil then
+									photo:setRawMetadata("pickStatus", change.pickStatus)
+								end
+								if change.rating ~= nil then
+									-- `false` clears: a rating of nil is "no stars".
+									photo:setRawMetadata("rating", change.rating or nil)
+								end
+								if change.colorNameForLabel ~= nil then
+									if change.colorNameForLabel then
+										photo:setRawMetadata("colorNameForLabel", change.colorNameForLabel)
+									else
+										-- An empty label text removes the label.
+										photo:setRawMetadata("label", "")
+									end
+								end
+								if change.written ~= nil then
+									-- Ownership record, in the same undo step as the marks.
+									photo:setPropertyForPlugin(_PLUGIN, "cullWritten", change.written)
+								end
+							end
+						end
+					end, Defaults.catalogWriteAccessOptions)
+				end)
+				if not ok then
+					flagsFailed = tostring(writeResult)
+				elseif writeResult == "aborted" then
+					flagsFailed = "the catalog was busy and the write timed out"
+				end
+				if flagsFailed then
+					flagCounts = nil
+					log:error("Applying cull flags failed: " .. flagsFailed)
+				end
+			end
+		end
+
+		local collectionsWrite = catalog:withWriteAccessDo("Create culling collections", function()
 			resultSet = catalog:createCollectionSet(
 				LOC("$$$/LrGeniusAI/CullTask/ResultSet=Culling Results @ ^1", timestamp),
 				nil,
@@ -678,6 +892,15 @@ LrTasks.startAsyncTask(function()
 			end
 		end, Defaults.catalogWriteAccessOptions)
 
+		if collectionsWrite == "aborted" then
+			ErrorHandler.handleError(
+				LOC("$$$/LrGeniusAI/CullTask/ErrorTitle=Culling failed"),
+				"The result collections could not be created: the catalog was busy and the write timed out. "
+					.. "Nothing else was changed by this step; run the cull again."
+			)
+			return
+		end
+
 		if picksCollection then
 			catalog:setActiveSources({ picksCollection })
 			LrApplicationView.gridView()
@@ -703,6 +926,32 @@ LrTasks.startAsyncTask(function()
 					tostring(setGroups),
 					tostring(summary.intentional_set_photo_count or #setPhotos)
 				)
+		end
+
+		if strongMomentRejects > 0 then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. string.format(
+					"%d reject candidate(s) had the strongest moment of their group but a technical flaw such as blur. Look at them before deleting: the reason is under 'Culling explanation' in the Metadata panel.",
+					strongMomentRejects
+				)
+		end
+
+		for _, line in ipairs(Util.cullFlagSummaryLines(flagCounts)) do
+			completionMessage = completionMessage .. "\n\n" .. line
+		end
+		if flagsFailed then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. "The flags, ratings and labels could not be written: "
+				.. flagsFailed
+				.. "\nThe collections above are complete; apply the flags from them by hand or run the cull again."
+		end
+		if metadataAborted then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. "The culling decision, score and explanation could not be written to the Metadata panel: "
+				.. "the catalog was busy and the write timed out. Run the cull again to fill them in."
 		end
 
 		-- Photos that fell out of the run rather than being culled: no usable
@@ -732,6 +981,6 @@ LrTasks.startAsyncTask(function()
 				.. ")."
 		end
 
-		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage)
+		LrDialogs.message(LOC("$$$/LrGeniusAI/CullTask/CompletionTitle=Culling Complete"), completionMessage, "info")
 	end)
 end)

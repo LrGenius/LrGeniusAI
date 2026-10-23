@@ -1,0 +1,20 @@
+#!/bin/sh
+# launchd starts this file directly so macOS can use "LrGeniusAI" as the
+# unsigned background item's name instead of the shell interpreter's name.
+# Keep this filename and the path in com.lrgenius.server.plist in sync.
+
+# Redirect here rather than using launchd's StandardOutPath/StandardErrorPath:
+# if /Library/Logs/LrGeniusAI was deleted, a user LaunchAgent cannot recreate
+# it and launchd would refuse to start the server. Fall back to the user's
+# log directory, or /dev/null if neither directory is writable.
+LOG=
+for d in /Library/Logs/LrGeniusAI "$HOME/Library/Logs/LrGeniusAI"; do
+    mkdir -p "$d" 2>/dev/null
+    if [ -w "$d" ]; then
+        LOG="$d/service.log"
+        break
+    fi
+done
+
+# exec preserves the PID watched by launchd, including KeepAlive behavior.
+exec /Applications/LrGeniusAI/Server/lrgenius-server >>"${LOG:-/dev/null}" 2>&1

@@ -32,6 +32,8 @@ Only **raw and DNG** files are saved. JPEGs, TIFFs and other formats in the chos
 
 A short name for this set of training examples (e.g. `wedding_airy`, `street_bw`, `landscape_dramatic`). Use the same label when saving multiple sessions of a consistent style.
 
+The field's drop-down menu offers the labels you used before, so the next session of the same style can reuse its label exactly instead of a near-miss spelling that would read as a second style.
+
 ### Description (optional)
 
 A free-text summary of what this edit style represents. Helps the AI understand when to apply it.
@@ -59,6 +61,12 @@ Matching runs on image similarity, so a training photo has to have been indexed
 with **Enable smart photo search** for it to be findable. Saving an example for
 a photo without an embedding still works, but that example will never be
 retrieved — the plugin shows a warning when this happens.
+
+When LrGeniusAI switches to a new AI search model, examples saved with the old
+one can no longer be compared with your photos. If that applies to all of your
+examples, the edit tells you so — save them again with **Save Edits as AI
+Training Examples** (it replaces the old ones). The photo being edited has to be
+indexed with the new model too.
 
 The same applies to the photo being edited: if it is not indexed, there is no
 embedding to compare your saved edits against. The backend then falls back to

@@ -13,6 +13,14 @@ OnboardingWizard = {}
 -- on disk, so this is where the user is told to fetch them rather than
 -- discovering the empty state later from a greyed-out feature.
 --
+-- The first tab also asks for a catalog backup before anything runs (#397):
+-- Lightroom counts every write LrGeniusAI makes to a photo as an edit, so the
+-- photo's Edit Date moves to the time of the run and no SDK call sets it back.
+-- A backup made beforehand is the only way to recover the old dates.
+--
+local BACKUP_HELP_URL =
+	"https://github.com/LrGenius/LrGeniusAI/wiki/Getting-Started#before-you-start-back-up-your-catalog"
+
 function OnboardingWizard.show(manualTrigger)
 	LrTasks.startAsyncTask(function()
 		LrFunctionContext.callWithContext("OnboardingWizard", function(context)
@@ -23,9 +31,8 @@ function OnboardingWizard.show(manualTrigger)
 			propertyTable.assetsReady = false
 			propertyTable.assetsSizeText = ""
 			propertyTable.useClip = prefs.useClip or false
-			propertyTable.geminiApiKey = prefs.geminiApiKey or ""
-			propertyTable.chatgptApiKey = prefs.chatgptApiKey or ""
-			propertyTable.anthropicApiKey = prefs.anthropicApiKey or ""
+			local loadedApiKeys =
+				Secrets.loadInto(propertyTable, { "geminiApiKey", "chatgptApiKey", "anthropicApiKey" })
 			LocalModelCatalog.initFields(propertyTable)
 
 			local f = LrView.osFactory()
@@ -169,6 +176,47 @@ function OnboardingWizard.show(manualTrigger)
 								),
 								width_in_chars = 60,
 								wrap = true,
+							}),
+						}),
+
+						f:group_box({
+							title = "Before you start: back up your catalog",
+							fill_horizontal = 1,
+							f:static_text({
+								title = "LrGeniusAI writes its results into your Lightroom catalog —\n"
+									.. "keywords, titles, captions and its own fields. Lightroom counts\n"
+									.. "each of these as an edit, so every photo LrGeniusAI processes\n"
+									.. "gets the time of the run as its Edit Date. Smart collections that\n"
+									.. "use Edit Date will include those photos, and the old date cannot\n"
+									.. "be set back.\n"
+									.. "\n"
+									.. 'With "Automatically write changes into XMP" turned on in Catalog\n'
+									.. "Settings, Lightroom also writes the new metadata into XMP sidecars\n"
+									.. "and DNG/JPEG files, so cloud or NAS sync will upload them again.\n"
+									.. "\n"
+									.. "Back up your catalog before the first run, and start with a few\n"
+									.. "photos.\n"
+									.. "\n"
+									.. "LrGeniusAI comes without any warranty. AI results can be wrong:\n"
+									.. "check keywords, captions, species and edits before you rely on\n"
+									.. "them. With a cloud AI provider, photo previews and metadata are\n"
+									.. "sent to that provider under its terms.",
+								width_in_chars = 60,
+							}),
+							f:spacer({ height = 5 }),
+							f:row({
+								f:push_button({
+									title = "How to back up",
+									action = function()
+										LrHttp.openUrlInBrowser(BACKUP_HELP_URL)
+									end,
+								}),
+								f:push_button({
+									title = "Disclaimer",
+									action = function()
+										LrHttp.openUrlInBrowser(Defaults.disclaimerUrl)
+									end,
+								}),
 							}),
 						}),
 
@@ -414,7 +462,7 @@ function OnboardingWizard.show(manualTrigger)
 									alignment = "right",
 									width = share("providerLabel"),
 								}),
-								f:edit_field({ value = bind("anthropicApiKey"), width_in_chars = 36 }),
+								f:password_field({ value = bind("anthropicApiKey"), width_in_chars = 36 }),
 								f:push_button({
 									title = "Get key",
 									action = function()
@@ -443,15 +491,14 @@ function OnboardingWizard.show(manualTrigger)
 			if result == "cancel" then
 				LrDialogs.message(
 					"Setup canceled",
-					"Your API keys were not saved. Run LrGeniusAI Setup again from the Plug-in Manager when you are ready."
+					"Your API keys were not saved. Run LrGeniusAI Setup again from the Plug-in Manager when you are ready.",
+					"info"
 				)
 			elseif result == "ok" or result == "other" then
 				prefs.onboardingCompleted = true
 				if result == "ok" then
 					-- Save settings
-					prefs.geminiApiKey = propertyTable.geminiApiKey
-					prefs.chatgptApiKey = propertyTable.chatgptApiKey
-					prefs.anthropicApiKey = propertyTable.anthropicApiKey
+					Secrets.saveChanged(propertyTable, loadedApiKeys)
 					prefs.useClip = propertyTable.useClip
 					log:info("Onboarding wizard completed with OK.")
 				else

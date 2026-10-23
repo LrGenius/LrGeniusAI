@@ -125,26 +125,51 @@ pub struct LocalModel {
     pub alias: Option<String>,
 }
 
-/// `true` if `dir` looks like an MLX model snapshot.
+/// `true` if `dir` looks like an MLX model snapshot the engine can chat with.
 ///
 /// `config.json` plus at least one safetensors shard is the minimum any of the
 /// factories in mlx-swift-lm can load. Checking for the weights as well as the
 /// config matters: an interrupted download leaves the small JSON files behind
 /// long before the multi-gigabyte shards arrive, and offering that as a
 /// loadable model produces a baffling failure minutes later.
+///
+/// The chat template is what tells a language model from the other Hugging
+/// Face models with the same layout. The search model's export script leaves
+/// `google/siglip2-so400m-patch16-naflex` in the Hugging Face cache, which
+/// discovery scans, and it showed up in the model dropdown. `assess_mlx`
+/// refuses a repo without a template for the same reason: the engine cannot
+/// turn a request into a prompt without one.
 #[must_use]
 pub fn is_model_dir(dir: &Path) -> bool {
     if !dir.join("config.json").is_file() {
         return false;
     }
-    std::fs::read_dir(dir).is_ok_and(|entries| {
+    let has_weights = std::fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry
                 .path()
                 .extension()
                 .is_some_and(|extension| extension == "safetensors")
         })
-    })
+    });
+    has_weights && has_chat_template(dir)
+}
+
+/// The same three places `hf_repo::assess_mlx` accepts a template from.
+fn has_chat_template(dir: &Path) -> bool {
+    /// Only the one field; the rest of the file (a megabyte of added tokens,
+    /// for Gemma) is skipped without being built into a tree.
+    #[derive(serde::Deserialize)]
+    struct TokenizerConfig {
+        chat_template: Option<serde::de::IgnoredAny>,
+    }
+    if dir.join("chat_template.jinja").is_file() || dir.join("chat_template.json").is_file() {
+        return true;
+    }
+    std::fs::read(dir.join("tokenizer_config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<TokenizerConfig>(&bytes).ok())
+        .is_some_and(|config| config.chat_template.is_some())
 }
 
 /// `true` for a directory discovery must never offer: a download still being
@@ -411,8 +436,16 @@ mod tests {
         }
     }
 
+    /// The smallest directory [`is_model_dir`] accepts.
+    fn write_model(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("config.json"), "{}").unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"w").unwrap();
+        std::fs::write(dir.join("chat_template.jinja"), "{{ messages }}").unwrap();
+    }
+
     #[test]
-    fn a_directory_needs_both_a_config_and_weights_to_count() {
+    fn a_directory_needs_a_config_weights_and_a_chat_template_to_count() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("model");
         std::fs::create_dir_all(&dir).unwrap();
@@ -425,7 +458,94 @@ mod tests {
         );
 
         std::fs::write(dir.join("model.safetensors"), b"weights").unwrap();
+        assert!(
+            !is_model_dir(&dir),
+            "weights without a chat template cannot be prompted"
+        );
+
+        std::fs::write(dir.join("chat_template.jinja"), "{{ messages }}").unwrap();
         assert!(is_model_dir(&dir));
+    }
+
+    /// What the search model's export script leaves in the Hugging Face cache:
+    /// the same layout as a language model, a tokenizer, but no template.
+    #[test]
+    fn an_image_encoder_in_the_hugging_face_cache_is_not_offered() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp
+            .path()
+            .join("models--google--siglip2-so400m-patch16-naflex");
+        let snapshot = repo.join("snapshots").join("abc123");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(
+            snapshot.join("config.json"),
+            r#"{"architectures": ["Siglip2Model"], "model_type": "siglip2"}"#,
+        )
+        .unwrap();
+        std::fs::write(snapshot.join("model.safetensors"), b"w").unwrap();
+        std::fs::write(snapshot.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(
+            snapshot.join("tokenizer_config.json"),
+            r#"{"model_max_length": 64}"#,
+        )
+        .unwrap();
+
+        let gemma = temp
+            .path()
+            .join("models--mlx-community--gemma-4-e4b-it-4bit")
+            .join("snapshots")
+            .join("def456");
+        write_model(&gemma);
+
+        let found = hf_cache_models(temp.path());
+        let names: Vec<_> = found.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["gemma-4-e4b-it-4bit"]);
+    }
+
+    #[test]
+    fn a_chat_template_counts_wherever_assess_mlx_accepts_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = |name: &str, file: &str, contents: &str| {
+            let dir = temp.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("config.json"), "{}").unwrap();
+            std::fs::write(dir.join("model.safetensors"), b"w").unwrap();
+            std::fs::write(dir.join(file), contents).unwrap();
+            dir
+        };
+        assert!(is_model_dir(&model(
+            "jinja",
+            "chat_template.jinja",
+            "{{ m }}"
+        )));
+        assert!(is_model_dir(&model(
+            "json",
+            "chat_template.json",
+            r#"{"chat_template": "{{ m }}"}"#
+        )));
+        assert!(is_model_dir(&model(
+            "tokenizer",
+            "tokenizer_config.json",
+            r#"{"chat_template": "{{ m }}", "added_tokens_decoder": {"0": {"content": "<pad>"}}}"#
+        )));
+        // Named templates, as some repos ship them.
+        assert!(is_model_dir(&model(
+            "named",
+            "tokenizer_config.json",
+            r#"{"chat_template": [{"name": "default", "template": "{{ m }}"}]}"#
+        )));
+        assert!(
+            !is_model_dir(&model(
+                "null",
+                "tokenizer_config.json",
+                r#"{"chat_template": null}"#
+            )),
+            "a null template is no template"
+        );
+        assert!(
+            !is_model_dir(&model("broken", "tokenizer_config.json", "{not json")),
+            "an unreadable tokenizer config is no template"
+        );
     }
 
     #[test]
@@ -437,9 +557,7 @@ mod tests {
             .join("models--mlx-community--gemma-4-e4b-it-4bit")
             .join("snapshots")
             .join("abc123");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("config.json"), "{}").unwrap();
-        std::fs::write(nested.join("model.safetensors"), b"w").unwrap();
+        write_model(&nested);
 
         let found = model_dirs_in(temp.path(), 3);
         assert_eq!(found, vec![nested]);
@@ -453,19 +571,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let outer = temp.path().join("outer");
         let inner = outer.join("inner");
-        std::fs::create_dir_all(&inner).unwrap();
         for dir in [&outer, &inner] {
-            std::fs::write(dir.join("config.json"), "{}").unwrap();
-            std::fs::write(dir.join("model.safetensors"), b"w").unwrap();
+            write_model(dir);
         }
 
         assert_eq!(model_dirs_in(temp.path(), 3), vec![outer]);
-    }
-
-    fn write_model(dir: &Path) {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("config.json"), "{}").unwrap();
-        std::fs::write(dir.join("model.safetensors"), b"w").unwrap();
     }
 
     /// A name with a dot in it used to stage into `<prefix>.part`, so two such
