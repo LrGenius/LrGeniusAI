@@ -4,6 +4,42 @@ The `geniusai-server` exposes a REST API over HTTP (default port 19819). All res
 
 This reference is intended for developers integrating with or extending the backend. Regular users interact through the Lightroom plugin and do not need to call these endpoints directly.
 
+## Access
+
+Every request needs the backend's **access token** as
+`Authorization: Bearer <token>`. Without it, or with another one, the answer is
+a **403** with `"error_code": "api_token"` (the status alone would be ambiguous:
+the agent bridge answers 401 for a session that has to register again). The
+check sits in front of the whole app (`lrg_api::api_auth`), outside the router
+the MCP tools and the chat call in-process.
+
+- **Where the token comes from.** The backend makes it once and keeps it in a
+  file only the user can read: `~/Library/Application Support/LrGeniusAI/api-token`
+  on macOS, `%USERPROFILE%\AppData\Local\LrGeniusAI\api-token` on Windows,
+  `$XDG_CONFIG_HOME/LrGeniusAI/api-token` (or `~/.config/…`) elsewhere
+  (`lrg_common::api_token`). `LRG_API_TOKEN` replaces the file with a fixed
+  token. `geniusai-server token` prints it; `geniusai-server token --new`
+  makes a new one, which a running backend uses once it restarts. The Docker
+  image keeps the file in its `/data` volume.
+- **How the plugin gets it.** For a backend on this computer it reads the
+  file (that it can is the proof of being the same user). For one elsewhere
+  the user pastes it under *Plug-in Manager → Backend Server → Access token*
+  (`Secrets.BACKEND_TOKEN`); a "local" address without a file, such as a
+  container's published port, falls back to that too. When the backend
+  refuses the token, the plugin reads the file once more and retries once
+  (a token made since), then tells the user what to do.
+- **Without the token:** `GET /ping`, `GET /version` and `POST /version/check`
+  (a plugin must learn what it is talking to, and that it is too old, before
+  it can get in), `/mcp` and `/v1/chat/*` (they check their own tokens), and
+  the HTML of `GET /v1/ui/people` and `GET /v1/ui/chat` (a browser cannot add
+  a header when it opens an address; the page takes the token from the
+  `#fragment` and sends it itself).
+- **Also refused, token or not:** a request from a page on another site (an
+  `Origin` that is not this server), and — when the backend listens only on
+  this computer (`GENIUSAI_HOST` is a loopback address, the default) — any
+  request whose `Host` does not name this computer, which is how a
+  DNS-rebinding page arrives.
+
 ---
 
 ## Server & Health
@@ -12,9 +48,28 @@ This reference is intended for developers integrating with or extending the back
 Minimal liveness check. Returns `{"status": "ok"}`.
 
 ### `GET /v1/server/health`
-Returns local model load state: `clip_model`/`clip_error` (SigLIP2) and
-`face_model`/`face_error` (YuNet/FaceNet), each `"loaded"`, `"not_loaded"`, or
-`"failed"`. It does **not** report cloud/local LLM provider availability —
+Returns local model load state. Each `*_model` field is `"loaded"`,
+`"not_loaded"`, or `"failed"`, with a matching `*_error` carrying the message
+when it is `"failed"`.
+
+| Field | What it covers |
+|---|---|
+| `clip_model` / `clip_error` | The SigLIP2 pair, as it has always been. `"failed"` if **either** tower failed, `"loaded"` if **either** is resident. |
+| `clip_image_model` / `clip_image_error` | The SigLIP2 **image** tower alone — what indexing and the training path embed with. |
+| `clip_text_model` / `clip_text_error` | The SigLIP2 **text** tower alone — what search, keyword lookup and the CLIP-IQA prompt sets embed with. |
+| `aesthetic_model` / `aesthetic_error` | AestheticSigLIP, the photo quality scorer. Its own backbone, loaded and idle-unloaded on its own clock. |
+| `face_model` / `face_error` | YuNet + FaceNet. |
+| `species_model` / `species_error` | BioCLIP 2. |
+
+The two SigLIP2 towers load and idle-unload **independently**, so an
+embeddings-only indexing run leaves `clip_image_model: "loaded"` and
+`clip_text_model: "not_loaded"`, and a semantic search does the opposite.
+`clip_model` is kept as the pair so that a client reading only that field still
+learns that something failed rather than missing a failure on the tower it does
+not ask about; the per-tower fields are additive and a server older than them
+does not send them.
+
+It does **not** report cloud/local LLM provider availability —
 the backend has no stored API keys or base URLs to probe on a bare GET. The
 plugin checks provider availability itself (stored keys, an Other AI server
 address, and whether `POST /v1/llm/providers/models` lists anything for the
@@ -72,6 +127,11 @@ Unloads heavy ML models from memory without shutting the server down (useful to 
 
 ### `POST /update/apply`
 Triggers an in-place backend self-update from the latest GitHub release.
+Loopback-only. The caller supplies the manifest, so its checksums say nothing
+about where the files come from: a binary URL other than
+`https://github.com/LrGenius/LrGeniusAI/releases/download/…` is a **403**, a
+plugin file from anywhere but `https://raw.githubusercontent.com/LrGenius/LrGeniusAI/…`
+or with a path that leaves the plugin folder is skipped with a warning.
 
 ---
 
@@ -96,12 +156,13 @@ Indexes a batch of photos sent as multipart file uploads. Generates embeddings a
 | `temperature` | float | Sampling temperature, default `0.1`. Only the local providers (`llamacpp`, `ollama`, `lmstudio`, `openai_compatible`) use it: OpenAI reasoning models get a fixed `1.0`, Anthropic and Gemini 3 are sent none, and MLX's guided generation samples on its own settings |
 | `reasoning_effort` | string | The plug-in's *Analysis depth*: `low` (default), `medium` or `high`. Sent as OpenAI `reasoning_effort`, Gemini `thinkingLevel` (3.x) or `thinkingBudget` (2.5), and Anthropic `output_config.effort` where the model lists that level; room for thinking (4096 / 8192 / 16384 tokens) is added to `max_tokens` for a model that thinks. Local providers ignore it. Any other value is a **400** naming it, not a silent fallback |
 | `generate_metadata` | bool | Generate keywords/title/caption/alt_text |
-| `create_embeddings` | bool | Create SigLIP2 semantic embeddings |
+| `create_embeddings` | bool | Create SigLIP2 semantic embeddings. Also scores the photo's aesthetic and names its genre (see the `aesthetic` task below) |
 | `detect_faces` | bool | Run face detection on the photo |
 | `regenerate` | bool | Re-process even if data already exists |
 | `replace_ss` | bool | Rewrite `ß` as `ss` in the generated title, caption, alt text and keywords. Applied after the model answers, and only to those fields — never to the filename |
 | `exposure_bias` | float | Exposure compensation in EV. Stored, and the decisive signal for culling's bracket detection. Omit when the camera did not record it; never default it to 0 |
 | `is_raw` | bool | Whether the original is raw. Stored on the photo so later work (style training above all) can keep raw and rendered originals apart. Omit when unknown |
+| `original_filename` | string | Single-photo upload only. The original file's name in the catalog (`018A0344.CR3`), for when the uploaded part is a rendition (`018A0344.jpg`). Stored and shown as the photo's `filename`; the part's own name still decides how the bytes are decoded. Ignored for a batch |
 | `extra_context` | object | Optional context hints (folder, date, GPS, keywords) |
 | `prompt` | string | The system prompt (the plug-in's "Instructions / Prompt" template). It *replaces* the built-in persona rather than extending it. Trimmed, and dropped when blank: a template the user emptied means "no persona of my own", so the built-in default applies instead of an empty system prompt. The edit routes read the same field the same way |
 | `existing_keywords` | string[] | The photo's keywords, *without* face tags. Only reaches the prompt when `submit_keywords` is set |
@@ -136,6 +197,16 @@ model only for small exported JPEGs, and silently vanished for anyone using
 
 `/v1/edit/recipe` and `/v1/edit/recipe/base64` accept the same
 `existing_keywords`/`existing_face_tags` pair, under the same switch.
+
+**Organism gate.** `species_prefilter` (default true) runs BioCLIP only on photos whose SigLIP2
+embedding scores at least `species_prefilter_threshold` on a fixed set of "is there an animal or
+plant" prompts; the rest are checked and stored as `rank = none`. The default threshold
+(`DEFAULT_SPECIES_PREFILTER_THRESHOLD`, 0.10) belongs to the current SigLIP2 model, because the score
+depends on how far apart that model puts the prompt pairs. It was 0.35 for the 384 center-crop model,
+where the same value would skip almost half of the identifiable photos on NaFlex. The NaFlex scores
+separate organisms from other photos less cleanly, so the gate is generous and a few non-organisms
+reach BioCLIP, which answers them at a coarse rank. Re-measure it with `examples/siglip_thresholds.rs`
+whenever `lrg_ml::siglip::MODEL_ID` changes.
 
 **Species reaches the prompt, not the request.** When `tasks` includes
 `species`, BioCLIP 2 runs *before* the LLM call rather than after it, and the
@@ -177,14 +248,62 @@ the batch.
 the group size for a `llamacpp` run, and omits it otherwise — a group formed for decode
 throughput must not override a provider's own preferred batch size.
 
+**Aesthetic score and genre.** The `embeddings` and `cull` tasks both imply the `aesthetic` task,
+which can also be asked for alone. It scores the photo with AestheticSigLIP (1 to 9, higher is
+better; its own So400m forward pass at 256 patches) and stores `aesthetic_score` with
+`aesthetic_model`, and names the photo's genre from its SigLIP2 embedding (zero-shot, thirteen
+genres or `other`) as `genre`, `genre_confidence` and `genre_version`. A photo that already has a
+score from the current export is skipped unless `regenerate_metadata` is set. When the scorer is not
+downloaded the run still indexes the photos and says so **once** in the response's `warnings` (not
+once per photo); a genre that could not be made says why the same way.
+
 ### `POST /v1/photos/lookup`
 Returns stored metadata and embedding status for one or more `photo_id` values.
+
+The response carries an `aesthetic` block next to `species`: `score`, `model`, `outdated` (the score
+is from another export than this build's, so not comparable with current ones), `genre` (the stable
+id), `genre_label` and `genre_confidence`. It is `null` for a photo with neither. It is a block of
+its own, not part of `metadata`, which is text the plug-in lets the user edit.
 
 ### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
 
 ### `POST /v1/index/unprocessed`
 Given a list of `photo_id` values, returns which ones are not yet indexed or are missing specific data.
+
+"Missing" is per task, and where the producer of a field can change it means *produced by the
+producer this build uses*, not merely present:
+
+| task | outstanding when |
+| --- | --- |
+| `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
+| `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
+| `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
+| genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
+| `species` | no `species_checked`, or a `species_model` that is not the head on disk |
+| `cull` | no `cull_phash`, no `cull_faces_present` key, or no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again) |
+| `metadata` | no title, caption, alt_text or keywords |
+
+`regenerate_metadata` overrides all of them.
+
+It redoes only the tasks of that request. Fields written by a task that is *not* in the request — the
+stored embedding, the species, the AI title, caption and keywords, the catalog membership — are kept: redoing
+`cull` alone does not remove a photo from search.
+
+The two identity fields differ in one respect, deliberately. For `faces`, a missing `face_model`
+re-queues the photo. For `embeddings`, a missing `embedding_model` does **not**: `has_embedding` has
+existed since before this field, so an absent identity is the normal state of every existing index,
+and re-queueing on absence would re-embed a whole catalog to settle a maybe. A present identity that
+differs always re-queues.
+
+Absence is rare in practice now: binding a database runs a one-time store upgrade
+(`lrg_store::upgrade`, step `0001-stamp-embedding-model`, recorded in `upgrades.json` in the lance
+root) that stamps this build's `embedding_model` on every stored vector that has none. That is safe
+because the field was added while one SigLIP2 export was current: the step stamps
+`lrg_ml::siglip::LEGACY_MODEL_ID` (the 384 center-crop model), **not** this build's NaFlex model, so
+those vectors are re-queued by `/v1/index/unprocessed` like any other stale one. A row naming another
+model keeps its name, and the absent-is-current rule stays for any row an older build writes after
+the upgrade has run.
 
 ### `POST /v1/photos/remove`
 Removes all data (embeddings, metadata, face data) for a given `photo_id`.
@@ -193,10 +312,59 @@ Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 Removes only the AI-generated metadata fields for a given `photo_id`, leaving embeddings intact.
 
 ### `POST /v1/photos/catalogs/cleanup`
-Removes backend records for photos that no longer exist in a given catalog.
+The index cleanup: takes photos deleted from a catalog out of its index. The
+plugin runs it on its own (a couple of minutes after Lightroom starts, then once
+a day, and when a search turns up photos the catalog no longer has) and from
+*Plug-in Manager → Backend Server → Clean up index now* (`IndexCleanup.lua`).
+The logic is `lrg_store::cleanup`.
+
+**Request:** `catalog_id` (required), `photo_ids` — every photo ID in the
+catalog — and `confirm_large_removal` (bool, default false).
+
+The inventory is sent in one request (including for an empty catalog), since
+separate batches would each release the photos outside that batch. The plugin
+takes cached identities as they are (no file access) and resolves only photos
+that have none yet; it aborts rather than send an incomplete inventory.
+
+Against that inventory, every image row is one of:
+
+| Row | Effect |
+|---|---|
+| claimed by this catalog, not in the inventory | the catalog lets go (`catalog_id` removed). Other catalogs keep theirs. A row left in no catalog is stamped `orphaned_at` (Unix seconds) |
+| in the inventory, in no catalog | re-adopted: the catalog is added back and the stamp cleared — a photo removed by mistake and imported again gets its AI data back |
+| in no catalog, stamped more than 30 days ago | purged for good: image row, its faces (`{photo_id}_n`) and its species embedding. Training examples stay |
+| in no catalog, no stamp | left alone — rows from before `catalog_ids` existed look like this |
+
+Every row is read again before it is written, and a purge candidate some
+catalog claimed since the scan is skipped.
+
+**Large removals:** when the catalog would let go of more than half of what it
+has indexed (and at least 50 photos), nothing changes and the answer is a
+**409**: `{"error", "needs_confirmation": true, "would_disassociate": n,
+"checked": indexed}`. That is what an inventory resolved another way than at
+indexing time looks like, and the grace period does not cover it — those IDs
+never come back. The plugin asks the user and repeats the request with
+`confirm_large_removal: true`.
+
+**Response:**
+
+| Field | Meaning |
+|---|---|
+| `checked` | photos this catalog had indexed |
+| `disassociated` | photos the catalog let go of |
+| `orphaned` | of those, how many are now in no catalog |
+| `readopted` | photos that came back |
+| `purged` | photos deleted for good in this run |
+| `waiting` | photos in no catalog, still within the grace period |
+| `next_purge_at` | Unix seconds when the oldest of those falls due, or `null` |
+| `grace_days` | the grace period (30) |
+| `warnings` | purges that failed; the next run retries them |
 
 ### `POST /v1/photos/catalogs/claim`
 Associates an existing backend record with a (potentially new) catalog ID.
+The plugin may scan the whole catalog for automatic or manual claiming, but
+identity caching uses catalog plugin properties and never writes photo metadata
+or Lightroom’s `lastEditTime`. The existing `photo_id` formats are unchanged.
 
 ---
 
@@ -209,7 +377,11 @@ Runs a semantic search query against indexed photos.
 
 | Field | Type | Description |
 |---|---|---|
-| `term` | string | Natural language search query. Also accepted as a query-string parameter |
+| `term` | string | Natural language search query. Also accepted as a query-string parameter. **Optional**: without one the search is "the best N" of the scope, ordered by stored aesthetic score, from metadata alone (no text tower, no vectors) |
+| `sort` | string | `relevance`, `aesthetic` or `combined`. Default `relevance` with a term, `aesthetic` without. `relevance` and `combined` without a term are a **400** ("need a search term"), as is an unknown value |
+| `min_aesthetic` | float | Only photos whose current aesthetic score is at least this (1–9). A photo with no score from the current export cannot be judged and is left out |
+| `genres` | array | Only photos whose `genre` is one of these ids (see `GET /v1/search/genres`). A photo with no genre is left out |
+| `aesthetic_weight` | float | `combined` only, 0–1, default 0.5: the share of the ordering that is the aesthetic score rather than relevance |
 | `catalog_id` | string | Restrict to a specific catalog |
 | `photo_ids` | array | Restrict search to specific `photo_id` values (`uuids` is accepted as an alias) |
 | `max_results` | int | Upper bound on results, across **both** halves of the search |
@@ -222,9 +394,31 @@ Runs a semantic search query against indexed photos.
 their intersection. (Until August 2026 the metadata half skipped the catalog
 check whenever `photo_ids` was present, leaking results from other catalogs.)
 
-**Response:** `results` array of `{photo_id, uuid, distance}`. Semantic matches
-come first, ordered by ascending distance; metadata matches follow with
+**Response:** `results` array of `{photo_id, uuid, distance, aesthetic_score, genre, genre_label}`
+(`aesthetic_score` is `null` for a photo with no score from the current export). By
+default semantic matches come first, ordered by ascending distance; metadata matches follow with
 `distance: null` and fill whatever is left of `max_results`.
+
+`sort=aesthetic` orders every match by score, best first. `sort=combined` orders by
+`(1 - w) * relevance + w * (score - 1) / 8`, where relevance is a semantic hit's distance scaled
+between the closest and the farthest of the result set (1 best) and a metadata hit — a literal
+match in the title, caption or keywords, which has no distance — counts as fully relevant. In both,
+matches without a current score go **last**, in their earlier order: they are not on the scale, and
+a warning says how many.
+
+`min_aesthetic` and `genres` are applied **after** the relevance cut, so they never move the cut
+(it is computed over the whole candidate list) and can leave fewer than `max_results`. What they
+drop for want of data, rather than for its value, is counted in `warnings`, since that is a problem
+the user can fix by indexing; a photo that was judged and found short of the minimum is simply not a
+match. Without a term, photos in scope with no score are counted the same way.
+
+`warnings` (a list) and `warning` (the same joined, for clients that predate it) appear whenever
+there is something to say; before this the route only ever returned `warning` for a missing model.
+
+### `GET /v1/search/genres`
+The genres a search can be restricted to, `{"genres": [{"id": "macro", "label": "Macro"}, ...]}`,
+`other` last. From `lrg_ml::genre::GENRES`, the list the classifier itself uses, so a UI never
+offers one the backend cannot name.
 
 ### `POST /v1/search/similar`
 Finds photos similar to a reference photo using perceptual hash (phash) or CLIP embeddings.
@@ -241,9 +435,73 @@ Finds photos similar to a reference photo using perceptual hash (phash) or CLIP 
 
 ### `POST /v1/cull/groups`
 Groups a set of photos into similarity clusters (used internally by the culling workflow).
+Takes the same request fields as `/v1/cull/grade` and returns its `groups`,
+`warnings` and `warning` (see below); no `summary`.
 
 ### `POST /v1/cull/grade`
 Runs the full culling pipeline on a set of photos: grouping, scoring, and classification into picks/alternates/rejects.
+
+**Key request fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `photo_ids` | array | Photos to cull. Ids with no stored record are skipped and counted in `summary.unindexed_count` |
+| `culling_preset` | string | `default`, `portrait`, `street`, `event` or `sports`. 400 with `available_presets` for anything else |
+| `time_delta_seconds` | int | Burst window. Absent means the preset's own |
+| `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
+| `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
+| `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
+| `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
+| `include_debug` | bool | Per-group thresholds and pairwise distances |
+
+Every preset except `default` judges the **moment**: the stronger of the
+preset's axis (`cull_semantic_iqa`: action, expression or candid) and, for
+`sports` and `event`, an emotion question (`cull_emotion_iqa`). `event` and
+`portrait` also ask whether closed eyes are a kiss or a laugh
+(`cull_eyes_closed_intent_iqa`), which lifts the blink penalty. All three are
+computed per request from the stored embedding against prompt vectors kept in
+the database (below), and never stored themselves. Within a
+group the moment applies only when every frame has it, and frames with a
+defect no edit repairs (blur, unintended closed eyes, occlusion) always rank
+below usable ones.
+
+**Response:**
+
+| Field | Type | Description |
+|---|---|---|
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
+| `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
+| `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eyes_closed_intended` when true, and always `clear_defect` |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos whose moment was not judged. Empty when there is nothing to say |
+| `warning` | string or null | The same messages joined, for clients older than `warnings` |
+
+The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a
+photo whose `aesthetic_model` is this build's, scaled `(s - 1) / 8` to `0..1`, injected as
+`cull_aesthetic_model` (so it appears in `stored_metadata`) and blended with the heuristic at
+`aesthetic_model_weight` (0.9, a chosen value rather than a tuned one). A score from another export
+counts as missing. It needs no embedding and no text tower, so it is independent of `use_iqa`. The
+number of ranked photos without one is said once in `warnings`, with the fix that fits: scoring them,
+or downloading the model first.
+
+Both routes return `warnings`, every caveat for the run as a list, and `warning`, the same
+caveats joined into the one string the plugin shows (`null` when there are none). Besides photos
+that were never analyzed and photos without embeddings, a caveat is raised when an AI signal the
+run asked for — quality, moment, kiss gate — could not be computed: each compares a photo's stored
+embedding against fixed prompt vectors, and those were neither in the database nor obtainable from
+the text tower, almost always because the SigLIP2 model is not downloaded. The signals lost to that
+one cause share one message, and ranking rests on the technical measurements alone.
+
+The prompt vectors — the CLIP-IQA moment and emotion sets, the genre classifier, the culling kiss gate, the organism
+gate `/v1/index/photos` uses in front of BioCLIP, the scene probes of `/v1/edit/training` and
+`/v1/edit/style` — live in the `text_embeddings` table (`model_id`, `text`, `vector`). A request prepares the prompts it needs
+once, before any per-photo work: from memory, else from the table for this build's
+`lrg_ml::siglip::MODEL_ID`, else with the text tower, whose results are stored and which is unloaded
+again straight away if the request loaded it. So each prompt is embedded once per model per
+database, and in normal use only a free-text search or keyword clustering loads the text tower.
+Only the prompts the request needs: on a CPU without fast fp16 one text-tower pass can take many
+seconds, and a first cull must stay inside the plugin's request timeout.
 
 ---
 
@@ -326,10 +584,37 @@ before `is_raw` was recorded count as compatible with anything. Every other
 develop setting means the same on both kinds of file and is blended normally;
 `tint` differs only in range, which the clamp handles.
 
+Only examples embedded with the current search model are compared with the photo
+(`embedding_model` in the example's metadata, written by `POST /v1/edit/training`); a vector
+from another model means nothing next to this one. Examples saved before the identity was
+recorded count as outdated. When *every* stored example is outdated, the endpoint says so
+(`error` on the 422, or `style_engine_note` when the LLM fallback runs) instead of reporting
+that there is nothing stored, and `/v1/edit/recipe` skips style matching with the same
+explanation in `warning`. Saving an example again replaces it.
+
 The `/v1/edit/recipe` few-shot path applies the same rule: an example whose raw status
 conflicts with the target has its white balance stripped before it reaches the
 prompt, so the model is never anchored on a number the schema it must answer in
 cannot express.
+
+### `POST /v1/edit/score`
+The aesthetic score of one rendered image, and nothing else: nothing is stored and no
+photo record is touched. Multipart with a single `image` part (any format the `image`
+crate decodes; the plugin sends the JPEG it exports). Answers
+`{"status": "success", "score": 5.87, "model": "<aesthetic model id>"}`, the score on the
+scorer's 1–9 scale rounded to two decimals — the same figure `POST /v1/index/photos`
+stores for a photo.
+
+It exists for AI Edit's optional refinement loop (`AestheticRefine.lua`), which applies a
+candidate edit to a photo, renders it and asks what the scorer makes of it, several times
+per photo. The score of an intermediate render belongs to no photo, which is why this is
+not an indexing task.
+
+| Status | Body | When |
+|---|---|---|
+| 400 | `{"status": "error", "error": ...}` | No `image` part, or an empty one |
+| 503 | `{"status": "error", "error": ...}` | The aesthetic model is not downloaded. The message is the instruction ("run "Download AI models" in Plug-in Manager") and is shown as it stands |
+| 500 | `{"status": "error", "error": ...}` | The image could not be decoded, or the model failed |
 
 ---
 
@@ -488,7 +773,10 @@ stale against the server serving them.
 A page can call the rest of this API directly — it is served from the
 backend's own origin, so no CORS setup is involved — and it forwards the
 `db_path` the plugin put in its URL on every request, which the auto-bind
-middleware honours exactly like the plugin's own calls.
+middleware honours exactly like the plugin's own calls. It sends the access
+token (see [Access](#access)) the plugin put in the URL's `#fragment`, which
+the browser sends nowhere; the page takes it out of the address bar and keeps
+it in `sessionStorage` for reloads.
 
 What a page *cannot* do is touch the Lightroom catalog. Those actions are
 queued instead: the page POSTs one, and the plugin task that is waiting on it
@@ -522,10 +810,213 @@ answer to "will anything pick this up".
 
 ---
 
+## AI Agents: MCP endpoint and agent bridge
+
+An AI agent — Claude Code, Claude Desktop, LM Studio, Cursor, any MCP client —
+connects to `/mcp` and gets tools over LrGeniusAI's index (search, people,
+culling) and over Lightroom itself (catalog queries, previews, metadata,
+collections, develop settings, the plugin's own tests). The backend cannot
+touch the catalog, so the Lightroom tools queue commands on the **agent
+bridge** and the plugin carries them out. Full design, the command list and how
+to test it: [Dev: Agent Bridge](Dev-Agent-Bridge). For users:
+[Help: AI Agents](Help-AI-Agents).
+
+These routes refuse anything a web page could send: a request with an `Origin`
+header (a browser — Lightroom's `LrHttp` sends none) or a `Host` that is not
+this computer (a DNS-rebinding page) gets a 403. All but registration and the
+status read also need the session token from registration, in the
+`X-LrGenius-Bridge-Token` header; an unknown token gets a 401 with
+`reregister: true`, which is how the plugin notices a backend restart.
+
+### `POST /mcp`
+### `GET /mcp`
+### `DELETE /mcp`
+The MCP endpoint (Streamable HTTP, served by `lrg-mcp` and mounted next to
+these routes rather than under `/v1` — MCP negotiates its own version). `POST`
+carries JSON-RPC messages and answers as JSON or as an event stream (tool
+progress arrives as `notifications/progress` on it); `GET` opens the
+server-to-client stream; `DELETE` ends the session named in `Mcp-Session-Id`.
+Only answers when `Host` is this computer, rejects every browser `Origin`, and
+needs the agent token as `Authorization: Bearer <token>`. A missing or wrong
+token gets a 403 with a JSON-RPC error saying where to copy the setup, and so
+does every request while no plugin session is registered. `geniusai-server
+mcp` is a stdio proxy to it for clients that only start commands (Claude
+Desktop); it takes the token from `LRGENIUS_MCP_TOKEN` or `--token`.
+
+### `POST /v1/agent/bridge`
+The plugin registers. Body: `port` (its LrSocket doorbell; absent when the
+socket could not be opened — the plugin then polls), `previous_token` (keeps an
+existing session when only the port changed), and what it reports about itself:
+`plugin_version`, `lightroom_version`, `catalog_path`, `catalog_name`,
+`catalog_id`, `db_path`, `allow_changes`, `dev_tools`, `platform`, plus
+`mcp_token` (the agent token it keeps; absent on its first registration),
+`rotate_mcp_token` (make a new one) and `started_at` (when this bridge loop
+started). A registration whose `started_at` is older than the newest one seen
+since the backend started gets **409** with `superseded: true`; the plugin's
+loop then stops. That ends the fight between the old and the new loop after
+"Reload Plug-in". Returns `token`, `session`, `resumed`,
+`ping_interval_seconds` and `mcp_token`: the agent token `/mcp` now requires,
+newly made when the plugin had none, asked for a new one, or sent something
+too short to be a secret. The backend then
+connects to the port and writes `wake` per queued command and `ping` on that
+interval. Any other registration replaces the old session; its unfinished
+commands fail as "plugin reloaded".
+
+### `GET /v1/agent/bridge`
+Bridge status: `connected`, `socket` (`none`/`connecting`/`connected`/`down`),
+`plugin` (as registered), `registered_at`, `last_seen_seconds`, `queued`,
+`in_progress`, `commands_done`. Never includes the token.
+
+### `DELETE /v1/agent/bridge`
+The plugin stops on purpose (the user cancelled the bridge, or Lightroom is
+quitting). Pending commands fail with "the user stopped agent control" so a
+waiting agent stops instead of retrying.
+
+### `GET /v1/agent/commands`
+The plugin claims every queued command, oldest first: `commands` is a list of
+`{id, action, args, timeout_seconds}`. Claiming also counts as the plugin being
+alive while its socket is down.
+
+### `POST /v1/agent/commands/<id>/result`
+The plugin's answer: `ok`, `result`, `error`, `warnings` (always passed on to
+the agent, also on success), and `refused` (`"changes"` or `"dev_tools"` when
+the plugin's settings forbid the command). Returns `accepted: false` when the
+caller already gave up (timeout or cancellation).
+
+### `POST /v1/agent/commands/<id>/progress`
+`{done, total, message}` while a long command runs; forwarded to the MCP client
+as progress notifications. The answer's `cancel` is true once nobody waits for
+the command any more, and the plugin stops between photos.
+
+---
+
+## Agent chat
+
+The in-app chat: a local or cloud AI model works the catalog through the same tools as
+`/mcp`, and the user chats with it — and approves its changes — in the
+browser. Design, the permission model and the event list:
+[Dev: Agent Chat](Dev-Agent-Chat). Served by `lrg-chat`, merged next to `/mcp`
+and written as served (not nested by `build_router`).
+
+Opening a chat takes the agent token as `Authorization: Bearer <token>`, like
+`/mcp`. Every other route takes the chat's own token the same way, and refuses
+a request whose `Origin` is not this server even with the right token. A wrong
+token, a foreign origin and a chat that has ended all get the same **403**.
+Errors are `{"error": "<what to do>"}`.
+
+### `GET /v1/ui/chat`
+The chat page (`lrg-chat/src/ui/chat.html`), no token needed: it is the same
+for everyone and holds nothing until it is given a chat. It reads `session` and
+`token` from its fragment, keeps them in `sessionStorage` so a reload works,
+and removes them from the address bar. Sent with a strict
+`Content-Security-Policy` (`default-src 'none'`, `connect-src 'self'`,
+`frame-ancestors 'none'`), `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. A new chat's address opened in the same tab
+changes only the fragment; the page reloads itself for it.
+
+### `POST /v1/chat/sessions`
+Opens a chat. Body: `provider` and `model` as for indexing, and what that
+provider needs:
+
+* `llamacpp`, `mlx`: `llm_n_ctx`, `llm_n_parallel`, `llm_gpu_layers` as on the
+  indexing routes. The model loads in the background; one that cannot load is
+  reported as an `error` event.
+* `chatgpt`, `anthropic`, `gemini`: `api_key`, required.
+* `openai_compatible`: `server_url`, required, and `api_key` if the server
+  wants one. `lmstudio`, `ollama`: optional `lmstudio_base_url`,
+  `ollama_base_url`.
+
+`connections`, optional: every key and address the user has set up, under the
+names [`POST /v1/llm/providers/models`](#post-v1llmprovidersmodels) takes
+(`openai_apikey`, `gemini_apikey`, `anthropic_apikey`, `server_url`,
+`server_apikey`, …), so the page can offer every provider in its model menu.
+The fields above win for the chosen provider. The engine settings are kept as
+well, for a switch to a local model.
+
+The keys are kept in the chat's memory only — never logged, saved or returned.
+A missing key, address or model is a **400** naming what to set. Returns
+`session_id`, `token` and
+`page`, the path to open with the token in its fragment
+(`/v1/ui/chat#session=…&token=…`). **503** when 8 chats are open and none is
+idle enough to close. No plugin session registered: 403 saying to turn the
+agent bridge on.
+
+### `GET /v1/chat/sessions/{id}`
+### `DELETE /v1/chat/sessions/{id}`
+`GET` returns what the page draws from: `model`, `busy`, `tools` (each with
+`name`, `title`, `class` — `read`/`change`/`destructive` — and its `rule`),
+`permissions`, `permissions_saved` (false while no index is bound, so a change
+would not survive a restart), `sends_to` (who receives the conversation when
+that is not this computer — "Anthropic", "your AI server (host:port)" — or
+null) and `lightroom` (`catalog_name`,
+`may_change_photos`; null when the plugin is not connected). `DELETE` stops the
+chat and forgets it (**204**). A chat nobody has listened to for two hours is
+closed by the backend.
+
+### `GET /v1/chat/sessions/{id}/events`
+Server-sent events, one JSON object per `data:` line, with a `type` and — for
+everything except the streamed `delta` pieces — a `seq`. `?after=<seq>`
+replays what was logged after it, then continues live. A page that falls too
+far behind gets `event: resync` and the stream ends; reconnecting with `after`
+catches up. The event types are listed in [Dev: Agent Chat](Dev-Agent-Chat#events).
+
+### `POST /v1/chat/sessions/{id}/messages`
+`{"text": "…"}`. **202** and the work starts; its progress arrives on the event
+stream. **409** while the previous message is still being worked on, **400**
+for an empty one.
+
+### `POST /v1/chat/sessions/{id}/approvals/{call_id}`
+The answer to an `approval_needed` event: `{"decision": "once"}`, `"chat"`
+(this tool for the rest of the chat), `"always"` (sets the tool's rule to
+`allow`), or `{"decision": "deny", "note": "…"}` — the note is passed to the
+model. **204**; **409** when that call is not waiting any more.
+
+### `POST /v1/chat/sessions/{id}/stop`
+Stops after the step in progress: the model's turn is cancelled, calls waiting
+for approval are denied, nothing new starts. A tool already running in
+Lightroom finishes and its result is recorded. The event stream gets a
+`stopped` event, and the model is told in the history that the user stopped
+there. **204**.
+
+### `GET /v1/chat/sessions/{id}/models`
+What the page's model menu offers, probed with the chat's `connections` the
+way `POST /v1/llm/providers/models` probes: `current` (`provider`, `model`,
+`label` — the model this chat runs on, an old MLX name mapped to the one it is
+listed under), `providers` (in the plugin's picker order, each with
+`provider`, `label` — "On this Mac", "LM Studio", the AI server's name, … —,
+`sends_to` as on `GET /v1/chat/sessions/{id}`, and `models`, sorted), and
+`warnings` (an AI server or key the user set up that did not answer). A
+provider with nothing to offer — not running, no key — is left out.
+
+### `POST /v1/chat/sessions/{id}/model`
+`{"provider": "…", "model": "…"}`: start over on another model. A conversation
+is not carried from one model to another: a new chat with the same connections
+and engine settings, and nothing in it, replaces this one, which ends (its
+token gets **403** from then on). Returns what `POST /v1/chat/sessions` does —
+the page opens the new `page`. **400** names a missing key, address or model
+(this chat stays as it was); **409** while a message is being worked on.
+
+### `GET /v1/chat/sessions/{id}/permissions`
+### `PUT /v1/chat/sessions/{id}/permissions`
+What runs without asking: `mode` (`ask_all`, `auto_read` — the default —,
+`auto_safe`, `auto_all`), `tools` (tool name → `allow`, `ask` or `block`) and
+`bulk_limit` (a change to photos aimed at more than this many asks even when
+allowed; 0 turns it off). The settings are the user's, not the chat's: every
+chat uses them, and they are saved as `chat_permissions.json` beside the index.
+`PUT` takes the whole object and returns `{saved, permissions}`.
+
+---
+
 ## Metadata Import
 
 ### `POST /v1/photos/metadata/import`
-Imports existing Lightroom catalog metadata (keywords, title, caption, rating, etc.) into the backend database for a batch of photos.
+Imports existing Lightroom catalog metadata (title, caption, alt text and keywords) into the backend database for a batch of photos.
+
+`metadata_items[].keywords` is the photo's keyword hierarchy
+(`MetadataManager.getPhotoKeywordHierarchy`) without the plugin's top-level
+container keyword ("LrGeniusAI", "ChatGPT", ...). Analysis results have no such
+root either, and "Retrieve Metadata" writes a stored hierarchy back underneath
+the container, so a root left in would come back nested inside itself.
 
 ---
 
@@ -563,7 +1054,9 @@ Applies a list of approved keyword merge pairs to the backend's metadata records
 ### `POST /v1/edit/training`
 Stores one photo's develop settings as a training example. `is_raw` is recorded
 with it and decides, later, whether the example may contribute a temperature —
-see `POST /v1/edit/style`.
+see `POST /v1/edit/style`. The SigLIP2 vector is stored together with the
+`embedding_model` that made it, which decides whether the example can still be
+matched after the search model changes.
 
 Saves a photo's Lightroom develop settings as a labeled training example.
 
@@ -606,8 +1099,8 @@ network does which job.
 
 ### `GET /v1/models/assets`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
-for the "this will download about N GB" line. All three families — `clip`,
-`bioclip` and `face` — are `downloadable: true` and all three gate `ready`.
+for the "this will download about N GB" line. All four families — `clip`, `aesthetic`
+(the photo quality scorer), `bioclip` and `face` — are `downloadable: true` and all four gate `ready`.
 Face detection used to be the exception: its `buffalo_l` weights came from
 `INSIGHTFACE_ROOT`, were not redistributable, and had to be excluded from
 `ready` so the button did not stay red forever over something the download
@@ -631,7 +1124,7 @@ BioCLIP 2 identifies animals, plants and fungi down to species. It ships as
 three assets — the ViT-L/14 image tower as fp16 ONNX, a pruned Tree-of-Life
 zero-shot head (`bioclip2_taxa.bin`) and its interned labels
 (`bioclip2_taxa.json`) — from their **own** release tag
-(`bioclip-assets-v1`), independent of the SigLIP2 `model-assets-v1` tag.
+(`bioclip-assets-v1`), independent of the SigLIP2 `model-assets-v2` tag.
 Roughly 876 MB in total.
 
 The head is pruned from upstream's 867,455 taxa; see
@@ -792,7 +1285,9 @@ Progress of the current local-model download (same shape as the CLIP download st
 ### `GET /v1/db/stats`
 Returns aggregate database statistics:
 - total indexed photos
-- photos with SigLIP embeddings
+- photos with SigLIP embeddings (`with_embedding`), and how many of those were made by another
+  search model than this build's (`with_outdated_embedding`; a search cannot find them until they
+  are indexed again)
 - photos with title / caption / keywords
 - total detected faces
 - total persons

@@ -21,11 +21,15 @@
 //!
 //! # Differences from the llama.cpp backend
 //!
-//! There is no pinned prompt prefix here. `GuidedGenerationLoop.run` allocates
-//! a fresh KV cache per call, so the run-constant half of the prompt is
-//! re-prefilled for every photo and [`GenerationOutput::prefix_reused`] is
-//! always false. The split prompt is still sent, and still ordered
+//! There is no pinned prompt prefix for indexing here. `GuidedGenerationLoop.run`
+//! allocates a fresh KV cache per call, so the run-constant half of the prompt
+//! is re-prefilled for every photo and [`GenerationOutput::prefix_reused`] is
+//! false for every photo. The split prompt is still sent, and still ordered
 //! stable-then-volatile, so the ordering is right the day that changes.
+//!
+//! A chat is different: the sidecar keeps the cache a turn leaves and starts
+//! the next turn of the same conversation from it (`chat` in the sidecar's
+//! `Engine.swift`), and `prefix_reused` says when it did.
 
 mod engine;
 mod protocol;
@@ -79,12 +83,34 @@ pub struct GenerationRequest {
     pub temperature: f32,
 }
 
+/// One turn of a conversation. Mirrors `lrg_llama::ChatMessage`.
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    /// `system`, `user` or `assistant`.
+    pub role: &'static str,
+    pub text: String,
+    /// Where they land relative to the text is the model's message format's
+    /// call.
+    pub images: Vec<RgbImage>,
+}
+
+/// A whole conversation, answered with one assistant turn. Mirrors
+/// `lrg_llama::ChatRequest`.
+#[derive(Debug, Clone, Default)]
+pub struct ChatRequest {
+    pub messages: Vec<ChatMessage>,
+    /// JSON Schema to constrain the answer with. `None` decodes freely.
+    pub schema: Option<serde_json::Value>,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GenerationOutput {
     pub text: String,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
-    /// Always false on this backend — see the module docs.
+    /// Only ever true for a chat turn — see the module docs.
     pub prefix_reused: bool,
 }
 

@@ -15,6 +15,9 @@ pub struct Request<'a> {
     pub model_dir: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requests: Option<Vec<GenerationSpec>>,
+    /// `chat` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatSpec>,
 }
 
 /// Where the raw pixels for one photo were staged.
@@ -47,6 +50,28 @@ pub struct GenerationSpec {
     pub temperature: f32,
 }
 
+/// One turn of a conversation. `role` is `system`, `user` or `assistant`.
+#[derive(Debug, Serialize)]
+pub struct ChatMessageSpec {
+    pub role: &'static str,
+    pub text: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImagePayload>,
+}
+
+/// A conversation, answered with one assistant turn. The sidecar sends the
+/// answer's text as `delta` lines while it decodes, then the usual response
+/// with one entry in `results`.
+#[derive(Debug, Serialize)]
+pub struct ChatSpec {
+    pub messages: Vec<ChatMessageSpec>,
+    /// Pre-serialized, for the same reason as [`GenerationSpec::schema`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct EngineInfoPayload {
     pub model_path: String,
@@ -65,10 +90,16 @@ pub struct GenerationResultPayload {
     pub error: Option<String>,
 }
 
+/// One line from the sidecar. Either a final response, or — while a `chat`
+/// decodes — a `delta` line carrying the next piece of its text and nothing
+/// else.
 #[derive(Debug, Deserialize)]
 pub struct Response {
     pub id: u64,
+    #[serde(default)]
     pub ok: bool,
+    #[serde(default)]
+    pub delta: Option<String>,
     pub error: Option<String>,
     pub info: Option<EngineInfoPayload>,
     pub results: Option<Vec<GenerationResultPayload>>,
@@ -127,6 +158,34 @@ mod tests {
         let json = serde_json::to_value(&spec).unwrap();
         assert!(json.get("image").is_none());
         assert!(json.get("schema").is_none());
+    }
+
+    #[test]
+    fn chat_spec_uses_the_agreed_key_names() {
+        let spec = ChatSpec {
+            messages: vec![ChatMessageSpec {
+                role: "user",
+                text: "hi".into(),
+                images: Vec::new(),
+            }],
+            schema: None,
+            max_tokens: 64,
+            temperature: 0.2,
+        };
+        let json = serde_json::to_value(&spec).unwrap();
+        assert_eq!(json["messages"][0]["role"], "user");
+        assert_eq!(json["messages"][0]["text"], "hi");
+        assert!(json["messages"][0].get("images").is_none());
+        assert!(json.get("schema").is_none());
+        assert_eq!(json["max_tokens"], 64);
+    }
+
+    #[test]
+    fn a_delta_line_decodes_without_ok() {
+        let response: Response = serde_json::from_str(r#"{"id":3,"delta":"Hal"}"#).unwrap();
+        assert_eq!(response.id, 3);
+        assert_eq!(response.delta.as_deref(), Some("Hal"));
+        assert!(!response.ok);
     }
 
     #[test]

@@ -51,6 +51,10 @@ return {
 			file = "TaskPeople.lua",
 		},
 		{
+			title = "Chat with Your Catalog...",
+			file = "TaskChat.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces..."),
 			file = "TaskFindSimilarFaces.lua",
 		},
@@ -92,6 +96,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/People=People..."),
 			file = "TaskPeople.lua",
+		},
+		{
+			title = "Chat with Your Catalog...",
+			file = "TaskChat.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces..."),
