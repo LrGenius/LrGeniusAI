@@ -34,6 +34,7 @@ globals = {
     "SkipPhotoContextDialog",
     "SpeciesLinks",
     "DevelopEditManager",
+    "DevelopExperiments",
     "TaskUpdate"
 }
 

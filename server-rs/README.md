@@ -8,7 +8,11 @@ endpoint reference.
 
 Workspace layout: `crates/lrg-common`, `lrg-store` (LanceDB), `lrg-imaging`,
 `lrg-ml` (ONNX Runtime via `ort`), `lrg-analysis`, `lrg-providers` (LLM
-clients), `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
+clients, edit-recipe schema), `lrg-develop` (the native Lightroom develop
+model: key registry, typed settings, Lua/JSON and XMP readers, the
+develop-preset writer, the Lua writer for `applyDevelopSettings` (provisional
+until experiments E1/E2/E4/E11) and correction builders; a leaf crate),
+`lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
 `lrg-mlx` (supervises the Apple silicon MLX sidecar), `lrg-api` (axum
 routers, including the agent bridge to the plugin), `lrg-mcp` (the MCP endpoint
 AI agents connect to at `/mcp`, and the `geniusai-server mcp` stdio proxy —
@@ -135,12 +139,22 @@ so a job that provisions assets can prove it used them:
 ```bash
 LRG_REQUIRE_GOLDENS=face          cargo test --workspace   # one family
 LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
-LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
+LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family except the local-only ones
 ```
 
 Family names are `face`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
 (89 MB, 2.2 GB, 868 MB and 834 MB respectively).
+
+Local-only families can never be provisioned in CI, because their data is
+private or not redistributable: `all` leaves them out, and only naming one
+makes its absence a failure. They are lrg-develop's local sweeps, each reading
+a path from an environment variable: `training-dump`
+(`LRG_DEVELOP_TRAINING_DUMP`, the maintainer's training dump), `lrc-presets`
+(`LRG_LRC_PRESETS_DIR`, Lightroom Classic's bundled presets and profiles),
+`acr-presets` (`LRG_ACR_PRESETS_DIR`, Camera Raw's user folder: its presets and
+profiles) and `xmp-corpus` (`LRG_XMP_CORPUS_DIR`, a private sidecar corpus). See
+[Dev-Develop-Model.md](../docs/wiki/Dev-Develop-Model.md).
 
 CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
 and sets `LRG_REQUIRE_GOLDENS=face`, while the nightly `golden-tests-full.yml`
@@ -401,6 +415,11 @@ uv run --no-project server-rs/scripts/export_face_models.py --output-dir face-as
 It runs with `--no-project` on purpose — `facenet-pytorch` pins `torch<2.3`
 and `numpy<2.0`, which `scripts/pyproject.toml` cannot satisfy, so the script
 carries its own PEP 723 dependency header.
+
+`scripts/develop_registry/` is a separate, stdlib-only `uv` project for the
+native Lightroom develop model: the `crs:` key inventory and registry
+generator, and the extractor that produces the scrubbed fixtures in
+`testdata/develop/`. See its README.
 
 Then point the server at the files:
 

@@ -1,0 +1,23 @@
+{
+  "AutoLateralCA": 1,
+  "Blacks2012": -8,
+  "CameraProfile": "Adobe Standard",
+  "Clarity2012": 15,
+  "Contrast2012": 12,
+  "ConvertToGrayscale": false,
+  "Dehaze": 5,
+  "Exposure2012": 0.35,
+  "GrainAmount": 15,
+  "Highlights2012": -40,
+  "LensProfileEnable": 1,
+  "LuminanceSmoothing": 10,
+  "PostCropVignetteAmount": -10,
+  "Saturation": -5,
+  "Shadows2012": 30,
+  "SharpenDetail": 25,
+  "SharpenRadius": 1.0,
+  "Sharpness": 40,
+  "Texture": 10,
+  "Vibrance": 20,
+  "Whites2012": 10
+}

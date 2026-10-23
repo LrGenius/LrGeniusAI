@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+log.workspace = true
+lrg-develop.workspace = true
 lrg-imaging.workspace = true
 rayon = "1.12.0"
 serde = { workspace = true, features = ["derive"] }
