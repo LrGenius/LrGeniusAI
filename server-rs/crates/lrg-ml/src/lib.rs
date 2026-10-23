@@ -42,9 +42,31 @@ pub fn kleidiai_disabled() -> bool {
     std::env::var("LRG_DISABLE_KLEIDIAI").as_deref() == Ok("1")
 }
 
+/// The one onnxruntime environment every session in this process is built under.
+///
+/// `ort` 2.0.0-rc.14 refuses a second `ort::init().build()` while the first
+/// environment is alive ("only one environment is allowed per process"), and
+/// each tower, the face models and the BioCLIP tower are built independently
+/// and lazily, so they all have to share one. `Environment` is a cheap
+/// reference-counted handle: each session keeps its clone, and the static
+/// keeps the environment alive for the life of the process.
+static ORT_ENVIRONMENT: std::sync::Mutex<Option<ort::environment::Environment>> =
+    std::sync::Mutex::new(None);
+
+/// The shared environment, created on first use.
+pub(crate) fn ort_environment() -> ort::Result<ort::environment::Environment> {
+    let mut slot = ORT_ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(env) = slot.as_ref() {
+        return Ok(env.clone());
+    }
+    let env = ort::init().build()?;
+    *slot = Some(env.clone());
+    Ok(env)
+}
+
 /// The graph optimization level every session in this crate is pinned to.
 ///
-/// **Do not remove this pin, and do not raise it to `All`.** `Session::builder()`
+/// **Do not remove this pin, and do not raise it to `All`.** `Session::builder(..)`
 /// sets no level, which leaves onnxruntime on its own default of
 /// `ORT_ENABLE_ALL` — and at that level onnxruntime *segfaults* inside
 /// `commit_from_file` on two of this project's five graphs. Not an error, not
