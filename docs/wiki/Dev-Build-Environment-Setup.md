@@ -164,6 +164,12 @@ to the binary's location, so don't move `lrgenius-mlx` on its own. See
 [`native/mlx-sidecar/README.md`](../../native/mlx-sidecar/README.md) for the
 full protocol and model layout (an MLX model is a directory, not a GGUF file).
 
+With Xcode 27.1, an existing `.build/xcode` may fail in `MLXFoundationModels`
+(`extraneous argument label 'capabilities:'`). `Package.swift` no longer pulls
+that module in, but Xcode keeps the package graph it resolved before: delete
+the whole `.build/xcode` (its `SourcePackages` alone is not enough) and build
+again.
+
 ### 4. Pre-commit hooks
 
 ```bash

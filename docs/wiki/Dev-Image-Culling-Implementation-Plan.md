@@ -505,7 +505,9 @@ inline in a sequential loop.
 Ordered by value. Items 1, 2, 4, 5, 6 and 10 of the original list are done —
 see [Signal-quality pass](#signal-quality-pass) below, and
 [Moment scoring](#moment-scoring-for-action-work) for the follow-up that came
-out of a real complaint about a soccer series.
+out of a real complaint about a soccer series. Item 2 of *this* list (the
+noise estimator) is done too — see
+[Flat-region noise and the Lightroom workflow](#flat-region-noise-and-the-lightroom-workflow).
 
 1. **A real eye-state classifier.** `blink_penalty` is still exactly
    `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
@@ -878,6 +880,172 @@ Two details that matter:
 
 No photographs leave the machine — a fixture holds measurements, capture times,
 hashes and opaque ids.
+
+## Flat-region noise and the Lightroom workflow
+
+Two gaps closed in one pass: the one signal that was known to point the wrong
+way, and the fact that a cull ended in collections rather than in the flags a
+photographer actually culls with.
+
+### `cull_noise_flat`
+
+Outstanding item 2 above. The frame-wide estimate is the mean 3×3 box-blur
+residual over mid-tone pixels; detail is high-pass energy too, so it scored a
+sharp frame 0.082 and the blurred frame of the same scene 0.012 and could
+never be normalised against the group. `lrg_imaging::metrics` now also
+accumulates the residual only where the **smoothed** image has no gradient
+(`noise_flat_gradient_threshold`, 0.02 per pixel), so texture and edges are
+left out and what remains is tone plus noise. The gradient is taken on the
+smoothed plane rather than the raw one so the noise under test cannot push
+its own pixels out of the mask. When less than `noise_flat_min_fraction` of
+the interior is flat (a frame that is texture edge to edge) the field equals
+`cull_noise`, so a row always carries it.
+
+Stored as `cull_noise_flat`, normalised by `noise_flat_denominator` (0.04,
+lower than the frame-wide 0.08 because a residual measured only on smooth
+pixels is a smaller number). `rank_group_records` reads it in preference to
+`cull_noise` — only when every frame of the group has it, since the two
+estimators answer different questions and a group indexed half before and
+half after must not compare one frame's grain with another's texture — and
+reports the frame-wide value alongside as `noise_frame_wide` so a
+disagreement is visible. `cull_noise` itself is unchanged, bit for bit,
+so the imaging goldens still pin the Python port. Unit tests cover the three
+cases that matter: two frames of one scene differing only in focus score the
+same flat noise while the frame-wide value still prefers the soft one; grain
+added to either raises it; and a frame with nothing flat falls back.
+
+Rows indexed before this shipped have no `cull_noise_flat` and rank on the
+frame-wide number until re-indexed — the same migration story as
+`cull_sharpness_peak`.
+
+### `reject_margin_scale`
+
+`/cull/grade` takes `reject_margin_scale`, a factor on the preset's
+`reject_score_delta`, clamped to 0.25..4. The presets say what a good frame
+of a genre looks like; how many near-misses to keep is the photographer's
+call and changes from job to job (one frame per burst for a client gallery,
+three for an album edit), so it is a dialog setting — **Cull strength**:
+gentle 1.5, balanced 1.0, strict 0.6 — rather than a preset. It moves only the
+score-margin rule. The defect rules (blur, blink, occlusion, exposure) fire at
+their usual thresholds, because a blink is a blink however gentle the cull.
+A contract test pins the ladder on the seeded three-frame burst: 0 rejects at
+the preset margin, 1 at half, 2 at a quarter.
+
+### Flags, stars and labels
+
+The plugin can now write the result into the catalog the way a photographer
+would by hand, so the filter bar, the flag shortcuts and *Delete Rejected
+Photos* work on it: Pick flag on winners (default on), Reject flag on reject
+candidates (default off — one menu command from deleting files), 3/2 stars for
+picks/alternates (default off), and a purple label on
+`strong_moment_but_unusable` rejects (default on). All of it in one
+`withWriteAccessDo`, so one undo step.
+
+The piece that makes a re-run safe is `Util.cullFlagPlan`: a pure function
+over the backend result, what the catalog holds now (`batchGetRawMetadata`
+for `pickStatus`, `rating`, `colorNameForLabel`) and what the last cull wrote
+(the `cullWritten` plugin field, `flag=1 rating=3 label=purple`, written in
+the same undo step as the marks). A mark equal to what the cull wrote is the
+cull's: it is refreshed to this run's decision or cleared when the decision
+no longer calls for it, so a re-run is never blocked by its own earlier
+output. Any other mark is the photographer's and is left alone and counted —
+unless *Also overwrite flags, stars and labels I set myself* is on, which is
+the only way a user mark is ever changed. (The first version keyed on "has a
+flag" alone, which could not tell the two apart: re-runs were blocked by
+their own picks and overwrite mode cleared the user's flags; review caught
+it.) `keep_all` groups are never touched. Every `with*WriteAccessDo` return
+value is checked, since a catalog that cannot be locked returns `"aborted"`
+without throwing. It is specced in `plugin/spec/util_cull_spec.lua`; the
+task only applies the plan and reports the counts.
+
+Result collections are now filled in score order (picks best first, rejects
+worst first), which Lightroom shows under Custom Order sort, and the burst
+window gained an `Auto (from preset)` choice that leaves `time_delta_seconds`
+out of the request so the preset windows — dead for a long time, then
+restored on the backend — finally reach a cull started from the dialog.
+
+## First real shoot
+
+The first cull of a real shoot — a baptism, 797 NEF frames, Event preset at
+the gentle strength — on the day the Lightroom workflow landed. It did what
+the synthetic fixtures could not: it showed where the signals meet real
+photographs. The numbers, then what changed.
+
+| what the run said | number |
+|---|---|
+| groups | 155 (one of 123 frames, others of 45, 44, 40, 28) |
+| picks / alternates / reject candidates | 103 / 27 / **667** |
+| reject candidates with `clear_defect` | 666 of 667 |
+| `possible_blink` on rejects | 653 |
+| `possible_occlusion` on rejects | 567 |
+| frames with faces whose `blink_penalty` exceeded the Event reject threshold | 767 of 769 |
+| "focus stacks" found, frames kept | 7, 27 — every one a group of 3 to 10 people |
+| `time_span_seconds` of every group | 0 |
+
+**The fast prep path sent no capture time.** `TaskCullPhotos.lua`'s
+`indexOptionsFor` forwarded `exposure_bias` and the filename and nothing else,
+so every photo it prepared was undated to the backend, the sliding-window
+grouper treated the whole selection as the "undated suffix" and matched by
+hash and embedding alone, and a ceremony of similar frames chained into one
+group of 123 with a single pick. Fixed three ways, so it cannot come back:
+the prep path now sends `date_time`/`date_time_unix` like Analyze & Index
+(and the single-photo by-reference wrapper forwards them, which it never did),
+the backend falls back to the file's EXIF `DateTimeOriginal`
+(`lrg_imaging::capture::read_capture_time`, with `SubSecTimeOriginal` for the
+fraction — at 20–30 fps a burst shares one whole second — and
+`OffsetTimeOriginal` so the value is a real epoch, as `local_hour` assumes)
+when the plugin sends nothing,
+and `/index/unprocessed` reports a cull-prepared photo without a
+`capture_time` as still needing preparation — once, since a photo that has
+none anywhere is stamped `capture_time_unknown`.
+
+**The face proxies fire on everything.** Eye openness read 0.07–0.26 across
+the whole shoot: the patch it is measured on is clamped to 8 px and the faces
+at a ceremony are small, so every frame "blinked", most were "occluded" and
+nearly all had a face score under the reject threshold. Each absolute rule was
+individually reasonable; together they made every non-pick of every burst a
+clear defect. The fix is not a new threshold — no threshold is right for a
+proxy that cannot see the eye — but `ranking.relative_defect_rules`: blink,
+occlusion and weak-face now also have to be clearly worse than the group's
+best frame (`relative_defect_margin`, 0.10) before they count. A proxy that
+reads the same on every frame of a burst then rejects nothing, while a frame
+that reads clearly worse than its siblings still does. The outstanding
+eye-state classifier (item 1 above) remains the real answer; this makes the
+proxy honest about what it can and cannot distinguish in the meantime.
+
+The second run, with capture times in place, showed the same shape one level
+down: 468 of 770 frames still rejected at gentle, 217 of them `blurred`.
+Sharpness inside one burst spans 0.01–0.10 (median 0.03), so an absolute
+0.20 threshold rejects a burst whole or not at all; and occlusion moves by
+0.1–0.35 inside one group of people (median 0.11) as heads turn, so the
+shared 0.10 margin fired in most multi-face groups. Blur therefore joined the
+relative rules — a frame with siblings is a blur defect when clearly softer
+than the sharpest of them, a single or a burst whose sharpest frame is itself
+soft keeps the absolute test, so a burst that missed focus throughout is
+still rejected whole — and occlusion got its own margin,
+`relative_occlusion_margin`. **Both are held pending calibration**, at the
+maintainers' request: `relative_blur_rule` defaults to off and the occlusion
+margin to the shared 0.10, so shipped behaviour is that of the second run.
+The measured candidates (blur on, occlusion 0.20) gave 415 of 770 at gentle
+and are what `cull_eval --ablate` should test once a hand-culled fixture
+exists for more than one genre.
+
+**People are not focus stacks.** Static framing plus a wandering sharp region
+is how a stack is recognised, and it is also what a group of people shifting
+their weight between frames looks like. `SetFrame::faces` now carries
+`cull_face_count`, and a group with a face in any frame is never a stack.
+
+The first run's flag writing, undo, respect-existing protection and
+collections all behaved as designed: 96 picks flagged (103 picks minus the 7
+"stacks", which are never flagged), 49 purple labels, 0 rejects (as
+configured), confirmed by reading the catalog. The second run (830 frames,
+respect-existing off) grouped sanely — 192 groups, the largest 23 frames,
+burst windows of 1–12 s, no "stacks" — rewrote the flags (101 picks set, 7
+earlier picks unflagged, 22 labels) and brought rejects from 84% to 61%; the
+blur and occlusion changes above are measured against that run's stored
+metrics, not yet against a hand cull. **None of these margins has been
+fitted to the photographer's own picks.** That is what *Export Culling
+Fixture* on this shoot is for, and it is the next step.
 
 ### Also fixed on the way past
 

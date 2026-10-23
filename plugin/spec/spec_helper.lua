@@ -93,3 +93,8 @@ end
 -- modules one at a time, in whatever order busted loads the files, so establish
 -- it here instead of making each spec remember to.
 require("Util")
+
+-- Same for Secrets: APISearchIndex asks it for the backend's access token on
+-- every request. Its password storage is the import stub, which holds nothing,
+-- so no token is sent unless a spec gives Secrets a storage of its own.
+require("Secrets")

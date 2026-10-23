@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use crate::agent_bridge::{
     PluginInfo, PluginOutcome, Progress, RegisterRequest, Superseded, PING_INTERVAL,
 };
+use crate::api_auth::is_loopback_host;
 use crate::state::AppState;
 
 /// The header the plugin sends its session token in.
@@ -57,27 +58,6 @@ fn refuse_browser_or_remote(headers: &HeaderMap) -> Option<Response> {
         ));
     }
     None
-}
-
-/// `localhost`, `127.0.0.1`, `[::1]`, each with or without a port. An absent
-/// Host (HTTP/1.0, some test clients) counts as local: the listener itself
-/// only binds the loopback interface by default.
-fn is_loopback_host(host: &str) -> bool {
-    if host.is_empty() {
-        return true;
-    }
-    let name = if let Some(rest) = host.strip_prefix('[') {
-        // [::1]:19819
-        rest.split(']').next().unwrap_or("")
-    } else {
-        host.rsplit_once(':')
-            .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
-            .map_or(host, |(name, _)| name)
-    };
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "localhost" | "127.0.0.1" | "::1"
-    )
 }
 
 fn forbidden(message: &str) -> Response {

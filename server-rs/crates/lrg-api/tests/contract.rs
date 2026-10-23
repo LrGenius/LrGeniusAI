@@ -1111,6 +1111,73 @@ async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
     assert!(winner["metrics"].is_object());
 }
 
+/// `reject_margin_scale` is the plugin's "how hard to cull" control. The seeded
+/// burst's scores sit ~0.047 apart per frame, under the default 0.18 margin,
+/// so nothing is rejected until the margin is scaled down — and then the
+/// frames fall one by one, furthest from the pick first.
+#[tokio::test]
+async fn cull_reject_margin_scale_moves_the_score_margin_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let rejects = |scale: Option<f64>| {
+        let app = app.clone();
+        let db = db_path_str.clone();
+        async move {
+            let mut body = serde_json::json!({
+                "photo_ids": ["burst0", "burst1", "burst2"],
+                "db_path": db,
+            });
+            if let Some(scale) = scale {
+                body["reject_margin_scale"] = serde_json::json!(scale);
+            }
+            let json = cull_request(app, body).await;
+            assert_eq!(json["groups"][0]["winner_photo_id"], "burst0");
+            json["summary"]["reject_candidate_count"].as_u64().unwrap()
+        }
+    };
+
+    assert_eq!(rejects(None).await, 0, "preset margin: a gentle cull");
+    assert_eq!(
+        rejects(Some(1.0)).await,
+        0,
+        "1.0 is the preset's own margin"
+    );
+    assert_eq!(
+        rejects(Some(0.5)).await,
+        1,
+        "half the margin takes the weakest frame"
+    );
+    assert_eq!(
+        rejects(Some(0.25)).await,
+        2,
+        "a quarter leaves only the pick"
+    );
+    // Out-of-range values are clamped, not refused: 0 would mean 0.25.
+    assert_eq!(rejects(Some(0.0)).await, 2);
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/cull/grade")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["burst0"],
+                        "db_path": db_path_str,
+                        "reject_margin_scale": "wide",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn cull_omits_debug_block_unless_requested() {
     let dir = tempfile::tempdir().unwrap();
@@ -1644,6 +1711,8 @@ async fn check_unprocessed_understands_the_cull_task() {
     state.ensure_db_path(&db_path_str).await.unwrap();
     let store = state.store().unwrap();
 
+    // A prepared row carries a capture time: grouping runs on it, and a row
+    // without one is reported again (see `undated` below).
     let row = |phash: Option<&str>, faces_present: Option<bool>| {
         let mut m = serde_json::Map::new();
         if let Some(p) = phash {
@@ -1652,6 +1721,7 @@ async fn check_unprocessed_understands_the_cull_task() {
         if let Some(f) = faces_present {
             m.insert("cull_faces_present".into(), serde_json::json!(f));
         }
+        m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
         m
     };
 
@@ -1683,6 +1753,30 @@ async fn check_unprocessed_understands_the_cull_task() {
                     vector: Some(vec![0.1; 1152]),
                     metadata: row(None, None),
                 },
+                // Culled by a version whose fast path sent no capture time:
+                // the signals are there, the date is not, and it groups
+                // wrongly until prepared again.
+                lrg_store::StoreRecord {
+                    id: "undated".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0126"), Some(true));
+                        m.remove("capture_time");
+                        m
+                    },
+                },
+                // ...unless neither the catalog nor the file had one, which
+                // is stamped so the photo is not asked for on every run.
+                lrg_store::StoreRecord {
+                    id: "undated_for_good".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0127"), Some(true));
+                        m.remove("capture_time");
+                        m.insert("capture_time_unknown".into(), serde_json::json!(true));
+                        m
+                    },
+                },
             ],
         )
         .await
@@ -1697,6 +1791,7 @@ async fn check_unprocessed_understands_the_cull_task() {
                         "photo_ids": [
                             "done_faceless", "done_with_faces",
                             "needs_face_pass", "needs_everything", "unknown",
+                            "undated", "undated_for_good",
                         ],
                         "tasks": "cull",
                         "regenerate_metadata": "false",
@@ -1713,8 +1808,9 @@ async fn check_unprocessed_understands_the_cull_task() {
     let json = body_json(response).await;
     assert_eq!(
         json["photo_ids"],
-        serde_json::json!(["needs_face_pass", "needs_everything", "unknown"]),
-        "a faceless photo that has been culled must not be reported forever"
+        serde_json::json!(["needs_face_pass", "needs_everything", "unknown", "undated"]),
+        "a faceless photo that has been culled must not be reported forever, and \
+         neither is one whose capture time is known to be unavailable"
     );
 }
 
@@ -2015,6 +2111,58 @@ async fn style_edit_without_training_data_is_an_error_the_plugin_must_handle() {
     assert_eq!(json["engine"], "none");
     assert_eq!(json["matched_examples"], 0);
     assert!(json["error"].is_string());
+}
+
+// ---------------------------------------------------------------------------
+// /v1/edit/score
+//
+// The plugin's aesthetic refinement loop scores each candidate render through
+// this route. Its two failure shapes decide what the user is told, so both are
+// pinned: a request with nothing to score, and a backend without the model.
+// ---------------------------------------------------------------------------
+
+async fn score_request(
+    app: axum::Router,
+    image: Option<(&str, &[u8])>,
+) -> (StatusCode, serde_json::Value) {
+    let (content_type, body) = multipart_body(&[], image);
+    let response = app
+        .oneshot(
+            Request::post("/v1/edit/score")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn edit_score_rejects_a_request_without_an_image() {
+    let (app, _) = fresh_app();
+    let (status, json) = score_request(app, None).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert_eq!(json["status"], "error");
+    assert!(json["error"].is_string(), "{json}");
+}
+
+#[tokio::test]
+async fn edit_score_names_the_missing_model_and_what_to_do_about_it() {
+    let (app, _) = fresh_app();
+    let (status, json) = score_request(app, Some(("render.jpg", b"not-a-real-jpeg"))).await;
+
+    // Not a 500: nothing is broken, the model just is not on disk. The plugin
+    // shows this string as it stands, so it has to be the instruction.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert_eq!(json["status"], "error");
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("aesthetic model") && error.contains("Download AI models"),
+        "{json}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3174,4 +3322,131 @@ async fn a_check_needs_a_repo_and_a_known_engine() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json["error"].as_str().unwrap().contains("engine must be"));
+}
+
+// ---------------------------------------------------------------------------
+// /v1/photos/catalogs/cleanup
+//
+// The plugin runs this unattended, so the two things it must never do are
+// remove a photo another catalog still has and act on an inventory that lost
+// most of the catalog.
+// ---------------------------------------------------------------------------
+
+async fn seed_catalog_rows(state: &Arc<AppState>, rows: &[(&str, &[&str])]) {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, catalogs)| {
+            let set = catalogs.iter().map(|c| c.to_string()).collect();
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "catalog_ids".into(),
+                serde_json::json!(lrg_store::meta::serialize_catalog_ids(&set)),
+            );
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+async fn catalogs_of(state: &Arc<AppState>, id: &str) -> Vec<String> {
+    let rows = state
+        .store()
+        .unwrap()
+        .get_meta(lrg_store::IMAGE_TABLE, &[id.to_string()])
+        .await
+        .unwrap();
+    lrg_store::meta::parse_catalog_ids(&rows[0].1)
+        .into_iter()
+        .collect()
+}
+
+#[tokio::test]
+async fn cleanup_releases_deleted_photos_and_reports_what_waits_for_deletion() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    seed_catalog_rows(
+        &state,
+        &[
+            ("kept", &["cat"]),
+            ("deleted", &["cat"]),
+            ("shared", &["cat", "other"]),
+            ("came_back", &[]),
+        ],
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/photos/catalogs/cleanup",
+        serde_json::json!({
+            "catalog_id": "cat",
+            "photo_ids": ["kept", "came_back"],
+            "db_path": db_path,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["checked"], 3, "{json}");
+    assert_eq!(json["disassociated"], 2, "{json}");
+    assert_eq!(json["orphaned"], 1, "{json}");
+    assert_eq!(json["readopted"], 1, "{json}");
+    assert_eq!(json["purged"], 0, "{json}");
+    assert_eq!(json["waiting"], 1, "{json}");
+    assert_eq!(json["grace_days"], 30, "{json}");
+    assert!(json["next_purge_at"].as_i64().is_some(), "{json}");
+    assert_eq!(json["warnings"], serde_json::json!([]), "{json}");
+
+    assert!(catalogs_of(&state, "deleted").await.is_empty());
+    assert_eq!(catalogs_of(&state, "shared").await, vec!["other"]);
+    assert_eq!(catalogs_of(&state, "came_back").await, vec!["cat"]);
+    assert_eq!(catalogs_of(&state, "kept").await, vec!["cat"]);
+}
+
+#[tokio::test]
+async fn cleanup_holds_back_a_removal_of_most_of_the_catalog_until_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids: Vec<String> = (0..60).map(|i| format!("p{i}")).collect();
+    let rows: Vec<(&str, &[&str])> = ids.iter().map(|id| (id.as_str(), &["cat"][..])).collect();
+    seed_catalog_rows(&state, &rows).await;
+
+    // What an inventory resolved under another identity looks like: none of
+    // the catalog's ids.
+    let request = |confirm: bool| {
+        serde_json::json!({
+            "catalog_id": "cat",
+            "photo_ids": ["unknown_1", "unknown_2"],
+            "confirm_large_removal": confirm,
+            "db_path": db_path,
+        })
+    };
+    let (status, json) = post_json(&app, "/v1/photos/catalogs/cleanup", request(false)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(json["needs_confirmation"], true, "{json}");
+    assert_eq!(json["would_disassociate"], 60, "{json}");
+    assert_eq!(json["checked"], 60, "{json}");
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("Nothing was removed"));
+    assert_eq!(catalogs_of(&state, "p0").await, vec!["cat"]);
+
+    let (status, json) = post_json(&app, "/v1/photos/catalogs/cleanup", request(true)).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["disassociated"], 60, "{json}");
+    assert!(catalogs_of(&state, "p0").await.is_empty());
 }

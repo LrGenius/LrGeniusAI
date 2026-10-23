@@ -24,6 +24,13 @@ plugin: AgentBridge.lua ◄─────────────────�
         AgentCommands.lua runs each command against the catalog (SDK)
 ```
 
+The in-app chat ([Dev: Agent Chat](Dev-Agent-Chat)) is one more client of the
+same tools: `lrg-chat` serves an `LrGeniusMcp` over an in-memory pipe for each
+chat and connects to it, so its calls take this path too. It leaves out the
+developer tools (`LrGeniusMcp::developer_tool_names`), and when it counts a
+selection for its bulk-change question it asks the plugin for at most
+`MAX_PHOTOS_PER_CALL` photos, as the tools do.
+
 | Where | What |
 |---|---|
 | `server-rs/crates/lrg-mcp/src/lib.rs` | Mounts the rmcp `StreamableHttpService` at `/mcp` behind the agent-token check (Host check on, every browser `Origin` refused) |
@@ -115,8 +122,8 @@ know comes back as "update the plugin".
 |---|---|---|---|
 | `get_status` (part) | `status` | – | catalog, selection, sources, versions |
 | any tool given `set: "selection"`/`"view"` | `get_photos` | – | `view` = photos of the active folders/collections; filter bar not applied |
-| `find_photos_in_catalog` | `find_photos` | – | `catalog:findPhotos`; capture dates filtered in Lua |
-| `get_photo_details` (part) | `photo_info` | – | batched metadata reads |
+| `find_photos_in_catalog` | `find_photos` | – | `catalog:findPhotos` for text, folder, collection, camera, lens, keywords and `edited`; rating, flag, colour label and file type checked per photo against `batchGetRawMetadata` (findPhotos returned no photos for those in LrC 15.6); capture dates filtered in Lua |
+| `get_photo_details` (part) | `photo_info` | – | batched metadata reads; with `all_metadata` (at most 10 photos) also `photo:getRawMetadata()`/`getFormattedMetadata()` without a key — every field — and `getContainedCollections()`, as `all_metadata: {formatted, raw, collections}` (`AgentCommands.fullMetadata`: raw leaves out Lightroom objects, values `formatted` repeats, and dates with an ISO 8601 twin) |
 | `view_photo` | `render_preview` | – | `LrExportSession` JPEG in the temp folder; the backend reads and deletes it |
 | `show_in_lightroom` | `show_photos` | own collection only | allowed when read-only; "LrGeniusAI Agent" set |
 | `update_photos` | `update_photos` | yes | one undo step; keywords by "Parent > Child" |
@@ -260,7 +267,11 @@ The SDK facts among these are in `.claude/skills/lrc-plugin-dev.md` under
   of displaying them.
 - `/v1/agent/*`: same Host/Origin rules in `routes/agent.rs`, plus the session
   token on everything after registration. The status read never shows the
-  token.
+  token. Like every REST route, they also need the backend's access token
+  (`lrg_api::api_auth`, see *Access* in [Dev: Backend API](Dev-Backend-API)),
+  which the plugin's requests carry by themselves; so registering — and with
+  it choosing the agent token — is open only to a program that can read the
+  user's token file. `/mcp` is exempt from it: it checks the agent token.
 - The doorbell carries no data and triggers nothing by itself.
 - Changes can be turned off (read-only), and developer commands need a
   `.lrdevplugin` install *and* a switch. Ticking that switch asks the user to

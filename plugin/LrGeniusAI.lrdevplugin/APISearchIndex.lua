@@ -28,6 +28,125 @@ function SearchIndexAPI.isLocalBackend()
 	return url:match("^https?://127%.0%.0%.1:") or url:match("^https?://localhost:")
 end
 
+-- The backend's access token: every request but a handful (/ping, /version,
+-- the browser pages' HTML) carries it as a bearer token, or the backend
+-- refuses it (server-rs/crates/lrg-api/src/api_auth.rs).
+--
+-- A backend on this computer keeps it in a file only this user can read, at
+-- the path below — the same one `lrg_common::api_token::token_dir` builds.
+-- Reading it is how the plug-in proves it runs as the same user, so nobody
+-- types anything. A backend elsewhere (another computer, a Docker container)
+-- has its file there; the user pastes its token into the Backend Server
+-- settings, from `geniusai-server token`.
+
+function SearchIndexAPI.localTokenFilePath()
+	local home = LrPathUtils.getStandardFilePath("home")
+	local parts = WIN_ENV and { "AppData", "Local", "LrGeniusAI", "api-token" }
+		or { "Library", "Application Support", "LrGeniusAI", "api-token" }
+	local path = home
+	for _, part in ipairs(parts) do
+		path = LrPathUtils.child(path, part)
+	end
+	return path
+end
+
+-- Read once, then kept: the file only changes when someone makes a new
+-- token, and a refused request reads it again (forgetLocalToken).
+local localTokenCache = nil
+
+local function readLocalToken()
+	if localTokenCache ~= nil then
+		return localTokenCache
+	end
+	local path = SearchIndexAPI.localTokenFilePath()
+	if LrFileUtils.exists(path) ~= "file" then
+		return nil
+	end
+	local ok, text = LrTasks.pcall(LrFileUtils.readFile, path)
+	local token = ok and type(text) == "string" and text:match("^%s*(.-)%s*$") or ""
+	if token == "" then
+		return nil
+	end
+	localTokenCache = token
+	return token
+end
+
+local function forgetLocalToken()
+	local had = localTokenCache ~= nil
+	localTokenCache = nil
+	return had
+end
+
+--- Forgets the token read from the file. For specs.
+function SearchIndexAPI._forgetLocalToken()
+	forgetLocalToken()
+end
+
+--- The token to send, or nil when there is none to send (an old backend that
+--- has none needs none).
+function SearchIndexAPI.backendToken()
+	if SearchIndexAPI.isLocalBackend() then
+		local token = readLocalToken()
+		if token then
+			return token
+		end
+	end
+	-- A remote backend, or a "local" address that is really a container's
+	-- port: the token the user entered.
+	local entered = Secrets.getBackendToken()
+	if entered ~= "" then
+		return entered
+	end
+	return nil
+end
+
+--- `headers` plus the access token, unless the caller already sends an
+--- Authorization header of its own (the chat sends the agent token).
+local function withAuthHeader(headers)
+	local out = {}
+	for _, header in ipairs(headers or {}) do
+		if tostring(header.field):lower() == "authorization" then
+			return headers
+		end
+		out[#out + 1] = header
+	end
+	local token = SearchIndexAPI.backendToken()
+	if token then
+		out[#out + 1] = { field = "Authorization", value = "Bearer " .. token }
+	end
+	return out
+end
+
+--- Whether the backend refused a request for want of the right token.
+local function isTokenRefusal(status, body)
+	return status == 403 and type(body) == "table" and body.error_code == "api_token"
+end
+
+--- What to tell the user when the backend refuses the token: what to do about
+--- it, which depends on where the backend runs.
+function SearchIndexAPI.tokenRefusedMessage()
+	local paste = "paste what it prints under Plug-in Manager → LrGeniusAI → Backend Server → Access token."
+	if SearchIndexAPI.isLocalBackend() then
+		local path = SearchIndexAPI.localTokenFilePath()
+		if LrFileUtils.exists(path) ~= "file" then
+			return "The backend refused LrGeniusAI: it wants its access token, and there is none in "
+				.. path
+				.. ". If the backend runs in Docker, run `docker exec geniusai-server /app/geniusai-server token` and "
+				.. paste
+				.. " Otherwise quit and reopen Lightroom, so the backend starts again and writes the file."
+		end
+		return "The backend did not accept the access token in "
+			.. path
+			.. ". If a new token was made, quit and reopen Lightroom so the backend uses it too. "
+			.. "If the backend is newer than this plug-in, update the plug-in."
+	end
+	return "The backend at "
+		.. getBaseUrl()
+		.. " wants its access token. On the computer it runs on, run `geniusai-server token` "
+		.. "(in Docker: `docker exec geniusai-server /app/geniusai-server token`) and "
+		.. paste
+end
+
 -- Whether the names Lightroom's face recognition put on a photo may be sent
 -- with this request.
 --
@@ -106,6 +225,7 @@ local ENDPOINTS = {
 	EDIT = "/v1/edit/recipe",
 	EDIT_BASE64 = "/v1/edit/recipe/base64",
 	STYLE_EDIT = "/v1/edit/style",
+	EDIT_SCORE = "/v1/edit/score",
 	TRAINING_ADD = "/v1/edit/training",
 	TRAINING_LIST = "/v1/edit/training",
 	TRAINING_CLEAR = "/v1/edit/training", -- DELETE /v1/edit/training (all)
@@ -149,6 +269,10 @@ local ENDPOINTS = {
 	-- LrView, and the queue they hand catalog work back through.
 	UI_PEOPLE = "/v1/ui/people",
 	UI_ACTIONS = "/v1/ui/actions",
+
+	-- The agent chat (TaskChat.lua): opening a session takes the agent token;
+	-- the page it returns talks to the backend on its own after that.
+	CHAT_SESSIONS = "/v1/chat/sessions",
 
 	-- The agent bridge (see AgentBridge.lua): the plugin registers, claims
 	-- commands an AI agent queued through the backend's MCP endpoint, and
@@ -848,6 +972,10 @@ function SearchIndexAPI.analyzeAndIndexPhotoByReference(photoId, filePath, optio
 			{
 				path = filePath,
 				photo_id = photoId,
+				-- Same per-photo fields the grouped variant forwards; the
+				-- capture time is what burst grouping runs on.
+				date_time = options.date_time,
+				date_time_unix = options.date_time_unix,
 				exposure_bias = options.exposure_bias,
 				is_raw = options.is_raw,
 			},
@@ -1855,9 +1983,14 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 		photo_ids = photoIds,
 		phash_threshold = options.phash_threshold or "auto",
 		clip_threshold = options.clip_threshold or "auto",
-		time_delta_seconds = options.time_delta_seconds or 2,
 		culling_preset = options.culling_preset or "default",
 	}
+	-- "auto" leaves the field out, and the backend then uses the preset's own
+	-- burst window (1s default, 2s event, 3s sports). Sending the string would
+	-- be a 400. Anything else goes through as before, 2 when unset.
+	if options.time_delta_seconds ~= "auto" then
+		body.time_delta_seconds = options.time_delta_seconds or 2
+	end
 	if options.include_stored_metadata then
 		body.include_stored_metadata = true
 	end
@@ -1866,6 +1999,11 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	-- from outside without a backend rebuild; nil leaves the preset in charge.
 	if type(options.semantic_weight) == "number" then
 		body.semantic_weight = options.semantic_weight
+	end
+	-- How hard to cull: scales the preset's reject margin (see
+	-- `Util.cullRejectMarginScale`). nil keeps the preset's own margin.
+	if type(options.reject_margin_scale) == "number" then
+		body.reject_margin_scale = options.reject_margin_scale
 	end
 
 	local result, err = _request("POST", SearchIndexAPI.url("CULL"), body, 300)
@@ -1981,11 +2119,83 @@ function SearchIndexAPI.removePhotoMetadata(photoId)
 end
 
 ---
--- Sync cleanup: disassociate this catalog from backend photos that are no longer in the catalog.
--- Does not delete backend data; works with global photo ID and cross-catalog backends.
--- @return boolean success, string|nil error message
+-- Every backend photo ID in the active catalog, for the index cleanup.
 --
-function SearchIndexAPI.syncCleanup()
+-- Cached identities are read as they are, without touching any file: the ID
+-- the backend knows a photo by is the one cached when it was indexed, even if
+-- the original has changed or is offline since. Only photos with no cached
+-- identity yet (imported since) are resolved, which caches theirs, so each
+-- photo costs that once.
+-- @param progressScope LrProgressScope
+-- @return table|nil list of IDs; nil, error message on failure ("canceled" when canceled)
+--
+local function catalogInventory(progressScope)
+	local catalog = LrApplication.activeCatalog()
+	local allPhotos = catalog:getAllPhotos()
+	local total = #allPhotos
+	local function progress(done, caption)
+		progressScope:setPortionComplete(done, total)
+		progressScope:setCaption(caption)
+	end
+
+	local ids = {}
+	if not shouldUseGlobalPhotoId() then
+		local uuids = catalog:batchGetRawMetadata(allPhotos, { "uuid" })
+		for _, photo in ipairs(allPhotos) do
+			local uuid = uuids[photo] and uuids[photo].uuid
+			if Util.nilOrEmpty(uuid) then
+				return nil, "Could not resolve photo identity for cleanup: Photo UUID is missing"
+			end
+			ids[#ids + 1] = uuid
+		end
+		return ids
+	end
+
+	local byId, uncached = Util.indexCachedPhotoIds(catalog, allPhotos, function(done)
+		progress(done, string.format("Reading photo IDs: %d of %d", done, total))
+	end)
+	if progressScope:isCanceled() then
+		return nil, "canceled"
+	end
+	for id in pairs(byId) do
+		ids[#ids + 1] = id
+	end
+	local cachedCount = total - #uncached
+	for index, photo in ipairs(uncached) do
+		if progressScope:isCanceled() then
+			return nil, "canceled"
+		end
+		local photoId, idErr = getPhotoIdForPhoto(photo)
+		if not photoId then
+			-- An incomplete inventory would release the photos it misses.
+			return nil, "Could not resolve photo identity for cleanup: " .. tostring(idErr)
+		end
+		ids[#ids + 1] = photoId
+		if index % 100 == 0 or index == #uncached then
+			progress(cachedCount + index, string.format("Identifying new photos: %d of %d", index, #uncached))
+		end
+	end
+	return ids
+end
+
+---
+-- The index cleanup: lets the backend know every photo in this catalog, so it
+-- releases the indexed photos that are no longer in it. A photo another
+-- catalog still has stays indexed there. One in no catalog is deleted for good
+-- after a grace period (`grace_days`), unless it comes back before that.
+--
+-- When the cleanup would release more than half of what the catalog has
+-- indexed, the backend changes nothing and asks for confirmation instead; pass
+-- `confirmLargeRemoval` to go ahead.
+--
+-- @param options table|nil { progressScope = LrProgressScope|nil, confirmLargeRemoval = boolean|nil }
+-- @return true, table backend result ({ disassociated, orphaned, readopted, purged, waiting,
+--   next_purge_at, grace_days, warnings, ... })
+-- @return false, string error message ("canceled" when canceled),
+--   table|nil { needsConfirmation = true, wouldRemove = n, indexed = n } when held back
+--
+function SearchIndexAPI.syncCleanup(options)
+	options = options or {}
 	local catalogId = getCatalogId()
 	if not catalogId then
 		log:warn("syncCleanup: no catalog identifier")
@@ -1996,64 +2206,59 @@ function SearchIndexAPI.syncCleanup()
 		return false, "Backend not reachable"
 	end
 
-	local catalog = LrApplication.activeCatalog()
-	local allPhotos = catalog:getAllPhotos()
-	local photoIds = {}
-	local updateInterval = math.max(1, math.floor(#allPhotos / 50))
-
-	local progressScope = LrProgressScope({
-		title = LOC("$$$/LrGeniusAI/SearchIndexAPI/cleaningIndex=Cleaning search index"),
-		functionContext = nil,
-	})
-
-	for i, photo in ipairs(allPhotos) do
-		if progressScope:isCanceled() then
+	local ownScope = options.progressScope == nil
+	local progressScope = options.progressScope
+		or LrProgressScope({
+			title = "Cleaning up the search index",
+			functionContext = nil,
+		})
+	local function finish(...)
+		if ownScope then
 			progressScope:done()
-			return false, "canceled"
 		end
-		local photoId, idErr = getPhotoIdForPhoto(photo)
-		if not photoId then
-			progressScope:done()
-			return false, "Could not resolve photo identity for cleanup: " .. tostring(idErr)
-		end
-		photoIds[#photoIds + 1] = photoId
-		if i % updateInterval == 0 or i == #allPhotos then
-			progressScope:setPortionComplete(i, #allPhotos)
-			progressScope:setCaption(
-				LOC("$$$/LrGeniusAI/SearchIndexAPI/cleaningIndexProgress=Cleaning index. Photo ^1/^2"),
-				tostring(i),
-				tostring(#allPhotos)
-			)
-		end
+		return ...
 	end
 
-	progressScope:setCaption(LOC("$$$/LrGeniusAI/SearchIndexAPI/syncCleanupSending=Syncing with backend..."))
+	local photoIds, inventoryErr = catalogInventory(progressScope)
+	if not photoIds then
+		return finish(false, inventoryErr)
+	end
 	if progressScope:isCanceled() then
-		progressScope:done()
-		return false, "canceled"
+		return finish(false, "canceled")
 	end
+	progressScope:setCaption("Removing deleted photos from the index...")
 	-- Cleanup is a complete inventory, not an additive claim. Sending batches
 	-- would disassociate every photo outside each batch (and an empty catalog
 	-- must still be sent so its former associations can be removed).
-	local result, err = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
+	local result, err, status, errorBody = _request("POST", SearchIndexAPI.url("SYNC_CLEANUP"), {
 		catalog_id = catalogId,
 		photo_ids = photoIds,
-	}, 120)
+		confirm_large_removal = options.confirmLargeRemoval == true,
+	}, 300)
 	if err then
-		progressScope:done()
+		if status == 409 and type(errorBody) == "table" and errorBody.needs_confirmation then
+			log:warn("syncCleanup held back by the backend: " .. tostring(errorBody.error))
+			return finish(false, errorBody.error, {
+				needsConfirmation = true,
+				wouldRemove = tonumber(errorBody.would_disassociate) or 0,
+				indexed = tonumber(errorBody.checked) or 0,
+			})
+		end
 		log:error("syncCleanup failed: " .. tostring(err))
-		return false, err
+		return finish(false, err)
 	end
-	local disassociated = result and result.disassociated or 0
-	progressScope:done()
+	result = type(result) == "table" and result or {}
 	log:info(
-		"syncCleanup finished: "
-			.. tostring(#photoIds)
-			.. " photos in catalog, "
-			.. tostring(disassociated)
-			.. " disassociated"
+		string.format(
+			"syncCleanup finished: %d photos in catalog, %s released, %s re-adopted, %s purged, %s waiting",
+			#photoIds,
+			tostring(result.disassociated or 0),
+			tostring(result.readopted or 0),
+			tostring(result.purged or 0),
+			tostring(result.waiting or 0)
+		)
 	)
-	return true
+	return finish(true, result)
 end
 
 ---
@@ -2171,12 +2376,6 @@ function SearchIndexAPI.claimPhotosForCatalog(progressScope)
 			result
 	end
 	return true, nil, result
-end
-
-function SearchIndexAPI.removeMissingFromIndex()
-	-- Use sync cleanup (soft state): disassociate this catalog from photos no longer in catalog.
-	-- Works with global photo ID and cross-catalog backends; no backend data is deleted.
-	return SearchIndexAPI.syncCleanup()
 end
 
 -- Build per-photo analysis options by merging shared options with catalog-derived
@@ -3472,7 +3671,7 @@ _requestMultipart = function(url, mimeChunks, timeout)
 			.. " chunks="
 			.. tostring(type(mimeChunks) == "table" and #mimeChunks or "n/a")
 	)
-	local result, hdrs = LrHttp.postMultipart(url, mimeChunks, nil, timeout)
+	local result, hdrs = LrHttp.postMultipart(url, mimeChunks, withAuthHeader(), timeout)
 	log:trace(
 		"_requestMultipart raw return: resultType="
 			.. tostring(type(result))
@@ -3510,7 +3709,11 @@ _requestMultipart = function(url, mimeChunks, timeout)
 			local ok, decoded_err = LrTasks.pcall(function()
 				return JSON:decode(result)
 			end)
-			if ok and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
+			if ok and isTokenRefusal(status, decoded_err) then
+				-- Read the file again next time; a new token may be there.
+				forgetLocalToken()
+				err_msg = SearchIndexAPI.tokenRefusedMessage()
+			elseif ok and type(decoded_err) == "table" and not Util.nilOrEmpty(decoded_err.error) then
 				err_msg = err_msg .. " - " .. decoded_err.error
 			else
 				err_msg = err_msg .. " Response: " .. tostring(result)
@@ -3538,7 +3741,7 @@ _urlEncode = function(s)
 	end))
 end
 
-_request = function(method, url, body, timeout, options)
+local requestOnce = function(method, url, body, timeout, options)
 	options = options or {}
 
 	-- Auto-inject db_path so the backend can transparently re-bind after a
@@ -3568,7 +3771,7 @@ _request = function(method, url, body, timeout, options)
 	local bodyString = (body and type(body) == "table") and JSON:encode(body) or nil
 
 	-- `options.headers`: extra request headers, { { field = ..., value = ... } }.
-	local extraHeaders = type(options.headers) == "table" and options.headers or {}
+	local extraHeaders = withAuthHeader(type(options.headers) == "table" and options.headers or {})
 
 	local ok, err = LrTasks.pcall(function()
 		if method == "GET" then
@@ -3657,6 +3860,22 @@ _request = function(method, url, body, timeout, options)
 		-- else reads two values as before.
 		return nil, err_msg, status, errorBody
 	end
+end
+
+_request = function(method, url, body, timeout, options)
+	local result, err, status, errorBody = requestOnce(method, url, body, timeout, options)
+	if result == nil and isTokenRefusal(status, errorBody) then
+		-- The token read earlier may be stale (a new one was made since):
+		-- read the file again and try once more.
+		if forgetLocalToken() and SearchIndexAPI.backendToken() then
+			result, err, status, errorBody = requestOnce(method, url, body, timeout, options)
+		end
+		if result == nil and isTokenRefusal(status, errorBody) then
+			err = SearchIndexAPI.tokenRefusedMessage()
+			log:error(err)
+		end
+	end
+	return result, err, status, errorBody
 end
 
 ---
@@ -4072,6 +4291,13 @@ function SearchIndexAPI.getPeopleUiUrl()
 			url = url .. "?db_path=" .. _urlEncode(dbPath)
 		end
 	end
+	-- The page sends the access token with its own requests. In the
+	-- fragment, which the browser never sends anywhere: not to the backend's
+	-- log, not in a Referer.
+	local token = SearchIndexAPI.backendToken()
+	if token then
+		url = url .. "#token=" .. _urlEncode(token)
+	end
 	return url
 end
 
@@ -4087,6 +4313,33 @@ function SearchIndexAPI.takeUiActions()
 		return nil, err
 	end
 	return result
+end
+
+---
+-- Opens an agent chat. Needs the agent token — the same one AI apps use for
+-- /mcp — and the local model to chat with. Returns { session_id, token, page },
+-- where `page` is the path to open, carrying the chat's own token in its
+-- fragment; or nil, err when the backend refused (its message says why, e.g.
+-- that the agent bridge is off).
+-- @param agentToken string
+-- @param body table { provider, model, llm_n_ctx?, llm_n_parallel?, llm_gpu_layers? }
+function SearchIndexAPI.openChatSession(agentToken, body)
+	local result, err = _request(
+		"POST",
+		SearchIndexAPI.url("CHAT_SESSIONS"),
+		body,
+		30,
+		{ headers = { { field = "Authorization", value = "Bearer " .. (agentToken or "") } } }
+	)
+	if err then
+		log:error("openChatSession failed: " .. tostring(err))
+	end
+	return result, err
+end
+
+--- A path the backend returned (such as a chat page), as a full URL.
+function SearchIndexAPI.pageUrl(path)
+	return getBaseUrl() .. path
 end
 
 ---
@@ -4266,7 +4519,7 @@ function SearchIndexAPI.downloadRawLog(logType, targetPath)
 	log:trace("Downloading raw " .. logType .. " log from: " .. url)
 
 	local ok, res, hdrs = LrTasks.pcall(function()
-		return LrHttp.get(url, nil, 60)
+		return LrHttp.get(url, withAuthHeader(), 60)
 	end)
 
 	-- Status can be in hdrs.status (table) or hdrs itself (number) depending on LR version
@@ -5403,6 +5656,40 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 	end
 	log:error("styleEdit unexpected status: " .. tostring(response.status))
 	return false, response.error or "Unexpected response"
+end
+
+---
+-- The aesthetic score (1..9, higher is better) of one rendered image.
+--
+-- Stores nothing on the backend: the caller is trying candidate edits, and the
+-- score of an intermediate render belongs to no photo record. AI Edit's
+-- aesthetic refinement (AestheticRefine.lua) is the caller.
+-- @param filepath string A rendered JPEG, as exportPhotoForIndexing produces.
+-- @return number|nil score, string|nil error The error is the backend's own
+--   words, which for a missing model already say what to do.
+---
+function SearchIndexAPI.scoreEditedPhoto(filepath)
+	if not filepath or not LrFileUtils.exists(filepath) then
+		return nil, "No rendered image to score"
+	end
+	local url = SearchIndexAPI.url("EDIT_SCORE")
+	local mimeChunks = {
+		{
+			name = "image",
+			fileName = LrPathUtils.leafName(filepath),
+			filePath = filepath,
+			contentType = "image/jpeg",
+		},
+	}
+	local response, err = _requestMultipart(url, mimeChunks, 60)
+	if not response then
+		return nil, err or "Unknown error"
+	end
+	local score = tonumber(response.score)
+	if response.status == "success" and score then
+		return score, nil
+	end
+	return nil, response.error or "Unexpected response"
 end
 
 --- Sends the update manifest and plugin path to the backend to perform a code-only update.

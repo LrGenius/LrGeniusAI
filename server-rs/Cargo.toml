@@ -12,6 +12,7 @@ members = [
     "crates/lrg-mlx",
     "crates/lrg-api",
     "crates/lrg-mcp",
+    "crates/lrg-chat",
     "crates/lrg-server",
 ]
 
@@ -32,6 +33,7 @@ lrg-llama = { path = "crates/lrg-llama" }
 lrg-mlx = { path = "crates/lrg-mlx" }
 lrg-api = { path = "crates/lrg-api" }
 lrg-mcp = { path = "crates/lrg-mcp" }
+lrg-chat = { path = "crates/lrg-chat" }
 
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync", "fs"] }

@@ -2,6 +2,7 @@
 //! application state, and the `db_path` auto-bind middleware.
 
 pub mod agent_bridge;
+pub mod api_auth;
 pub mod edit_budget;
 pub mod hf_repo;
 pub mod llm_engine;

@@ -92,6 +92,10 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.periodicalUpdateCheck = prefs.periodicalUpdateCheck
 	propertyTable.dbStoragePath = prefs.dbStoragePath or ""
 	propertyTable.backendServerUrl = prefs.backendServerUrl or Defaults.defaultBackendServerUrl
+	-- The access token of a backend on another computer. Kept for endDialog,
+	-- which saves it only when changed.
+	propertyTable.backendApiToken = Secrets.getBackendToken()
+	propertyTable.loadedBackendToken = propertyTable.backendApiToken
 
 	-- The Other AI server. Its status line is checked when the dialog opens
 	-- and whenever the address or key changes — an edit field commits when
@@ -369,6 +373,22 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 		while checksStillWanted() do
 			refreshBridgeStatus()
 			LrTasks.sleep(2)
+		end
+	end)
+
+	-- Index cleanup (IndexCleanup.lua). Saved the moment it changes, like the
+	-- agent bridge switches: the background schedule reads it live. The status
+	-- is polled so a run that finishes while the dialog is open shows up.
+	propertyTable.autoIndexCleanup = prefs.autoIndexCleanup ~= false
+	propertyTable:addObserver("autoIndexCleanup", function(_, _, value)
+		prefs.autoIndexCleanup = value == true
+		propertyTable.indexCleanupStatus = IndexCleanup.statusText()
+	end)
+	propertyTable.indexCleanupStatus = ""
+	LrTasks.startAsyncTask(function()
+		while checksStillWanted() do
+			propertyTable.indexCleanupStatus = IndexCleanup.statusText()
+			LrTasks.sleep(3)
 		end
 	end)
 end
@@ -1483,6 +1503,33 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:row({
 					fill_horizontal = 1,
 					f:static_text({
+						title = "Access token",
+						alignment = "right",
+						width = share("labelWidth"),
+					}),
+					f:password_field({
+						value = bind("backendApiToken"),
+						fill_horizontal = 1,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
+						title = "",
+						width = share("labelWidth"),
+					}),
+					f:static_text({
+						title = "Only for a backend on another computer or in Docker: run "
+							.. '"geniusai-server token" there and paste what it prints. '
+							.. "A backend on this computer needs nothing here.",
+						fill_horizontal = 1,
+						height_in_lines = 2,
+						width_in_chars = 60,
+					}),
+				}),
+				f:row({
+					fill_horizontal = 1,
+					f:static_text({
 						title = LOC("$$$/LrGeniusAI/PluginInfo/DbStoragePath=Database storage folder"),
 						alignment = "right",
 						width = share("labelWidth"),
@@ -1531,6 +1578,33 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						fill_horizontal = 1,
 						wrap = true,
 					}),
+				}),
+				f:checkbox({
+					value = bind("autoIndexCleanup"),
+					title = "Remove photos deleted from Lightroom from the search index automatically",
+				}),
+				f:static_text({
+					-- Manual line breaks: wrap = true does nothing on static_text.
+					title = "Checked once a day, and when a search finds photos that are gone. A photo another catalog\n"
+						.. "still has stays indexed there; one in no catalog keeps its AI data for 30 days in case it\n"
+						.. "comes back. Before removing more than half of a catalog's index, LrGeniusAI asks.",
+					size = "small",
+				}),
+				f:push_button({
+					title = "Clean up index now",
+					width = share("backendButtonWidth"),
+					action = function()
+						IndexCleanup.runNow(function()
+							propertyTable.indexCleanupStatus = IndexCleanup.statusText()
+						end)
+					end,
+				}),
+				f:static_text({
+					-- Sized up front: a bound title does not resize the view.
+					title = bind("indexCleanupStatus"),
+					size = "small",
+					width_in_chars = 95,
+					height_in_lines = 2,
 				}),
 				f:row({
 					f:push_button({
@@ -1756,6 +1830,15 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 		return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 	end
 	Secrets.saveChanged(propertyTable, propertyTable.loadedApiKeys)
+	local backendToken = trimmed(propertyTable.backendApiToken)
+	if backendToken ~= trimmed(propertyTable.loadedBackendToken) then
+		LrTasks.startAsyncTask(function()
+			local ok, problem = Secrets.setBackendToken(backendToken)
+			if not ok then
+				LrDialogs.message("Access token not stored securely", problem, "warning")
+			end
+		end)
+	end
 	prefs.aiServerUrl = trimmed(propertyTable.aiServerUrl)
 	-- Shown for one opening of this dialog; see updateHealth.
 	prefs.pendingProviderNotice = nil

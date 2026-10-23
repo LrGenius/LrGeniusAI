@@ -12,6 +12,9 @@
 # silently ignored.
 #
 # Stop:  docker compose down
+# Token: docker exec geniusai-server /app/geniusai-server token
+#        (paste it in Lightroom: Plug-in Manager > LrGeniusAI > Backend Server >
+#        Access token; kept in ./data/LrGeniusAI/api-token)
 # Logs:  docker compose logs -f geniusai-server
 
 services:

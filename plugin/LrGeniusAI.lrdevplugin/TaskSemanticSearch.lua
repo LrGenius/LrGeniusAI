@@ -579,18 +579,28 @@ LrTasks.startAsyncTask(function()
 			table.insert(missingFromResults, tostring(rowsWithoutId) .. " result row(s) carried no photo ID")
 		end
 		local missingFromCatalog = #photoIds - (photos and #photos or 0)
+		local cleanupStarted = false
 		if missingFromCatalog > 0 then
 			table.insert(
 				missingFromResults,
 				tostring(missingFromCatalog) .. " matched photo(s) are not in the current catalog"
 			)
+			-- The search is scoped to this catalog, so these are photos it
+			-- indexed and no longer has: deleted ones the cleanup has not
+			-- caught up with yet.
+			cleanupStarted = IndexCleanup.requestSoon()
 		end
 		if #missingFromResults > 0 then
 			LrDialogs.message(
 				"Search Results Are Incomplete",
 				"The collection does not hold every photo the search matched: "
 					.. table.concat(missingFromResults, "; ")
-					.. ".",
+					.. "."
+					.. (
+						cleanupStarted
+							and "\n\nPhotos deleted from Lightroom are taken out of the search index now, in the background."
+						or ""
+					),
 				"warning"
 			)
 		end

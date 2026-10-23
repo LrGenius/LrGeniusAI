@@ -42,14 +42,58 @@ photos, so it works best on frames shot with AEB.
 3. Choose:
    - **Apply to** – `Selected photos only` or `Current view`.
    - **Burst time window (seconds)** – how far apart two frames may be and
-     still count as the same burst.
+     still count as the same burst. `Auto (from preset)` uses the preset's
+     own window: 1 s for Default, Portrait and Street, 2 s for Event, 3 s for
+     Sports.
    - **Culling preset** – tunes thresholds and weights:
      `Default (sharpness, exposure, faces)`, `Portrait (faces and expression)`,
      `Street (candid moments)`, `Event (people, emotion, moments)`,
      `Sports (action and emotion)`. Every preset except Default also judges
      the moment; see below.
+   - **Cull strength** – how many near-misses become reject candidates.
+     `Gentle` keeps more alternates, `Strict` aims for one keeper per burst,
+     `Balanced` is the preset's own margin. It only moves the score margin:
+     a blurred frame, a blink or a blocked face is rejected at the same
+     threshold whatever you choose.
    - **Create 'Duplicates / Near Duplicates' collection** – on by default.
+   - **Lightroom flags and ratings** – see the next section.
 4. Start the task and wait until the progress dialog completes.
+
+## Flags, stars and labels in Lightroom
+
+Collections are good for review; flags are what you cull *with*. The
+**Lightroom flags and ratings** box writes the result the way you would by
+hand, so the Library filter bar, the flag shortcuts and
+**Photo → Delete Rejected Photos** all work on it directly:
+
+- **Flag picks (P)** – the best usable frame of every group gets the Pick
+  flag. On by default.
+- **Flag reject candidates as rejected (X)** – reject candidates get the
+  Reject flag. Off by default, because that flag is one menu command away
+  from deleting files; turn it on once you trust the preset on your work.
+  Nothing is ever deleted by the plugin.
+- **Star ratings** – picks 3 stars, alternates 2 stars. Reject candidates
+  get no stars; the flag is their mark. Off by default.
+- **Purple label on "look before deleting" rejects** – a reject candidate
+  that had its group's strongest moment but a technical flaw is labelled
+  purple, so it stands out in the grid before you delete rejects. On by
+  default.
+- **Also overwrite flags, stars and labels I set myself** – off by default.
+  The plugin remembers what each cull wrote on a photo (the *Culling wrote*
+  field in the Metadata panel), so it can tell its own marks from yours. Marks
+  an earlier cull wrote are always brought up to date with the new run — an
+  earlier pick that is now an alternate loses its flag, an earlier "look
+  before deleting" label goes — while a flag, rating or label you set
+  yourself is left alone and counted in the completion dialog. Turn this on
+  only to re-cull from scratch over your own marks.
+
+Everything the run writes is one history step, so **Cmd/Ctrl+Z** takes it all
+back. Frames of an exposure bracket, focus stack or panorama are never flagged
+or rated.
+
+The result collections are filled in review order: `Picks` and `Alternates`
+best first, `Reject Candidates` worst first. Set the collection's sort to
+**Custom Order** to see it.
 
 The plugin calls the backend culling endpoint, which:
 
@@ -126,8 +170,10 @@ You can safely rename or move these collections later; they are standard Lightro
 ### When the run finishes
 
 The completion dialog counts the groups, picks, alternates, reject candidates
-and near-duplicate groups, and names the preset used. Two lines appear only
-when they apply:
+and near-duplicate groups, and names the preset used. When flags, stars or
+labels were written it says how many of each, and how many were left alone
+because you had set them yourself. Two more lines appear only when they
+apply:
 
 - how many groups were recognised as brackets, stacks or panoramas, and that
   every frame in them was kept
@@ -144,7 +190,10 @@ For each photo, the backend stores culling-related fields such as:
 
 - group information: `cull_group_id`, `cull_group_type`, `cull_group_rank`, `cull_group_winner`
 - technical scores: `cull_sharpness`, `cull_sharpness_peak`, `cull_exposure`,
-  `cull_highlight_clip`, `cull_shadow_clip`, `cull_noise`,
+  `cull_highlight_clip`, `cull_shadow_clip`, `cull_noise`, `cull_noise_flat`
+  (noise measured only where the frame is smooth, so fine detail no longer
+  reads as grain; ranking prefers it to `cull_noise`, and photos indexed
+  before it existed rank on `cull_noise` until re-indexed),
   `cull_motion_anisotropy` (camera shake vs. subject motion),
   `cull_sharp_region_x` / `cull_sharp_region_y` (where in the frame the
   sharpness actually sits, so a sharp background does not win over a sharp
@@ -227,6 +276,23 @@ the model, have none; the culling warning then says how many and that they were
 ranked on a simpler contrast-and-colour estimate instead, which can compare
 unevenly with scored frames in the same group. Run **Analyze & Index Photos** on
 them to fill it in.
+
+## Capture time and grouping
+
+Burst grouping runs on each photo's capture time. The fast preparation pass
+sends it from the catalog, and the backend reads it from the file's EXIF when
+the catalog has none. Photos prepared by an older version without it group
+badly (whole sequences of similar frames collapse into one group with one
+pick), so the plugin offers to prepare them again once; a photo that has no
+capture time anywhere is remembered as such and not asked about again.
+
+Rejects for a blink, a blocked face or a weak face are judged against the
+other frames of the group as well as against fixed thresholds: a frame is only
+a blink when its eyes read clearly less open than the best frame of its burst.
+On small faces the eye estimate reads "closed" on every frame, so without this
+every frame but the pick was a reject. The same treatment for blur exists in
+the backend but is switched off until it has been checked against hand-culled
+shoots of several genres.
 
 ## Tips for best results
 

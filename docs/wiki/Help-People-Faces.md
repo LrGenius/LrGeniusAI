@@ -27,7 +27,9 @@ it when you are done.
 
 If the browser never comes up — a blocked pop-up, no default browser — the
 plugin tells you after about half a minute and gives you the address to open
-by hand.
+by hand. Use that whole address: the part after `#` is the backend's access
+token, and the page cannot load anything without it. A bookmark of the page
+does not keep it, so open People from Lightroom each time.
 
 ### What it shows
 

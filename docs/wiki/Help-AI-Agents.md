@@ -30,6 +30,7 @@ Ask in plain words, for example:
 - "Cull the photos I have selected: keep the best frame of each burst and
   reject the blurry ones."
 - "Which bird species did I photograph in 2025?"
+- "Put my 10 best landscape photos in a collection."
 - "Make these three photos a bit warmer and lift the shadows, then show me."
 - "Add the keywords *Hamburg* and *Harbour* to every photo of the harbour from
   yesterday."
@@ -39,12 +40,12 @@ Behind those requests the agent uses these tools:
 | Tool | What it does |
 |---|---|
 | `get_status` | Whether Lightroom is connected, the open catalog, the selection, how much is indexed |
-| `search_photos` | Semantic search: describe what is in the picture |
+| `search_photos` | Semantic search: describe what is in the picture. Can also rank by aesthetic score and keep only some genres; with no description it returns your best photos (see [Advanced Search](Help-Advanced-Search#ranking)) |
 | `find_similar_photos` | Photos that look alike, or near-duplicates |
 | `list_people`, `find_photos_of_people` | People from LrGeniusAI's face recognition |
 | `find_photos_in_catalog` | Lightroom's own filters: rating, flag, label, keywords, folder, dates, camera, lens |
 | `cull_photos` | Groups bursts and duplicates, names winners and reject candidates |
-| `get_photo_details`, `view_photo` | Metadata, and the photo as Lightroom renders it now |
+| `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre) — on request every field Lightroom keeps, IPTC, EXIF, GPS and other plug-ins' fields included — and the photo as Lightroom renders it now |
 | `show_in_lightroom` | Fills a collection and switches Lightroom to it |
 | `update_photos` | Rating, flag, colour label, title, caption, keywords, IPTC fields |
 | `manage_collection`, `list_collections` | Collections |
@@ -101,6 +102,75 @@ app set up with the old one stops working until you copy the new setup into it.
 
 The token lives in your system's password storage (the Keychain on macOS, the
 Credential Manager on Windows), like your AI provider keys.
+
+---
+
+## Or chat right here: Chat with Your Catalog
+
+You do not need another app to try this. **Library → Plug-in Extras → Chat with
+Your Catalog...** opens a chat page in your browser, and an AI model works with
+the same tools.
+
+The chat starts with **the model chosen for Analyze & Index**:
+
+- **A model on this computer** (`Plug-in Manager → LrGeniusAI → Local AI
+  Model`), LM Studio or Ollama: nothing leaves your computer.
+- **A cloud model** (OpenAI, Anthropic, Google Gemini) or **your own AI
+  server**: the chat uses the key or address you entered for it. What the
+  model reads — your messages, photo previews, metadata and the names of
+  recognised people — goes to that company or server with every step, under
+  its terms, and it costs what that provider charges. LrGeniusAI asks once per
+  provider before the first such chat, and the chat page says where it runs.
+
+If the model for Analyze & Index cannot chat, the chat uses a local model if
+one is installed. It also needs the **agent bridge** (Step 1). You do not
+need the token or Step 2.
+
+**Choosing another model.** The **Model** menu at the top of the chat page
+lists every model you can use right now: the ones on this computer, LM Studio
+and Ollama while they run, your own AI server, and every cloud provider you
+entered a key for. Another model starts a **new chat** — the conversation so
+far is cleared, and the page asks before it does that. For a cloud model it
+also says where the new chat goes.
+
+**You decide what it may do on its own.** Each step the model wants to take
+appears as a card. When your settings ask first, the card has buttons:
+
+- **Allow once** — just this step.
+- **Allow in this chat** — this tool, until you close the chat.
+- **Always allow** — this tool from now on, in every chat.
+- **Don't allow** — optionally with a note saying what to do instead, for
+  example "only the three best ones". The model gets your note.
+
+**What it may do...** at the top right sets this for every chat:
+
+- *Ask before every step* — even searching waits for you.
+- *Look freely, ask before changes* — the default. Searching and looking run on
+  their own; anything that changes something asks first.
+- *Also allow easy-to-undo changes* — collections, showing results and
+  indexing run on their own; changes to the photos themselves (ratings,
+  keywords, develop settings) ask.
+- *Allow everything* — nothing asks, except large changes (below).
+
+Per tool you can also choose *Allow*, *Ask* or *Off* (the model is not even
+told about a tool that is off). And a change to more photos than your limit
+(200 unless you change it) always asks, whatever else you allowed.
+
+**Stop** ends what the model is doing: a step waiting for you is not done, and
+nothing new starts. A step already running in Lightroom finishes.
+
+Everything under *Staying in control* below applies to the chat too: read-only
+mode, Undo, the develop snapshots and the stop button on the progress bar.
+
+**Expect mistakes, more so from small models.** Models on your computer
+misunderstand more often than the large ones behind Claude or ChatGPT: they
+pick a wrong field, or act on more photos than you meant. Read what a card says before you allow it. Bigger models do better —
+Gemma 4 12B handles one- and two-step tasks such as "find my beach photos and
+show them" or "give the selected photos four stars"; Gemma 4 E4B often gets the
+details of a change wrong.
+
+Two hours after you close its browser tab, a chat is gone; open a new one from
+the menu. So is every chat when LrGeniusAI's backend restarts.
 
 ---
 

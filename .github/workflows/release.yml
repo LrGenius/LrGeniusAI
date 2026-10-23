@@ -720,6 +720,9 @@ jobs:
           SMOKE_STDOUT="$DB_DIR/smoke-backend.out"
           mkdir -p "$DB_DIR"
           URL="http://127.0.0.1:19819/ping"
+          # A fixed access token, so the shutdown below gets in without the
+          # backend writing a token file into the runner's home folder.
+          export LRG_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
           START_TS=$(python3 -c "import time; print(time.time())")
 
           BIN="$GITHUB_WORKSPACE/build/lrgenius-server/lrgenius-server${{ matrix.bin_ext }}"
@@ -764,7 +767,7 @@ jobs:
           COLD_START_SECONDS=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$START_TS" "$END_TS")
           echo "Measured cold start to /ping: ${COLD_START_SECONDS}s"
 
-          curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
+          curl -sf -X POST -H "Authorization: Bearer $LRG_API_TOKEN" "http://127.0.0.1:19819/shutdown" || true
 
       - name: Pack artifact payload
         shell: bash

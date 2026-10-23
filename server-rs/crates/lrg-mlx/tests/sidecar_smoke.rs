@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use lrg_mlx::{GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
+use lrg_mlx::{ChatMessage, ChatRequest, GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
 
 fn model_dir() -> PathBuf {
     PathBuf::from(
@@ -106,6 +106,73 @@ async fn describes_a_photo_as_schema_valid_json() {
 
 /// Every photo in a batch must get its own slot, in order — this is what the
 /// provider relies on to zip results back to photos.
+fn message(role: &'static str, text: &str) -> ChatMessage {
+    ChatMessage {
+        role,
+        text: text.to_string(),
+        images: Vec::new(),
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs Apple silicon, a built sidecar and a real MLX model"]
+async fn answers_a_conversation_and_streams_exactly_its_text() {
+    let engine = engine().await;
+    let mut last = message("user", "What colours does this photo show?");
+    last.images.push(test_image());
+    let request = ChatRequest {
+        messages: vec![
+            message("system", "You answer briefly, as JSON."),
+            message("user", "Say hello."),
+            message("assistant", r#"{"answer": "Hello."}"#),
+            last,
+        ],
+        schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": false
+        })),
+        max_tokens: 96,
+        temperature: 0.0,
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let out = engine
+        .chat(request, Some(tx))
+        .await
+        .expect("chat should succeed");
+    let mut streamed = String::new();
+    let mut pieces = 0;
+    while let Ok(piece) = rx.try_recv() {
+        streamed.push_str(&piece);
+        pieces += 1;
+    }
+    println!("{pieces} deltas: {}", out.text);
+    assert_eq!(streamed, out.text, "the deltas must add up to the answer");
+    assert!(
+        pieces > 1,
+        "the answer should arrive in pieces, not at once"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(out.text.trim())
+        .unwrap_or_else(|e| panic!("constrained output must be valid JSON: {e}\n{}", out.text));
+    assert!(parsed["answer"].is_string(), "{parsed}");
+
+    // The engine still indexes afterwards, and gives up the chat's cache for it.
+    let outputs = engine
+        .generate(vec![GenerationRequest {
+            system_prompt: "You are a photo tagger.".into(),
+            stable_prompt: "Describe the photo.".into(),
+            image: Some(test_image()),
+            schema: Some(metadata_schema()),
+            max_tokens: 256,
+            ..Default::default()
+        }])
+        .await
+        .expect("the sidecar is still there");
+    outputs[0].as_ref().expect("indexing after a chat works");
+}
+
 #[tokio::test]
 #[ignore = "needs Apple silicon, a built sidecar and a real MLX model"]
 async fn a_batch_returns_one_result_per_request() {
@@ -170,4 +237,85 @@ async fn a_bad_model_directory_fails_to_load() {
     })
     .await;
     assert!(result.is_err(), "a missing model directory must not load");
+}
+
+/// Two turns of a conversation whose system prompt outgrows Gemma's sliding
+/// window (512 tokens), as every real chat prompt does: past it the cache
+/// cannot be trimmed back. `answer` turns the model's first answer into what
+/// the second turn says it was.
+///
+/// Returns turn 2 as answered from the cache, and as answered once another
+/// conversation has replaced it — which shares at most the template's first
+/// tokens with turn 2, so it is as good as fresh.
+async fn two_turns(answer: impl Fn(&str) -> String) -> (MlxEngine, String, String) {
+    let engine = engine().await;
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string", "maxLength": 300}},
+        "required": ["answer"],
+        "additionalProperties": false
+    });
+    let turn = |messages: &Vec<ChatMessage>| ChatRequest {
+        messages: messages.clone(),
+        schema: Some(schema.clone()),
+        max_tokens: 96,
+        temperature: 0.0,
+    };
+    let rules: String = (1..=120)
+        .map(|n| format!("Rule {n}: keep the answer short and plain.\n"))
+        .collect();
+    let mut first = message("user", "What colours does this photo show?");
+    // In the shared part: the next turn still reuses it.
+    first.images.push(test_image());
+    let mut messages = vec![
+        message("system", &format!("You answer briefly, as JSON.\n{rules}")),
+        first,
+    ];
+    let one = engine.chat(turn(&messages), None).await.expect("turn 1");
+    assert!(!one.prefix_reused, "nothing to reuse yet");
+
+    messages.push(message("assistant", &answer(one.text.trim())));
+    messages.push(message("user", "Now in one word."));
+    let two = engine.chat(turn(&messages), None).await.expect("turn 2");
+    println!("turn 2: {} prompt tokens: {}", two.prompt_tokens, two.text);
+    assert!(
+        two.prefix_reused,
+        "turn 2 starts with all of turn 1's prompt"
+    );
+
+    let other = vec![message("user", "Name a fruit, as JSON.")];
+    engine.chat(turn(&other), None).await.expect("another chat");
+    let fresh = engine
+        .chat(turn(&messages), None)
+        .await
+        .expect("turn 2 again");
+
+    // Turn 1 ran with a freshly compiled grammar; the sidecar has since
+    // rolled the same constraint back after every turn and reused it.
+    let again = engine
+        .chat(turn(&messages[..2].to_vec()), None)
+        .await
+        .expect("turn 1 again");
+    assert_eq!(
+        one.text, again.text,
+        "a rolled-back grammar must decode as a freshly compiled one"
+    );
+    (engine, two.text, fresh.text)
+}
+
+#[tokio::test]
+#[ignore = "needs Apple silicon, a built sidecar and a real MLX model"]
+async fn the_next_turn_reuses_the_conversation_and_answers_the_same() {
+    // The answer repeated as the model wrote it: the whole cache carries on.
+    let (_, cached, fresh) = two_turns(str::to_string).await;
+    assert_eq!(cached, fresh, "a reused cache must not change the answer");
+}
+
+#[tokio::test]
+#[ignore = "needs Apple silicon, a built sidecar and a real MLX model"]
+async fn a_rewritten_answer_still_reuses_the_prompt_before_it() {
+    // The answer comes back in other words, so the cache past the prompt is
+    // of no use and cannot be trimmed: the copy taken after the prompt is.
+    let (_, cached, fresh) = two_turns(|_| r#"{"answer": "Red, mostly."}"#.to_string()).await;
+    assert_eq!(cached, fresh, "a reused cache must not change the answer");
 }

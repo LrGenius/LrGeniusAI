@@ -4366,6 +4366,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "lrg-chat"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "futures-util",
+ "http-body-util",
+ "log",
+ "lrg-api",
+ "lrg-common",
+ "lrg-mcp",
+ "lrg-providers",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "lrg-chroma-reader"
 version = "0.1.0"
 dependencies = [
@@ -4497,6 +4522,7 @@ dependencies = [
  "clap",
  "log",
  "lrg-api",
+ "lrg-chat",
  "lrg-chroma-reader",
  "lrg-common",
  "lrg-mcp",

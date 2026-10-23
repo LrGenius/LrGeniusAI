@@ -4,6 +4,42 @@ The `geniusai-server` exposes a REST API over HTTP (default port 19819). All res
 
 This reference is intended for developers integrating with or extending the backend. Regular users interact through the Lightroom plugin and do not need to call these endpoints directly.
 
+## Access
+
+Every request needs the backend's **access token** as
+`Authorization: Bearer <token>`. Without it, or with another one, the answer is
+a **403** with `"error_code": "api_token"` (the status alone would be ambiguous:
+the agent bridge answers 401 for a session that has to register again). The
+check sits in front of the whole app (`lrg_api::api_auth`), outside the router
+the MCP tools and the chat call in-process.
+
+- **Where the token comes from.** The backend makes it once and keeps it in a
+  file only the user can read: `~/Library/Application Support/LrGeniusAI/api-token`
+  on macOS, `%USERPROFILE%\AppData\Local\LrGeniusAI\api-token` on Windows,
+  `$XDG_CONFIG_HOME/LrGeniusAI/api-token` (or `~/.config/…`) elsewhere
+  (`lrg_common::api_token`). `LRG_API_TOKEN` replaces the file with a fixed
+  token. `geniusai-server token` prints it; `geniusai-server token --new`
+  makes a new one, which a running backend uses once it restarts. The Docker
+  image keeps the file in its `/data` volume.
+- **How the plugin gets it.** For a backend on this computer it reads the
+  file (that it can is the proof of being the same user). For one elsewhere
+  the user pastes it under *Plug-in Manager → Backend Server → Access token*
+  (`Secrets.BACKEND_TOKEN`); a "local" address without a file, such as a
+  container's published port, falls back to that too. When the backend
+  refuses the token, the plugin reads the file once more and retries once
+  (a token made since), then tells the user what to do.
+- **Without the token:** `GET /ping`, `GET /version` and `POST /version/check`
+  (a plugin must learn what it is talking to, and that it is too old, before
+  it can get in), `/mcp` and `/v1/chat/*` (they check their own tokens), and
+  the HTML of `GET /v1/ui/people` and `GET /v1/ui/chat` (a browser cannot add
+  a header when it opens an address; the page takes the token from the
+  `#fragment` and sends it itself).
+- **Also refused, token or not:** a request from a page on another site (an
+  `Origin` that is not this server), and — when the backend listens only on
+  this computer (`GENIUSAI_HOST` is a loopback address, the default) — any
+  request whose `Host` does not name this computer, which is how a
+  DNS-rebinding page arrives.
+
 ---
 
 ## Server & Health
@@ -91,6 +127,11 @@ Unloads heavy ML models from memory without shutting the server down (useful to 
 
 ### `POST /update/apply`
 Triggers an in-place backend self-update from the latest GitHub release.
+Loopback-only. The caller supplies the manifest, so its checksums say nothing
+about where the files come from: a binary URL other than
+`https://github.com/LrGenius/LrGeniusAI/releases/download/…` is a **403**, a
+plugin file from anywhere but `https://raw.githubusercontent.com/LrGenius/LrGeniusAI/…`
+or with a path that leaves the plugin folder is skipped with a warning.
 
 ---
 
@@ -240,7 +281,7 @@ producer this build uses*, not merely present:
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
-| `cull` | no `cull_phash`, or no `cull_faces_present` key |
+| `cull` | no `cull_phash`, no `cull_faces_present` key, or no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again) |
 | `metadata` | no title, caption, alt_text or keywords |
 
 `regenerate_metadata` overrides all of them.
@@ -271,12 +312,53 @@ Removes all data (embeddings, metadata, face data) for a given `photo_id`.
 Removes only the AI-generated metadata fields for a given `photo_id`, leaving embeddings intact.
 
 ### `POST /v1/photos/catalogs/cleanup`
-Disassociates the catalog from backend records for photos no longer present in
-the supplied catalog inventory; it does not physically delete photo data. The
-plugin resolves IDs without changing photo metadata and aborts if it cannot
-resolve the complete inventory. The inventory is sent in one request (including
-for an empty catalog), since separate batches would each remove associations
-for photos outside that batch.
+The index cleanup: takes photos deleted from a catalog out of its index. The
+plugin runs it on its own (a couple of minutes after Lightroom starts, then once
+a day, and when a search turns up photos the catalog no longer has) and from
+*Plug-in Manager → Backend Server → Clean up index now* (`IndexCleanup.lua`).
+The logic is `lrg_store::cleanup`.
+
+**Request:** `catalog_id` (required), `photo_ids` — every photo ID in the
+catalog — and `confirm_large_removal` (bool, default false).
+
+The inventory is sent in one request (including for an empty catalog), since
+separate batches would each release the photos outside that batch. The plugin
+takes cached identities as they are (no file access) and resolves only photos
+that have none yet; it aborts rather than send an incomplete inventory.
+
+Against that inventory, every image row is one of:
+
+| Row | Effect |
+|---|---|
+| claimed by this catalog, not in the inventory | the catalog lets go (`catalog_id` removed). Other catalogs keep theirs. A row left in no catalog is stamped `orphaned_at` (Unix seconds) |
+| in the inventory, in no catalog | re-adopted: the catalog is added back and the stamp cleared — a photo removed by mistake and imported again gets its AI data back |
+| in no catalog, stamped more than 30 days ago | purged for good: image row, its faces (`{photo_id}_n`) and its species embedding. Training examples stay |
+| in no catalog, no stamp | left alone — rows from before `catalog_ids` existed look like this |
+
+Every row is read again before it is written, and a purge candidate some
+catalog claimed since the scan is skipped.
+
+**Large removals:** when the catalog would let go of more than half of what it
+has indexed (and at least 50 photos), nothing changes and the answer is a
+**409**: `{"error", "needs_confirmation": true, "would_disassociate": n,
+"checked": indexed}`. That is what an inventory resolved another way than at
+indexing time looks like, and the grace period does not cover it — those IDs
+never come back. The plugin asks the user and repeats the request with
+`confirm_large_removal: true`.
+
+**Response:**
+
+| Field | Meaning |
+|---|---|
+| `checked` | photos this catalog had indexed |
+| `disassociated` | photos the catalog let go of |
+| `orphaned` | of those, how many are now in no catalog |
+| `readopted` | photos that came back |
+| `purged` | photos deleted for good in this run |
+| `waiting` | photos in no catalog, still within the grace period |
+| `next_purge_at` | Unix seconds when the oldest of those falls due, or `null` |
+| `grace_days` | the grace period (30) |
+| `warnings` | purges that failed; the next run retries them |
 
 ### `POST /v1/photos/catalogs/claim`
 Associates an existing backend record with a (potentially new) catalog ID.
@@ -369,6 +451,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
 
@@ -513,6 +596,25 @@ The `/v1/edit/recipe` few-shot path applies the same rule: an example whose raw 
 conflicts with the target has its white balance stripped before it reaches the
 prompt, so the model is never anchored on a number the schema it must answer in
 cannot express.
+
+### `POST /v1/edit/score`
+The aesthetic score of one rendered image, and nothing else: nothing is stored and no
+photo record is touched. Multipart with a single `image` part (any format the `image`
+crate decodes; the plugin sends the JPEG it exports). Answers
+`{"status": "success", "score": 5.87, "model": "<aesthetic model id>"}`, the score on the
+scorer's 1–9 scale rounded to two decimals — the same figure `POST /v1/index/photos`
+stores for a photo.
+
+It exists for AI Edit's optional refinement loop (`AestheticRefine.lua`), which applies a
+candidate edit to a photo, renders it and asks what the scorer makes of it, several times
+per photo. The score of an intermediate render belongs to no photo, which is why this is
+not an indexing task.
+
+| Status | Body | When |
+|---|---|---|
+| 400 | `{"status": "error", "error": ...}` | No `image` part, or an empty one |
+| 503 | `{"status": "error", "error": ...}` | The aesthetic model is not downloaded. The message is the instruction ("run "Download AI models" in Plug-in Manager") and is shown as it stands |
+| 500 | `{"status": "error", "error": ...}` | The image could not be decoded, or the model failed |
 
 ---
 
@@ -671,7 +773,10 @@ stale against the server serving them.
 A page can call the rest of this API directly — it is served from the
 backend's own origin, so no CORS setup is involved — and it forwards the
 `db_path` the plugin put in its URL on every request, which the auto-bind
-middleware honours exactly like the plugin's own calls.
+middleware honours exactly like the plugin's own calls. It sends the access
+token (see [Access](#access)) the plugin put in the URL's `#fragment`, which
+the browser sends nowhere; the page takes it out of the address bar and keeps
+it in `sessionStorage` for reloads.
 
 What a page *cannot* do is touch the Lightroom catalog. Those actions are
 queued instead: the page POSTs one, and the plugin task that is waiting on it
@@ -782,6 +887,123 @@ caller already gave up (timeout or cancellation).
 `{done, total, message}` while a long command runs; forwarded to the MCP client
 as progress notifications. The answer's `cancel` is true once nobody waits for
 the command any more, and the plugin stops between photos.
+
+---
+
+## Agent chat
+
+The in-app chat: a local or cloud AI model works the catalog through the same tools as
+`/mcp`, and the user chats with it — and approves its changes — in the
+browser. Design, the permission model and the event list:
+[Dev: Agent Chat](Dev-Agent-Chat). Served by `lrg-chat`, merged next to `/mcp`
+and written as served (not nested by `build_router`).
+
+Opening a chat takes the agent token as `Authorization: Bearer <token>`, like
+`/mcp`. Every other route takes the chat's own token the same way, and refuses
+a request whose `Origin` is not this server even with the right token. A wrong
+token, a foreign origin and a chat that has ended all get the same **403**.
+Errors are `{"error": "<what to do>"}`.
+
+### `GET /v1/ui/chat`
+The chat page (`lrg-chat/src/ui/chat.html`), no token needed: it is the same
+for everyone and holds nothing until it is given a chat. It reads `session` and
+`token` from its fragment, keeps them in `sessionStorage` so a reload works,
+and removes them from the address bar. Sent with a strict
+`Content-Security-Policy` (`default-src 'none'`, `connect-src 'self'`,
+`frame-ancestors 'none'`), `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. A new chat's address opened in the same tab
+changes only the fragment; the page reloads itself for it.
+
+### `POST /v1/chat/sessions`
+Opens a chat. Body: `provider` and `model` as for indexing, and what that
+provider needs:
+
+* `llamacpp`, `mlx`: `llm_n_ctx`, `llm_n_parallel`, `llm_gpu_layers` as on the
+  indexing routes. The model loads in the background; one that cannot load is
+  reported as an `error` event.
+* `chatgpt`, `anthropic`, `gemini`: `api_key`, required.
+* `openai_compatible`: `server_url`, required, and `api_key` if the server
+  wants one. `lmstudio`, `ollama`: optional `lmstudio_base_url`,
+  `ollama_base_url`.
+
+`connections`, optional: every key and address the user has set up, under the
+names [`POST /v1/llm/providers/models`](#post-v1llmprovidersmodels) takes
+(`openai_apikey`, `gemini_apikey`, `anthropic_apikey`, `server_url`,
+`server_apikey`, …), so the page can offer every provider in its model menu.
+The fields above win for the chosen provider. The engine settings are kept as
+well, for a switch to a local model.
+
+The keys are kept in the chat's memory only — never logged, saved or returned.
+A missing key, address or model is a **400** naming what to set. Returns
+`session_id`, `token` and
+`page`, the path to open with the token in its fragment
+(`/v1/ui/chat#session=…&token=…`). **503** when 8 chats are open and none is
+idle enough to close. No plugin session registered: 403 saying to turn the
+agent bridge on.
+
+### `GET /v1/chat/sessions/{id}`
+### `DELETE /v1/chat/sessions/{id}`
+`GET` returns what the page draws from: `model`, `busy`, `tools` (each with
+`name`, `title`, `class` — `read`/`change`/`destructive` — and its `rule`),
+`permissions`, `permissions_saved` (false while no index is bound, so a change
+would not survive a restart), `sends_to` (who receives the conversation when
+that is not this computer — "Anthropic", "your AI server (host:port)" — or
+null) and `lightroom` (`catalog_name`,
+`may_change_photos`; null when the plugin is not connected). `DELETE` stops the
+chat and forgets it (**204**). A chat nobody has listened to for two hours is
+closed by the backend.
+
+### `GET /v1/chat/sessions/{id}/events`
+Server-sent events, one JSON object per `data:` line, with a `type` and — for
+everything except the streamed `delta` pieces — a `seq`. `?after=<seq>`
+replays what was logged after it, then continues live. A page that falls too
+far behind gets `event: resync` and the stream ends; reconnecting with `after`
+catches up. The event types are listed in [Dev: Agent Chat](Dev-Agent-Chat#events).
+
+### `POST /v1/chat/sessions/{id}/messages`
+`{"text": "…"}`. **202** and the work starts; its progress arrives on the event
+stream. **409** while the previous message is still being worked on, **400**
+for an empty one.
+
+### `POST /v1/chat/sessions/{id}/approvals/{call_id}`
+The answer to an `approval_needed` event: `{"decision": "once"}`, `"chat"`
+(this tool for the rest of the chat), `"always"` (sets the tool's rule to
+`allow`), or `{"decision": "deny", "note": "…"}` — the note is passed to the
+model. **204**; **409** when that call is not waiting any more.
+
+### `POST /v1/chat/sessions/{id}/stop`
+Stops after the step in progress: the model's turn is cancelled, calls waiting
+for approval are denied, nothing new starts. A tool already running in
+Lightroom finishes and its result is recorded. The event stream gets a
+`stopped` event, and the model is told in the history that the user stopped
+there. **204**.
+
+### `GET /v1/chat/sessions/{id}/models`
+What the page's model menu offers, probed with the chat's `connections` the
+way `POST /v1/llm/providers/models` probes: `current` (`provider`, `model`,
+`label` — the model this chat runs on, an old MLX name mapped to the one it is
+listed under), `providers` (in the plugin's picker order, each with
+`provider`, `label` — "On this Mac", "LM Studio", the AI server's name, … —,
+`sends_to` as on `GET /v1/chat/sessions/{id}`, and `models`, sorted), and
+`warnings` (an AI server or key the user set up that did not answer). A
+provider with nothing to offer — not running, no key — is left out.
+
+### `POST /v1/chat/sessions/{id}/model`
+`{"provider": "…", "model": "…"}`: start over on another model. A conversation
+is not carried from one model to another: a new chat with the same connections
+and engine settings, and nothing in it, replaces this one, which ends (its
+token gets **403** from then on). Returns what `POST /v1/chat/sessions` does —
+the page opens the new `page`. **400** names a missing key, address or model
+(this chat stays as it was); **409** while a message is being worked on.
+
+### `GET /v1/chat/sessions/{id}/permissions`
+### `PUT /v1/chat/sessions/{id}/permissions`
+What runs without asking: `mode` (`ask_all`, `auto_read` — the default —,
+`auto_safe`, `auto_all`), `tools` (tool name → `allow`, `ask` or `block`) and
+`bulk_limit` (a change to photos aimed at more than this many asks even when
+allowed; 0 turns it off). The settings are the user's, not the chat's: every
+chat uses them, and they are saved as `chat_permissions.json` beside the index.
+`PUT` takes the whole object and returns `{saved, permissions}`.
 
 ---
 

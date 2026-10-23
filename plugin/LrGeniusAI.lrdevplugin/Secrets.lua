@@ -366,11 +366,71 @@ function Secrets.setMcpToken(value)
 	return true
 end
 
+---------------------------------------------------------------------------
+-- The backend's access token
+---------------------------------------------------------------------------
+
+--- The token a backend on another computer wants with every request (see
+--- SearchIndexAPI.backendToken). The user pastes it in from that computer's
+--- `geniusai-server token`. A backend on this computer needs nothing typed:
+--- the plug-in reads the token from the file it keeps. Not one of FIELDS, for
+--- the same reason as the agent token: it must never travel to a provider.
+--- The LrPasswords key string, so it must never change.
+Secrets.BACKEND_TOKEN = "backendApiToken"
+
+local backendTokenCache = nil
+
+---
+-- The access token the user entered, or "" when there is none.
+--
+-- @return string
+-- @return string|nil Why it could not be read; the text says what to do.
+--
+function Secrets.getBackendToken()
+	if backendTokenCache ~= nil then
+		return backendTokenCache
+	end
+	local value, err = retrieve(Secrets.BACKEND_TOKEN)
+	if value == nil then
+		local problem = "The backend's access token could not be read from the system's password storage ("
+			.. err
+			.. "). Enter it again under Plug-in Manager → Backend Server."
+		addProblem(problem)
+		return "", problem
+	end
+	backendTokenCache = value
+	return value
+end
+
+---
+-- Saves the access token the user entered, or removes it when blank. Must
+-- run in a task.
+--
+-- @param value string|nil
+-- @return boolean Whether it is in the password storage.
+-- @return string|nil What went wrong, for the user.
+--
+function Secrets.setBackendToken(value)
+	value = trim(value)
+	-- For this session even when storing fails.
+	backendTokenCache = value
+	local ok, err = storeVerified(Secrets.BACKEND_TOKEN, value)
+	if not ok then
+		log:error("Storing the backend's access token failed: " .. err)
+		return false,
+			"The backend's access token could not be saved in the system's password storage ("
+				.. err
+				.. "). It works until Lightroom quits; then enter it again."
+	end
+	return true
+end
+
 --- Forgets the cache and the problems. For specs.
 function Secrets._reset()
 	cache = {}
 	problems = {}
 	mcpTokenCache = nil
+	backendTokenCache = nil
 end
 
 return Secrets

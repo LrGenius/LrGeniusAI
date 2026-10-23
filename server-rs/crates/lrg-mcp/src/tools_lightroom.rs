@@ -18,10 +18,11 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use lrg_api::agent_bridge::CallOptions;
+use lrg_api::routes::search;
 
 use crate::server::{
-    bridge_error, json_result, string_list, tool_error, truncate, with_warnings, LrGeniusMcp,
-    Photos, MAX_PHOTOS_PER_CALL,
+    bridge_error, json_result, round2, string_list, tool_error, truncate, with_warnings,
+    LrGeniusMcp, Photos, MAX_PHOTOS_PER_CALL,
 };
 
 /// Previews come back as a JPEG file the plugin rendered. Anything bigger
@@ -30,6 +31,10 @@ const MAX_PREVIEW_BYTES: u64 = 25 * 1024 * 1024;
 
 /// Most photos `get_photo_details` describes in one call.
 const MAX_DETAILS: usize = 50;
+
+/// Most photos it describes with `all_metadata`: each brings every field
+/// Lightroom has, a few thousand characters.
+const MAX_FULL_DETAILS: usize = 10;
 
 /// How long a command that changes photos may take: a base plus a little
 /// per photo, so a big batch is not cut off but a stuck one is noticed.
@@ -98,6 +103,12 @@ pub struct FindInCatalogArgs {
 pub struct DetailsArgs {
     #[serde(flatten)]
     pub photos: Photos,
+    /// Also every metadata field Lightroom keeps for each photo — all IPTC
+    /// and EXIF fields, file details, GPS coordinates, copyright and
+    /// contact info, other plug-ins' fields, the collections it is in — both
+    /// as Lightroom shows them and raw. Much longer: at most 10 photos.
+    #[serde(default)]
+    pub all_metadata: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -298,6 +309,30 @@ fn update_payload(args: &UpdateArgs) -> Result<Value, String> {
     Ok(Value::Object(changes))
 }
 
+/// A photo's aesthetic score and genre as get_photo_details reports them.
+/// A score from another model export is still shown — it is that model's
+/// honest answer — but flagged, because search does not rank by it and it is
+/// not comparable with current scores.
+fn aesthetic_fields(m: &Map<String, Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    if let Some(score) = m
+        .get(lrg_store::meta::AESTHETIC_SCORE_FIELD)
+        .and_then(Value::as_f64)
+    {
+        out.insert("aesthetic_score".into(), json!(round2(score)));
+        if search::current_aesthetic(m).is_none() {
+            out.insert("aesthetic_outdated".into(), json!(true));
+        }
+    }
+    if let Some(genre) = search::genre_of(m) {
+        out.insert("genre".into(), json!(genre));
+        if let Some(label) = search::genre_label(genre) {
+            out.insert("genre_label".into(), json!(label));
+        }
+    }
+    out
+}
+
 /// The plugin's `find_photos` criteria, validated.
 fn find_criteria(args: &FindInCatalogArgs) -> Result<Value, String> {
     let mut c = Map::new();
@@ -436,7 +471,9 @@ impl LrGeniusMcp {
     /// Everything known about up to 50 photos: Lightroom's metadata (file,
     /// capture time, camera and exposure, rating, flag, label, keywords,
     /// title, caption, whether it is edited) merged with LrGeniusAI's index
-    /// (AI title, caption, keywords, species, search status).
+    /// (AI title, caption, keywords, species, aesthetic score 1-9, genre,
+    /// search status). With `all_metadata`, every field Lightroom keeps for
+    /// up to 10 photos.
     #[tool(
         name = "get_photo_details",
         annotations(title = "Photo details", read_only_hint = true)
@@ -450,7 +487,12 @@ impl LrGeniusMcp {
             Err(e) => return Ok(tool_error(e)),
         };
         let total = resolved.photo_ids.len();
-        let ids: Vec<String> = resolved.photo_ids.into_iter().take(MAX_DETAILS).collect();
+        let max = if args.all_metadata {
+            MAX_FULL_DETAILS
+        } else {
+            MAX_DETAILS
+        };
+        let ids: Vec<String> = resolved.photo_ids.into_iter().take(max).collect();
 
         let index: HashMap<String, Map<String, Value>> = match self.state().store() {
             Some(store) => store
@@ -468,7 +510,7 @@ impl LrGeniusMcp {
             match self
                 .lightroom(
                     "photo_info",
-                    json!({"photo_ids": ids}),
+                    json!({"photo_ids": ids, "all_metadata": args.all_metadata}),
                     CallOptions::read(Duration::from_secs(60)),
                     None,
                 )
@@ -479,6 +521,17 @@ impl LrGeniusMcp {
                         if let Some(id) = p["photo_id"].as_str() {
                             lightroom.insert(id.to_string(), p.clone());
                         }
+                    }
+                    // A plugin from before `all_metadata` ignores it.
+                    if args.all_metadata
+                        && !lightroom.is_empty()
+                        && lightroom.values().all(|p| p.get("all_metadata").is_none())
+                    {
+                        warnings.push(
+                            "Lightroom sent only the usual details, not every metadata field: \
+                             the LrGeniusAI plugin is older than this backend. Update the plugin."
+                                .into(),
+                        );
                     }
                     let missing = string_list(&reply.result["missing"]);
                     if !missing.is_empty() {
@@ -535,6 +588,7 @@ impl LrGeniusMcp {
                                 ai.insert(name.into(), json!(v));
                             }
                         }
+                        ai.extend(aesthetic_fields(m));
                         ai.insert(
                             "searchable".into(),
                             json!(lrg_store::meta::has_embedding(m)),
@@ -553,7 +607,7 @@ impl LrGeniusMcp {
         if total > ids.len() {
             answer["more"] = json!(total - ids.len());
             answer["hint"] = json!(format!(
-                "Only the first {MAX_DETAILS} are described; ask for the rest in smaller groups."
+                "Only the first {max} are described; ask for the rest in smaller groups."
             ));
         }
         Ok(json_result(with_warnings(answer, &warnings)))
@@ -938,6 +992,38 @@ impl LrGeniusMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scored(score: f64, model: &str, genre: Option<&str>) -> Map<String, Value> {
+        let mut m = Map::new();
+        m.insert(lrg_store::meta::AESTHETIC_SCORE_FIELD.into(), json!(score));
+        m.insert(lrg_store::meta::AESTHETIC_MODEL_FIELD.into(), json!(model));
+        if let Some(g) = genre {
+            m.insert(lrg_store::meta::GENRE_FIELD.into(), json!(g));
+        }
+        m
+    }
+
+    #[test]
+    fn photo_details_show_the_aesthetic_score_and_genre() {
+        let f = aesthetic_fields(&scored(
+            6.4567,
+            search::AESTHETIC_MODEL_ID,
+            Some("landscape"),
+        ));
+        assert_eq!(f["aesthetic_score"], 6.46);
+        assert!(f.get("aesthetic_outdated").is_none());
+        assert_eq!(f["genre"], "landscape");
+        assert_eq!(f["genre_label"], search::genre_label("landscape").unwrap());
+    }
+
+    #[test]
+    fn a_score_from_another_model_is_shown_but_flagged() {
+        let f = aesthetic_fields(&scored(7.0, "an-older-export", None));
+        assert_eq!(f["aesthetic_score"], 7.0);
+        assert_eq!(f["aesthetic_outdated"], true);
+        assert!(f.get("genre").is_none());
+        assert!(aesthetic_fields(&Map::new()).is_empty());
+    }
 
     fn update(f: impl FnOnce(&mut UpdateArgs)) -> UpdateArgs {
         let mut args = UpdateArgs {

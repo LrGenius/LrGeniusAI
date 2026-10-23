@@ -3009,4 +3009,358 @@ function Util.searchCollectionName(args)
 	return table.concat(parts, " \194\183 ") .. " @ " .. tostring(args.time or "")
 end
 
+---
+-- How hard to cull, as the factor the backend applies to the preset's reject
+-- margin (`reject_margin_scale` on `/cull/grade`). The preset decides what a
+-- good frame looks like; how many near-misses to keep is the photographer's
+-- call and changes from job to job, so it is a dialog setting, not a preset.
+--
+-- Above 1 widens the margin (fewer reject candidates), below 1 narrows it.
+-- The defect rules — blur, blink, occlusion — are not scaled: a blink is a
+-- blink however gentle the cull.
+Util.CULL_STRENGTH_SCALE = { gentle = 1.5, balanced = 1.0, strict = 0.6 }
+
+---
+-- @param strength string|nil "gentle", "balanced" or "strict".
+-- @return number The margin scale; 1.0 for anything unknown.
+--
+function Util.cullRejectMarginScale(strength)
+	return Util.CULL_STRENGTH_SCALE[strength] or 1.0
+end
+
+---
+-- Star ratings written for a cull decision when the user asks for them.
+-- Picks and alternates only: a reject candidate gets the reject flag, and a
+-- star on a frame about to be deleted would only confuse the filter bar.
+Util.CULL_RATING_BY_DECISION = { pick = 3, alternate = 2 }
+
+---
+-- Lightroom's colour label for a reject candidate that carried its group's
+-- strongest moment ("look before deleting"). Purple is the label photographers
+-- use least, so it is the one least likely to collide with their own system.
+Util.CULL_STRONG_MOMENT_LABEL = "purple"
+
+---
+-- The culling decision the plugin stores for one ranked photo.
+--
+-- @param photoResult table One entry of `groups[].photos` from `/cull/grade`.
+-- @return string "pick", "reject_candidate" or "alternate".
+--
+function Util.cullDecisionOf(photoResult)
+	if type(photoResult) ~= "table" then
+		return "alternate"
+	end
+	if photoResult.winner then
+		return "pick"
+	elseif photoResult.reject_candidate then
+		return "reject_candidate"
+	end
+	return "alternate"
+end
+
+---
+-- The `cull_score` of every ranked photo, by photo ID.
+--
+-- @param groups table `groups` from `/cull/grade`.
+-- @return table photoId -> number.
+--
+function Util.cullScoresById(groups)
+	local scores = {}
+	for _, group in ipairs(groups or {}) do
+		for _, photoResult in ipairs(group.photos or {}) do
+			local id = photoResult.photo_id
+			if id then
+				scores[id] = tonumber(photoResult.cull_score) or 0
+			end
+		end
+	end
+	return scores
+end
+
+---
+-- Orders photo IDs by culling score so a result collection reads as a review
+-- queue: picks best first, reject candidates worst first. Lightroom shows a
+-- collection in the order its photos were added when its sort is Custom
+-- Order, which is what makes this worth doing. Ties keep their input order.
+--
+-- @param ids table Array of photo IDs.
+-- @param scores table photoId -> number, from `Util.cullScoresById`.
+-- @param worstFirst boolean|nil Ascending by score when true.
+-- @return table A new array.
+--
+function Util.cullSortByScore(ids, scores, worstFirst)
+	local entries = {}
+	for index, id in ipairs(ids or {}) do
+		table.insert(entries, { id = id, score = (scores or {})[id] or 0, index = index })
+	end
+	table.sort(entries, function(a, b)
+		if a.score ~= b.score then
+			if worstFirst then
+				return a.score < b.score
+			end
+			return a.score > b.score
+		end
+		return a.index < b.index
+	end)
+	local sorted = {}
+	for _, entry in ipairs(entries) do
+		table.insert(sorted, entry.id)
+	end
+	return sorted
+end
+
+---
+-- Encodes what a cull wrote on a photo, for the `cullWritten` plugin field:
+-- `flag=1 rating=3 label=purple`, fields the cull does not own left out.
+-- Empty string when it owns nothing, so the field can be cleared.
+--
+-- @param written table { pickStatus = n?, rating = n?, colorNameForLabel = s? }
+-- @return string
+--
+function Util.cullWrittenEncode(written)
+	written = written or {}
+	local parts = {}
+	if type(written.pickStatus) == "number" and written.pickStatus ~= 0 then
+		table.insert(parts, "flag=" .. tostring(written.pickStatus))
+	end
+	if type(written.rating) == "number" and written.rating > 0 then
+		table.insert(parts, "rating=" .. tostring(written.rating))
+	end
+	if type(written.colorNameForLabel) == "string" and written.colorNameForLabel ~= "" then
+		table.insert(parts, "label=" .. written.colorNameForLabel)
+	end
+	return table.concat(parts, " ")
+end
+
+---
+-- Inverse of `Util.cullWrittenEncode`; anything unreadable decodes as nothing.
+--
+-- @param text string|nil
+-- @return table { pickStatus = n?, rating = n?, colorNameForLabel = s? }
+--
+function Util.cullWrittenDecode(text)
+	local written = {}
+	if type(text) ~= "string" then
+		return written
+	end
+	for key, value in text:gmatch("(%a+)=(%S+)") do
+		if key == "flag" then
+			written.pickStatus = tonumber(value)
+		elseif key == "rating" then
+			written.rating = tonumber(value)
+		elseif key == "label" then
+			written.colorNameForLabel = value
+		end
+	end
+	return written
+end
+
+---
+-- Decides which Lightroom flags, star ratings and colour labels a cull result
+-- should write, photo by photo, and what it must leave alone.
+--
+-- Pure: it reads the backend result, what the catalog holds now, and what an
+-- earlier cull wrote (`cullWritten`), and returns the writes for the task to
+-- apply inside one undoable write-access block. Frames of a bracket, focus
+-- stack or panorama (`keep_all`) are never touched — every one of them is
+-- wanted.
+--
+-- Ownership is what makes a re-run safe. A mark equal to what the last cull
+-- wrote is the cull's: it is refreshed to this run's decision, or cleared
+-- when the decision no longer calls for it (an earlier pick that is now an
+-- alternate loses its flag, an earlier "look before deleting" label goes).
+-- Any other mark is the photographer's and is left alone and counted —
+-- unless `overwriteUserMarks` is on, which is the explicit "re-cull from
+-- scratch" and the only way a user flag is ever changed.
+--
+-- @param groups table `groups` from `/cull/grade`.
+-- @param options table `flagPicks`, `flagRejects`, `rateByDecision`,
+--        `labelStrongMoment`, `overwriteUserMarks` (booleans).
+-- @param current table photoId -> { pickStatus = n, rating = n,
+--        colorNameForLabel = s, written = table }; what the catalog holds now
+--        and what the last cull wrote, decoded.
+-- @return table plan: photoId -> { pickStatus = n?, rating = n|false?,
+--         colorNameForLabel = s|false?, written = string }; `false` clears a
+--         value, `written` is the new `cullWritten` field.
+-- @return table counts: `picks`, `rejects`, `cleared`, `ratings`,
+--         `ratingsCleared`, `labels`, `labelsCleared`, `keptFlags`,
+--         `keptRatings`, `keptLabels` (the last three are the photographer's
+--         own marks that were left alone).
+--
+function Util.cullFlagPlan(groups, options, current)
+	options = options or {}
+	current = current or {}
+	local plan = {}
+	local counts = {
+		picks = 0,
+		rejects = 0,
+		cleared = 0,
+		ratings = 0,
+		ratingsCleared = 0,
+		labels = 0,
+		labelsCleared = 0,
+		keptFlags = 0,
+		keptRatings = 0,
+		keptLabels = 0,
+	}
+	local overwrite = options.overwriteUserMarks == true
+	local flagsOn = options.flagPicks or options.flagRejects
+
+	local function isLabel(value)
+		return type(value) == "string" and value ~= "" and value ~= "none" and value ~= "gray" and value ~= "grey"
+	end
+
+	for _, group in ipairs(groups or {}) do
+		if group.keep_all ~= true then
+			for _, photoResult in ipairs(group.photos or {}) do
+				local id = photoResult.photo_id
+				if id then
+					local decision = Util.cullDecisionOf(photoResult)
+					local now = current[id] or {}
+					local wrote = now.written or {}
+					local nowFlag = tonumber(now.pickStatus) or 0
+					local nowRating = tonumber(now.rating) or 0
+					local nowLabel = isLabel(now.colorNameForLabel) and now.colorNameForLabel or nil
+					-- A mark is the cull's when it still reads what the cull wrote.
+					local flagIsOurs = nowFlag ~= 0 and wrote.pickStatus == nowFlag
+					local ratingIsOurs = nowRating > 0 and wrote.rating == nowRating
+					local labelIsOurs = nowLabel ~= nil and wrote.colorNameForLabel == nowLabel
+					local change = {}
+					local written = {}
+
+					-- Flags. `wantFlag` 0 means "no flag of ours here".
+					local wantFlag = 0
+					if decision == "pick" and options.flagPicks then
+						wantFlag = 1
+					elseif decision == "reject_candidate" and options.flagRejects then
+						wantFlag = -1
+					end
+					if flagsOn then
+						if wantFlag ~= 0 then
+							if nowFlag == wantFlag then
+								written.pickStatus = wantFlag
+							elseif nowFlag == 0 or flagIsOurs or overwrite then
+								change.pickStatus = wantFlag
+								written.pickStatus = wantFlag
+								if wantFlag == 1 then
+									counts.picks = counts.picks + 1
+								else
+									counts.rejects = counts.rejects + 1
+								end
+							else
+								counts.keptFlags = counts.keptFlags + 1
+							end
+						elseif nowFlag ~= 0 and (flagIsOurs or overwrite) then
+							change.pickStatus = 0
+							counts.cleared = counts.cleared + 1
+						end
+					elseif flagIsOurs then
+						-- Flags switched off this run: an earlier cull's flag stays
+						-- but is no longer tracked as ours.
+						written.pickStatus = nil
+					end
+
+					-- Stars.
+					local wantRating = options.rateByDecision and Util.CULL_RATING_BY_DECISION[decision] or nil
+					if wantRating then
+						if nowRating == wantRating then
+							written.rating = wantRating
+						elseif nowRating == 0 or ratingIsOurs or overwrite then
+							change.rating = wantRating
+							written.rating = wantRating
+							counts.ratings = counts.ratings + 1
+						else
+							counts.keptRatings = counts.keptRatings + 1
+						end
+					elseif options.rateByDecision and ratingIsOurs then
+						change.rating = false
+						counts.ratingsCleared = counts.ratingsCleared + 1
+					end
+
+					-- "Look before deleting" label.
+					local wantLabel = options.labelStrongMoment
+						and decision == "reject_candidate"
+						and Util.table_contains(photoResult.reason_codes or {}, "strong_moment_but_unusable")
+					if wantLabel then
+						if nowLabel == Util.CULL_STRONG_MOMENT_LABEL then
+							written.colorNameForLabel = nowLabel
+						elseif nowLabel == nil or labelIsOurs or overwrite then
+							change.colorNameForLabel = Util.CULL_STRONG_MOMENT_LABEL
+							written.colorNameForLabel = Util.CULL_STRONG_MOMENT_LABEL
+							counts.labels = counts.labels + 1
+						else
+							counts.keptLabels = counts.keptLabels + 1
+						end
+					elseif options.labelStrongMoment and labelIsOurs then
+						change.colorNameForLabel = false
+						counts.labelsCleared = counts.labelsCleared + 1
+					end
+
+					-- Record ownership whenever it changed, including to nothing.
+					local encoded = Util.cullWrittenEncode(written)
+					local before = Util.cullWrittenEncode(wrote)
+					if encoded ~= before then
+						change.written = encoded
+					end
+					if next(change) ~= nil then
+						plan[id] = change
+					end
+				end
+			end
+		end
+	end
+	return plan, counts
+end
+
+---
+-- The lines the completion dialog adds for what `Util.cullFlagPlan` wrote and
+-- what it left alone. Empty when nothing was asked for.
+--
+-- @param counts table Second return of `Util.cullFlagPlan`.
+-- @return table Array of strings.
+--
+function Util.cullFlagSummaryLines(counts)
+	counts = counts or {}
+	local lines = {}
+	local wrote = {}
+	if (counts.picks or 0) > 0 then
+		table.insert(wrote, tostring(counts.picks) .. " flagged as picks")
+	end
+	if (counts.rejects or 0) > 0 then
+		table.insert(wrote, tostring(counts.rejects) .. " flagged as rejected")
+	end
+	if (counts.cleared or 0) > 0 then
+		table.insert(wrote, tostring(counts.cleared) .. " unflagged")
+	end
+	if (counts.ratings or 0) > 0 then
+		table.insert(wrote, tostring(counts.ratings) .. " star ratings set")
+	end
+	if (counts.labels or 0) > 0 then
+		table.insert(wrote, tostring(counts.labels) .. " purple 'look before deleting' labels")
+	end
+	if (counts.ratingsCleared or 0) > 0 then
+		table.insert(wrote, tostring(counts.ratingsCleared) .. " earlier star ratings removed")
+	end
+	if (counts.labelsCleared or 0) > 0 then
+		table.insert(wrote, tostring(counts.labelsCleared) .. " earlier labels removed")
+	end
+	if #wrote > 0 then
+		table.insert(lines, "Lightroom: " .. table.concat(wrote, ", ") .. ". Undo with Cmd/Ctrl+Z.")
+	end
+	local kept = {}
+	if (counts.keptFlags or 0) > 0 then
+		table.insert(kept, tostring(counts.keptFlags) .. " flags")
+	end
+	if (counts.keptRatings or 0) > 0 then
+		table.insert(kept, tostring(counts.keptRatings) .. " ratings")
+	end
+	if (counts.keptLabels or 0) > 0 then
+		table.insert(kept, tostring(counts.keptLabels) .. " labels")
+	end
+	if #kept > 0 then
+		table.insert(lines, "Left alone because you set them yourself: " .. table.concat(kept, ", ") .. ".")
+	end
+	return lines
+end
+
 return Util

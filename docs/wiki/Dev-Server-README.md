@@ -17,13 +17,22 @@ clients), `lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
 routers, including the agent bridge to the plugin), `lrg-mcp` (the MCP endpoint
 AI agents connect to at `/mcp`, and the `geniusai-server mcp` stdio proxy —
 see [`docs/wiki/Dev-Agent-Bridge.md`](../docs/wiki/Dev-Agent-Bridge.md)),
+`lrg-chat` (the in-app agent chat at `/v1/chat/*` and its page, a local or
+cloud model working through the same tools — see
+[`docs/wiki/Dev-Agent-Chat.md`](../docs/wiki/Dev-Agent-Chat.md)),
 `lrg-server` (the binary).
 
 There are two *local* LLM backends, selected as the `llamacpp` and `mlx`
 providers. They are independent — a build can have either, both, or neither —
 and both are served by the same `LocalEngine` trait in
-`lrg-providers/src/local_provider.rs`. Their build requirements differ, so they
-are covered separately below.
+`lrg-providers/src/local.rs`. Besides indexing photos in batches
+(`generate`), the trait answers a whole conversation with one turn,
+streaming its text as it is decoded (`chat`) — the agent chat is built on that.
+The chat itself talks to a model-neutral `ChatModel` (`lrg-providers/src/chat.rs`);
+`local_chat.rs` puts a local engine behind it, calling tools by decoding
+against a JSON Schema with one branch per tool, since llama.cpp cannot render
+the Jinja templates that carry a model's native tool-call format.
+Their build requirements differ, so they are covered separately below.
 
 **Which one ships is a per-platform decision.** Release builds enable
 `llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not
@@ -68,17 +77,53 @@ learns the address, so nothing else needs changing. Note that
 `SearchIndexAPI.startServer` still launches the *installed* binary on the
 default port, so start a custom-port build yourself.
 
-**Do not expose the server publicly.** It speaks plain HTTP, has no
-authentication, and the plug-in puts the user's cloud-provider API key
-(`api_key`, `openai_apikey`, `server_apikey`, …) in the body of every request
-that uses one. Bound to `127.0.0.1` none of that leaves the machine. Bound to
-anything else, the keys and the photos cross the network unencrypted, and
-anyone who can reach the port can use the server. Until it has TLS and a
-login, run a non-loopback server only on a network you trust, never with its
-port forwarded to the internet or open on a cloud host; reach it from
-elsewhere through a VPN or an SSH tunnel
-(`ssh -L 19819:127.0.0.1:19819 user@host`). The server does not store the
-keys; it uses each one only for the request it came with.
+**Do not expose the server publicly.** It speaks plain HTTP, and the plug-in
+puts the user's cloud-provider API key (`api_key`, `openai_apikey`,
+`server_apikey`, …) in the body of every request that uses one. Bound to
+`127.0.0.1` none of that leaves the machine. Bound to anything else, the keys,
+the photos and the access token (below) cross the network unencrypted. The
+token keeps out whoever does not have it, but not someone who can read the
+traffic. Until the server has TLS, run a non-loopback server only on a network
+you trust, never with its port forwarded to the internet or open on a cloud
+host; reach it from elsewhere through a VPN, an SSH tunnel
+(`ssh -L 19819:127.0.0.1:19819 user@host`) or a reverse proxy with HTTPS. The
+server does not store the keys; it uses each one only for the request it came
+with.
+
+### Access token
+
+Every request needs the server's access token as
+`Authorization: Bearer <token>`; without it the answer is a 403 with
+`"error_code": "api_token"`. Only `/ping`, `/version`, `/version/check`, the
+browser pages' HTML and the routes with tokens of their own (`/mcp`,
+`/v1/chat/*`) go without (`lrg_api::api_auth`; the full rules are under
+*Access* in [Dev: Backend API](../docs/wiki/Dev-Backend-API.md)).
+
+The server makes the token on its first start and keeps it in a file only the
+user can read (`lrg_common::api_token`):
+
+| OS | File |
+|---|---|
+| macOS | `~/Library/Application Support/LrGeniusAI/api-token` |
+| Windows | `%USERPROFILE%\AppData\Local\LrGeniusAI\api-token` |
+| Linux | `$XDG_CONFIG_HOME/LrGeniusAI/api-token`, or `~/.config/LrGeniusAI/api-token` |
+
+A plug-in on the same computer reads that file itself. For one on another
+computer, print the token and paste it under *Plug-in Manager → Backend
+Server → Access token*:
+
+```bash
+geniusai-server token          # prints it (makes it if there is none yet)
+geniusai-server token --new    # replaces it; restart the server afterwards
+```
+
+`LRG_API_TOKEN` (32–256 letters, digits, `-`, `_`) replaces the file with a
+fixed token. To call the API by hand:
+
+```bash
+curl -H "Authorization: Bearer $(geniusai-server token 2>/dev/null)" \
+    http://127.0.0.1:19819/v1/server/health
+```
 
 ### Golden tests and `LRG_REQUIRE_GOLDENS`
 
@@ -425,8 +470,13 @@ templates llama.cpp will accept — start there if a new model misbehaves.
 Same role as the section above, different artifacts: **an MLX model is a
 directory, not a file** — a Hugging Face repo snapshot with `config.json`, one
 or more safetensors shards, and the tokenizer files. Discovery therefore looks
-for directories that contain a `config.json` *and* at least one `.safetensors`
-(the config alone would match a half-finished download).
+for directories that contain a `config.json`, at least one `.safetensors` (the
+config alone would match a half-finished download) *and* a chat template
+(`chat_template.jinja`, `chat_template.json` or `chat_template` in
+`tokenizer_config.json`). The template is what separates a language model from
+an image encoder with the same layout: `google/siglip2-so400m-patch16-naflex`,
+which the search model's export script leaves in the Hugging Face cache, was
+otherwise offered as a chat model.
 
 `GET /v1/llm/catalog` reports MLX under a nested `mlx` key alongside the GGUF half,
 including `supported`/`reason`, and `POST /v1/llm/downloads` takes an MLX
@@ -464,10 +514,12 @@ export HF_ENDPOINT=https://huggingface.co
 
 There are no tuning knobs to match llama.cpp's `n_ctx`/`n_parallel`/GPU layers,
 and that is not an oversight: `GuidedGenerationLoop.run` in mlx-swift-lm
-allocates a fresh KV cache per call, so there is no pinned prompt prefix to
+allocates a fresh KV cache per call, so indexing has no pinned prompt prefix to
 size a context window around, the preferred batch size is 1, and the grammar is
-compiled per request. The prompt is still sent pre-split and stable-first so the
-ordering is right if that changes upstream.
+compiled per photo. The prompt is still sent pre-split and stable-first so the
+ordering is right if that changes upstream. (The agent chat runs its own copy
+of that loop, which keeps a conversation's cache between turns — see
+`native/mlx-sidecar/README.md`.)
 
 ### Troubleshooting: `LRG_DISABLE_KLEIDIAI`
 
@@ -500,6 +552,11 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 ```
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
+
+The image keeps the access token in its `/data` volume
+(`XDG_CONFIG_HOME=/data`), so it survives the container being recreated. Print
+it for the plug-in with
+`docker exec geniusai-server /app/geniusai-server token`.
 
 `-p 19819:19819` publishes the port on every interface of the host, so the
 warning under [Host and port](#host-and-port) applies. When Lightroom runs on

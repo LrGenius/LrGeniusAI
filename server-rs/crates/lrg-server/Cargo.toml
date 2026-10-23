@@ -26,3 +26,4 @@ log.workspace = true
 tokio.workspace = true
 lrg-mcp.workspace = true
 tokio-util = "0.7"
+lrg-chat.workspace = true

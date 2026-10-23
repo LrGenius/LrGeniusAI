@@ -143,6 +143,9 @@ performs them against the catalog. Reach for this when a task is a grid of
 server-side data that LrView cannot re-render (see
 [Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);
 keep settings and short forms native.
+`TaskChat.lua` goes further: the chat page at `/v1/ui/chat` works through
+the agent bridge, which runs whenever Lightroom does, so the task only opens
+a chat and hands the browser its address.
 
 All long-running operations run inside `LrTasks.startAsyncTask`. Use `LrTasks.pcall` (never native `pcall`) so tasks can yield.
 
@@ -161,7 +164,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
 - `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin, and the `agent_bridge` that hands MCP tool calls to the plugin (`/v1/agent/*`).
 - `lrg-mcp` — the MCP endpoint (`/mcp`, bearer agent token required) AI agents connect to: tools over the index (calling the REST routes in-process) and over Lightroom (through `agent_bridge` to the plugin's `AgentBridge.lua`/`AgentCommands.lua`, which starts with Lightroom), result sets, prompts, and `geniusai-server mcp`, a stdio proxy for Claude Desktop. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
-- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` and `mcp` (stdio proxy) subcommands; merges the `lrg-mcp` router next to `lrg_api::build_router`'s.
+- `lrg-chat` — the in-app agent chat (`/v1/chat/*`): a local or cloud model works the catalog through the same tools, as an in-memory MCP client of `lrg-mcp`, with the user's approval (`permissions.rs`). The model answers through `lrg_providers::chat::ChatModel`: `cloud_chat.rs` uses each API's own tool calling, and `local_chat.rs` does it by decoding against a JSON Schema, since llama.cpp cannot render the Jinja templates that carry a model's native tool-call format. See [Dev-Agent-Chat.md](docs/wiki/Dev-Agent-Chat.md).
+- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` and `mcp` (stdio proxy) subcommands; merges the `lrg-mcp` and `lrg-chat` routers next to `lrg_api::build_router`'s.
 
 `APISearchIndex.lua` on the plugin side defines the API contract; keep it in sync with any endpoint changes here.
 
@@ -169,7 +173,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 
 - Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
 - Vector search: LanceDB tables `IMAGE_TABLE`/`FACE_TABLE`/`SPECIES_TABLE` in `lrg_store` (SigLIP2, face, and BioCLIP 2 embeddings respectively).
-- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
+- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. A catalog letting go of a photo never deletes its data: only the index cleanup (`lrg_store::cleanup`, run by `IndexCleanup.lua`) purges a photo, after it has been in no catalog for 30 days.
 
 ---
 
@@ -185,7 +189,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `APISearchIndex.lua` must be kept in sync with any backend API changes.
 - An agent bridge command (`AgentCommands.lua`) and the MCP tool that sends it (`lrg-mcp`) change together, with the contract table in `docs/wiki/Dev-Agent-Bridge.md`. Commands that change photos are listed in `CHANGES`, so the user's read-only switch covers them.
 - API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
-- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS`.
+- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS` and for the backend's access token.
+- Requests to the backend go through `_request`/`_requestMultipart` in `APISearchIndex.lua`, which add the backend's access token. A call that has to use `LrHttp` directly passes `withAuthHeader(...)` as its headers, and nothing logs a URL or header that carries the token.
 
 ### Rust / Backend (`server-rs/`)
 
@@ -193,7 +198,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Always use the `log` facade (`log::info!`/`warn!`/`error!`).
 - Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
 - Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
-- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed.
+- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed. Every route but a few needs the access token: `curl -H "Authorization: Bearer $(cargo run -q -p lrg-server -- token 2>/dev/null)" …` (see *Access* in `docs/wiki/Dev-Backend-API.md`).
+- A new route is behind the access token (`lrg_api::api_auth`) without anything to do. Exempting one (`exempt` there) is a security decision: say why in its comment and in *Access*.
 
 ### Errors must surface
 

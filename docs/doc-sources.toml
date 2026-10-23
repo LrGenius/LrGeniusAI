@@ -60,6 +60,8 @@ sources = [
   # Likewise the agent bridge behind /v1/agent/*, and the /mcp endpoint.
   "server-rs/crates/lrg-api/src/agent_bridge.rs",
   "server-rs/crates/lrg-mcp/src/lib.rs",
+  # The agent chat's routes, merged at the root beside /mcp.
+  "server-rs/crates/lrg-chat/src/routes.rs",
   # The page names the release tags the download routes pull assets from, so a
   # change to how a tag is published belongs in the same review.
   ".github/workflows/model-assets-bioclip.yml",
@@ -131,6 +133,7 @@ sources = [
 # LLM edit path, so the page documents the style engine only.
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskAiEditPhotos.lua",
+  "plugin/LrGeniusAI.lrdevplugin/AestheticRefine.lua",
   "plugin/LrGeniusAI.lrdevplugin/DevelopEditManager.lua",
   "server-rs/crates/lrg-api/src/routes/style_edit.rs",
   "server-rs/crates/lrg-analysis/src/style_engine.rs",
@@ -165,6 +168,10 @@ sources = [
   # Starting, stopping, the activity bar, polling, the agent token.
   "plugin/LrGeniusAI.lrdevplugin/AgentBridge.lua",
   "server-rs/crates/lrg-mcp/src/lib.rs",
+  # Chat with Your Catalog: the menu item, the page and what it may do.
+  "plugin/LrGeniusAI.lrdevplugin/TaskChat.lua",
+  "server-rs/crates/lrg-chat/src/ui/chat.html",
+  "server-rs/crates/lrg-chat/src/permissions.rs",
 ]
 
 [page."Dev-Agent-Bridge.md"]
@@ -178,6 +185,23 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/PluginTests.lua",
   # The full-test runbook's command-line client (its options and exit codes).
   "scripts/mcp_call.py",
+]
+
+[page."Dev-Agent-Chat.md"]
+sources = [
+  "server-rs/crates/lrg-chat/src/*.rs",
+  "server-rs/crates/lrg-chat/tests/*.rs",
+  # The model side: the conversation types and tool calling by grammar.
+  "server-rs/crates/lrg-providers/src/chat.rs",
+  "server-rs/crates/lrg-providers/src/local_chat.rs",
+  "server-rs/crates/lrg-providers/src/cloud_chat.rs",
+  "server-rs/crates/lrg-providers/src/local.rs",
+  # The conversation's cache across turns on MLX (the llama.cpp half lives in
+  # lrg-llama's worker.rs, which is mostly indexing and stays unlisted).
+  "native/mlx-sidecar/Sources/lrgenius-mlx/ChatDecodeLoop.swift",
+  # The page and the menu item that opens it.
+  "server-rs/crates/lrg-chat/src/ui/chat.html",
+  "plugin/LrGeniusAI.lrdevplugin/TaskChat.lua",
 ]
 
 [page."Help-People-Faces.md"]
