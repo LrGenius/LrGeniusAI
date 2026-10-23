@@ -3,8 +3,9 @@
 //!
 //! What this actually pins down is the **preprocessing**, not the ONNX graph.
 //! `lrg-ml::bioclip_pre` reimplements pybioclip's transform in Rust, and it
-//! differs from `image_pre` on three axes at once — 224 not 384, squash not
-//! center-crop, bilinear not bicubic, resize in `f32` not `u8`. Any of those
+//! differs from SigLIP2's `naflex_pre` on several axes at once — 224x224
+//! squash not aspect-preserving patches, OpenAI-CLIP mean/std not 0.5, resize
+//! in `f32` not `u8`. Any of those
 //! being subtly wrong produces embeddings that still look plausible and
 //! classify slightly worse forever. A cosine against real torch output is the
 //! only thing that catches it.

@@ -337,27 +337,35 @@ end
 -- address on this computer. One on another machine is the Other AI server.
 --
 -- @param provider string
--- @param p table The plug-in prefs.
+-- @param p table Secrets.connectionFields(prefs): the Other AI server address,
+--   the API keys, and `keyProblems` — field -> why that key could not be read.
+--   Not the prefs themselves: the keys are no longer in them.
 -- @return table|nil { api_key?, server_url? }
 -- @return string|nil Why the provider cannot be used, when the table is nil.
 --
 function AiProviders.connectionOptions(provider, p)
 	p = p or {}
+	local keyProblems = p.keyProblems or {}
 	local opts = {}
 	if provider == "chatgpt" then
 		if blank(p.chatgptApiKey) then
-			return nil, "The OpenAI API key is not set. Enter it under Plug-in Manager → Optional AI providers."
+			return nil,
+				keyProblems.chatgptApiKey
+					or "The OpenAI API key is not set. Enter it under Plug-in Manager → Optional AI providers."
 		end
 		opts.api_key = trim(p.chatgptApiKey)
 	elseif provider == "gemini" then
 		if blank(p.geminiApiKey) then
 			return nil,
-				"The Google Gemini API key is not set. Enter it under Plug-in Manager → Optional AI providers."
+				keyProblems.geminiApiKey
+					or "The Google Gemini API key is not set. Enter it under Plug-in Manager → Optional AI providers."
 		end
 		opts.api_key = trim(p.geminiApiKey)
 	elseif provider == "anthropic" then
 		if blank(p.anthropicApiKey) then
-			return nil, "The Anthropic API key is not set. Enter it under Plug-in Manager → Optional AI providers."
+			return nil,
+				keyProblems.anthropicApiKey
+					or "The Anthropic API key is not set. Enter it under Plug-in Manager → Optional AI providers."
 		end
 		opts.api_key = trim(p.anthropicApiKey)
 	elseif provider == "openai_compatible" then
@@ -365,12 +373,46 @@ function AiProviders.connectionOptions(provider, p)
 			return nil,
 				"No AI server address is set. Enter it under Plug-in Manager → Optional AI providers → Other AI server."
 		end
+		-- The key is optional here, so an empty one is only an error when it
+		-- is empty because it could not be read: sending none would get a
+		-- 401 from a server that wants one, with nothing saying why.
+		if keyProblems.aiServerApiKey then
+			return nil, keyProblems.aiServerApiKey
+		end
 		opts.server_url = trim(p.aiServerUrl)
 		if not blank(p.aiServerApiKey) then
 			opts.api_key = trim(p.aiServerApiKey)
 		end
 	end
 	return opts
+end
+
+---
+-- Every key and address the user has set up, under the names the backend's
+-- model listing takes (`openai_apikey`, …, `server_url`, `server_apikey`).
+-- The agent chat sends this when it opens, so its page can offer every
+-- provider. A key that is not set, or could not be read, is left out, and so
+-- is the provider it belongs to.
+--
+-- @param p table Secrets.connectionFields(prefs).
+-- @return table
+--
+function AiProviders.modelListConnections(p)
+	p = p or {}
+	local out = {}
+	local function put(name, value)
+		if not blank(value) then
+			out[name] = trim(value)
+		end
+	end
+	put("openai_apikey", p.chatgptApiKey)
+	put("gemini_apikey", p.geminiApiKey)
+	put("anthropic_apikey", p.anthropicApiKey)
+	put("server_url", p.aiServerUrl)
+	if out.server_url then
+		put("server_apikey", p.aiServerApiKey)
+	end
+	return out
 end
 
 ---

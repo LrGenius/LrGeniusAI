@@ -39,7 +39,7 @@ this project took is smaller and, in the ordinary sense, not copyrightable
 expression: CI/CD practice (scoping workflow triggers, concurrency groups,
 pinning every action to a commit SHA rather than a tag, pinning the test runner,
 and the discipline of verifying a generated version stamp instead of assuming
-the write landed), plus a handful of documented Lightroom SDK behaviours. The
+the write landed), plus a handful of documented Lightroom SDK behaviours (among them how LrSocket behaves across plug-in reloads and on Windows, which shaped the agent bridge in `AgentBridge.lua`). The
 entry is here because the ideas were worth having and the source deserves
 saying so — not because MIT compels it at this scope.
 

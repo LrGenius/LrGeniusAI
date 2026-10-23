@@ -132,7 +132,8 @@ function TaskUpdate.runUpdate(releaseInfo)
 			LOC("$$$/LrGeniusAI/TaskUpdate/SuccessTitle=Update Starting"),
 			LOC(
 				"$$$/LrGeniusAI/TaskUpdate/ExternalUpdaterMsg=Lightroom will now close to allow the update to complete. Restart it once the updater window shows 'Finished'."
-			)
+			),
+			"info"
 		)
 		LrApplication.shutdown()
 	end)

@@ -15,6 +15,13 @@ LrGeniusAI adds a backend-powered AI layer to Lightroom Classic. It helps you:
 - Generate and apply Develop edits, optionally trained on your own edits
 - Deduplicate and declutter the keywords already in your catalog
 - Re-import generated metadata back into Lightroom
+- Let AI agents — Claude Code, Claude Desktop, LM Studio, any MCP client — search
+  the catalog and work in Lightroom through the agent bridge (`AgentBridge.lua`,
+  `AgentCommands.lua`); see `docs/wiki/Help-AI-Agents.md` and read
+  `docs/wiki/Disclaimer.md` first
+- Chat with the catalog in the browser (*Chat with Your Catalog*, `TaskChat.lua`):
+  the model chosen for Analyze & Index — local or cloud, and switchable on the
+  chat page — does that same work, asking before it changes anything
 
 The plugin is designed to work with local and cloud providers, while keeping Lightroom as your main workspace.
 
@@ -35,6 +42,7 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Semantic search using image/text embeddings
 - Metadata field search (`keywords`, `caption`, `title`, `alt_text`)
 - Scope search to current selection/view/catalog
+- Order or restrict results by aesthetic score and genre; with no search term, list the best photos by score
 
 ### People Workflows
 
@@ -82,10 +90,21 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   - `Alternates`
   - `Reject Candidates`
   - optional `Duplicates / Near Duplicates`
+- Judge the moment as well as sharpness: the Sports and Event presets ask
+  about action and emotion, keep usable frames ahead of flawed ones, and do not
+  count a kiss or a laugh with closed eyes as a blink
+- Nominate a clearly blurred single, or a burst blurred throughout, as reject
+  candidates instead of picking it by default
 - Detect exposure brackets, focus stacks and panoramas and route them to a
   `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
   off — every frame of such a set is part of one picture
-- Create a dedicated Lightroom collection set for each culling run and switch you directly to the picks collection for review
+- Choose how hard to cull (gentle / balanced / strict) without changing preset
+- Write the result as Lightroom flags, star ratings and a purple "look before
+  deleting" label, in one undo step, leaving photos you already flagged, rated
+  or labelled alone unless you say otherwise
+- Create a dedicated Lightroom collection set for each culling run, filled in
+  review order (picks best first, rejects worst first), and switch you directly
+  to the picks collection for review
 
 ---
 
@@ -127,17 +146,75 @@ If you have an indexed backend database from a UUID-era version, run
 indexed under the current IDs are skipped, so this costs nothing beyond the
 photos that genuinely need re-indexing.
 
+### Photo identity cache and Lightroom's Date Edited
+
+Resolving an ID must never call `photo:setPropertyForPlugin` or change other
+photo metadata. Lightroom advances `lastEditTime` even for private plugin
+metadata writes. This was why automatic claiming could mark an entire catalog
+as edited while the user had selected only one photo (#397). Restoring the
+previous timestamp is not a supported SDK operation.
+
+`Util.getGlobalPhotoIdForPhoto` now stores one JSON record per Lightroom photo
+UUID in **catalog** plugin properties (`photoIdentityV1_<uuid>`). The record
+contains the existing backend ID and algorithm, plus size/mtime for partial
+hashes. This is persistent bookkeeping, so scans can still write catalog
+properties, but never photo properties. UUIDs are cache keys only; the backend
+continues to receive the same `meta1:` / `md5p:` IDs.
+
+Existing photo-level caches are migrated lazily without clearing or rewriting
+any of their four fields. Catalog records take precedence; `forceRecompute`
+updates only the catalog record. Stable metadata IDs survive renames, file
+rewrites and restarts. Legacy partial hashes retain their size/mtime validation
+when the original is available. Offline photos retain a cached ID, or can get a
+stable ID from metadata already in the catalog. Computing a new partial hash
+still requires the original file.
+
+Single/batch result lookup, scoped search, unprocessed-photo scans, metadata
+import, analysis prefetch, claiming and cleanup all use the shared resolver.
+Claiming and cleanup fail before sending their inventory if an ID cannot be
+resolved or persisted; cleanup sends the complete inventory in one request,
+including an empty inventory. Backend claim errors keep the migration pending.
+Scans report identity failures instead of silently losing photos. No backend endpoint or photo-ID algorithm changes are required.
+
+Catalog backups include the new cache. Exporting/importing photos into another
+catalog may not transfer catalog plugin properties; there, existing photo-level
+IDs or the unchanged metadata algorithm are used. Renamed photos without a
+transferred cache retain the cross-catalog limitations described below. Cache
+entries are deliberately not pruned when photos disappear; no automatic
+identity reset or photo-metadata schema migration runs on upgrade.
+
+This fix prevents future bookkeeping writes. It cannot restore Date Edited
+values already changed by an older version. Applying actual metadata, keywords,
+culling results or develop edits remains an intentional photo modification.
+
+#### Lightroom smoke check (requires a disposable catalog)
+
+1. Include uncached photos, photos with an older plugin ID, a virtual copy and
+   offline originals. Record `getRawMetadata("lastEditTime")` for each photo and
+   membership of Date Edited smart collections.
+2. Select one photo, start Analyze & Index and allow the automatic claim to
+   finish. Only actual result application to selected photos may change Date
+   Edited; all other photos must retain their recorded timestamps.
+3. Run manual claiming, scoped search, result lookup, “New or unprocessed
+   photos”, and cleanup. Verify timestamps and smart collections are unchanged.
+4. Restart Lightroom, rename/move a photo, and repeat lookup/claiming. Verify
+   the backend IDs and result matching are unchanged. Reconnect offline files
+   and verify legacy partial hashes still validate size/mtime.
+5. With simulated unavailable catalog write access, verify an identity-save
+   failure is reported and no incomplete claiming/cleanup inventory is sent.
+   Do not run this on a production catalog.
+
 ---
 
-## Breaking Change: Cross-Catalog Backend (Soft State, No Deletion)
+## Cross-Catalog Backend (Soft State) and the Index Cleanup
 
-When using a **shared remote backend** with multiple Lightroom catalogs, the backend no longer deletes photo data when a photo is removed from one catalog. Instead it only marks that catalog as no longer “having” that photo (**catalog_ids**). Other catalogs that still have the photo keep seeing it.
+When using a **shared backend** with multiple Lightroom catalogs, the backend does not delete photo data when a photo is removed from one catalog. Instead it only marks that catalog as no longer “having” that photo (**catalog_ids**). Other catalogs that still have the photo keep seeing it. Only a photo that is in no catalog at all is deleted, 30 days later (see *Index cleanup* below).
 
 ### What the plugin does
 
 - Sends a stable **catalog_id** with all index and read requests so the backend can scope data per catalog.
-- **Sync cleanup**: When you run “Remove missing photos from index” (or the equivalent), the plugin calls the backend to **disassociate** this catalog from photos that are no longer in the current catalog. It does **not** ask the backend to delete those photos.
-- **Claim photos**: So that existing indexed photos are visible to this catalog under the new behavior, the plugin runs an automatic one-time “claim” on first use: it tells the backend to add this catalog’s **catalog_id** to all photos that are currently in the catalog. This runs in the background once per catalog; no dialog.
+- **Index cleanup**: takes photos deleted from the catalog out of its index — see below.
+- **Claim photos**: So that existing indexed photos are visible to this catalog under the new behavior, the plugin runs an automatic one-time “claim” on first use: it tells the backend to add this catalog’s **catalog_id** to all photos that are currently in the catalog. This runs in the background once per catalog with progress and a completion message. It resolves IDs without writing photo metadata.
 
 ### Manual “Claim photos for this catalog”
 
@@ -147,6 +224,40 @@ In `Plug-in Manager -> LrGeniusAI -> Backend Server` you can click **Claim photo
 - Manually fix visibility if automatic claim did not run or failed.
 
 This adds the current catalog’s id to the listed photos on the backend; it does not delete any data.
+
+### Index cleanup (deleted photos)
+
+`IndexCleanup.lua` decides when; the backend does the work (`POST /v1/photos/catalogs/cleanup`,
+`lrg_store::cleanup`). The plugin sends every photo ID in the catalog, and the backend:
+
+- **releases** the photos this catalog indexed that are no longer in it. A photo another
+  catalog still has stays indexed there;
+- stamps a photo left in **no catalog** and keeps its data for **30 days**, so a photo removed by
+  mistake and imported again gets its AI data back (it has the same photo ID) instead of being
+  indexed from scratch;
+- **purges** a photo that has been in no catalog for longer, with its faces and species
+  embedding. Training examples are kept.
+
+When it runs:
+
+- on its own, about two minutes after Lightroom starts and then once a day (checked hourly), as
+  long as *Remove photos deleted from Lightroom from the search index automatically* is ticked in
+  `Plug-in Manager -> LrGeniusAI -> Backend Server` (on by default);
+- soon after **Advanced Search** or **Find Similar Images** found matches the catalog no longer
+  has — those are deleted photos still in the index (at most every ten minutes);
+- when you click **Clean up index now** in the same section. That run reports what it did.
+
+Safeguards:
+
+- The inventory takes cached photo identities as they are, without touching the originals, so
+  an offline or changed file keeps its photo indexed. Photos with no identity yet are resolved
+  once; if any cannot be, nothing is sent.
+- If more than half of what the catalog has indexed (at least 50 photos) would be released, the
+  backend changes nothing and the plugin asks first. That is what an inventory under different
+  photo IDs looks like — a restored backup, a changed ID setting — and those IDs would never come
+  back to stop the purge. The automatic run asks at most once a week.
+- An automatic run that fails shows no dialog; it is retried within the hour and its error is
+  in the section's status line. A run that changed something shows a short notice.
 
 ---
 
@@ -168,11 +279,21 @@ If strict cross-catalog identity is important for your workflow, plan for re-ind
 
 In the plugin settings dialog you can configure:
 
-- Backend server URL
+- Backend server URL, and the **Access token** of a backend on another computer
+  or in Docker (`geniusai-server token` prints it there). A backend on this
+  computer needs nothing typed: the plugin reads the token from the file the
+  backend keeps (`SearchIndexAPI.backendToken`). Kept in `LrPasswords`
+  (`Secrets.BACKEND_TOKEN`), shown as dots. See *Access* in
+  [Dev: Backend API](https://github.com/LrGenius/LrGeniusAI/wiki/Dev-Backend-API).
 - Optional AI providers: the OpenAI, Gemini and Anthropic keys, and an **Other AI server**
   (any OpenAI-compatible server) with an optional key. Ollama and LM Studio have
   no settings: they are found at their default address on this computer, and
   one running elsewhere is the Other AI server.
+  The keys are kept in the encrypted password storage Lightroom gives plug-ins
+  (`LrPasswords`, see `Secrets.lua`), not in the plug-in prefs, which Lightroom
+  writes to disk as plain text.
+  The fields show dots, not the key (`f:password_field`, in the onboarding
+  wizard as well).
 - **Local AI Model (no external app)** — browse, download and select vision
   models the backend runs itself, plus the advanced knobs (context size, photos
   in parallel, layers on the GPU). Which engine backs this section is decided
@@ -193,6 +314,15 @@ In the plugin settings dialog you can configure:
   for that run. `Default` cannot be deleted, and is put back if an older
   install lost it.
 - Optional CLIP model download for advanced search
+- **AI Agents (MCP)** — the agent bridge's switch (on by default; it starts with
+  Lightroom and shows a progress bar only while an agent works), whether agents
+  may change photos, and developer commands (`.lrdevplugin` installs only; ticking
+  the box asks for confirmation). The agent token is kept like the API keys, in
+  `LrPasswords` (`Secrets.getMcpToken`), shown as dots, and copied into an AI
+  app's setup by one button per app. The first copy shows the agent warning and
+  needs *I understand*.
+- In-Lightroom tests (`PluginTests.lua`): *Help → Developer: Run Automated
+  Tests...*, or headless through the agent bridge (`run_plugin_tests`).
 
 ---
 
@@ -213,11 +343,19 @@ If you are upgrading from an older version that stored Lightroom catalog UUIDs a
 re-run **Analyze & Index Photos** over the catalog. There is no migration path — photos already
 indexed under the current IDs are skipped.
 
+API keys from versions that kept them in the plug-in prefs move to the password storage at
+every start of Lightroom (`Secrets.migrate`, called from `Init.lua`). A key leaves the prefs only
+after the storage has returned it unchanged; one that cannot be moved keeps working from the
+prefs, and the Plug-in Manager's status line names it. Going back to an older version loses the
+keys for that version, which reads them from the prefs only — enter them again there.
+
 ---
 
 ## Troubleshooting
 
-- Verify backend connectivity in plugin settings (`backendServerUrl`).
+- Verify backend connectivity in plugin settings (`backendServerUrl`). A backend on another
+  computer receives your cloud API keys over plain HTTP — keep it on a trusted network, never
+  reachable from the internet (see the FAQ).
 - Check log files from Plugin Manager (`Show logfile` / copy logs to desktop).
 - If search returns no results, confirm photos were indexed with embeddings.
 - If faces are missing, ensure face processing was enabled during indexing.

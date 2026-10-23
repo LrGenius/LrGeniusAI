@@ -505,7 +505,9 @@ inline in a sequential loop.
 Ordered by value. Items 1, 2, 4, 5, 6 and 10 of the original list are done —
 see [Signal-quality pass](#signal-quality-pass) below, and
 [Moment scoring](#moment-scoring-for-action-work) for the follow-up that came
-out of a real complaint about a soccer series.
+out of a real complaint about a soccer series. Item 2 of *this* list (the
+noise estimator) is done too — see
+[Flat-region noise and the Lightroom workflow](#flat-region-noise-and-the-lightroom-workflow).
 
 1. **A real eye-state classifier.** `blink_penalty` is still exactly
    `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
@@ -568,11 +570,12 @@ Covers outstanding items 1, 2, 4, 5, 6 and 10 of the previous list.
   still happens so the set has a representative frame, but nothing is ever
   nominated for rejection. Surfaced as `keep_all` / `intentional_set` on each
   group and a dedicated Lightroom collection.
-- **CLIP-IQA aesthetics** (`lrg-ml::clip_iqa`). Five antonym prompt pairs
-  embedded once per server lifetime; every photo is then a handful of dot
-  products against the SigLIP2 vector already in the database. Blended against
-  the old heuristic at `aesthetic_iqa_weight` (0.8). Degrades silently to the
-  heuristic when there is no embedding or no reachable text tower.
+- **Aesthetics** (`lrg-ml::aesthetic`). *Superseded:* this first used five
+  CLIP-IQA antonym prompt pairs over the SigLIP2 embedding. It is now the
+  AestheticSigLIP score stored with each photo at index time, scaled to 0..1
+  and blended against the old heuristic at `aesthetic_model_weight` (0.9). A
+  photo without a score from the current export ranks on the heuristic alone,
+  and the cull says how many did, once.
 - **Group-relative exposure.** The absolute target of mean luminance 0.5 marks
   every frame of a low-key set as badly exposed and then cannot tell them apart.
   Exposure is now blended toward its position in the group's own range
@@ -705,11 +708,14 @@ The same mechanism now covers three axes, one per preset, selected by
 
 | preset | axis | weight | what it asks |
 |---|---|---|---|
-| `sports` | `action` | 0.30 | ball visible, feet off the ground, mid-play vs between plays |
+| `sports` | `action` (+ `sport_emotion`) | 0.55 (was 0.30) | ball visible, feet off the ground, mid-play vs between plays |
 | `street` | `candid` | 0.32 | unposed vs posed, people reacting to each other |
-| `event` | `candid` | 0.22 | the same, weighted lower — event work still has to be deliverable |
+| `event` | `candid` (+ `event_emotion`) | 0.45 (was 0.22) | the same — event work still has to be deliverable, which the usable gate now guarantees |
 | `portrait` | `expression` | 0.20 | warm genuine smile vs flat awkward expression |
 | `default` | — | 0 | spans every genre; no one question is right for all of them |
+
+The emotion sets and the new weights are from
+[Emotion and the usable gate](#emotion-and-the-usable-gate) below.
 
 `street` carries the highest weight because it is the one genre the analysis is
 explicit about: grain and motion blur are legitimate there, and ranking frames
@@ -730,7 +736,9 @@ spot); animal eye sharpness (needs detection, not a scene judgement).
 ### Tuning it from outside
 
 `/cull` accepts `semantic_weight` to override the preset's own, and the plugin
-passes it through. `0.0` switches the axis off, `0.5` lets it lead. The shipped
+passes it through. (Until the emotion work it only decided whether the prompts
+were scored; the ranking itself still used the preset's weight, so a sweep
+changed nothing. It now reaches the ranking.) `0.0` switches the axis off, `0.5` lets it lead. The shipped
 weights are a guess; this is the fastest way to find out whether the signal
 suits a particular photographer's eye without a rebuild. `--ablate semantic` in
 `cull_eval` does the same against a fixture.
@@ -744,12 +752,113 @@ peak frame out of five adjacent ones at 20fps. The expression axis is a
 *whole-frame* judgement, so on a group shot it reports the mood of the picture
 rather than of any one face. All of them need embeddings, so every axis is inert
 on the fast `tasks=cull` path — a catalog prepared that way ranks exactly as it
-did before.
+did before. (Since the emotion work the plugin adds `embeddings` to the prep pass
+for every preset that judges the moment, and the backend warns when the moment
+could not be judged.)
 
 **It has not been validated on real photographs.** That is not an oversight: the
 prompts are a hypothesis, and this repository has now twice shipped a
 plausible-sounding signal that was wrong. Which is why the other half of this
 work is the fixture exporter.
+
+## Emotion and the usable gate
+
+Prompted by the next complaint: the biggest missing factor is **emotion**, at
+sports and at events alike. The concept (four failure modes, phases, open
+decisions) lives outside the repository; this is what Phase 1 built. No new
+model: everything is answered from the stored SigLIP2 embedding.
+
+### What shipped
+
+- **Two emotion prompt sets**, `SPORT_EMOTION_PROMPT_PAIRS` (celebrating,
+  protesting, despair vs calm and neutral) and `EVENT_EMOTION_PROMPT_PAIRS`
+  (laughing, crying with joy, hugging, guests reacting vs blank faces), selected
+  by `ranking.emotion_prompt_set`. Each pair is a complete question with the
+  same subject on both sides, after the organism-set lesson that a partial pair
+  only adds noise to the average.
+- **The moment is the max, not the mean**, of the genre axis and the emotion
+  question. The goal celebration has no ball in it and the shot on goal has
+  nobody cheering yet; averaging would score both as half a moment. This is why
+  it does not contradict "one axis per preset" above: nothing is diluted, the
+  stronger answer stands.
+- **All or nothing per group.** A frame without an embedding carries no moment,
+  and comparing it with frames that do would rank it on a different question
+  from its neighbours. Such a group ranks without the moment, and the response
+  says so.
+- **The usable gate** (`ranking.usable_gate`): once the moment is deciding,
+  every frame without a clear defect ranks above every frame with one — first
+  usable, then the moment. A clear defect is one no edit repairs: blur,
+  unintended closed eyes, occlusion. Exposure is deliberately excluded (group-
+  relative, and Lightroom lifts a stop without a trace), and so is the
+  composite face score, which also falls for a face that is merely small. The
+  gate is what lets the moment lead: `sports` now weights it 0.55 and `event`
+  0.45, where the old convex blend had to stay small because it was the only
+  thing stopping a ruined frame from winning.
+- **Emotion beats the blink.** `EYES_CLOSED_INTENT_PROMPT_PAIRS` is a gate, not a
+  grading axis: above `ranking.eyes_closed_intent_threshold` (0.7 at `event` and
+  `portrait`) closed eyes stop counting as a blink — no blink penalty, no blink
+  reject. It asks about the scene (a kiss, a burst of laughter), which is coarse
+  affect and well within what these models read; it does not try to judge eye
+  openness, which the section above rules out for good reason. The eye share
+  baked into the stored `cull_face_score` stays.
+- **Singles and whole bad series can be rejected**
+  (`ranking.reject_blurred_without_alternative`). A single used to be a pick
+  unconditionally, and so was rank 1 of any group. Now the pick is the
+  best-ranked frame that is not a reject candidate, and at rank 1 (or for a
+  single) only blur makes one: exposure is scored against a mid-grey target
+  that marks a correctly dark concert frame as underexposed once there is no
+  group to compare with, and the blink proxy is too weak to reject a frame
+  without a better sibling. `winner_photo_id` is therefore nullable.
+- **Reasons in plain language**: `strongest_emotion` when emotion carried the
+  pick, `eyes_closed_intentional`, and `strong_moment_but_unusable` on a reject
+  candidate that had its group's strongest moment ("look before deleting"),
+  by at least `ranking.reason_moment_margin` (0.15) over the pick. The plugin
+  counts the last one in its completion message.
+- **Warnings that reach the dialog.** `/cull/grade` and `/cull/groups` return a
+  `warnings` list (and the joined `warning` for older plugins): photos whose
+  moment was not judged, or prompt vectors that were neither in the
+  `text_embeddings` table nor obtainable from the text tower — one message for
+  every signal that cause took out. The emotion and kiss-gate prompts are
+  prepared together (formerly with a quality set, since replaced by the stored
+  aesthetic score), in one text-tower pass the first time
+  and from the database after that. `apply_prompt_scores` returns `None` for a
+  set it could not score instead of 0.
+- **The plugin prepares what the preset needs**: `Util.cullPrepTasks` adds
+  `embeddings` to the prep pass for every preset but `default`, and the model
+  check asks for the image model as well as the face model.
+
+`python_parity()` switches the gate and the single/rank-1 rejects off, so the
+Python goldens still pin the port.
+
+### Live check (not a validation)
+
+Run against the real SigLIP2 fp16 towers on six public photos, to catch
+prompts that are plainly broken, not to tune anything:
+
+| photo | `sport_emotion` | `action` | `event_emotion` | kiss gate |
+|---|---|---|---|---|
+| coach screaming on the touchline | **0.72** | 0.42 | 0.42 | 0.60 |
+| player mid-shot, calm face | 0.31 | **0.87** | 0.23 | 0.59 |
+| couple on a red carpet, neutral | 0.12 | 0.34 | 0.28 | 0.35 |
+| studio portrait | 0.37 | 0.42 | 0.45 | 0.59 |
+
+The sport emotion question separates the screaming coach from everything else,
+and the max picks the action question for the shot instead: both frames won
+their group with the right reason (`strongest_emotion`, sharpest). No photo
+here contains a kiss or a laugh, so the gate's 0.35–0.60 only shows it does
+not fire on neutral faces; 0.6 to 0.7 is a thin margin. One finding changed the
+code: a Gaussian-blurred copy of the player scored 0.95 on action against the
+original's 0.87, which would have marked the blurred copy as "strongest moment,
+look before deleting". Hence the margin above.
+
+### Not validated yet
+
+Same caveat as the moment axes, and the same remedy: the prompts, the 0.7
+threshold and the 0.55/0.45 weights are hypotheses. The next step is a sports
+and an event shoot culled by hand, exported with *Export Culling Fixture*, and
+scored with `cull_eval` with and without `--ablate semantic`. Phase 2 of the
+concept (per-face expression, an eyes-closed classifier, focus on the eye, main
+subjects) waits on what that measurement shows.
 
 ### Export Culling Fixture
 
@@ -771,6 +880,172 @@ Two details that matter:
 
 No photographs leave the machine — a fixture holds measurements, capture times,
 hashes and opaque ids.
+
+## Flat-region noise and the Lightroom workflow
+
+Two gaps closed in one pass: the one signal that was known to point the wrong
+way, and the fact that a cull ended in collections rather than in the flags a
+photographer actually culls with.
+
+### `cull_noise_flat`
+
+Outstanding item 2 above. The frame-wide estimate is the mean 3×3 box-blur
+residual over mid-tone pixels; detail is high-pass energy too, so it scored a
+sharp frame 0.082 and the blurred frame of the same scene 0.012 and could
+never be normalised against the group. `lrg_imaging::metrics` now also
+accumulates the residual only where the **smoothed** image has no gradient
+(`noise_flat_gradient_threshold`, 0.02 per pixel), so texture and edges are
+left out and what remains is tone plus noise. The gradient is taken on the
+smoothed plane rather than the raw one so the noise under test cannot push
+its own pixels out of the mask. When less than `noise_flat_min_fraction` of
+the interior is flat (a frame that is texture edge to edge) the field equals
+`cull_noise`, so a row always carries it.
+
+Stored as `cull_noise_flat`, normalised by `noise_flat_denominator` (0.04,
+lower than the frame-wide 0.08 because a residual measured only on smooth
+pixels is a smaller number). `rank_group_records` reads it in preference to
+`cull_noise` — only when every frame of the group has it, since the two
+estimators answer different questions and a group indexed half before and
+half after must not compare one frame's grain with another's texture — and
+reports the frame-wide value alongside as `noise_frame_wide` so a
+disagreement is visible. `cull_noise` itself is unchanged, bit for bit,
+so the imaging goldens still pin the Python port. Unit tests cover the three
+cases that matter: two frames of one scene differing only in focus score the
+same flat noise while the frame-wide value still prefers the soft one; grain
+added to either raises it; and a frame with nothing flat falls back.
+
+Rows indexed before this shipped have no `cull_noise_flat` and rank on the
+frame-wide number until re-indexed — the same migration story as
+`cull_sharpness_peak`.
+
+### `reject_margin_scale`
+
+`/cull/grade` takes `reject_margin_scale`, a factor on the preset's
+`reject_score_delta`, clamped to 0.25..4. The presets say what a good frame
+of a genre looks like; how many near-misses to keep is the photographer's
+call and changes from job to job (one frame per burst for a client gallery,
+three for an album edit), so it is a dialog setting — **Cull strength**:
+gentle 1.5, balanced 1.0, strict 0.6 — rather than a preset. It moves only the
+score-margin rule. The defect rules (blur, blink, occlusion, exposure) fire at
+their usual thresholds, because a blink is a blink however gentle the cull.
+A contract test pins the ladder on the seeded three-frame burst: 0 rejects at
+the preset margin, 1 at half, 2 at a quarter.
+
+### Flags, stars and labels
+
+The plugin can now write the result into the catalog the way a photographer
+would by hand, so the filter bar, the flag shortcuts and *Delete Rejected
+Photos* work on it: Pick flag on winners (default on), Reject flag on reject
+candidates (default off — one menu command from deleting files), 3/2 stars for
+picks/alternates (default off), and a purple label on
+`strong_moment_but_unusable` rejects (default on). All of it in one
+`withWriteAccessDo`, so one undo step.
+
+The piece that makes a re-run safe is `Util.cullFlagPlan`: a pure function
+over the backend result, what the catalog holds now (`batchGetRawMetadata`
+for `pickStatus`, `rating`, `colorNameForLabel`) and what the last cull wrote
+(the `cullWritten` plugin field, `flag=1 rating=3 label=purple`, written in
+the same undo step as the marks). A mark equal to what the cull wrote is the
+cull's: it is refreshed to this run's decision or cleared when the decision
+no longer calls for it, so a re-run is never blocked by its own earlier
+output. Any other mark is the photographer's and is left alone and counted —
+unless *Also overwrite flags, stars and labels I set myself* is on, which is
+the only way a user mark is ever changed. (The first version keyed on "has a
+flag" alone, which could not tell the two apart: re-runs were blocked by
+their own picks and overwrite mode cleared the user's flags; review caught
+it.) `keep_all` groups are never touched. Every `with*WriteAccessDo` return
+value is checked, since a catalog that cannot be locked returns `"aborted"`
+without throwing. It is specced in `plugin/spec/util_cull_spec.lua`; the
+task only applies the plan and reports the counts.
+
+Result collections are now filled in score order (picks best first, rejects
+worst first), which Lightroom shows under Custom Order sort, and the burst
+window gained an `Auto (from preset)` choice that leaves `time_delta_seconds`
+out of the request so the preset windows — dead for a long time, then
+restored on the backend — finally reach a cull started from the dialog.
+
+## First real shoot
+
+The first cull of a real shoot — a baptism, 797 NEF frames, Event preset at
+the gentle strength — on the day the Lightroom workflow landed. It did what
+the synthetic fixtures could not: it showed where the signals meet real
+photographs. The numbers, then what changed.
+
+| what the run said | number |
+|---|---|
+| groups | 155 (one of 123 frames, others of 45, 44, 40, 28) |
+| picks / alternates / reject candidates | 103 / 27 / **667** |
+| reject candidates with `clear_defect` | 666 of 667 |
+| `possible_blink` on rejects | 653 |
+| `possible_occlusion` on rejects | 567 |
+| frames with faces whose `blink_penalty` exceeded the Event reject threshold | 767 of 769 |
+| "focus stacks" found, frames kept | 7, 27 — every one a group of 3 to 10 people |
+| `time_span_seconds` of every group | 0 |
+
+**The fast prep path sent no capture time.** `TaskCullPhotos.lua`'s
+`indexOptionsFor` forwarded `exposure_bias` and the filename and nothing else,
+so every photo it prepared was undated to the backend, the sliding-window
+grouper treated the whole selection as the "undated suffix" and matched by
+hash and embedding alone, and a ceremony of similar frames chained into one
+group of 123 with a single pick. Fixed three ways, so it cannot come back:
+the prep path now sends `date_time`/`date_time_unix` like Analyze & Index
+(and the single-photo by-reference wrapper forwards them, which it never did),
+the backend falls back to the file's EXIF `DateTimeOriginal`
+(`lrg_imaging::capture::read_capture_time`, with `SubSecTimeOriginal` for the
+fraction — at 20–30 fps a burst shares one whole second — and
+`OffsetTimeOriginal` so the value is a real epoch, as `local_hour` assumes)
+when the plugin sends nothing,
+and `/index/unprocessed` reports a cull-prepared photo without a
+`capture_time` as still needing preparation — once, since a photo that has
+none anywhere is stamped `capture_time_unknown`.
+
+**The face proxies fire on everything.** Eye openness read 0.07–0.26 across
+the whole shoot: the patch it is measured on is clamped to 8 px and the faces
+at a ceremony are small, so every frame "blinked", most were "occluded" and
+nearly all had a face score under the reject threshold. Each absolute rule was
+individually reasonable; together they made every non-pick of every burst a
+clear defect. The fix is not a new threshold — no threshold is right for a
+proxy that cannot see the eye — but `ranking.relative_defect_rules`: blink,
+occlusion and weak-face now also have to be clearly worse than the group's
+best frame (`relative_defect_margin`, 0.10) before they count. A proxy that
+reads the same on every frame of a burst then rejects nothing, while a frame
+that reads clearly worse than its siblings still does. The outstanding
+eye-state classifier (item 1 above) remains the real answer; this makes the
+proxy honest about what it can and cannot distinguish in the meantime.
+
+The second run, with capture times in place, showed the same shape one level
+down: 468 of 770 frames still rejected at gentle, 217 of them `blurred`.
+Sharpness inside one burst spans 0.01–0.10 (median 0.03), so an absolute
+0.20 threshold rejects a burst whole or not at all; and occlusion moves by
+0.1–0.35 inside one group of people (median 0.11) as heads turn, so the
+shared 0.10 margin fired in most multi-face groups. Blur therefore joined the
+relative rules — a frame with siblings is a blur defect when clearly softer
+than the sharpest of them, a single or a burst whose sharpest frame is itself
+soft keeps the absolute test, so a burst that missed focus throughout is
+still rejected whole — and occlusion got its own margin,
+`relative_occlusion_margin`. **Both are held pending calibration**, at the
+maintainers' request: `relative_blur_rule` defaults to off and the occlusion
+margin to the shared 0.10, so shipped behaviour is that of the second run.
+The measured candidates (blur on, occlusion 0.20) gave 415 of 770 at gentle
+and are what `cull_eval --ablate` should test once a hand-culled fixture
+exists for more than one genre.
+
+**People are not focus stacks.** Static framing plus a wandering sharp region
+is how a stack is recognised, and it is also what a group of people shifting
+their weight between frames looks like. `SetFrame::faces` now carries
+`cull_face_count`, and a group with a face in any frame is never a stack.
+
+The first run's flag writing, undo, respect-existing protection and
+collections all behaved as designed: 96 picks flagged (103 picks minus the 7
+"stacks", which are never flagged), 49 purple labels, 0 rejects (as
+configured), confirmed by reading the catalog. The second run (830 frames,
+respect-existing off) grouped sanely — 192 groups, the largest 23 frames,
+burst windows of 1–12 s, no "stacks" — rewrote the flags (101 picks set, 7
+earlier picks unflagged, 22 labels) and brought rejects from 84% to 61%; the
+blur and occlusion changes above are measured against that run's stored
+metrics, not yet against a hand cull. **None of these margins has been
+fitted to the photographer's own picks.** That is what *Export Culling
+Fixture* on this shoot is for, and it is the next step.
 
 ### Also fixed on the way past
 

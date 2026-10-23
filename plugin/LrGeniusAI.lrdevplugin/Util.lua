@@ -188,6 +188,33 @@ function Util.getCatalogIdentifier(catalog)
 	return catalogId, nil
 end
 
+---
+-- Puts text on the system clipboard. The SDK has no clipboard of its own, so
+-- this goes through a temporary file and the system's own tool: pbcopy on
+-- macOS, clip on Windows. The file is deleted straight away — it may hold a
+-- secret (the agent setup carries its token).
+-- @param text string
+-- @return boolean true when the text is on the clipboard
+-- @return string|nil why not
+--
+function Util.copyToClipboard(text)
+	local name = "lrgenius-clipboard-" .. tostring(math.floor(LrDate.currentTime() * 1000)) .. ".txt"
+	local path = LrPathUtils.child(LrPathUtils.getStandardFilePath("temp"), name)
+	local fh = io.open(path, "wb")
+	if not fh then
+		return false, "a temporary file could not be written"
+	end
+	fh:write(tostring(text or ""))
+	fh:close()
+	local command = WIN_ENV and ('cmd /c clip < "' .. path .. '"') or ('/usr/bin/pbcopy < "' .. path .. '"')
+	local status = LrTasks.execute(command)
+	LrFileUtils.delete(path)
+	if status ~= 0 then
+		return false, "the system clipboard tool failed (exit " .. tostring(status) .. ")"
+	end
+	return true
+end
+
 function Util.string_split(s, delimiter)
 	local t = {}
 	for str in string.gmatch(s, "([^" .. delimiter .. "]+)") do
@@ -563,6 +590,88 @@ function Util.promptForRequest(text)
 	return trimmed
 end
 
+-- How many earlier inputs an editable drop-down offers when no length is given.
+local DEFAULT_HISTORY_LENGTH = 15
+
+---
+-- Puts `entry` at the top of a most-recent-first input history.
+--
+-- Backs the editable drop-downs (search term, top-level keyword, style label):
+-- what was used last is offered first next time. Blank entries are not
+-- recorded, and an earlier copy of the same entry -- compared without regard
+-- to case or surrounding space -- moves up instead of appearing twice, in the
+-- spelling used most recently.
+--
+-- Returns a new table rather than editing `history`. LrPrefs saves a table
+-- when it is assigned, not when its contents change, so a `table.insert` into
+-- the stored one would be gone the next time Lightroom starts.
+--
+-- @param history table|nil The stored list, most recent first.
+-- @param entry string|nil What was just used.
+-- @param maxEntries number|nil How many to keep; 15 when omitted.
+-- @return table The new list, to assign back to prefs.
+--
+function Util.pushHistory(history, entry, maxEntries)
+	local limit = tonumber(maxEntries) or DEFAULT_HISTORY_LENGTH
+	local result = {}
+	local seen = {}
+	local function add(value)
+		if #result >= limit or type(value) ~= "string" then
+			return
+		end
+		local trimmed = Util.trim(value)
+		local key = string.lower(trimmed)
+		if trimmed == "" or seen[key] then
+			return
+		end
+		seen[key] = true
+		table.insert(result, trimmed)
+	end
+
+	add(entry)
+	if type(history) == "table" then
+		for _, value in ipairs(history) do
+			add(value)
+		end
+	end
+	return result
+end
+
+---
+-- The items for an editable drop-down: the history first, then any of
+-- `extras` it does not already hold.
+--
+-- `extras` covers the values worth offering before anything has been typed --
+-- the top-level keywords LrGeniusAI already knows about, say. Duplicates and
+-- blanks are dropped the same way Util.pushHistory drops them, and anything
+-- that is not a string is skipped, so a damaged prefs entry yields a shorter
+-- list rather than a dialog that fails to open.
+--
+-- @param history table|nil Most recent first, as Util.pushHistory keeps it.
+-- @param extras table|nil Further values, offered after the history.
+-- @return table Array of strings, for a combo_box's `items`.
+--
+function Util.historyItems(history, extras)
+	local items = Util.pushHistory(history, nil, math.huge)
+	local seen = {}
+	for _, value in ipairs(items) do
+		seen[string.lower(value)] = true
+	end
+	if type(extras) == "table" then
+		for _, value in ipairs(extras) do
+			if type(value) == "string" then
+				local trimmed = Util.trim(value)
+				local key = string.lower(trimmed)
+				if trimmed ~= "" and not seen[key] then
+					seen[key] = true
+					table.insert(items, trimmed)
+				end
+			end
+		end
+	end
+	return items
+end
+
 ---
 -- Splits a flattened keyword list into ordinary keywords and face tags.
 --
@@ -839,100 +948,184 @@ function Util.buildGlobalPhotoId(filePath, windowBytes)
 	return globalPhotoId, metadata
 end
 
+-- Identity bookkeeping belongs to the catalog, never to LrPhoto metadata:
+-- even private photo:setPropertyForPlugin writes advance Lightroom's lastEditTime.
+-- One durable record per Lightroom UUID keeps IDs stable across renames/restarts
+-- without a catalog-sized JSON blob or a process-global cache leaking across catalogs.
+local PHOTO_ID_CACHE_PREFIX = "photoIdentityV1_"
+
+local function readPhotoIdentity(catalog, key)
+	local raw = catalog:getPropertyForPlugin(_PLUGIN, key)
+	if raw == nil or raw == "" then
+		return nil
+	end
+	local record = JSON:decode(raw)
+	if
+		type(record) ~= "table"
+		or type(record.id) ~= "string"
+		or Util.nilOrEmpty(record.id)
+		or (record.algorithm ~= STABLE_ID_ALGO and record.algorithm ~= LEGACY_HASH_ALGO)
+	then
+		error("Invalid photo identity cache entry. Restore the catalog from a backup before retrying.")
+	end
+	return record
+end
+
+---
+-- Backend photo ID -> photo, for every photo whose identity is already
+-- cached, read without touching any file. Finding a photo *by* its ID needs
+-- the ID the backend knows, which is the last one cached, even when the
+-- original is offline or has changed since; checking each file (what
+-- getGlobalPhotoIdForPhoto does for older hash IDs) is what made a lookup
+-- across a large catalog take tens of seconds.
+-- @param catalog LrCatalog
+-- @param photos table LrPhoto list
+-- @param onProgress function|nil called with (done, total) every few hundred photos
+-- @return table id -> LrPhoto
+-- @return table photos with no cached identity yet
+--
+function Util.indexCachedPhotoIds(catalog, photos, onProgress)
+	local byId, uncached = {}, {}
+	local uuids = catalog:batchGetRawMetadata(photos, { "uuid" })
+	for index, photo in ipairs(photos) do
+		local uuid = uuids[photo] and uuids[photo].uuid
+		local ok, record = false, nil
+		if not Util.nilOrEmpty(uuid) then
+			ok, record = LrTasks.pcall(readPhotoIdentity, catalog, PHOTO_ID_CACHE_PREFIX .. uuid)
+		end
+		if ok and record then
+			byId[record.id] = photo
+		else
+			uncached[#uncached + 1] = photo
+		end
+		if index % 500 == 0 then
+			if onProgress then
+				onProgress(index, #photos)
+			end
+			LrTasks.yield()
+		end
+	end
+	return byId, uncached
+end
+
+local function photoIdentityIsCurrent(record, attributes)
+	if not record then
+		return false
+	end
+	if record.algorithm == STABLE_ID_ALGO then
+		return true
+	end
+	-- Keep the last known identity for offline photos. A scan must not lose
+	-- their backend association just because the originals are disconnected.
+	return record.algorithm == LEGACY_HASH_ALGO
+		and (
+			not attributes
+			or (
+				tonumber(record.fileSize) == attributes.fileSize
+				and math.floor(tonumber(record.fileModificationDate) or 0)
+					== math.floor(attributes.fileModificationDate)
+			)
+		)
+end
+
+--- Resolves a backend ID without writing any photo metadata, including on a
+--- cache miss or forceRecompute. Existing photo properties are read-only legacy
+--- input; new and migrated identities are stored in catalog plugin properties.
 function Util.getGlobalPhotoIdForPhoto(photo, options)
 	options = options or {}
 	if not photo then
 		return nil, "Photo is nil"
 	end
+	local catalog = photo.catalog or LrApplication.activeCatalog()
+	local uuid = photo:getRawMetadata("uuid")
+	if not catalog or Util.nilOrEmpty(uuid) then
+		return nil, "A catalog and photo UUID are required to preserve the photo identity"
+	end
+	local key = PHOTO_ID_CACHE_PREFIX .. uuid
+	local ok, record = LrTasks.pcall(readPhotoIdentity, catalog, key)
+	if not ok then
+		return nil, "Could not read photo identity: " .. tostring(record)
+	end
+	local initialId = record and record.id
+	-- Stable IDs need no disk access, including when the original is offline.
+	if not options.forceRecompute and record and record.algorithm == STABLE_ID_ALGO then
+		return record.id, nil
+	end
 
 	local originalFilePath = photo:getRawMetadata("path")
-	local attributes, attrErr = getFileAttributes(originalFilePath)
-	if not attributes then
-		log:error(
-			"getGlobalPhotoIdForPhoto: file attributes unavailable for photo path="
-				.. tostring(originalFilePath)
-				.. " err="
-				.. tostring(attrErr)
-		)
-		return nil, attrErr
-	end
-
-	local cachedId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
-	local cachedAlgorithm = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm")
-	local cachedSize = tonumber(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize") or "")
-	local cachedMtime = tonumber(photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate") or "")
-
-	if not options.forceRecompute and not Util.nilOrEmpty(cachedId) then
-		if cachedAlgorithm == STABLE_ID_ALGO then
-			-- log:trace("getGlobalPhotoIdForPhoto: cache hit for " .. tostring(originalFilePath))
-			return cachedId, nil
+	local attributes = getFileAttributes(originalFilePath)
+	if not options.forceRecompute then
+		if photoIdentityIsCurrent(record, attributes) then
+			return record.id, nil
 		end
-		if
-			cachedAlgorithm == LEGACY_HASH_ALGO
-			and cachedSize == tonumber(attributes.fileSize)
-			and math.floor(cachedMtime or 0) == math.floor(tonumber(attributes.fileModificationDate) or 0)
-		then
-			-- log:trace("getGlobalPhotoIdForPhoto: cache hit for legacy hash " .. tostring(originalFilePath))
-			return cachedId, nil
+		-- Only consult the old photo cache when no catalog record exists. A
+		-- recomputed catalog ID must never be replaced by stale photo metadata.
+		if not record then
+			local legacyId = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoId")
+			if not Util.nilOrEmpty(legacyId) then
+				local legacy = {
+					id = legacyId,
+					algorithm = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm"),
+					fileSize = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize"),
+					fileModificationDate = photo:getPropertyForPlugin(_PLUGIN, "globalPhotoIdFileModificationDate"),
+				}
+				if photoIdentityIsCurrent(legacy, attributes) then
+					record = legacy
+				end
+			end
 		end
 	end
 
-	local rebuildStartedAt = LrDate.currentTime()
-	local globalPhotoId, idErr = Util.computeStableMetadataPhotoId(photo)
-	local metadata = {
-		fileSize = attributes.fileSize,
-		fileModificationDate = attributes.fileModificationDate,
-		algorithm = STABLE_ID_ALGO,
-	}
-
-	if not globalPhotoId then
-		log:warn(
-			"getGlobalPhotoIdForPhoto: stable metadata id failed, falling back to partial hash for "
-				.. tostring(originalFilePath)
-				.. " err="
-				.. tostring(idErr)
-		)
-		local fallbackId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
-		if not fallbackId then
-			log:error(
-				"getGlobalPhotoIdForPhoto: failed for "
-					.. tostring(originalFilePath)
-					.. " err="
-					.. tostring(metadataOrErr)
-			)
-			return nil, metadataOrErr
+	if options.forceRecompute or not photoIdentityIsCurrent(record, attributes) then
+		local id, idErr = Util.computeStableMetadataPhotoId(photo)
+		record = { id = id, algorithm = STABLE_ID_ALGO }
+		if not id then
+			log:trace("Stable metadata ID unavailable; using partial hash: " .. tostring(idErr))
+			local fallbackId, metadataOrErr = Util.buildGlobalPhotoId(originalFilePath, options.windowBytes)
+			if not fallbackId then
+				return nil, metadataOrErr
+			end
+			if type(metadataOrErr) ~= "table" then
+				return nil, "Invalid photo metadata"
+			end
+			record = metadataOrErr
+			record.id = fallbackId
+			record.algorithm = LEGACY_HASH_ALGO
 		end
-		if type(metadataOrErr) ~= "table" then
-			return nil, "Invalid photo metadata"
-		end
-		globalPhotoId = fallbackId
-		metadata = metadataOrErr
-		metadata.algorithm = LEGACY_HASH_ALGO
 	end
 
-	local catalog = LrApplication.activeCatalog()
-	catalog:withPrivateWriteAccessDo(function()
-		photo:setPropertyForPlugin(_PLUGIN, "globalPhotoId", globalPhotoId)
-		photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdFileSize", tostring(metadata.fileSize or ""))
-		photo:setPropertyForPlugin(
-			_PLUGIN,
-			"globalPhotoIdFileModificationDate",
-			tostring(metadata.fileModificationDate or "")
-		)
-		photo:setPropertyForPlugin(_PLUGIN, "globalPhotoIdAlgorithm", tostring(metadata.algorithm or STABLE_ID_ALGO))
+	-- Do not return a newly computed ID until it is durable: otherwise a
+	-- rename/restart after a failed cache write could orphan backend data.
+	local didSave = false
+	local saved, saveErr = LrTasks.pcall(function()
+		local function save()
+			local current = readPhotoIdentity(catalog, key)
+			-- Another task may have resolved this photo while write access yielded.
+			if
+				not options.forceRecompute
+				and current
+				and current.id ~= initialId
+				and photoIdentityIsCurrent(current, attributes)
+			then
+				record = current
+			else
+				catalog:setPropertyForPlugin(_PLUGIN, key, JSON:encode(record))
+			end
+			didSave = true
+		end
+		if catalog.hasPrivateWriteAccess or catalog.hasWriteAccess then
+			save()
+		else
+			catalog:withPrivateWriteAccessDo(save)
+		end
 	end)
-
-	local rebuildElapsedMs = math.floor((LrDate.currentTime() - rebuildStartedAt) * 1000)
-	log:trace(
-		"getGlobalPhotoIdForPhoto: cache miss -> generated id for "
-			.. tostring(originalFilePath)
-			.. " elapsedMs="
-			.. tostring(rebuildElapsedMs)
-			.. " idPrefix="
-			.. tostring(string.sub(globalPhotoId, 1, 24))
-	)
-
-	return globalPhotoId, nil
+	if not saved or not didSave then
+		return nil,
+			"Could not save photo identity. Check catalog write access and retry: " .. tostring(
+				saveErr or "write access was not granted"
+			)
+	end
+	return record.id, nil
 end
 
 function Util.getStringsFromRelativePath(absolutePath)
@@ -1187,6 +1380,39 @@ function Util.deepcopy(o, seen)
 		no = o
 	end
 	return no
+end
+
+---
+-- Adds a value to a list kept in the preferences, in a way that gets saved.
+--
+-- LrPrefs saves a preference when its key is assigned, and the SDK warns it
+-- may not notice a change made inside a table already stored under a key. So
+-- `table.insert(prefs.someList, x)` changes the list for this session only,
+-- and the addition is gone once Lightroom restarts. The list is copied,
+-- extended and assigned back instead. The copy also leaves alone the table the
+-- preference was seeded with: `knownTopLevelKeywords` starts out as
+-- `Defaults.defaultTopLevelKeywords` itself, not a copy of it.
+--
+-- @param store table The preferences (`prefs`), or a table standing in for them.
+-- @param key string The preference holding the list.
+-- @param value any The value to add; nil adds nothing.
+-- @return boolean Whether the value was added; false when it was already there.
+--
+function Util.appendToPrefsList(store, key, value)
+	if value == nil then
+		return false
+	end
+	local current = store[key]
+	if type(current) ~= "table" then
+		current = {}
+	end
+	if Util.table_contains(current, value) then
+		return false
+	end
+	local updated = Util.deepcopy(current)
+	table.insert(updated, value)
+	store[key] = updated
+	return true
 end
 
 ---
@@ -1622,6 +1848,48 @@ function Util.get_keys(t)
 		table.insert(keys, key)
 	end
 	return keys
+end
+
+---
+-- Frees the models the backend is holding in memory, on demand.
+--
+-- The backend loads the two SigLIP2 towers, the face pair and BioCLIP lazily
+-- and drops them again after 30 minutes without a request. Until this existed
+-- the only way to hand that memory back sooner was to quit Lightroom: the
+-- plug-in called `/server/unload` from its shutdown function and nowhere else,
+-- so a session that indexed a catalog and then sat idle kept several GB
+-- resident with no way to release it (#405).
+--
+-- Nothing is lost by unloading. Each model is loaded again the next time it is
+-- needed — the first analysis, search or cull after this costs a few seconds —
+-- and the index, the database and the models on disk are untouched.
+--
+-- Deliberately does not start the backend. Unloading is only meaningful
+-- against a running server, and starting one in order to empty it would be the
+-- opposite of what the button is for.
+function Util.unloadModelsDialog()
+	if not SearchIndexAPI.pingServer() then
+		LrDialogs.message(
+			"AI models",
+			"The backend is not running, so there are no models in memory. Nothing was changed.",
+			"info"
+		)
+		return
+	end
+
+	if SearchIndexAPI.unloadResources() then
+		log:trace("Backend models unloaded on request")
+		LrDialogs.message(
+			"AI models unloaded",
+			"The models were released and the memory they were holding is free.\n\nThe next analysis, search or cull loads them again, which takes a few seconds.",
+			"info"
+		)
+	else
+		ErrorHandler.handleError(
+			"Could not unload the AI models",
+			"The backend did not answer the unload request. It may have stopped in the meantime — check the server status and try again."
+		)
+	end
 end
 
 function Util.waitForServerDialog(options)
@@ -2393,8 +2661,13 @@ function Util.requiredModelFamilies(tasks)
 	for _, task in ipairs(tasks) do
 		if task == "embeddings" then
 			needed.clip = true
-		elseif task == "faces" or task == "cull" then
+			needed.aesthetic = true
+		elseif task == "faces" then
 			needed.face = true
+		elseif task == "cull" then
+			-- The fast cull ingest also scores each photo's aesthetic.
+			needed.face = true
+			needed.aesthetic = true
 		elseif task == "species" then
 			needed.bioclip = true
 		end
@@ -2402,7 +2675,7 @@ function Util.requiredModelFamilies(tasks)
 	-- Fixed order rather than pairs(): the result reaches a dialog, and a list
 	-- that reshuffles between runs reads like a different problem each time.
 	local result = {}
-	for _, id in ipairs({ "clip", "face", "bioclip" }) do
+	for _, id in ipairs({ "clip", "aesthetic", "face", "bioclip" }) do
 		if needed[id] then
 			table.insert(result, id)
 		end
@@ -2485,10 +2758,19 @@ function Util.searchCoverage(stats, catalogPhotoCount)
 	if searchable < 0 then
 		searchable = 0
 	end
+	-- Embeddings from a previous search model are stored but compare with
+	-- nothing the search embeds now, so they are not searchable either. They
+	-- are a part of `withEmbedding`, hence the clamp to it.
+	local outdated = math.max(0, math.min(tonumber(photos.with_outdated_embedding) or 0, searchable))
+	local current = searchable - outdated
 	return {
 		total = total,
-		searchable = searchable,
-		unsearchable = total - searchable,
+		searchable = current,
+		unsearchable = total - current,
+		-- Of the unsearchable ones: indexed with the previous model, and
+		-- never indexed at all. Different instructions in the dialog.
+		outdated = outdated,
+		unindexed = total - searchable,
 	}
 end
 
@@ -2510,6 +2792,575 @@ function Util.formatDownloadSize(bytes)
 		return string.format("%.1f GB", n / 1e9)
 	end
 	return string.format("%.0f MB", n / 1e6)
+end
+
+---
+-- Whether a culling preset judges the moment: emotion, expression, action.
+--
+-- Mirrors the backend presets, where every one but `default` gives the moment
+-- weight. `default` spans every genre and has no moment question that is right
+-- for all of them. The moment is read from the SigLIP2 embedding, which is
+-- why this decides what the cull prep pass computes.
+--
+-- @param preset string|nil Culling preset name.
+-- @return boolean
+--
+function Util.cullPresetJudgesMoment(preset)
+	return type(preset) == "string" and preset ~= "" and preset ~= "default"
+end
+
+---
+-- The index tasks the cull prep pass sends for a preset.
+--
+-- `cull` alone is the fast path: pHash, image metrics, face quality, no
+-- embedding. A preset that judges the moment adds `embeddings`, because
+-- without one the backend has nothing to judge it from and quietly ranks on
+-- sharpness alone — the very gap the moment exists to close.
+--
+-- @param preset string|nil Culling preset name.
+-- @return table Task names.
+--
+function Util.cullPrepTasks(preset)
+	if Util.cullPresetJudgesMoment(preset) then
+		return { "cull", "embeddings" }
+	end
+	return { "cull" }
+end
+
+---
+-- A backend response's warnings as a list of distinct messages.
+--
+-- Prefers the `warnings` list. Falls back to the single `warning` string an
+-- older backend sends, so a plugin newer than its backend still reports.
+--
+-- @param response table|nil Decoded response.
+-- @return table List of strings, possibly empty.
+--
+function Util.responseWarnings(response)
+	if type(response) ~= "table" then
+		return {}
+	end
+	local source = response.warnings
+	if type(source) ~= "table" then
+		source = { response.warning }
+	end
+	local list, seen = {}, {}
+	for _, w in ipairs(source) do
+		if type(w) == "string" and w ~= "" and not seen[w] then
+			seen[w] = true
+			table.insert(list, w)
+		end
+	end
+	return list
+end
+
+---
+-- Joins warnings for one dialog: the first `maxShown`, then a count of the
+-- rest. A wall of lines is as unreadable as none, and dropping the rest
+-- silently would hide problems.
+--
+-- @param list table List of strings.
+-- @param maxShown number|nil Defaults to 5.
+-- @return string|nil nil when the list is empty.
+--
+function Util.formatWarningList(list, maxShown)
+	if type(list) ~= "table" or #list == 0 then
+		return nil
+	end
+	maxShown = maxShown or 5
+	local shown = {}
+	for i = 1, math.min(maxShown, #list) do
+		table.insert(shown, list[i])
+	end
+	local text = table.concat(shown, "\n\n")
+	if #list > #shown then
+		text = text .. "\n\n... and " .. tostring(#list - #shown) .. " more warnings"
+	end
+	return text
+end
+
+---
+-- The Metadata panel values for a photo's aesthetic score and genre.
+--
+-- Pure so the formatting is tested headless. The score is one decimal, as a
+-- string, like every other numeric AI field (the metadata schema declares them
+-- all as strings). A score from another export of the model is not written: it
+-- is the model's honest answer for that export but not comparable with the
+-- scores of this one, and showing it beside current ones would mislead.
+--
+-- @param aesthetic table|nil The backend's `aesthetic` block from /v1/photos/lookup.
+-- @return string|nil The score text ("7.4"), nil when there is no current score.
+-- @return string The genre's label, "" when there is none.
+--
+function Util.aestheticFieldValues(aesthetic)
+	if type(aesthetic) ~= "table" then
+		return nil, ""
+	end
+	local score = tonumber(aesthetic.score)
+	local scoreText = nil
+	if score and aesthetic.outdated ~= true then
+		scoreText = string.format("%.1f", score)
+	end
+	local genre = aesthetic.genre_label
+	if type(genre) ~= "string" then
+		genre = ""
+	end
+	return scoreText, genre
+end
+
+---
+-- The minimum aesthetic score a slider position stands for, nil for "off".
+--
+-- The slider is integral and runs in half-points so a step is meaningful:
+-- 0 is off, and positions from 2 to 18 are 1.0 to 9.0 (the model's range).
+-- Position 1 would be 0.5, below anything the model can say, so it is off too.
+--
+-- @param position number|nil Slider position, 0-18.
+-- @return number|nil The score, or nil when the minimum is off.
+--
+function Util.minAestheticFromSlider(position)
+	local n = tonumber(position)
+	if n == nil or n < 2 then
+		return nil
+	end
+	if n > 18 then
+		n = 18
+	end
+	return n / 2
+end
+
+---
+-- What the minimum-aesthetic slider shows beside it.
+--
+-- @param position number|nil Slider position, 0-18.
+-- @return string "Off" or "7.5".
+--
+function Util.minAestheticLabel(position)
+	local score = Util.minAestheticFromSlider(position)
+	if score == nil then
+		return "Off"
+	end
+	return string.format("%.1f", score)
+end
+
+---
+-- The ranking options of a search, from what the dialog holds.
+--
+-- Pure so the rules are tested headless:
+-- - without a search term there is nothing to be relevant to, so the order is
+--   always the aesthetic score, whatever the popup says ("the best N");
+-- - a minimum of "off" and a genre of "all" are simply not sent;
+-- - `aestheticWeight` is only meaningful when combining.
+--
+-- @param ui table `{ hasTerm, sortBy, minAestheticPosition, genre }`
+--   (`sortBy` "relevance"|"aesthetic"|"combined", `genre` "all" or a genre id).
+-- @return table `{ sort, minAesthetic, genres, aestheticWeight }`, absent keys nil.
+--
+function Util.searchRankingOptions(ui)
+	ui = ui or {}
+	local sort = ui.sortBy
+	if sort ~= "relevance" and sort ~= "aesthetic" and sort ~= "combined" then
+		sort = ui.hasTerm and "relevance" or "aesthetic"
+	end
+	if not ui.hasTerm then
+		sort = "aesthetic"
+	end
+	local options = { sort = sort }
+	options.minAesthetic = Util.minAestheticFromSlider(ui.minAestheticPosition)
+	if type(ui.genre) == "string" and ui.genre ~= "" and ui.genre ~= "all" then
+		options.genres = { ui.genre }
+	end
+	if sort == "combined" then
+		options.aestheticWeight = 0.5
+	end
+	return options
+end
+
+---
+-- The name of the collection a search fills.
+--
+-- A search by term keeps its old name (`'term' @ time`); the ranking only adds
+-- what is not the default, so a plain search reads as it always did. Without a
+-- term it is "Best N", with the filters that shaped it.
+--
+-- @param args table `{ term, maxResults, sort, minAesthetic, genreLabel, time }`
+--   (`time` already formatted).
+-- @return string
+--
+function Util.searchCollectionName(args)
+	local term = Util.trim(args.term or "")
+	local parts = {}
+	if term == "" then
+		table.insert(parts, "Best " .. tostring(args.maxResults or ""))
+	else
+		table.insert(parts, "'" .. term .. "'")
+		if args.sort == "aesthetic" then
+			table.insert(parts, "by aesthetic")
+		elseif args.sort == "combined" then
+			table.insert(parts, "relevance + aesthetic")
+		end
+	end
+	if args.minAesthetic then
+		table.insert(parts, string.format("\226\137\165%.1f", args.minAesthetic))
+	end
+	if args.genreLabel and args.genreLabel ~= "" then
+		table.insert(parts, args.genreLabel)
+	end
+	return table.concat(parts, " \194\183 ") .. " @ " .. tostring(args.time or "")
+end
+
+---
+-- How hard to cull, as the factor the backend applies to the preset's reject
+-- margin (`reject_margin_scale` on `/cull/grade`). The preset decides what a
+-- good frame looks like; how many near-misses to keep is the photographer's
+-- call and changes from job to job, so it is a dialog setting, not a preset.
+--
+-- Above 1 widens the margin (fewer reject candidates), below 1 narrows it.
+-- The defect rules — blur, blink, occlusion — are not scaled: a blink is a
+-- blink however gentle the cull.
+Util.CULL_STRENGTH_SCALE = { gentle = 1.5, balanced = 1.0, strict = 0.6 }
+
+---
+-- @param strength string|nil "gentle", "balanced" or "strict".
+-- @return number The margin scale; 1.0 for anything unknown.
+--
+function Util.cullRejectMarginScale(strength)
+	return Util.CULL_STRENGTH_SCALE[strength] or 1.0
+end
+
+---
+-- Star ratings written for a cull decision when the user asks for them.
+-- Picks and alternates only: a reject candidate gets the reject flag, and a
+-- star on a frame about to be deleted would only confuse the filter bar.
+Util.CULL_RATING_BY_DECISION = { pick = 3, alternate = 2 }
+
+---
+-- Lightroom's colour label for a reject candidate that carried its group's
+-- strongest moment ("look before deleting"). Purple is the label photographers
+-- use least, so it is the one least likely to collide with their own system.
+Util.CULL_STRONG_MOMENT_LABEL = "purple"
+
+---
+-- The culling decision the plugin stores for one ranked photo.
+--
+-- @param photoResult table One entry of `groups[].photos` from `/cull/grade`.
+-- @return string "pick", "reject_candidate" or "alternate".
+--
+function Util.cullDecisionOf(photoResult)
+	if type(photoResult) ~= "table" then
+		return "alternate"
+	end
+	if photoResult.winner then
+		return "pick"
+	elseif photoResult.reject_candidate then
+		return "reject_candidate"
+	end
+	return "alternate"
+end
+
+---
+-- The `cull_score` of every ranked photo, by photo ID.
+--
+-- @param groups table `groups` from `/cull/grade`.
+-- @return table photoId -> number.
+--
+function Util.cullScoresById(groups)
+	local scores = {}
+	for _, group in ipairs(groups or {}) do
+		for _, photoResult in ipairs(group.photos or {}) do
+			local id = photoResult.photo_id
+			if id then
+				scores[id] = tonumber(photoResult.cull_score) or 0
+			end
+		end
+	end
+	return scores
+end
+
+---
+-- Orders photo IDs by culling score so a result collection reads as a review
+-- queue: picks best first, reject candidates worst first. Lightroom shows a
+-- collection in the order its photos were added when its sort is Custom
+-- Order, which is what makes this worth doing. Ties keep their input order.
+--
+-- @param ids table Array of photo IDs.
+-- @param scores table photoId -> number, from `Util.cullScoresById`.
+-- @param worstFirst boolean|nil Ascending by score when true.
+-- @return table A new array.
+--
+function Util.cullSortByScore(ids, scores, worstFirst)
+	local entries = {}
+	for index, id in ipairs(ids or {}) do
+		table.insert(entries, { id = id, score = (scores or {})[id] or 0, index = index })
+	end
+	table.sort(entries, function(a, b)
+		if a.score ~= b.score then
+			if worstFirst then
+				return a.score < b.score
+			end
+			return a.score > b.score
+		end
+		return a.index < b.index
+	end)
+	local sorted = {}
+	for _, entry in ipairs(entries) do
+		table.insert(sorted, entry.id)
+	end
+	return sorted
+end
+
+---
+-- Encodes what a cull wrote on a photo, for the `cullWritten` plugin field:
+-- `flag=1 rating=3 label=purple`, fields the cull does not own left out.
+-- Empty string when it owns nothing, so the field can be cleared.
+--
+-- @param written table { pickStatus = n?, rating = n?, colorNameForLabel = s? }
+-- @return string
+--
+function Util.cullWrittenEncode(written)
+	written = written or {}
+	local parts = {}
+	if type(written.pickStatus) == "number" and written.pickStatus ~= 0 then
+		table.insert(parts, "flag=" .. tostring(written.pickStatus))
+	end
+	if type(written.rating) == "number" and written.rating > 0 then
+		table.insert(parts, "rating=" .. tostring(written.rating))
+	end
+	if type(written.colorNameForLabel) == "string" and written.colorNameForLabel ~= "" then
+		table.insert(parts, "label=" .. written.colorNameForLabel)
+	end
+	return table.concat(parts, " ")
+end
+
+---
+-- Inverse of `Util.cullWrittenEncode`; anything unreadable decodes as nothing.
+--
+-- @param text string|nil
+-- @return table { pickStatus = n?, rating = n?, colorNameForLabel = s? }
+--
+function Util.cullWrittenDecode(text)
+	local written = {}
+	if type(text) ~= "string" then
+		return written
+	end
+	for key, value in text:gmatch("(%a+)=(%S+)") do
+		if key == "flag" then
+			written.pickStatus = tonumber(value)
+		elseif key == "rating" then
+			written.rating = tonumber(value)
+		elseif key == "label" then
+			written.colorNameForLabel = value
+		end
+	end
+	return written
+end
+
+---
+-- Decides which Lightroom flags, star ratings and colour labels a cull result
+-- should write, photo by photo, and what it must leave alone.
+--
+-- Pure: it reads the backend result, what the catalog holds now, and what an
+-- earlier cull wrote (`cullWritten`), and returns the writes for the task to
+-- apply inside one undoable write-access block. Frames of a bracket, focus
+-- stack or panorama (`keep_all`) are never touched — every one of them is
+-- wanted.
+--
+-- Ownership is what makes a re-run safe. A mark equal to what the last cull
+-- wrote is the cull's: it is refreshed to this run's decision, or cleared
+-- when the decision no longer calls for it (an earlier pick that is now an
+-- alternate loses its flag, an earlier "look before deleting" label goes).
+-- Any other mark is the photographer's and is left alone and counted —
+-- unless `overwriteUserMarks` is on, which is the explicit "re-cull from
+-- scratch" and the only way a user flag is ever changed.
+--
+-- @param groups table `groups` from `/cull/grade`.
+-- @param options table `flagPicks`, `flagRejects`, `rateByDecision`,
+--        `labelStrongMoment`, `overwriteUserMarks` (booleans).
+-- @param current table photoId -> { pickStatus = n, rating = n,
+--        colorNameForLabel = s, written = table }; what the catalog holds now
+--        and what the last cull wrote, decoded.
+-- @return table plan: photoId -> { pickStatus = n?, rating = n|false?,
+--         colorNameForLabel = s|false?, written = string }; `false` clears a
+--         value, `written` is the new `cullWritten` field.
+-- @return table counts: `picks`, `rejects`, `cleared`, `ratings`,
+--         `ratingsCleared`, `labels`, `labelsCleared`, `keptFlags`,
+--         `keptRatings`, `keptLabels` (the last three are the photographer's
+--         own marks that were left alone).
+--
+function Util.cullFlagPlan(groups, options, current)
+	options = options or {}
+	current = current or {}
+	local plan = {}
+	local counts = {
+		picks = 0,
+		rejects = 0,
+		cleared = 0,
+		ratings = 0,
+		ratingsCleared = 0,
+		labels = 0,
+		labelsCleared = 0,
+		keptFlags = 0,
+		keptRatings = 0,
+		keptLabels = 0,
+	}
+	local overwrite = options.overwriteUserMarks == true
+	local flagsOn = options.flagPicks or options.flagRejects
+
+	local function isLabel(value)
+		return type(value) == "string" and value ~= "" and value ~= "none" and value ~= "gray" and value ~= "grey"
+	end
+
+	for _, group in ipairs(groups or {}) do
+		if group.keep_all ~= true then
+			for _, photoResult in ipairs(group.photos or {}) do
+				local id = photoResult.photo_id
+				if id then
+					local decision = Util.cullDecisionOf(photoResult)
+					local now = current[id] or {}
+					local wrote = now.written or {}
+					local nowFlag = tonumber(now.pickStatus) or 0
+					local nowRating = tonumber(now.rating) or 0
+					local nowLabel = isLabel(now.colorNameForLabel) and now.colorNameForLabel or nil
+					-- A mark is the cull's when it still reads what the cull wrote.
+					local flagIsOurs = nowFlag ~= 0 and wrote.pickStatus == nowFlag
+					local ratingIsOurs = nowRating > 0 and wrote.rating == nowRating
+					local labelIsOurs = nowLabel ~= nil and wrote.colorNameForLabel == nowLabel
+					local change = {}
+					local written = {}
+
+					-- Flags. `wantFlag` 0 means "no flag of ours here".
+					local wantFlag = 0
+					if decision == "pick" and options.flagPicks then
+						wantFlag = 1
+					elseif decision == "reject_candidate" and options.flagRejects then
+						wantFlag = -1
+					end
+					if flagsOn then
+						if wantFlag ~= 0 then
+							if nowFlag == wantFlag then
+								written.pickStatus = wantFlag
+							elseif nowFlag == 0 or flagIsOurs or overwrite then
+								change.pickStatus = wantFlag
+								written.pickStatus = wantFlag
+								if wantFlag == 1 then
+									counts.picks = counts.picks + 1
+								else
+									counts.rejects = counts.rejects + 1
+								end
+							else
+								counts.keptFlags = counts.keptFlags + 1
+							end
+						elseif nowFlag ~= 0 and (flagIsOurs or overwrite) then
+							change.pickStatus = 0
+							counts.cleared = counts.cleared + 1
+						end
+					elseif flagIsOurs then
+						-- Flags switched off this run: an earlier cull's flag stays
+						-- but is no longer tracked as ours.
+						written.pickStatus = nil
+					end
+
+					-- Stars.
+					local wantRating = options.rateByDecision and Util.CULL_RATING_BY_DECISION[decision] or nil
+					if wantRating then
+						if nowRating == wantRating then
+							written.rating = wantRating
+						elseif nowRating == 0 or ratingIsOurs or overwrite then
+							change.rating = wantRating
+							written.rating = wantRating
+							counts.ratings = counts.ratings + 1
+						else
+							counts.keptRatings = counts.keptRatings + 1
+						end
+					elseif options.rateByDecision and ratingIsOurs then
+						change.rating = false
+						counts.ratingsCleared = counts.ratingsCleared + 1
+					end
+
+					-- "Look before deleting" label.
+					local wantLabel = options.labelStrongMoment
+						and decision == "reject_candidate"
+						and Util.table_contains(photoResult.reason_codes or {}, "strong_moment_but_unusable")
+					if wantLabel then
+						if nowLabel == Util.CULL_STRONG_MOMENT_LABEL then
+							written.colorNameForLabel = nowLabel
+						elseif nowLabel == nil or labelIsOurs or overwrite then
+							change.colorNameForLabel = Util.CULL_STRONG_MOMENT_LABEL
+							written.colorNameForLabel = Util.CULL_STRONG_MOMENT_LABEL
+							counts.labels = counts.labels + 1
+						else
+							counts.keptLabels = counts.keptLabels + 1
+						end
+					elseif options.labelStrongMoment and labelIsOurs then
+						change.colorNameForLabel = false
+						counts.labelsCleared = counts.labelsCleared + 1
+					end
+
+					-- Record ownership whenever it changed, including to nothing.
+					local encoded = Util.cullWrittenEncode(written)
+					local before = Util.cullWrittenEncode(wrote)
+					if encoded ~= before then
+						change.written = encoded
+					end
+					if next(change) ~= nil then
+						plan[id] = change
+					end
+				end
+			end
+		end
+	end
+	return plan, counts
+end
+
+---
+-- The lines the completion dialog adds for what `Util.cullFlagPlan` wrote and
+-- what it left alone. Empty when nothing was asked for.
+--
+-- @param counts table Second return of `Util.cullFlagPlan`.
+-- @return table Array of strings.
+--
+function Util.cullFlagSummaryLines(counts)
+	counts = counts or {}
+	local lines = {}
+	local wrote = {}
+	if (counts.picks or 0) > 0 then
+		table.insert(wrote, tostring(counts.picks) .. " flagged as picks")
+	end
+	if (counts.rejects or 0) > 0 then
+		table.insert(wrote, tostring(counts.rejects) .. " flagged as rejected")
+	end
+	if (counts.cleared or 0) > 0 then
+		table.insert(wrote, tostring(counts.cleared) .. " unflagged")
+	end
+	if (counts.ratings or 0) > 0 then
+		table.insert(wrote, tostring(counts.ratings) .. " star ratings set")
+	end
+	if (counts.labels or 0) > 0 then
+		table.insert(wrote, tostring(counts.labels) .. " purple 'look before deleting' labels")
+	end
+	if (counts.ratingsCleared or 0) > 0 then
+		table.insert(wrote, tostring(counts.ratingsCleared) .. " earlier star ratings removed")
+	end
+	if (counts.labelsCleared or 0) > 0 then
+		table.insert(wrote, tostring(counts.labelsCleared) .. " earlier labels removed")
+	end
+	if #wrote > 0 then
+		table.insert(lines, "Lightroom: " .. table.concat(wrote, ", ") .. ". Undo with Cmd/Ctrl+Z.")
+	end
+	local kept = {}
+	if (counts.keptFlags or 0) > 0 then
+		table.insert(kept, tostring(counts.keptFlags) .. " flags")
+	end
+	if (counts.keptRatings or 0) > 0 then
+		table.insert(kept, tostring(counts.keptRatings) .. " ratings")
+	end
+	if (counts.keptLabels or 0) > 0 then
+		table.insert(kept, tostring(counts.keptLabels) .. " labels")
+	end
+	if #kept > 0 then
+		table.insert(lines, "Left alone because you set them yourself: " .. table.concat(kept, ", ") .. ".")
+	end
+	return lines
 end
 
 return Util

@@ -162,7 +162,9 @@ function UpdateCheck.checkForNewVersion()
 			LOC(
 				"$$$/LrGeniusAI/UpdateCheck/LatestVersion=You're on the latest plugin version: ^1",
 				UpdateCheck.releaseTagName
-			)
+			),
+			nil,
+			"info"
 		)
 	end
 	return nil

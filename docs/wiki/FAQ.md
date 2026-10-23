@@ -10,6 +10,10 @@ LrGeniusAI is an AI extension for Adobe Lightroom Classic. It adds AI-powered me
 
 Only if you choose a cloud provider (ChatGPT/OpenAI, Google Gemini, Anthropic Claude, or a cloud service such as OpenRouter as the *Other AI server*). With a local provider — the built-in llama.cpp and MLX engines, Ollama / LM Studio, or a server on your own network — your photos never leave your machines. For cloud providers, images are sent to the respective API for analysis. Embeddings and all generated metadata are always stored locally.
 
+### Does LrGeniusAI change my catalog or my image files?
+
+It changes your **catalog**: keywords, titles, captions and alt text, its own metadata fields (species, culling results, AI model and run date), and — with *AI Edit* — develop settings. Lightroom counts each of those writes as an edit, so the photos get a new **Edit Date**. LrGeniusAI itself never writes to your image files, but if **Automatically write changes into XMP** is on in *Catalog Settings*, Lightroom writes the new metadata into XMP sidecars and into DNG, JPEG, TIFF and PSD files, which cloud or NAS sync will upload again. Back up your catalog before the first run — see [Before you start](Getting-Started#before-you-start-back-up-your-catalog).
+
 ### Which Lightroom version is supported?
 
 Adobe **Lightroom Classic** only. Lightroom CC (cloud) and other Lightroom versions are not supported, as the plugin relies on the Lightroom Classic SDK.
@@ -43,6 +47,14 @@ Yes. The installers are not code-signed (cost and complexity for an open-source 
 ### Can I run the backend on a different machine or in Docker?
 
 Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository.
+
+The backend only works for whoever has its **access token**. On the computer it runs on, run `geniusai-server token` (in Docker: `docker exec geniusai-server /app/geniusai-server token`) and paste what it prints under *Plug-in Manager → LrGeniusAI → Backend Server → Access token*. A backend on the same computer as Lightroom needs nothing: the plug-in reads the token itself. `geniusai-server token --new` replaces the token (restart the backend afterwards, then paste the new one).
+
+> [!WARNING]
+> **Never make a backend reachable from the internet.** The plug-in talks to the backend over plain HTTP, with no encryption. The access token keeps out anyone who does not have it, but on the network it travels in plain text with every request — as does your API key for a cloud provider (OpenAI, Gemini, Anthropic, or a cloud service as the *Other AI server*), and your photos. Someone who can watch your network traffic can read all of it. That is harmless on the default `127.0.0.1`, where nothing leaves your computer. For now:
+>
+> - Run a remote backend only on a network you trust, such as your home network. Never forward its port on your router or open it on a cloud server.
+> - To reach a backend somewhere else, use a VPN (WireGuard, Tailscale), an SSH tunnel, or a reverse proxy with HTTPS (the Backend Server URL accepts `https://`). With an SSH tunnel, `ssh -L 19819:127.0.0.1:19819 user@host` lets you keep the Backend Server URL at its default; the access token is still the one from that host.
 
 ---
 
@@ -82,6 +94,8 @@ the status line names the exact reason. On Windows the section is llama.cpp rath
 
 *File → Plug-in Manager → LrGeniusAI* → scroll to **Optional AI providers**. Enter your Gemini, OpenAI or Anthropic key there, or the address and key of an **Other AI server** such as OpenRouter ([Other AI Server](Help-Other-AI-Server)).
 
+The keys are kept in the encrypted password storage Lightroom gives plug-ins, which uses your operating system's, not in Lightroom's preferences file, which is plain text. Earlier versions kept them in that file; the first start of a newer version moves them. If a key cannot be moved, it keeps working from the preferences file, and the status line in the Plug-in Manager says which key it is. Keys sent to a backend on another computer are not protected on the way: see [above](#can-i-run-the-backend-on-a-different-machine-or-in-docker).
+
 ### Can I use OpenRouter, a llama.cpp server, LiteLLM or vLLM?
 
 Yes — any server that speaks the OpenAI chat API. Enter it as the **Other AI server** under *Optional AI providers*, with an API key if it needs one. See [Other AI Server](Help-Other-AI-Server).
@@ -99,6 +113,12 @@ Up to four things in one pass:
 4. Identifies animal, plant and fungus species (using BioCLIP 2 locally) and writes the taxonomy to the plugin's metadata fields.
 
 Every step is optional and each has its own checkbox — only step 1 involves a language model or a cloud account at all.
+
+### Why did the Edit Date of my photos change?
+
+Because Lightroom counts every change a plug-in makes to a photo as an edit. Each photo *Analyze & Index* processes gets the time of the run as its **Edit Date** — even on a run that writes no titles, captions or keywords — and smart collections that filter on *Edit Date* pick it up. Lightroom offers plug-ins no way to set the old date back, and putting old metadata back would count as another edit, so the only way to recover the previous dates is a catalog backup made before the run. See [Before you start](Getting-Started#before-you-start-back-up-your-catalog).
+
+Up to version 3.2.1, LrGeniusAI could also change the Edit Date of **every photo in the catalog** — typically the first time a task ran — no matter which photos you had selected ([#397](https://github.com/LrGenius/LrGeniusAI/issues/397)). Later versions no longer touch photos you did not ask them to process; dates already changed by an older version can only be recovered from a backup.
 
 ### Does species identification send my photos anywhere?
 
@@ -124,6 +144,15 @@ Yes. Advanced Search only works on photos that have been indexed (embeddings cre
 ### How do I re-index photos that have already been indexed?
 
 Enable **Regenerate all data (overwrite existing)** in the Analyze & Index dialog.
+
+### What happens to the index when I delete photos in Lightroom?
+
+LrGeniusAI takes them out of the search index on its own: a couple of minutes after Lightroom starts, then once a day, and right after a search finds photos that are no longer in the catalog. You can also run it yourself: *Plug-in Manager → LrGeniusAI → Backend Server → Clean up index now*, which tells you what it did. The checkbox above that button turns the automatic cleanup off.
+
+- A photo that another catalog using the same LrGeniusAI database still has stays indexed there.
+- A photo that is in no catalog any more keeps its AI data for **30 days**. If you import it again in that time, it gets its keywords, captions and faces back instead of being analyzed again. After 30 days the data is deleted for good.
+- If more than half of a catalog's indexed photos seem to be gone at once, LrGeniusAI asks before removing anything. That happens after deleting a big shoot, but also when the catalog was restored from an older backup — in that case, keep them.
+- Faces of deleted photos still show in **People** until their data is deleted for good.
 
 ---
 
