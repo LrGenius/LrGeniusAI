@@ -44,9 +44,17 @@ let package = Package(
         //
         // Revisit once mlx-swift-lm cuts a release containing
         // Libraries/MLXGuidedGeneration and move back to `.upToNextMinor`.
+        //
+        // `traits: []` turns off `FoundationModelsIntegration`, which is on by
+        // default and pulls `MLXFoundationModels` in through `MLXHuggingFace`
+        // even though nothing here imports it. Written against a beta SDK, it
+        // no longer compiles with Xcode 27.1's FoundationModels (an
+        // `init(capabilities:)` that went away), and with the trait off it
+        // builds as an empty library.
         .package(
             url: "https://github.com/ml-explore/mlx-swift-lm",
-            revision: "c97539da0e8554d2fad90cc79692381eab1c7906"
+            revision: "c97539da0e8554d2fad90cc79692381eab1c7906",
+            traits: []
         ),
         // mlx-swift-lm deliberately does not depend on a tokenizer
         // implementation — `MLXLMCommon.Tokenizer` is a protocol and consumers

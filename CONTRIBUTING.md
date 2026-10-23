@@ -75,6 +75,7 @@ there too, in the same PR.
 - **Asynchronicity**: Long-running operations **must** run in `LrTasks.startAsyncTask`.
 - **Yielding**: Use `LrTasks.pcall` instead of native `pcall` to allow for yielding during asynchronous operations.
 - **Naming Conventions**: Top-level plugin actions should follow the `Task*.lua` naming convention.
+- **Secrets**: Store API keys through `Secrets.lua` (Lightroom's encrypted password storage), never in `prefs`, which Lightroom writes to disk as plain text. Fields that show a key are `f:password_field`, never `f:edit_field`. The backend's access token is a secret too: plugin requests go through `_request`/`_requestMultipart` in `APISearchIndex.lua`, which add it, and nothing logs it.
 - **GUI strings**: Write user-facing strings as plain, finished English. Translations were dropped, so new code does not use `LOC`. Existing `LOC(...)` calls in older files just render their inline default — leave them alone, but don't add more.
 - **Utilities**: Use `Util.lua` for common logic.
 - **Photo Identity**: Use `Util.getGlobalPhotoIdForPhoto` (metadata-based) for cross-catalog consistency.
@@ -131,9 +132,10 @@ must survive every edit.
 
 ## ✅ Testing
 - **Smoke Tests**: Run `TaskAutomatedTests.lua` within Lightroom to verify plugin-backend connectivity.
+- **Lightroom Tests over MCP**: With Lightroom open (the agent bridge starts with it) and `LRGENIUS_MCP_TOKEN` set to the agent token from the Plug-in Manager, `cd server-rs && cargo test -p lrg-mcp --test live_lightroom -- --ignored --test-threads=1` runs the plugin's in-Lightroom tests through the MCP endpoint (see `docs/wiki/Dev-Agent-Bridge.md`). They work on whichever catalog is open, so use a test catalog that holds copies of your photos, above all with `LRG_LIVE_WRITES=1`, which changes photos. AI coding agents run the full live test from `.claude/skills/lrgenius-mcp-full-test/SKILL.md` and must not test in your production catalog without your approval.
 - **Plugin Unit Tests**: Pure Lua logic (helpers in `Util.lua`, keyword and photo-id handling) is tested headlessly with [busted](https://lunarmodules.github.io/busted/): run `busted` from the repo root (`luarocks install busted`). Specs live in `plugin/spec/`, `.busted` configures them, and `plugin/spec/spec_helper.lua` stubs the Lightroom SDK. CI runs them via `lua-tests.yml`. Add specs when you touch pure helpers.
 - **Backend Tests**: `cd server-rs && cargo test --workspace`.
-  - The ML golden tests **skip when their model files are absent, and a skip is reported as a pass** — so a green run on a machine without the model assets has not checked the model numerics. Set `LRG_REQUIRE_GOLDENS` to the families whose assets you have (`face`, `siglip`, `bioclip`, or `all`) to turn that skip into a failure. PR CI requires `face`; the nightly `golden-tests-full.yml` runs `all`. See [`server-rs/README.md`](server-rs/README.md#golden-tests-and-lrg_require_goldens) for fetching the assets.
+  - The ML golden tests **skip when their model files are absent, and a skip is reported as a pass** — so a green run on a machine without the model assets has not checked the model numerics. Set `LRG_REQUIRE_GOLDENS` to the families whose assets you have (`face`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a failure. PR CI requires `face`; the nightly `golden-tests-full.yml` runs `all`. See [`server-rs/README.md`](server-rs/README.md#golden-tests-and-lrg_require_goldens) for fetching the assets.
 
 ---
 

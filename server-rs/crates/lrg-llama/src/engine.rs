@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::thread::JoinHandle;
 
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::worker::{self, Job};
@@ -74,6 +75,26 @@ pub struct GenerationRequest {
     pub per_photo_prompt: String,
     pub image: Option<RgbImage>,
     /// JSON Schema to constrain decoding with. `None` decodes freely.
+    pub schema: Option<serde_json::Value>,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+/// One turn of a conversation. `role` is a chat-template role name:
+/// `system`, `user` or `assistant`.
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: &'static str,
+    pub text: String,
+    /// Placed after the text, in order.
+    pub images: Vec<RgbImage>,
+}
+
+/// A whole conversation, answered with one assistant turn.
+#[derive(Debug, Clone, Default)]
+pub struct ChatRequest {
+    pub messages: Vec<ChatMessage>,
+    /// JSON Schema to constrain the answer with. `None` decodes freely.
     pub schema: Option<serde_json::Value>,
     pub max_tokens: u32,
     pub temperature: f32,
@@ -188,6 +209,31 @@ impl LlamaEngine {
             })
             .map_err(|_| LlamaError::Shutdown)?;
         reply_rx.await.map_err(|_| LlamaError::Shutdown)
+    }
+
+    /// Answer a conversation, sending the text to `deltas` as it is decoded.
+    ///
+    /// The conversation runs in sequence 0 and evicts the pinned indexing
+    /// prefix, so the next indexing batch evaluates its prefix again. Dropping
+    /// the returned future stops the decode at the next token.
+    ///
+    /// # Errors
+    /// Reports a prompt that does not fit the context window, a photo the
+    /// model cannot take, a failed decode, or an engine that is gone.
+    pub async fn chat(
+        &self,
+        request: ChatRequest,
+        deltas: Option<UnboundedSender<String>>,
+    ) -> Result<GenerationOutput, LlamaError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(Job::Chat {
+                request,
+                deltas,
+                reply: reply_tx,
+            })
+            .map_err(|_| LlamaError::Shutdown)?;
+        reply_rx.await.map_err(|_| LlamaError::Shutdown)?
     }
 }
 

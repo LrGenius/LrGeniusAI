@@ -70,12 +70,14 @@ LrTasks.startAsyncTask(function()
 					LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 					LOC(
 						"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-					)
+					),
+					"info"
 				)
 			else
 				LrDialogs.message(
 					LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+					LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+					"info"
 				)
 			end
 			return
@@ -93,7 +95,8 @@ LrTasks.startAsyncTask(function()
 		if status == "canceled" then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/common/TaskCanceled/Title=Task Canceled"),
-				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user.")
+				LOC("$$$/LrGeniusAI/common/TaskCanceled/Message=The task was canceled by the user."),
+				"info"
 			)
 		elseif status == "allfailed" then
 			ErrorHandler.handleError(

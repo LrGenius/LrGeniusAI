@@ -16,15 +16,27 @@ clients, edit-recipe schema), `lrg-develop` (the native Lightroom develop
 model: key registry, typed settings, Lua/JSON and XMP readers, the
 develop-preset writer, the Lua writer for `applyDevelopSettings` (provisional
 until experiments E1/E2/E4/E11) and correction builders; a leaf crate),
-`lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature), `lrg-mlx`
-(supervises the Apple silicon MLX sidecar), `lrg-api` (axum routers),
+`lrg-llama` (in-process llama.cpp, behind the `llamacpp` feature),
+`lrg-mlx` (supervises the Apple silicon MLX sidecar), `lrg-api` (axum
+routers, including the agent bridge to the plugin), `lrg-mcp` (the MCP endpoint
+AI agents connect to at `/mcp`, and the `geniusai-server mcp` stdio proxy —
+see [`docs/wiki/Dev-Agent-Bridge.md`](../docs/wiki/Dev-Agent-Bridge.md)),
+`lrg-chat` (the in-app agent chat at `/v1/chat/*` and its page, a local or
+cloud model working through the same tools — see
+[`docs/wiki/Dev-Agent-Chat.md`](../docs/wiki/Dev-Agent-Chat.md)),
 `lrg-server` (the binary).
 
 There are two *local* LLM backends, selected as the `llamacpp` and `mlx`
 providers. They are independent — a build can have either, both, or neither —
 and both are served by the same `LocalEngine` trait in
-`lrg-providers/src/local_provider.rs`. Their build requirements differ, so they
-are covered separately below.
+`lrg-providers/src/local.rs`. Besides indexing photos in batches
+(`generate`), the trait answers a whole conversation with one turn,
+streaming its text as it is decoded (`chat`) — the agent chat is built on that.
+The chat itself talks to a model-neutral `ChatModel` (`lrg-providers/src/chat.rs`);
+`local_chat.rs` puts a local engine behind it, calling tools by decoding
+against a JSON Schema with one branch per tool, since llama.cpp cannot render
+the Jinja templates that carry a model's native tool-call format.
+Their build requirements differ, so they are covered separately below.
 
 **Which one ships is a per-platform decision.** Release builds enable
 `llamacpp` on **Windows only**; the **macOS build is MLX-only** and does not
@@ -69,9 +81,57 @@ learns the address, so nothing else needs changing. Note that
 `SearchIndexAPI.startServer` still launches the *installed* binary on the
 default port, so start a custom-port build yourself.
 
+**Do not expose the server publicly.** It speaks plain HTTP, and the plug-in
+puts the user's cloud-provider API key (`api_key`, `openai_apikey`,
+`server_apikey`, …) in the body of every request that uses one. Bound to
+`127.0.0.1` none of that leaves the machine. Bound to anything else, the keys,
+the photos and the access token (below) cross the network unencrypted. The
+token keeps out whoever does not have it, but not someone who can read the
+traffic. Until the server has TLS, run a non-loopback server only on a network
+you trust, never with its port forwarded to the internet or open on a cloud
+host; reach it from elsewhere through a VPN, an SSH tunnel
+(`ssh -L 19819:127.0.0.1:19819 user@host`) or a reverse proxy with HTTPS. The
+server does not store the keys; it uses each one only for the request it came
+with.
+
+### Access token
+
+Every request needs the server's access token as
+`Authorization: Bearer <token>`; without it the answer is a 403 with
+`"error_code": "api_token"`. Only `/ping`, `/version`, `/version/check`, the
+browser pages' HTML and the routes with tokens of their own (`/mcp`,
+`/v1/chat/*`) go without (`lrg_api::api_auth`; the full rules are under
+*Access* in [Dev: Backend API](../docs/wiki/Dev-Backend-API.md)).
+
+The server makes the token on its first start and keeps it in a file only the
+user can read (`lrg_common::api_token`):
+
+| OS | File |
+|---|---|
+| macOS | `~/Library/Application Support/LrGeniusAI/api-token` |
+| Windows | `%USERPROFILE%\AppData\Local\LrGeniusAI\api-token` |
+| Linux | `$XDG_CONFIG_HOME/LrGeniusAI/api-token`, or `~/.config/LrGeniusAI/api-token` |
+
+A plug-in on the same computer reads that file itself. For one on another
+computer, print the token and paste it under *Plug-in Manager → Backend
+Server → Access token*:
+
+```bash
+geniusai-server token          # prints it (makes it if there is none yet)
+geniusai-server token --new    # replaces it; restart the server afterwards
+```
+
+`LRG_API_TOKEN` (32–256 letters, digits, `-`, `_`) replaces the file with a
+fixed token. To call the API by hand:
+
+```bash
+curl -H "Authorization: Bearer $(geniusai-server token 2>/dev/null)" \
+    http://127.0.0.1:19819/v1/server/health
+```
+
 ### Golden tests and `LRG_REQUIRE_GOLDENS`
 
-The ML golden tests — SigLIP2, BioCLIP 2 and the face pipeline — compare real
+The ML golden tests — SigLIP2, the aesthetic scorer, BioCLIP 2 and the face pipeline — compare real
 inference against torch-computed reference values. They need their model files
 on disk and **skip when those are absent**, which the Rust test harness reports
 as a pass. That is fine on a working copy, and dangerous in CI: a green run is
@@ -86,9 +146,9 @@ LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
 LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family except the local-only ones
 ```
 
-Family names are `face`, `siglip` and `bioclip`. Per-family rather than a
+Family names are `face`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
-(89 MB, 2.2 GB and 834 MB respectively).
+(89 MB, 2.2 GB, 868 MB and 834 MB respectively).
 
 Local-only families can never be provisioned in CI, because their data is
 private or not redistributable: `all` leaves them out, and only naming one
@@ -176,24 +236,33 @@ cargo test -p lrg-mlx --test sidecar_smoke -- --ignored
 
 ## Model files
 
-### SigLIP2 (semantic embeddings)
+### SigLIP2 NaFlex (semantic embeddings)
 
+`google/siglip2-so400m-patch16-naflex`: the image keeps its aspect ratio
+(at most 576 patches of 16x16) instead of being center-cropped to a square.
 `POST /v1/models/clip/downloads` + `GET /v1/models/clip/downloads` fetch the fp16
-ONNX assets (`siglip2_image_fp16.onnx`, `siglip2_text_fp16.onnx`,
-`tokenizer.json`) and place them at the `LRG_SIGLIP_*` paths below,
+ONNX assets (`siglip2_naflex_image_fp16.onnx`, `siglip2_naflex_text_fp16.onnx`,
+`siglip2_naflex_tokenizer.json`) and place them at the `LRG_SIGLIP_*` paths below,
 pulling CI-exported ONNX assets from a release instead of the fp32
 checkpoint from Hugging Face.
 
-They come from the fixed `model-assets-v1` tag
+They come from the fixed `model-assets-v2` tag
 (`MODEL_ASSETS_RELEASE_TAG` in `routes/clip.rs`), **not** from the binary's
 own version tag: the assets change far less often than the app, so
 re-uploading them on every release would be wasted. Bumping them means
-bumping that constant and the tag together (e.g. `model-assets-v2`).
+bumping that constant and the tag together. `model-assets-v2` was that bump
+away from the fixed-resolution 384 export, which stays on `model-assets-v1`
+for the builds that predate NaFlex. The `.github/workflows/model-assets.yml`
+workflow publishes the tag; a build is only usable once it has run.
 
-That release exists with all three assets attached, so the endpoint works
-on any build. To export the models yourself instead — for a local change,
-or to avoid the download — run the same script the `build-model-assets` CI
-job runs:
+The image tower takes four inputs (`pixel_values`, `pixel_attention_mask`,
+`pos_interp_h`, `pos_interp_w`; see the script's docstring and
+`lrg-ml/src/naflex_pre.rs`). The position-embedding resize is done by the
+caller as two matmuls because transformers' own data-dependent
+`F.interpolate` does not export to ONNX.
+
+To export the models yourself instead — for a local change, or to avoid the
+download — run the script the `model-assets.yml` CI job runs:
 
 ```bash
 cd server-rs
@@ -203,29 +272,81 @@ uv run --project scripts --with onnxscript \
 
 `--with onnxscript` is required: torch >=2.9's `torch.onnx.export` imports
 it unconditionally even with `dynamo=False`. This downloads the SigLIP2
-checkpoint from Hugging Face, traces it natively in fp16, and writes
-`siglip2_image_fp16.onnx` (~860 MB), `siglip2_text_fp16.onnx` (~1.4 GB),
-and `tokenizer.json` into the output directory.
+checkpoint from Hugging Face, traces it natively in fp16, and writes the two
+`.onnx` files, `siglip2_naflex_tokenizer.json` and `siglip_goldens.json`
+(reference embeddings from transformers' own fp32 `Siglip2Model`) into the
+output directory, then verifies the fp16 graphs against them. Copy
+`siglip_goldens.json` to `testdata/` — `tests/goldens.rs` checks its
+`model_id` against `lrg_ml::siglip::MODEL_ID`.
 
-Verify the export against the checked-in goldens (no torch/open_clip
-needed for this half, just onnxruntime/numpy/tokenizers):
+Before a real export, `--self-test` checks the hand-written wrappers against
+the transformers forward on a tiny random-weight model (seconds, no download):
+
+```bash
+uv run --project scripts --with onnxscript \
+    python scripts/export_siglip2_fp16.py --self-test
+```
+
+Re-verify existing output without exporting again:
 
 ```bash
 uv run --project scripts python scripts/export_siglip2_fp16.py \
     --verify-only --output-dir /path/to/models/siglip2
 ```
 
-Both towers should score cosine similarity >0.99999 against the fp32
+Both towers should score cosine similarity >0.999 against the fp32
 goldens. Then point the server at the files:
 
 ```bash
-export LRG_SIGLIP_IMAGE_ONNX=/path/to/models/siglip2/siglip2_image_fp16.onnx
-export LRG_SIGLIP_TEXT_ONNX=/path/to/models/siglip2/siglip2_text_fp16.onnx
-export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/tokenizer.json
+export LRG_SIGLIP_IMAGE_ONNX=/path/to/models/siglip2/siglip2_naflex_image_fp16.onnx
+export LRG_SIGLIP_TEXT_ONNX=/path/to/models/siglip2/siglip2_naflex_text_fp16.onnx
+export LRG_SIGLIP_TOKENIZER=/path/to/models/siglip2/siglip2_naflex_tokenizer.json
 ```
 
-Without these set, `lrg-ml` falls back to `~/.cache/lrgenius/models/{siglip2_image,siglip2_text}.onnx`
-and `~/.cache/lrgenius/models/tokenizer.json`.
+Without these set, `lrg-ml` falls back to
+`~/.cache/lrgenius/models/{siglip2_naflex_image,siglip2_naflex_text}.onnx`
+and `~/.cache/lrgenius/models/siglip2_naflex_tokenizer.json`.
+
+### AestheticSigLIP (photo quality score)
+
+`somepago/AestheticSigLIP` (Apache-2.0) is a SigLIP 2 So400m NaFlex encoder
+fine-tuned to score a photo from 1 to 9. It is its **own backbone**, not a head
+on the search model's stored embedding, so scoring a photo is a second So400m
+forward pass — at the 256 patches it was trained with, with the authors' own
+rule for choosing the patch grid (`lrg-ml/src/aesthetic.rs`). Indexing computes
+it for the `embeddings` and `cull` tasks, and stores the score as
+`aesthetic_score` next to `aesthetic_model`, so a different export is recognised
+as stale and re-queued.
+
+It is a separate download (`aesthetic_siglip_fp16.onnx`, ~870 MB) from the same
+`model-assets-v2` release, reported as the `aesthetic` family by
+`/v1/models/assets` and fetched by the combined download; `LRG_AESTHETIC_ONNX`
+overrides the path (default `~/.cache/lrgenius/models/aesthetic_siglip.onnx`).
+Without it indexing still works and says once per run that scores were skipped.
+
+The checkpoint is a pickle and the model code is third-party Python, so
+`scripts/export_aesthetic_siglip_fp16.py` pins the upstream revision, the
+checkpoint's SHA-256 and the SHA-256 of every file it imports, and refuses
+anything else; the checkpoint loads with `weights_only=True`.
+
+```bash
+cd server-rs
+uv run --project scripts --with onnxscript \
+    python scripts/export_aesthetic_siglip_fp16.py --output-dir /path/to/models/aesthetic
+```
+
+It writes `aesthetic_siglip_fp16.onnx`, `aesthetic_goldens.json` (scores from the
+authors' own fp32 code and preprocessing) and `aesthetic_pre_goldens.json`
+(their patch grid for 41 image shapes, and their patches for the golden images),
+then verifies the fp16 graph against them. `--self-test` checks the wrapper
+against the authors' model on a tiny random-weight copy first. Copy both golden
+files to `testdata/`; `tests/aesthetic_goldens.rs` needs the ONNX file
+(`LRG_REQUIRE_GOLDENS=aesthetic` makes its absence a failure) and
+`tests/aesthetic_pre_goldens.rs` needs no model.
+
+The genre next to it (`lrg-ml/src/genre.rs`) is zero-shot from the search
+model's embedding: thirteen genres described by prompts whose text embeddings
+come from the database like the other fixed prompts, so no text tower runs.
 
 ### BioCLIP 2 (species identification)
 
@@ -280,7 +401,7 @@ the plugin actually calls — put them. Note the fallback name for the tower is
 `bioclip2_image.onnx`, without the export script's `_fp16` suffix.
 
 Assets are published by `.github/workflows/model-assets-bioclip.yml` to the
-fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v1`.
+fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v2`.
 **That release does not exist yet**, so the download route reports a 404 until
 the workflow has run once; an export placed in the cache directory by hand works
 in the meantime.
@@ -368,8 +489,13 @@ templates llama.cpp will accept — start there if a new model misbehaves.
 Same role as the section above, different artifacts: **an MLX model is a
 directory, not a file** — a Hugging Face repo snapshot with `config.json`, one
 or more safetensors shards, and the tokenizer files. Discovery therefore looks
-for directories that contain a `config.json` *and* at least one `.safetensors`
-(the config alone would match a half-finished download).
+for directories that contain a `config.json`, at least one `.safetensors` (the
+config alone would match a half-finished download) *and* a chat template
+(`chat_template.jinja`, `chat_template.json` or `chat_template` in
+`tokenizer_config.json`). The template is what separates a language model from
+an image encoder with the same layout: `google/siglip2-so400m-patch16-naflex`,
+which the search model's export script leaves in the Hugging Face cache, was
+otherwise offered as a chat model.
 
 `GET /v1/llm/catalog` reports MLX under a nested `mlx` key alongside the GGUF half,
 including `supported`/`reason`, and `POST /v1/llm/downloads` takes an MLX
@@ -407,10 +533,12 @@ export HF_ENDPOINT=https://huggingface.co
 
 There are no tuning knobs to match llama.cpp's `n_ctx`/`n_parallel`/GPU layers,
 and that is not an oversight: `GuidedGenerationLoop.run` in mlx-swift-lm
-allocates a fresh KV cache per call, so there is no pinned prompt prefix to
+allocates a fresh KV cache per call, so indexing has no pinned prompt prefix to
 size a context window around, the preferred batch size is 1, and the grammar is
-compiled per request. The prompt is still sent pre-split and stable-first so the
-ordering is right if that changes upstream.
+compiled per photo. The prompt is still sent pre-split and stable-first so the
+ordering is right if that changes upstream. (The agent chat runs its own copy
+of that loop, which keeps a conversation's cache between turns — see
+`native/mlx-sidecar/README.md`.)
 
 ### Troubleshooting: `LRG_DISABLE_KLEIDIAI`
 
@@ -443,6 +571,16 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 ```
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
+
+The image keeps the access token in its `/data` volume
+(`XDG_CONFIG_HOME=/data`), so it survives the container being recreated. Print
+it for the plug-in with
+`docker exec geniusai-server /app/geniusai-server token`.
+
+`-p 19819:19819` publishes the port on every interface of the host, so the
+warning under [Host and port](#host-and-port) applies. When Lightroom runs on
+the same computer, publish it to that computer only:
+`-p 127.0.0.1:19819:19819`.
 
 The image is built **without** the `llamacpp` feature and has no MLX sidecar, so
 neither local backend is available in a container. Inside the container,
@@ -482,6 +620,15 @@ raw — are resident before any of them has been shrunk to a normalised JPEG.
 Decode is pure CPU and by far the largest sequential cost of a batch without
 an LLM in it, so this trades wall time against peak memory directly. `1`
 restores the one-at-a-time behaviour.
+
+The SigLIP2 text tower (about 1 GB resident) is kept out of indexing, culling
+and the edit routes altogether. What they score photos against is fixed text —
+the CLIP-IQA moment prompts, the genre classifier, the organism gate in front of BioCLIP, the scene probes —
+and its vectors are stored in the `text_embeddings` LanceDB table, keyed by
+`model_id` and `text` (`lrg-api/src/prompt_embeddings.rs`). A request that needs
+a prompt the table lacks runs the text tower for it once, stores the result, and
+unloads the tower again straight after when that request is what loaded it;
+afterwards only a free-text search or keyword clustering loads it.
 
 The other half of memory behaviour during a long indexing run is
 compaction — see `Store::optimize_all` and the constants above it. To

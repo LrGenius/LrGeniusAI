@@ -602,7 +602,7 @@ jobs:
       - name: Upload unsigned backend binaries for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-exe
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-backend-exe-${{ matrix.arch }}
           path: build/lrgenius-server/
@@ -678,7 +678,7 @@ jobs:
       - name: Upload unsigned installer for signing
         if: matrix.os_name == 'windows'
         id: upload-unsigned-installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-installer-${{ matrix.arch }}
           path: ${{ steps.locate-installer.outputs.path }}
@@ -720,6 +720,9 @@ jobs:
           SMOKE_STDOUT="$DB_DIR/smoke-backend.out"
           mkdir -p "$DB_DIR"
           URL="http://127.0.0.1:19819/ping"
+          # A fixed access token, so the shutdown below gets in without the
+          # backend writing a token file into the runner's home folder.
+          export LRG_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
           START_TS=$(python3 -c "import time; print(time.time())")
 
           BIN="$GITHUB_WORKSPACE/build/lrgenius-server/lrgenius-server${{ matrix.bin_ext }}"
@@ -764,7 +767,7 @@ jobs:
           COLD_START_SECONDS=$(python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.2f}')" "$START_TS" "$END_TS")
           echo "Measured cold start to /ping: ${COLD_START_SECONDS}s"
 
-          curl -sf -X POST "http://127.0.0.1:19819/shutdown" || true
+          curl -sf -X POST -H "Authorization: Bearer $LRG_API_TOKEN" "http://127.0.0.1:19819/shutdown" || true
 
       - name: Pack artifact payload
         shell: bash
@@ -776,7 +779,7 @@ jobs:
           tar -C build -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lrgenius-ai-${{ matrix.os_name }}-${{ matrix.arch }}
           path: |
@@ -831,7 +834,7 @@ jobs:
           tar -C build-plugin-only -cf "$ARTIFACT_DIR/$ARTIFACT_TAR" .
 
       - name: Upload plugin-only artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lrgenius-ai-plugin-docker-backend
           path: artifact-payload/lrgenius-ai-plugin-docker-backend.tar
@@ -967,10 +970,10 @@ jobs:
           fetch-depth: 0
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: lrgenius-ai-*
           path: artifacts

@@ -9,6 +9,25 @@ pub const CATALOG_IDS_FIELD: &str = "catalog_ids";
 pub const PHOTO_ID_FIELD: &str = "photo_id";
 pub const LEGACY_UUID_FIELD: &str = "uuid";
 pub const HAS_EMBEDDING_FIELD: &str = "has_embedding";
+/// Which embedding function produced the stored vector, so a row written by a
+/// different one can be told apart from a current row. Sits beside
+/// [`HAS_EMBEDDING_FIELD`] for the same reason: "has an embedding" and "has an
+/// embedding this build can compare against" are different questions.
+pub const EMBEDDING_MODEL_FIELD: &str = "embedding_model";
+/// The AestheticSigLIP score, `1..9`, and which export produced it. As with the
+/// embedding, a score from another export is stale rather than wrong-shaped.
+pub const AESTHETIC_SCORE_FIELD: &str = "aesthetic_score";
+pub const AESTHETIC_MODEL_FIELD: &str = "aesthetic_model";
+/// The zero-shot genre id (`lrg_ml::genre`), the winner's softmax share, and the
+/// version of the genre list and thresholds that produced it.
+pub const GENRE_FIELD: &str = "genre";
+pub const GENRE_CONFIDENCE_FIELD: &str = "genre_confidence";
+pub const GENRE_VERSION_FIELD: &str = "genre_version";
+/// When the row lost its last catalog (Unix seconds), set by the index
+/// cleanup — see [`crate::cleanup`]. Only read while `catalog_ids` is empty: a
+/// row that is indexed again in some catalog may keep a stale value, which the
+/// next cleanup that empties it overwrites.
+pub const ORPHANED_AT_FIELD: &str = "orphaned_at";
 
 /// Parse catalog_ids from metadata (JSON list string or plain list).
 pub fn parse_catalog_ids(metadata: &Map<String, Value>) -> BTreeSet<String> {

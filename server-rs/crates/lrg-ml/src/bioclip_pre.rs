@@ -1,18 +1,16 @@
 //! BioCLIP 2 image preprocessing.
 //!
-//! **Deliberately different from [`crate::image_pre`] in three ways.** Do not
+//! **Deliberately different from SigLIP2's [`crate::naflex_pre`].** Do not
 //! "unify" them — they preprocess for different checkpoints, and every
 //! difference here is load-bearing:
 //!
-//! | | SigLIP2 (`image_pre`) | BioCLIP 2 (here) |
+//! | | SigLIP2 NaFlex (`naflex_pre`) | BioCLIP 2 (here) |
 //! |---|---|---|
-//! | size | 384 | **224** |
-//! | geometry | shortest-edge resize + center crop | **squash** to 224x224 |
-//! | filter | bicubic | **bilinear** |
+//! | size | aspect-preserving, up to 576 patches | **224x224** |
+//! | geometry | resize keeping the aspect ratio, then patchify | **squash** to 224x224 |
+//! | filter | bilinear | **bilinear** |
 //! | domain | resize on `u8`, then scale | **scale to `[0,1]` first, resize on `f32`** |
-//!
-//! mean/std are the same OpenAI-CLIP constants in both, reused from
-//! `image_pre` rather than re-typed.
+//! | mean/std | 0.5 / 0.5 | **OpenAI-CLIP constants** |
 //!
 //! The source of truth is pybioclip, which overrides open_clip's own
 //! transform for TreeOfLife models (`predict.py`, `BaseClassifier.
@@ -41,9 +39,14 @@
 
 use lrg_imaging::pil_resample::{resize_plane_f32, Filter};
 
-use crate::image_pre::{MEAN, STD};
-
 pub const IMAGE_SIZE: usize = 224;
+
+// Exact OPENAI_DATASET_MEAN/STD constants from open_clip — kept at full
+// precision to match torchvision's f32 cast bit-for-bit.
+#[allow(clippy::excessive_precision)]
+const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
+#[allow(clippy::excessive_precision)]
+const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
 /// Preprocess one RGB8 image into an NCHW f32 buffer (1x3x224x224):
 /// scale to `[0,1]`, squash-resize to 224x224 (bilinear, antialiased),

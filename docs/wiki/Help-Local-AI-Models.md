@@ -122,6 +122,8 @@ elsewhere:
   `~/.cache/huggingface/hub`. A model from that cache is listed under its repo
   name (`gemma-3-12b-it-qat-4bit`), not under the snapshot hash the cache
   stores it as; a model you had picked under the old hash name keeps working.
+  Only models that come with a chat template are listed, so other models in
+  that cache (such as the SigLIP2 search model) are skipped.
 - **llama.cpp** pairs a model with the vision projector (`mmproj`) in the
   *same folder* only, so each LM Studio model folder is paired on its own.
 
@@ -153,9 +155,9 @@ through. Leave the fields empty for sensible defaults. Changing any of them
 reloads the model on the next request.
 
 **MLX has no equivalent knobs**, and that is a deliberate limitation rather than
-an oversight: the MLX decoder allocates a fresh cache per request, so there is
-no shared prompt prefix to size a context window around, and it processes one
-photo at a time.
+an oversight: when indexing, the MLX decoder allocates a fresh cache per photo,
+so there is no shared prompt prefix to size a context window around, and it
+processes one photo at a time.
 
 ---
 

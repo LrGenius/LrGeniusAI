@@ -59,7 +59,7 @@ cargo test -p lrg-llama --test engine_smoke -- --ignored
 
 When Lightroom is involved, note the plugin auto-launches the *installed* binary (`/Applications/LrGeniusAI/Server/lrgenius-server`), which is not your dev build. `startServer` pings port 19819 first and short-circuits if something already answers, so start your feature-enabled build by hand and the plugin will use it.
 
-`POST /v1/models/clip/downloads` fetches the SigLIP2 fp16 ONNX assets from the fixed `model-assets-v1` release tag (not the build's own version tag); that release exists with all three assets, so this works on any build. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers the face models — YuNet needs no export step, FaceNet does). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
+`POST /v1/models/clip/downloads` fetches the SigLIP2 NaFlex fp16 ONNX assets from the fixed `model-assets-v2` release tag (not the build's own version tag), which the `model-assets.yml` workflow publishes; until that release exists, a build cannot download the search model. The older fixed-resolution export stays on `model-assets-v1` for older builds. To export them yourself instead, see [server-rs/README.md](server-rs/README.md) for the commands and the env vars that point the server at the files (also covers the face models — YuNet needs no export step, FaceNet does). The export/verify script has its own standalone `uv` project at `server-rs/scripts/` (torch/transformers/open_clip/onnxruntime — a build-time tool, not a runtime dependency of the Rust binary).
 
 ### Pre-commit hooks (formatting + linting)
 
@@ -86,7 +86,7 @@ cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
 
 **The ML golden tests skip when their model files are absent, and a skip is
 reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
-are present (`face`, `siglip`, `bioclip`, or `all`) to turn that skip into a
+are present (`face`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
 failure — this is what stops CI being green on numerical checks that never ran.
 PR CI provisions the face pair (89 MB) and requires it; the nightly
 `golden-tests-full.yml` fetches all three. If you add a golden test, gate it
@@ -103,7 +103,20 @@ profiles) and `xmp-corpus` (`LRG_XMP_CORPUS_DIR`, a private sidecar corpus); see
 
 ### Plugin — load into Lightroom
 
-Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua`.
+Add (or symlink) `plugin/LrGeniusAI.lrdevplugin` via Lightroom **Plug-in Manager**. Smoke tests run inside Lightroom via `TaskAutomatedTests.lua` (the suites live in `PluginTests.lua`).
+
+### Plugin — test inside Lightroom over MCP
+
+With Lightroom open (the agent bridge starts with it), the same in-Lightroom tests run headless through the backend's MCP endpoint — from an agent (`run_plugin_tests`) or from cargo. Both need the agent token from Plug-in Manager → LrGeniusAI → AI Agents (*Copy token*):
+
+```bash
+cd server-rs
+LRGENIUS_MCP_TOKEN=<token> cargo test -p lrg-mcp --test live_lightroom -- --ignored --test-threads=1   # LRG_LIVE_WRITES=1 adds catalog-writing tests
+```
+
+The plugin uses whatever backend answers on 19819, so stop the installed one and run your build for this. With the plugin loaded from its `.lrdevplugin` folder and *Allow developer commands* ticked, an agent can also `reload_plugin_modules` after editing Lua and probe with `eval_lua` — no Lightroom restart. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
+
+The full live test, step by step (every tool, the safety switches, a report), is the runbook `.claude/skills/lrgenius-mcp-full-test/SKILL.md`; `scripts/mcp_call.py` calls single tools from a shell. All of it works on the catalog that is open in Lightroom, so *Live tests in Lightroom* under Key Rules comes first.
 
 ### Plugin — headless unit tests
 
@@ -138,6 +151,9 @@ performs them against the catalog. Reach for this when a task is a grid of
 server-side data that LrView cannot re-render (see
 [Dev-Backend-API.md](docs/wiki/Dev-Backend-API.md) for the bridge contract);
 keep settings and short forms native.
+`TaskChat.lua` goes further: the chat page at `/v1/ui/chat` works through
+the agent bridge, which runs whenever Lightroom does, so the task only opens
+a chat and hands the browser its address.
 
 All long-running operations run inside `LrTasks.startAsyncTask`. Use `LrTasks.pcall` (never native `pcall`) so tasks can yield.
 
@@ -155,8 +171,10 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-develop` — the native Lightroom develop model, a leaf crate (no image, network or async dependencies, so `cargo test -p lrg-develop` takes seconds): the key registry (`registry/table.rs`, one `KeySpec` per `crs:` key with type, stored range, UI scale, number format, defaults, policy class, frame scope, file kind), the typed model (`DevelopSettings`, corrections and masks, `Look`, white balance, the policy filter), the readers for `getDevelopSettings()` blobs (`lua::read`) and XMP sidecars, presets and profiles (`xmp::read`, on `roxmltree`), which share their typing and classification rules so both land in the same model, the deterministic develop-preset writer (`xmp::write`), the Lua writer for `applyDevelopSettings` (`lua::write`; provisional until experiments E1/E2/E4/E11, its open choices in `LuaOptions::PROVISIONAL`) — both writers' lossless test modes exist only behind the crate's `test-roundtrip` feature, which only its own dev-dependency enables — and the correction builders (`build`: semantic, gradient and luminance-range masks with SHA-256-derived sync ids). The LLM edit-recipe schema stays in `lrg-providers`, learning/blending in `lrg-analysis::style_engine`. See [Dev-Develop-Model.md](docs/wiki/Dev-Develop-Model.md).
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.
-- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin.
-- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` subcommand.
+- `lrg-api` — axum routers (one module per API domain under `routes/`), `db_path` auto-bind middleware, jobs registry, and the browser UI: the pages under `src/ui/` served by `routes/ui.rs`, plus the `ui_bridge` queue that hands their actions to the plugin, and the `agent_bridge` that hands MCP tool calls to the plugin (`/v1/agent/*`).
+- `lrg-mcp` — the MCP endpoint (`/mcp`, bearer agent token required) AI agents connect to: tools over the index (calling the REST routes in-process) and over Lightroom (through `agent_bridge` to the plugin's `AgentBridge.lua`/`AgentCommands.lua`, which starts with Lightroom), result sets, prompts, and `geniusai-server mcp`, a stdio proxy for Claude Desktop. See [Dev-Agent-Bridge.md](docs/wiki/Dev-Agent-Bridge.md).
+- `lrg-chat` — the in-app agent chat (`/v1/chat/*`): a local or cloud model works the catalog through the same tools, as an in-memory MCP client of `lrg-mcp`, with the user's approval (`permissions.rs`). The model answers through `lrg_providers::chat::ChatModel`: `cloud_chat.rs` uses each API's own tool calling, and `local_chat.rs` does it by decoding against a JSON Schema, since llama.cpp cannot render the Jinja templates that carry a model's native tool-call format. See [Dev-Agent-Chat.md](docs/wiki/Dev-Agent-Chat.md).
+- `lrg-server` — the binary: CLI (`clap`), lifecycle, self-updater (`routes::update`), `migrate` and `mcp` (stdio proxy) subcommands; merges the `lrg-mcp` and `lrg-chat` routers next to `lrg_api::build_router`'s.
 
 `APISearchIndex.lua` on the plugin side defines the API contract; keep it in sync with any endpoint changes here.
 
@@ -164,7 +182,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 
 - Primary photo identity: file-based `photo_id` (replaces legacy Lightroom UUIDs).
 - Vector search: LanceDB tables `IMAGE_TABLE`/`FACE_TABLE`/`SPECIES_TABLE` in `lrg_store` (SigLIP2, face, and BioCLIP 2 embeddings respectively).
-- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. The server never physically deletes photo data.
+- Multi-catalog support: photos track `catalog_ids`; reads are catalog-scoped when a `catalog_id` is provided. A catalog letting go of a photo never deletes its data: only the index cleanup (`lrg_store::cleanup`, run by `IndexCleanup.lua`) purges a photo, after it has been in no catalog for 30 days.
 
 ---
 
@@ -178,6 +196,10 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Logging: `log:error`, `log:warn`, `log:info`, `log:trace`.
 - New top-level actions must follow the `Task*.lua` naming convention.
 - `APISearchIndex.lua` must be kept in sync with any backend API changes.
+- An agent bridge command (`AgentCommands.lua`) and the MCP tool that sends it (`lrg-mcp`) change together, with the contract table in `docs/wiki/Dev-Agent-Bridge.md`. Commands that change photos are listed in `CHANGES`, so the user's read-only switch covers them.
+- API keys and other secrets go through `Secrets.lua` (LrPasswords), never `prefs`: Lightroom writes prefs to disk as plain text.
+- A field that shows an API key or other secret is an `f:password_field`, never an `f:edit_field`, so the key is never on screen in plain text. `plugin/spec/api_key_fields_spec.lua` checks this for every key in `Secrets.FIELDS` and for the backend's access token.
+- Requests to the backend go through `_request`/`_requestMultipart` in `APISearchIndex.lua`, which add the backend's access token. A call that has to use `LrHttp` directly passes `withAuthHeader(...)` as its headers, and nothing logs a URL or header that carries the token.
 
 ### Rust / Backend (`server-rs/`)
 
@@ -185,7 +207,8 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - Always use the `log` facade (`log::info!`/`warn!`/`error!`).
 - Manage dependencies via `cargo add`/`cargo remove` (updates `Cargo.toml` + `Cargo.lock`); commit both.
 - Code must pass `cargo fmt` and `cargo clippy --workspace --all-targets` with zero warnings before considering a change done.
-- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed.
+- After changing an endpoint, prefer live-testing against the actual running binary (`cargo run -p lrg-server -- --db-path ... --debug` + `curl`) in addition to unit tests — this has repeatedly caught real bugs unit tests alone missed. Every route but a few needs the access token: `curl -H "Authorization: Bearer $(cargo run -q -p lrg-server -- token 2>/dev/null)" …` (see *Access* in `docs/wiki/Dev-Backend-API.md`).
+- A new route is behind the access token (`lrg_api::api_auth`) without anything to do. Exempting one (`exempt` there) is a security decision: say why in its comment and in *Access*.
 
 ### Errors must surface
 
@@ -221,6 +244,10 @@ Concretely, when writing or reviewing this path:
 
 Silence is only acceptable for something the user did not ask for and cannot
 act on — and that decision belongs in a comment at the point where it is made.
+
+### Live tests in Lightroom
+
+- **Never test in a developer's production catalog without their approval.** The MCP tools, `run_plugin_tests`, the `live_lightroom` tests and `eval_lua` all work on whatever catalog is open in Lightroom, so check which one it is (`get_status`) before you start. Unless the developer has told you it is a test catalog — one holding copies, not the originals a production catalog uses — ask first: name the catalog and say what the test would do. That applies to read-only tests too, since they send previews, metadata and the names of recognised people to the agent. Once the developer approves, test there too, within what they approved (read-only, indexing, changes or developer commands). An approval holds for that catalog in that conversation. The full procedure is in `.claude/skills/lrgenius-mcp-full-test/SKILL.md`.
 
 ### Docs
 

@@ -92,6 +92,40 @@ outside Lightroom; all results are reversible via Lightroom's Edit History.
 
 ---
 
+## Refine with the aesthetic score *(optional)*
+
+Tick **Refine each edit with the aesthetic score** in the options and AI Edit asks
+a second opinion before it settles on an edit: it applies the recipe, renders the
+photo, and has the aesthetic model score the result. If a gentler version scores
+clearly better, it steps the strength down — 100%, 75%, 50%, 25% — and keeps the
+best-scoring one.
+
+What the score decides is **how much of your style to keep**, never what the style
+is:
+
+- The loop only moves between "no edit" and the recipe as it came back. It never
+  goes above 100%, so the limits described in *What the frame allows* below still
+  hold.
+- A gentler edit has to beat the stronger one by a clear margin to win. On a tie
+  the stronger edit — the one closer to your own — stays.
+- The scorer is a general model of what photographs look good, not of what *you*
+  like. Leave this off if you would rather judge the edit yourself, and keep
+  **Review each proposed edit** on to see the recipe before the loop runs.
+
+The cost is a render and a score per strength tried: a few seconds per photo, at
+most four tries. Each try is applied to the photo for real, so it shows up in the
+photo's Edit History — tick **Apply the edit to a new virtual copy** to keep the
+original's history clean. When the loop is done the photo carries only the
+strength it chose.
+
+When the finished edit still scores lower than the original, the completion dialog
+lists the photo so you can look at it. A photo the scorer could not handle is
+edited at full strength and listed too. If the aesthetic model is not downloaded,
+the run asks once before it starts: download it from Plug-in Manager, or carry on
+without refinement.
+
+---
+
 ## What the frame allows
 
 Your habitual +25 contrast was learnt on the frames you shot, and this frame may
@@ -191,7 +225,7 @@ When enabled, a **review dialog** opens for each photo before the edit is applie
 
 **Recommended for first use.** Disable only after you've validated the results for your shooting style.
 
-> **No before/after preview yet.** The review dialog lists values; it does not render a comparison. A rendered before/after is planned. Until then, Lightroom's own History panel is the fastest way to judge a result — every run is a single undo step named *Apply AI Lightroom develop settings*.
+> **No before/after preview yet.** The review dialog lists values; it does not render a comparison. A rendered before/after is planned. Until then, Lightroom's own History panel is the fastest way to judge a result — a plain run is a single undo step named *Apply AI Lightroom develop settings* (a refined run adds one per strength tried).
 
 ### Apply the edit to a new virtual copy
 
@@ -207,6 +241,13 @@ Two side effects come from Lightroom's own API here: copying works on the
 current selection, so your grid selection changes as the run walks through the
 photos, and if a photo is not part of the folder or collection you are looking
 at, the plugin switches the source to *All Photographs* to reach it.
+
+### Refine each edit with the aesthetic score
+
+Off by default. Tries gentler strengths of the recipe and keeps the one the aesthetic
+model scores best — see [Refine with the aesthetic score](#refine-with-the-aesthetic-score-optional)
+above. Slower, and each try is a step in the photo's Edit History; pair it with the
+virtual copy option to keep the original's history clean.
 
 ---
 

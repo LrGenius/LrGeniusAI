@@ -23,7 +23,10 @@ mod device;
 mod engine;
 mod worker;
 
-pub use engine::{EngineInfo, GenerationOutput, GenerationRequest, LlamaEngine, LlamaEngineConfig};
+pub use engine::{
+    ChatMessage, ChatRequest, EngineInfo, GenerationOutput, GenerationRequest, LlamaEngine,
+    LlamaEngineConfig,
+};
 
 /// A decoded RGB image, 3 bytes per pixel, ready for `MtmdBitmap`.
 ///

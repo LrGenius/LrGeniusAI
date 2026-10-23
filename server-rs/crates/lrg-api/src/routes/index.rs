@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::{json, Map, Value};
 
-use lrg_store::{meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
+use lrg_store::{cleanup, meta, StoreRecord, FACE_TABLE, IMAGE_TABLE};
 
 use crate::state::AppState;
 
@@ -77,6 +77,10 @@ async fn check_unprocessed(
     // off stored faces would report every cull-processed photo as outstanding
     // forever. It has its own completion flag below.
     let compute_cull = has_task("cull");
+    // Scoring a photo's aesthetic rides along with both indexing tasks that
+    // read the pixels (see `index_upload::parse_options`), and can be asked for
+    // alone.
+    let compute_aesthetic = has_task("aesthetic") || compute_embeddings || compute_cull;
     let any_task =
         compute_embeddings || compute_metadata || compute_faces || compute_cull || compute_species;
 
@@ -100,6 +104,18 @@ async fn check_unprocessed(
     // against and stored results are taken at face value — the alternative
     // would re-queue the whole catalog on every server restart.
     let current_species_model = state.bioclip.model_id();
+    // Which embedding function this build writes. A compile-time constant, like
+    // the detector/recognizer pair below and unlike the BioCLIP head above.
+    let current_embedding_model = state.siglip.model_id();
+    // Which scoring function this build writes, and whether it can write one at
+    // all: a photo cannot be brought up to date by a model that is not on disk,
+    // so without it nothing is re-queued for the score — the plug-in tells the
+    // user the model is missing rather than offering the same run forever.
+    let current_aesthetic_model = state.aesthetic.model_id();
+    let aesthetic_available = state.aesthetic.is_cached();
+    // The genre is made from the stored embedding with prompts the search model
+    // embeds, so there is nothing to bring up to date without that model.
+    let genre_available = state.siglip.is_cached();
     // Which detector/recognizer pair this build writes. A compile-time
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
@@ -186,8 +202,38 @@ async fn check_unprocessed(
                         _ => true,
                     })
                 };
-                let needs_embedding =
-                    compute_embeddings && (regenerate_metadata || !has_flag("has_embedding"));
+                // A stored embedding only compares against the function that
+                // produced it, so an identity that is present and different
+                // re-queues the photo. An identity that is *absent* is taken as
+                // current: a row that predates the field cannot be checked
+                // either way, and re-embedding a whole catalog on the first run
+                // after an upgrade is not something to do on a maybe.
+                let embedding_model_current = match m.get("embedding_model").and_then(Value::as_str)
+                {
+                    Some(stored) => stored == current_embedding_model,
+                    None => true,
+                };
+                let needs_embedding = compute_embeddings
+                    && (regenerate_metadata
+                        || !has_flag("has_embedding")
+                        || !embedding_model_current);
+                let aesthetic_current = has_flag(meta::AESTHETIC_SCORE_FIELD)
+                    && m.get(meta::AESTHETIC_MODEL_FIELD).and_then(Value::as_str)
+                        == Some(current_aesthetic_model);
+                let needs_aesthetic = compute_aesthetic
+                    && aesthetic_available
+                    && (regenerate_metadata || !aesthetic_current);
+                // A genre from another version of the genre list (or none yet)
+                // is brought up to date from the stored embedding. A photo with
+                // no embedding is already queued by `needs_embedding`.
+                let genre_current = has_flag(meta::GENRE_FIELD)
+                    && m.get(meta::GENRE_VERSION_FIELD).and_then(Value::as_str)
+                        == Some(lrg_ml::genre::VERSION);
+                let needs_genre = (compute_embeddings || compute_aesthetic)
+                    && genre_available
+                    && has_flag("has_embedding")
+                    && embedding_model_current
+                    && !genre_current;
                 let has_any_metadata = has_flag("title")
                     || has_flag("caption")
                     || has_flag("alt_text")
@@ -202,6 +248,14 @@ async fn check_unprocessed(
                 // outstanding on every run.
                 let needs_cull_faces =
                     compute_cull && (regenerate_metadata || !m.contains_key("cull_faces_present"));
+                // A photo prepared for culling before the fast path sent a
+                // capture time has signals but no date, and groups wrongly.
+                // Re-preparing fills it in from the plugin or the file's EXIF;
+                // `capture_time_unknown` marks the ones where neither had it,
+                // so they are not asked for again on every run.
+                let needs_cull_time = compute_cull
+                    && !m.contains_key("capture_time")
+                    && !has_flag("capture_time_unknown");
                 // A photo is done for `species` only if it was checked *and*
                 // checked by the head currently on disk. Widening the taxa
                 // whitelist changes what BioCLIP can answer, so results from an
@@ -217,10 +271,13 @@ async fn check_unprocessed(
                         || !has_flag("species_checked")
                         || !species_head_current);
                 needs_embedding
+                    || needs_aesthetic
+                    || needs_genre
                     || needs_metadata
                     || needs_faces
                     || needs_cull_phash
                     || needs_cull_faces
+                    || needs_cull_time
                     || needs_species
             })
             .cloned()
@@ -328,8 +385,14 @@ async fn sync_claim(State(state): State<Arc<AppState>>, body: Option<Json<Value>
     Json(json!({"status": "ok", "claimed": claimed, "errors": errors})).into_response()
 }
 
-/// Port of `chroma_service.sync_cleanup`: disassociate catalog_id from
-/// photos no longer in the active list (soft state only, never deletes).
+/// The index cleanup (see `lrg_store::cleanup`): `photo_ids` is every photo
+/// in the catalog, and the catalog lets go of the photos it no longer has.
+/// Photos left in no catalog are deleted for good after the grace period;
+/// photos that came back get their data back.
+///
+/// Letting go of more than half of what the catalog has indexed is refused
+/// with a 409 that changes nothing, unless `confirm_large_removal` is set —
+/// see `CleanupPlan::is_large_removal`.
 async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
     let catalog_id = data
@@ -352,63 +415,109 @@ async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Valu
         )
             .into_response();
     }
-    let active: std::collections::HashSet<&str> = photo_ids
+    let inventory: std::collections::HashSet<String> = photo_ids
         .and_then(Value::as_array)
-        .map(|list| list.iter().filter_map(Value::as_str).collect())
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
+    let confirmed = data
+        .get("confirm_large_removal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let Some(store) = state.store() else {
-        return Json(json!({"status": "ok", "checked": 0, "disassociated": 0})).into_response();
+        return Json(json!({
+            "status": "ok", "checked": 0, "disassociated": 0, "orphaned": 0,
+            "readopted": 0, "purged": 0, "waiting": 0, "next_purge_at": null,
+            "grace_days": cleanup::ORPHAN_GRACE_DAYS, "warnings": [],
+        }))
+        .into_response();
     };
 
-    let result: Result<(usize, usize), String> = async {
-        let rows = store
-            .scan_meta(IMAGE_TABLE)
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut checked = 0usize;
-        let mut disassociated = 0usize;
-        for (id, metadata) in rows {
-            let mut ids_set = meta::parse_catalog_ids(&metadata);
-            if !ids_set.contains(catalog_id) {
-                continue;
-            }
-            checked += 1;
-            if active.contains(id.as_str()) {
-                continue;
-            }
-            // Read-modify-write keeping the vector (Python _remove_catalog_id).
-            let mut records = store
-                .get(IMAGE_TABLE, std::slice::from_ref(&id))
-                .await
-                .map_err(|e| e.to_string())?;
-            let Some(record) = records.first_mut() else {
-                continue;
-            };
-            ids_set.remove(catalog_id);
-            record.metadata.insert(
-                meta::CATALOG_IDS_FIELD.into(),
-                Value::String(meta::serialize_catalog_ids(&ids_set)),
-            );
-            meta::ensure_photo_metadata(&id, &mut record.metadata);
-            store
-                .upsert(IMAGE_TABLE, &records)
-                .await
-                .map_err(|e| e.to_string())?;
-            disassociated += 1;
+    let now = chrono::Utc::now().timestamp();
+    let rows = match store.scan_meta(IMAGE_TABLE).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::error!("Index cleanup failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
-        Ok((checked, disassociated))
-    }
-    .await;
+    };
+    let plan = cleanup::plan(rows, catalog_id, &inventory, now);
 
-    match result {
-        Ok((checked, disassociated)) => {
-            Json(json!({"status": "ok", "checked": checked, "disassociated": disassociated}))
-                .into_response()
+    if plan.is_large_removal() && !confirmed {
+        log::warn!(
+            "Index cleanup for {catalog_id} held back: {} of {} indexed photos are not in the \
+             catalog's inventory of {}",
+            plan.release.len(),
+            plan.indexed,
+            inventory.len()
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "{} of the {} photos indexed for this catalog are no longer in it. \
+                     Nothing was removed: confirm the cleanup to remove them from the index.",
+                    plan.release.len(),
+                    plan.indexed
+                ),
+                "needs_confirmation": true,
+                "would_disassociate": plan.release.len(),
+                "checked": plan.indexed,
+            })),
+        )
+            .into_response();
+    }
+
+    match cleanup::apply(&store, catalog_id, &plan, now).await {
+        Ok(outcome) => {
+            let waiting = plan.waiting + outcome.orphaned;
+            // The next purge is due one grace period after the oldest stamp
+            // still waiting; rows stamped by this run are the newest there are.
+            let oldest = match (plan.oldest_waiting, outcome.orphaned > 0) {
+                (Some(at), _) => Some(at),
+                (None, true) => Some(now),
+                (None, false) => None,
+            };
+            let next_purge_at = oldest.map(|at| at + cleanup::ORPHAN_GRACE_SECS);
+            log::info!(
+                "Index cleanup for {catalog_id}: {} of {} indexed photos released ({} now in no \
+                 catalog), {} re-adopted, {} purged, {waiting} waiting",
+                outcome.released,
+                plan.indexed,
+                outcome.orphaned,
+                outcome.readopted,
+                outcome.purged
+            );
+            Json(json!({
+                "status": "ok",
+                "checked": plan.indexed,
+                "disassociated": outcome.released,
+                "orphaned": outcome.orphaned,
+                "readopted": outcome.readopted,
+                "purged": outcome.purged,
+                "waiting": waiting,
+                "next_purge_at": next_purge_at,
+                "grace_days": cleanup::ORPHAN_GRACE_DAYS,
+                "warnings": outcome.warnings,
+            }))
+            .into_response()
         }
         Err(e) => {
-            log::error!("Sync cleanup failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response()
+            log::error!("Index cleanup failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
         }
     }
 }
@@ -667,6 +776,41 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         Value::Null
     };
 
+    // The aesthetic score and genre, in their own block for the same reason as
+    // species: they are model output the plug-in writes to its own catalog
+    // fields, not text for the review dialog. `null` when the photo has neither,
+    // so "not scored" is not mistaken for a score of zero.
+    //
+    // `outdated` is true for a score from another export than this build's: the
+    // number is still the model's honest answer for that export, but it is not
+    // comparable with scores from this one.
+    let aesthetic_score = metadata_dict
+        .get(meta::AESTHETIC_SCORE_FIELD)
+        .filter(|v| v.is_number())
+        .cloned();
+    let genre_id = metadata_dict
+        .get(meta::GENRE_FIELD)
+        .and_then(Value::as_str)
+        .filter(|g| !g.is_empty());
+    let aesthetic = if aesthetic_score.is_some() || genre_id.is_some() {
+        json!({
+            "score": aesthetic_score.unwrap_or(Value::Null),
+            "model": metadata_dict.get(meta::AESTHETIC_MODEL_FIELD).cloned().unwrap_or(Value::Null),
+            "outdated": metadata_dict
+                .get(meta::AESTHETIC_MODEL_FIELD)
+                .and_then(Value::as_str)
+                .is_some_and(|m| m != lrg_ml::aesthetic::MODEL_ID),
+            "genre": genre_id,
+            "genre_label": genre_id.and_then(lrg_ml::genre::label_for),
+            "genre_confidence": metadata_dict
+                .get(meta::GENRE_CONFIDENCE_FIELD)
+                .cloned()
+                .unwrap_or(Value::Null),
+        })
+    } else {
+        Value::Null
+    };
+
     log::info!(
         "Retrieved data for photo {photo_id}: {} metadata fields",
         metadata_fields.len()
@@ -677,6 +821,7 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         "uuid": photo_id,
         "metadata": metadata_fields,
         "species": species,
+        "aesthetic": aesthetic,
         "edit": edit_recipe,
         "edit_summary": metadata_dict.get("edit_summary").cloned().unwrap_or(Value::Null),
         "edit_warnings": edit_warnings,
