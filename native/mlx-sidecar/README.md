@@ -38,6 +38,15 @@ xcodebuild build \
 plugin (`CudaBuild`) that Xcode otherwise stops to ask about — which a CI runner
 can never answer.
 
+**Xcode 27.1: `extraneous argument label 'capabilities:'` in
+`MLXFoundationModels`.** That module wraps Apple's FoundationModels and was
+written against a beta SDK. Nothing here uses it, and `Package.swift` turns off
+the `FoundationModelsIntegration` trait that pulls it in — but Xcode keeps the
+package graph it resolved earlier, and deleting only
+`.build/xcode/SourcePackages` is not enough. If an existing `.build/xcode`
+still fails this way, delete the whole `.build/xcode` (or build into a fresh
+`-derivedDataPath`) and build again.
+
 The products land in `.build/xcode/Build/Products/Release/`:
 
 | File | Why it matters |
@@ -64,9 +73,48 @@ printf '%s\n' \
   | ./.build/xcode/Build/Products/Release/lrgenius-mlx
 ```
 
-Operations: `ping`, `load`, `generate`, `status`, `unload`, `shutdown`. Only
-`load` and `generate` are used by the Rust side; the rest exist for exactly this
-kind of manual poking.
+Operations: `ping`, `load`, `generate`, `chat`, `status`, `unload`,
+`shutdown`. The Rust side uses `load`, `generate` and `chat`; the rest exist for
+exactly this kind of manual poking.
+
+`chat` answers a conversation with one assistant turn:
+
+```bash
+'{"id":2,"op":"chat","chat":{"messages":[{"role":"system","text":"Be brief."},{"role":"user","text":"Name three primary colours."}],"max_tokens":40,"temperature":0.0}}'
+```
+
+`role` is `system`, `user` or `assistant`; a turn may carry `images` (a list
+of the payloads described below), and `schema` constrains the answer as in
+`generate`. While it decodes, the sidecar writes `{"id":2,"delta":"..."}` lines
+with the next piece of text, then the usual response with the whole answer as
+the one entry in `results`. Unconstrained answers arrive as a single delta at
+the end: that decode path hands back token ids, not text.
+
+**A conversation's cache carries over to its next turn.** The sidecar keeps the
+KV cache a constrained chat turn leaves, with the tokens it holds, and the next
+turn prefills only what follows the part the two share; `prefix_reused` says
+when that happened. The cache carries on as it is when the new prompt repeats
+all of it (the answer included, token for token), is trimmed back to where they
+part when its layers allow it, and otherwise a copy taken right after the last
+prompt serves — Gemma's sliding-window layers cannot be trimmed once a prompt
+outgrows the window (512 tokens for Gemma 4 E4B), and every chat prompt does.
+Nothing is reused when a new photo follows the shared part (its pixels go in
+with the whole prompt), when the photos so far differ (in tokens every photo is
+the same run of placeholders, so they are compared by content), or for Qwen-VL
+and GLM models, which work out positions from the whole prompt. Indexing
+clears it, as it does on llama.cpp. Measured with Gemma 4 E4B and the agent
+chat's ~4,000-token prompt: the first token after 70–210 ms instead of 3.7 s.
+
+The chat's grammar is kept too: after the turn the matcher is rolled back by
+exactly the tokens it accepted and reused while the schema stays the same —
+compiling the chat's schema (every tool) took ~2 s.
+
+Both need a decode loop that takes the caller's cache, which the library's
+`GuidedGenerationLoop` does not, so the chat runs `ChatDecodeLoop`, an adapted
+copy. It also fixes one thing: when the grammar forces tokens after a sampled
+one (fast-forward), the library feeds only the forced tokens through the
+model, so the model never sees the token it sampled; the copy feeds that token
+first. Indexing still uses the library's loop, bug included.
 
 stdout carries protocol lines *only*. Logs go to stderr, which the Rust
 supervisor inherits so they land in the server log. Nothing in the target may
@@ -108,6 +156,7 @@ you build with `xcodebuild` as instructed above, set `LRG_MLX_SIDECAR`.
 | In-process | yes | no, a child process |
 | Schema-constrained decoding | llguidance | XGrammar |
 | Pinned prompt prefix | **yes** | no — see below |
+| Chat cache across turns | yes | yes (not Qwen-VL, GLM) |
 | Photos per batch | `n_parallel` | 1 |
 
 The prefix difference is the one to understand. `lrg-llama` evaluates the
@@ -122,7 +171,16 @@ Two smaller consequences of the same limitation: batches are evaluated one photo
 at a time (there is no shared prefix to amortise and one VLM prefill already
 saturates the GPU), and the JSON-Schema grammar is compiled per request rather
 than cloned, because `GrammarConstraint.clone()` — xgrammar's
-`GrammarMatcher::Fork()` — fails with `forkFailed` in this build.
+`GrammarMatcher::Fork()` — fails with `forkFailed` in this build. (The chat
+gets around both with its own loop; see `chat` above.)
+
+**Control tokens are kept out of answers.** `TokenizerVocabExtractor` hands
+them to XGrammar as plain text (`<|channel>`, `<start_of_turn>`, …), so a
+model could write one inside a JSON string — Gemma 4 12B did, mid-answer, in
+the agent chat. `Engine.withoutControlTokens` blanks their entries before the
+grammar vocabulary is built, because XGrammar never accepts a token whose text
+is empty; EOS is kept, since it ends an answer. The load log says how many
+(23 for Gemma 4). llama.cpp's llguidance excludes them already.
 
 ## Dependency pinning
 

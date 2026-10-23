@@ -40,36 +40,36 @@ require("PromptConfigProvider")
 require("UpdateCheck")
 require("ErrorHandler")
 require("APISearchIndex")
+require("IndexCleanup")
 require("SpeciesLinks")
 require("PhotoSelector")
 require("LocalModelCatalog")
 require("AiProviders")
+require("Secrets")
 require("OnboardingWizard")
+require("AgentCommands")
+require("AgentBridge")
+require("PluginTests")
 
 if _G.prefs.ai == nil then
 	_G.prefs.ai = ""
 end
 
-if _G.prefs.geminiApiKey == nil then
-	_G.prefs.geminiApiKey = ""
-end
-
-if _G.prefs.chatgptApiKey == nil then
-	_G.prefs.chatgptApiKey = ""
-end
-
-if _G.prefs.anthropicApiKey == nil then
-	_G.prefs.anthropicApiKey = ""
-end
+-- The API keys are not prefs any more: they live in the system's password
+-- storage (see Secrets.lua). Keys still in prefs move there, every start —
+-- going back to an older version puts them in prefs again. In a task: the
+-- SDK does not say whether LrPasswords works outside one. A key that cannot
+-- be moved keeps working from prefs; the Plug-in Manager says so.
+LrTasks.startAsyncTask(function()
+	for _, problem in ipairs(Secrets.migrate()) do
+		_G.log:error(problem)
+	end
+end)
 
 -- The "Other AI server": any OpenAI-compatible server (OpenRouter, a llama.cpp
 -- server, LiteLLM, or LM Studio / Ollama on another computer).
 if _G.prefs.aiServerUrl == nil then
 	_G.prefs.aiServerUrl = ""
-end
-
-if _G.prefs.aiServerApiKey == nil then
-	_G.prefs.aiServerApiKey = ""
 end
 
 -- Ollama and LM Studio no longer have address fields: they are found at their
@@ -236,6 +236,13 @@ if _G.prefs.useGlobalPhotoId == nil then
 	_G.prefs.useGlobalPhotoId = true
 end
 
+-- Taking deleted photos out of the search index (IndexCleanup.lua). On by
+-- default: what it removes is kept for 30 days, and it asks before removing
+-- most of a catalog.
+if _G.prefs.autoIndexCleanup == nil then
+	_G.prefs.autoIndexCleanup = true
+end
+
 if _G.prefs.useLightroomKeywords == nil then
 	_G.prefs.useLightroomKeywords = false
 end
@@ -250,6 +257,21 @@ end
 
 if _G.prefs.useClip == nil then
 	_G.prefs.useClip = false
+end
+
+-- The AI agent bridge (AgentBridge.lua). On by default: MCP clients cannot
+-- use it without the agent token, which only the Plug-in Manager shows, and
+-- nothing is visible until an agent actually works. Agents may change photos
+-- unless the user turns that off. Developer commands only ever work from a
+-- .lrdevplugin install, whatever this says.
+if _G.prefs.agentBridgeEnabled == nil then
+	_G.prefs.agentBridgeEnabled = true
+end
+if _G.prefs.agentBridgeAllowChanges == nil then
+	_G.prefs.agentBridgeAllowChanges = true
+end
+if _G.prefs.agentBridgeDevTools == nil then
+	_G.prefs.agentBridgeDevTools = false
 end
 
 -- Advanced Search dialog options (persisted for convenience)
@@ -288,6 +310,19 @@ end
 -- if prefs.onboardingCompleted == nil then
 -- 	Do not set to false yet, let the wizard trigger
 -- end
+
+-- Init.lua runs on load and on "Reload Plug-in": retire a bridge loop left
+-- over from before the reload, then start a fresh one. AgentBridge.start makes
+-- its own function context, so the loop outlives this script; it keeps trying
+-- until the backend answers.
+AgentBridge.resetForReload()
+if _G.prefs.agentBridgeEnabled then
+	AgentBridge.start()
+end
+
+-- Always started: it checks the "remove deleted photos automatically" switch
+-- on every round, so turning it on in the Plug-in Manager needs no restart.
+IndexCleanup.start()
 
 LrTasks.startAsyncTask(function()
 	-- Check if onboarding is needed

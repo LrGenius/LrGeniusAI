@@ -113,8 +113,11 @@ local function showRetrieveMetadataDialog(ctx)
 				f:checkbox({
 					value = bind("useTopLevelKeyword"),
 				}),
-				f:edit_field({
+				f:combo_box({
 					value = bind("topLevelKeyword"),
+					-- Shares its history with Analyze & Index: it is the same
+					-- keyword, and both dialogs write the same preference.
+					items = Util.historyItems(prefs.topLevelKeywordHistory, prefs.knownTopLevelKeywords),
 					width_in_chars = 20,
 					enabled = bind("useTopLevelKeyword"),
 				}),
@@ -139,6 +142,10 @@ local function showRetrieveMetadataDialog(ctx)
 		prefs.retrieveAppendMetadata = props.appendMetadata
 		prefs.useTopLevelKeyword = props.useTopLevelKeyword
 		prefs.topLevelKeyword = props.topLevelKeyword
+		if props.useTopLevelKeyword then
+			prefs.topLevelKeywordHistory =
+				Util.pushHistory(prefs.topLevelKeywordHistory, props.topLevelKeyword, Defaults.inputHistoryLength)
+		end
 
 		return {
 			scope = props.scope,
@@ -241,7 +248,7 @@ LrTasks.startAsyncTask(function()
 						LOC(
 							"$$$/LrGeniusAI/RetrieveMetadata/ServerUnreachableMessage=Cannot reach backend server. Please check your connection and try again."
 						),
-						"error"
+						"critical"
 					)
 					log:error("Backend server unreachable during metadata retrieval")
 					break
@@ -305,6 +312,9 @@ LrTasks.startAsyncTask(function()
 								table.insert(backendWarnings, fileName .. ": " .. warning)
 							end
 						end
+						-- Score and genre are model output, not text the user can
+						-- reword, so they are written whenever the photo has them.
+						MetadataManager.applyAesthetic(photo, retrievedData.aesthetic)
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 
@@ -381,7 +391,7 @@ LrTasks.startAsyncTask(function()
 			if #backendWarnings > 0 then
 				combinedReport = combinedReport
 					.. "\n\n"
-					.. LOC("$$$/LrGeniusAI/common/BackendWarnings=Backend Warnings:")
+					.. LOC("$$$/LrGeniusAI/common/BackendWarnings=Warnings:")
 					.. "\n"
 				for i = 1, math.min(5, #backendWarnings) do
 					combinedReport = combinedReport .. "- " .. backendWarnings[i] .. "\n"

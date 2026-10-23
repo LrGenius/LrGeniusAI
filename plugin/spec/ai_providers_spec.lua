@@ -253,10 +253,55 @@ describe("AiProviders.connectionOptions", function()
 		assert.truthy(err:find("Other AI server", 1, true))
 	end)
 
+	it("says a key could not be read, instead of saying it is not set", function()
+		local unreadable = "Your OpenAI API key could not be read from the system's password storage (denied)."
+		local opts, err = AiProviders.connectionOptions(
+			"chatgpt",
+			{ chatgptApiKey = "", keyProblems = { chatgptApiKey = unreadable } }
+		)
+		assert.is_nil(opts)
+		assert.are.equal(unreadable, err)
+
+		-- The Other AI server's key is optional, but an unreadable one must not
+		-- be sent as "no key".
+		opts, err = AiProviders.connectionOptions("openai_compatible", {
+			aiServerUrl = "https://openrouter.ai/api/v1",
+			aiServerApiKey = "",
+			keyProblems = { aiServerApiKey = "unreadable" },
+		})
+		assert.is_nil(opts)
+		assert.are.equal("unreadable", err)
+	end)
+
 	it("needs nothing for the apps and engines on this computer", function()
 		for _, provider in ipairs({ "ollama", "lmstudio", "mlx", "llamacpp" }) do
 			assert.are.same({}, AiProviders.connectionOptions(provider, { chatgptApiKey = "sk" }))
 		end
+	end)
+end)
+
+describe("AiProviders.modelListConnections", function()
+	it("names every key that is set the way the model listing takes it", function()
+		assert.are.same(
+			{
+				openai_apikey = "sk-1",
+				anthropic_apikey = "sk-ant",
+				server_url = "https://openrouter.ai/api/v1",
+				server_apikey = "sk-or",
+			},
+			AiProviders.modelListConnections({
+				chatgptApiKey = " sk-1 ",
+				geminiApiKey = "  ",
+				anthropicApiKey = "sk-ant",
+				aiServerUrl = "https://openrouter.ai/api/v1",
+				aiServerApiKey = "sk-or",
+			})
+		)
+	end)
+
+	it("sends no server key without a server", function()
+		assert.are.same({}, AiProviders.modelListConnections({ aiServerUrl = "", aiServerApiKey = "sk-or" }))
+		assert.are.same({}, AiProviders.modelListConnections(nil))
 	end)
 end)
 

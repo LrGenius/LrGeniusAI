@@ -1,54 +1,38 @@
-//! CLIP-IQA: an aesthetic / quality score read straight off the SigLIP2
-//! embedding that indexing already computed and stored.
-//!
-//! What this replaces is `cull_aesthetic`, a weighted sum of contrast,
-//! colourfulness and exposure. That heuristic rewards punchy, saturated frames
-//! and floors muted fine-art portraiture, fog, snow, low-key work and every
-//! desaturated editorial look — it measures how loud a picture is, not how good
-//! it is, and no amount of re-weighting fixes a signal that is asking the wrong
-//! question.
+//! CLIP-IQA: zero-shot scores read straight off the SigLIP2 embedding that
+//! indexing already computed and stored.
 //!
 //! The method (Wang, Chan & Loy, *Exploring CLIP for Assessing the Look and
 //! Feel of Images*) is to ask the model directly, with pairs of opposed
-//! prompts: embed "a good photo" and "a bad photo", and score an image by which
-//! it sits closer to. It costs one text-tower pass for the whole prompt set,
-//! once per server lifetime — after that every photo is a handful of dot
-//! products against a vector the database already holds. There is no per-photo
-//! image inference, which is what makes this affordable in the culling hot
-//! path where a learned IQA model would not be.
+//! prompts: embed "a photo of an athlete in mid-air" and "a photo of an
+//! athlete standing still", and score an image by which it sits closer to. The
+//! prompts cost one text-tower pass, once per model: the backend keeps their
+//! vectors in the database's `text_embeddings` table (`lrg-api`'s
+//! `prompt_embeddings`), so after the first run nothing loads the text tower for
+//! them at all. Every photo is then a handful of dot products against a vector
+//! the database already holds. There is no per-photo image inference, which is
+//! what makes this affordable in the culling hot path.
+//!
+//! **What this no longer does is judge overall quality.** A "good photo / bad
+//! photo" pair set used to feed the aesthetic term of culling; that is now the
+//! AestheticSigLIP score stored with every photo (`crate::aesthetic`), a model
+//! trained for exactly that question. What remains here are the questions a
+//! general aesthetic model cannot answer: the *moment* (action, expression,
+//! candid, emotion), whether closed eyes are meant, and whether an organism is
+//! in the frame.
 //!
 //! It applies only to photos that carry an embedding, so the fast `tasks=cull`
-//! ingest — which deliberately skips SigLIP2 — degrades to the old heuristic
+//! ingest — which deliberately skips SigLIP2 — degrades to ranking without it
 //! rather than failing.
 
-use crate::siglip::{l2_normalize, SiglipError, SiglipModel};
+use crate::siglip::l2_normalize;
 
-/// Opposed prompt pairs, `(positive, negative)`.
+/// Opposed prompt pairs are `(positive, negative)`; every set below follows the
+/// CLIP-IQA recipe. Kept few and plainly worded on purpose: its own ablation
+/// finds short unadorned antonyms beat elaborate prompts, and every pair added
+/// is another text-tower row plus another axis along which the score can be
+/// diluted.
 ///
-/// Kept few and plainly worded on purpose. CLIP-IQA's own ablation finds short
-/// unadorned antonyms beat elaborate prompts, and every pair added is another
-/// text-tower row plus another axis along which the score can be diluted.
-///
-/// The set spans the three judgements culling's other signals cannot make:
-/// whether the frame reads as a *good photograph* at all, whether its light is
-/// working, and whether it is composed. Sharpness and exposure are deliberately
-/// *not* asked about — those are measured directly and far more reliably from
-/// pixels, and duplicating them here would just add a noisy second opinion.
-pub const DEFAULT_PROMPT_PAIRS: &[(&str, &str)] = &[
-    ("a good photo.", "a bad photo."),
-    ("a beautiful photo.", "an ugly photo."),
-    (
-        "a well-composed photograph.",
-        "a badly composed photograph.",
-    ),
-    (
-        "a photo with beautiful lighting.",
-        "a photo with bad lighting.",
-    ),
-    ("an interesting photo.", "a boring photo."),
-];
-
-/// Prompt pairs for *moment* rather than quality: is this the frame where
+/// Prompt pairs for the *moment*: is this the frame where
 /// something is happening?
 ///
 /// This exists because of a concrete complaint about a soccer series. In a
@@ -147,6 +131,97 @@ pub const CANDID_PROMPT_PAIRS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Prompt pairs for emotion in sport: is somebody in this frame *feeling*
+/// something strongly?
+///
+/// The action set asks whether play is happening; it cannot see the goal
+/// celebration that follows, the striker on his knees after the miss, or the
+/// keeper screaming at his defence. In sport those are often the frames that
+/// get published, and none of them has a ball near anybody's foot. So emotion
+/// is asked separately, and ranking takes the *stronger* of the two answers as
+/// the frame's moment rather than their average.
+///
+/// What counts is *intensity*, not whether the emotion is happy. Despair and
+/// anger are as valuable to a sports photographer as joy, so every pair names
+/// several emotions on the positive side — the organism set's lesson applies:
+/// a pair that only covers joy drags a frame of despair down with it, because
+/// [`IqaPrompts::score`] averages over pairs.
+pub const SPORT_EMOTION_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "an athlete showing intense emotion, such as joy, anger or despair.",
+        "an athlete with a calm, neutral face.",
+    ),
+    (
+        "players celebrating, protesting or consoling each other with big gestures.",
+        "players standing apart, waiting calmly.",
+    ),
+    (
+        "an athlete screaming, cheering or crying.",
+        "an athlete looking relaxed and expressionless.",
+    ),
+    (
+        "a dramatic, emotional moment in a sports game.",
+        "an uneventful moment in a sports game.",
+    ),
+];
+
+/// Prompt pairs for emotion at events: weddings, parties, company events,
+/// concerts.
+///
+/// Here the emotion that counts is warm — laughter, happy tears, a hug, a
+/// guest's delighted reaction — and the failure that counts is the
+/// unflattering frame: mid-sentence, mid-bite, a blank stare. The last pair
+/// asks about that directly, because an event photographer's first cull is
+/// largely throwing those out.
+///
+/// Same construction as the sport set: each pair is a complete question on its
+/// own, naming several emotions, so averaging cannot punish a frame for showing
+/// the "wrong" kind of joy.
+pub const EVENT_EMOTION_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "people laughing, crying with joy or hugging.",
+        "people with blank, neutral faces.",
+    ),
+    (
+        "a heartfelt, emotional moment between people.",
+        "an ordinary moment where nobody shows any emotion.",
+    ),
+    (
+        "guests reacting with delight or surprise.",
+        "guests looking bored or distracted.",
+    ),
+    (
+        "people with natural, flattering expressions.",
+        "a person caught mid-sentence or mid-bite with an awkward face.",
+    ),
+];
+
+/// Prompt pairs asking whether closed eyes in this frame are *meant*: a kiss,
+/// or laughter hard enough to squeeze the eyes shut.
+///
+/// Not a grading axis, a gate, like [`ORGANISM_PROMPT_PAIRS`]. The blink proxy
+/// cannot tell a kiss from a blink — both are closed eyes — so without this the
+/// kiss at a wedding is the frame most reliably marked as a reject candidate.
+/// The ranking skips the blink penalty for a frame that clears the gate.
+///
+/// The last pair contrasts the two causes head-on, which is the question
+/// actually being asked; the first two keep a frame where nobody is kissing or
+/// laughing firmly below the threshold.
+pub const EYES_CLOSED_INTENT_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "people kissing or laughing so hard their eyes are closed.",
+        "people with their eyes open, neither kissing nor laughing.",
+    ),
+    (
+        "a kiss or a burst of laughter.",
+        "a calm moment without a kiss or laughter.",
+    ),
+    (
+        "eyes closed in a kiss or in laughter.",
+        "eyes closed in an accidental blink.",
+    ),
+];
+
 /// Prompt pairs asking whether there is an *organism* in the frame at all.
 ///
 /// Unlike every other set here this is not a grading axis — nothing weights it
@@ -211,16 +286,23 @@ pub const ORGANISM_PROMPT_PAIRS: &[(&str, &str)] = &[
 ///   spatial relations are a known blind spot for contrastive image-text models.
 ///   These are measurable directly and should be.
 /// - *Animal eye sharpness.* Needs detection, not a global scene judgement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PromptSet {
-    /// Is this a good photograph? [`DEFAULT_PROMPT_PAIRS`].
-    Quality,
     /// Is something happening in it? [`ACTION_PROMPT_PAIRS`].
     Action,
     /// Is the face working? [`EXPRESSION_PROMPT_PAIRS`].
     Expression,
     /// Is this a real moment or a pose? [`CANDID_PROMPT_PAIRS`].
     Candid,
+    /// Is an athlete feeling something strongly? [`SPORT_EMOTION_PROMPT_PAIRS`].
+    SportEmotion,
+    /// Are people laughing, moved, reacting? [`EVENT_EMOTION_PROMPT_PAIRS`].
+    EventEmotion,
+    /// Are closed eyes meant — a kiss, a laugh? [`EYES_CLOSED_INTENT_PROMPT_PAIRS`].
+    ///
+    /// A gate on the blink penalty, not a grading axis — deliberately absent
+    /// from [`PromptSet::SEMANTIC`].
+    EyesClosedIntent,
     /// Is there an organism in the frame? [`ORGANISM_PROMPT_PAIRS`].
     ///
     /// A gate for the species task, not a grading axis — deliberately absent
@@ -231,12 +313,20 @@ pub enum PromptSet {
 impl PromptSet {
     pub fn pairs(self) -> &'static [(&'static str, &'static str)] {
         match self {
-            PromptSet::Quality => DEFAULT_PROMPT_PAIRS,
             PromptSet::Action => ACTION_PROMPT_PAIRS,
             PromptSet::Expression => EXPRESSION_PROMPT_PAIRS,
             PromptSet::Candid => CANDID_PROMPT_PAIRS,
+            PromptSet::SportEmotion => SPORT_EMOTION_PROMPT_PAIRS,
+            PromptSet::EventEmotion => EVENT_EMOTION_PROMPT_PAIRS,
+            PromptSet::EyesClosedIntent => EYES_CLOSED_INTENT_PROMPT_PAIRS,
             PromptSet::Organism => ORGANISM_PROMPT_PAIRS,
         }
+    }
+
+    /// Every prompt of the set, positive before negative, pair by pair — the
+    /// texts whose embeddings [`IqaPrompts::from_lookup`] asks for.
+    pub fn texts(self) -> impl Iterator<Item = &'static str> {
+        self.pairs().iter().flat_map(|(pos, neg)| [*pos, *neg])
     }
 
     /// Stable name, used as the cache key and as the axis label a preset names.
@@ -245,10 +335,12 @@ impl PromptSet {
     /// cannot depend on this crate.
     pub fn as_str(self) -> &'static str {
         match self {
-            PromptSet::Quality => "quality",
             PromptSet::Action => "action",
             PromptSet::Expression => "expression",
             PromptSet::Candid => "candid",
+            PromptSet::SportEmotion => "sport_emotion",
+            PromptSet::EventEmotion => "event_emotion",
+            PromptSet::EyesClosedIntent => "eyes_closed_intent",
             PromptSet::Organism => "organism",
         }
     }
@@ -257,28 +349,37 @@ impl PromptSet {
     /// config typo the caller should ignore and log, not an error to propagate.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "quality" => Some(PromptSet::Quality),
             "action" => Some(PromptSet::Action),
             "expression" => Some(PromptSet::Expression),
             "candid" => Some(PromptSet::Candid),
+            "sport_emotion" => Some(PromptSet::SportEmotion),
+            "event_emotion" => Some(PromptSet::EventEmotion),
+            "eyes_closed_intent" => Some(PromptSet::EyesClosedIntent),
             "organism" => Some(PromptSet::Organism),
             _ => None,
         }
     }
 
-    /// The genre-selectable grading axes: every set except
-    /// [`PromptSet::Quality`], which always applies, and
-    /// [`PromptSet::Organism`], which gates the species task rather than
-    /// grading anything.
-    pub const SEMANTIC: [PromptSet; 3] =
-        [PromptSet::Action, PromptSet::Expression, PromptSet::Candid];
-
-    /// Every set, so the invariant tests cannot silently skip a new one.
-    pub const ALL: [PromptSet; 5] = [
-        PromptSet::Quality,
+    /// The genre-selectable grading axes: every set except the two gates —
+    /// [`PromptSet::Organism`] for the species task and
+    /// [`PromptSet::EyesClosedIntent`] for the blink penalty — which decide
+    /// whether something runs rather than grading anything.
+    pub const SEMANTIC: [PromptSet; 5] = [
         PromptSet::Action,
         PromptSet::Expression,
         PromptSet::Candid,
+        PromptSet::SportEmotion,
+        PromptSet::EventEmotion,
+    ];
+
+    /// Every set, so the invariant tests cannot silently skip a new one.
+    pub const ALL: [PromptSet; 7] = [
+        PromptSet::Action,
+        PromptSet::Expression,
+        PromptSet::Candid,
+        PromptSet::SportEmotion,
+        PromptSet::EventEmotion,
+        PromptSet::EyesClosedIntent,
         PromptSet::Organism,
     ];
 }
@@ -289,42 +390,40 @@ impl PromptSet {
 /// would flatten to ~0.5 for every image on earth.
 const LOGIT_SCALE: f64 = 100.0;
 
-/// L2-normalized text embeddings for [`DEFAULT_PROMPT_PAIRS`], computed once.
+/// L2-normalized text embeddings for one [`PromptSet`]'s pairs.
 #[derive(Clone)]
 pub struct IqaPrompts {
     pairs: Vec<(Vec<f32>, Vec<f32>)>,
 }
 
 impl IqaPrompts {
-    /// Runs the text tower over every prompt in one batch.
+    /// Builds the set from embeddings the caller already has, `None` when any
+    /// of its texts is missing.
     ///
-    /// This is the only expensive call in the module, and it also loads the
-    /// SigLIP2 model if it has idle-unloaded. Callers should treat failure as
-    /// "no IQA available" rather than an error — the aesthetic heuristic is
-    /// still there.
-    pub fn compute(model: &SiglipModel) -> Result<Self, SiglipError> {
-        Self::compute_set(model, PromptSet::Quality)
-    }
-
-    /// [`Self::compute`] for a named set. One text-tower call per set; callers
-    /// cache the result for the process lifetime.
-    pub fn compute_set(model: &SiglipModel, set: PromptSet) -> Result<Self, SiglipError> {
-        let texts: Vec<String> = set
+    /// Takes a lookup rather than a model because the text tower is the
+    /// expensive way to get these: they are a pure function of the weights
+    /// and a compile-time list of strings, so the backend stores them once
+    /// per model and reads them back. A half-built set is refused rather than
+    /// scored, since [`Self::score`] averages over pairs and a missing pair
+    /// would quietly change what the number means.
+    ///
+    /// The vectors are normalized here whatever the lookup hands over.
+    pub fn from_lookup<'a>(
+        set: PromptSet,
+        lookup: impl Fn(&str) -> Option<&'a [f32]>,
+    ) -> Option<Self> {
+        let pairs = set
             .pairs()
             .iter()
-            .flat_map(|(pos, neg)| [pos.to_string(), neg.to_string()])
-            .collect();
-        let mut embeddings = model.embed_text(&texts)?;
-        for e in embeddings.iter_mut() {
-            l2_normalize(e);
-        }
-        let pairs = embeddings
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|c| (c[0].clone(), c[1].clone()))
-            .collect();
-        Ok(IqaPrompts { pairs })
+            .map(|(pos, neg)| {
+                let mut pos = lookup(pos)?.to_vec();
+                let mut neg = lookup(neg)?.to_vec();
+                l2_normalize(&mut pos);
+                l2_normalize(&mut neg);
+                Some((pos, neg))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(IqaPrompts { pairs })
     }
 
     pub fn pair_count(&self) -> usize {
@@ -433,6 +532,46 @@ mod tests {
     fn a_dimension_mismatch_has_no_score() {
         let p = prompts(vec![(vec![1.0, 0.0], vec![0.0, 1.0])]);
         assert!(p.score(&[1.0, 0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn from_lookup_builds_a_complete_set_and_refuses_a_partial_one() {
+        let vectors: std::collections::HashMap<&str, Vec<f32>> = PromptSet::Organism
+            .texts()
+            .enumerate()
+            .map(|(i, text)| (text, vec![i as f32 + 1.0, 1.0]))
+            .collect();
+        let full =
+            IqaPrompts::from_lookup(PromptSet::Organism, |t| vectors.get(t).map(Vec::as_slice))
+                .unwrap();
+        assert_eq!(full.pair_count(), ORGANISM_PROMPT_PAIRS.len());
+
+        let missing = ORGANISM_PROMPT_PAIRS[1].1;
+        let partial = IqaPrompts::from_lookup(PromptSet::Organism, |t| {
+            (t != missing)
+                .then(|| vectors.get(t).map(Vec::as_slice))
+                .flatten()
+        });
+        assert!(partial.is_none());
+    }
+
+    /// The lookup's vectors need not be normalized; scoring assumes they are.
+    #[test]
+    fn from_lookup_normalizes_what_it_is_given() {
+        let pos = vec![10.0, 0.0];
+        let neg = vec![0.0, 0.5];
+        let p = IqaPrompts::from_lookup(PromptSet::Candid, |t| {
+            if PromptSet::Candid.pairs().iter().any(|(a, _)| *a == t) {
+                Some(pos.as_slice())
+            } else {
+                Some(neg.as_slice())
+            }
+        })
+        .unwrap();
+        for (a, b) in &p.pairs {
+            assert_eq!(a, &vec![1.0, 0.0]);
+            assert_eq!(b, &vec![0.0, 1.0]);
+        }
     }
 
     #[test]

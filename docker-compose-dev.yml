@@ -9,6 +9,9 @@
 #
 # Start: docker compose -f docker-compose-dev.yml up -d --build
 # Stop:  docker compose -f docker-compose-dev.yml down
+# Token: docker exec geniusai-server /app/geniusai-server token
+#        (paste it in Lightroom: Plug-in Manager > LrGeniusAI > Backend Server >
+#        Access token; kept in ./data/LrGeniusAI/api-token)
 # Logs:  docker compose -f docker-compose-dev.yml logs -f geniusai-server
 
 services:

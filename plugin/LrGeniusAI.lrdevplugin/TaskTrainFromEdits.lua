@@ -44,8 +44,12 @@ local function showTrainDialog(ctx)
 					title = LOC("$$$/LrGeniusAI/Training/LabelLabel=Style label (optional):"),
 					width = 180,
 				}),
-				f:edit_field({
+				-- A style label is a name reused across sessions ("Wedding"), so
+				-- the earlier ones are offered rather than retyped -- and a
+				-- typo no longer splits one style into two.
+				f:combo_box({
 					value = bind("label"),
+					items = Util.historyItems(prefs.trainingLabelHistory),
 					width_in_chars = 30,
 					placeholder_string = LOC("$$$/LrGeniusAI/Training/LabelPlaceholder=e.g. Wedding, Portrait, Street"),
 				}),
@@ -83,6 +87,7 @@ local function showTrainDialog(ctx)
 	end
 
 	prefs.trainingLabel = props.label
+	prefs.trainingLabelHistory = Util.pushHistory(prefs.trainingLabelHistory, props.label, Defaults.inputHistoryLength)
 	prefs.trainingSummary = props.summary
 	prefs.trainingScope = props.scope
 

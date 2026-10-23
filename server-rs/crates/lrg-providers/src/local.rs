@@ -45,6 +45,55 @@ pub struct LocalResponse {
     pub prefix_reused: bool,
 }
 
+/// Who said one turn of a conversation.
+///
+/// There is no tool role. The chat templates llama.cpp can apply without
+/// Jinja know only these three, so a caller that runs tools renders their
+/// results into a user turn itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalChatRole {
+    System,
+    User,
+    Assistant,
+}
+
+impl LocalChatRole {
+    /// The role name chat templates expect.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LocalChatRole::System => "system",
+            LocalChatRole::User => "user",
+            LocalChatRole::Assistant => "assistant",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalChatMessage {
+    pub role: LocalChatRole,
+    pub text: String,
+    /// Photos shown with this turn. llama.cpp places them after the text;
+    /// with MLX the model's message format decides.
+    pub images: Vec<LocalImage>,
+}
+
+/// A whole conversation, answered with one assistant turn.
+///
+/// Unlike [`LocalRequest`] nothing here is pinned: a conversation changes
+/// with every turn, so the engine evaluates all of it each time.
+#[derive(Debug, Clone, Default)]
+pub struct LocalChatRequest {
+    pub messages: Vec<LocalChatMessage>,
+    /// JSON Schema to constrain the answer with.
+    pub schema: Option<serde_json::Value>,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+/// Where an engine sends the answer's text while it is being generated.
+pub type TextDeltas = tokio::sync::mpsc::UnboundedSender<String>;
+
 #[async_trait]
 pub trait LocalEngine: Send + Sync {
     /// Generate for a group of photos sharing one stable prefix.
@@ -66,6 +115,27 @@ pub trait LocalEngine: Send + Sync {
     /// that is not wrong, just pointless — the surplus waits for a free slot.
     fn preferred_batch_size(&self) -> usize {
         1
+    }
+
+    /// Answer a conversation with one assistant turn, sending its text to
+    /// `deltas` as it is generated. The returned text is the whole answer.
+    ///
+    /// Dropping the returned future asks the engine to stop. How soon it can
+    /// differs: llama.cpp stops at the next token, the MLX sidecar only once
+    /// its answer is complete.
+    async fn chat(
+        &self,
+        request: LocalChatRequest,
+        deltas: Option<TextDeltas>,
+    ) -> Result<LocalResponse, String> {
+        let _ = (request, deltas);
+        Err(format!("{} cannot hold a conversation", self.model_name()))
+    }
+
+    /// The tokens one conversation may use, prompt and answer together, when
+    /// the engine knows.
+    fn context_window(&self) -> Option<u32> {
+        None
     }
 }
 

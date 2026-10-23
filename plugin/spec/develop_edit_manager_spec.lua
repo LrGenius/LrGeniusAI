@@ -13,6 +13,7 @@ local internal = DevelopEditManager.internal
 local mergeGlobalDevelopSettings = internal.mergeGlobalDevelopSettings
 local buildDevelopSettings = internal.buildDevelopSettings
 local normalizeDevelopValue = internal.normalizeDevelopValue
+local scaleDevelopSettings = internal.scaleDevelopSettings
 
 describe("DevelopEditManager global merge semantics", function()
 	it("replaces white balance instead of adding to it", function()
@@ -505,5 +506,69 @@ describe("DevelopEditManager white balance display", function()
 		assert.is_falsy(details:find("table: 0x", 1, true))
 		assert.is_truthy(details:find("white_balance: temperature 6200, tint +13", 1, true))
 		assert.is_truthy(details:find("some_future_group: 2 setting(s)", 1, true))
+	end)
+end)
+
+describe("DevelopEditManager recipe strength", function()
+	-- A recipe applied at less than full strength moves each number only part of
+	-- the way from what the photo has to what the recipe asks for. Recipe values
+	-- are absolute, so half an edit is halfway between the two, not half the value.
+
+	it("moves numbers part of the way from the photo's own value", function()
+		local baseline = { Exposure2012 = 0.2, Contrast2012 = 10 }
+		local scaled = scaleDevelopSettings(baseline, { Exposure2012 = 1.2, Contrast2012 = 30 }, 0.5)
+
+		assert.are.equal(0.7, scaled.Exposure2012)
+		assert.are.equal(20, scaled.Contrast2012)
+	end)
+
+	it("reproduces the baseline at strength 0 and the recipe at strength 1", function()
+		local baseline = { Exposure2012 = 0.2, Temp = 5500 }
+		local recipe = { Exposure2012 = 1.2, Temp = 6000 }
+
+		assert.are.same(baseline, scaleDevelopSettings(baseline, recipe, 0))
+		assert.are.same(recipe, scaleDevelopSettings(baseline, recipe, 1))
+	end)
+
+	it("scales white balance from the as-shot value, not from zero", function()
+		-- Half of 6000 K would be 3000 K; halfway from 5500 K to 6000 K is 5750 K.
+		local scaled = scaleDevelopSettings({ Temp = 5500 }, { Temp = 6000 }, 0.5)
+
+		assert.are.equal(5750, scaled.Temp)
+	end)
+
+	it("sends hues the short way round", function()
+		local scaled = scaleDevelopSettings({ SplitToningShadowHue = 350 }, { SplitToningShadowHue = 10 }, 0.5)
+
+		-- 350 towards 10 passes through 0, not through 180. 360 is 0 once the
+		-- merge wraps it.
+		assert.are.equal(0, normalizeDevelopValue("SplitToningShadowHue", scaled.SplitToningShadowHue))
+	end)
+
+	it("applies what cannot be interpolated whole from halfway up, and leaves it out below", function()
+		local curve = { { 0, 0 }, { 255, 255 } }
+		local recipe = { ToneCurvePV2012 = curve, CameraProfile = "Camera Neutral" }
+
+		local half = scaleDevelopSettings({}, recipe, 0.5)
+		assert.are.equal(curve, half.ToneCurvePV2012)
+		assert.are.equal("Camera Neutral", half.CameraProfile)
+
+		local gentle = scaleDevelopSettings({}, recipe, 0.25)
+		assert.is_nil(gentle.ToneCurvePV2012)
+		assert.is_nil(gentle.CameraProfile)
+	end)
+
+	it("treats a number the photo has no value for like something it cannot interpolate", function()
+		assert.are.equal(12, scaleDevelopSettings({}, { Contrast2012 = 12 }, 0.5).Contrast2012)
+		assert.is_nil(scaleDevelopSettings({}, { Contrast2012 = 12 }, 0.25).Contrast2012)
+	end)
+
+	it("leaves the photo's other settings to the merge", function()
+		-- Only the keys the recipe mentions come back; the caller merges them over
+		-- the baseline, which is what keeps crops and the rest untouched.
+		local scaled = scaleDevelopSettings({ CropLeft = 0.1, Exposure2012 = 0 }, { Exposure2012 = 1 }, 0.5)
+
+		assert.is_nil(scaled.CropLeft)
+		assert.are.equal(0.5, scaled.Exposure2012)
 	end)
 end)

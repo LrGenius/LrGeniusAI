@@ -22,6 +22,14 @@ enum Log {
 private let encoder = JSONEncoder()
 private let decoder = JSONDecoder()
 
+/// One piece of a `chat` answer. A piece that cannot be encoded is dropped:
+/// the final response still carries the whole text.
+private func respondDelta(id: Int, _ delta: String) {
+    guard var line = try? encoder.encode(SidecarDelta(id: id, delta: delta)) else { return }
+    line.append(0x0A)
+    FileHandle.standardOutput.write(line)
+}
+
 private func respond(_ response: SidecarResponse) {
     guard var line = try? encoder.encode(response) else {
         // Encoding our own response type cannot realistically fail, but if it
@@ -67,6 +75,21 @@ private func handle(_ request: SidecarRequest) async {
             // Only whole-batch failures land here (no model loaded, say);
             // per-photo failures are inside `results`.
             Log.error("generate failed: \(describe(error))")
+            respond(.failure(id: request.id, describe(error)))
+        }
+
+    case .chat:
+        guard let spec = request.chat else {
+            respond(.failure(id: request.id, "chat requires chat"))
+            return
+        }
+        do {
+            let result = try await engine.chat(spec: spec) { delta in
+                respondDelta(id: request.id, delta)
+            }
+            respond(.generated(id: request.id, results: [result]))
+        } catch {
+            Log.error("chat failed: \(describe(error))")
             respond(.failure(id: request.id, describe(error)))
         }
 
