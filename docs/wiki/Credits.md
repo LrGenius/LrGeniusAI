@@ -5,11 +5,15 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 ## Core Backend Dependencies
 - **YuNet**: Fast, lightweight face detector from the OpenCV Model Zoo; provides the face boxes and five landmarks. [GitHub](https://github.com/opencv/opencv_zoo)
 - **FaceNet (facenet-pytorch)**: Inception-ResNet-v1 with VGGFace2 weights; produces the face embeddings that group photos by person. [GitHub](https://github.com/timesler/facenet-pytorch)
-- **SigLIP2 / OpenCLIP**: The vision-language models behind semantic search, and the framework both SigLIP2 and BioCLIP 2 are loaded and exported with. [GitHub](https://github.com/mlfoundations/open_clip)
+- **SigLIP2 (NaFlex)** (Apache-2.0): Google's `siglip2-so400m-patch16-naflex` ([SigLIP 2, Tschannen et al., 2025](https://arxiv.org/abs/2502.14786)), the vision-language model behind semantic search and the photo genre; it keeps each photo's aspect ratio. Exported with Hugging Face Transformers. [Model](https://huggingface.co/google/siglip2-so400m-patch16-naflex)
+- **AestheticSigLIP**: Gowthami Somepalli's `AestheticSigLIP`, a SigLIP 2 So400m NaFlex encoder fine-tuned to score photos from 1 to 9, which provides the *Aesthetic score*. Apache-2.0. [Model](https://huggingface.co/somepago/AestheticSigLIP)
+- **CLIP-IQA**: The prompt-pair method (Wang, Chan & Loy, *Exploring CLIP for Assessing the Look and Feel of Images*, AAAI 2023) behind the moment, emotion and kiss-gate questions culling asks of a photo. [Paper](https://arxiv.org/abs/2207.12396)
+- **OpenCLIP**: The framework BioCLIP 2 is loaded and exported with. [GitHub](https://github.com/mlfoundations/open_clip)
 - **ONNX Runtime**: Cross-platform, high performance ML inferencing, used via the `ort` crate for SigLIP2, BioCLIP 2, YuNet and FaceNet. [Website](https://onnxruntime.ai/)
 - **LanceDB**: Embedded vector database storing embeddings and metadata. [Website](https://lancedb.com/)
 - **axum / tokio**: Async HTTP server and runtime for `geniusai-server`. [GitHub](https://github.com/tokio-rs/axum)
 - **Hugging Face Tokenizers**: Fast tokenizers used for the SigLIP2 text tower. [GitHub](https://github.com/huggingface/tokenizers)
+- **rmcp** (Apache-2.0): The official Rust SDK for the Model Context Protocol; serves the `/mcp` endpoint AI agents connect to, and connects the in-app chat to the same tools. [GitHub](https://github.com/modelcontextprotocol/rust-sdk)
 
 ## Species Identification
 
@@ -38,7 +42,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **Hugging Face Hub**: Distribution for the downloadable local models.
 
 ## Tooling & Project Infrastructure
-- **Automaat/lightroom-mcp** (MIT): A second open-source Lightroom Classic plugin, by Marcin Skalski, pairing an `.lrplugin` with an MCP server. Its CI/CD setup is where this project's workflow trigger scoping, per-workflow concurrency groups, commit-SHA pinning of *every* action (not just third-party ones), the pinned `busted` revision, and the "stamp the version, then read the stamp back" rule came from — the last of which turned up a bug that had shipped in every release. Its plugin also documents a couple of Lightroom SDK behaviours worth knowing. [GitHub](https://github.com/Automaat/lightroom-mcp)
+- **Automaat/lightroom-mcp** (MIT): A second open-source Lightroom Classic plugin, by Marcin Skalski, pairing an `.lrplugin` with an MCP server. Its CI/CD setup is where this project's workflow trigger scoping, per-workflow concurrency groups, commit-SHA pinning of *every* action (not just third-party ones), the pinned `busted` revision, and the "stamp the version, then read the stamp back" rule came from — the last of which turned up a bug that had shipped in every release. Its plugin also documents a couple of Lightroom SDK behaviours worth knowing — among them how LrSocket behaves across plug-in reloads and on Windows (its issues #110, #121, #128, #134, #137), which decided the shape of LrGeniusAI's agent bridge: a receive-only socket as a doorbell, everything else over HTTP. No code was taken from it. [GitHub](https://github.com/Automaat/lightroom-mcp)
 - **StyLua, luacheck, busted**: Formatting, linting and headless unit tests for the plugin's Lua.
 - **pre-commit**: Runs the formatters, linters and the docs checker before every commit.
 

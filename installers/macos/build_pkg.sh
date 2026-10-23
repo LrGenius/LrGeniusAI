@@ -30,6 +30,11 @@ echo "Copying backend binary..."
 cp "build/lrgenius-server/lrgenius-server" "$ROOT_DIR/Applications/LrGeniusAI/Server/lrgenius-server"
 chmod +x "$ROOT_DIR/Applications/LrGeniusAI/Server/lrgenius-server"
 
+# Install the named launcher used by macOS's background-items list. Keep the
+# backend filename unchanged for the plugin, self-updater and process cleanup.
+cp "$SCRIPT_DIR/LrGeniusAI" "$ROOT_DIR/Applications/LrGeniusAI/Server/LrGeniusAI"
+chmod 755 "$ROOT_DIR/Applications/LrGeniusAI/Server/LrGeniusAI"
+
 # 1.5 Codesign the binary (before it's placed into the pkg payload).
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
   echo "Codesigning backend binary with identity: ${MACOS_SIGN_IDENTITY}"

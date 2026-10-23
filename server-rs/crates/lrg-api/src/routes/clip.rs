@@ -11,13 +11,19 @@
 //!
 //! Those assets live at a **stable, separate release tag**
 //! (`MODEL_ASSETS_RELEASE_TAG`), not the app's own version tag — the
-//! model (`timm/ViT-SO400M-16-SigLIP2-384`) doesn't change per app
+//! model (`google/siglip2-so400m-patch16-naflex`) doesn't change per app
 //! release, so re-exporting/re-publishing it on every `v*` tag would be
 //! pure waste. The `.github/workflows/model-assets.yml` workflow
 //! publishes to that tag only when the export script or its pinned
 //! deps actually change. If the export ever changes in a way that isn't
 //! backward compatible with older binaries, bump both the workflow's
-//! tag and `MODEL_ASSETS_RELEASE_TAG` together (e.g. `model-assets-v2`).
+//! tag and `MODEL_ASSETS_RELEASE_TAG` together.
+//!
+//! `model-assets-v2` is that bump: v1 holds the fixed-resolution
+//! `ViT-SO400M-16-SigLIP2-384` export, which released builds still download,
+//! so it stays published and untouched. The asset names changed along with the
+//! tag (`siglip2_naflex_*`) so the two can never be mistaken for each other on
+//! disk.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -34,12 +40,16 @@ use crate::state::AppState;
 const DOWNLOAD_KEY: &str = "clip";
 
 const RELEASE_REPO: &str = "LrGenius/LrGeniusAI";
-const MODEL_ASSETS_RELEASE_TAG: &str = "model-assets-v1";
+const MODEL_ASSETS_RELEASE_TAG: &str = "model-assets-v2";
 const ASSET_NAMES: [&str; 3] = [
-    "siglip2_image_fp16.onnx",
-    "siglip2_text_fp16.onnx",
-    "tokenizer.json",
+    "siglip2_naflex_image_fp16.onnx",
+    "siglip2_naflex_text_fp16.onnx",
+    "siglip2_naflex_tokenizer.json",
 ];
+
+/// The AestheticSigLIP scorer, published next to the SigLIP2 towers under the
+/// same tag (one export script run per model release, one release to bump).
+const AESTHETIC_ASSET_NAME: &str = "aesthetic_siglip_fp16.onnx";
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/models/clip", get(clip_status)).route(
@@ -314,6 +324,18 @@ pub(crate) async fn download_release_assets(
         s.current_file = None;
         s.set_done();
     });
+}
+
+/// The aesthetic scorer's asset and where it goes, for the combined download in
+/// `routes::assets`. Not part of [`clip_assets`]: it is its own model family
+/// with its own readiness, and a build with the search model but not this one
+/// must still search.
+pub(crate) fn aesthetic_assets(paths: &lrg_ml::aesthetic::AestheticPaths) -> Vec<ReleaseAsset<'_>> {
+    vec![(
+        MODEL_ASSETS_RELEASE_TAG,
+        AESTHETIC_ASSET_NAME,
+        paths.onnx.as_path(),
+    )]
 }
 
 /// The SigLIP2 assets and where they go, for this route and for the combined

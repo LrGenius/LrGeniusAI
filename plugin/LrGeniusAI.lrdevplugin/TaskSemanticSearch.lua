@@ -1,6 +1,7 @@
 --[[
-    Provides an advanced search dialog that combines semantic search with optional quality filtering.
-    If the search term is empty, it performs a quality-only search.
+    Provides an advanced search dialog: semantic and metadata search over the photos LrGeniusAI
+    has indexed, which can be ordered and restricted by the stored aesthetic score and genre.
+    With no search term it lists the best photos by aesthetic score instead.
 ]]
 
 ---
@@ -44,12 +45,22 @@ local function buildCoverageWarning()
 		catalogCount = nil
 	end
 	local coverage = Util.searchCoverage(stats, catalogCount)
-	if coverage and coverage.unsearchable > 0 then
+	if coverage and coverage.outdated > 0 then
+		table.insert(
+			lines,
+			string.format(
+				'New AI search model: %d of %d photos were indexed with the previous one and cannot be found by a search yet.\nRun Library > Plug-in Extras > Analyze & Index Photos with "Enable smart photo search" again to bring them up to date.',
+				coverage.outdated,
+				coverage.total
+			)
+		)
+	end
+	if coverage and coverage.unindexed > 0 then
 		table.insert(
 			lines,
 			LOC(
 				'$$$/LrGeniusAI/AdvancedSearchTask/WarnUnindexed=^1 of ^2 photos have no search index yet and cannot be found by a search.\nRun Library > Plug-in Extras > Analyze & Index Photos with "Enable smart photo search" to include them.',
-				tostring(coverage.unsearchable),
+				tostring(coverage.unindexed),
 				tostring(coverage.total)
 			)
 		)
@@ -61,7 +72,7 @@ local function buildCoverageWarning()
 	return table.concat(lines, "\n\n")
 end
 
-local function showAdvancedSearchDialog(ctx, coverageWarning)
+local function showAdvancedSearchDialog(ctx, coverageWarning, genres)
 	local props = LrBinding.makePropertyTable(ctx)
 	props.searchTerm = ""
 	-- Scope and search-in options from prefs (persisted)
@@ -74,6 +85,22 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 	props.searchInMetadataAltText = prefs.searchInMetadataAltText ~= false
 	props.relevanceStrictness = prefs.relevanceStrictness or 50
 	props.maxResults = prefs.maxResults or 300
+	-- Ranking by the stored aesthetic score and genre.
+	props.searchSort = prefs.searchSort or "relevance"
+	props.minAestheticPosition = prefs.searchMinAestheticPosition or 0
+	props.searchGenre = prefs.searchGenre or "all"
+
+	-- "All genres" plus what the backend can name. A backend that does not
+	-- know the list (older, or unreachable) gets no genre filter at all rather
+	-- than one that offers genres it cannot honour.
+	local genreItems = { { title = "All genres", value = "all" } }
+	for _, genre in ipairs(genres or {}) do
+		table.insert(genreItems, { title = tostring(genre.label or genre.id), value = tostring(genre.id) })
+	end
+	local hasGenres = #genreItems > 1
+	if not hasGenres then
+		props.searchGenre = "all"
+	end
 
 	local f = LrView.osFactory()
 	local bind = LrView.bind
@@ -109,7 +136,14 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 					width = share("labelWidth"),
 					alignment = "right",
 				}),
-				f:edit_field({ value = bind("searchTerm"), width_in_chars = 40 }),
+				-- Editable, with the earlier searches in its menu: a search is
+				-- often repeated after an indexing run, and retyping it is the
+				-- one part of that a machine can do.
+				f:combo_box({
+					value = bind("searchTerm"),
+					items = Util.historyItems(prefs.searchHistory),
+					width_in_chars = 40,
+				}),
 			}),
 			f:row({
 				f:static_text({
@@ -130,6 +164,69 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 							value = "selected",
 						},
 					},
+				}),
+			}),
+			f:group_box({
+				title = "Ranking",
+				f:column({
+					spacing = f:control_spacing(),
+					f:row({
+						f:static_text({
+							title = "Sort by",
+							width = share("labelWidth"),
+							alignment = "right",
+						}),
+						f:popup_menu({
+							value = bind("searchSort"),
+							items = {
+								{ title = "Relevance", value = "relevance" },
+								{ title = "Aesthetic score", value = "aesthetic" },
+								{ title = "Relevance and aesthetic score", value = "combined" },
+							},
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = "Minimum aesthetic score",
+							width = share("labelWidth"),
+							alignment = "right",
+						}),
+						f:slider({
+							value = bind("minAestheticPosition"),
+							min = 0,
+							max = 18,
+							integral = true,
+							width = 200,
+						}),
+						f:static_text({
+							title = bind({
+								key = "minAestheticPosition",
+								transform = function(value)
+									return Util.minAestheticLabel(value)
+								end,
+							}),
+							width = 40,
+						}),
+					}),
+					f:row({
+						f:static_text({
+							title = "Genre",
+							width = share("labelWidth"),
+							alignment = "right",
+						}),
+						f:popup_menu({
+							value = bind("searchGenre"),
+							items = genreItems,
+							enabled = hasGenres,
+						}),
+					}),
+					f:row({
+						f:static_text({ width = share("labelWidth") }),
+						f:static_text({
+							-- Manual line breaks: `wrap` has no effect on static_text.
+							title = "Leave the search term empty to list the best photos\nby aesthetic score instead.",
+						}),
+					}),
 				}),
 			}),
 			f:group_box({
@@ -255,6 +352,13 @@ local function showAdvancedSearchDialog(ctx, coverageWarning)
 		prefs.searchInMetadataAltText = props.searchInMetadataAltText
 		prefs.relevanceStrictness = props.relevanceStrictness
 		prefs.maxResults = props.maxResults
+		prefs.searchSort = props.searchSort
+		prefs.searchMinAestheticPosition = props.minAestheticPosition
+		prefs.searchGenre = props.searchGenre
+		if Util.trim(props.searchTerm or "") ~= "" then
+			prefs.searchHistory = Util.pushHistory(prefs.searchHistory, props.searchTerm, Defaults.inputHistoryLength)
+		end
+		props.genreItems = genreItems
 		return props
 	else
 		return nil
@@ -264,13 +368,20 @@ end
 LrTasks.startAsyncTask(function()
 	LrFunctionContext.callWithContext("showAdvancedSearchDialog", function(context)
 		LrDialogs.attachErrorDialogToFunctionContext(context)
-		-- Check server connection and health (ensure CLIP is ready for semantic search)
-		if not Util.waitForServerDialog({ requireClip = true }) then
+		-- Check server connection and health. The search model is only needed for
+		-- a search by term, which is not known until the dialog has been filled in,
+		-- so it is checked after it (below): ranking by aesthetic score alone works
+		-- without it.
+		if not Util.waitForServerDialog({}) then
 			return
 		end
 
-		local props = showAdvancedSearchDialog(context, buildCoverageWarning())
+		local props = showAdvancedSearchDialog(context, buildCoverageWarning(), SearchIndexAPI.getSearchGenres())
 		if props == nil then
+			return
+		end
+		local hasTerm = Util.trim(props.searchTerm or "") ~= ""
+		if hasTerm and not Util.waitForServerDialog({ requireClip = true }) then
 			return
 		end
 
@@ -290,80 +401,107 @@ LrTasks.startAsyncTask(function()
 						LOC("$$$/LrGeniusAI/common/InvalidViewTitle=Invalid View"),
 						LOC(
 							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
-						)
+						),
+						"info"
 					)
 				else
 					LrDialogs.message(
 						LOC("$$$/LrGeniusAI/common/NoPhotosTitle=No Photos Found"),
-						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+						LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+						"info"
 					)
 				end
 				return
 			end
 		end -- 'all' means photosToSearch is nil, so we search everything
 
-		-- Semantic search (with optional quality filter)
+		-- Search by term, or, with no term, the best photos by aesthetic score.
 		local searchStartedAt = LrDate.currentTime()
-		if props.searchTerm ~= "" then
-			log:trace("Performing semantic search for: " .. props.searchTerm)
-			local searchOptions = {
-				semanticSiglip = props.searchInSemanticSiglip,
-				metadata = props.searchInMetadata,
-				metadataFields = {},
-				relevanceStrictness = props.relevanceStrictness,
-				maxResults = props.maxResults,
-			}
-			if props.searchInMetadata then
-				if props.searchInMetadataKeywords then
-					table.insert(searchOptions.metadataFields, "flattened_keywords")
-				end
-				if props.searchInMetadataCaption then
-					table.insert(searchOptions.metadataFields, "caption")
-				end
-				if props.searchInMetadataTitle then
-					table.insert(searchOptions.metadataFields, "title")
-				end
-				if props.searchInMetadataAltText then
-					table.insert(searchOptions.metadataFields, "alt_text")
-				end
-			end
-			if #searchOptions.metadataFields == 0 and props.searchInMetadata then
-				searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
-			end
-			results, err = SearchIndexAPI.searchIndex(props.searchTerm, photosToSearch, searchOptions)
-			local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
-			local resCount = 0
-			if type(results) == "table" then
-				if results.results then
-					resCount = #results.results
-				else
-					resCount = #results
-				end
-			end
-			log:trace(
-				"Semantic search completed. term="
-					.. tostring(props.searchTerm)
-					.. " results="
-					.. tostring(resCount)
-					.. " elapsedMs="
-					.. tostring(elapsedMs)
-			)
-			collectionName = string.format("'%s' @ %s", props.searchTerm, LrDate.timeToW3CDate(LrDate.currentTime()))
+		log:trace(
+			hasTerm and ("Performing search for: " .. props.searchTerm)
+				or "Listing the best photos by aesthetic score (no search term)"
+		)
 
-		-- There used to be a quality-only branch here ("prettiest" /
-		-- "ugliest"). It had no UI: `useQualityFilter` is initialised to false
-		-- and never bound to a control, so the branch was unreachable — which
-		-- is the only reason it never crashed, because it called
-		-- `SearchIndexAPI.getPrettiest` and three siblings that do not exist.
-		-- Removed rather than revived: reviving it means designing the feature,
-		-- not restoring code.
-		else
-			LrDialogs.message(
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteria=No Search Criteria"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noSearchCriteriaMessage=Please enter a search term.")
-			)
-			return
+		-- The search itself is one request, so there is nothing to measure and
+		-- nothing to interrupt: the bar is indeterminate, and cancel is not
+		-- offered (#402).
+		local progressScope = LrProgressScope({
+			title = "Searching...",
+			functionContext = context,
+		})
+		progressScope:setIndeterminate()
+		progressScope:setCancelable(false)
+		progressScope:setCaption(hasTerm and "Searching the catalog..." or "Ranking the catalog by aesthetic score...")
+
+		local searchOptions = {
+			semanticSiglip = props.searchInSemanticSiglip,
+			metadata = props.searchInMetadata,
+			metadataFields = {},
+			relevanceStrictness = props.relevanceStrictness,
+			maxResults = props.maxResults,
+		}
+		-- Sort, minimum and genre; what is not set is not sent.
+		local ranking = Util.searchRankingOptions({
+			hasTerm = hasTerm,
+			sortBy = props.searchSort,
+			minAestheticPosition = props.minAestheticPosition,
+			genre = props.searchGenre,
+		})
+		for key, value in pairs(ranking) do
+			searchOptions[key] = value
 		end
+		if props.searchInMetadata then
+			if props.searchInMetadataKeywords then
+				table.insert(searchOptions.metadataFields, "flattened_keywords")
+			end
+			if props.searchInMetadataCaption then
+				table.insert(searchOptions.metadataFields, "caption")
+			end
+			if props.searchInMetadataTitle then
+				table.insert(searchOptions.metadataFields, "title")
+			end
+			if props.searchInMetadataAltText then
+				table.insert(searchOptions.metadataFields, "alt_text")
+			end
+		end
+		if #searchOptions.metadataFields == 0 and props.searchInMetadata then
+			searchOptions.metadataFields = { "flattened_keywords", "alt_text", "caption", "title" }
+		end
+		results, err = SearchIndexAPI.searchIndex(hasTerm and props.searchTerm or nil, photosToSearch, searchOptions)
+		progressScope:done()
+		local elapsedMs = math.floor((LrDate.currentTime() - searchStartedAt) * 1000)
+		local resCount = 0
+		if type(results) == "table" then
+			if results.results then
+				resCount = #results.results
+			else
+				resCount = #results
+			end
+		end
+		log:trace(
+			"Search completed. term="
+				.. tostring(props.searchTerm)
+				.. " sort="
+				.. tostring(ranking.sort)
+				.. " results="
+				.. tostring(resCount)
+				.. " elapsedMs="
+				.. tostring(elapsedMs)
+		)
+		local genreLabel = nil
+		for _, item in ipairs(props.genreItems or {}) do
+			if item.value == props.searchGenre and item.value ~= "all" then
+				genreLabel = item.title
+			end
+		end
+		collectionName = Util.searchCollectionName({
+			term = props.searchTerm,
+			maxResults = props.maxResults,
+			sort = ranking.sort,
+			minAesthetic = ranking.minAesthetic,
+			genreLabel = genreLabel,
+			time = LrDate.timeToW3CDate(LrDate.currentTime()),
+		})
 
 		if err then
 			ErrorHandler.handleError(LOC("$$$/LrGeniusAI/AdvancedSearchTask/SearchError=Search failed"), err)
@@ -386,7 +524,8 @@ LrTasks.startAsyncTask(function()
 		if #finalResults == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 			return
 		end
@@ -416,7 +555,8 @@ LrTasks.startAsyncTask(function()
 		if #photoIds == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 			return
 		end
@@ -439,18 +579,28 @@ LrTasks.startAsyncTask(function()
 			table.insert(missingFromResults, tostring(rowsWithoutId) .. " result row(s) carried no photo ID")
 		end
 		local missingFromCatalog = #photoIds - (photos and #photos or 0)
+		local cleanupStarted = false
 		if missingFromCatalog > 0 then
 			table.insert(
 				missingFromResults,
 				tostring(missingFromCatalog) .. " matched photo(s) are not in the current catalog"
 			)
+			-- The search is scoped to this catalog, so these are photos it
+			-- indexed and no longer has: deleted ones the cleanup has not
+			-- caught up with yet.
+			cleanupStarted = IndexCleanup.requestSoon()
 		end
 		if #missingFromResults > 0 then
 			LrDialogs.message(
 				"Search Results Are Incomplete",
 				"The collection does not hold every photo the search matched: "
 					.. table.concat(missingFromResults, "; ")
-					.. ".",
+					.. "."
+					.. (
+						cleanupStarted
+							and "\n\nPhotos deleted from Lightroom are taken out of the search index now, in the background."
+						or ""
+					),
 				"warning"
 			)
 		end
@@ -525,7 +675,8 @@ LrTasks.startAsyncTask(function()
 		else
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResults=No Results"),
-				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria.")
+				LOC("$$$/LrGeniusAI/AdvancedSearchTask/noResultsMessage=No photos found matching the criteria."),
+				"info"
 			)
 		end
 	end)

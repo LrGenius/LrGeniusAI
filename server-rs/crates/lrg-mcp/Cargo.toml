@@ -1,0 +1,30 @@
+[package]
+name = "lrg-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+base64 = "0.23"
+chrono.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+log.workspace = true
+lrg-api.workspace = true
+lrg-common.workspace = true
+lrg-store.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "schemars", "base64", "transport-streamable-http-server", "transport-io"] }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util = "0.7"
+tower = { workspace = true, features = ["util"] }
+
+[dev-dependencies]
+axum.workspace = true
+http-body-util.workspace = true
+rmcp = { version = "3.5.1", default-features = false, features = ["client", "server", "macros", "schemars", "transport-async-rw"] }
+tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }

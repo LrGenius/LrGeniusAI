@@ -24,7 +24,8 @@ use serde_json::{json, Value};
 
 use crate::routes::bioclip::bioclip_assets;
 use crate::routes::clip::{
-    clip_assets, download_release_assets, Downloads, ModelDownloadStatus, ReleaseAsset,
+    aesthetic_assets, clip_assets, download_release_assets, Downloads, ModelDownloadStatus,
+    ReleaseAsset,
 };
 use crate::state::AppState;
 
@@ -40,6 +41,7 @@ const DOWNLOAD_KEY: &str = "assets";
 /// download time, and plumbing that through a status endpoint would mean
 /// issuing six HEAD requests every time the Plug-in Manager polls.
 const CLIP_APPROX_BYTES: u64 = 2_310_000_000;
+const AESTHETIC_APPROX_BYTES: u64 = 868_000_000;
 const BIOCLIP_APPROX_BYTES: u64 = 876_000_000;
 const FACE_APPROX_BYTES: u64 = 94_200_000;
 
@@ -75,10 +77,16 @@ pub fn router() -> Router<Arc<AppState>> {
 /// because the plugin reads it.
 async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let clip_ready = state.siglip.is_cached();
+    let aesthetic_ready = state.aesthetic.is_cached();
     let bioclip_ready = state.bioclip.is_cached();
     let face_ready = state.face.is_cached();
 
     let missing_bytes = if clip_ready { 0 } else { CLIP_APPROX_BYTES }
+        + if aesthetic_ready {
+            0
+        } else {
+            AESTHETIC_APPROX_BYTES
+        }
         + if bioclip_ready {
             0
         } else {
@@ -87,7 +95,7 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
         + if face_ready { 0 } else { FACE_APPROX_BYTES };
 
     Json(json!({
-        "ready": clip_ready && bioclip_ready && face_ready,
+        "ready": clip_ready && aesthetic_ready && bioclip_ready && face_ready,
         "missing_approx_bytes": missing_bytes,
         "families": [
             {
@@ -96,6 +104,13 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
                 "ready": clip_ready,
                 "downloadable": true,
                 "approx_bytes": CLIP_APPROX_BYTES,
+            },
+            {
+                "id": "aesthetic",
+                "name": "Photo quality scoring",
+                "ready": aesthetic_ready,
+                "downloadable": true,
+                "approx_bytes": AESTHETIC_APPROX_BYTES,
             },
             {
                 "id": "bioclip",
@@ -135,11 +150,13 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let download_state = state.model_download.clone();
     let need_clip = !state.siglip.is_cached();
+    let need_aesthetic = !state.aesthetic.is_cached();
     let need_bioclip = !state.bioclip.is_cached();
     let need_face = !state.face.is_cached();
     tokio::spawn(run_download(
         download_state,
         need_clip,
+        need_aesthetic,
         need_bioclip,
         need_face,
     ));
@@ -158,14 +175,24 @@ async fn download_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!(status))
 }
 
-async fn run_download(state: Arc<Downloads>, need_clip: bool, need_bioclip: bool, need_face: bool) {
+async fn run_download(
+    state: Arc<Downloads>,
+    need_clip: bool,
+    need_aesthetic: bool,
+    need_bioclip: bool,
+    need_face: bool,
+) {
     let clip_paths = lrg_ml::model_paths::resolve();
+    let aesthetic_paths = lrg_ml::model_paths::resolve_aesthetic();
     let bioclip_paths = lrg_ml::model_paths::resolve_bioclip();
     let face_paths = lrg_ml::model_paths::resolve_face();
 
     let mut assets = Vec::new();
     if need_clip {
         assets.extend(clip_assets(&clip_paths));
+    }
+    if need_aesthetic {
+        assets.extend(aesthetic_assets(&aesthetic_paths));
     }
     if need_bioclip {
         assets.extend(bioclip_assets(&bioclip_paths));
@@ -189,7 +216,7 @@ async fn run_download(state: Arc<Downloads>, need_clip: bool, need_bioclip: bool
     }
 
     log::info!(
-        "Downloading {} asset(s): clip={need_clip} bioclip={need_bioclip} face={need_face}",
+        "Downloading {} asset(s): clip={need_clip} aesthetic={need_aesthetic} bioclip={need_bioclip} face={need_face}",
         assets.len()
     );
     download_release_assets(&state, DOWNLOAD_KEY, "AI models", &assets).await;

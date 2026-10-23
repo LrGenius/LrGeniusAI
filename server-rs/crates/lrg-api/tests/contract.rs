@@ -36,7 +36,7 @@ fn app(state: Arc<AppState>) -> axum::Router {
 /// and it would do the same to any developer who had run the plugin's model
 /// download before `cargo test`.
 ///
-/// Pointing all three families at an empty directory makes the suite
+/// Pointing every family at an empty directory makes the suite
 /// hermetic: same assertions, same cost, whether or not the assets are on the
 /// machine. Numerical coverage of the real weights belongs to the golden
 /// tests in `lrg-ml`, which is where `LRG_REQUIRE_GOLDENS` enforces it.
@@ -47,9 +47,12 @@ fn models_absent() -> ModelAssetPaths {
     let dir = NO_MODELS.path();
     ModelAssetPaths {
         siglip: lrg_ml::siglip::ModelPaths {
-            image_onnx: dir.join("siglip2_image.onnx"),
-            text_onnx: dir.join("siglip2_text.onnx"),
-            tokenizer_json: dir.join("tokenizer.json"),
+            image_onnx: dir.join("siglip2_naflex_image.onnx"),
+            text_onnx: dir.join("siglip2_naflex_text.onnx"),
+            tokenizer_json: dir.join("siglip2_naflex_tokenizer.json"),
+        },
+        aesthetic: lrg_ml::aesthetic::AestheticPaths {
+            onnx: dir.join("aesthetic_siglip.onnx"),
         },
         face: lrg_ml::faces::FaceModelPaths {
             det_onnx: dir.join("yunet_face_detection.onnx"),
@@ -379,6 +382,585 @@ async fn check_unprocessed_reports_only_missing_work() {
     assert_eq!(json["uuids"], json["photo_ids"]);
 }
 
+/// An app whose aesthetic model *file* exists (empty: nothing here loads it), so
+/// routes that only ask whether the model is on disk behave as with the real one.
+fn app_with_aesthetic_file() -> (axum::Router, Arc<AppState>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let onnx = dir.path().join("aesthetic_siglip.onnx");
+    std::fs::write(&onnx, b"").unwrap();
+    let mut models = models_absent();
+    models.aesthetic = lrg_ml::aesthetic::AestheticPaths { onnx };
+    let state = Arc::new(AppState::with_model_paths(None, false, models));
+    (app(state.clone()), state, dir)
+}
+
+async fn seed_embedded_photos(
+    state: &Arc<AppState>,
+    rows: &[(&str, Option<(f64, &str)>)],
+) -> serde_json::Value {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, aesthetic)| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(true));
+            m.insert(
+                "embedding_model".into(),
+                serde_json::json!(lrg_ml::siglip::MODEL_ID),
+            );
+            m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+            if let Some((score, model)) = aesthetic {
+                m.insert("aesthetic_score".into(), serde_json::json!(score));
+                m.insert("aesthetic_model".into(), serde_json::json!(model));
+            }
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+    serde_json::json!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>())
+}
+
+/// A photo is only done for the embedding tasks once it carries a score from
+/// the current export, and only when the model that makes one is on disk —
+/// otherwise the same run would be offered for ever.
+#[tokio::test]
+async fn check_unprocessed_re_queues_photos_without_a_current_aesthetic_score() {
+    let (app, state, _models) = app_with_aesthetic_file();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids = seed_embedded_photos(
+        &state,
+        &[
+            ("scored", Some((7.1, lrg_ml::aesthetic::MODEL_ID))),
+            ("unscored", None),
+            ("stale", Some((6.0, "aesthetic-from-another-export"))),
+        ],
+    )
+    .await;
+
+    // `cull` is left out: it also wants `cull_faces_present`, which none of
+    // these rows have, so it would re-queue all of them for that reason.
+    for tasks in ["embeddings", "aesthetic"] {
+        let (status, json) = post_json(
+            &app,
+            "/v1/index/unprocessed",
+            serde_json::json!({
+                "photo_ids": ids, "tasks": tasks,
+                "regenerate_metadata": "false", "db_path": db_path,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let mut queued: Vec<&str> = json["photo_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        queued.sort();
+        assert_eq!(queued, ["stale", "unscored"], "tasks={tasks}");
+    }
+}
+
+/// Without the model on disk nothing can be brought up to date, so the score
+/// does not keep the photos in the queue.
+#[tokio::test]
+async fn check_unprocessed_ignores_the_aesthetic_score_without_the_model() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids = seed_embedded_photos(&state, &[("unscored", None)]).await;
+    let (_, json) = post_json(
+        &app,
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ids, "tasks": "embeddings",
+            "regenerate_metadata": "false", "db_path": db_path,
+        }),
+    )
+    .await;
+    assert_eq!(json["photo_ids"], serde_json::json!([]));
+}
+
+/// The plug-in reads the score and genre back from the lookup, in a block of
+/// their own that does not leak into the LLM metadata the review dialog edits.
+#[tokio::test]
+async fn photo_lookup_reports_the_aesthetic_score_and_genre() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    seed_embedded_photos(
+        &state,
+        &[
+            ("scored", Some((7.1, lrg_ml::aesthetic::MODEL_ID))),
+            ("stale", Some((6.0, "aesthetic-from-another-export"))),
+            ("bare", None),
+        ],
+    )
+    .await;
+    // Genre lives on the same row; add it to one photo.
+    let store = state.store().unwrap();
+    let mut row = store
+        .get(lrg_store::IMAGE_TABLE, &["scored".to_string()])
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    row.metadata
+        .insert("genre".into(), serde_json::json!("macro"));
+    row.metadata
+        .insert("genre_confidence".into(), serde_json::json!(0.74));
+    store.upsert(lrg_store::IMAGE_TABLE, &[row]).await.unwrap();
+
+    let lookup = |id: &'static str| {
+        let app = app.clone();
+        let db_path = db_path.clone();
+        async move {
+            post_json(
+                &app,
+                "/v1/photos/lookup",
+                serde_json::json!({"photo_id": id, "db_path": db_path}),
+            )
+            .await
+            .1
+        }
+    };
+
+    let scored = lookup("scored").await;
+    assert_eq!(scored["aesthetic"]["score"], 7.1);
+    assert_eq!(scored["aesthetic"]["outdated"], false);
+    assert_eq!(scored["aesthetic"]["genre"], "macro");
+    assert_eq!(scored["aesthetic"]["genre_label"], "Macro");
+    assert_eq!(scored["aesthetic"]["genre_confidence"], 0.74);
+    assert!(
+        scored["metadata"].get("aesthetic_score").is_none(),
+        "the score must not reach the review dialog's metadata"
+    );
+
+    let stale = lookup("stale").await;
+    assert_eq!(stale["aesthetic"]["score"], 6.0);
+    assert_eq!(stale["aesthetic"]["outdated"], true);
+    assert!(stale["aesthetic"]["genre"].is_null());
+
+    assert!(lookup("bare").await["aesthetic"].is_null());
+}
+
+/// `(id, score, model, genre, title)` of a photo for the search tests; a `None`
+/// score is a photo never scored.
+type SearchableRow<'a> = (&'a str, Option<f64>, &'a str, Option<&'a str>, &'a str);
+
+/// Photos with a stored aesthetic score and genre, for the search tests.
+async fn seed_searchable(state: &Arc<AppState>, rows: &[SearchableRow<'_>]) {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, score, model, genre, title)| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(false));
+            m.insert("title".into(), serde_json::json!(title));
+            if let Some(score) = score {
+                m.insert("aesthetic_score".into(), serde_json::json!(score));
+                m.insert("aesthetic_model".into(), serde_json::json!(model));
+            }
+            if let Some(genre) = genre {
+                m.insert("genre".into(), serde_json::json!(genre));
+            }
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: None,
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+fn result_ids(json: &serde_json::Value) -> Vec<&str> {
+    json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["photo_id"].as_str().unwrap())
+        .collect()
+}
+
+/// No term: "the best N", by stored score, best first. A photo with no score
+/// from the current export is not on the scale and is left out — and said so.
+#[tokio::test]
+async fn search_without_a_term_returns_the_best_photos_by_aesthetic_score() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    seed_searchable(
+        &state,
+        &[
+            ("mid", Some(6.0), current, Some("street"), "a"),
+            ("best", Some(7.5), current, Some("macro"), "b"),
+            ("worst", Some(4.0), current, None, "c"),
+            ("never", None, current, None, "d"),
+            ("stale", Some(9.0), "another-export", None, "e"),
+        ],
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"max_results": 10, "db_path": db}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(result_ids(&json), ["best", "mid", "worst"]);
+    let first = &json["results"][0];
+    assert_eq!(first["aesthetic_score"], 7.5);
+    assert_eq!(first["genre"], "macro");
+    assert_eq!(first["genre_label"], "Macro");
+    assert!(first["distance"].is_null());
+    // The two without a current score are counted, once.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .starts_with("2 photo(s) in scope have no aesthetic score"));
+    assert_eq!(json["warning"], warnings[0]);
+
+    // The count is a cap on what comes back, not on what is considered.
+    let (_, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"max_results": 10, "min_aesthetic": 6.0, "db_path": db}),
+    )
+    .await;
+    assert_eq!(result_ids(&json), ["best", "mid"]);
+}
+
+#[tokio::test]
+async fn search_restricts_by_genre_and_minimum_score() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    seed_searchable(
+        &state,
+        &[
+            ("macro_hi", Some(7.0), current, Some("macro"), "flower"),
+            ("macro_lo", Some(5.0), current, Some("macro"), "flower"),
+            ("street_hi", Some(8.0), current, Some("street"), "flower"),
+            ("macro_noscore", None, current, Some("macro"), "flower"),
+        ],
+    )
+    .await;
+
+    // A term that matches by title only (no model in this test app), restricted.
+    let (status, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({
+            "term": "flower", "genres": ["macro"], "min_aesthetic": 6.0,
+            "sort": "aesthetic", "search_sources": {"semantic_siglip": false},
+            "db_path": db,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(result_ids(&json), ["macro_hi"]);
+    // The photo that could not be judged against the minimum is named, once;
+    // the ones judged and found short or of another genre are just not matches.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .starts_with("1 matching photo(s) have no aesthetic score"));
+}
+
+/// With a term and `sort=aesthetic` the metadata matches are ordered by score,
+/// unscored ones last.
+#[tokio::test]
+async fn search_orders_matches_by_aesthetic_score_when_asked() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    seed_searchable(
+        &state,
+        &[
+            ("plain", Some(5.0), current, None, "cat on a sofa"),
+            ("none", None, current, None, "cat in a box"),
+            ("lovely", Some(7.0), current, None, "cat in the sun"),
+        ],
+    )
+    .await;
+    let search = |sort: &'static str| {
+        let app = app.clone();
+        let db = db.clone();
+        async move {
+            post_json(
+                &app,
+                "/v1/search",
+                serde_json::json!({
+                    "term": "cat", "sort": sort,
+                    "search_sources": {"semantic_siglip": false}, "db_path": db,
+                }),
+            )
+            .await
+            .1
+        }
+    };
+    let by_score = search("aesthetic").await;
+    assert_eq!(result_ids(&by_score), ["lovely", "plain", "none"]);
+    assert!(by_score["warning"]
+        .as_str()
+        .unwrap()
+        .contains("1 matching photo(s) have no aesthetic score"));
+    // Relevance leaves the search's own order, and says nothing about scores.
+    let by_relevance = search("relevance").await;
+    assert_eq!(by_relevance["results"].as_array().unwrap().len(), 3);
+    assert!(by_relevance["warning"].is_null(), "{by_relevance}");
+}
+
+/// Relevance is how close a photo is to the term; without one there is nothing
+/// to be relevant to, which is said rather than quietly reinterpreted.
+#[tokio::test]
+async fn search_rejects_relevance_ordering_without_a_term_and_unknown_sorts() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    for sort in ["relevance", "combined"] {
+        let (status, json) = post_json(
+            &app,
+            "/v1/search",
+            serde_json::json!({"sort": sort, "db_path": db}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert!(json["error"]
+            .as_str()
+            .unwrap()
+            .contains("need a search term"));
+    }
+    let (status, json) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"term": "x", "sort": "best", "db_path": db}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(json["error"].as_str().unwrap().contains("Unknown sort"));
+}
+
+/// The dialog's genre list comes from the classifier's own, `other` included.
+#[tokio::test]
+async fn search_genres_lists_what_the_classifier_can_name() {
+    let (app, _state) = fresh_app();
+    let json = get_json(&app, "/v1/search/genres").await;
+    let genres = json["genres"].as_array().unwrap();
+    assert_eq!(genres.len(), lrg_ml::genre::GENRES.len() + 1);
+    assert!(genres
+        .iter()
+        .any(|g| g["id"] == "macro" && g["label"] == "Macro"));
+    assert_eq!(genres.last().unwrap()["id"], lrg_ml::genre::OTHER_ID);
+}
+
+/// A genre made under another version of the genre list, or never made, is
+/// re-queued from the stored embedding — but only when the search model that makes
+/// it is on disk.
+#[tokio::test]
+async fn check_unprocessed_re_queues_photos_with_a_stale_genre() {
+    let dir = tempfile::tempdir().unwrap();
+    // This test's own directory, never the shared empty one the other tests rely
+    // on to have no model files.
+    let mut models = models_absent();
+    models.siglip = lrg_ml::siglip::ModelPaths {
+        image_onnx: dir.path().join("siglip2_naflex_image.onnx"),
+        text_onnx: dir.path().join("siglip2_naflex_text.onnx"),
+        tokenizer_json: dir.path().join("siglip2_naflex_tokenizer.json"),
+    };
+    for file in [
+        &models.siglip.image_onnx,
+        &models.siglip.text_onnx,
+        &models.siglip.tokenizer_json,
+    ] {
+        std::fs::write(file, b"").unwrap();
+    }
+    let present = Arc::new(AppState::with_model_paths(None, false, {
+        let onnx = dir.path().join("aesthetic_siglip.onnx");
+        std::fs::write(&onnx, b"").unwrap();
+        models.aesthetic = lrg_ml::aesthetic::AestheticPaths { onnx };
+        models
+    }));
+    let app = app(present.clone());
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    present.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    let ids = seed_embedded_photos(
+        &present,
+        &[
+            ("current", Some((7.0, current))),
+            ("old_version", Some((7.0, current))),
+            ("no_genre", Some((7.0, current))),
+        ],
+    )
+    .await;
+    let store = present.store().unwrap();
+    let mut rows = store
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &["current".to_string(), "old_version".to_string()],
+        )
+        .await
+        .unwrap();
+    for row in &mut rows {
+        row.metadata
+            .insert("genre".into(), serde_json::json!("landscape"));
+        let version = if row.id == "current" {
+            lrg_ml::genre::VERSION
+        } else {
+            "an-older-version"
+        };
+        row.metadata
+            .insert("genre_version".into(), serde_json::json!(version));
+    }
+    store.upsert(lrg_store::IMAGE_TABLE, &rows).await.unwrap();
+
+    let (_, json) = post_json(
+        &app,
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ids, "tasks": "embeddings",
+            "regenerate_metadata": "false", "db_path": db,
+        }),
+    )
+    .await;
+    let mut queued: Vec<&str> = json["photo_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    queued.sort();
+    assert_eq!(queued, ["no_genre", "old_version"]);
+
+    // Without the search model there is nothing to make a genre with.
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let ids = seed_embedded_photos(&state, &[("no_genre", Some((7.0, current)))]).await;
+    let (_, json) = post_json(
+        &app,
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ids, "tasks": "embeddings",
+            "regenerate_metadata": "false", "db_path": db,
+        }),
+    )
+    .await;
+    assert_eq!(json["photo_ids"], serde_json::json!([]));
+}
+
+/// A stored embedding written by a different function is re-queued; one whose
+/// identity is simply not recorded is not.
+///
+/// The asymmetry is the point. A row that predates `embedding_model` cannot be
+/// checked either way, and treating absence as stale would re-embed an entire
+/// catalog on the first run after an upgrade — so absence is taken as current.
+/// A *different* identity is the case the field exists for.
+#[tokio::test]
+async fn check_unprocessed_re_queues_only_a_different_embedding_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    let db_path_str = db_path.to_str().unwrap().to_string();
+
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+
+    let embedded = |model: Option<&str>| {
+        let mut m = serde_json::Map::new();
+        m.insert("has_embedding".into(), serde_json::json!(true));
+        // Required for the row to count as done at all: `any_task` is true
+        // whenever any task is asked for, so a missing `cull_phash` re-queues
+        // the photo regardless of its embedding.
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        if let Some(model) = model {
+            m.insert("embedding_model".into(), serde_json::json!(model));
+        }
+        m
+    };
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                // Another function wrote this vector — an older model, a
+                // re-export, a preprocessing change. Indistinguishable from a
+                // current one except by the identity.
+                lrg_store::StoreRecord {
+                    id: "other".into(),
+                    vector: Some(vec![0.1; 1152]),
+                    metadata: embedded(Some("some-previous-model")),
+                },
+                // Predates the field.
+                lrg_store::StoreRecord {
+                    id: "unlabelled".into(),
+                    vector: Some(vec![0.2; 1152]),
+                    metadata: embedded(None),
+                },
+                // This build's own work.
+                lrg_store::StoreRecord {
+                    id: "current".into(),
+                    vector: Some(vec![0.3; 1152]),
+                    metadata: embedded(Some(lrg_ml::siglip::MODEL_ID)),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["other", "unlabelled", "current"],
+                        "tasks": "embeddings",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["photo_ids"], serde_json::json!(["other"]));
+}
+
 // ---------------------------------------------------------------------------
 // /v1/cull/grade + /v1/cull/groups
 //
@@ -408,6 +990,17 @@ async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
             );
             meta.insert("cull_exposure".into(), serde_json::json!(0.8));
             meta.insert("cull_noise".into(), serde_json::json!(0.1));
+            // A current score, so a cull over these photos has nothing to say
+            // about missing ones; descending like the sharpness, so the winner
+            // is still photo 0.
+            meta.insert(
+                "aesthetic_score".into(),
+                serde_json::json!(7.0 - 0.1 * i as f64),
+            );
+            meta.insert(
+                "aesthetic_model".into(),
+                serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+            );
             lrg_store::StoreRecord {
                 id: format!("burst{i}"),
                 vector: with_embedding.then(|| vec![0.5f32; 1152]),
@@ -433,6 +1026,46 @@ async fn cull_request(app: axum::Router, body: serde_json::Value) -> serde_json:
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     body_json(response).await
+}
+
+/// A search can only find embeddings made by the model it embeds the query
+/// with, so stats say how many stored ones were made by another.
+#[tokio::test]
+async fn stats_count_embeddings_from_another_search_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let row = |id: &str, model: Option<&str>| {
+        let mut m = serde_json::Map::new();
+        m.insert("has_embedding".into(), serde_json::json!(true));
+        if let Some(model) = model {
+            m.insert("embedding_model".into(), serde_json::json!(model));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: Some(vec![0.1; 1152]),
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                row("current", Some(lrg_ml::siglip::MODEL_ID)),
+                row("legacy", Some(lrg_ml::siglip::LEGACY_MODEL_ID)),
+                row("unstamped", None),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let stats = get_json(&app, "/v1/db/stats").await;
+    assert_eq!(stats["photos"]["with_embedding"], 3);
+    // The unstamped row counts as current, as in /v1/index/unprocessed.
+    assert_eq!(stats["photos"]["with_outdated_embedding"], 1);
 }
 
 #[tokio::test]
@@ -465,6 +1098,9 @@ async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
     assert_eq!(group["winner_photo_id"], "burst0", "sharpest must win");
     assert!(group["photo_ids"].as_array().unwrap().len() == 3);
 
+    // TaskCullPhotos.lua reads the list; `warning` stays for older plugins.
+    assert!(json["warnings"].is_array(), "{json}");
+
     // Per-photo fields the plugin writes into catalog metadata.
     let winner = &group["photos"][0];
     assert_eq!(winner["winner"], true);
@@ -473,6 +1109,73 @@ async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
     assert!(winner["reason_codes"].is_array());
     assert!(winner["explanation"].is_string());
     assert!(winner["metrics"].is_object());
+}
+
+/// `reject_margin_scale` is the plugin's "how hard to cull" control. The seeded
+/// burst's scores sit ~0.047 apart per frame, under the default 0.18 margin,
+/// so nothing is rejected until the margin is scaled down — and then the
+/// frames fall one by one, furthest from the pick first.
+#[tokio::test]
+async fn cull_reject_margin_scale_moves_the_score_margin_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    let rejects = |scale: Option<f64>| {
+        let app = app.clone();
+        let db = db_path_str.clone();
+        async move {
+            let mut body = serde_json::json!({
+                "photo_ids": ["burst0", "burst1", "burst2"],
+                "db_path": db,
+            });
+            if let Some(scale) = scale {
+                body["reject_margin_scale"] = serde_json::json!(scale);
+            }
+            let json = cull_request(app, body).await;
+            assert_eq!(json["groups"][0]["winner_photo_id"], "burst0");
+            json["summary"]["reject_candidate_count"].as_u64().unwrap()
+        }
+    };
+
+    assert_eq!(rejects(None).await, 0, "preset margin: a gentle cull");
+    assert_eq!(
+        rejects(Some(1.0)).await,
+        0,
+        "1.0 is the preset's own margin"
+    );
+    assert_eq!(
+        rejects(Some(0.5)).await,
+        1,
+        "half the margin takes the weakest frame"
+    );
+    assert_eq!(
+        rejects(Some(0.25)).await,
+        2,
+        "a quarter leaves only the pick"
+    );
+    // Out-of-range values are clamped, not refused: 0 would mean 0.25.
+    assert_eq!(rejects(Some(0.0)).await, 2);
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/cull/grade")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ["burst0"],
+                        "db_path": db_path_str,
+                        "reject_margin_scale": "wide",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -533,14 +1236,41 @@ async fn cull_warns_about_unindexed_photos_instead_of_dropping_them_silently() {
     );
 }
 
+/// Writes every fixed prompt's embedding, the way an earlier run that had the
+/// text tower would have left them.
+async fn seed_prompt_embeddings(state: &Arc<AppState>) {
+    let rows: Vec<lrg_store::TextEmbedding> = lrg_api::prompt_embeddings::fixed_prompts()
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let mut vector = vec![0.0f32; 1152];
+            vector[i] = 1.0;
+            lrg_store::TextEmbedding {
+                model_id: lrg_ml::siglip::MODEL_ID.to_string(),
+                text: text.to_string(),
+                vector,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .put_text_embeddings(&rows)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn cull_warning_tracks_stored_embeddings_not_model_residency() {
     let dir = tempfile::tempdir().unwrap();
     let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
     let (app, state) = fresh_app();
     state.ensure_db_path(&db_path_str).await.unwrap();
-    // Embeddings present, SigLIP definitely not resident in this test process.
+    // Embeddings present, SigLIP definitely not resident in this test process
+    // — not even on disk. With the prompt vectors an earlier run stored,
+    // culling needs no model at all.
     seed_burst(&state, 3, true).await;
+    seed_prompt_embeddings(&state).await;
 
     let json = cull_request(
         app,
@@ -553,6 +1283,52 @@ async fn cull_warning_tracks_stored_embeddings_not_model_residency() {
         "an idle-unloaded model must not be reported as broken grouping, got {:?}",
         json["warning"]
     );
+}
+
+/// A single that is clearly blurred is a reject candidate with no pick, and
+/// `winner_photo_id` is `null` rather than naming it. The plugin decodes JSON
+/// null to nil, which its `if winnerPhotoId` already handles.
+#[tokio::test]
+async fn a_blurred_single_has_no_winner() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+    let mut meta = serde_json::Map::new();
+    meta.insert("filename".into(), serde_json::json!("soft.jpg"));
+    meta.insert("capture_time".into(), serde_json::json!(1_700_000_000));
+    meta.insert("cull_phash".into(), serde_json::json!("0f0f0f0f0f0f0f0f"));
+    meta.insert("cull_sharpness".into(), serde_json::json!(0.04));
+    meta.insert("cull_exposure".into(), serde_json::json!(0.7));
+    meta.insert("cull_noise".into(), serde_json::json!(0.1));
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[lrg_store::StoreRecord {
+                id: "soft".into(),
+                vector: None,
+                metadata: meta,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["soft"], "db_path": db_path_str}),
+    )
+    .await;
+
+    let group = &json["groups"][0];
+    assert_eq!(group["group_type"], "single");
+    assert!(group["winner_photo_id"].is_null(), "{group}");
+    assert_eq!(
+        group["reject_candidate_photo_ids"],
+        serde_json::json!(["soft"])
+    );
+    assert_eq!(json["summary"]["pick_count"], 0);
+    assert_eq!(json["summary"]["reject_candidate_count"], 1);
 }
 
 #[tokio::test]
@@ -576,6 +1352,315 @@ async fn cull_warns_when_no_embeddings_are_stored() {
     );
     // Grouping still works from pHash + capture time.
     assert_eq!(json["summary"]["group_count"], 1);
+}
+
+/// Photos with embeddings, but no stored prompt vectors and no model to make
+/// them: the moment cannot be judged, and the ranking that skipped it has to
+/// say so — and say how to fix it.
+#[tokio::test]
+async fn cull_warns_when_the_moment_has_no_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    seed_burst(&state, 3, true).await;
+
+    // `sports` ranks with the action set and the sport emotion set, so two sets
+    // miss for one cause.
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "culling_preset": "sports",
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    // The run still succeeds, ranked on sharpness, exposure and faces.
+    assert_eq!(json["status"], "success");
+    assert_eq!(json["summary"]["group_count"], 1);
+    assert_eq!(json["groups"][0]["winner_photo_id"], "burst0");
+    // Said once, not once per set — and not a second time as photos whose
+    // moment went unjudged, which is the same cause.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.contains("moment") && warning.contains("Download AI models"),
+        "expected one caveat naming every lost signal and the fix, got {warning:?}"
+    );
+    // The string the plug-in shows carries it too.
+    assert_eq!(json["warning"], warnings[0], "{json}");
+}
+
+/// A second catalog's database gets the prompt vectors from the first one's
+/// run, out of memory — no text tower, and nothing for the user to see.
+#[tokio::test]
+async fn a_second_database_is_filled_with_prompts_from_memory() {
+    let (app, state) = fresh_app();
+
+    // `sports` is a preset that asks the prompts questions: the default one
+    // ranks on stored numbers alone and reads none.
+    let cull = |db: &str| {
+        serde_json::json!({
+            "photo_ids": ["burst0", "burst1", "burst2"],
+            "culling_preset": "sports",
+            "db_path": db,
+        })
+    };
+
+    let first = tempfile::tempdir().unwrap();
+    let first_db = first
+        .path()
+        .join("lrgenius.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+    state.ensure_db_path(&first_db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    seed_prompt_embeddings(&state).await;
+    let json = cull_request(app.clone(), cull(&first_db)).await;
+    assert!(json["warning"].is_null(), "{json}");
+
+    let second = tempfile::tempdir().unwrap();
+    let second_db = second
+        .path()
+        .join("lrgenius.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+    state.ensure_db_path(&second_db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    let json = cull_request(app, cull(&second_db)).await;
+    assert!(json["warning"].is_null(), "{json}");
+
+    // What this cull read: the sets the preset ranks with, nothing else copied.
+    let ranking = lrg_analysis::culling_config::get_culling_config("sports").ranking;
+    let mut wanted: Vec<String> = [ranking.semantic_prompt_set, ranking.emotion_prompt_set]
+        .into_iter()
+        .flatten()
+        .filter_map(lrg_ml::clip_iqa::PromptSet::from_name)
+        .flat_map(|set| set.texts().map(str::to_string).collect::<Vec<_>>())
+        .collect();
+    if ranking.eyes_closed_intent_threshold > 0.0 {
+        wanted.extend(
+            lrg_ml::clip_iqa::PromptSet::EyesClosedIntent
+                .texts()
+                .map(str::to_string),
+        );
+    }
+    wanted.sort();
+    wanted.dedup();
+    assert!(!wanted.is_empty());
+    let store = state.store().unwrap();
+    let copied = store
+        .get_text_embeddings(lrg_ml::siglip::MODEL_ID, &wanted)
+        .await
+        .unwrap();
+    assert_eq!(copied.len(), wanted.len());
+    assert_eq!(
+        store.count(lrg_store::TEXT_EMBEDDING_TABLE).await.unwrap(),
+        wanted.len()
+    );
+}
+
+/// The default preset asks the prompts nothing, so a cull on it neither needs
+/// nor writes any — and has no text tower to miss.
+#[tokio::test]
+async fn the_default_cull_reads_no_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db}),
+    )
+    .await;
+    assert!(json["warning"].is_null(), "{json}");
+    assert_eq!(
+        state
+            .store()
+            .unwrap()
+            .count(lrg_store::TEXT_EMBEDDING_TABLE)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// Seeds two frames that differ in nothing but their aesthetic score (and the
+/// heuristic, which prefers the other one), and returns the id the cull picks.
+async fn winner_among_equal_frames(scores: [(f64, &str); 2], heuristic: [f64; 2]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let records: Vec<lrg_store::StoreRecord> = (0..2)
+        .map(|i| {
+            let mut m = serde_json::Map::new();
+            m.insert("filename".into(), serde_json::json!(format!("f{i}.jpg")));
+            m.insert("capture_time".into(), serde_json::json!(1_700_000_000 + i));
+            m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+            m.insert("cull_sharpness".into(), serde_json::json!(0.7));
+            m.insert("cull_exposure".into(), serde_json::json!(0.8));
+            m.insert("cull_noise".into(), serde_json::json!(0.1));
+            m.insert("cull_aesthetic".into(), serde_json::json!(heuristic[i]));
+            m.insert("aesthetic_score".into(), serde_json::json!(scores[i].0));
+            m.insert("aesthetic_model".into(), serde_json::json!(scores[i].1));
+            lrg_store::StoreRecord {
+                id: format!("frame{i}"),
+                vector: None,
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["frame0", "frame1"], "db_path": db}),
+    )
+    .await;
+    json["groups"][0]["winner_photo_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The stored model score moves the pick, against the heuristic: frame 0 looks
+/// punchier to the heuristic, the model scores frame 1 higher.
+#[tokio::test]
+async fn cull_prefers_the_frame_the_aesthetic_model_scores_higher() {
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    let winner = winner_among_equal_frames([(5.0, current), (7.5, current)], [0.9, 0.2]).await;
+    assert_eq!(winner, "frame1");
+}
+
+/// A score from another export is not comparable with this one's, so it must
+/// not decide anything: the heuristic does, and the cull says the scores are
+/// missing.
+#[tokio::test]
+async fn cull_ignores_a_score_from_another_export() {
+    let winner = winner_among_equal_frames(
+        [(5.0, "another-export"), (7.5, "another-export")],
+        [0.9, 0.2],
+    )
+    .await;
+    assert_eq!(winner, "frame0");
+}
+
+/// Photos indexed before scoring existed rank on the heuristic and say so, once.
+#[tokio::test]
+async fn cull_warns_once_about_photos_without_an_aesthetic_score() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    seed_burst(&state, 3, true).await;
+    // Strip the scores the helper adds: these are photos from before scoring.
+    let store = state.store().unwrap();
+    let mut rows = store
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &[
+                "burst0".to_string(),
+                "burst1".to_string(),
+                "burst2".to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+    for row in &mut rows {
+        row.metadata.remove("aesthetic_score");
+        row.metadata.remove("aesthetic_model");
+    }
+    store.upsert(lrg_store::IMAGE_TABLE, &rows).await.unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db}),
+    )
+    .await;
+    assert_eq!(json["status"], "success");
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.starts_with("3 photo(s) have no aesthetic score"),
+        "{warning:?}"
+    );
+    // The test app has no scorer on disk, so the fix named is the download.
+    assert!(warning.contains("Download AI models"), "{warning:?}");
+}
+
+/// Binding a database stamps the embedding identity on rows written before
+/// the field existed, once, and leaves a row naming another model alone.
+#[tokio::test]
+async fn binding_stamps_the_embedding_model_on_rows_that_predate_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    {
+        // What an older build left: a store with no upgrade marker.
+        let lance_root = lrg_store::migrate::lance_root_for_db(&db_path);
+        let store = lrg_store::Store::open(&lance_root).await.unwrap();
+        let row = |id: &str, model: Option<&str>| {
+            let mut m = serde_json::Map::new();
+            m.insert("has_embedding".into(), serde_json::json!(true));
+            if let Some(model) = model {
+                m.insert("embedding_model".into(), serde_json::json!(model));
+            }
+            lrg_store::StoreRecord {
+                id: id.into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        };
+        store
+            .upsert(
+                lrg_store::IMAGE_TABLE,
+                &[row("old", None), row("other", Some("some-previous-model"))],
+            )
+            .await
+            .unwrap();
+    }
+
+    let (_, state) = fresh_app();
+    state
+        .ensure_db_path(db_path.to_str().unwrap())
+        .await
+        .unwrap();
+
+    let rows = state
+        .store()
+        .unwrap()
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &["old".to_string(), "other".to_string()],
+        )
+        .await
+        .unwrap();
+    let model_of = |id: &str| {
+        rows.iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.metadata.get("embedding_model"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    // The earlier model, not this build's: those vectors were made by it, and
+    // labelling them as current would keep them from ever being re-embedded.
+    assert_eq!(
+        model_of("old").as_deref(),
+        Some(lrg_ml::siglip::LEGACY_MODEL_ID)
+    );
+    assert_ne!(model_of("old").as_deref(), Some(lrg_ml::siglip::MODEL_ID));
+    assert_eq!(model_of("other").as_deref(), Some("some-previous-model"));
 }
 
 #[tokio::test]
@@ -626,6 +1711,8 @@ async fn check_unprocessed_understands_the_cull_task() {
     state.ensure_db_path(&db_path_str).await.unwrap();
     let store = state.store().unwrap();
 
+    // A prepared row carries a capture time: grouping runs on it, and a row
+    // without one is reported again (see `undated` below).
     let row = |phash: Option<&str>, faces_present: Option<bool>| {
         let mut m = serde_json::Map::new();
         if let Some(p) = phash {
@@ -634,6 +1721,7 @@ async fn check_unprocessed_understands_the_cull_task() {
         if let Some(f) = faces_present {
             m.insert("cull_faces_present".into(), serde_json::json!(f));
         }
+        m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
         m
     };
 
@@ -665,6 +1753,30 @@ async fn check_unprocessed_understands_the_cull_task() {
                     vector: Some(vec![0.1; 1152]),
                     metadata: row(None, None),
                 },
+                // Culled by a version whose fast path sent no capture time:
+                // the signals are there, the date is not, and it groups
+                // wrongly until prepared again.
+                lrg_store::StoreRecord {
+                    id: "undated".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0126"), Some(true));
+                        m.remove("capture_time");
+                        m
+                    },
+                },
+                // ...unless neither the catalog nor the file had one, which
+                // is stamped so the photo is not asked for on every run.
+                lrg_store::StoreRecord {
+                    id: "undated_for_good".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0127"), Some(true));
+                        m.remove("capture_time");
+                        m.insert("capture_time_unknown".into(), serde_json::json!(true));
+                        m
+                    },
+                },
             ],
         )
         .await
@@ -679,6 +1791,7 @@ async fn check_unprocessed_understands_the_cull_task() {
                         "photo_ids": [
                             "done_faceless", "done_with_faces",
                             "needs_face_pass", "needs_everything", "unknown",
+                            "undated", "undated_for_good",
                         ],
                         "tasks": "cull",
                         "regenerate_metadata": "false",
@@ -695,8 +1808,9 @@ async fn check_unprocessed_understands_the_cull_task() {
     let json = body_json(response).await;
     assert_eq!(
         json["photo_ids"],
-        serde_json::json!(["needs_face_pass", "needs_everything", "unknown"]),
-        "a faceless photo that has been culled must not be reported forever"
+        serde_json::json!(["needs_face_pass", "needs_everything", "unknown", "undated"]),
+        "a faceless photo that has been culled must not be reported forever, and \
+         neither is one whose capture time is known to be unavailable"
     );
 }
 
@@ -1392,6 +2506,58 @@ async fn style_edit_sends_every_global_field_the_installed_plugin_applies() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// /v1/edit/score
+//
+// The plugin's aesthetic refinement loop scores each candidate render through
+// this route. Its two failure shapes decide what the user is told, so both are
+// pinned: a request with nothing to score, and a backend without the model.
+// ---------------------------------------------------------------------------
+
+async fn score_request(
+    app: axum::Router,
+    image: Option<(&str, &[u8])>,
+) -> (StatusCode, serde_json::Value) {
+    let (content_type, body) = multipart_body(&[], image);
+    let response = app
+        .oneshot(
+            Request::post("/v1/edit/score")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn edit_score_rejects_a_request_without_an_image() {
+    let (app, _) = fresh_app();
+    let (status, json) = score_request(app, None).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert_eq!(json["status"], "error");
+    assert!(json["error"].is_string(), "{json}");
+}
+
+#[tokio::test]
+async fn edit_score_names_the_missing_model_and_what_to_do_about_it() {
+    let (app, _) = fresh_app();
+    let (status, json) = score_request(app, Some(("render.jpg", b"not-a-real-jpeg"))).await;
+
+    // Not a 500: nothing is broken, the model just is not on disk. The plugin
+    // shows this string as it stands, so it has to be the instruction.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert_eq!(json["status"], "error");
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("aesthetic model") && error.contains("Download AI models"),
+        "{json}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2551,4 +3717,131 @@ async fn a_check_needs_a_repo_and_a_known_engine() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json["error"].as_str().unwrap().contains("engine must be"));
+}
+
+// ---------------------------------------------------------------------------
+// /v1/photos/catalogs/cleanup
+//
+// The plugin runs this unattended, so the two things it must never do are
+// remove a photo another catalog still has and act on an inventory that lost
+// most of the catalog.
+// ---------------------------------------------------------------------------
+
+async fn seed_catalog_rows(state: &Arc<AppState>, rows: &[(&str, &[&str])]) {
+    let records: Vec<lrg_store::StoreRecord> = rows
+        .iter()
+        .map(|(id, catalogs)| {
+            let set = catalogs.iter().map(|c| c.to_string()).collect();
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "catalog_ids".into(),
+                serde_json::json!(lrg_store::meta::serialize_catalog_ids(&set)),
+            );
+            lrg_store::StoreRecord {
+                id: (*id).into(),
+                vector: Some(vec![0.1; 1152]),
+                metadata: m,
+            }
+        })
+        .collect();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &records)
+        .await
+        .unwrap();
+}
+
+async fn catalogs_of(state: &Arc<AppState>, id: &str) -> Vec<String> {
+    let rows = state
+        .store()
+        .unwrap()
+        .get_meta(lrg_store::IMAGE_TABLE, &[id.to_string()])
+        .await
+        .unwrap();
+    lrg_store::meta::parse_catalog_ids(&rows[0].1)
+        .into_iter()
+        .collect()
+}
+
+#[tokio::test]
+async fn cleanup_releases_deleted_photos_and_reports_what_waits_for_deletion() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    seed_catalog_rows(
+        &state,
+        &[
+            ("kept", &["cat"]),
+            ("deleted", &["cat"]),
+            ("shared", &["cat", "other"]),
+            ("came_back", &[]),
+        ],
+    )
+    .await;
+
+    let (status, json) = post_json(
+        &app,
+        "/v1/photos/catalogs/cleanup",
+        serde_json::json!({
+            "catalog_id": "cat",
+            "photo_ids": ["kept", "came_back"],
+            "db_path": db_path,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["checked"], 3, "{json}");
+    assert_eq!(json["disassociated"], 2, "{json}");
+    assert_eq!(json["orphaned"], 1, "{json}");
+    assert_eq!(json["readopted"], 1, "{json}");
+    assert_eq!(json["purged"], 0, "{json}");
+    assert_eq!(json["waiting"], 1, "{json}");
+    assert_eq!(json["grace_days"], 30, "{json}");
+    assert!(json["next_purge_at"].as_i64().is_some(), "{json}");
+    assert_eq!(json["warnings"], serde_json::json!([]), "{json}");
+
+    assert!(catalogs_of(&state, "deleted").await.is_empty());
+    assert_eq!(catalogs_of(&state, "shared").await, vec!["other"]);
+    assert_eq!(catalogs_of(&state, "came_back").await, vec!["cat"]);
+    assert_eq!(catalogs_of(&state, "kept").await, vec!["cat"]);
+}
+
+#[tokio::test]
+async fn cleanup_holds_back_a_removal_of_most_of_the_catalog_until_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let ids: Vec<String> = (0..60).map(|i| format!("p{i}")).collect();
+    let rows: Vec<(&str, &[&str])> = ids.iter().map(|id| (id.as_str(), &["cat"][..])).collect();
+    seed_catalog_rows(&state, &rows).await;
+
+    // What an inventory resolved under another identity looks like: none of
+    // the catalog's ids.
+    let request = |confirm: bool| {
+        serde_json::json!({
+            "catalog_id": "cat",
+            "photo_ids": ["unknown_1", "unknown_2"],
+            "confirm_large_removal": confirm,
+            "db_path": db_path,
+        })
+    };
+    let (status, json) = post_json(&app, "/v1/photos/catalogs/cleanup", request(false)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{json}");
+    assert_eq!(json["needs_confirmation"], true, "{json}");
+    assert_eq!(json["would_disassociate"], 60, "{json}");
+    assert_eq!(json["checked"], 60, "{json}");
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("Nothing was removed"));
+    assert_eq!(catalogs_of(&state, "p0").await, vec!["cat"]);
+
+    let (status, json) = post_json(&app, "/v1/photos/catalogs/cleanup", request(true)).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["disassociated"], 60, "{json}");
+    assert!(catalogs_of(&state, "p0").await.is_empty());
 }

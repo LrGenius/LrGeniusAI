@@ -46,6 +46,30 @@ pub struct ImageMetricsConfig {
     /// variance. Drives `cull_focus_concentration` and the sharp-region
     /// centroid.
     pub sharpness_tile_focus_fraction: f64,
+    /// Largest local gradient magnitude (per pixel, in `0..1` luma units,
+    /// measured on the 3×3-smoothed image) at which a pixel still counts as
+    /// *flat* for `cull_noise_flat`.
+    ///
+    /// The frame-wide noise estimate is a high-pass residual, and fine detail
+    /// *is* high-pass energy: measured on two frames of one scene differing
+    /// only in focus, it scored the sharp frame 0.082 and the blurred one
+    /// 0.012, so it argued *against* sharpness inside every burst. Gating the
+    /// residual on pixels where the smoothed image has no structure asks the
+    /// question the estimator was always meant to answer — how much the
+    /// pixels wobble where nothing is going on — and leaves texture out of it.
+    /// The gradient is taken on the smoothed image rather than the raw one so
+    /// that the noise being measured cannot talk its own pixels out of the
+    /// mask.
+    pub noise_flat_gradient_threshold: f64,
+    /// Smallest share of the interior that must be flat before the flat-region
+    /// estimate is trusted. Below this (a frame that is texture edge to edge)
+    /// `cull_noise_flat` falls back to the frame-wide value so the field is
+    /// always present and never manufactured from a handful of pixels.
+    pub noise_flat_min_fraction: f64,
+    /// Normaliser for `cull_noise_flat`. Lower than `noise_denominator`
+    /// because a residual measured only where the image is smooth is a
+    /// smaller number than one averaged over edges as well.
+    pub noise_flat_denominator: f64,
 }
 
 impl ImageMetricsConfig {
@@ -70,6 +94,11 @@ impl ImageMetricsConfig {
             aesthetic_exposure_weight: 0.20,
             sharpness_tile_grid: 8,
             sharpness_tile_focus_fraction: 0.5,
+            // ~5 levels of 255 per pixel on the smoothed image: a gentle
+            // tonal ramp passes, any real edge or texture does not.
+            noise_flat_gradient_threshold: 0.02,
+            noise_flat_min_fraction: 0.02,
+            noise_flat_denominator: 0.04,
         }
     }
 }
