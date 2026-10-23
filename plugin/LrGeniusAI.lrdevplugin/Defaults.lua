@@ -82,6 +82,11 @@ Defaults.defaultKeywordAliases = false
 -- models.
 Defaults.catalogKeywordLimit = 500
 
+-- How many earlier inputs an editable drop-down (search term, top-level
+-- keyword, style label) remembers. Enough to find last week's searches again,
+-- short enough to scan without scrolling.
+Defaults.inputHistoryLength = 15
+
 -- Sampling temperature. Only models that do not reason use it — the local
 -- ones, gpt-4.1 and Gemini 2.x; a reasoning model fixes its own (see
 -- AiProviders.appliesTemperature).
@@ -145,6 +150,14 @@ Defaults.defaultLlmGpuLayers = 999
 Defaults.defaultBackendServerUrl = "http://127.0.0.1:19819"
 
 Defaults.defaultExportQuality = 50
+
+-- The disclaimer page (docs/wiki/Disclaimer.md, also on lrgenius.com). Linked
+-- from the onboarding, the Plug-in Manager and the agent setup confirmation.
+Defaults.disclaimerUrl = "https://github.com/LrGenius/LrGeniusAI/wiki/Disclaimer"
+
+-- Bumped when the agent warning changes enough that everyone should read it
+-- again before connecting an AI agent (see PluginInfoDialogSections).
+Defaults.agentDisclaimerVersion = 1
 Defaults.defaultExportSize = "3072"
 
 Defaults.defaultSystemInstruction =

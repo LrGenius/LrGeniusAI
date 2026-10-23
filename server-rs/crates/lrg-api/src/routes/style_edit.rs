@@ -27,15 +27,88 @@ use lrg_store::{StoreRecord, IMAGE_TABLE, TRAINING_TABLE};
 
 use super::edit::{
     cosine_distance, generate_edit_recipe_for_photo, parse_edit_options_form, persist_edit_recipe,
-    success_payload, warning_entries,
+    success_payload, training_example_is_current, warning_entries, OUTDATED_TRAINING_EXAMPLES,
 };
 use crate::routes::route_util::{
-    compute_scene_tags, local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
+    local_hour, parse_multipart, reasoning_effort_field, SinglePhotoForm,
 };
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new().route("/edit/style", axum::routing::post(style_edit))
+    axum::Router::new()
+        .route("/edit/style", axum::routing::post(style_edit))
+        .route("/edit/score", axum::routing::post(score_edit))
+}
+
+/// `POST /v1/edit/score` — the aesthetic score of one rendered image, nothing
+/// stored.
+///
+/// The plugin's optional refinement loop renders a photo with a candidate edit
+/// applied and asks what the scorer makes of it, several times per photo, so
+/// this must not touch the index: the score of an intermediate render belongs
+/// to no photo record. Takes the same `image` part as the other edit routes.
+async fn score_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+    let form = match parse_multipart(&mut multipart).await {
+        Ok(form) => form,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+    let Some(image_bytes) = form
+        .images
+        .into_iter()
+        .next()
+        .map(|image| image.bytes)
+        .filter(|bytes| !bytes.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "error": "No image provided to score."})),
+        )
+            .into_response();
+    };
+
+    if !state.aesthetic.is_cached() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "error",
+                "error": "the aesthetic model is not downloaded yet — run \"Download AI models\" \
+                          in Plug-in Manager",
+            })),
+        )
+            .into_response();
+    }
+
+    let aesthetic = state.aesthetic.clone();
+    let scored = tokio::task::spawn_blocking(move || -> Result<f32, String> {
+        let rgb = image::load_from_memory(&image_bytes)
+            .map_err(|e| format!("could not decode the image: {e}"))?
+            .to_rgb8();
+        let (width, height) = (rgb.width() as usize, rgb.height() as usize);
+        aesthetic
+            .score_image(&rgb.into_raw(), width, height)
+            .map_err(|e| format!("aesthetic scoring failed: {e}"))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("aesthetic scoring task failed: {e}")));
+
+    match scored {
+        // Two decimals, as the index stores it: a difference smaller than that
+        // is not one the scorer can be trusted to have meant.
+        Ok(score) => Json(json!({
+            "status": "success",
+            "score": (f64::from(score) * 100.0).round() / 100.0,
+            "model": lrg_ml::aesthetic::MODEL_ID,
+        }))
+        .into_response(),
+        Err(e) => {
+            log::warn!("Edit score request failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "error": e})),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// The learnable form of a stored training example: its frozen
@@ -143,41 +216,56 @@ fn record_to_candidate(
 /// examples fallback with Python's neutral 0.5 distance.
 ///
 /// Also returns how many of the candidates teach nothing (see
-/// [`canonical_of`]), so the caller can tell the user.
+/// [`canonical_of`]) and, as the third value, how many examples the
+/// similarity search had to leave out because they were embedded with an
+/// earlier search model, so the caller can tell the user either.
 async fn fetch_style_candidates(
     store: &lrg_store::Store,
     query_embedding: Option<&[f32]>,
     n_results: usize,
-) -> (Vec<TrainingCandidate>, usize) {
-    let pairs: Vec<(TrainingCandidate, bool)> = if let Some(q) = query_embedding {
-        let records = store.scan_all(TRAINING_TABLE).await.unwrap_or_default();
-        let mut scored: Vec<(f64, StoreRecord)> = records
-            .into_iter()
-            .filter_map(|r| {
-                let v = r.vector.clone()?;
-                Some((cosine_distance(q, &v), r))
-            })
-            .collect();
-        scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        scored.truncate(n_results);
-        scored
-            .into_iter()
-            .map(|(cos_dist, r)| record_to_candidate(&r.id, &r.metadata, 2.0 * cos_dist))
-            .collect()
-    } else {
-        let mut rows = store.scan_meta(TRAINING_TABLE).await.unwrap_or_default();
-        rows.sort_by(|a, b| {
-            let ca = a.1.get("captured_at").and_then(Value::as_str).unwrap_or("");
-            let cb = b.1.get("captured_at").and_then(Value::as_str).unwrap_or("");
-            cb.cmp(ca)
-        });
-        rows.truncate(n_results);
-        rows.into_iter()
-            .map(|(id, meta)| record_to_candidate(&id, &meta, 0.5))
-            .collect()
-    };
+) -> (Vec<TrainingCandidate>, usize, usize) {
+    let (pairs, outdated): (Vec<(TrainingCandidate, bool)>, usize) =
+        if let Some(q) = query_embedding {
+            let records = store.scan_all(TRAINING_TABLE).await.unwrap_or_default();
+            let outdated = records
+                .iter()
+                .filter(|r| r.vector.is_some() && !training_example_is_current(&r.metadata))
+                .count();
+            let mut scored: Vec<(f64, StoreRecord)> = records
+                .into_iter()
+                .filter(|r| training_example_is_current(&r.metadata))
+                .filter_map(|r| {
+                    let v = r.vector.clone()?;
+                    Some((cosine_distance(q, &v), r))
+                })
+                .collect();
+            scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            scored.truncate(n_results);
+            let pairs = scored
+                .into_iter()
+                .map(|(cos_dist, r)| record_to_candidate(&r.id, &r.metadata, 2.0 * cos_dist))
+                .collect();
+            (pairs, outdated)
+        } else {
+            let mut rows = store.scan_meta(TRAINING_TABLE).await.unwrap_or_default();
+            rows.sort_by(|a, b| {
+                let ca = a.1.get("captured_at").and_then(Value::as_str).unwrap_or("");
+                let cb = b.1.get("captured_at").and_then(Value::as_str).unwrap_or("");
+                cb.cmp(ca)
+            });
+            rows.truncate(n_results);
+            let pairs = rows
+                .into_iter()
+                .map(|(id, meta)| record_to_candidate(&id, &meta, 0.5))
+                .collect();
+            (pairs, 0)
+        };
     let unlearned = pairs.iter().filter(|(_, u)| *u).count();
-    (pairs.into_iter().map(|(c, _)| c).collect(), unlearned)
+    (
+        pairs.into_iter().map(|(c, _)| c).collect(),
+        unlearned,
+        outdated,
+    )
 }
 
 /// The note for candidates that were retrieved but teach nothing. The count
@@ -252,10 +340,18 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             compute_exposure_metrics(&[], 0, 0)
         }
     };
-    let query_scene_tags = clip_embedding
-        .as_deref()
-        .map(|e| compute_scene_tags(&state.siglip, e))
-        .unwrap_or_default();
+    // From the stored prompt embeddings, not the text tower; empty when they
+    // cannot be had, as before — the scene match is one term of several in
+    // choosing the examples to learn from.
+    let query_scene_tags = match clip_embedding.as_deref() {
+        Some(e) => crate::prompt_embeddings::prepare(
+            &state,
+            &crate::prompt_embeddings::scene_probe_texts(),
+        )
+        .await
+        .scene_tags(e),
+        None => Vec::new(),
+    };
     let query_tod = time_of_day_bucket_for_hour(local_hour(capture_time_unix)).to_string();
     let focal_bucket = lrg_analysis::training::focal_length_bucket(focal_length);
     log::info!(
@@ -266,12 +362,17 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     );
 
     let training_count = store.count(TRAINING_TABLE).await.unwrap_or(0);
-    let (candidates, unlearned) = fetch_style_candidates(
+    let (candidates, unlearned, outdated_examples) = fetch_style_candidates(
         &store,
         clip_embedding.as_deref(),
         CANDIDATE_POOL.min(training_count.max(1)),
     )
     .await;
+
+    // With nothing current to compare against, "no result" would read as
+    // though the user had no examples; say what actually happened.
+    let outdated_note = (candidates.is_empty() && outdated_examples > 0)
+        .then_some(OUTDATED_TRAINING_EXAMPLES.to_string());
 
     // Parsed before the style engine runs, not after: the engine needs to know
     // whether this photo is raw to decide which examples' white balance
@@ -298,6 +399,9 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
             candidates.len()
         );
         result.warnings.push(UNLEARNED_EXAMPLES_WARNING.to_string());
+    }
+    if result.warnings.is_empty() {
+        result.warnings.extend(outdated_note);
     }
 
     if (result.engine == "none" || result.confidence < CONFIDENCE_LOW) && use_llm_fallback {

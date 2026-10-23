@@ -10,10 +10,11 @@ use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
 use lrg_analysis::culling_config::{available_presets, get_culling_config};
-use lrg_analysis::grouping::{group_and_sort_images, Group, GroupingInput};
+use lrg_analysis::grouping::{group_and_sort_images_with_config, Group, GroupingInput};
 use lrg_ml::clip_iqa::PromptSet;
-use lrg_store::IMAGE_TABLE;
+use lrg_store::{meta, IMAGE_TABLE};
 
+use crate::prompt_embeddings::PromptEmbeddings;
 use crate::state::AppState;
 
 pub fn router() -> axum::Router<Arc<AppState>> {
@@ -37,10 +38,11 @@ struct GroupingParams {
     /// Score the aesthetic term with CLIP-IQA over the stored SigLIP2
     /// embeddings instead of the contrast/colourfulness heuristic alone.
     ///
-    /// On by default. It exists as a switch because the first call in a server
-    /// lifetime loads the text tower, and because the evaluation harness needs
-    /// to be able to measure what the signal is actually worth by turning it
-    /// off.
+    /// On by default. It exists as a switch because the evaluation harness
+    /// needs to be able to measure what the signal is actually worth by
+    /// turning it off. (It used to matter for cost too, when the first call in
+    /// a server lifetime loaded the text tower; the prompt vectors now come
+    /// out of the database.)
     use_iqa: bool,
     /// Echo each photo's stored `cull_*` metadata verbatim, alongside the
     /// ranked `metrics` block.
@@ -61,6 +63,17 @@ struct GroupingParams {
     /// it does when it leads — without a rebuild. It is the fastest way to find
     /// out whether the signal suits a particular photographer's eye.
     semantic_weight: Option<f64>,
+    /// Scales the preset's `reject_score_delta` — how far below the pick a
+    /// frame's score must fall before it is a reject candidate.
+    ///
+    /// How hard to cull is the photographer's call, not the preset's: the same
+    /// wedding is culled to one frame per burst for a client gallery and to
+    /// three for an album edit. Above 1 fewer frames are nominated (a wider
+    /// margin), below 1 more. It moves only the score-margin rule; the
+    /// defect rules (blur, blink, occlusion, exposure) fire at their usual
+    /// thresholds, because a blink is a blink however gentle the cull.
+    /// Clamped to 0.25..4.
+    reject_margin_scale: Option<f64>,
 }
 
 /// Mirrors `_parse_grouping_params`. `Err` carries the (status, body) to
@@ -174,6 +187,19 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         },
     };
 
+    // Clamped like `semantic_weight`: a factor of 0 would reject every frame
+    // but the pick, and anything past 4 is indistinguishable from "never".
+    let reject_margin_scale = match data.get("reject_margin_scale") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        {
+            Some(n) if n.is_finite() => Some(n.clamp(0.25, 4.0)),
+            _ => return bad("Invalid reject_margin_scale value"),
+        },
+    };
+
     Ok(GroupingParams {
         photo_ids,
         phash_threshold,
@@ -184,6 +210,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         use_iqa,
         include_stored_metadata,
         semantic_weight,
+        reject_margin_scale,
     })
 }
 
@@ -307,11 +334,41 @@ struct GroupingOutcome {
     missing_count: usize,
     /// Records that came back carrying a usable (non-zero) embedding.
     embedded_count: usize,
+    /// The run asked the moment questions: the preset (or the
+    /// `semantic_weight` override) weights the moment, and IQA is on.
+    moment_asked: bool,
+    /// Ranked photos that came back with no moment score at all — no
+    /// embedding, as a rule. Ranking drops the moment for their whole group.
+    moment_missing: usize,
+    /// Ranked photos with no aesthetic score from the current export (never
+    /// scored, or scored by another export): their aesthetic term rests on the
+    /// contrast/colour heuristic alone.
+    aesthetic_missing: usize,
+    /// Whether the photo quality model is on disk, which decides what the
+    /// warning about missing scores tells the user to do.
+    aesthetic_model_ready: bool,
+    /// CLIP-IQA signals the run asked for and had to do without, because
+    /// their prompt vectors were neither stored nor obtainable from the text
+    /// tower.
+    unavailable: Option<UnavailableSignals>,
     /// Per photo, the stored inputs ranking read. Empty unless
     /// `include_stored_metadata` was requested — building it clones a map per
     /// photo, which is pure waste on the normal cull path.
     stored_metadata: std::collections::HashMap<String, Map<String, Value>>,
 }
+
+/// The ranking signals a run lost, and the one reason they share.
+struct UnavailableSignals {
+    /// What each lost signal is, phrased for the user, each once.
+    signals: Vec<&'static str>,
+    /// [`PromptEmbeddings::problem`]: why the prompts are missing, which
+    /// already names the fix.
+    why: String,
+}
+
+/// The user-facing names of the signals a prompt pass feeds.
+const MOMENT_SIGNAL: &str = "the AI judgement of the moment (emotion, expression, action)";
+const KISS_GATE_SIGNAL: &str = "the check whether closed eyes are a kiss or a laugh";
 
 /// The stored fields that reproduce a ranking run: every `cull_*` metric plus
 /// the two non-`cull_` inputs ranking and set detection actually read.
@@ -333,35 +390,22 @@ fn stored_cull_fields(metadata: &Map<String, Value>) -> Map<String, Value> {
 /// Scores every record that carries an embedding against one prompt set and
 /// writes the result under `key`.
 ///
-/// Every failure path here is silent by design: no model on disk, a text tower
-/// that will not load, a photo indexed by the fast cull pass with no embedding.
-/// Ranking has a fallback for each of these — the aesthetic heuristic, and for
-/// moment simply not applying the blend — so a missing score is a *worse*
-/// result, never a broken one. Refusing to cull because an optional signal is
-/// unavailable would be the wrong trade.
+/// No failure here fails the cull. Per photo, one that cannot be scored (no
+/// embedding — the fast cull pass stores none) is skipped: ranking has a
+/// fallback for it, the aesthetic heuristic and for the moment simply not
+/// applying the blend, and [`grouping_warnings`] counts the photos whose moment
+/// went unjudged. A set that is unavailable altogether is the caller's to
+/// report.
 ///
-/// Returns how many photos were scored, for the log line.
+/// Returns how many photos were scored, or `None` when the set itself is
+/// unavailable.
 fn apply_prompt_scores(
-    state: &AppState,
+    prompts: &PromptEmbeddings,
     records: &mut [GroupingInput],
-    set: lrg_ml::clip_iqa::PromptSet,
+    set: PromptSet,
     key: &str,
-) -> usize {
-    if !records.iter().any(|r| {
-        r.embedding
-            .as_ref()
-            .is_some_and(|v| v.iter().any(|x| *x != 0.0))
-    }) {
-        return 0;
-    }
-
-    // Locked once for the whole batch rather than per record, which is why
-    // this takes the guard instead of calling `score_prompt_set`.
-    let mut cache = state.clip_iqa.lock().unwrap();
-    let Some(prompts) = crate::routes::route_util::ensure_prompt_set(state, &mut cache, set) else {
-        return 0;
-    };
-
+) -> Option<usize> {
+    let prompts = prompts.prompt_set(set)?;
     let mut scored = 0usize;
     for record in records.iter_mut() {
         let Some(embedding) = record.embedding.as_ref() else {
@@ -372,7 +416,57 @@ fn apply_prompt_scores(
             scored += 1;
         }
     }
-    scored
+    log::debug!(
+        "CLIP-IQA {} scored {scored}/{} photo(s)",
+        set.as_str(),
+        records.len()
+    );
+    Some(scored)
+}
+
+/// Scales a stored AestheticSigLIP score to the `0..1` ranking works in.
+///
+/// The model's score runs 1 to 9 (its first and last bucket centers), so
+/// `(s - 1) / 8` fills the unit interval. The ranking only compares photos
+/// within a group and reads two absolute bars (`reason_low_aesthetic_threshold`,
+/// 0.35-0.42), which on this scale sit at model scores of 3.8-4.4: the bottom of
+/// the model's own "bad framing, low effort" band.
+fn aesthetic_unit(score: f64) -> f64 {
+    ((score - lrg_ml::aesthetic::SCORE_MIN as f64)
+        / (lrg_ml::aesthetic::SCORE_MAX as f64 - lrg_ml::aesthetic::SCORE_MIN as f64))
+        .clamp(0.0, 1.0)
+}
+
+/// Writes `cull_aesthetic_model` onto every record that carries a score from
+/// the *current* export, and returns how many do not.
+///
+/// A score from another export is not comparable with this one's (different
+/// weights, different calibration), so it counts as missing rather than being
+/// mixed in. Needs no embedding and no text tower, unlike the prompt passes: it
+/// is a stored number, which is also why a cull-only catalog has it.
+fn apply_aesthetic_scores(records: &mut [GroupingInput]) -> usize {
+    let mut missing = 0usize;
+    for record in records.iter_mut() {
+        let current = record
+            .metadata
+            .get(meta::AESTHETIC_MODEL_FIELD)
+            .and_then(Value::as_str)
+            == Some(lrg_ml::aesthetic::MODEL_ID);
+        let score = record
+            .metadata
+            .get(meta::AESTHETIC_SCORE_FIELD)
+            .and_then(Value::as_f64)
+            .filter(|_| current);
+        match score {
+            Some(score) => {
+                record
+                    .metadata
+                    .insert("cull_aesthetic_model".into(), json!(aesthetic_unit(score)));
+            }
+            None => missing += 1,
+        }
+    }
+    missing
 }
 
 async fn compute_groups(
@@ -384,6 +478,11 @@ async fn compute_groups(
             groups: Vec::new(),
             missing_count: params.photo_ids.len(),
             embedded_count: 0,
+            moment_asked: false,
+            moment_missing: 0,
+            aesthetic_missing: 0,
+            aesthetic_model_ready: state.aesthetic.is_cached(),
+            unavailable: None,
             stored_metadata: Default::default(),
         });
     };
@@ -400,59 +499,112 @@ async fn compute_groups(
         })
         .count();
 
-    // Before grouping, because ranking runs inside it.
-    if params.use_iqa {
-        let scored = apply_prompt_scores(
-            state,
-            &mut records,
-            lrg_ml::clip_iqa::PromptSet::Quality,
-            "cull_aesthetic_iqa",
-        );
-        if scored > 0 {
-            log::debug!(
-                "CLIP-IQA quality scored {scored}/{} photo(s)",
-                records.len()
-            );
+    // The request's `semantic_weight` overrides the preset's for the ranking
+    // itself, not just for deciding whether to score the axis — before, a
+    // sweep scored the prompts and then ranked on the preset's own weight.
+    let mut cfg = get_culling_config(&params.culling_preset);
+    if let Some(weight) = params.semantic_weight {
+        cfg.ranking.semantic_weight = weight;
+    }
+    // The photographer's cull strength, applied on top of the preset's own
+    // margin so every preset keeps its relative calibration.
+    if let Some(scale) = params.reject_margin_scale {
+        cfg.ranking.reject_score_delta *= scale;
+    }
+    let ranking = &cfg.ranking;
+
+    // The moment is judged only where the preset weights it. Asking a
+    // landscape whether anyone is cheering produces a number that is then
+    // discarded — and its prompts are not worth preparing either.
+    let moment_sets: Vec<(&'static str, &'static str)> = if ranking.semantic_weight > 0.0 {
+        [
+            (ranking.semantic_prompt_set, "cull_semantic_iqa"),
+            (ranking.emotion_prompt_set, "cull_emotion_iqa"),
+        ]
+        .into_iter()
+        .filter_map(|(name, key)| name.map(|n| (n, key)))
+        .collect()
+    } else {
+        Vec::new()
+    };
+    let moment_asked = params.use_iqa && !moment_sets.is_empty();
+    let mut unavailable = None;
+
+    // The aesthetic term comes from the score indexing stored, not from a
+    // prompt pass, so it is not behind `use_iqa` or an embedding.
+    let aesthetic_missing = apply_aesthetic_scores(&mut records);
+
+    // Before grouping, because ranking runs inside it. Only when some photo
+    // can be scored: preparing the prompts may mean a text-tower run the first
+    // time ever, which is not worth paying for a run with nothing to score.
+    if params.use_iqa && embedded_count > 0 {
+        let mut passes: Vec<(PromptSet, &str, &'static str)> = Vec::new();
+        for (name, key) in &moment_sets {
+            match PromptSet::from_name(name) {
+                Some(set) => passes.push((set, key, MOMENT_SIGNAL)),
+                // A config typo. Log rather than fail: the rest of the ranking
+                // is unaffected, a cull that refuses to run over it helps
+                // nobody, and the preset tests exist to catch it first.
+                None => log::warn!(
+                    "culling preset {:?} names unknown prompt set {name:?}; skipping that signal",
+                    params.culling_preset
+                ),
+            }
+        }
+        // The kiss gate is asked whenever the preset sets a threshold, moment
+        // or not: it decides whether closed eyes count as a blink, which the
+        // ranking reads either way.
+        if ranking.eyes_closed_intent_threshold > 0.0 {
+            passes.push((
+                PromptSet::EyesClosedIntent,
+                "cull_eyes_closed_intent_iqa",
+                KISS_GATE_SIGNAL,
+            ));
         }
 
-        // The genre axis runs only when the chosen preset actually names one
-        // and gives it weight. It is a second text-tower call and a second set
-        // of dot products, and asking a landscape whether anyone is smiling
-        // produces a number that is then discarded.
-        let ranking = get_culling_config(&params.culling_preset).ranking;
-        let weight = params.semantic_weight.unwrap_or(ranking.semantic_weight);
-        if weight > 0.0 {
-            match ranking.semantic_prompt_set.and_then(PromptSet::from_name) {
-                Some(set) => {
-                    let scored = apply_prompt_scores(state, &mut records, set, "cull_semantic_iqa");
-                    if scored > 0 {
-                        log::debug!(
-                            "CLIP-IQA {} scored {scored}/{} photo(s)",
-                            set.as_str(),
-                            records.len()
-                        );
-                    }
-                }
-                None => {
-                    // A weight with no axis, or an axis name no prompt set
-                    // answers to. Log rather than fail: the rest of the ranking
-                    // is unaffected and a cull that refuses to run over a
-                    // config typo helps nobody.
-                    if let Some(name) = ranking.semantic_prompt_set {
-                        log::warn!(
-                            "culling preset {:?} names unknown semantic prompt set {name:?}; \
-                             skipping that signal",
-                            params.culling_preset
-                        );
-                    }
-                }
+        // One preparation for every set the run asks, so a first run that
+        // has to embed them pays for a single text-tower pass. Nothing to
+        // prepare for a preset that asks no question of the prompts.
+        let sets: Vec<PromptSet> = passes.iter().map(|(set, _, _)| *set).collect();
+        let prompts =
+            crate::prompt_embeddings::prepare(state, &crate::prompt_embeddings::texts_of(&sets))
+                .await;
+        let mut lost: Vec<&'static str> = Vec::new();
+        for (set, key, signal) in passes {
+            if apply_prompt_scores(&prompts, &mut records, set, key).is_none()
+                && !lost.contains(&signal)
+            {
+                lost.push(signal);
             }
+        }
+        if !lost.is_empty() {
+            unavailable = Some(UnavailableSignals {
+                signals: lost,
+                why: prompts
+                    .problem()
+                    .unwrap_or("their prompts could not be prepared")
+                    .to_string(),
+            });
         }
     }
 
+    // Counted on what ranking will see, so the warning describes the run that
+    // happened rather than the store.
+    let moment_missing = if moment_asked {
+        records
+            .iter()
+            .filter(|r| {
+                !r.metadata.contains_key("cull_semantic_iqa")
+                    && !r.metadata.contains_key("cull_emotion_iqa")
+            })
+            .count()
+    } else {
+        0
+    };
+
     // Captured after the IQA passes and before grouping consumes the records,
     // so it reflects exactly the inputs this run ranked on — including the
-    // injected `cull_aesthetic_iqa` / `cull_moment_iqa`, which are not stored
+    // injected `cull_*_iqa` scores, which are not stored
     // in the database and would otherwise be unreproducible from a fixture.
     let stored_metadata = if params.include_stored_metadata {
         records
@@ -465,51 +617,129 @@ async fn compute_groups(
 
     Ok(GroupingOutcome {
         stored_metadata,
-        groups: group_and_sort_images(
+        groups: group_and_sort_images_with_config(
             records,
             params.phash_threshold,
             params.clip_threshold,
             params.time_delta_seconds,
-            &params.culling_preset,
+            &cfg,
         ),
         missing_count,
         embedded_count,
+        moment_asked,
+        moment_missing,
+        aesthetic_missing,
+        aesthetic_model_ready: state.aesthetic.is_cached(),
+        unavailable,
     })
 }
 
-/// The user-facing caveat for a grouping run, or `None` when there is nothing
-/// worth saying.
+/// `a`, `a and b`, `a, b and c`.
+fn join_as_prose(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The user-facing caveats for a grouping run, most fundamental first; empty
+/// when there is nothing worth saying.
 ///
 /// This deliberately inspects the *data*, not the model. It used to test
 /// `siglip.status() != "loaded"`, i.e. whether the model happened to be
 /// resident in RAM — but SigLIP idle-unloads after 30 minutes, so any cull run
 /// on an idle server told the user visual grouping was disabled while it was in
 /// fact working perfectly from embeddings already in the database.
-fn grouping_warning(outcome: &GroupingOutcome) -> Option<String> {
+///
+/// A list, not one slot: an unindexed photo and an unjudged moment are two
+/// problems with two different fixes, and the second must not erase the first.
+/// One cause is still said once: signals lost to the same missing model share
+/// one message rather than one each.
+fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
+    const MOMENT: &str = "the moment (emotion, expression, action)";
+    let mut warnings = Vec::new();
     let considered = outcome.embedded_count + outcome.missing_count;
     if outcome.missing_count > 0 && considered == outcome.missing_count {
-        return Some(format!(
+        warnings.push(format!(
             "None of the {} selected photo(s) have been analyzed yet, so there is nothing to \
              group. Run 'Analyze & Index Photos' on them first.",
             outcome.missing_count
         ));
+        return warnings;
     }
     if outcome.missing_count > 0 {
-        return Some(format!(
+        warnings.push(format!(
             "{} selected photo(s) have not been analyzed yet and were skipped. Run \
              'Analyze & Index Photos' on them to include them.",
             outcome.missing_count
         ));
     }
+    // Independent of embeddings: the score is stored, so a cull-only catalog
+    // has it and a catalog indexed before scoring existed does not.
+    if outcome.aesthetic_missing > 0 {
+        warnings.push(if outcome.aesthetic_model_ready {
+            format!(
+                "{} photo(s) have no aesthetic score from the current AI model yet, so their \
+                 aesthetic term rests on a contrast and colour heuristic, which can rank them \
+                 unevenly against scored photos in the same group. Run 'Analyze & Index \
+                 Photos' on them to score them.",
+                outcome.aesthetic_missing
+            )
+        } else {
+            format!(
+                "{} photo(s) have no aesthetic score because the photo quality model is not \
+                 downloaded yet, so their aesthetic term rests on a contrast and colour \
+                 heuristic. Run \"Download AI models\" in Plug-in Manager, then 'Analyze & Index \
+                 Photos' on them.",
+                outcome.aesthetic_missing
+            )
+        });
+    }
     if outcome.embedded_count == 0 {
-        return Some(
+        warnings.push(if outcome.moment_asked {
+            format!(
+                "No image analysis is stored for these photos, so grouping used perceptual \
+                 hashes and capture time only, and {MOMENT} was not judged. Run 'Cull Similar \
+                 Photos' again and choose 'Prepare now'."
+            )
+        } else {
             "No visual embeddings are stored for these photos, so grouping used perceptual \
              hashes and capture time only. Re-run 'Analyze & Index Photos' with embeddings \
              enabled for content-aware grouping."
-                .to_string(),
-        );
+                .to_string()
+        });
+        return warnings;
     }
-    None
+    let moment_lost = outcome
+        .unavailable
+        .as_ref()
+        .is_some_and(|u| u.signals.contains(&MOMENT_SIGNAL));
+    if let Some(u) = &outcome.unavailable {
+        warnings.push(format!(
+            "Ranking ran without {} because {}. Picks rest on the remaining measurements \
+             (sharpness, exposure, faces) alone.",
+            join_as_prose(&u.signals),
+            u.why
+        ));
+    }
+    // Every photo misses the moment when its prompts are missing; that is the
+    // message above, not a second one about photos to prepare.
+    if !moment_lost && outcome.moment_missing > 0 {
+        warnings.push(format!(
+            "{} photo(s) have no image analysis yet, so {MOMENT} was not judged for them or \
+             for the photos grouped with them. Run 'Cull Similar Photos' again and choose \
+             'Prepare now' to include it.",
+            outcome.moment_missing
+        ));
+    }
+    warnings
+}
+
+/// The legacy single-string `warning`, for a plugin that predates `warnings`:
+/// every message, so an older client loses none of them either.
+fn joined_warning(warnings: &[String]) -> Option<String> {
+    (!warnings.is_empty()).then(|| warnings.join("\n\n"))
 }
 
 async fn group_similar(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Response {
@@ -527,14 +757,14 @@ async fn group_similar(State(state): State<Arc<AppState>>, body: Option<Json<Val
 
     match compute_groups(&state, &params).await {
         Ok(outcome) => {
-            let warning = grouping_warning(&outcome);
+            let warnings = grouping_warnings(&outcome);
             let json_groups: Vec<Value> = outcome
                 .groups
                 .iter()
                 .map(|g| group_to_json(g, &params, &outcome))
                 .collect();
-            let mut response = json!({"groups": json_groups});
-            if let Some(w) = warning {
+            let mut response = json!({"groups": json_groups, "warnings": warnings});
+            if let Some(w) = joined_warning(&warnings) {
                 response["warning"] = json!(w);
             }
             Json(response).into_response()
@@ -565,7 +795,7 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
 
     match compute_groups(&state, &params).await {
         Ok(outcome) => {
-            let warning = grouping_warning(&outcome);
+            let warnings = grouping_warnings(&outcome);
             let (mut picks, mut alternates, mut rejects, mut near_dup_groups) =
                 (0i64, 0i64, 0i64, 0i64);
             let (mut set_groups, mut set_photos) = (0i64, 0i64);
@@ -594,7 +824,8 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
                 .collect();
             Json(json!({
                 "status": "success",
-                "warning": warning,
+                "warning": joined_warning(&warnings),
+                "warnings": warnings,
                 "summary": {
                     "group_count": outcome.groups.len(),
                     "pick_count": picks,
@@ -625,5 +856,171 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(embedded: usize, missing: usize) -> GroupingOutcome {
+        GroupingOutcome {
+            groups: Vec::new(),
+            missing_count: missing,
+            embedded_count: embedded,
+            moment_asked: true,
+            moment_missing: 0,
+            aesthetic_missing: 0,
+            aesthetic_model_ready: true,
+            unavailable: None,
+            stored_metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_clean_run_says_nothing() {
+        assert!(grouping_warnings(&outcome(10, 0)).is_empty());
+        assert_eq!(joined_warning(&[]), None);
+    }
+
+    /// Two problems, two fixes: the second must not erase the first.
+    #[test]
+    fn skipped_photos_and_an_unjudged_moment_both_reach_the_user() {
+        let mut o = outcome(10, 2);
+        o.moment_missing = 3;
+        let warnings = grouping_warnings(&o);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("2 selected photo(s) have not been analyzed"));
+        assert!(warnings[1].starts_with("3 photo(s) have no image analysis"));
+        assert!(warnings[1].contains("Prepare now"));
+        let joined = joined_warning(&warnings).unwrap();
+        assert!(joined.contains(&warnings[0]) && joined.contains(&warnings[1]));
+    }
+
+    /// No embeddings at all: one message covering both grouping and the moment,
+    /// not two that tell the user the same fix twice.
+    #[test]
+    fn no_embeddings_is_one_message_for_a_moment_preset() {
+        let warnings = grouping_warnings(&outcome(0, 0));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("perceptual hashes") && warnings[0].contains("moment"));
+
+        let mut o = outcome(0, 0);
+        o.moment_asked = false;
+        let warnings = grouping_warnings(&o);
+        assert!(!warnings[0].contains("moment"), "{warnings:?}");
+    }
+
+    /// Signals lost to the one missing model: one message naming each of them
+    /// and the fix, not one per signal — and no second one telling the user
+    /// to prepare photos whose analysis is not what is missing.
+    #[test]
+    fn unavailable_prompts_are_one_message_naming_the_fix() {
+        let mut o = outcome(10, 0);
+        o.unavailable = Some(UnavailableSignals {
+            signals: vec![KISS_GATE_SIGNAL, MOMENT_SIGNAL],
+            why: "the AI search model is not downloaded yet — run \"Download AI models\" in \
+                  Plug-in Manager"
+                .into(),
+        });
+        o.moment_missing = 10;
+        let warnings = grouping_warnings(&o);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "the model is the one cause: {warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("a kiss or a laugh and the AI judgement of the moment")
+                && warnings[0].contains("Download AI models"),
+            "{warnings:?}"
+        );
+
+        // Only the kiss check missing — the moment's prompts came from the
+        // database — leaves the unprepared photos their own message.
+        o.unavailable.as_mut().unwrap().signals = vec![KISS_GATE_SIGNAL];
+        o.moment_missing = 2;
+        let warnings = grouping_warnings(&o);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(!warnings[0].contains("moment"), "{warnings:?}");
+        assert!(warnings[1].starts_with("2 photo(s) have no image analysis"));
+    }
+
+    /// Photos without a current aesthetic score are said once, with the fix that
+    /// fits: score them, or download the model first.
+    #[test]
+    fn photos_without_an_aesthetic_score_are_reported_with_the_right_fix() {
+        let mut o = outcome(10, 0);
+        o.aesthetic_missing = 4;
+        let warnings = grouping_warnings(&o);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("4 photo(s) have no aesthetic score"));
+        assert!(warnings[0].contains("Analyze & Index"), "{warnings:?}");
+        assert!(!warnings[0].contains("Download AI models"), "{warnings:?}");
+
+        o.aesthetic_model_ready = false;
+        let warnings = grouping_warnings(&o);
+        assert!(warnings[0].contains("not downloaded yet"), "{warnings:?}");
+        assert!(warnings[0].contains("Download AI models"), "{warnings:?}");
+    }
+
+    /// The score is stored data, so the warning is not hidden by a catalog with
+    /// no embeddings — a cull-only one has scores and a pre-scoring one does not.
+    #[test]
+    fn the_aesthetic_warning_survives_a_catalog_without_embeddings() {
+        let mut o = outcome(0, 0);
+        o.aesthetic_missing = 3;
+        let warnings = grouping_warnings(&o);
+        assert!(
+            warnings.iter().any(|w| w.contains("no aesthetic score")),
+            "{warnings:?}"
+        );
+    }
+
+    fn record_with(metadata: Value) -> GroupingInput {
+        GroupingInput {
+            photo_id: "p".into(),
+            filename: "p.jpg".into(),
+            capture_time: None,
+            phash: None,
+            embedding: None,
+            metadata: metadata.as_object().cloned().unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn the_model_score_is_scaled_to_the_unit_interval() {
+        assert_eq!(aesthetic_unit(1.0), 0.0);
+        assert_eq!(aesthetic_unit(9.0), 1.0);
+        assert_eq!(aesthetic_unit(5.0), 0.5);
+        // Outside what the model can produce: clamped, never negative or above 1.
+        assert_eq!(aesthetic_unit(0.0), 0.0);
+        assert_eq!(aesthetic_unit(12.0), 1.0);
+    }
+
+    /// Only a score from the current export is used; another export's is not
+    /// comparable and counts as missing, like one that was never made.
+    #[test]
+    fn only_a_current_aesthetic_score_reaches_the_ranking() {
+        let current = lrg_ml::aesthetic::MODEL_ID;
+        let mut records = vec![
+            record_with(json!({"aesthetic_score": 7.0, "aesthetic_model": current})),
+            record_with(json!({"aesthetic_score": 7.0, "aesthetic_model": "another-export"})),
+            record_with(json!({"aesthetic_score": 7.0})),
+            record_with(json!({})),
+        ];
+        let missing = apply_aesthetic_scores(&mut records);
+        assert_eq!(missing, 3);
+        assert_eq!(records[0].metadata["cull_aesthetic_model"], 0.75);
+        for r in &records[1..] {
+            assert!(!r.metadata.contains_key("cull_aesthetic_model"));
+        }
+    }
+
+    #[test]
+    fn lost_signals_are_listed_as_prose() {
+        assert_eq!(join_as_prose(&["a"]), "a");
+        assert_eq!(join_as_prose(&["a", "b"]), "a and b");
+        assert_eq!(join_as_prose(&["a", "b", "c"]), "a, b and c");
     }
 }

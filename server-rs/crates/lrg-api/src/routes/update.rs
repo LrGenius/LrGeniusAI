@@ -9,7 +9,12 @@
 //! that's currently running on both Windows and Unix.
 //!
 //! Loopback-only, matching Python's guard against a remote caller
-//! triggering arbitrary local file writes. Live-tested end-to-end
+//! triggering arbitrary local file writes. The caller supplies the manifest,
+//! so its checksums prove nothing about where the files came from: every URL
+//! in it has to be one of this project's own release files on GitHub
+//! ([`official_url`]), and every plugin file has to stay inside the plugin
+//! folder. Like every route, it also needs the access token
+//! (`crate::api_auth`). Live-tested end-to-end
 //! against a local HTTP server standing in for a GitHub release asset
 //! (serving the running binary's own bytes back at itself, so the sha256
 //! matched cleanly): download, verify, stage, rename-current-exe-aside,
@@ -45,6 +50,43 @@ fn platform_key() -> &'static str {
         ("linux", "x86_64") => "linux-x64",
         _ => "unsupported",
     }
+}
+
+/// Where this project publishes releases: the binaries as release assets, the
+/// plugin files at the release's tag (`scripts/generate_update_manifest.py`).
+const OFFICIAL_SOURCES: &[(&str, &str)] = &[
+    ("github.com", "/LrGenius/LrGeniusAI/releases/download/"),
+    ("raw.githubusercontent.com", "/LrGenius/LrGeniusAI/"),
+];
+
+/// Whether `url` is one of this project's own release files. Checked on the
+/// parsed URL, so `..` segments, a port or a user name cannot dress up
+/// another address as one.
+fn official_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.port().is_none()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && OFFICIAL_SOURCES.iter().any(|(host, prefix)| {
+            parsed.host_str() == Some(*host) && parsed.path().starts_with(prefix)
+        })
+}
+
+fn not_official(url: &str) -> String {
+    format!("refused to download {url}: updates only come from LrGeniusAI's own releases on GitHub")
+}
+
+/// A relative path with no `..`, so joining it to the plugin folder cannot
+/// leave the folder.
+fn stays_inside(rel_path: &str) -> bool {
+    let path = Path::new(rel_path);
+    !rel_path.is_empty()
+        && path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -125,6 +167,9 @@ async fn update_apply(
             "manifest entry missing url",
         );
     };
+    if !official_url(url) {
+        return err(StatusCode::FORBIDDEN, not_official(url));
+    }
     let expected_sha256 = platform_entry
         .get("sha256")
         .and_then(Value::as_str)
@@ -239,6 +284,16 @@ async fn patch_plugin_files(
         ) else {
             continue;
         };
+        if !official_url(file_url) {
+            warnings.push(format!("{rel_path}: {}", not_official(file_url)));
+            continue;
+        }
+        if !stays_inside(rel_path) {
+            warnings.push(format!(
+                "{rel_path}: not a path inside the plugin folder, skipped"
+            ));
+            continue;
+        }
         let expected = entry
             .get("sha256")
             .and_then(Value::as_str)
@@ -302,6 +357,39 @@ mod tests {
         // the machine running the test.
         let key = platform_key();
         assert!(!key.is_empty());
+    }
+
+    #[test]
+    fn only_the_projects_own_releases_are_downloaded() {
+        for url in [
+            "https://github.com/LrGenius/LrGeniusAI/releases/download/v3.0.0/lrgenius-server-macos-arm64",
+            "https://raw.githubusercontent.com/LrGenius/LrGeniusAI/v3.0.0/plugin/LrGeniusAI.lrdevplugin/Init.lua",
+        ] {
+            assert!(official_url(url), "{url}");
+        }
+        for url in [
+            "http://github.com/LrGenius/LrGeniusAI/releases/download/v3.0.0/x",
+            "https://github.com/someone/else/releases/download/v1/x",
+            "https://github.com/LrGenius/LrGeniusAI/releases/download/../../../someone/else/x",
+            "https://github.com:8443/LrGenius/LrGeniusAI/releases/download/v1/x",
+            "https://github.com@evil.example/LrGenius/LrGeniusAI/releases/download/v1/x",
+            "https://evil.example/LrGenius/LrGeniusAI/releases/download/v1/x",
+            "https://github.com/LrGenius/LrGeniusAI/archive/main.zip",
+            "not a url",
+        ] {
+            assert!(!official_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn plugin_files_stay_inside_the_plugin_folder() {
+        assert!(stays_inside("Init.lua"));
+        assert!(stays_inside("sub/dir/File.lua"));
+        assert!(!stays_inside(""));
+        assert!(!stays_inside("../Other.lrdevplugin/Init.lua"));
+        assert!(!stays_inside("sub/../../x"));
+        assert!(!stays_inside("/etc/passwd"));
+        assert!(!stays_inside("./Init.lua"));
     }
 
     #[test]

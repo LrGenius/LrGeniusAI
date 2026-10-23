@@ -1,6 +1,7 @@
 //! Shared application state, including the db_path bind state machine
 //! (port of `services/chroma.ensure_db_path`): binding opens the LanceDB
-//! store and auto-runs the one-time Chroma migration when needed.
+//! store, auto-runs the one-time Chroma migration when needed, and applies any
+//! pending store upgrades (`lrg_store::upgrade`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,11 +10,13 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::sync::{Mutex, Notify};
 
 use lrg_common::{config, jobs::JobRegistry, logging};
+use lrg_ml::aesthetic::{AestheticModel, AestheticPaths};
 use lrg_ml::bioclip::{BioclipModel, BioclipModelPaths};
 use lrg_ml::faces::{FaceModel, FaceModelPaths};
 use lrg_ml::siglip::{ModelPaths as SiglipModelPaths, SiglipModel};
-use lrg_store::{migrate, Store};
+use lrg_store::{migrate, upgrade, Store};
 
+use crate::agent_bridge::AgentBridge;
 use crate::llm_engine::LlmEngineSlot;
 use crate::mlx_engine::MlxEngineSlot;
 use crate::routes::clip::ModelDownloadStatus;
@@ -30,6 +33,9 @@ pub struct AppState {
     /// Global (not per-catalog) — lazily loaded on first use, matching
     /// server_lifecycle.py's model lifecycle.
     pub siglip: Arc<SiglipModel>,
+    /// AestheticSigLIP: scores a photo 1..9. Its own So400m backbone, so it has
+    /// its own lazy-load and idle-unload clock apart from `siglip`.
+    pub aesthetic: Arc<AestheticModel>,
     /// Global — lazily loaded, matching `services/face.py`'s `_get_face_app`.
     pub face: Arc<FaceModel>,
     /// Global — BioCLIP 2 plus its pruned Tree-of-Life head, same lazy-load
@@ -44,18 +50,19 @@ pub struct AppState {
     /// Lightroom catalog. Global for the same reason `jobs` is: Lightroom
     /// runs one of these tasks at a time.
     pub ui_bridge: Arc<UiBridge>,
-    /// CLIP-IQA prompt embeddings, computed on first use and kept for the
-    /// process lifetime.
+    /// Hands commands from the MCP endpoint (an AI agent) to the plugin and
+    /// their answers back. Global, like `ui_bridge`: one Lightroom plugin at a
+    /// time drives a backend. See [`crate::agent_bridge`].
+    pub agent_bridge: Arc<AgentBridge>,
+    /// Text embeddings of the fixed prompts — CLIP-IQA, the organism gate,
+    /// the scene probes — read from the database's `text_embeddings` table,
+    /// or made once with the text tower and stored there. See
+    /// [`crate::prompt_embeddings`].
     ///
-    /// These are a pure function of the model weights and a compile-time list
-    /// of strings, so recomputing them would be waste — but the first call
-    /// costs a text-tower pass and, if SigLIP2 has idle-unloaded, a model load.
     /// Deliberately *not* cleared alongside `siglip.unload()`: the embeddings
-    /// stay valid across an unload/reload cycle, and dropping them would make
-    /// every cull run after an idle period pay the load again.
-    /// Keyed by prompt set, since quality and action are embedded separately
-    /// and a catalog may only ever need one of them.
-    pub clip_iqa: Arc<StdMutex<HashMap<&'static str, lrg_ml::clip_iqa::IqaPrompts>>>,
+    /// stay valid across an unload/reload cycle, and they are what lets a run
+    /// do without the text tower in the first place.
+    pub prompt_embeddings: crate::prompt_embeddings::PromptCache,
     /// Download progress, keyed by asset group (`"clip"`, `"llm"`,
     /// `"bioclip"`). Keyed
     /// rather than a single slot because a GGUF download and a SigLIP2
@@ -93,6 +100,7 @@ pub struct AppState {
 /// shapes. See `tests/contract.rs` for the failure that motivated this.
 pub struct ModelAssetPaths {
     pub siglip: SiglipModelPaths,
+    pub aesthetic: AestheticPaths,
     pub face: FaceModelPaths,
     pub bioclip: BioclipModelPaths,
 }
@@ -102,6 +110,7 @@ impl ModelAssetPaths {
     pub fn from_env() -> Self {
         Self {
             siglip: lrg_ml::model_paths::resolve(),
+            aesthetic: lrg_ml::model_paths::resolve_aesthetic(),
             face: lrg_ml::model_paths::resolve_face(),
             bioclip: lrg_ml::model_paths::resolve_bioclip(),
         }
@@ -127,11 +136,13 @@ impl AppState {
             shutdown: Notify::new(),
             debug,
             siglip: Arc::new(SiglipModel::new(models.siglip)),
+            aesthetic: Arc::new(AestheticModel::new(models.aesthetic)),
             face: Arc::new(FaceModel::new(models.face)),
             bioclip: Arc::new(BioclipModel::new(models.bioclip)),
             jobs: Arc::new(JobRegistry::new()),
             ui_bridge: Arc::new(UiBridge::new()),
-            clip_iqa: Arc::new(StdMutex::new(HashMap::new())),
+            agent_bridge: Arc::new(AgentBridge::new()),
+            prompt_embeddings: Default::default(),
             model_download: Arc::new(StdMutex::new(HashMap::new())),
             llm: Arc::default(),
             mlx: Arc::default(),
@@ -164,6 +175,7 @@ impl AppState {
     /// an OOM kill around ~3600 photos.
     pub async fn run_maintenance(&self) {
         self.siglip.unload_if_idle();
+        self.aesthetic.unload_if_idle();
         self.face.unload_if_idle();
         self.bioclip.unload_if_idle();
         self.llm.unload_if_idle();
@@ -204,10 +216,11 @@ impl AppState {
     }
 
     /// Bind the backend to `db_path`: open the store (running the one-time
-    /// Chroma migration when applicable) and move the log file next to the
-    /// catalog. Returns true if a switch/init happened, false when the path
-    /// was already active — matching the Python semantics where "already
-    /// bound" requires both the path to match AND the client to be open.
+    /// Chroma migration when applicable, then any pending store upgrades) and
+    /// move the log file next to the catalog. Returns true if a switch/init
+    /// happened, false when the path was already active — matching the
+    /// Python semantics where "already bound" requires both the path to match
+    /// AND the client to be open.
     pub async fn ensure_db_path(&self, db_path: &str) -> Result<bool, String> {
         if db_path.is_empty() {
             return Ok(false);
@@ -240,6 +253,26 @@ impl AppState {
             .map_err(|e| format!("failed to open store at {}: {e}", lance_root.display()))?;
         if let Some(summary) = migrate::ensure_migrated(&new_path, &lance_root, &store).await? {
             log::info!("Chroma migration completed: {summary}");
+        }
+        // After the Chroma migration, so rows it just brought over are
+        // upgraded too, and before the store is published, so no request
+        // writes alongside a step.
+        let report = upgrade::ensure_upgraded(
+            &lance_root,
+            &store,
+            &upgrade::UpgradeContext {
+                legacy_embedding_model: lrg_ml::siglip::LEGACY_MODEL_ID,
+            },
+        )
+        .await;
+        for (step, summary) in &report.applied {
+            log::info!("Store upgrade {step} completed: {summary}");
+        }
+        if let Some((step, e)) = &report.failed {
+            // Not reported to the user: nothing reads worse for it. The only
+            // step so far stamps an identity that, while absent, is already
+            // taken as current, and it is retried on the next bind.
+            log::warn!("Store upgrade {step} failed, will retry on the next bind: {e}");
         }
 
         *self.store.write().unwrap() = Some(Arc::new(store));
