@@ -243,7 +243,8 @@ LrTasks.startAsyncTask(function()
 						and LOC(
 							"$$$/LrGeniusAI/common/InvalidViewMessage=The 'Current view' scope only works when a folder or collection is selected."
 						)
-					or LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope.")
+					or LOC("$$$/LrGeniusAI/common/NoPhotosMessage=No photos found in the selected scope."),
+				"info"
 			)
 			return
 		end
@@ -267,7 +268,8 @@ LrTasks.startAsyncTask(function()
 				LOC("$$$/LrGeniusAI/CullTask/NoPhotoIdsTitle=No usable photos"),
 				LOC(
 					"$$$/LrGeniusAI/CullTask/NoPhotoIdsMessage=No usable photo IDs could be computed for the selected photos."
-				)
+				),
+				"info"
 			)
 			return
 		end
@@ -439,6 +441,19 @@ LrTasks.startAsyncTask(function()
 					dropped.photos
 				)
 		end
-		LrDialogs.message(LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"), doneMessage)
+		-- A fixture exported without the moment scores cannot measure them, so
+		-- whatever the backend could not judge is part of the result.
+		local fixtureWarnings = Util.responseWarnings(cullResult)
+		if #fixtureWarnings > 0 then
+			log:warn("Cull fixture: backend warnings: " .. table.concat(fixtureWarnings, " | "))
+			doneMessage = doneMessage
+				.. "\n\nThe backend reported problems, so some scores are missing from the fixture:\n\n"
+				.. Util.formatWarningList(fixtureWarnings)
+		end
+		LrDialogs.message(
+			LOC("$$$/LrGeniusAI/CullFixture/DoneTitle=Fixture exported"),
+			doneMessage,
+			#fixtureWarnings > 0 and "warning" or "info"
+		)
 	end)
 end)

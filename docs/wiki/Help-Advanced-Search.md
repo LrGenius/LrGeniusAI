@@ -16,7 +16,11 @@ A text search only finds photos that carry a SigLIP embedding, so a
 half-indexed catalog answers "no results" for a subject that is sitting right
 there. The dialog says so before you type: if the search model is not
 downloaded, or some of the catalog has no search index yet, an orange note at
-the top gives the count and what to run to fix it.
+the top gives the count and what to run to fix it. After an update that
+switches to a new AI search model, photos indexed with the old one count as
+not searchable too, and the note names them separately: run **Analyze &
+Index Photos** with **Enable smart photo search** again and they are brought
+up to date.
 
 The check is two cheap lookups (`/v1/db/stats` plus the catalog's photo count) and
 runs every time the dialog opens. It is a note, not a gate — the search still
@@ -24,17 +28,45 @@ runs across whatever *is* indexed.
 
 ## Search term
 
-Free text. Describe what is in the photo, not how it was shot:
+Free text, or **empty** to list your best photos: with no term the search ranks
+everything in scope by its **Aesthetic score** and gives you the best ones (up
+to **Max results**), optionally restricted by the controls under *Ranking*.
+Photos that have no score yet are not part of that list; the dialog says how
+many, and **Analyze & Index Photos** fills them in.
+
+With a term, describe what is in the photo, not how it was shot:
 
 - `red sports car in front of a garage`
 - `sunset over mountains with orange sky`
 - `two people laughing at a wooden table`
+
+The field is also a drop-down: its menu lists your last 15 searches, most recent
+first, so a search you run again after indexing more photos is one click rather
+than retyped. Pick one and edit it, or type over it as usual.
 
 ## Search scope
 
 - **All photos** — everything indexed in the backend
 - **Current view** — the folder or collection currently open
 - **Selected photos** — the current selection only
+
+## Ranking
+
+- **Sort by** — *Relevance* (the default for a search with a term),
+  *Aesthetic score*, or *Relevance and aesthetic score*, which mixes the two
+  evenly. Without a term the order is always the aesthetic score.
+- **Minimum aesthetic score** — drop photos scored below this, from 1.0 to 9.0
+  in half-points; *Off* at the left end. Typical photos sit between about 4.5
+  and 7; treat it as a way to sort and thin out your own photos, not as a
+  verdict.
+- **Genre** — only photos of one genre (landscape, portrait, street, wildlife &
+  animals, sport, event & wedding, architecture, macro, food, product & still
+  life, astro & night sky, concert & stage, aerial, or *Other*). The genre is a
+  guess from the picture, made when the photo is indexed.
+
+Photos with no score (or no genre) cannot pass a minimum (or a genre filter), and
+the search says how many it left out for that reason. The collection's name says
+what shaped it, for example `Best 50 · ≥7.0 · Landscape @ …`.
 
 ## Tuning
 
@@ -73,3 +105,10 @@ named after the query and scope.
 **Set the collection sort order to `Custom Order`** — that is the only order in
 which Lightroom shows the best matches at the top. Any other sort order throws
 the ranking away.
+
+If the search matched photos that are no longer in the catalog, a **Search
+Results Are Incomplete** message says how many. Those are usually photos you
+deleted from Lightroom that are still in the index: when the automatic index
+cleanup is on, the message also says that a cleanup has started in the
+background, and the next search no longer finds them (see the
+[FAQ](FAQ.md#what-happens-to-the-index-when-i-delete-photos-in-lightroom)).

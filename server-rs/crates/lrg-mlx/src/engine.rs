@@ -7,10 +7,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
-use crate::protocol::{GenerationSpec, ImagePayload, Request, Response};
-use crate::{GenerationOutput, GenerationRequest, MlxError};
+use crate::protocol::{
+    ChatMessageSpec, ChatSpec, GenerationResultPayload, GenerationSpec, ImagePayload, Request,
+    Response,
+};
+use crate::{ChatRequest, GenerationOutput, GenerationRequest, MlxError, RgbImage};
 
 /// Name of the sidecar binary, as produced by `swift build` and as staged next
 /// to `lrgenius-server` by the installer.
@@ -136,6 +140,7 @@ impl MlxEngine {
                 op: "load",
                 model_dir: Some(&model_dir),
                 requests: None,
+                chat: None,
             })
             .await?;
 
@@ -194,13 +199,7 @@ impl MlxEngine {
         for request in requests {
             let image = match request.image {
                 Some(image) => {
-                    let file = StagedImage::write(&image)?;
-                    let payload = ImagePayload {
-                        path: file.path.display().to_string(),
-                        width: image.width,
-                        height: image.height,
-                        channels: 3,
-                    };
+                    let (file, payload) = StagedImage::stage(&image)?;
                     staged.push(file);
                     Some(payload)
                 }
@@ -227,6 +226,7 @@ impl MlxEngine {
                 op: "generate",
                 model_dir: None,
                 requests: Some(specs),
+                chat: None,
             })
             .await?;
         drop(staged);
@@ -248,29 +248,86 @@ impl MlxEngine {
 
         Ok(results
             .into_iter()
-            .map(|result| {
-                if result.ok {
-                    Ok(GenerationOutput {
-                        text: result.text.unwrap_or_default(),
-                        prompt_tokens: result.prompt_tokens.unwrap_or(0),
-                        completion_tokens: result.completion_tokens.unwrap_or(0),
-                        prefix_reused: result.prefix_reused,
-                    })
-                } else {
-                    Err(MlxError::Inference(result.error.unwrap_or_else(|| {
-                        "the MLX model failed on this photo".to_string()
-                    })))
-                }
-            })
+            .map(|result| output_of(result, "the MLX model failed on this photo"))
             .collect())
     }
 
-    /// Write one request and read replies until the matching id comes back.
+    /// Answer a conversation, sending the text to `deltas` as the sidecar
+    /// decodes it.
+    ///
+    /// Dropping the returned future does not stop the sidecar: it finishes
+    /// the answer, and the next request waits for that and skips the lines.
+    ///
+    /// # Errors
+    /// Reports a photo that cannot be staged, a failed generation, or a
+    /// sidecar that is gone.
+    pub async fn chat(
+        &self,
+        request: ChatRequest,
+        deltas: Option<UnboundedSender<String>>,
+    ) -> Result<GenerationOutput, MlxError> {
+        let mut staged = Vec::new();
+        let mut messages = Vec::with_capacity(request.messages.len());
+        for message in request.messages {
+            let mut images = Vec::with_capacity(message.images.len());
+            for image in &message.images {
+                let (file, payload) = StagedImage::stage(image)?;
+                staged.push(file);
+                images.push(payload);
+            }
+            messages.push(ChatMessageSpec {
+                role: message.role,
+                text: message.text,
+                images,
+            });
+        }
+
+        let response = self
+            .call_streaming(
+                Request {
+                    id: 0,
+                    op: "chat",
+                    model_dir: None,
+                    requests: None,
+                    chat: Some(ChatSpec {
+                        messages,
+                        schema: request.schema.as_ref().map(ToString::to_string),
+                        max_tokens: request.max_tokens,
+                        temperature: request.temperature,
+                    }),
+                },
+                deltas.as_ref(),
+            )
+            .await?;
+        drop(staged);
+
+        if !response.ok {
+            return Err(MlxError::Inference(response.error.unwrap_or_else(|| {
+                "the MLX sidecar reported a failure".to_string()
+            })));
+        }
+        let result = response
+            .results
+            .and_then(|results| results.into_iter().next())
+            .ok_or_else(|| MlxError::Sidecar("chat returned no result".to_string()))?;
+        output_of(result, "the MLX model could not answer")
+    }
+
+    async fn call(&self, request: Request<'_>) -> Result<Response, MlxError> {
+        self.call_streaming(request, None).await
+    }
+
+    /// Write one request and read replies until the matching id comes back,
+    /// handing `delta` lines for it to `deltas` on the way.
     ///
     /// Holding the connection lock for the whole exchange is what makes the
-    /// correlation safe: no other request can interleave, so any line with a
-    /// different id is a protocol bug rather than someone else's answer.
-    async fn call(&self, mut request: Request<'_>) -> Result<Response, MlxError> {
+    /// correlation safe: no other request can interleave, so a line with a
+    /// different id belongs to a request whose caller stopped waiting.
+    async fn call_streaming(
+        &self,
+        mut request: Request<'_>,
+        deltas: Option<&UnboundedSender<String>>,
+    ) -> Result<Response, MlxError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         request.id = id;
         let mut line = serde_json::to_string(&request)
@@ -313,12 +370,24 @@ impl MlxEngine {
                 ))
             })?;
             if response.id == id {
-                return Ok(response);
+                match response.delta {
+                    Some(delta) => {
+                        if let Some(deltas) = deltas {
+                            let _ = deltas.send(delta);
+                        }
+                    }
+                    None => return Ok(response),
+                }
+                continue;
             }
-            log::warn!(
-                "Ignoring an MLX sidecar reply for request {} while awaiting {id}",
-                response.id
-            );
+            // An abandoned chat streams a line per piece of text; one warning
+            // each would bury the log.
+            if response.delta.is_none() {
+                log::warn!(
+                    "Ignoring an MLX sidecar reply for request {} while awaiting {id}",
+                    response.id
+                );
+            }
         }
     }
 }
@@ -344,11 +413,35 @@ struct StagedImage {
 }
 
 impl StagedImage {
-    fn write(image: &crate::RgbImage) -> Result<Self, MlxError> {
+    /// Write the pixels and describe them for the sidecar.
+    fn stage(image: &RgbImage) -> Result<(Self, ImagePayload), MlxError> {
         let path = std::env::temp_dir().join(format!("lrg-mlx-{}.rgb", uuid::Uuid::new_v4()));
         std::fs::write(&path, &image.data)
             .map_err(|e| MlxError::Image(format!("could not stage pixels at {path:?}: {e}")))?;
-        Ok(StagedImage { path })
+        let payload = ImagePayload {
+            path: path.display().to_string(),
+            width: image.width,
+            height: image.height,
+            channels: 3,
+        };
+        Ok((StagedImage { path }, payload))
+    }
+}
+
+/// One result off the wire. `failed` is the message when the sidecar gave
+/// none.
+fn output_of(result: GenerationResultPayload, failed: &str) -> Result<GenerationOutput, MlxError> {
+    if result.ok {
+        Ok(GenerationOutput {
+            text: result.text.unwrap_or_default(),
+            prompt_tokens: result.prompt_tokens.unwrap_or(0),
+            completion_tokens: result.completion_tokens.unwrap_or(0),
+            prefix_reused: result.prefix_reused,
+        })
+    } else {
+        Err(MlxError::Inference(
+            result.error.unwrap_or_else(|| failed.to_string()),
+        ))
     }
 }
 

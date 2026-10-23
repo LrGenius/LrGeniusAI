@@ -125,6 +125,20 @@ pub struct CullingMetrics {
     /// distinguishes the *reason* a frame that is already soft is soft, which
     /// is the difference between the `motion_blur` and `blurred` reason codes.
     pub cull_motion_anisotropy: f64,
+    /// Noise measured only where the image is flat, normalized like
+    /// [`Self::cull_noise`] (higher is noisier).
+    ///
+    /// [`Self::cull_noise`] is the mean 3×3 box-blur residual over every
+    /// mid-tone pixel. Real detail is high-pass energy too, so a sharp frame
+    /// reads as *dirtier* than a soft frame of the same scene — the signal
+    /// pointed against sharpness inside every burst, which is why ranking
+    /// could never normalise it against the group. This variant keeps only the
+    /// pixels whose smoothed neighbourhood carries no gradient
+    /// (`noise_flat_gradient_threshold`), so texture stops registering as
+    /// grain. Ranking reads it in preference to `cull_noise` when present;
+    /// when too little of the frame is flat it equals `cull_noise`, so a
+    /// consumer never has to special-case its absence within a row.
+    pub cull_noise_flat: f64,
 }
 
 impl CullingMetrics {
@@ -133,6 +147,7 @@ impl CullingMetrics {
             cull_sharpness: 0.0,
             cull_exposure: 0.0,
             cull_noise: 1.0,
+            cull_noise_flat: 1.0,
             cull_highlight_clip: 0.0,
             cull_shadow_clip: 0.0,
             cull_technical_score: 0.0,
@@ -335,7 +350,12 @@ pub fn culling_metrics(image: &RgbImage, cfg: &ImageMetricsConfig) -> CullingMet
             + cfg.exposure_clip_weight * (1.0 - clipping_penalty),
     );
 
-    // 3x3 box-blur residual noise estimate over the interior.
+    // 3x3 box-blur residual noise estimate over the interior. The smoothed
+    // plane is materialised (borders left as the source pixel) because the
+    // flat-region pass below needs its gradient; the accumulation order per
+    // pixel is unchanged, so `cull_noise` stays bit-identical to the Python
+    // original.
+    let mut blurred_plane = gray.clone();
     let mut resid_all_sum = 0.0f64;
     let mut resid_mid_sum = 0.0f64;
     let mut mid_count = 0usize;
@@ -348,6 +368,7 @@ pub fn culling_metrics(image: &RgbImage, cfg: &ImageMetricsConfig) -> CullingMet
                 }
             }
             let blurred = acc / 9.0;
+            blurred_plane[y * rw + x] = blurred;
             let reference = gray[y * rw + x];
             let residual = (reference - blurred).abs() as f64;
             resid_all_sum += residual;
@@ -363,6 +384,44 @@ pub fn culling_metrics(image: &RgbImage, cfg: &ImageMetricsConfig) -> CullingMet
         resid_all_sum / lap_n
     };
     let noise_penalty = unit(noise_raw / cfg.noise_denominator);
+
+    // Flat-region noise: the same residual, kept only where the *smoothed*
+    // image has no gradient to speak of. Texture and edges are what made the
+    // frame-wide estimate rank a sharp frame dirtier than a soft one; a pixel
+    // whose neighbourhood is flat after smoothing has nothing in it but tone
+    // and noise. Measured on the smoothed plane so the noise under test
+    // cannot push its own pixels out of the mask. One pixel further in than
+    // the residual loop, because the central difference needs smoothed
+    // neighbours on both sides.
+    let mut flat_sum = 0.0f64;
+    let mut flat_count = 0usize;
+    if rw >= 5 && rh >= 5 {
+        let gradient_threshold = cfg.noise_flat_gradient_threshold.max(0.0) as f32;
+        for y in 2..rh - 2 {
+            for x in 2..rw - 2 {
+                let i = y * rw + x;
+                let reference = gray[i];
+                if reference <= 0.15 || reference >= 0.85 {
+                    continue;
+                }
+                let gx = 0.5 * (blurred_plane[i + 1] - blurred_plane[i - 1]);
+                let gy = 0.5 * (blurred_plane[i + rw] - blurred_plane[i - rw]);
+                if (gx * gx + gy * gy).sqrt() > gradient_threshold {
+                    continue;
+                }
+                flat_sum += (reference - blurred_plane[i]).abs() as f64;
+                flat_count += 1;
+            }
+        }
+    }
+    let flat_min = (cfg.noise_flat_min_fraction.clamp(0.0, 1.0) * lap_n).ceil() as usize;
+    let noise_flat_penalty = if flat_count > 0 && flat_count >= flat_min.max(1) {
+        unit(flat_sum / flat_count as f64 / cfg.noise_flat_denominator.max(1e-6))
+    } else {
+        // Texture edge to edge: nothing flat to measure, so say what the
+        // frame-wide estimate says rather than inventing a number.
+        noise_penalty
+    };
 
     let technical_score = unit(
         cfg.technical_weight_sharpness * sharpness
@@ -392,6 +451,7 @@ pub fn culling_metrics(image: &RgbImage, cfg: &ImageMetricsConfig) -> CullingMet
         cull_sharp_region_x: round4(sharp_region_x),
         cull_sharp_region_y: round4(sharp_region_y),
         cull_motion_anisotropy: round4(motion_anisotropy),
+        cull_noise_flat: round4(noise_flat_penalty),
     }
 }
 
@@ -517,6 +577,104 @@ mod tests {
             "a checker is isotropic: {}",
             mc.cull_motion_anisotropy
         );
+    }
+
+    /// Deterministic per-pixel noise; a fixed seed keeps the test reproducible.
+    fn add_noise(px: &mut [u8], amplitude: i32, mut seed: u32) {
+        for v in px.iter_mut() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let n = ((seed >> 16) as i32 % (2 * amplitude + 1)) - amplitude;
+            *v = (*v as i32 + n).clamp(0, 255) as u8;
+        }
+    }
+
+    /// Mid-grey everywhere except a textured block (the "subject"), which is
+    /// a crisp period-4 checker when `sharp` and a smeared ramp otherwise.
+    /// Same scene, same noise, only the focus differs.
+    fn scene(size: usize, sharp: bool, noise: i32) -> Vec<u8> {
+        let mut px = vec![120u8; size * size * 3];
+        let block = size / 3;
+        for y in 0..block {
+            for x in 0..block {
+                let v = if sharp {
+                    if ((x / 2) + (y / 2)) % 2 == 0 {
+                        40
+                    } else {
+                        200
+                    }
+                } else {
+                    // Soft: a slow ramp carries far less high-pass energy.
+                    (40 + (160 * (x + y)) / (2 * block)) as u8
+                };
+                let i = (y * size + x) * 3;
+                px[i..i + 3].fill(v);
+            }
+        }
+        if noise > 0 {
+            add_noise(&mut px, noise, 7);
+        }
+        px
+    }
+
+    /// The failure the flat-region estimate exists to remove: the frame-wide
+    /// residual reads a sharp subject as grain and scores the sharp frame
+    /// *noisier* than the soft one. Measured where nothing is going on, the
+    /// two frames of one scene carry the same noise.
+    #[test]
+    fn flat_noise_does_not_mistake_sharpness_for_grain() {
+        let size = 192;
+        let sharp = metrics_of(&scene(size, true, 0), size);
+        let soft = metrics_of(&scene(size, false, 0), size);
+        assert!(
+            sharp.cull_noise > soft.cull_noise,
+            "documenting the fault: frame-wide noise sharp {} vs soft {}",
+            sharp.cull_noise,
+            soft.cull_noise
+        );
+        assert!(
+            (sharp.cull_noise_flat - soft.cull_noise_flat).abs() < 0.02,
+            "flat noise must not follow focus: sharp {} vs soft {}",
+            sharp.cull_noise_flat,
+            soft.cull_noise_flat
+        );
+    }
+
+    /// ...while still measuring noise: the same scene with grain added must
+    /// score clearly higher than the clean one, on both frames alike.
+    #[test]
+    fn flat_noise_rises_with_actual_grain() {
+        let size = 192;
+        for sharp in [true, false] {
+            let clean = metrics_of(&scene(size, sharp, 0), size);
+            let grainy = metrics_of(&scene(size, sharp, 12), size);
+            assert!(
+                grainy.cull_noise_flat > clean.cull_noise_flat + 0.2,
+                "sharp={sharp}: grainy {} should exceed clean {}",
+                grainy.cull_noise_flat,
+                clean.cull_noise_flat
+            );
+        }
+    }
+
+    /// A frame that is texture edge to edge has nothing flat to measure. The
+    /// field must then say what the frame-wide estimate says, not zero.
+    #[test]
+    fn flat_noise_falls_back_when_nothing_is_flat() {
+        let size = 128;
+        let mut px = vec![0u8; size * size * 3];
+        for y in 0..size {
+            for x in 0..size {
+                let v = if ((x / 2) + (y / 2)) % 2 == 0 {
+                    40
+                } else {
+                    200
+                };
+                let i = (y * size + x) * 3;
+                px[i..i + 3].fill(v);
+            }
+        }
+        let m = metrics_of(&px, size);
+        assert_eq!(m.cull_noise_flat, m.cull_noise);
     }
 
     /// A flat frame has no focus anywhere; the centroid must not divide by zero

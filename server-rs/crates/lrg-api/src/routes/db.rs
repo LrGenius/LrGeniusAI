@@ -48,7 +48,7 @@ async fn database_stats(
     Query(query): Query<StatsQuery>,
 ) -> Response {
     let empty = json!({
-        "photos": {"total": 0, "with_embedding": 0, "with_title": 0,
+        "photos": {"total": 0, "with_embedding": 0, "with_outdated_embedding": 0, "with_title": 0,
                     "with_caption": 0, "with_keywords": 0,
                     "with_species": 0, "with_species_id": 0},
         "faces": {"total": 0},
@@ -80,6 +80,11 @@ async fn database_stats(
             .collect();
 
         let (mut total, mut with_embedding, mut with_title) = (0u64, 0u64, 0u64);
+        // Embeddings made by another search model than this build's: they
+        // count in `with_embedding` but compare with nothing the search
+        // embeds now, so a client has to be able to tell them apart. An
+        // absent identity counts as current, as in `/v1/index/unprocessed`.
+        let mut with_outdated_embedding = 0u64;
         let (mut with_caption, mut with_keywords) = (0u64, 0u64);
         // `with_species` is "BioCLIP has looked at it", `with_species_id` is
         // "and it came back with something". The gap between the two is how
@@ -100,6 +105,12 @@ async fn database_stats(
             total += 1;
             if meta::has_embedding(&m) {
                 with_embedding += 1;
+                if m.get(meta::EMBEDDING_MODEL_FIELD)
+                    .and_then(Value::as_str)
+                    .is_some_and(|stored| stored != lrg_ml::siglip::MODEL_ID)
+                {
+                    with_outdated_embedding += 1;
+                }
             }
             if non_empty(&m, "title") {
                 with_title += 1;
@@ -135,6 +146,7 @@ async fn database_stats(
 
         Ok(json!({
             "photos": {"total": total, "with_embedding": with_embedding,
+                        "with_outdated_embedding": with_outdated_embedding,
                         "with_title": with_title, "with_caption": with_caption,
                         "with_keywords": with_keywords,
                         "with_species": with_species, "with_species_id": with_species_id},

@@ -17,6 +17,24 @@ return {
 			browsable = true,
 		},
 		{
+			id = "genre",
+			title = "Genre",
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
+			-- A string like every other numeric AI field here ("7.4"): the
+			-- metadata schema declares them all as strings.
+			id = "aestheticScore",
+			title = "Aesthetic score",
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
 			id = "aiEditLastRun",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/AiEditLastRun=Last AI edit run"),
 			dataType = "string",
@@ -89,24 +107,8 @@ return {
 			browsable = true,
 		},
 		{
-			id = "cullGroupType",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullGroupType=Culling group type"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
 			id = "cullGroupRank",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullGroupRank=Culling rank"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullGroupWinner",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullGroupWinner=Group winner"),
 			dataType = "string",
 			readOnly = true,
 			searchable = true,
@@ -121,14 +123,6 @@ return {
 			browsable = true,
 		},
 		{
-			id = "cullReasonCodes",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullReasonCodes=Culling reason codes"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
 			id = "cullExplanation",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullExplanation=Culling explanation"),
 			dataType = "string",
@@ -136,117 +130,17 @@ return {
 			searchable = true,
 			browsable = true,
 		},
+		-- What the last cull wrote on this photo (flag, stars, label), encoded
+		-- by Util.cullWrittenEncode. It is how a re-run tells its own marks
+		-- from the photographer's: a flag equal to what the cull wrote is the
+		-- cull's to change, anything else is theirs and is left alone.
 		{
-			id = "cullSharpness",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullSharpness=Sharpness"),
+			id = "cullWritten",
+			title = "Culling wrote",
 			dataType = "string",
 			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullExposure",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullExposure=Exposure"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullNoise",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullNoise=Noise penalty"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullTechnicalScore",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullTechnicalScore=Technical score"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullAesthetic",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullAesthetic=Aesthetic score"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullFaceCount",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullFaceCount=Face count"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullFaceSharpness",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullFaceSharpness=Face sharpness"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullFaceProminence",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullFaceProminence=Face prominence"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullFaceVisibility",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullFaceVisibility=Face visibility"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullFaceScore",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullFaceScore=Face score"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullOcclusion",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullOcclusion=Occlusion penalty"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullEyeOpenness",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullEyeOpenness=Eye openness"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "cullBlinkPenalty",
-			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/cullBlinkPenalty=Blink penalty"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
-		},
-		{
-			id = "keywords",
-			title = LOC("$$$/lrc-ai-assistant/AIMetadataProvider/keywords=AI Keywords"),
-			dataType = "string",
-			readOnly = true,
-			searchable = true,
-			browsable = true,
+			searchable = false,
+			browsable = false,
 		},
 		-- Not necessarily English: GBIF's vernacular data has no reliable
 		-- per-language coverage, so where no English name exists the backend
@@ -319,6 +213,9 @@ return {
 			searchable = false,
 			browsable = false,
 		},
+		-- Legacy identity cache: retain these definitions and values for upgrades.
+		-- Util reads them but stores new identities in catalog plugin properties;
+		-- clearing or rewriting these photo fields would change lastEditTime.
 		{
 			id = "globalPhotoId",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/GlobalPhotoId=Global Photo ID"),
@@ -356,7 +253,7 @@ return {
 		},
 	},
 
-	schemaVersion = 33,
+	schemaVersion = 36,
 	updateFromEarlierSchemaVersion = function(catalog, previousSchemaVersion, progressScope)
 		catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then

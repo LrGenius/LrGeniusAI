@@ -4,6 +4,11 @@ This is the task that does the actual AI work: it sends your photos to a model,
 gets keywords, titles, captions and alt text back, and builds the search index
 the other features rely on.
 
+> **Back up your catalog before the first run.** Lightroom counts what this task
+> writes as an edit, so every photo it processes gets a new **Edit Date** — even
+> with titles, captions and keywords switched off — and the old date cannot be
+> set back. See [Before you start](Getting-Started#before-you-start-back-up-your-catalog).
+
 ## Start the task
 
 In Lightroom Classic:
@@ -68,7 +73,15 @@ needed for metadata: embeddings, faces and species run without one.
 - **Enable smart photo search** — computes the SigLIP embedding that
   [Advanced Search](Help-Advanced-Search) and
   [Find Similar](Help-Find-Similar) need. Greyed out until the search model has
-  been downloaded in the Plug-in Manager.
+  been downloaded in the Plug-in Manager. It also gives each photo an
+  **Aesthetic score** (1 to 9, from a model trained to judge how good a photo
+  looks) and a **Genre** (landscape, portrait, macro … or *Other*), written to
+  those two fields in the Metadata panel. The score needs the *Photo quality
+  scoring* model, a separate download in the same **Download AI models**
+  button; without it the photos are still indexed and the run says once that
+  the scores were skipped. Both are a model's opinion of the picture, not a
+  measurement: use the score to sort and compare your own photos, not as a
+  verdict.
 - **Enable face detection** — detects and embeds faces for
   [People](Help-People-Faces).
 - **Identify animal and plant species** — runs BioCLIP 2 and writes a
@@ -251,7 +264,9 @@ One checkbox each for **Keywords**, **Title**, **Caption**, **Alt Text**.
   with large or messy hierarchies: everything you have gets offered to the
   model.
 - **Top-level Keyword** — nests everything generated under one keyword of your
-  choosing, so AI keywords stay separable from your own.
+  choosing, so AI keywords stay separable from your own. Its drop-down menu
+  offers the ones you used recently, then the other top-level keywords
+  LrGeniusAI knows about; *Retrieve Metadata from Backend* shares the same list.
 - **Bilingual Keywords** — additionally produces keywords in a second language.
 - **Keyword aliases** — reuses keywords already in your catalog instead of
   creating near-duplicates ("bicycle" vs "bike"). See
@@ -320,6 +335,10 @@ Both are ordinary templates once they appear: edit them, add your own, delete
 what you do not want. A template you delete stays deleted, and one you rewrite
 stays rewritten — the plug-in only ever offers each built-in once. "Reset to
 defaults" in the prompt dialog brings both back.
+
+Template changes made in this dialog — edits, new templates, deletions — are
+kept when you start the run and dropped when you press **Cancel**, the same as
+every other setting here.
 
 **Clearing a template's text** is allowed and is saved: an empty template means
 "no persona of my own", and the run uses the backend's built-in one instead of
@@ -394,7 +413,13 @@ Extra information sent alongside the photo to improve accuracy:
   **Discard** and **Cancel** now drop the species along with everything else —
   before, the species fields, the look-up links and the species keywords were
   written whichever button you pressed. Cancel stops the review there, and the
-  completion dialog says how many photos were left untouched.
+  completion dialog says how many photos were left untouched. The same dialog
+  also names the photos the run's own totals count as done but never wrote:
+  those you discarded in the review, and those skipped for having no photo ID.
+  A photo whose data cannot be read back from the backend appears under
+  **Warnings** rather than disappearing. Warnings are listed however the run
+  ends: a run you stop from the progress bar, and one in which every photo
+  failed, now show what the run had already found as well.
 - **Import metadata from catalog before indexing** — pushes the metadata you
   already have into the backend first, so the AI does not overwrite it blindly.
 
@@ -412,4 +437,5 @@ Extra information sent alongside the photo to improve accuracy:
 - **Retrieve Metadata from Backend** — apply stored results to the catalog
   later, or after a failed write.
 - **Import Metadata from Catalog** — one-way sync of your Lightroom metadata
-  into the backend database.
+  into the backend database. The top-level keyword is left out of the keywords
+  it sends: it only groups the AI keywords, it does not describe the photo.

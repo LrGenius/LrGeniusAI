@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::aesthetic::AestheticPaths;
 use crate::bioclip::BioclipModelPaths;
 use crate::faces::FaceModelPaths;
 use crate::siglip::ModelPaths;
@@ -37,12 +38,37 @@ fn env_or_default(var: &str, default: PathBuf) -> PathBuf {
     std::env::var_os(var).map(PathBuf::from).unwrap_or(default)
 }
 
+/// The SigLIP2 NaFlex towers and their tokenizer.
+///
+/// The `naflex` in the default names is load-bearing: the fixed-resolution
+/// model these replace used `siglip2_image.onnx`/`siglip2_text.onnx`/
+/// `tokenizer.json` in the same directory, and an upgraded install still has
+/// them. Reusing those names would have made the old files count as present —
+/// and an old image tower fed NaFlex inputs fails on every photo.
 pub fn resolve() -> ModelPaths {
     let dir = default_models_dir();
     ModelPaths {
-        image_onnx: env_or_default("LRG_SIGLIP_IMAGE_ONNX", dir.join("siglip2_image.onnx")),
-        text_onnx: env_or_default("LRG_SIGLIP_TEXT_ONNX", dir.join("siglip2_text.onnx")),
-        tokenizer_json: env_or_default("LRG_SIGLIP_TOKENIZER", dir.join("tokenizer.json")),
+        image_onnx: env_or_default(
+            "LRG_SIGLIP_IMAGE_ONNX",
+            dir.join("siglip2_naflex_image.onnx"),
+        ),
+        text_onnx: env_or_default("LRG_SIGLIP_TEXT_ONNX", dir.join("siglip2_naflex_text.onnx")),
+        tokenizer_json: env_or_default(
+            "LRG_SIGLIP_TOKENIZER",
+            dir.join("siglip2_naflex_tokenizer.json"),
+        ),
+    }
+}
+
+/// The AestheticSigLIP scorer. One file, no tokenizer: it only has an image side.
+///
+/// Same per-artifact env-var convention as SigLIP2 (`LRG_AESTHETIC_ONNX`).
+pub fn resolve_aesthetic() -> AestheticPaths {
+    AestheticPaths {
+        onnx: env_or_default(
+            "LRG_AESTHETIC_ONNX",
+            default_models_dir().join("aesthetic_siglip.onnx"),
+        ),
     }
 }
 

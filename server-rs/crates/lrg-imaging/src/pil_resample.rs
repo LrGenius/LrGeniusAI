@@ -119,6 +119,28 @@ fn precompute_coeffs(
     (ksize, bounds, kk)
 }
 
+/// The resampling as a dense `out_size x in_size` weight matrix, row-major.
+///
+/// Row `i` holds the weights output sample `i` takes from each input sample —
+/// the same coefficients [`resize_plane_f32`] applies, laid out so a caller can
+/// resize along one axis with a matrix product instead. SigLIP2 NaFlex needs
+/// exactly that: its position-embedding grid is resized per image with
+/// torch's `F.interpolate(bilinear, antialias=True)`, which is separable and
+/// uses these kernels, and the exported graph does the resize as two matrix
+/// products against matrices built here (see `lrg_ml::naflex_pre`).
+pub fn resample_matrix(in_size: usize, out_size: usize, filter: Filter) -> Vec<f32> {
+    let (ksize, bounds, kk) = precompute_coeffs(in_size, out_size, filter);
+    let mut out = vec![0.0f32; out_size * in_size];
+    for row in 0..out_size {
+        let xmin = bounds[row * 2] as usize;
+        let xlen = bounds[row * 2 + 1] as usize;
+        for x in 0..xlen {
+            out[row * in_size + xmin + x] = kk[row * ksize + x] as f32;
+        }
+    }
+    out
+}
+
 /// Pillow `normalize_coeffs_8bpc`.
 fn normalize_coeffs_8bpc(kk: &[f64]) -> Vec<i32> {
     kk.iter()
@@ -198,7 +220,19 @@ pub fn resize_plane(
     filter: Filter,
 ) -> Vec<u8> {
     assert_eq!(input.len(), in_w * in_h);
-    // Horizontal pass first, then vertical (Pillow order).
+    // Horizontal pass first, then vertical.
+    //
+    // This is Pillow <= 12 (12.3.0 is what `scripts/uv.lock` pins, and what the
+    // goldens are made with). Pillow 13.0 changed it: it runs the vertical pass
+    // first when the height shrinks by more than twice what the width does
+    // (`horizontal_first` in `ImagingResampleInner`, Resample.c). The 8-bit path
+    // rounds after every pass, so the two orders differ by one level on a few
+    // percent of the pixels of such images.
+    //
+    // Deliberately not following 13: everything this has to agree with was made
+    // with the older order — pHashes already stored in catalogs, and the
+    // preprocessing the SigLIP2 and aesthetic models were trained and
+    // evaluated with. Move this and the goldens together if that ever changes.
     let mut data = input.to_vec();
     let mut w = in_w;
     if out_w != in_w {
@@ -313,4 +347,51 @@ pub fn rgb_to_luma(rgb: &[u8], pixels: usize) -> Vec<u8> {
         out.push(((r * 19595 + g * 38470 + b * 7471 + 0x8000) >> 16) as u8);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The matrix must be the same resize as [`resize_plane_f32`], both up and
+    /// down: a 1-pixel-wide column resized either way has to agree.
+    #[test]
+    fn resample_matrix_matches_resize_plane_f32() {
+        let column: Vec<f32> = (0..16).map(|i| (i as f32 * 0.37).sin()).collect();
+        for out_len in [5, 16, 23, 40] {
+            let expected = resize_plane_f32(&column, 1, 16, 1, out_len, Filter::Bilinear);
+            let m = resample_matrix(16, out_len, Filter::Bilinear);
+            for (row, want) in expected.iter().enumerate() {
+                let got: f32 = (0..16).map(|j| m[row * 16 + j] * column[j]).sum();
+                assert!((got - want).abs() < 1e-5, "out_len {out_len} row {row}");
+            }
+            for row in 0..out_len {
+                let sum: f32 = m[row * 16..(row + 1) * 16].iter().sum();
+                assert!((sum - 1.0).abs() < 1e-5);
+            }
+        }
+    }
+
+    /// Horizontal pass first, whatever the shape: Pillow <= 12's order (see
+    /// `resize_plane`). A tall image is the case Pillow 13 changed, so it is
+    /// the one that would notice a drift.
+    #[test]
+    fn passes_run_horizontal_first_like_pillow_12() {
+        let (w, h) = (30usize, 90usize);
+        let mut x = 7u64;
+        let input: Vec<u8> = (0..w * h)
+            .map(|_| {
+                x = x.wrapping_mul(1103515245).wrapping_add(12345) & 0x7FFF_FFFF;
+                ((x >> 16) & 0xFF) as u8
+            })
+            .collect();
+        let f = Filter::Bilinear;
+
+        // Height drops 90 -> 60 (30) against width 30 -> 22 (8 * 2 = 16): the
+        // shape Pillow 13 would run vertical first.
+        let hv = resize_plane(&resize_plane(&input, w, h, 22, h, f), 22, h, 22, 60, f);
+        assert_eq!(resize_plane(&input, w, h, 22, 60, f), hv);
+        let vh = resize_plane(&resize_plane(&input, w, h, w, 60, f), w, 60, 22, 60, f);
+        assert_ne!(hv, vh, "the shape must be one where the order matters");
+    }
 }

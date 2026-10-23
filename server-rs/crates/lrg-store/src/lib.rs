@@ -1,6 +1,6 @@
 //! LanceDB-backed vector store replacing the embedded ChromaDB.
 //!
-//! Schema per table: `id: Utf8` (unique), `vector: FixedSizeList<Float32, D>`
+//! Schema per photo table ([`TABLES`]; [`TEXT_EMBEDDING_TABLE`] has its own): `id: Utf8` (unique), `vector: FixedSizeList<Float32, D>`
 //! (nullable — metadata-only photos store NULL instead of Chroma's zero-vector
 //! hack), `metadata: Utf8` (JSON object, byte-compatible with the Chroma
 //! metadata dict including `catalog_ids` as a JSON-list string and
@@ -18,9 +18,12 @@ use futures::TryStreamExt;
 // ourselves lets cargo pick a semver-incompatible major (arrow 59 while lancedb
 // pins ^58), which puts two arrow trees in the build and breaks every type that
 // crosses the lancedb boundary.
-use lancedb::arrow::arrow_array::builder::{FixedSizeListBuilder, Float32Builder, StringBuilder};
+use lancedb::arrow::arrow_array::builder::{
+    FixedSizeListBuilder, Float32Builder, ListBuilder, StringBuilder,
+};
 use lancedb::arrow::arrow_array::{
-    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
+    Array, FixedSizeListArray, Float32Array, ListArray, RecordBatch, RecordBatchIterator,
+    StringArray,
 };
 use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
 use lancedb::index::scalar::BTreeIndexBuilder;
@@ -29,8 +32,10 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::{CompactionOptions, Duration, OptimizeAction, OptimizeOptions};
 use serde_json::{Map, Value};
 
+pub mod cleanup;
 pub mod meta;
 pub mod migrate;
+pub mod upgrade;
 
 /// Table names match the Chroma collection names 1:1 so the migration and
 /// the service layer share vocabulary.
@@ -53,6 +58,19 @@ pub const TABLES: [(&str, i32); 4] = [
     (SPECIES_TABLE, 768),
 ];
 
+/// Text-tower embeddings of the fixed prompts photos are scored against —
+/// the CLIP-IQA sets, the organism gate in front of BioCLIP, the scene
+/// probes — so a run reads them instead of loading the text tower to make
+/// them again.
+///
+/// Not one of [`TABLES`], because nothing about it fits their shape: a row is
+/// keyed by `(model_id, text)` rather than by a photo, nothing ever searches
+/// it by vector, and `vector` is a variable-length list so that a model with
+/// another dimension can share the table. `model_id` is a column of its own
+/// for the same reason: rows of several models can sit side by side, and a
+/// build only ever reads its own.
+pub const TEXT_EMBEDDING_TABLE: &str = "text_embeddings";
+
 /// Where the removed Vertex AI integration kept its embeddings. Nothing
 /// reads or writes it any more; `Store::open` drops it from databases that
 /// still carry one.
@@ -61,6 +79,11 @@ const RETIRED_VERTEX_TABLE: &str = "image_embeddings_vertex";
 /// Chunk size for `id IN (...)` predicates, mirroring the Python
 /// GET_IDS_CHUNK_SIZE rationale (bounded query size on large catalogs).
 const GET_IDS_CHUNK_SIZE: usize = 1000;
+
+/// `LIKE` terms per `DELETE` in [`Store::delete_by_id_prefixes`]. Each term is
+/// a pattern match, not an index lookup, so this stays well under
+/// `GET_IDS_CHUNK_SIZE`.
+const PREFIX_DELETE_CHUNK_SIZE: usize = 200;
 
 /// How many write ops must pile up before the maintenance loop compacts.
 ///
@@ -155,6 +178,16 @@ pub struct OptimizeSummary {
     pub cache_bytes: u64,
 }
 
+/// One row of [`TEXT_EMBEDDING_TABLE`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextEmbedding {
+    /// The embedding function that produced `vector`, e.g.
+    /// `lrg_ml::siglip::MODEL_ID`.
+    pub model_id: String,
+    pub text: String,
+    pub vector: Vec<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoreRecord {
     pub id: String,
@@ -199,6 +232,61 @@ fn table_schema(dim: i32) -> Arc<Schema> {
         ),
         Field::new("metadata", DataType::Utf8, true),
     ]))
+}
+
+fn text_embedding_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("model_id", DataType::Utf8, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
+            false,
+        ),
+    ]))
+}
+
+fn text_embeddings_to_batch(rows: &[TextEmbedding]) -> Result<RecordBatch> {
+    let mut model_ids = StringBuilder::new();
+    let mut texts = StringBuilder::new();
+    let mut vectors = ListBuilder::new(Float32Builder::new());
+    for row in rows {
+        model_ids.append_value(&row.model_id);
+        texts.append_value(&row.text);
+        vectors.values().append_slice(&row.vector);
+        vectors.append(true);
+    }
+    Ok(RecordBatch::try_new(
+        text_embedding_schema(),
+        vec![
+            Arc::new(model_ids.finish()),
+            Arc::new(texts.finish()),
+            Arc::new(vectors.finish()),
+        ],
+    )?)
+}
+
+fn batch_to_text_embeddings(batch: &RecordBatch) -> Vec<TextEmbedding> {
+    let column = |name: &str| batch.column_by_name(name);
+    let (Some(model_ids), Some(texts), Some(vectors)) = (
+        column("model_id").and_then(|c| c.as_any().downcast_ref::<StringArray>()),
+        column("text").and_then(|c| c.as_any().downcast_ref::<StringArray>()),
+        column("vector").and_then(|c| c.as_any().downcast_ref::<ListArray>()),
+    ) else {
+        return Vec::new();
+    };
+    (0..batch.num_rows())
+        .filter(|&row| !vectors.is_null(row))
+        .filter_map(|row| {
+            let values = vectors.value(row);
+            let floats = values.as_any().downcast_ref::<Float32Array>()?;
+            Some(TextEmbedding {
+                model_id: model_ids.value(row).to_string(),
+                text: texts.value(row).to_string(),
+                vector: floats.values().to_vec(),
+            })
+        })
+        .collect()
 }
 
 fn sql_quote(s: &str) -> String {
@@ -303,7 +391,8 @@ fn batch_to_records(batch: &RecordBatch) -> Vec<StoreRecord> {
 }
 
 impl Store {
-    /// Open (or create) the store at `root`, ensuring all four tables exist.
+    /// Open (or create) the store at `root`, ensuring every table exists —
+    /// the four [`TABLES`] and [`TEXT_EMBEDDING_TABLE`].
     pub async fn open(root: &Path) -> Result<Store> {
         // Explicit session: without one, lancedb builds a `Session::default()`
         // whose caches are capped at 6 GiB + 1 GiB. See `INDEX_CACHE_BYTES`.
@@ -339,6 +428,11 @@ impl Store {
                     .await?;
             }
         }
+        if !existing.iter().any(|t| t == TEXT_EMBEDDING_TABLE) {
+            conn.create_empty_table(TEXT_EMBEDDING_TABLE, text_embedding_schema())
+                .execute()
+                .await?;
+        }
         let store = Store {
             conn,
             session,
@@ -349,7 +443,9 @@ impl Store {
     }
 
     async fn table(&self, name: &str) -> Result<lancedb::Table> {
-        table_dim(name)?; // validate name
+        if name != TEXT_EMBEDDING_TABLE {
+            table_dim(name)?; // validate name
+        }
         Ok(self.conn.open_table(name).execute().await?)
     }
 
@@ -401,7 +497,13 @@ impl Store {
     /// of thousands.
     async fn optimize_all_with_target(&self, target_rows: usize) -> Result<OptimizeSummary> {
         let mut summary = OptimizeSummary::default();
-        for (name, _) in TABLES {
+        // The text table is written rarely, but each write still mints a
+        // version, and pruning is the only thing that ever reclaims one.
+        let names = TABLES
+            .iter()
+            .map(|(name, _)| *name)
+            .chain([TEXT_EMBEDDING_TABLE]);
+        for name in names {
             let tbl = self.table(name).await?;
             let compaction = tbl
                 .optimize(OptimizeAction::Compact {
@@ -539,6 +641,26 @@ impl Store {
         Ok(())
     }
 
+    /// [`Store::delete_by_id_prefix`] for many prefixes at once, a few hundred
+    /// per `DELETE`. Each `DELETE` mints a dataset version, so purging the
+    /// faces of a thousand photos one prefix at a time would leave a thousand
+    /// versions for the maintenance loop to prune.
+    pub async fn delete_by_id_prefixes(&self, table: &str, prefixes: &[String]) -> Result<()> {
+        if prefixes.is_empty() {
+            return Ok(());
+        }
+        let tbl = self.table(table).await?;
+        for chunk in prefixes.chunks(PREFIX_DELETE_CHUNK_SIZE) {
+            let predicate = chunk
+                .iter()
+                .map(|p| format!("({})", id_prefix_predicate(p)))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            tbl.delete(&predicate).await?;
+        }
+        Ok(())
+    }
+
     /// Every row whose `id` starts with `prefix`, vectors included — the read
     /// counterpart of [`Store::delete_by_id_prefix`].
     ///
@@ -664,6 +786,61 @@ impl Store {
         let tbl = self.table(table).await?;
         Ok(tbl.count_rows(None).await?)
     }
+
+    /// The stored embeddings of whichever of `texts` have one under
+    /// `model_id`. A text with no row is simply absent from the result, in no
+    /// particular order — callers match on `text`.
+    pub async fn get_text_embeddings(
+        &self,
+        model_id: &str,
+        texts: &[String],
+    ) -> Result<Vec<TextEmbedding>> {
+        let tbl = self.table(TEXT_EMBEDDING_TABLE).await?;
+        let mut out = Vec::new();
+        for chunk in texts.chunks(GET_IDS_CHUNK_SIZE) {
+            let list = chunk
+                .iter()
+                .map(|s| sql_quote(s))
+                .collect::<Vec<_>>()
+                .join(",");
+            let batches: Vec<RecordBatch> = tbl
+                .query()
+                .only_if(format!(
+                    "model_id = {} AND text IN ({list})",
+                    sql_quote(model_id)
+                ))
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+            for batch in &batches {
+                out.extend(batch_to_text_embeddings(batch));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Insert-or-replace by `(model_id, text)`.
+    pub async fn put_text_embeddings(&self, rows: &[TextEmbedding]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let batch = text_embeddings_to_batch(rows)?;
+        let schema = batch.schema();
+        let reader = RecordBatchIterator::new([Ok(batch)], schema);
+        let tbl = self.table(TEXT_EMBEDDING_TABLE).await?;
+        let mut builder = tbl.merge_insert(&["model_id", "text"]);
+        builder
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        builder
+            .execute(
+                Box::new(reader) as Box<dyn lancedb::arrow::arrow_array::RecordBatchReader + Send>
+            )
+            .await?;
+        self.write_ops.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -682,6 +859,82 @@ mod tests {
             vector,
             metadata,
         }
+    }
+
+    fn text_row(model_id: &str, text: &str, vector: Vec<f32>) -> TextEmbedding {
+        TextEmbedding {
+            model_id: model_id.to_string(),
+            text: text.to_string(),
+            vector,
+        }
+    }
+
+    #[tokio::test]
+    async fn text_embeddings_round_trip_per_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        store
+            .put_text_embeddings(&[
+                text_row("model-a", "a good photo.", vec![0.1, 0.2, 0.3]),
+                // Another model with another dimension, in the same table.
+                text_row("model-b", "a good photo.", vec![0.4, 0.5]),
+                text_row("model-a", "it's a quote", vec![0.6, 0.7, 0.8]),
+            ])
+            .await
+            .unwrap();
+
+        let mut got = store
+            .get_text_embeddings(
+                "model-a",
+                &[
+                    "a good photo.".into(),
+                    "it's a quote".into(),
+                    "never stored".into(),
+                ],
+            )
+            .await
+            .unwrap();
+        got.sort_by(|a, b| a.text.cmp(&b.text));
+        assert_eq!(
+            got,
+            vec![
+                text_row("model-a", "a good photo.", vec![0.1, 0.2, 0.3]),
+                text_row("model-a", "it's a quote", vec![0.6, 0.7, 0.8]),
+            ]
+        );
+
+        let other = store
+            .get_text_embeddings("model-b", &["a good photo.".into()])
+            .await
+            .unwrap();
+        assert_eq!(
+            other,
+            vec![text_row("model-b", "a good photo.", vec![0.4, 0.5])]
+        );
+    }
+
+    /// Re-writing a `(model_id, text)` pair replaces its vector rather than
+    /// adding a second row, and the rows survive reopening the store.
+    #[tokio::test]
+    async fn text_embeddings_replace_by_model_and_text_and_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let store = Store::open(dir.path()).await.unwrap();
+            store
+                .put_text_embeddings(&[text_row("m", "t", vec![1.0, 0.0])])
+                .await
+                .unwrap();
+            store
+                .put_text_embeddings(&[text_row("m", "t", vec![0.0, 1.0])])
+                .await
+                .unwrap();
+            assert_eq!(store.count(TEXT_EMBEDDING_TABLE).await.unwrap(), 1);
+        }
+        let store = Store::open(dir.path()).await.unwrap();
+        let got = store.get_text_embeddings("m", &["t".into()]).await.unwrap();
+        assert_eq!(got, vec![text_row("m", "t", vec![0.0, 1.0])]);
+        // And maintenance covers the table without tripping over its schema.
+        store.optimize_all().await.unwrap();
     }
 
     #[tokio::test]
@@ -967,6 +1220,44 @@ mod tests {
         assert_eq!(remaining.len(), 2);
         assert!(remaining.contains(&"photo_10_0".to_string()));
         assert!(remaining.contains(&"other_0".to_string()));
+    }
+
+    /// The batched form covers exactly what the single form covers, per
+    /// prefix, across more prefixes than fit in one `DELETE`.
+    #[tokio::test]
+    async fn delete_by_id_prefixes_matches_each_prefix_across_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        let photos = PREFIX_DELETE_CHUNK_SIZE + 3;
+        let mut rows: Vec<StoreRecord> = (0..photos)
+            .map(|i| {
+                record(
+                    &format!("p{i}_0"),
+                    Some(vec![0.0; 512]),
+                    json!({"photo_id": format!("p{i}")}),
+                )
+            })
+            .collect();
+        // "p1_" must not reach "p10_0" (whose prefix is "p10_"), and an
+        // unlisted photo keeps its face.
+        rows.push(record("keep_0", Some(vec![0.0; 512]), json!({})));
+        store.append(FACE_TABLE, &rows).await.unwrap();
+
+        let prefixes: Vec<String> = (0..photos)
+            .filter(|i| *i != 10)
+            .map(|i| format!("p{i}_"))
+            .collect();
+        store
+            .delete_by_id_prefixes(FACE_TABLE, &prefixes)
+            .await
+            .unwrap();
+
+        let mut remaining = store.scan_ids(FACE_TABLE).await.unwrap();
+        remaining.sort();
+        assert_eq!(remaining, vec!["keep_0".to_string(), "p10_0".to_string()]);
+        // An empty list is a no-op, not a `DELETE` with no predicate.
+        store.delete_by_id_prefixes(FACE_TABLE, &[]).await.unwrap();
+        assert_eq!(store.count(FACE_TABLE).await.unwrap(), 2);
     }
 
     /// The read side has to cover exactly the rows the delete side clears —
