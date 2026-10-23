@@ -170,7 +170,7 @@ fn thumbnail_112_jpeg(crop: &[u8], cw: usize, ch: usize) -> String {
 /// with KleidiAI enabled again — see [`crate::DISABLE_KLEIDIAI`] for the
 /// measurements and the `LRG_DISABLE_KLEIDIAI` escape hatch.
 fn build_session(path: &Path) -> ort::Result<Session> {
-    let env = ort::init().build()?;
+    let env = crate::ort_environment()?;
     let builder = Session::builder(&env)?
         .with_optimization_level(crate::OPTIMIZATION_LEVEL)?
         .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])?;
