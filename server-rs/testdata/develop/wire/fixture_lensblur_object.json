@@ -76,8 +76,18 @@
   "LensProfileVignettingScale": 100,
   "Look": {
     "Amount": 1.0,
+    "Copyright": "Synthetic copyright notice",
+    "Group": {
+      "x-default": "Synthetic Group"
+    },
     "Name": "Adobe Landscape",
-    "Stubbed": true,
+    "Parameters": {
+      "ConvertToGrayscale": false,
+      "ProcessVersion": "15.4"
+    },
+    "SupportsAmount": false,
+    "SupportsMonochrome": false,
+    "SupportsOutputReferred": false,
     "UUID": "6F9C877E84273F4E8271E6B91BEB36A1"
   },
   "LuminanceAdjustmentAqua": 0,

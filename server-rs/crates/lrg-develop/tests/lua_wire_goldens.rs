@@ -346,11 +346,17 @@ fn cases() -> Vec<Case> {
         )
     });
 
-    // The Look of a committed fixture, as a stub (provisional) and whole.
+    // The Look of a committed fixture, as a stub (no longer the default) and whole.
     let mut look = DevelopSettings::new();
     look.look = fixture("mask_range_color_area.json").look;
     assert!(look.look.is_some());
-    out.push(case("look_stub.json", look.clone(), raw()));
+    out.push(Case {
+        options: LuaOptions {
+            look_form: LookForm::Stub,
+            ..LuaOptions::PROVISIONAL
+        },
+        ..case("look_stub.json", look.clone(), raw())
+    });
     out.push(Case {
         options: LuaOptions {
             look_form: LookForm::Full,

@@ -348,7 +348,7 @@ impl LuaOptions {
     /// | `wb_mode_only` | `false` | settled on non-raw (E1f/E1g, 15.6); open on raw | E1f/E1g: `"Auto"` alone sets the mode, and the readback showed the previous incremental numbers unchanged within 15 s (Library module; the Basic-panel check is open). Never honoured for a non-raw photo, whatever this says. Stays together with `lrg_analysis::style_engine::EMIT_NAMED_WB_MODES` | raw: E1e (`Daylight`) and `Auto` on a raw file (a positive answer turns it on for raw targets only); `"As Shot"` and the other named modes alone are applied by no experiment |
     /// | `flatten_auto_now` | `false` | settled on non-raw (E1f against E1g, 15.6) | `optFlattenAutoNow = true` made no difference to the readback within 15 s (Library module) | raw (matters only with `wb_mode_only`) |
     /// | `ai_update` | `true` | settled for AI masks (E2b against E2c, 15.6, non-raw) | without the call the subject mask is still pending after 30 s (Library module); after `photo:updateAISettings()` it is computed (call 0.6 s) | an Adobe Adaptive `Look` (E11 rejects adaptive Looks); people parts (the subType-3 form, on a photo with a visible person) |
-    /// | `look_form` | `Stub` | open | E11 needs a raw file and did not run; every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) | E11a/E11b/E11c on a raw file; camera-restricted and adaptive Looks by no experiment |
+    /// | `look_form` | `Full` | settled on raw (E11, 15.6) | E11b: a complete Look with `Parameters` from another photo is honoured; E11a/E11c: a stub, with or without `Stubbed`, sets no Look. A Look without `Parameters` is reported (`Look.Parameters`) | camera-restricted and adaptive Looks by no experiment |
     /// | `preset_amount_flags` | `false` | settled: no effect (E4e, 15.6, non-raw) | amount 50 and 200 leave the globals and the mask values at the preset's own, with and without `SupportsAmount`/`SupportsAmount2` (read back; the visual check is manual) | the preset route is not chosen (E4: preset masks replace the photo's, `updateAI = true` left the mask pending) |
     ///
     /// When a run answers more, in one change:
@@ -382,14 +382,15 @@ impl LuaOptions {
         // Supported on non-raw (E1b/E1d, 15.6); raw E1b vs E1c open.
         wb_custom_with_numbers: true,
         // Settled on non-raw (E1f/E1g, 15.6; never honoured for non-raw);
-        // raw E1e open. With EMIT_NAMED_WB_MODES.
+        // raw E1e-E1g not recomputed either. With EMIT_NAMED_WB_MODES.
         wb_mode_only: false,
         // Settled on non-raw (E1f vs E1g, 15.6): no effect.
         flatten_auto_now: false,
         // Settled for AI masks (E2b vs E2c, 15.6, non-raw).
         ai_update: true,
-        // Open: E11 needs a raw file.
-        look_form: LookForm::Stub,
+        // Settled on raw (E11a/E11c, E11b): a stub sets no Look, a complete Look with
+        // Parameters does.
+        look_form: LookForm::Full,
         // Settled (E4e, 15.6): the amount changes nothing either way.
         preset_amount_flags: false,
     };
@@ -424,7 +425,7 @@ impl LuaOptions {
             status: EvidenceStatus::Settled,
             by: "E2a-E2d (subject, sky, background)",
             scope: FIRST_RUN,
-            open: "people parts: the one applied (E2d hair, MaskSubType 3 / MaskSubCategoryID 5, the writer's form) ended failed, ErrorReason 1; form or photo is not known. Minimal and a luminance range's preset form are applied by no experiment",
+            open: "people parts: the hair mask (MaskSubType 3 / MaskSubCategoryID 5, the writer's form) failed with ErrorReason 1 on the non-raw TIFF but computed on the raw run, so the form works and the first failure was the photo; other parts and several people are open. Minimal and a luminance range's preset form are applied by no experiment",
         },
         OptionEvidence {
             field: "local_form",
@@ -436,23 +437,23 @@ impl LuaOptions {
         OptionEvidence {
             field: "wb_custom_with_numbers",
             status: EvidenceStatus::Supported,
-            by: "E1b (numbers alone leave As Shot in the readback), E1d (Custom is taken)",
-            scope: FIRST_RUN,
-            open: "non-raw Custom + incremental numbers in one call (the writer's non-raw form); whether As Shot + numbers renders them (Basic panel); raw E1b against E1c",
+            by: "E1b (numbers alone leave As Shot in the readback), E1d (Custom is taken); raw E1c (Custom + Temperature + Tint is taken whole)",
+            scope: FIRST_RUN_AND_RAW,
+            open: "non-raw Custom + incremental numbers in one call (the writer's non-raw form); whether As Shot + numbers renders them (Basic panel)",
         },
         OptionEvidence {
             field: "wb_mode_only",
             status: EvidenceStatus::Settled,
-            by: "E1f/E1g (Auto alone: the readback showed the old numbers within 15 s)",
-            scope: FIRST_RUN,
-            open: "raw: E1e (Daylight) and Auto on a raw file; a positive answer enables raw targets only (non-raw is refused whatever the field says); the Basic-panel check",
+            by: "E1f/E1g (non-raw) and E1e-E1g (raw): a mode alone sets the mode, Temperature/Tint stay as they were for 15 s",
+            scope: FIRST_RUN_AND_RAW,
+            open: "the Basic-panel check (Lightroom may resolve a mode only when Develop renders the photo)",
         },
         OptionEvidence {
             field: "flatten_auto_now",
             status: EvidenceStatus::Settled,
-            by: "E1f against E1g (no difference)",
-            scope: FIRST_RUN,
-            open: "raw",
+            by: "E1f against E1g (no difference), on non-raw and on raw",
+            scope: FIRST_RUN_AND_RAW,
+            open: "the Basic-panel check",
         },
         OptionEvidence {
             field: "ai_update",
@@ -463,10 +464,10 @@ impl LuaOptions {
         },
         OptionEvidence {
             field: "look_form",
-            status: EvidenceStatus::Open,
-            by: "",
-            scope: "",
-            open: "E11 needs a raw file and did not run",
+            status: EvidenceStatus::Settled,
+            by: "E11b (a complete Look with Parameters from another photo is honoured); E11a/E11c (a stub, with or without Stubbed, sets no Look)",
+            scope: RAW_LOOK_RUN,
+            open: "Full without Parameters (reported, not written as a working Look), camera-restricted and adaptive Looks (applied by no experiment), and the Basic-panel check",
         },
         OptionEvidence {
             field: "preset_amount_flags",
@@ -483,6 +484,13 @@ impl LuaOptions {
 pub const FIRST_RUN: &str =
     "Lightroom Classic 15.6, one non-raw TIFF without develop edits, run from the Library module";
 
+/// Where the Look answers hold: the E11 runs of 2026-10-23.
+pub const RAW_LOOK_RUN: &str =
+    "Lightroom Classic 15.6, Canon CR3 raws, Library module; Looks \"Adobe Color\" onto a copy with no Look";
+
+/// Rows settled by both runs.
+pub const FIRST_RUN_AND_RAW: &str = "Lightroom Classic 15.6, Library module: one non-raw TIFF without edits, and one edited Canon CR3";
+
 /// How far the experiments carry one [`LuaOptions`] field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EvidenceStatus {
@@ -496,6 +504,15 @@ pub enum EvidenceStatus {
     Supported,
     /// No experiment has answered it: the default is a provisional guess.
     Open,
+}
+
+/// Whether the profile is an Adobe Adaptive Look (`isAdobeAdaptive`).
+fn is_adaptive(look: &Look) -> bool {
+    look.rest
+        .fields
+        .values
+        .get(&id(Level::Struct(StructKind::Look), "isAdobeAdaptive"))
+        .is_some_and(|v| *v == Value::Bool(true))
 }
 
 /// One row of [`LuaOptions::EVIDENCE`].
@@ -1216,18 +1233,11 @@ impl Writer<'_> {
     /// The `Look` in apply mode, per [`LuaOptions::look_form`] (a round
     /// trip writes it whole through the global fields).
     fn look(&mut self, look: &Look) -> Result<Option<J>, WireError> {
-        const L: Level = Level::Struct(StructKind::Look);
         let written = self.look_table(look)?;
         // An Adobe Adaptive profile needs an AI update to compute its
         // `AILook` state, which is never written (COMPUTED), in every form.
         // Applied by no experiment: E11 rejects adaptive Looks.
-        let adaptive = look
-            .rest
-            .fields
-            .values
-            .get(&id(L, "isAdobeAdaptive"))
-            .is_some_and(|v| *v == Value::Bool(true));
-        if written.is_some() && adaptive {
+        if written.is_some() && is_adaptive(look) {
             self.ai = true;
         }
         Ok(written)
@@ -1240,7 +1250,14 @@ impl Writer<'_> {
             let parameters = record.fields.take(L, "Parameters");
             let mut m = self.fields(&record.fields, "Look")?;
             match parameters {
-                None => {}
+                // A Look without `Parameters` is a stub, and Lightroom
+                // ignores a stub (E11a/E11c): say so. An adaptive Look has
+                // none by design (its `AILook` state is computed).
+                None => {
+                    if !is_adaptive(look) {
+                        self.skip("Look.Parameters", SkipReason::Opaque);
+                    }
+                }
                 Some(Value::Opaque(Opaque::Json(j)))
                     if check_wire_at(&j, "Look.Parameters", false).is_ok() =>
                 {

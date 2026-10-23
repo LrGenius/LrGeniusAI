@@ -59,8 +59,17 @@
   "LensProfileVignettingScale": 100,
   "Look": {
     "Amount": 1.0,
+    "Group": {
+      "x-default": "Synthetic Group"
+    },
     "Name": "Adobe Color",
-    "Stubbed": true,
+    "Parameters": {
+      "ConvertToGrayscale": false,
+      "ProcessVersion": "15.4"
+    },
+    "SupportsAmount": false,
+    "SupportsMonochrome": false,
+    "SupportsOutputReferred": false,
     "UUID": "B952C231111CD8E0ECCF14B86BAA7077"
   },
   "LuminanceAdjustmentAqua": 0,

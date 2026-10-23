@@ -62,9 +62,23 @@
   "LensProfileVignettingScale": 100,
   "Look": {
     "Amount": 1.0,
+    "Cluster": "Synthetic",
+    "Copyright": "Synthetic copyright notice",
+    "Group": {
+      "x-default": "Synthetic Group"
+    },
     "Name": "Adaptive Color",
-    "Stubbed": true,
-    "UUID": "226E6263ED94405B973B41F5A6E67BE9"
+    "Parameters": {
+      "ConvertToGrayscale": false,
+      "ProcessVersion": "15.4"
+    },
+    "SortName": {
+      "x-default": "Synthetic"
+    },
+    "SupportsMonochrome": false,
+    "SupportsOutputReferred": false,
+    "UUID": "226E6263ED94405B973B41F5A6E67BE9",
+    "isAdobeAdaptive": true
   },
   "LuminanceAdjustmentAqua": 0,
   "LuminanceAdjustmentBlue": 0,

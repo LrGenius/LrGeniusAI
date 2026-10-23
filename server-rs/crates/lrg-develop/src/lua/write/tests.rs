@@ -111,7 +111,7 @@ fn the_provisional_choices_are_pinned() {
     assert!(!p.wb_mode_only);
     assert!(!p.flatten_auto_now);
     assert!(p.ai_update);
-    assert_eq!(p.look_form, LookForm::Stub);
+    assert_eq!(p.look_form, LookForm::Full);
     assert!(!p.preset_amount_flags);
 }
 
@@ -176,15 +176,17 @@ fn the_first_run_statuses_are_pinned() {
             .unwrap()
             .status
     };
-    for f in ["int_flag_as", "look_form"] {
-        assert_eq!(status(f), EvidenceStatus::Open, "{f}");
-    }
+    assert_eq!(status("int_flag_as"), EvidenceStatus::Open);
+    assert_eq!(status("look_form"), EvidenceStatus::Settled);
     for f in ["wb_custom_with_numbers", "panel_switches"] {
         assert_eq!(status(f), EvidenceStatus::Supported, "{f}");
     }
     for e in LuaOptions::EVIDENCE {
         assert!(
-            e.status == EvidenceStatus::Open || e.scope == FIRST_RUN,
+            e.status == EvidenceStatus::Open
+                || e.scope == FIRST_RUN
+                || e.scope == FIRST_RUN_AND_RAW
+                || e.scope == RAW_LOOK_RUN,
             "{}",
             e.field
         );
@@ -1012,8 +1014,12 @@ fn look_settings() -> DevelopSettings {
 }
 
 #[test]
-fn the_look_goes_as_a_stub_by_default() {
-    let w = apply(&look_settings());
+fn the_stub_forms_are_still_there_on_request() {
+    let stub = LuaOptions {
+        look_form: LookForm::Stub,
+        ..LuaOptions::default()
+    };
+    let w = apply_with(&look_settings(), stub);
     assert_eq!(
         w.table["Look"],
         json!({"Name": "Adobe Color", "UUID": "B952C231111CD8E0ECCF14B86BAA7077",
@@ -1029,6 +1035,19 @@ fn the_look_goes_as_a_stub_by_default() {
         },
     );
     assert!(bare.table["Look"].get("Stubbed").is_none());
+}
+
+/// E11b: a complete Look with `Parameters` is the one that is applied.
+#[test]
+fn the_look_goes_whole_by_default_and_says_when_it_has_no_parameters() {
+    let w = apply(&look_settings());
+    assert_eq!(w.table["Look"]["Name"], json!("Adobe Color"));
+    assert!(w.table["Look"].get("Parameters").is_some());
+    assert!(w.table["Look"].get("Stubbed").is_none());
+    assert!(w.skipped.is_empty(), "{:?}", w.skipped);
+    let bare = read(json!({"Look": {"Name": "Adobe Vivid",
+        "UUID": "EA1DE074F188405965EF399C72C221D9", "Amount": 1, "Stubbed": true}}));
+    assert_eq!(paths(&apply(&bare)), ["Look.Parameters"]);
 }
 
 #[test]
@@ -1062,7 +1081,11 @@ fn a_camera_restricted_look_only_reaches_that_camera() {
         camera: Some("Synthetic Camera".into()),
         ..PhotoContext::default()
     });
-    let w = to_lua_value(&s, &same, &LuaOptions::default()).unwrap();
+    let stub = LuaOptions {
+        look_form: LookForm::Stub,
+        ..LuaOptions::default()
+    };
+    let w = to_lua_value(&s, &same, &stub).unwrap();
     assert!(w.table.get("Look").is_some());
     // The stub carries no restriction of its own: a COMPUTED copy Lightroom
     // refills, and the filter has already kept the Look to its camera, so

@@ -63,8 +63,18 @@
   "LensProfileVignettingScale": 100,
   "Look": {
     "Amount": 1.0,
+    "Copyright": "Synthetic copyright notice",
+    "Group": {
+      "x-default": "Synthetic Group"
+    },
     "Name": "Adobe Monochrome",
-    "Stubbed": true,
+    "Parameters": {
+      "ConvertToGrayscale": true,
+      "ProcessVersion": "15.4"
+    },
+    "SupportsAmount": false,
+    "SupportsMonochrome": false,
+    "SupportsOutputReferred": false,
     "UUID": "0CFE8F8AB5F63B2A73CE0B0077D20817"
   },
   "LuminanceNoiseReductionContrast": 0,

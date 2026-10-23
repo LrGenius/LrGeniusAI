@@ -468,6 +468,97 @@ applied. `panel_switches = MaskOnly` is only supported (the switch was
 already on). People-part masks, `int_flag_as`, `look_form` and every
 raw-side white-balance question stay open.
 
+## Results: second run (2026-10-23, raw)
+
+**Lightroom Classic 15.6**, test catalog, Library module, one photo: an
+**edited Canon CR3** (`editCount` 5, cropped square, Look "R5M2 Standard V2a",
+process version 15.4). It answers the raw side of E1, E11 and E13 and repeats
+E2 and E4. Its report is not committed.
+
+| Experiment | Result | Settles | Stays open |
+|---|---|---|---|
+| E13 | `orientation = "AB"`; the crop model fits with 0.0015 px error under the reported frame and not under swapped dimensions (2728 px off); 178 top-level keys on an edited photo | `dimensions` and `croppedDimensions` come as reported; the readback is not a default table | a portrait raw with a straightened crop; a fresh raw for the raw defaults |
+| E1a/E1d | `{Temp}` accepted, nothing changed; with `WhiteBalance = "Custom"` only the mode changed | `Temp` is ignored on raw too | none |
+| E1b/E1c | `{Temperature}` alone is stored; `Custom` + `Temperature` + `Tint` is stored whole | the raw white-balance family writes as the writer does | Basic-panel check |
+| E1e/E1f/E1g | `Daylight`, `Auto` and `Auto` + `optFlattenAutoNow` set the mode; `Temperature`/`Tint` stay at 3000/40 for 15.2 s | `wb_mode_only` and `flatten_auto_now` stay off on raw as well | whether Develop resolves the mode on render (Basic panel) |
+| E11a/E11c | a stub of "Adobe Vivid", with or without `Stubbed`, leaves `CameraProfile` Adobe Standard and **no Look** (the photo's own Look is dropped, none is set) | the stub form does not apply a Look | E11b: the copy could not be switched away from its own Look, so a complete Look with `Parameters` is untested |
+| E2 | as in the first run: pending after 30.4 s, computed 1.0 s after `updateAISettings()` (call 0.9 s); sky, background and hair computed within 2.3 s | the hair mask (subType 3, sub-category 5) **works**; its first failure was the photo | people parts other than hair; several people |
+| E4 | as in the first run: masks replaced, re-apply in place, amount ignored (identical values at 50 and 200 with and without the flags), apply then delete works in the session | the preset route stays rejected; amount has no effect | the look of the amount copies; the restart behaviour (E4f) |
+
+**Third run (2026-10-23, after a Lightroom restart).** E11 and E4 again, on a
+second Canon CR3 (`018A0060.CR3`, Look "Adobe Color" with `Parameters`):
+
+- E11a/E11c: the same as before. A stub of "Adobe Vivid", with or without
+  `Stubbed`, leaves `CameraProfile` Adobe Standard and no Look. The result does
+  not depend on the photo or on which Look it carried.
+- E11b: inconclusive again, for the same reason: the copy could not be
+  switched away from its own Look first, because every Look write ends with no
+  Look. A complete Look needs a source photo that carries a *different* Look
+  than the target: select two such photos for the run.
+- E4: identical to the earlier run (masks replaced, sky mask pending after
+  60.7 s, amount ignored, re-apply in place). The restart question is
+  answered: "LrGenius Experiment E4f" was **not listed** after the restart and
+  had no file, so Lightroom forgets a deleted plugin preset at the restart.
+
+**Fourth and fifth reports (2026-10-23).** `report3` holds E1 (not E11) on
+two more raws, `018A0028.CR3` and `018A0060.CR3`; `report4` holds E13 on a
+portrait raw, `018A0052.CR3` without crop:
+
+- E1 on two further raws: identical to the first raw run. `Temp` is ignored,
+  `Temperature` alone is stored, `Custom` + `Temperature` + `Tint` is stored
+  whole, and `Daylight`/`Auto`/`Auto` + `optFlattenAutoNow` set the mode only,
+  with `Temperature`/`Tint` unchanged for 15.2 s. Three raws now agree.
+- E13, portrait raw (`orientation = "DA"`): `dimensions` and
+  `croppedDimensions` are reported in the **display frame** (5464 x 8192),
+  while the raw-metadata `width`/`height` stay in the sensor frame
+  (8192 x 5464). The verdict stays "ambiguous", because an uncropped photo
+  fits both frames; the portrait case still lacks a straightened crop.
+- E13 readback of an unedited raw (`hasAdjustments` false, though `editCount`
+  is 3): 178 top-level keys, `CameraProfile` "Adobe Standard", Look
+  "Adobe Color" with `Parameters`, `Temperature` 4250, `Tint` 7, crop
+  0/1/0/1. This is a raw default table, apart from the as-shot white balance
+  and the lens profile digest, which depend on the file.
+
+**Sixth and seventh reports (2026-10-23).** E11 on two raws, `018A0040.CR3`
+and `018A0065.CR3` (`report_e11`), and E13 on a straightened portrait raw,
+`018A0062.CR3` (`report_e13`):
+
+- E11a/E11c: the stub again leaves no Look, on both photos. E11b is
+  **inconclusive a third time**, because both photos carry the same Look
+  ("Adobe Color", UUID `B952C231...`), so there is no other Look to take as
+  the source and the copy cannot be switched away from its own. E11 needs two
+  raws with *different* Looks; neither of the photos picked so far has one.
+- E13, `orientation = "DA"`, `CropAngle` 19.98, `CropLeft` 0.25487,
+  `CropRight` 0.74513: the verdict is settled. `dimensions` (5464 x 8192) and
+  `croppedDimensions` (3763 x 5641) are both in **display orientation**. The
+  crop model fits only with both dimensions swapped (0.49 px error against
+  more than 1500 px for every other reading): the `Crop*` fractions and the
+  angle act on the **sensor frame** (8192 x 5464), and the result is
+  reported rotated by `orientation`. The first portrait report (no crop)
+  could not tell these apart.
+- The unedited raw readback has 179 top-level keys here against 178 on
+  `018A0052.CR3`; the difference was not examined.
+
+**Eighth report (2026-10-23, `report_e11_2`).** E11 on `018A0500.CR3`
+(Look "Adobe Color") and `018A0516.CR3` (CameraProfile "Camera Neutral", no
+Look):
+
+- E11b is answered: a **complete Look with `Parameters`**, taken from the
+  other selected photo ("Adobe Color"), is **honoured**. The copy ends on
+  CameraProfile Adobe Standard with Look "Adobe Color", `Parameters` kept.
+- E11a and E11c, the stub with and without `Stubbed`, are **ignored** on the
+  photo with no Look (the Look stays empty). On a photo with a Look they drop
+  it. A stub never sets a Look.
+- So `look_form` has to be `Full` to transfer a Look, and it is now the
+  default. It needs the source Look's `Parameters`, which a Look read from an
+  XMP preset or a training row may not carry: the writer then reports
+  `Look.Parameters` as skipped. The wire goldens with a Look were re-blessed.
+
+**What changes for step 2.** Nothing in the writer: it already writes
+`Temperature`/`Tint`/`Custom` as a family, never `Temp`, and asks for
+`updateAISettings()` after masks. `look_form` is `Full` since E11b. The evidence
+rows in `LuaOptions::EVIDENCE` carry the raw answers.
+
 **Still open, for a second run on raw files:**
 - a portrait raw (rotated in camera) with a straightened crop, for E13's
   frame, and a fresh, unedited raw for the raw default table;

@@ -717,8 +717,9 @@ decimals.
 > and background and the non-raw mode-only choices (`wb_mode_only`,
 > `flatten_auto_now`). `wb_custom_with_numbers` is only supported, because
 > `Custom` with the incremental numbers (the writer's non-raw form) was never
-> applied, and so is `panel_switches`. People parts, `int_flag_as`,
-> `look_form` and the raw side are open, and the wire goldens are not frozen.
+> applied, and so is `panel_switches`. People parts and `int_flag_as` are
+> open, `look_form` is settled on raw (a stub sets no Look, a complete Look
+> does), and the wire goldens are not frozen.
 
 `lua::to_lua_value(&settings, &LuaMode, &LuaOptions) -> Result<LuaWritten,
 WireError>` writes the table `photo:applyDevelopSettings()` takes, as the
@@ -816,7 +817,11 @@ Rules 7–9 are checked once more on the finished table (`check_wire`, public
 for the apply layer); a failure is a writer bug and a
 `WireError::NotWireSafe`, never a table handed to Lightroom.
 
-The `Look` follows `look_form`. The stub forms carry `Name`, `UUID`,
+The `Look` follows `look_form`, by default `Full` (E11: only a complete Look
+with `Parameters` is applied; a stub sets none). A Look without `Parameters`
+is still written but reported as `Look.Parameters`, since Lightroom would
+ignore it like a stub; an adaptive Look has none by design and is not
+reported. The stub forms (on request) carry `Name`, `UUID`,
 `Amount` (and `Stubbed`): the profile's COMPUTED fields (`Parameters`,
 `Group`, `Supports*`, `CameraModelRestriction`, `isAdobeAdaptive`, ...) are
 copies Lightroom fills in from its profile library when it resolves the
@@ -860,7 +865,7 @@ unmeasured whatever the run says.
 | `wb_mode_only` | a named mode without numbers written / skipped and reported (`Custom` alone is never written) | `false` | E1f/E1g: `"Auto"` alone sets the mode, and the readback showed the previous incremental numbers unchanged within 15 s (the Basic-panel check is open). Never honoured for a non-raw photo: the writer and the style engine refuse a mode alone there before reading the switch. Stays together with the style engine's `EMIT_NAMED_WB_MODES` (off) | raw: E1e (`Daylight`) and Auto on a raw file, where a positive answer turns mode-only on for raw targets only; `"As Shot"` and the other named modes alone are applied by no experiment | settled on non-raw; open on raw |
 | `flatten_auto_now` | `ApplyCall::flatten_auto_now` when the table sets `WhiteBalance="Auto"` | `false` | E1f against E1g: `optFlattenAutoNow = true` made no difference to the readback within 15 s | raw (matters only with `wb_mode_only`) | settled on non-raw |
 | `ai_update` | `ApplyCall::update_ai_settings` after an AI mask (`Mask/Image`), `LensBlur` or an Adobe Adaptive `Look` | `true` | E2b: without the call the mask is still pending after 30 s in the Library module; E2c: after `photo:updateAISettings()` it is computed (call 0.6 s) | an Adobe Adaptive `Look` (E11 rejects adaptive Looks); people parts (the subType-3 form, on a photo with a visible person) | settled for AI masks (E2, non-raw) |
-| `look_form` | `Stub` (`Stubbed = true`) / `BareStub` / `Full` | `Stub` | E11 needs a raw file and did not run; every Look in Adobe's bundled presets is a `Stubbed = true` stub (E11a's form) | E11a/E11b/E11c on a raw file; camera-restricted and adaptive Looks by no experiment | open |
+| `look_form` | `Stub` (`Stubbed = true`) / `BareStub` / `Full` | `Full` | E11b: a complete Look with `Parameters` is honoured; E11a/E11c: a stub sets no Look (raw, 15.6) | camera-restricted and adaptive Looks by no experiment | settled |
 | `preset_amount_flags` | `SupportsAmount`/`SupportsAmount2 = true` in a plugin preset's table (`LuaMode::Preset` only) | `false` | E4e: amount 50 and 200 leave the globals and the mask values at the preset's own, with and without the flags (read back) | the look of the amount copies (manual check); the preset route is not chosen (see below) | settled: no effect in 15.6 |
 
 The default table now equals the one E2 applies for AI masks (preset-form
@@ -991,7 +996,7 @@ The same test file also
 **Not frozen.** The first run settled the AI-mask forms for subject, sky
 and background on one non-raw photo, and the default table is now the form
 E2 applied; people parts, `panel_switches` (`None` against `MaskOnly`),
-`int_flag_as`, `look_form` and the raw side are open. Freezing also needs one thing the
+`int_flag_as` and the Basic-panel checks are open. Freezing also needs one thing the
 experiments as built do not do: apply the writer's own output. E2 and E4
 apply hand-built tables (the AI-mask preset form, all 23 locals,
 `EnableMaskGroupBasedCorrections`), never a golden. Blocking item before the
