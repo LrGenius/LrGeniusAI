@@ -154,7 +154,7 @@ impl ServerUrl {
         })
     }
 
-    fn chat_url(&self) -> String {
+    pub(crate) fn chat_url(&self) -> String {
         format!("{}/chat/completions", self.api_base)
     }
 

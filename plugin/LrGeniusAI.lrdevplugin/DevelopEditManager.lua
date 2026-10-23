@@ -492,6 +492,41 @@ local function normalizeDevelopValue(key, value, isRaw)
 	return value
 end
 
+-- A recipe applied at less than full strength: every number moves only part of
+-- the way from what the photo has now (`baseline`) to what the recipe asks for.
+--
+-- Recipe values are absolute, so "half an edit" is not half the value — it is
+-- halfway between the photo's own value and the recipe's. That is also why the
+-- baseline has to be the photo as it was *before* the first candidate went on:
+-- scaling against a photo that already carries a candidate would compound.
+--
+-- A setting that cannot be interpolated (a tone curve, a profile name, a flag,
+-- or a number the photo has no value for) is applied whole from halfway up and
+-- left out below it. Left out means the photo keeps its baseline value, because
+-- the caller merges the result over the baseline — so strength 0 reproduces the
+-- baseline exactly.
+--
+-- Hues wrap, so they travel the short way round: 350° towards 10° passes
+-- through 0°, not through 180°.
+local function scaleDevelopSettings(baseline, settings, strength)
+	local scaled = {}
+	for key, target in pairs(settings or {}) do
+		local from = type(baseline) == "table" and baseline[key] or nil
+		if type(target) == "number" and type(from) == "number" then
+			local bounds = DEVELOP_VALUE_BOUNDS[key]
+			local delta = target - from
+			if bounds and bounds.wrap then
+				local span = bounds.max - bounds.min
+				delta = delta - math.floor(delta / span + 0.5) * span
+			end
+			scaled[key] = from + delta * strength
+		elseif strength >= 0.5 then
+			scaled[key] = target
+		end
+	end
+	return scaled
+end
+
 local function mergeGlobalDevelopSettings(currentSettings, aiSettings, isRaw)
 	local merged = {}
 	-- Start with existing settings to preserve all state, including linked keys
@@ -753,6 +788,7 @@ DevelopEditManager.internal = {
 	normalizeDevelopValue = normalizeDevelopValue,
 	mergeGlobalDevelopSettings = mergeGlobalDevelopSettings,
 	buildDevelopSettings = buildDevelopSettings,
+	scaleDevelopSettings = scaleDevelopSettings,
 }
 
 local function focusPhotoInDevelop(photo, warnings)
@@ -790,13 +826,18 @@ local function focusPhotoInDevelop(photo, warnings)
 	return true
 end
 
-local function applyGlobalDevelopSettings(photo, recipe, warnings)
+-- `scaling` is `{ strength = 0..1, baseline = <develop settings> }`, or nil for
+-- the whole recipe. See `scaleDevelopSettings` for what a partial strength means.
+local function applyGlobalDevelopSettings(photo, recipe, warnings, scaling)
 	log:trace("DevelopEditManager.applyGlobalDevelopSettings: start")
 	-- Read from the catalog rather than passed in: the backend was told the
 	-- same thing when the recipe was generated, but a recipe can also be
 	-- re-applied later, and the file is the authority either way.
 	local isRaw = Util.isRawPhoto(photo)
 	local developSettings = buildDevelopSettings(recipe, warnings, isRaw)
+	if scaling and (tonumber(scaling.strength) or 1) < 1 then
+		developSettings = scaleDevelopSettings(scaling.baseline, developSettings, tonumber(scaling.strength))
+	end
 	local cropInRecipe = recipe and recipe.global and recipe.global.crop
 	if type(cropInRecipe) == "table" then
 		log:trace(
@@ -830,9 +871,17 @@ local function applyGlobalDevelopSettings(photo, recipe, warnings)
 	end
 
 	local mergedSettings = developSettings
-	local okCurrent, currentOrErr = LrTasks.pcall(function()
-		return photo:getDevelopSettings()
-	end)
+	local okCurrent, currentOrErr
+	if scaling and type(scaling.baseline) == "table" then
+		-- Merge over the photo as it was before any candidate went on, not over
+		-- what it carries now: a setting a stronger candidate set and this one
+		-- skips would otherwise stay behind from the stronger one.
+		okCurrent, currentOrErr = true, scaling.baseline
+	else
+		okCurrent, currentOrErr = LrTasks.pcall(function()
+			return photo:getDevelopSettings()
+		end)
+	end
 	if okCurrent and type(currentOrErr) == "table" then
 		mergedSettings = mergeGlobalDevelopSettings(currentOrErr, developSettings, isRaw)
 	else
@@ -1539,6 +1588,42 @@ function DevelopEditManager.showValidationDialog(context, photo, response, optio
 	return result, nil
 end
 
+---
+-- The photo's develop settings as they are right now, to scale a recipe against.
+-- Take it before the first candidate goes on; see `scaleDevelopSettings`.
+-- @return table|nil settings, string|nil error
+function DevelopEditManager.captureBaseline(photo)
+	local ok, settingsOrErr = LrTasks.pcall(function()
+		return photo:getDevelopSettings()
+	end)
+	if ok and type(settingsOrErr) == "table" then
+		return settingsOrErr, nil
+	end
+	return nil, tostring(settingsOrErr)
+end
+
+---
+-- Puts a recipe's global settings on a photo at the given strength and does
+-- nothing else: no masks, nothing persisted. For trying candidates; the edit
+-- that stays goes through `applyRecipe`.
+-- @param strength number 0..1; 1 is the whole recipe, 0 the baseline.
+-- @param baseline table From `captureBaseline`.
+-- @return boolean applied, table warnings
+function DevelopEditManager.applyGlobalAtStrength(photo, response, strength, baseline)
+	local recipe = getRecipeFromResponse(response)
+	if not recipe then
+		return false, { "No edit recipe returned by the AI." }
+	end
+	local warnings = {}
+	local applied = applyGlobalDevelopSettings(photo, recipe, warnings, { strength = strength, baseline = baseline })
+	return applied, warnings
+end
+
+---
+-- @param options table|nil `applyGlobal`, `applyMasks`, and optionally
+--   `strength` (0..1) with the `baseline` it is measured from. Without a
+--   strength the whole recipe goes on. Masks are not scaled: a mask is a region
+--   plus its own adjustments, with no baseline to move from.
 function DevelopEditManager.applyRecipe(photo, response, options)
 	log:trace("DevelopEditManager.applyRecipe: start")
 	local recipe = getRecipeFromResponse(response)
@@ -1559,7 +1644,11 @@ function DevelopEditManager.applyRecipe(photo, response, options)
 
 	local globalApplied = true
 	if applyGlobal then
-		globalApplied = applyGlobalDevelopSettings(photo, recipe, warnings)
+		local scaling = nil
+		if options and options.strength ~= nil then
+			scaling = { strength = options.strength, baseline = options.baseline }
+		end
+		globalApplied = applyGlobalDevelopSettings(photo, recipe, warnings, scaling)
 	end
 	if applyMasks then
 		applyMaskEdits(photo, recipe, warnings)

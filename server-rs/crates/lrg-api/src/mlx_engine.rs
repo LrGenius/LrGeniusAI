@@ -20,8 +20,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use serde::Serialize;
 
-use lrg_mlx::{GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
-use lrg_providers::local::{LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine};
+use lrg_mlx::{ChatMessage, ChatRequest, GenerationRequest, MlxEngine, MlxEngineConfig, RgbImage};
+use lrg_providers::local::{
+    LocalChatRequest, LocalEngine, LocalRequest, LocalResponse, SharedLocalEngine, TextDeltas,
+};
 
 /// How long the model may sit unused before it is dropped. Matches the ONNX
 /// models' and llama.cpp's policy — and here it also reaps the sidecar process,
@@ -116,6 +118,46 @@ impl LocalEngine for MlxLocalEngine {
         // would only delay the first result without producing any of them
         // sooner. See `lrg_mlx`'s module docs.
         1
+    }
+
+    async fn chat(
+        &self,
+        request: LocalChatRequest,
+        deltas: Option<TextDeltas>,
+    ) -> Result<LocalResponse, String> {
+        let mut messages = Vec::with_capacity(request.messages.len());
+        for message in request.messages {
+            let images = message
+                .images
+                .into_iter()
+                .map(|image| RgbImage::new(image.width, image.height, image.rgb))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            messages.push(ChatMessage {
+                role: message.role.as_str(),
+                text: message.text,
+                images,
+            });
+        }
+        let output = self
+            .engine
+            .chat(
+                ChatRequest {
+                    messages,
+                    schema: request.schema,
+                    max_tokens: request.max_tokens,
+                    temperature: request.temperature,
+                },
+                deltas,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(LocalResponse {
+            text: output.text,
+            prompt_tokens: output.prompt_tokens,
+            completion_tokens: output.completion_tokens,
+            prefix_reused: output.prefix_reused,
+        })
     }
 }
 

@@ -1,6 +1,8 @@
 //! HTTP layer: axum routers mirroring the Flask blueprints, the shared
 //! application state, and the `db_path` auto-bind middleware.
 
+pub mod agent_bridge;
+pub mod api_auth;
 pub mod edit_budget;
 pub mod hf_repo;
 pub mod llm_engine;
@@ -8,6 +10,7 @@ pub mod llm_models;
 pub mod middleware;
 pub mod mlx_engine;
 pub mod mlx_models;
+pub mod prompt_embeddings;
 pub mod routes;
 pub mod species_links;
 pub mod state;
@@ -53,7 +56,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::style_edit::router())
         .merge(routes::import_::router())
         .merge(routes::species::router())
-        .merge(routes::ui::router());
+        .merge(routes::ui::router())
+        .merge(routes::agent::router());
 
     Router::new()
         // Never versioned — a new plug-in must be able to reach these on an

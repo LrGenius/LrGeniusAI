@@ -1,10 +1,9 @@
-//! End-to-end golden verification: Rust preprocessing (image
-//! shortest-edge resize + center crop + OpenAI-CLIP normalize, text
-//! clean + Gemma tokenize) plus ort inference
-//! against real torch-computed embeddings from `make_siglip_goldens.py`
-//! (which runs through open_clip's actual `preprocess`/`tokenizer`
-//! pipeline, not just the exported ONNX graph — this is the full-stack
-//! check that spike S1 didn't cover).
+//! End-to-end golden verification: Rust preprocessing (NaFlex patches,
+//! text clean + Gemma tokenize) plus ort inference against real
+//! torch-computed embeddings. `scripts/export_siglip2_fp16.py` writes
+//! `siglip_goldens.json` from transformers' own `Siglip2Model` and processor
+//! in the same run that exports the ONNX files, so the goldens always
+//! describe the model that was published.
 //!
 //! Requires the SigLIP2 ONNX files. They are looked up exactly where the
 //! server looks (`LRG_SIGLIP_IMAGE_ONNX` / `LRG_SIGLIP_TEXT_ONNX` /
@@ -48,6 +47,8 @@ fn build_image(name: &str) -> (Vec<u8>, usize, usize) {
         "gradient_640x480" => (gradient(640, 480), 640, 480),
         "lcg_noise_800x600" => (lcg_bytes(800 * 600 * 3, 42), 800, 600),
         "small_320x240" => (lcg_bytes(320 * 240 * 3, 99), 320, 240),
+        "portrait_300x900" => (lcg_bytes(300 * 900 * 3, 7), 300, 900),
+        "panorama_1200x200" => (gradient(1200, 200), 1200, 200),
         other => panic!("unknown golden image {other}"),
     }
 }
@@ -75,6 +76,14 @@ fn image_and_text_embeddings_match_torch() {
     );
     let goldens: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    // Goldens from a different model are not a tolerance problem: comparing
+    // against them fails every cosine and says nothing useful. Say what to do.
+    assert_eq!(
+        goldens["model_id"].as_str(),
+        Some(lrg_ml::siglip::MODEL_ID),
+        "testdata/siglip_goldens.json is for another model; download the one \
+         `scripts/export_siglip2_fp16.py` published next to the ONNX files"
+    );
 
     for (name, expected) in goldens["images"].as_object().unwrap() {
         let (pixels, width, height) = build_image(name);

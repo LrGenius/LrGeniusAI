@@ -79,8 +79,8 @@ fn matches_real_python_output() {
         assert_eq!(got.group_id, want["group_id"].as_str().unwrap());
         assert_eq!(got.group_type, want["group_type"].as_str().unwrap());
         assert_eq!(
-            got.winner_photo_id,
-            want["winner_photo_id"].as_str().unwrap()
+            got.winner_photo_id.as_deref(),
+            Some(want["winner_photo_id"].as_str().unwrap())
         );
         let want_ids: Vec<String> = want["photo_ids"]
             .as_array()

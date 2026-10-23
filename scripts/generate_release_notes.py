@@ -11,8 +11,8 @@ API key beyond the workflow's built-in GITHUB_TOKEN:
   2. pull the title and labels of every PR referenced in them,
   3. sort those into New / Improved / Fixed using the PR's labels and its
      conventional-commit prefix, dropping changes with no user-visible effect,
-  4. wrap the result in the static download/troubleshooting sections and keep
-     the technical list in a collapsed <details> block.
+  4. wrap the result in the static download/backup/troubleshooting sections and
+     keep the technical list in a collapsed <details> block.
 
 Everything here is deterministic: the same release always produces the same
 notes. The wording of each bullet is the PR title with its `type(scope):`
@@ -346,6 +346,24 @@ def download_section(tag, breaking):
     return "\n".join(lines)
 
 
+# In every release, not only the first: each new version runs over catalogs
+# that already hold years of work, and the Edit Date it moves cannot be set
+# back by anyone but a catalog backup (#397).
+BACKUP_SECTION = """\
+## Back up your catalog first
+
+LrGeniusAI writes its results into your Lightroom catalog, and Lightroom counts
+each of those writes as an edit: every photo LrGeniusAI processes gets a new
+**Edit Date**, smart collections that filter on Edit Date pick it up, and the
+old date cannot be set back. With **Automatically write changes into XMP**
+turned on, Lightroom also writes the new metadata into XMP sidecars and
+DNG/JPEG files, so cloud or NAS sync will upload those files again.
+
+Back up your catalog before you run a new version over it, and start with a few
+photos. How to back up, and what else to check:
+https://github.com/LrGenius/LrGeniusAI/wiki/Getting-Started#before-you-start-back-up-your-catalog"""
+
+
 HELP_SECTION = """\
 ## If your computer warns about the download
 
@@ -369,6 +387,7 @@ def assemble(summary, generated_body, tag, breaking):
     if summary:
         parts.append(summary)
     parts.append(download_section(tag, breaking))
+    parts.append(BACKUP_SECTION)
     parts.append(HELP_SECTION)
     if generated_body:
         if summary:

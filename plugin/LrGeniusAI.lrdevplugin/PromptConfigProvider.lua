@@ -111,7 +111,9 @@ function PromptConfigProvider.showPromptConfigDialog(propertyTable)
 
 	propertyTable.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
 
-	propertyTable.prompts = prefs.prompts
+	-- A copy, assigned back on OK, so a cancelled edit stays cancelled. LrPrefs
+	-- saves a key when it is assigned, not when the table under it changes.
+	propertyTable.prompts = Util.deepcopy(prefs.prompts)
 
 	propertyTable.prompt = prefs.prompt
 

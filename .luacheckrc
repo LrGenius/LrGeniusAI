@@ -3,6 +3,10 @@ std = "lua51"
 -- Lightroom globals and project-specific globals
 globals = {
     "import",
+    "AestheticRefine",
+    "AgentBridge",
+    "AgentCommands",
+    "PluginTests",
     "LOC",
     "MAC_ENV",
     "WIN_ENV",
@@ -13,6 +17,7 @@ globals = {
     "Util",
     "AiProviders",
     "ErrorHandler",
+    "IndexCleanup",
     "Info",
     "UpdateCheck",
     "Defaults",
@@ -25,6 +30,7 @@ globals = {
     "PluginInfoDialogSections",
     "PromptConfigProvider",
     "SearchIndexAPI",
+    "Secrets",
     "SkipPhotoContextDialog",
     "SpeciesLinks",
     "DevelopEditManager",

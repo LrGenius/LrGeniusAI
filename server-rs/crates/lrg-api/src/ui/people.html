@@ -451,6 +451,35 @@
       // re-binds instead of answering about an empty catalog.
       const DB_PATH = new URLSearchParams(location.search).get("db_path") || "";
 
+      // The backend's access token, which every call below has to carry.
+      // Lightroom puts it in the address's #fragment, which the browser sends
+      // nowhere. It is taken out of the address bar at once, so it does not
+      // end up in a bookmark or a screenshot, and kept for this tab only, so
+      // reloading the page still works.
+      const TOKEN = (() => {
+        const fromAddress = new URLSearchParams(location.hash.slice(1)).get("token");
+        if (fromAddress) {
+          try {
+            sessionStorage.setItem("lrgenius-token", fromAddress);
+          } catch (e) {
+            // No storage (private window): only a reload loses the token.
+          }
+          history.replaceState(null, "", location.pathname + location.search);
+          return fromAddress;
+        }
+        try {
+          return sessionStorage.getItem("lrgenius-token") || "";
+        } catch (e) {
+          return "";
+        }
+      })();
+
+      function authHeaders(extra) {
+        const headers = Object.assign({}, extra);
+        if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+        return headers;
+      }
+
       // Every backend path this page calls, in one block. The page is served
       // from the same binary that answers these, so they move together — and
       // when they do (the /v1 grouping moved all of them once already), this
@@ -499,7 +528,7 @@
         try {
           response = await fetch(withDbPath(path), {
             method,
-            headers: body ? { "Content-Type": "application/json" } : undefined,
+            headers: authHeaders(body ? { "Content-Type": "application/json" } : {}),
             body: body ? JSON.stringify(body) : undefined,
           });
         } catch (e) {
@@ -516,6 +545,12 @@
           } catch (e) {
             throw new Error("Backend returned a malformed response: " + text.slice(0, 300));
           }
+        }
+        if (data.error_code === "api_token") {
+          throw new Error(
+            "The backend did not accept this page: it has no access token, or an old one. " +
+              "Close this page and open People again from Lightroom."
+          );
         }
         if (!response.ok || data.error) {
           throw new Error(data.error || "Backend returned HTTP " + response.status);
@@ -1558,7 +1593,7 @@
 
       async function heartbeat() {
         try {
-          const response = await fetch(withDbPath(API.status));
+          const response = await fetch(withDbPath(API.status), { headers: authHeaders() });
           const data = await response.json();
           pluginConnected = !!data.plugin_connected;
         } catch (e) {

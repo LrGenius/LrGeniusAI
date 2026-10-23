@@ -41,6 +41,9 @@ Groups time-adjacent photos into bursts, scores each image (sharpness, face qual
 ### People & Faces
 Lists detected face clusters (persons) with thumbnails and photo counts. Lets you assign names and jump directly to a Lightroom collection per person. **Find Similar Faces** finds other photos containing the same face as a selected photo. See [Help: People & Faces](Help-People-Faces).
 
+### AI Agents (MCP)
+Not a menu item: the agent bridge starts with Lightroom and lets an AI agent connected to LrGeniusAI's MCP endpoint search your catalog and work in Lightroom — find, cull, rate, keyword, collect and edit, each change one Undo step. While an agent works, a progress bar shows what it is doing; its X stops the agent. The switch, the read-only and developer settings, the agent token and one-click setups for Claude Code, Claude Desktop and other apps are in the Plug-in Manager under *AI Agents (MCP)*. See [Help: AI Agents](Help-AI-Agents).
+
 ### Find Similar Images
 Finds near-duplicates (perceptual hash) or visually similar photos (CLIP embeddings) for a selected photo. Results go into a new Lightroom collection. See [Help: Find Similar Images](Help-Find-Similar).
 

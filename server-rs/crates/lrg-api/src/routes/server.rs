@@ -55,21 +55,92 @@ pub(super) async fn list_models(
 ) -> Json<Value> {
     log::info!("Models request received - checking all providers");
     let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let field = |key: &str| {
-        data.get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-    };
+    Json(available_models(&state, &ProviderConnections::from_json(&data)).await)
+}
 
-    let openai_key = field("openai_apikey");
-    let gemini_key = field("gemini_apikey");
-    let anthropic_key = field("anthropic_apikey");
-    let ollama_base_url = field("ollama_base_url");
-    let lmstudio_base_url = field("lmstudio_base_url");
-    let server_url = field("server_url");
-    let server_key = field("server_apikey");
+/// The keys and addresses a model listing probes with, under the names the
+/// `/models` body gives them. No `Debug`: it holds API keys.
+#[derive(Clone, Default)]
+pub struct ProviderConnections {
+    pub openai_key: Option<String>,
+    pub gemini_key: Option<String>,
+    pub anthropic_key: Option<String>,
+    pub ollama_base_url: Option<String>,
+    pub lmstudio_base_url: Option<String>,
+    pub server_url: Option<String>,
+    pub server_key: Option<String>,
+}
+
+impl ProviderConnections {
+    /// Read from a `/models` body: `openai_apikey`, `gemini_apikey`,
+    /// `anthropic_apikey`, `ollama_base_url`, `lmstudio_base_url`,
+    /// `server_url`, `server_apikey`. Blank values count as absent.
+    #[must_use]
+    pub fn from_json(data: &Value) -> Self {
+        let field = |key: &str| {
+            data.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        ProviderConnections {
+            openai_key: field("openai_apikey"),
+            gemini_key: field("gemini_apikey"),
+            anthropic_key: field("anthropic_apikey"),
+            ollama_base_url: field("ollama_base_url"),
+            lmstudio_base_url: field("lmstudio_base_url"),
+            server_url: field("server_url"),
+            server_key: field("server_apikey"),
+        }
+    }
+
+    /// Put `key` where `provider`'s key belongs; a provider that takes no key
+    /// ignores it.
+    pub fn set_key(&mut self, provider: &str, key: String) {
+        let slot = match provider {
+            "chatgpt" | "openai" => &mut self.openai_key,
+            "gemini" => &mut self.gemini_key,
+            "anthropic" => &mut self.anthropic_key,
+            "openai_compatible" => &mut self.server_key,
+            _ => return,
+        };
+        *slot = Some(key);
+    }
+
+    /// What it takes to build `provider` with these connections.
+    #[must_use]
+    pub fn selection(&self, provider: &str) -> ProviderSelection {
+        let api_key = match provider {
+            "chatgpt" | "openai" => &self.openai_key,
+            "gemini" => &self.gemini_key,
+            "anthropic" => &self.anthropic_key,
+            "openai_compatible" => &self.server_key,
+            _ => &None,
+        };
+        ProviderSelection {
+            name: provider.to_string(),
+            api_key: api_key.clone(),
+            ollama_base_url: self.ollama_base_url.clone(),
+            lmstudio_base_url: self.lmstudio_base_url.clone(),
+            server_url: self.server_url.clone(),
+            local_engine: None,
+        }
+    }
+}
+
+/// The models every provider offers right now, as `/models` answers. See
+/// [`list_models`].
+pub async fn available_models(state: &AppState, connections: &ProviderConnections) -> Value {
+    let ProviderConnections {
+        openai_key,
+        gemini_key,
+        anthropic_key,
+        ollama_base_url,
+        lmstudio_base_url,
+        server_url,
+        server_key,
+    } = connections.clone();
 
     // `build_provider` returns Err for a cloud provider whose key is missing,
     // which is exactly the "offer no models" case — hence the empty list
@@ -210,7 +281,7 @@ pub(super) async fn list_models(
         Vec::new()
     };
 
-    Json(json!({
+    json!({
         "models": {
             "llamacpp": llamacpp_models,
             "mlx": mlx_models,
@@ -224,7 +295,7 @@ pub(super) async fn list_models(
         "servers": servers,
         "aliases": { "mlx": mlx_aliases },
         "warnings": warnings,
-    }))
+    })
 }
 
 pub(super) async fn ping() -> &'static str {
@@ -255,6 +326,7 @@ async fn restart(State(state): State<Arc<AppState>>) -> Json<Value> {
 async fn unload(State(state): State<Arc<AppState>>) -> Json<Value> {
     log::info!("Unload request received via API");
     state.siglip.unload();
+    state.aesthetic.unload();
     state.face.unload();
     state.bioclip.unload();
     // Store handles stay open (LanceDB keeps its own lazy IO, nothing to
@@ -322,6 +394,9 @@ pub(super) async fn version_check(body: Option<Json<Value>>) -> Json<Value> {
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_status, clip_error) = state.siglip.status();
+    let (clip_image_status, clip_image_error) = state.siglip.image_status();
+    let (clip_text_status, clip_text_error) = state.siglip.text_status();
+    let (aesthetic_status, aesthetic_error) = state.aesthetic.status();
     let (face_status, face_error) = state.face.status();
     let (species_status, species_error) = state.bioclip.status();
     // Deliberately no LLM provider status here: this GET carries no API keys
@@ -329,9 +404,22 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     // there is nothing to report. The plugin checks provider availability
     // itself from stored prefs plus a direct ping (SearchIndexAPI.getDetailedHealth
     // in APISearchIndex.lua) rather than through this endpoint.
+    //
+    // `clip_model` stays the pair, as it has always been: the two SigLIP2
+    // towers load independently now, so a client that reads only this field
+    // (every plug-in older than this one) still learns that *something* failed
+    // rather than missing a failure on whichever tower it does not ask about.
+    // The per-tower fields are additive, so a newer plug-in can name the tower
+    // that broke while an older server that lacks them still answers.
     Json(json!({
         "clip_model": clip_status,
         "clip_error": clip_error,
+        "clip_image_model": clip_image_status,
+        "clip_image_error": clip_image_error,
+        "clip_text_model": clip_text_status,
+        "clip_text_error": clip_text_error,
+        "aesthetic_model": aesthetic_status,
+        "aesthetic_error": aesthetic_error,
         "face_model": face_status,
         "face_error": face_error,
         "species_model": species_status,

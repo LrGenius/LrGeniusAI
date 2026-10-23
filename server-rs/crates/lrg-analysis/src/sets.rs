@@ -41,6 +41,14 @@ pub struct SetFrame<'a> {
     pub embedding: Option<&'a [f32]>,
     /// Centroid of the in-focus region, `cull_sharp_region_{x,y}`.
     pub sharp_region: Option<(f64, f64)>,
+    /// Faces detected in the frame, `cull_face_count`; 0 when unknown.
+    ///
+    /// Focus stacks are macro, product and landscape work. People move, so a
+    /// burst of a group with the sharp region wandering as they do looks
+    /// exactly like a stack to the geometric rules — measured on a real
+    /// baptism, seven "focus stacks" of 3 to 10 faces each, 27 frames kept
+    /// from a cull for no reason. A frame with faces is never part of one.
+    pub faces: usize,
 }
 
 fn cosine_distance(a: &[f32], b: &[f32]) -> Option<f64> {
@@ -149,6 +157,11 @@ fn is_bracket(frames: &[SetFrame], cfg: &SetDetectionConfig) -> bool {
 /// existed simply never matches — the frames stay a burst, which is the old
 /// behaviour rather than a new failure.
 fn is_focus_stack(frames: &[SetFrame], cfg: &SetDetectionConfig) -> bool {
+    // Nobody focus-stacks people; a wandering sharp region over faces is the
+    // people moving. See `SetFrame::faces`.
+    if frames.iter().any(|f| f.faces > 0) {
+        return false;
+    }
     let regions: Vec<(f64, f64)> = frames.iter().filter_map(|f| f.sharp_region).collect();
     if regions.len() != frames.len() {
         return false;
@@ -261,6 +274,7 @@ mod tests {
             phash: Some(phash),
             embedding: None,
             sharp_region: Some(region),
+            faces: 0,
         }
     }
 
@@ -278,6 +292,7 @@ mod tests {
                 phash: Some(0xffff_ffff_0000_0000u64.rotate_left(i as u32 * 17)),
                 embedding: None,
                 sharp_region: None,
+                faces: 0,
             })
             .collect()
     }
@@ -401,6 +416,26 @@ mod tests {
         assert_eq!(detect_intentional_set(&frames, &cfg()), None);
     }
 
+    /// Three frames of a group of people, static framing, with the sharp
+    /// region wandering as they move. Geometrically that is a focus stack, and
+    /// on a real baptism this rule kept 27 frames out of a cull in seven such
+    /// "stacks". Nobody focus-stacks people.
+    #[test]
+    fn frames_with_faces_are_never_a_focus_stack() {
+        let mut frames = [
+            frame(Some(0.0), 0xabcd_0000_0000_0000, (0.2, 0.8)),
+            frame(Some(0.0), 0xabcd_0000_0000_0001, (0.5, 0.5)),
+            frame(Some(0.0), 0xabcd_0000_0000_0003, (0.8, 0.2)),
+        ];
+        assert_eq!(
+            detect_intentional_set(&frames, &cfg()),
+            Some(IntentionalSet::FocusStack),
+            "without faces the geometry reads as a stack"
+        );
+        frames[1].faces = 4;
+        assert_eq!(detect_intentional_set(&frames, &cfg()), None);
+    }
+
     #[test]
     fn a_sweep_of_overlapping_frames_is_a_panorama() {
         // Vectors drifting steadily around a circle: adjacent frames overlap,
@@ -420,6 +455,7 @@ mod tests {
                 phash: Some(0x0f0f_0f0f_0f0f_0f0f << i),
                 embedding: Some(v.as_slice()),
                 sharp_region: None,
+                faces: 0,
             })
             .collect();
         assert_eq!(
@@ -442,6 +478,7 @@ mod tests {
                 phash: Some(0xdead_beef_0000_0000 + i as u64),
                 embedding: Some(v.as_slice()),
                 sharp_region: None,
+                faces: 0,
             })
             .collect();
         assert_eq!(detect_intentional_set(&frames, &cfg()), None);
