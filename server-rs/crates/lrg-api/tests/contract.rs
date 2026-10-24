@@ -556,6 +556,96 @@ async fn photo_lookup_reports_the_aesthetic_score_and_genre() {
     assert!(lookup("bare").await["aesthetic"].is_null());
 }
 
+/// The quality flags are derived from the stored culling metrics when the
+/// photo is read back, and a photo indexed before those metrics existed says
+/// it was not measured instead of reading as a clean photo.
+#[tokio::test]
+async fn photo_lookup_reports_quality_flags_and_unmeasured_photos() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    let row = |id: &str, metrics: serde_json::Value| {
+        let serde_json::Value::Object(mut m) = metrics else {
+            unreachable!()
+        };
+        m.insert("has_embedding".into(), serde_json::json!(false));
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                row(
+                    "shaky_bright",
+                    serde_json::json!({
+                        "cull_sharpness": 0.04, "cull_sharpness_peak": 0.06,
+                        "cull_motion_anisotropy": 0.9,
+                        "cull_highlight_clip": 0.2, "cull_shadow_clip": 0.0,
+                    }),
+                ),
+                row(
+                    "clean",
+                    serde_json::json!({
+                        "cull_sharpness": 0.7, "cull_sharpness_peak": 0.85,
+                        "cull_motion_anisotropy": 0.2,
+                        "cull_highlight_clip": 0.0, "cull_shadow_clip": 0.0,
+                    }),
+                ),
+                // Indexed before the tiled sharpness pass: no peak, no
+                // coherence.
+                row(
+                    "old",
+                    serde_json::json!({
+                        "cull_sharpness": 0.04,
+                        "cull_highlight_clip": 0.0, "cull_shadow_clip": 0.0,
+                    }),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let lookup = |id: &'static str| {
+        let app = app.clone();
+        let db_path = db_path.clone();
+        async move {
+            post_json(
+                &app,
+                "/v1/photos/lookup",
+                serde_json::json!({"photo_id": id, "db_path": db_path}),
+            )
+            .await
+            .1
+        }
+    };
+
+    let shaky = lookup("shaky_bright").await;
+    assert_eq!(shaky["quality"]["measured"], true);
+    assert_eq!(
+        shaky["quality"]["flags"],
+        serde_json::json!(["motion_blur", "highlights_clipped"])
+    );
+    assert_eq!(shaky["quality"]["text"], "motion blur, highlights clipped");
+    assert!(
+        shaky["metadata"].get("quality").is_none(),
+        "flags must not reach the review dialog's metadata"
+    );
+
+    let clean = lookup("clean").await;
+    assert_eq!(clean["quality"]["measured"], true);
+    assert_eq!(clean["quality"]["text"], "");
+
+    let old = lookup("old").await;
+    assert_eq!(old["quality"], serde_json::json!({"measured": false}));
+}
+
 /// `(id, score, model, genre, title)` of a photo for the search tests; a `None`
 /// score is a photo never scored.
 type SearchableRow<'a> = (&'a str, Option<f64>, &'a str, Option<&'a str>, &'a str);
@@ -1109,6 +1199,60 @@ async fn cull_returns_summary_and_group_shape_the_plugin_reads() {
     assert!(winner["reason_codes"].is_array());
     assert!(winner["explanation"].is_string());
     assert!(winner["metrics"].is_object());
+    // The seeded burst predates the tiled sharpness pass (no
+    // `cull_sharpness_peak`), so its photos carry no quality flags — said, not
+    // shown as clean.
+    assert_eq!(winner["quality"], serde_json::json!({"measured": false}));
+}
+
+/// The cull is where the plug-in writes quality flags for photos the fast
+/// preparation pass measured, so each photo of the response carries them.
+#[tokio::test]
+async fn cull_reports_quality_flags_per_photo() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+    let store = state.store().unwrap();
+    let mut m = serde_json::Map::new();
+    m.insert("filename".into(), serde_json::json!("dark.jpg"));
+    m.insert("capture_time".into(), serde_json::json!(1_700_000_000));
+    m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+    for (k, v) in [
+        ("cull_sharpness", 0.7),
+        ("cull_sharpness_peak", 0.8),
+        ("cull_motion_anisotropy", 0.2),
+        ("cull_highlight_clip", 0.0),
+        ("cull_shadow_clip", 0.4),
+        ("cull_exposure", 0.3),
+        ("cull_noise", 0.1),
+    ] {
+        m.insert(k.into(), serde_json::json!(v));
+    }
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[lrg_store::StoreRecord {
+                id: "dark".into(),
+                vector: None,
+                metadata: m,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["dark"], "db_path": db_path_str}),
+    )
+    .await;
+    let photo = &json["groups"][0]["photos"][0];
+    assert_eq!(photo["quality"]["measured"], true);
+    assert_eq!(
+        photo["quality"]["flags"],
+        serde_json::json!(["shadows_clipped"])
+    );
+    assert_eq!(photo["quality"]["text"], "shadows clipped");
 }
 
 /// `reject_margin_scale` is the plugin's "how hard to cull" control. The seeded

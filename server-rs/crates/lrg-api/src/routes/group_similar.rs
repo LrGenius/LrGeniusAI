@@ -272,6 +272,15 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
                 "reason_codes": p.reason_codes,
                 "explanation": p.explanation,
                 "metrics": Value::Object(p.metrics.clone()),
+                // Absolute, per-photo defects for the plug-in's *Quality
+                // flags* field — unlike everything above, not a judgement
+                // against the group. `measured: false` when the photo lacks
+                // the signals.
+                "quality": outcome
+                    .quality
+                    .get(&p.photo_id)
+                    .cloned()
+                    .unwrap_or_else(|| json!({"measured": false})),
             });
             if let Some(stored) = outcome.stored_metadata.get(&p.photo_id) {
                 photo["stored_metadata"] = Value::Object(stored.clone());
@@ -355,6 +364,11 @@ struct GroupingOutcome {
     /// `include_stored_metadata` was requested — building it clones a map per
     /// photo, which is pure waste on the normal cull path.
     stored_metadata: std::collections::HashMap<String, Map<String, Value>>,
+    /// Per photo, its `quality` block (`lrg_analysis::quality_flags`), read
+    /// from the stored metrics before grouping consumes the records. Always
+    /// built: the cull is where the plug-in writes the flags for photos the
+    /// fast preparation pass measured.
+    quality: std::collections::HashMap<String, Value>,
 }
 
 /// The ranking signals a run lost, and the one reason they share.
@@ -484,6 +498,7 @@ async fn compute_groups(
             aesthetic_model_ready: state.aesthetic.is_cached(),
             unavailable: None,
             stored_metadata: Default::default(),
+            quality: Default::default(),
         });
     };
     let mut records = load_grouping_inputs(&store, &params.photo_ids).await?;
@@ -614,9 +629,19 @@ async fn compute_groups(
     } else {
         Default::default()
     };
+    let quality = records
+        .iter()
+        .map(|r| {
+            (
+                r.photo_id.clone(),
+                lrg_analysis::quality_flags::quality_json(&r.metadata),
+            )
+        })
+        .collect();
 
     Ok(GroupingOutcome {
         stored_metadata,
+        quality,
         groups: group_and_sort_images_with_config(
             records,
             params.phash_threshold,
@@ -874,6 +899,7 @@ mod tests {
             aesthetic_model_ready: true,
             unavailable: None,
             stored_metadata: Default::default(),
+            quality: Default::default(),
         }
     }
 

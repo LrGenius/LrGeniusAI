@@ -11,6 +11,7 @@ pub mod face_cluster;
 pub mod grouping;
 pub mod keywords;
 pub mod persons;
+pub mod quality_flags;
 pub mod relevance_filter;
 pub mod sets;
 pub mod style_engine;

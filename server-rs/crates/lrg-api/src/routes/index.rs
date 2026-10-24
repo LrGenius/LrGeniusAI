@@ -811,6 +811,13 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         Value::Null
     };
 
+    // The technical defects the plug-in writes to its *Quality flags* field,
+    // derived from the stored culling metrics when read (see
+    // `lrg_analysis::quality_flags`). `measured: false` for a photo indexed
+    // before those metrics existed, so "not measured" is never shown as
+    // "nothing wrong".
+    let quality = lrg_analysis::quality_flags::quality_json(&metadata_dict);
+
     log::info!(
         "Retrieved data for photo {photo_id}: {} metadata fields",
         metadata_fields.len()
@@ -822,6 +829,7 @@ async fn get_photo_data(State(state): State<Arc<AppState>>, body: Option<Json<Va
         "metadata": metadata_fields,
         "species": species,
         "aesthetic": aesthetic,
+        "quality": quality,
         "edit": edit_recipe,
         "edit_summary": metadata_dict.get("edit_summary").cloned().unwrap_or(Value::Null),
         "edit_warnings": edit_warnings,
