@@ -43,6 +43,10 @@ return {
 			file = "TaskCullPhotos.lua",
 		},
 		{
+			title = "Create Smart Collection Templates...",
+			file = "TaskCreateSmartCollections.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend..."),
 			file = "TaskRetrieveMetadata.lua",
 		},
@@ -88,6 +92,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/CullPhotos=Cull Similar Photos..."),
 			file = "TaskCullPhotos.lua",
+		},
+		{
+			title = "Create Smart Collection Templates...",
+			file = "TaskCreateSmartCollections.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend..."),

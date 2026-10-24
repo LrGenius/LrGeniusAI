@@ -32,6 +32,7 @@ globals = {
     "SearchIndexAPI",
     "Secrets",
     "SkipPhotoContextDialog",
+    "SmartCollectionTemplates",
     "SpeciesLinks",
     "DevelopEditManager",
     "TaskUpdate"
