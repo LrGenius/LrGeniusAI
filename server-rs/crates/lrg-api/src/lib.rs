@@ -4,6 +4,7 @@
 pub mod agent_bridge;
 pub mod api_auth;
 pub mod edit_budget;
+pub mod hardware;
 pub mod hf_repo;
 pub mod llm_engine;
 pub mod llm_models;

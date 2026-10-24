@@ -60,7 +60,7 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
     CatalogEntry {
         id: "mlx-gemma4-e4b",
-        label: "Gemma 4 E4B (recommended)",
+        label: "Gemma 4 E4B (best all-round)",
         repo: "mlx-community/gemma-4-e4b-it-4bit",
         revision: "main",
         dir_name: "gemma-4-e4b-it-4bit",

@@ -77,7 +77,7 @@ pub const CATALOG: &[CatalogEntry] = &[
     // share a directory.
     CatalogEntry {
         id: "gemma4-e4b",
-        label: "Gemma 4 E4B (recommended)",
+        label: "Gemma 4 E4B (best all-round)",
         repo: "lmstudio-community/gemma-4-E4B-it-GGUF",
         revision: "main",
         model_file: "gemma-4-E4B-it-Q4_K_M.gguf",

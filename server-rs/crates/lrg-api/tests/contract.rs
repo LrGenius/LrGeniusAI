@@ -3450,3 +3450,41 @@ async fn cleanup_holds_back_a_removal_of_most_of_the_catalog_until_confirmed() {
     assert_eq!(json["disassociated"], 60, "{json}");
     assert!(catalogs_of(&state, "p0").await.is_empty());
 }
+
+/// The catalog says what computer the backend runs on and which model of each
+/// engine fits it, and marks that model in the downloadable list. The plug-in
+/// shows it as "Recommended for this computer".
+#[tokio::test]
+async fn llm_catalog_reports_the_hardware_and_a_recommendation_per_engine() {
+    let (app, _) = fresh_app();
+    let json = get_json(&app, "/v1/llm/catalog").await;
+
+    let hw = &json["hardware"];
+    assert!(hw["memory_bytes"].as_u64().unwrap() > 0, "{hw}");
+    assert!(hw["memory_gb"].as_u64().unwrap() > 0, "{hw}");
+    assert!(hw["logical_cores"].as_u64().unwrap() > 0, "{hw}");
+    assert!(hw["cpu"].is_string());
+    assert_eq!(hw["os"], std::env::consts::OS);
+    assert!(hw["unified_memory"].is_boolean());
+
+    for half in [&json, &json["mlx"]] {
+        let rec = &half["recommended"];
+        assert!(
+            rec["reason"].as_str().is_some_and(|r| !r.is_empty()),
+            "{rec}"
+        );
+        let marked: Vec<&str> = half["downloadable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["recommended"] == true)
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        match rec["id"].as_str() {
+            Some(id) => assert_eq!(marked, vec![id], "exactly the recommended entry is marked"),
+            None => assert!(marked.is_empty()),
+        }
+        // Nothing is installed in this test, so there is no name to select.
+        assert!(rec["installed_name"].is_null());
+    }
+}

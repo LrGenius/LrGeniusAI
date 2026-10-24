@@ -45,6 +45,7 @@ zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
 async-trait = "0.1.91"
 rayon = "1.12.0"
 uuid.workspace = true
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 lrg-store.workspace = true

@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 
 use lrg_providers::local::SharedLocalEngine;
 
+use crate::hardware;
 use crate::hf_repo::{self, CheckError, Engine, RepoCheck};
 use crate::llm_engine::{settings_for, EngineOverrides};
 use crate::llm_models::{self, CatalogEntry};
@@ -143,10 +144,31 @@ pub fn engine_overrides_from_json(data: &Value) -> EngineOverrides {
     }
 }
 
+/// A recommendation as the catalog reports it: the hardware module's answer
+/// plus, when the model is already on disk, the name it is installed under —
+/// which is what the plug-in selects as the model to use.
+fn recommendation_json(rec: &hardware::Recommendation, installed_name: Option<&str>) -> Value {
+    json!({
+        "id": rec.id,
+        "label": rec.label,
+        "reason": rec.reason,
+        "installed_name": installed_name,
+    })
+}
+
 async fn catalog(State(state): State<Arc<AppState>>) -> Json<Value> {
+    // The model has to fit the computer the backend runs on, which is where it
+    // runs — see `crate::hardware`.
+    let hw = hardware::detect();
     let installed = llm_models::discover_local_models();
     let installed_names: std::collections::HashSet<&str> =
         installed.iter().map(|m| m.name.as_str()).collect();
+    let recommended = hardware::recommend(
+        hw,
+        hardware::LLAMACPP_PREFERENCE,
+        &hardware::llamacpp_candidates(),
+    );
+    let recommended_id = recommended.id.as_deref();
 
     // A catalog entry whose file is already on disk is not offered for download
     // again — it shows up in `installed` instead.
@@ -159,9 +181,14 @@ async fn catalog(State(state): State<Arc<AppState>>) -> Json<Value> {
                 "approx_bytes": entry.approx_bytes,
                 "min_ram_gb": entry.min_ram_gb,
                 "installed": installed_names.contains(entry.model_file),
+                "recommended": recommended_id == Some(entry.id),
             })
         })
         .collect();
+    let recommended_installed = recommended_id
+        .and_then(llm_models::catalog_entry)
+        .map(|e| e.model_file)
+        .filter(|file| installed_names.contains(file));
 
     // The MLX half is reported alongside rather than as a separate route: the
     // plugin renders one "Local AI Model" panel and needs both backends'
@@ -172,6 +199,9 @@ async fn catalog(State(state): State<Arc<AppState>>) -> Json<Value> {
         .iter()
         .map(|m| m.name.as_str())
         .collect::<std::collections::HashSet<_>>();
+    let mlx_recommended =
+        hardware::recommend(hw, hardware::MLX_PREFERENCE, &hardware::mlx_candidates());
+    let mlx_recommended_id = mlx_recommended.id.as_deref();
     let mlx_downloadable: Vec<Value> = mlx_models::CATALOG
         .iter()
         .map(|entry| {
@@ -181,19 +211,27 @@ async fn catalog(State(state): State<Arc<AppState>>) -> Json<Value> {
                 "approx_bytes": entry.approx_bytes,
                 "min_ram_gb": entry.min_ram_gb,
                 "installed": mlx_installed_dirs.contains(entry.dir_name),
+                "recommended": mlx_recommended_id == Some(entry.id),
             })
         })
         .collect();
+    let mlx_recommended_installed = mlx_recommended_id
+        .and_then(mlx_models::catalog_entry)
+        .map(|e| e.dir_name)
+        .filter(|dir| mlx_installed_dirs.contains(dir));
     let mlx_availability = state.mlx.availability();
 
     Json(json!({
         "installed": installed,
         "downloadable": downloadable,
+        "recommended": recommendation_json(&recommended, recommended_installed),
         "supported": state.llm.is_supported(),
         "model_dir": lrg_ml::model_paths::resolve_llm().dir.display().to_string(),
+        "hardware": hw,
         "mlx": {
             "installed": mlx_installed,
             "downloadable": mlx_downloadable,
+            "recommended": recommendation_json(&mlx_recommended, mlx_recommended_installed),
             "supported": mlx_availability.supported,
             "reason": mlx_availability.reason,
             "model_dir": lrg_ml::model_paths::resolve_mlx().dir.display().to_string(),
