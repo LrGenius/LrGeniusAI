@@ -187,6 +187,15 @@ This fix prevents future bookkeeping writes. It cannot restore Date Edited
 values already changed by an older version. Applying actual metadata, keywords,
 culling results or develop edits remains an intentional photo modification.
 
+The *Quality flags* field (`qualityFlags`) sits in between: it is a measurement,
+read back by Analyze & Index, the cull and Retrieve Metadata on every photo they
+touch, and on most photos it never changes. `MetadataManager.applyQualityFlags`
+therefore reads the current values in one batch and writes only the photos
+whose value differs (`Util.qualityFlagsPlan`, tested in
+`plugin/spec/util_quality_flags_spec.lua`) — never an unchanged value, and never
+`""` into a field that was never set. A photo the backend reports as not measured
+(indexed before the signals existed) keeps whatever the field holds.
+
 #### Lightroom smoke check (requires a disposable catalog)
 
 1. Include uncached photos, photos with an older plugin ID, a virtual copy and

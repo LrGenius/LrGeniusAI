@@ -265,6 +265,27 @@ is from another export than this build's, so not comparable with current ones), 
 id), `genre_label` and `genre_confidence`. It is `null` for a photo with neither. It is a block of
 its own, not part of `metadata`, which is text the plug-in lets the user edit.
 
+A `quality` block carries the photo's **quality flags**, the technical defects the plug-in writes to
+its *Quality flags* field: `{"measured": true, "flags": [...], "text": "..."}`, where `flags` are
+stable ids (`blurred`, `motion_blur`, `highlights_clipped`, `shadows_clipped`, always in that
+order) and `text` the comma-separated labels the field shows (`""` for none). A photo stored
+without one of the culling metrics the flags read (`cull_sharpness`, `cull_sharpness_peak`,
+`cull_motion_anisotropy`, `cull_highlight_clip`, `cull_shadow_clip` — indexed before the tiled
+sharpness pass) gets `{"measured": false}`: a flag rather than `null`, because the plug-in's JSON
+decoder drops `null` keys and "not measured" must not read as "no block" (a backend older than the
+field) or as "nothing wrong". Re-indexing fills them in; every indexing task computes the metrics.
+
+The flags are derived from the stored metrics when read (`lrg_analysis::quality_flags`), not stored,
+so their thresholds can move without re-indexing. Each is absolute and per photo: `blurred` and
+`motion_blur` are culling's own `blurred`/`motion_blur` reason codes at the default preset's
+thresholds (effective sharpness — frame and peak tile blended by `sharpness_peak_weight` — below
+`reason_blur_threshold`, split by `reason_motion_anisotropy_threshold`), without the group-relative
+half. `highlights_clipped` is at least 5% of the frame at the highlight clip point and
+`shadows_clipped` at least 10% at black, both chosen rather than tuned. Exposure, the face proxies
+and noise are deliberately not flags: the first is scored against a mid-grey target, the second only
+discriminates within a group, and the flat-region noise reading scales with the preview resolution
+the plug-in sends.
+
 ### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
 
@@ -473,7 +494,7 @@ below usable ones.
 | `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
-| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eyes_closed_intended` when true, and always `clear_defect` |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`, `quality`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eyes_closed_intended` when true, and always `clear_defect`. `quality` is the photo's quality flags, the same block as in `/v1/photos/lookup` |
 | `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 

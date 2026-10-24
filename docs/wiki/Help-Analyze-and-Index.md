@@ -82,6 +82,10 @@ needed for metadata: embeddings, faces and species run without one.
   the scores were skipped. Both are a model's opinion of the picture, not a
   measurement: use the score to sort and compare your own photos, not as a
   verdict.
+
+Whatever tasks you pick, every run also measures each photo's sharpness and
+clipping, and writes what it found to the **Quality flags** field in the
+Metadata panel — see [Quality flags](#quality-flags) below.
 - **Enable face detection** — detects and embeds faces for
   [People](Help-People-Faces).
 - **Identify animal and plant species** — runs BioCLIP 2 and writes a
@@ -127,6 +131,47 @@ Only the models the run actually needs are checked: a search-only run is not
 stopped by a missing species model, and tasks that run on an LLM or in the
 cloud need nothing downloaded. If the check itself cannot reach the backend the
 run proceeds, and any real failure is reported as usual.
+
+---
+
+## Quality flags
+
+The **Quality flags** field in the Metadata panel lists the technical defects
+LrGeniusAI measured on a photo, separated by commas, and is empty when it found
+none:
+
+| flag | means |
+| --- | --- |
+| `blurred` | soft overall — missed focus, or nothing sharp anywhere in the frame |
+| `motion blur` | soft, and the softness runs in one direction: camera shake or subject motion |
+| `highlights clipped` | at least 5% of the frame is blown out to pure white |
+| `shadows clipped` | at least 10% of the frame is crushed to pure black |
+
+The field is searchable, so the Library filter (*Text → Any Searchable Plug-in
+Field → contains → blurred*) or a smart collection finds them. A photo with a
+sharp subject against a blurred background is not flagged: the measurement looks
+at the sharpest part of the frame as well as the whole of it.
+
+Each flag is judged on the photo alone, against fixed thresholds, so it means
+the same thing on every photo. That is why a few things culling looks at are
+not flags: exposure (a dark concert frame is dark on purpose), blinks and
+blocked faces (only meaningful against the other frames of a burst), and noise
+(its reading depends on the preview size set in Plug-in Manager). Shadows count
+as clipped only at twice the share of highlights because night, stage and
+silhouette shots put large areas at black on purpose; on those the flag is a
+fact, not a fault.
+
+The flags are written by **Analyze & Index Photos** (every task measures them),
+by **Cull Similar Photos** (including photos it prepared with the fast pass) and
+by **Retrieve Metadata from Backend**. The field is only written when its value
+changes, so running a task again does not change the *Date Edited* of photos
+whose flags are the same.
+
+Photos indexed by an older version of LrGeniusAI were not measured this way and
+have no flags. The run's summary says how many: select them and run **Analyze &
+Index Photos** with the scope *Selected photos only* — *New or unprocessed
+photos* skips them, because they are indexed. With *Skip photos with existing
+data*, nothing they already have is generated again.
 
 ---
 

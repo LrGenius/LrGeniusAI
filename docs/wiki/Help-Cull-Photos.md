@@ -219,6 +219,15 @@ photo made every cull run touch every photo's last-edit time. The explanation
 carries the reason codes in words. Photos culled before this change keep the
 values their old fields held, but those fields are no longer shown or updated.
 
+A cull also fills in the photo's **Quality flags** field (`blurred`,
+`motion blur`, `highlights clipped`, `shadows clipped`), including for photos
+the fast preparation pass measured. Unlike the culling fields these are judged
+on the photo alone, not against its group, so they stay true whatever else was
+in the selection — see
+[Quality flags](Help-Analyze-and-Index#quality-flags). The field is only
+written when its value changes. Photos prepared by an older version have no
+flags yet; the completion dialog says how many and how to fill them in.
+
 Typical reason codes include:
 
 - `sharpest_in_group`
