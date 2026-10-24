@@ -35,6 +35,19 @@ return {
 			browsable = true,
 		},
 		{
+			-- Technical defects the backend measured on this photo
+			-- ("blurred, highlights clipped"), comma-separated, empty when it
+			-- found none. Searchable so a smart collection or the Library filter
+			-- can find them ("Quality flags contains blurred"). Written only
+			-- when the value changes: see MetadataManager.applyQualityFlags.
+			id = "qualityFlags",
+			title = "Quality flags",
+			dataType = "string",
+			readOnly = true,
+			searchable = true,
+			browsable = true,
+		},
+		{
 			id = "aiEditLastRun",
 			title = LOC("$$$/LrGeniusAI/AIMetadataProvider/AiEditLastRun=Last AI edit run"),
 			dataType = "string",
@@ -253,7 +266,10 @@ return {
 		},
 	},
 
-	schemaVersion = 36,
+	-- 37 added `qualityFlags`. Nothing to migrate: a new field starts out
+	-- unset on every photo, and filling it in here would touch every photo's
+	-- Date Edited at once.
+	schemaVersion = 37,
 	updateFromEarlierSchemaVersion = function(catalog, previousSchemaVersion, progressScope)
 		catalog:assertHasPrivateWriteAccess("AIMetadataProvider.updateFromEarlierSchemaVersion")
 		if previousSchemaVersion ~= nil and previousSchemaVersion < 23 then

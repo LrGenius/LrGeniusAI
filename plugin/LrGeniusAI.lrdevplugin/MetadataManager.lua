@@ -1645,6 +1645,121 @@ end
 -- @param aesthetic table|nil The `aesthetic` block of /v1/photos/lookup.
 -- @return boolean Whether anything was written.
 --
+---
+-- Reads what each photo's *Quality flags* field holds now: one batched read,
+-- falling back to per-photo reads when the batch call fails.
+--
+-- @param catalog LrCatalog
+-- @param photos table LrPhoto list
+-- @return table photo -> current value (absent when never set)
+--
+local function currentQualityFlags(catalog, photos)
+	local current = {}
+	local ok, batch = LrTasks.pcall(function()
+		return catalog:batchGetPropertyForPlugin(photos, _PLUGIN, { "qualityFlags" })
+	end)
+	if ok and type(batch) == "table" then
+		for _, photo in ipairs(photos) do
+			local values = batch[photo]
+			if type(values) == "table" then
+				current[photo] = values.qualityFlags
+			end
+		end
+		return current
+	end
+	log:warn("batchGetPropertyForPlugin failed before writing quality flags; reading per photo: " .. tostring(batch))
+	for _, photo in ipairs(photos) do
+		local okOne, value = LrTasks.pcall(function()
+			return photo:getPropertyForPlugin(_PLUGIN, "qualityFlags", nil, true)
+		end)
+		if okOne then
+			current[photo] = value
+		end
+	end
+	return current
+end
+
+---
+-- Writes quality flags ("blurred, highlights clipped") to the photos'
+-- *Quality flags* field, from the backend's `quality` blocks.
+--
+-- Only fields whose value changes are written (Util.qualityFlagsPlan): every
+-- plug-in property write advances Lightroom's Date Edited, and rewriting an
+-- unchanged value on every run would mark every indexed photo as edited. One
+-- write-access block for the lot, so a cull of thousands of photos does not
+-- queue thousands of catalog transactions.
+--
+-- @param entries table List of `{ photo = LrPhoto, quality = table|nil }`,
+--   `quality` being the block of /v1/photos/lookup or of a photo in the
+--   /v1/cull/grade response.
+-- @return table Counts: `{ written, unchanged, unmeasured, absent, failed }`.
+--
+function MetadataManager.applyQualityFlags(entries)
+	local counts = { written = 0, unchanged = 0, unmeasured = 0, absent = 0, failed = 0 }
+	if type(entries) ~= "table" or #entries == 0 then
+		return counts
+	end
+	local catalog = LrApplication.activeCatalog()
+	local photos = {}
+	for _, entry in ipairs(entries) do
+		photos[#photos + 1] = entry.photo
+	end
+	local current = currentQualityFlags(catalog, photos)
+	local items = {}
+	for i, entry in ipairs(entries) do
+		items[i] = { current = current[entry.photo], quality = entry.quality }
+	end
+	local writes
+	writes, counts = Util.qualityFlagsPlan(items)
+	if #writes == 0 then
+		return counts
+	end
+	local ok, result = LrTasks.pcall(function()
+		return catalog:withPrivateWriteAccessDo(function()
+			for _, write in ipairs(writes) do
+				entries[write.index].photo:setPropertyForPlugin(_PLUGIN, "qualityFlags", write.value)
+			end
+		end, Defaults.catalogWriteAccessOptions)
+	end)
+	if not ok or result == "aborted" then
+		log:error("Writing quality flags failed: " .. tostring(result))
+		counts.failed = counts.failed + counts.written
+		counts.written = 0
+	end
+	return counts
+end
+
+---
+-- The user-facing lines for what `applyQualityFlags` could not do, in the
+-- order a user would fix them. Empty when everything that could be written
+-- was.
+--
+-- @param counts table The counts `applyQualityFlags` returned.
+-- @return table List of strings.
+--
+function MetadataManager.qualityFlagsReport(counts)
+	local lines = {}
+	counts = counts or {}
+	local unmeasured = Util.qualityFlagsUnmeasuredMessage(counts.unmeasured)
+	if unmeasured then
+		lines[#lines + 1] = unmeasured
+	end
+	if (counts.absent or 0) > 0 then
+		lines[#lines + 1] = string.format(
+			"The backend sent no quality flags for %d photo(s): it is older than this plug-in. "
+				.. "Update the LrGeniusAI backend (Plug-in Manager > LrGeniusAI > Check for updates).",
+			counts.absent
+		)
+	end
+	if (counts.failed or 0) > 0 then
+		lines[#lines + 1] = string.format(
+			"The quality flags of %d photo(s) could not be written: the catalog was busy. Run the task again to fill them in.",
+			counts.failed
+		)
+	end
+	return lines
+end
+
 function MetadataManager.applyAesthetic(photo, aesthetic)
 	local scoreText, genre = Util.aestheticFieldValues(aesthetic)
 	if scoreText == nil and genre == "" then

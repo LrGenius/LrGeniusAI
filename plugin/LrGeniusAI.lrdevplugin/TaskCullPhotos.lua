@@ -799,6 +799,23 @@ LrTasks.startAsyncTask(function()
 			log:error("Writing culling metadata was aborted: the catalog was busy")
 		end
 
+		-- Quality flags ("blurred, highlights clipped") ride on each photo of
+		-- the cull response, because the fast preparation pass measures the
+		-- signals without ever reaching Analyze & Index's save pass. Unlike
+		-- the culling fields above they are absolute, so they mean the same
+		-- thing whatever else was in the selection. Only changed values are
+		-- written (MetadataManager.applyQualityFlags).
+		local qualityEntries = {}
+		for _, group in ipairs(groups) do
+			for _, photoResult in ipairs(group["photos"] or {}) do
+				local photo = photoResult["photo_id"] and photoById[photoResult["photo_id"]]
+				if photo then
+					qualityEntries[#qualityEntries + 1] = { photo = photo, quality = photoResult["quality"] }
+				end
+			end
+		end
+		local qualityLines = MetadataManager.qualityFlagsReport(MetadataManager.applyQualityFlags(qualityEntries))
+
 		-- Flags, stars and labels: the result in the form a photographer culls
 		-- with, so the filter bar and Photo > Delete Rejected Photos work on it
 		-- directly. One write-access block, so one Cmd/Ctrl+Z undoes the lot.
@@ -952,6 +969,9 @@ LrTasks.startAsyncTask(function()
 				.. "\n\n"
 				.. "The culling decision, score and explanation could not be written to the Metadata panel: "
 				.. "the catalog was busy and the write timed out. Run the cull again to fill them in."
+		end
+		for _, line in ipairs(qualityLines) do
+			completionMessage = completionMessage .. "\n\n" .. line
 		end
 
 		-- Photos that fell out of the run rather than being culled: no usable

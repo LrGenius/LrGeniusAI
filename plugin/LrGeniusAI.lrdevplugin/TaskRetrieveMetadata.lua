@@ -211,6 +211,7 @@ LrTasks.startAsyncTask(function()
 		local backendWarnings = {}
 		local skipValidation = false
 		local canceled = false
+		local qualityEntries = {}
 
 		for i, photo in ipairs(photos) do
 			if progressScope:isCanceled() then
@@ -315,6 +316,9 @@ LrTasks.startAsyncTask(function()
 						-- Score and genre are model output, not text the user can
 						-- reword, so they are written whenever the photo has them.
 						MetadataManager.applyAesthetic(photo, retrievedData.aesthetic)
+						-- Quality flags likewise, collected and written in one
+						-- go after the loop (only where the value changes).
+						qualityEntries[#qualityEntries + 1] = { photo = photo, quality = retrievedData.quality }
 						successCount = successCount + 1
 						log:trace("Metadata applied successfully for photo: " .. fileName)
 
@@ -343,6 +347,10 @@ LrTasks.startAsyncTask(function()
 				table.insert(errorMessages, fileName .. ": " .. tostring(photoIdErr))
 				errorCount = errorCount + 1
 			end
+		end
+
+		for _, line in ipairs(MetadataManager.qualityFlagsReport(MetadataManager.applyQualityFlags(qualityEntries))) do
+			table.insert(backendWarnings, line)
 		end
 
 		progressScope:done()

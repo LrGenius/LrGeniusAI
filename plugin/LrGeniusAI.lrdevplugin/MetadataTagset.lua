@@ -23,6 +23,7 @@ return {
 		"com.adobe.separator",
 		_PLUGIN.id .. ".genre",
 		_PLUGIN.id .. ".aestheticScore",
+		_PLUGIN.id .. ".qualityFlags",
 		_PLUGIN.id .. ".aiModel",
 		_PLUGIN.id .. ".aiLastRun",
 		"com.adobe.separator",

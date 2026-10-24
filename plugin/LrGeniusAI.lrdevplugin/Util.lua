@@ -2909,6 +2909,85 @@ function Util.aestheticFieldValues(aesthetic)
 end
 
 ---
+-- What to do with a photo's *Quality flags* field, given what it holds now and
+-- the backend's `quality` block for the photo.
+--
+-- Pure so the rule that matters is tested headless: **the field is written
+-- only when its value changes.** Every plug-in property write advances the
+-- photo's Date Edited in Lightroom, so writing an unchanged value — or writing
+-- "" into a field that was never set — on every run would mark the whole
+-- selection as edited (see the Date Edited section of plugin/README.md).
+--
+-- @param current string|nil What the field holds now (nil when never set).
+-- @param quality table|nil The backend's `quality` block:
+--   `{ measured = true, flags = {...}, text = "..." }` or `{ measured = false }`.
+-- @return string|nil The value to write, nil when nothing is to be written.
+-- @return string Why: "changed", "unchanged", "unmeasured" (the photo was
+--   indexed before the signals existed) or "absent" (no block at all — a
+--   backend older than the field).
+--
+function Util.qualityFlagsChange(current, quality)
+	if type(quality) ~= "table" then
+		return nil, "absent"
+	end
+	if quality.measured ~= true then
+		return nil, "unmeasured"
+	end
+	local text = type(quality.text) == "string" and quality.text or ""
+	local have = type(current) == "string" and current or ""
+	if have == text then
+		return nil, "unchanged"
+	end
+	return text, "changed"
+end
+
+---
+-- The writes a batch of photos needs, and what became of the rest.
+--
+-- @param items table List of `{ current = string|nil, quality = table|nil }`.
+-- @return table List of `{ index = n, value = string }` — only the photos
+--   whose field changes.
+-- @return table Counts: `{ written, unchanged, unmeasured, absent, failed }`
+--   (`written` counts the planned writes; `failed` starts at 0).
+--
+function Util.qualityFlagsPlan(items)
+	local writes = {}
+	local counts = { written = 0, unchanged = 0, unmeasured = 0, absent = 0, failed = 0 }
+	for index, item in ipairs(items or {}) do
+		local value, why = Util.qualityFlagsChange(item.current, item.quality)
+		if value ~= nil then
+			writes[#writes + 1] = { index = index, value = value }
+			counts.written = counts.written + 1
+		else
+			counts[why] = (counts[why] or 0) + 1
+		end
+	end
+	return writes, counts
+end
+
+---
+-- The user-facing line for photos that have no quality flags because they
+-- were indexed before LrGeniusAI measured them. nil when there are none.
+--
+-- @param count number How many photos came back unmeasured.
+-- @return string|nil
+--
+function Util.qualityFlagsUnmeasuredMessage(count)
+	count = tonumber(count) or 0
+	if count <= 0 then
+		return nil
+	end
+	return string.format(
+		"%d photo(s) have no quality flags yet: they were indexed by an older version of LrGeniusAI, "
+			.. "which did not measure blur and clipping. Select them and run Analyze & Index Photos with "
+			.. "the scope Selected photos only (New or unprocessed photos skips them, because they are "
+			.. "indexed) to fill the flags in. With Skip photos with existing data, nothing they already "
+			.. "have is generated again.",
+		count
+	)
+end
+
+---
 -- The minimum aesthetic score a slider position stands for, nil for "off".
 --
 -- The slider is integral and runs in half-points so a step is meaningful:

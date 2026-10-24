@@ -1200,29 +1200,72 @@ LrTasks.startAsyncTask(function()
 			log:trace("Saved species data for " .. speciesCount .. " photo(s)")
 		end
 
-		-- Aesthetic score and genre are computed by the "smart search" task and
-		-- are not text anyone reviews, so they have a pass of their own rather
-		-- than riding on the metadata paths below (which only run with
-		-- metadata generation on). Read back one photo at a time like the
-		-- species pass; a backend that has neither simply returns no block.
-		if status ~= "allfailed" and props.enableEmbeddings and props.saveDataToCatalog then
-			log:trace("Saving aesthetic scores for processed photos...")
+		-- Aesthetic score, genre and quality flags are model output and
+		-- measurements, not text anyone reviews, so they have a pass of their
+		-- own rather than riding on the metadata paths below (which only run
+		-- with metadata generation on). Read back one photo at a time like the
+		-- species pass; a backend that has none simply returns no block.
+		--
+		-- The quality flags come from the culling metrics, which every indexing
+		-- task computes, so this pass runs whatever the run was asked to do.
+		-- The aesthetic half stays behind "smart photo search", which is what
+		-- computes the score.
+		if status ~= "allfailed" and props.saveDataToCatalog then
+			log:trace("Saving aesthetic scores and quality flags for processed photos...")
 			local aestheticCount = 0
+			local qualityEntries = {}
+			local qualityUnread = 0
 			for _, photo in ipairs(processedPhotos) do
 				local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 				if photoId then
 					local response, photoDataErr = SearchIndexAPI.getPhotoData(photoId)
 					if photoDataErr then
 						log:error("getPhotoData failed while saving aesthetic scores: " .. photoDataErr)
-						photoDataErrCount = photoDataErrCount + 1
+						-- Counted once per photo: the other read-back passes
+						-- already count this photo when they ran.
+						if props.enableEmbeddings then
+							photoDataErrCount = photoDataErrCount + 1
+						else
+							qualityUnread = qualityUnread + 1
+						end
 					elseif not response then
-						photoDataMissingCount = photoDataMissingCount + 1
-					elseif MetadataManager.applyAesthetic(photo, response.aesthetic) then
-						aestheticCount = aestheticCount + 1
+						if props.enableEmbeddings then
+							photoDataMissingCount = photoDataMissingCount + 1
+						else
+							qualityUnread = qualityUnread + 1
+						end
+					else
+						if props.enableEmbeddings and MetadataManager.applyAesthetic(photo, response.aesthetic) then
+							aestheticCount = aestheticCount + 1
+						end
+						qualityEntries[#qualityEntries + 1] = { photo = photo, quality = response.quality }
 					end
 				end
 			end
 			log:trace("Saved aesthetic data for " .. aestheticCount .. " photo(s)")
+			local qualityCounts = MetadataManager.applyQualityFlags(qualityEntries)
+			log:trace(
+				string.format(
+					"Quality flags: %d written, %d unchanged, %d unmeasured, %d absent, %d failed",
+					qualityCounts.written,
+					qualityCounts.unchanged,
+					qualityCounts.unmeasured,
+					qualityCounts.absent,
+					qualityCounts.failed
+				)
+			)
+			for _, line in ipairs(MetadataManager.qualityFlagsReport(qualityCounts)) do
+				table.insert(runWarnings, line)
+			end
+			if qualityUnread > 0 then
+				table.insert(
+					runWarnings,
+					"The quality flags of "
+						.. tostring(qualityUnread)
+						.. " photo(s) could not be read back from the search index, so they were not updated. "
+						.. "Run Retrieve Metadata from Backend on them to fill them in."
+				)
+			end
 		end
 
 		-- Set when the review dialog stops the save pass below: photos already
