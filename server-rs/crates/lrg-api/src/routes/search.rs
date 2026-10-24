@@ -617,11 +617,17 @@ async fn search(
     }
     hits.truncate(n_results);
 
+    // Whether the browser search page has a picture to show for the photo
+    // (`crate::thumbnails`); a stat per result, at most `max_results` of them.
+    let lance_root = state.lance_root();
     let results: Vec<Value> = hits
         .into_iter()
         .map(|hit| {
             let m = rows.get(hit.photo_id.as_str());
             let genre = m.and_then(|m| genre_of(m));
+            let has_thumbnail = lance_root
+                .as_deref()
+                .is_some_and(|root| crate::thumbnails::exists(root, &hit.photo_id));
             json!({
                 "photo_id": hit.photo_id,
                 "uuid": hit.photo_id,
@@ -629,6 +635,7 @@ async fn search(
                 "aesthetic_score": m.and_then(|m| current_aesthetic(m)),
                 "genre": genre,
                 "genre_label": genre.and_then(lrg_ml::genre::label_for),
+                "has_thumbnail": has_thumbnail,
             })
         })
         .collect();

@@ -14,6 +14,7 @@ pub mod prompt_embeddings;
 pub mod routes;
 pub mod species_links;
 pub mod state;
+pub mod thumbnails;
 pub mod ui_bridge;
 
 use std::sync::Arc;

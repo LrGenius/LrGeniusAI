@@ -268,6 +268,8 @@ local ENDPOINTS = {
 	-- Browser UI: the pages the plugin opens instead of building them in
 	-- LrView, and the queue they hand catalog work back through.
 	UI_PEOPLE = "/v1/ui/people",
+	UI_SEARCH = "/v1/ui/search",
+	UI_SEARCH_CONTEXT = "/v1/ui/search/context",
 	UI_ACTIONS = "/v1/ui/actions",
 
 	-- The agent chat (TaskChat.lua): opening a session takes the agent token;
@@ -4283,8 +4285,10 @@ end
 -- catalog the plugin talks to — the backend accepts it from the query string
 -- exactly like it does from `_request`'s injected copy.
 -- @return string
-function SearchIndexAPI.getPeopleUiUrl()
-	local url = SearchIndexAPI.url("UI_PEOPLE")
+--- The address of a /v1/ui/ page, with the catalog's db_path and the access
+--- token the page needs.
+local function uiPageUrl(key)
+	local url = SearchIndexAPI.url(key)
 	if SearchIndexAPI.isLocalBackend() then
 		local dbPath = getDbPath()
 		if dbPath then
@@ -4301,13 +4305,46 @@ function SearchIndexAPI.getPeopleUiUrl()
 	return url
 end
 
+function SearchIndexAPI.getPeopleUiUrl()
+	return uiPageUrl("UI_PEOPLE")
+end
+
+function SearchIndexAPI.getSearchUiUrl()
+	return uiPageUrl("UI_SEARCH")
+end
+
+---
+-- Hands the search page what only Lightroom knows: the catalog, the current
+-- view and selection as photo IDs, the last search options. The page reads
+-- it back from the backend; a refresh posts it again.
+-- @param context table `{ catalog_id, scopes = { view = { label, photo_ids }, selection = { photo_ids } }, defaults, history }`
+-- @return table|nil `{ revision }`, or nil, err
+function SearchIndexAPI.setSearchUiContext(context)
+	local result, err = _request("POST", SearchIndexAPI.url("UI_SEARCH_CONTEXT"), context, 60)
+	if err then
+		log:error("setSearchUiContext failed: " .. tostring(err))
+	end
+	return result, err
+end
+
+--- This catalog's ID as the backend scopes its data by it, or nil.
+function SearchIndexAPI.catalogIdForRequests()
+	return getCatalogId()
+end
+
 ---
 -- Take everything a /v1/ui/ page queued for the plugin. Draining is destructive:
 -- each action is handed out exactly once, so the caller must act on what it
 -- gets back rather than polling again for it.
+-- @param page string|nil "people" (the default) or "search": each page has
+--   its own queue, so two tasks never take each other's actions.
 -- @return table|nil { status, actions = { ... }, page_open } or nil, err
-function SearchIndexAPI.takeUiActions()
-	local result, err = _request("GET", SearchIndexAPI.url("UI_ACTIONS"), nil, 10)
+function SearchIndexAPI.takeUiActions(page)
+	local url = SearchIndexAPI.url("UI_ACTIONS")
+	if page then
+		url = url .. "?page=" .. _urlEncode(page)
+	end
+	local result, err = _request("GET", url, nil, 10)
 	if err then
 		log:error("takeUiActions failed: " .. err)
 		return nil, err
