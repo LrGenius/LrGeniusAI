@@ -356,7 +356,9 @@ jobs:
         shell: bash
         run: |
           cd server-rs
-          cargo test --workspace --release ${{ matrix.cargo_features }}
+          # `release-test`, not `--release`: no LTO, so each test binary
+          # links in seconds instead of repeating a thin-LTO pass.
+          cargo test --workspace --profile release-test ${{ matrix.cargo_features }}
 
       - name: Build backend binary (release)
         shell: bash

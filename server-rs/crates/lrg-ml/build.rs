@@ -11,6 +11,12 @@
 //!
 //! A `rustc-link-lib` from a library crate reaches every binary and test that
 //! depends on it, so doing this here covers `lrg-server` and all test targets.
+//!
+//! The archive is linked `-bundle`. A bundled static library is copied into
+//! the rlib, where it sits *before* the `ort-sys` rlib that needs it; the
+//! linker then never pulls the member out, and targets that link little else
+//! (the `bench_image` example) still fail with the undefined symbol. Unbundled,
+//! `-lclang_rt.osx` goes on the final link line after every rlib.
 
 use std::process::Command;
 
@@ -48,5 +54,5 @@ fn main() {
     }
 
     println!("cargo:rustc-link-search=native={lib_dir}");
-    println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    println!("cargo:rustc-link-lib=static:-bundle=clang_rt.osx");
 }
