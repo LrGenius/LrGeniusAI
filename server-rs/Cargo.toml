@@ -53,3 +53,13 @@ tempfile = "3"
 [profile.release]
 lto = "thin"
 strip = "symbols"
+
+# What the release workflow runs the test suite under. Same optimisation as
+# `release` (the ML tests are too slow unoptimised), but without LTO: with
+# `lto = "thin"` every test binary and example repeats an LTO pass over the
+# whole dependency graph, and the Windows leg ran past its 240 minute limit
+# in that link phase alone.
+[profile.release-test]
+inherits = "release"
+lto = false
+strip = "none"
