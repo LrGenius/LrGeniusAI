@@ -1228,12 +1228,20 @@ Lists local models that are installed and those offered for download.
 ```json
 {
   "installed":    [{ "name": "...", "model_path": "...", "mmproj_path": "...", "source": "downloaded|env|lmstudio" }],
-  "downloadable": [{ "id": "gemma4-e4b", "label": "...", "approx_bytes": 0, "min_ram_gb": 16, "installed": false }],
+  "downloadable": [{ "id": "gemma4-e4b", "label": "...", "approx_bytes": 0, "min_ram_gb": 16, "installed": false, "recommended": true }],
+  "recommended":  { "id": "gemma4-e4b", "label": "...", "reason": "Gemma 4 E4B is the best model that fits …", "installed_name": null },
   "supported":    true,
   "model_dir":    "~/.cache/lrgenius/models/llm",
+  "hardware": {
+    "memory_bytes": 17179869184, "memory_gb": 16, "cpu": "Apple M2 Pro",
+    "logical_cores": 10, "physical_cores": 10, "os": "macos", "arch": "aarch64",
+    "apple_chip": { "name": "M2 Pro", "generation": 2, "tier": "pro" },
+    "unified_memory": true
+  },
   "mlx": {
     "installed":    [{ "name": "gemma-4-e4b-it-4bit", "model_dir": "...", "source": "downloaded|env|lmstudio|huggingface" }],
-    "downloadable": [{ "id": "mlx-gemma4-e4b", "label": "...", "approx_bytes": 0, "min_ram_gb": 16, "installed": false }],
+    "downloadable": [{ "id": "mlx-gemma4-e4b", "label": "...", "approx_bytes": 0, "min_ram_gb": 16, "installed": false, "recommended": true }],
+    "recommended":  { "id": "mlx-gemma4-e4b", "label": "...", "reason": "...", "installed_name": "gemma-4-e4b-it-4bit" },
     "supported":    false,
     "reason":       "MLX runs only on Apple silicon Macs. …",
     "model_dir":    "~/.cache/lrgenius/models/mlx"
@@ -1242,6 +1250,23 @@ Lists local models that are installed and those offered for download.
 ```
 
 `supported: false` always carries a `reason` for MLX; for llama.cpp it means the binary was built without the `llamacpp` feature.
+
+**`hardware` and `recommended`** describe the computer the *backend* runs on (`lrg_api::hardware`), which
+is where a local model runs — so they are right for a plug-in on another computer too. Detected once per
+process with the `sysinfo` crate. `memory_gb` is the size the machine was sold with: the OS reports a little
+less than is installed (firmware, an integrated GPU's share), so a report within 16 % below a standard size
+(4, 8, 16, 18, 24, 32 … GB) counts as that size. `apple_chip` is parsed from the CPU brand string and is
+`null` elsewhere. No GPU is reported on Windows and Linux: llama.cpp only lists its devices once its backend
+has initialised, which loads the Vulkan modules — too heavy for a settings refresh.
+
+Each engine's `recommended` is the first entry of a fixed preference list, best model first, whose catalog
+`min_ram_gb` the computer meets: MLX `mlx-gemma4-12b` → `mlx-gemma4-e4b` → `mlx-gemma4-e2b`; llama.cpp
+`gemma4-e4b` → `qwen2.5-vl-3b` → `smolvlm-500m`. The llama.cpp list stops at E4B because without knowing
+there is a discrete GPU, a 12B model on the CPU alone is too slow for a catalog. Apple chip generation and
+tier are reported but not used: they decide speed, not fit, and no per-chip throughput has been measured.
+`id`/`label` are `null` when nothing fits, and `reason` then says what to use instead. `installed_name` is
+the name the model is installed under (the `installed[].name` to select) when it is already on disk. The
+same entry carries `recommended: true` in `downloadable`.
 
 ### `GET /v1/llm/status`
 Engine state (`status`, loaded `model_name`, …) for the llama.cpp engine, with the MLX engine's equivalent nested under `mlx`. `n_ctx` is the whole KV cache; `n_ctx_seq` is the share one photo gets, which is what a prompt plus its `max_tokens` has to fit inside. They differ whenever `n_parallel > 1`, because llama.cpp splits the cache per sequence. `n_parallel` is the effective value: the engine lowers a requested count that would leave each photo too little.

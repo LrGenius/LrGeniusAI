@@ -73,6 +73,10 @@ processing a large catalog:
   throughput on your hardware before queueing thousands. Smaller models
   (Gemma 4 E2B, Qwen2.5-VL 3B) trade quality for speed; the first photo in a
   session is always the slowest because the model has to load into memory.
+  The local-model settings name the model that fits your computer's memory
+  (*Recommended for this computer*, see
+  [Help: Local AI Models](Help-Local-AI-Models#recommended-for-this-computer));
+  start there and move down a size if it is too slow.
 
 Full comparison: [Help: Choosing AI Model](Help-Choosing-AI-Model) ·
 [Help: Local AI Models](Help-Local-AI-Models).

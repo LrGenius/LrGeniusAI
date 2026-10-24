@@ -39,6 +39,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **JSON.lua** (CC-BY 3.0): A complete JSON encoder/decoder in Lua by Jeffrey Friedl, vendored into the plugin. [Upstream](http://regex.info/blog/lua/json)
 - **Adobe Lightroom Classic SDK**: The Lua API the plugin frontend is built on.
 - **Hugging Face Hub**: Distribution for the downloadable local models.
+- **sysinfo** (MIT): Reads the computer's memory and processor, so the local-model settings can recommend a model that fits. [GitHub](https://github.com/GuillaumeGomez/sysinfo)
 
 ## Tooling & Project Infrastructure
 - **Automaat/lightroom-mcp** (MIT): A second open-source Lightroom Classic plugin, by Marcin Skalski, pairing an `.lrplugin` with an MCP server. Its CI/CD setup is where this project's workflow trigger scoping, per-workflow concurrency groups, commit-SHA pinning of *every* action (not just third-party ones), the pinned `busted` revision, and the "stamp the version, then read the stamp back" rule came from — the last of which turned up a bug that had shipped in every release. Its plugin also documents a couple of Lightroom SDK behaviours worth knowing — among them how LrSocket behaves across plug-in reloads and on Windows (its issues #110, #121, #128, #134, #137), which decided the shape of LrGeniusAI's agent bridge: a receive-only socket as a doorbell, everything else over HTTP. No code was taken from it. [GitHub](https://github.com/Automaat/lightroom-mcp)

@@ -38,6 +38,30 @@ not arise.
    `On this PC · <model>` (llama.cpp). When the download finishes, the
    plug-in also offers to make it the model for AI metadata right away.
 
+### Recommended for this computer
+
+The line **For this computer** in the section (and in the setup wizard) names
+the model that fits the computer the backend runs on, and the dropdown marks it
+*Recommended for this computer* and selects it until you pick another. The
+choice is made by memory, because a model that does not fit next to Lightroom
+does not get slower, it swaps until it is unusable:
+
+| Memory | MLX (Mac) | llama.cpp (Windows) |
+|---|---|---|
+| 32 GB or more | Gemma 4 12B | Gemma 4 E4B |
+| 16–31 GB | Gemma 4 E4B | Gemma 4 E4B |
+| 8–15 GB | Gemma 4 E2B | Qwen2.5-VL 3B |
+| 4–7 GB | — | SmolVLM 500M (testing only) |
+
+On Windows the recommendation stops at Gemma 4 E4B because LrGeniusAI cannot
+tell from the settings page whether there is a graphics card, and a 12B model on
+the processor alone is too slow for a catalog. With a graphics card of 12 GB or
+more, Gemma 4 12B is worth trying. A computer below the smallest model's memory
+gets a note to use a cloud provider instead. The memory counted is what the
+computer was sold with, so a 16 GB laptop that reports a little less still
+counts as 16 GB. The recommendation is a starting point, not a limit: every
+model in the list can be downloaded.
+
 The curated lists are short on purpose: every entry is an ungated repository
 (no Hugging Face token needed) and a **vision** model, since a text-only model
 would look selectable and then fail on the first photo.
@@ -46,7 +70,7 @@ would look selectable and then fail on the first photo.
 
 | Model | Download | Comfortable RAM |
 |---|---|---|
-| Gemma 4 E4B *(recommended)* | ~6.3 GB | 16 GB |
+| Gemma 4 E4B (best all-round) | ~6.3 GB | 16 GB |
 | Gemma 4 12B (QAT, highest quality) | ~7.2 GB | 24 GB |
 | Ministral 3 8B (balanced alternative) | ~6.1 GB | 16 GB |
 | Qwen3.5 9B (balanced alternative) | ~6.5 GB | 16 GB |
@@ -61,7 +85,7 @@ both.
 
 | Model | Download | Comfortable RAM |
 |---|---|---|
-| Gemma 4 E4B *(recommended)* | ~5.2 GB | 16 GB |
+| Gemma 4 E4B (best all-round) | ~5.2 GB | 16 GB |
 | Gemma 4 E2B (faster, lower quality) | ~3.6 GB | 8 GB |
 | Gemma 4 12B (QAT, highest quality) | ~11.0 GB | 32 GB |
 | Ministral 3 8B (balanced alternative) | ~5.6 GB | 16 GB |

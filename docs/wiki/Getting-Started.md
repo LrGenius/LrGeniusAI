@@ -89,9 +89,12 @@ LrGeniusAI server in the background.
    1. Click **Download AI Models** (about 3.3 GB). These power search, species
       and face detection.
    2. Further down, in **Local AI Model — MLX** (Mac) or **Local AI Model —
-      llama.cpp** (Windows), pick **Gemma 4 E4B (recommended)** and click
-      **Download** (about 5–6 GB). This is the model that writes your
-      keywords, titles and captions.
+      llama.cpp** (Windows), the line **For this computer** names the model
+      that fits your computer's memory, and the dropdown has it selected and
+      marked *Recommended for this computer* (Gemma 4 E4B on most computers
+      with 16 GB or more). Click **Download** (about 3–7 GB, depending on the
+      model). This is the model that writes your keywords, titles and
+      captions.
 5. Click **OK**.
 
 The downloads keep running in the background — watch the progress bar in the
