@@ -219,6 +219,12 @@ sources = [
   "server-rs/crates/lrg-api/src/routes/search.rs",
 ]
 
+[page."Help-Smart-Collections.md"]
+sources = [
+  "plugin/LrGeniusAI.lrdevplugin/TaskCreateSmartCollections.lua",
+  "plugin/LrGeniusAI.lrdevplugin/SmartCollectionTemplates.lua",
+]
+
 [page."Help-Find-Similar.md"]
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskFindSimilarImages.lua",

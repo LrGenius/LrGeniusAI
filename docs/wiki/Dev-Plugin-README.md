@@ -48,6 +48,20 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Scope search to current selection/view/catalog
 - Order or restrict results by aesthetic score and genre; with no search term, list the best photos by score
 
+### Smart Collection Templates
+
+- *Create Smart Collection Templates...* (`TaskCreateSmartCollections.lua`)
+  creates smart collections over the plug-in's searchable fields in an
+  `LrGeniusAI` collection set; the templates are a pure table in
+  `SmartCollectionTemplates.lua` (tested in
+  `plugin/spec/smart_collection_templates_spec.lua`)
+- Plug-in fields are addressed as `sdktext:<plug-in id>.<field id>` and compared
+  as text: the numeric AI fields are stored as strings, so "score 7+" is
+  "starts with 7, 8 or 9"
+- Idempotent: an existing collection of the same name in its set is left
+  untouched (`createSmartCollection` with `canReturnPrior`), and the run reports
+  it
+
 ### People Workflows
 
 - Cluster faces into persons

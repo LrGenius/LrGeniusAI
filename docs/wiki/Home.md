@@ -21,6 +21,7 @@ Welcome to the project wiki.
 - [Help: Cull Photos](Help-Cull-Photos) *(beta)* — burst grouping, ranking, Picks/Alternates/Rejects
 - [Help: People & Faces](Help-People-Faces) — face clusters, person names, face-based collections
 - [Help: Find Similar Images](Help-Find-Similar) — near-duplicate and content-similar search
+- [Help: Smart Collection Templates](Help-Smart-Collections) — ready-made smart collections for best photos, quality flags, culling, species and genres
 - [Help: Keyword Deduplication and De-Clutter](Help-Keyword-Dedup-and-Declutter) — synonym merging and auto de-clutter
 - [Help: Train from Edits](Help-Train-From-Edits) — save your edits as AI style examples
 - [Help: AI Agents (MCP)](Help-AI-Agents) — let Claude, LM Studio or another AI agent search your catalog and work in Lightroom

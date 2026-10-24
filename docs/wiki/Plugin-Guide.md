@@ -47,6 +47,9 @@ Not a menu item: the agent bridge starts with Lightroom and lets an AI agent con
 ### Find Similar Images
 Finds near-duplicates (perceptual hash) or visually similar photos (CLIP embeddings) for a selected photo. Results go into a new Lightroom collection. See [Help: Find Similar Images](Help-Find-Similar).
 
+### Create Smart Collection Templates
+Creates ready-made smart collections over LrGeniusAI's metadata fields — best photos by aesthetic score, photos with quality flags, culling picks without keywords, species by group, one per genre — in an *LrGeniusAI* collection set. Pick the ones you want in a short dialog; running it again leaves existing ones alone. See [Help: Smart Collection Templates](Help-Smart-Collections).
+
 ### Keyword Management
 - **Deduplicate Keyword Synonyms** — interactive workflow to find and merge near-duplicate catalog keywords.
 - **Auto De-Clutter** — runs automatically during indexing to prevent the AI from creating synonym keywords of ones already in your catalog.
