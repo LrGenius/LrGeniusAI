@@ -52,3 +52,73 @@ describe("LocalModelCatalog.customDownloadSummary", function()
 		assert.truthy(text:find("ggml-org/gemma-3-12b-it-GGUF (Q4_K_M)", 1, true))
 	end)
 end)
+
+-- "Recommended for this computer": the backend picks the model that fits the
+-- computer it runs on (`recommended` in /v1/llm/catalog), and the settings and
+-- the setup wizard mark it.
+describe("LocalModelCatalog recommendation", function()
+	local entries = {
+		{ id = "mlx-gemma4-12b", label = "Gemma 4 12B", approx_bytes = 11.0e9, recommended = false },
+		{ id = "mlx-gemma4-e4b", label = "Gemma 4 E4B (best all-round)", approx_bytes = 5.2e9, recommended = true },
+		{ id = "mlx-gemma4-e2b", label = "Gemma 4 E2B", approx_bytes = 3.6e9, installed = true },
+	}
+
+	it("marks the recommended entry in the picker, and only that one", function()
+		local choices = LocalModelCatalog.downloadChoices(entries)
+		assert.are.equal("Gemma 4 12B (11.0 GB)", choices[1].title)
+		assert.are.equal("Gemma 4 E4B (best all-round) (5.2 GB) — Recommended for this computer", choices[2].title)
+		-- Installed models are not offered; the custom entry closes the list.
+		assert.are.equal(3, #choices)
+		assert.are.equal(LocalModelCatalog.CUSTOM_CHOICE, choices[3].value)
+	end)
+
+	it("preselects the recommended model when nothing is chosen yet", function()
+		local choices = LocalModelCatalog.downloadChoices(entries)
+		assert.are.equal("mlx-gemma4-e4b", LocalModelCatalog.pickValidChoice(choices, nil, "mlx-gemma4-e4b"))
+	end)
+
+	it("keeps the user's own choice over the recommendation", function()
+		local choices = LocalModelCatalog.downloadChoices(entries)
+		assert.are.equal(
+			"mlx-gemma4-12b",
+			LocalModelCatalog.pickValidChoice(choices, "mlx-gemma4-12b", "mlx-gemma4-e4b")
+		)
+	end)
+
+	it("falls back to the first entry when the recommendation is not offered", function()
+		local choices = LocalModelCatalog.downloadChoices(entries)
+		-- Installed already, or a backend older than the field.
+		assert.are.equal("mlx-gemma4-12b", LocalModelCatalog.pickValidChoice(choices, nil, "mlx-gemma4-e2b"))
+		assert.are.equal("mlx-gemma4-12b", LocalModelCatalog.pickValidChoice(choices, nil, nil))
+		assert.are.equal("mlx-gemma4-12b", LocalModelCatalog.pickValidChoice(choices, "gone", nil))
+	end)
+
+	it("says why, and what to do, for each state of the recommendation", function()
+		local reason = "Gemma 4 E4B is the best model that fits next to Lightroom on a computer with 16 GB of memory."
+		assert.are.equal(
+			reason .. " Pick it below and click Download.",
+			LocalModelCatalog.recommendationText({ id = "mlx-gemma4-e4b", reason = reason })
+		)
+		assert.are.equal(
+			reason .. " It is installed.",
+			LocalModelCatalog.recommendationText({
+				id = "mlx-gemma4-e4b",
+				reason = reason,
+				installed_name = "gemma-4-e4b-it-4bit",
+			})
+		)
+		local none = "This computer has 4 GB of memory; the smallest local model needs 8 GB next to Lightroom."
+		assert.are.equal(none, LocalModelCatalog.recommendationText({ reason = none }))
+		-- A backend older than the field says nothing.
+		assert.are.equal("", LocalModelCatalog.recommendationText(nil))
+	end)
+
+	it("marks the recommended model in the installed list", function()
+		local names = LocalModelCatalog.installedNames(
+			{ { name = "gemma-4-e4b-it-4bit" }, { name = "other" } },
+			{ installed_name = "gemma-4-e4b-it-4bit" }
+		)
+		assert.are.same({ "gemma-4-e4b-it-4bit (recommended for this computer)", "other" }, names)
+		assert.are.same({ "other" }, LocalModelCatalog.installedNames({ { name = "other" } }, nil))
+	end)
+end)

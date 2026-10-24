@@ -132,6 +132,17 @@ function OnboardingWizard.show(manualTrigger)
 						}),
 					}),
 					f:row({
+						f:static_text({
+							title = "For this computer:",
+							width = share("modelLabel"),
+						}),
+						f:static_text({
+							title = bind(args.recommendedKey),
+							fill_horizontal = 1,
+							height_in_lines = 2,
+						}),
+					}),
+					f:row({
 						f:popup_menu({
 							items = bind(args.choicesKey),
 							value = bind(args.choiceKey),
@@ -380,6 +391,7 @@ function OnboardingWizard.show(manualTrigger)
 									),
 									statusKey = "mlxStatusText",
 									installedKey = "mlxInstalledText",
+									recommendedKey = "mlxRecommendedText",
 									choicesKey = "mlxDownloadChoices",
 									choiceKey = "mlxDownloadChoice",
 									supportedKey = "mlxSupported",
@@ -392,6 +404,7 @@ function OnboardingWizard.show(manualTrigger)
 								),
 								statusKey = "llmStatusText",
 								installedKey = "llmInstalledText",
+								recommendedKey = "llmRecommendedText",
 								choicesKey = "llmDownloadChoices",
 								choiceKey = "llmDownloadChoice",
 								supportedKey = "llmSupported",

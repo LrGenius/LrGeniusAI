@@ -767,6 +767,20 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					fill_horizontal = 1,
 				}),
 			}),
+			-- Which model fits the computer the backend runs on, from
+			-- `recommended` in /v1/llm/catalog; the picker marks the same entry.
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "For this computer",
+					width = share("setupLabelWidth"),
+				}),
+				f:static_text({
+					title = bind("mlxRecommendedText"),
+					fill_horizontal = 1,
+					height_in_lines = 2,
+				}),
+			}),
 			f:row({
 				fill_horizontal = 1,
 				f:popup_menu({
@@ -814,6 +828,20 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 				f:static_text({
 					title = bind("llmInstalledText"),
 					fill_horizontal = 1,
+				}),
+			}),
+			-- Which model fits the computer the backend runs on, from
+			-- `recommended` in /v1/llm/catalog; the picker marks the same entry.
+			f:row({
+				fill_horizontal = 1,
+				f:static_text({
+					title = "For this computer",
+					width = share("setupLabelWidth"),
+				}),
+				f:static_text({
+					title = bind("llmRecommendedText"),
+					fill_horizontal = 1,
+					height_in_lines = 2,
 				}),
 			}),
 			f:row({

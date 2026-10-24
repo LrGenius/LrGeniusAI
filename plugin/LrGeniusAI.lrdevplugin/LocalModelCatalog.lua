@@ -7,8 +7,10 @@
 -- fields lives here instead of being written twice.
 --
 -- Fields written into the caller's property table:
---   llmSupported, llmStatusText, llmInstalledText, llmDownloadChoices, llmDownloadChoice
---   mlxSupported, mlxStatusText, mlxInstalledText, mlxDownloadChoices, mlxDownloadChoice
+--   llmSupported, llmStatusText, llmInstalledText, llmDownloadChoices, llmDownloadChoice,
+--   llmRecommendedText
+--   mlxSupported, mlxStatusText, mlxInstalledText, mlxDownloadChoices, mlxDownloadChoice,
+--   mlxRecommendedText
 --
 LocalModelCatalog = {}
 
@@ -26,6 +28,7 @@ function LocalModelCatalog.initFields(propertyTable)
 	propertyTable.llmDownloadChoice = nil
 	propertyTable.llmStatusText = LOC("$$$/LrGeniusAI/LocalModel/Checking=Checking for local models...")
 	propertyTable.llmInstalledText = ""
+	propertyTable.llmRecommendedText = ""
 	propertyTable.llmSupported = false
 
 	-- MLX is deliberately a separate group from the llama.cpp one: the two hold
@@ -36,41 +39,107 @@ function LocalModelCatalog.initFields(propertyTable)
 	propertyTable.mlxDownloadChoice = nil
 	propertyTable.mlxStatusText = LOC("$$$/LrGeniusAI/MlxModel/Checking=Checking for MLX models...")
 	propertyTable.mlxInstalledText = ""
+	propertyTable.mlxRecommendedText = ""
 	propertyTable.mlxSupported = false
 end
 
 --- The picker value of "Other model from Hugging Face…".
 LocalModelCatalog.CUSTOM_CHOICE = "hf:other"
 
+--- What the picker and the installed list append to the model the backend
+--- recommends for the computer it runs on (`recommended` in /v1/llm/catalog).
+LocalModelCatalog.RECOMMENDED_MARK = "Recommended for this computer"
+
+---
 -- Formats the catalog entries as picker items, appending the download size,
 -- and ends the list with "Other model from Hugging Face…": the curated list
 -- covers what has been tested, not everything a user may want to run (#341).
 -- It is an item rather than a field of its own so the section does not grow;
 -- the field only appears, in a dialog, once it is picked.
-local function toDownloadChoices(entries)
+--
+-- The entry the backend recommends for this computer is marked as such.
+--
+-- @param entries table `downloadable` from /v1/llm/catalog (or its `mlx` half).
+-- @return table Picker items `{ title, value }`.
+--
+function LocalModelCatalog.downloadChoices(entries)
 	local choices = {}
 	for _, entry in ipairs(entries or {}) do
 		if not entry.installed then
 			local gb = entry.approx_bytes and string.format(" (%.1f GB)", entry.approx_bytes / 1e9) or ""
-			table.insert(choices, { title = (entry.label or entry.id) .. gb, value = entry.id })
+			local mark = entry.recommended == true and (" — " .. LocalModelCatalog.RECOMMENDED_MARK) or ""
+			table.insert(choices, { title = (entry.label or entry.id) .. gb .. mark, value = entry.id })
 		end
 	end
 	table.insert(choices, { title = "Other model from Hugging Face…", value = LocalModelCatalog.CUSTOM_CHOICE })
 	return choices
 end
 
+---
 -- Keeps the picker's selection pointing at something the list still offers.
 --
 -- Callers refresh periodically, and a model that finishes downloading drops out
 -- of `downloadable`; the id selected before would otherwise linger and keep the
--- Download button live for an entry that is no longer there.
-local function pickValidChoice(choices, current)
+-- Download button live for an entry that is no longer there. With nothing
+-- chosen yet, the recommended model is preselected.
+--
+-- @param choices table From `downloadChoices`.
+-- @param current string|nil The id selected now.
+-- @param recommendedId string|nil The backend's recommended id.
+-- @return string|nil
+--
+function LocalModelCatalog.pickValidChoice(choices, current, recommendedId)
+	local fallback = nil
 	for _, choice in ipairs(choices) do
 		if choice.value == current then
 			return current
 		end
+		if recommendedId ~= nil and choice.value == recommendedId then
+			fallback = recommendedId
+		end
 	end
-	return choices[1] and choices[1].value or nil
+	return fallback or (choices[1] and choices[1].value or nil)
+end
+
+---
+-- The "For this computer" line: which model fits the computer the backend
+-- runs on, and why — or why none does.
+--
+-- @param recommended table|nil `recommended` from /v1/llm/catalog; absent on
+--   a backend older than the field.
+-- @return string "" when there is nothing to say.
+--
+function LocalModelCatalog.recommendationText(recommended)
+	if type(recommended) ~= "table" or type(recommended.reason) ~= "string" then
+		return ""
+	end
+	if type(recommended.installed_name) == "string" and recommended.installed_name ~= "" then
+		return recommended.reason .. " It is installed."
+	end
+	if recommended.id == nil then
+		return recommended.reason
+	end
+	return recommended.reason .. " Pick it below and click Download."
+end
+
+---
+-- The installed list, with the recommended model marked.
+--
+-- @param installed table `installed` from /v1/llm/catalog (entries with `name`).
+-- @param recommended table|nil `recommended` from the same response.
+-- @return table List of display names.
+--
+function LocalModelCatalog.installedNames(installed, recommended)
+	local recommendedName = type(recommended) == "table" and recommended.installed_name or nil
+	local names = {}
+	for _, m in ipairs(installed or {}) do
+		local name = m.name or "?"
+		if recommendedName ~= nil and name == recommendedName then
+			name = name .. " (" .. LocalModelCatalog.RECOMMENDED_MARK:lower() .. ")"
+		end
+		table.insert(names, name)
+	end
+	return names
 end
 
 -- The llama.cpp half of /v1/llm/catalog + /v1/llm/status.
@@ -83,21 +152,25 @@ local function updateLlamaCppFields(propertyTable, catalog, status)
 		-- gated on it, and a choice left over from an earlier refresh would
 		-- otherwise stay clickable against a backend that cannot serve it.
 		propertyTable.llmDownloadChoice = nil
+		propertyTable.llmRecommendedText = ""
 		propertyTable.llmSupported = false
 		return
 	end
 	propertyTable.llmSupported = true
 
-	local names = {}
-	for _, m in ipairs(catalog.installed or {}) do
-		table.insert(names, m.name or "?")
-	end
+	local recommended = catalog.recommended
+	local names = LocalModelCatalog.installedNames(catalog.installed, recommended)
 	propertyTable.llmInstalledText = #names > 0 and table.concat(names, ", ")
 		or LOC("$$$/LrGeniusAI/LocalModel/NoneInstalled=none yet")
+	propertyTable.llmRecommendedText = LocalModelCatalog.recommendationText(recommended)
 
-	local choices = toDownloadChoices(catalog.downloadable)
+	local choices = LocalModelCatalog.downloadChoices(catalog.downloadable)
 	propertyTable.llmDownloadChoices = choices
-	propertyTable.llmDownloadChoice = pickValidChoice(choices, propertyTable.llmDownloadChoice)
+	propertyTable.llmDownloadChoice = LocalModelCatalog.pickValidChoice(
+		choices,
+		propertyTable.llmDownloadChoice,
+		type(recommended) == "table" and recommended.id or nil
+	)
 
 	if status ~= nil and status.status == "loaded" then
 		-- The per-photo window is what a user has to keep Max Tokens under, so
@@ -125,6 +198,7 @@ local function updateMlxFields(propertyTable, catalog, status)
 		propertyTable.mlxStatusText = LOC("$$$/LrGeniusAI/MlxModel/Unsupported=This backend does not support MLX.")
 		propertyTable.mlxDownloadChoices = {}
 		propertyTable.mlxDownloadChoice = nil
+		propertyTable.mlxRecommendedText = ""
 		propertyTable.mlxSupported = false
 		return
 	end
@@ -135,21 +209,25 @@ local function updateMlxFields(propertyTable, catalog, status)
 			or LOC("$$$/LrGeniusAI/MlxModel/Unavailable=MLX is not available on this system.")
 		propertyTable.mlxDownloadChoices = {}
 		propertyTable.mlxDownloadChoice = nil
+		propertyTable.mlxRecommendedText = ""
 		propertyTable.mlxSupported = false
 		return
 	end
 	propertyTable.mlxSupported = true
 
-	local mlxNames = {}
-	for _, m in ipairs(mlx.installed or {}) do
-		table.insert(mlxNames, m.name or "?")
-	end
+	local mlxRecommended = mlx.recommended
+	local mlxNames = LocalModelCatalog.installedNames(mlx.installed, mlxRecommended)
 	propertyTable.mlxInstalledText = #mlxNames > 0 and table.concat(mlxNames, ", ")
 		or LOC("$$$/LrGeniusAI/MlxModel/NoneInstalled=none yet")
+	propertyTable.mlxRecommendedText = LocalModelCatalog.recommendationText(mlxRecommended)
 
-	local mlxChoices = toDownloadChoices(mlx.downloadable)
+	local mlxChoices = LocalModelCatalog.downloadChoices(mlx.downloadable)
 	propertyTable.mlxDownloadChoices = mlxChoices
-	propertyTable.mlxDownloadChoice = pickValidChoice(mlxChoices, propertyTable.mlxDownloadChoice)
+	propertyTable.mlxDownloadChoice = LocalModelCatalog.pickValidChoice(
+		mlxChoices,
+		propertyTable.mlxDownloadChoice,
+		type(mlxRecommended) == "table" and mlxRecommended.id or nil
+	)
 
 	local mlxStatus = status and status.mlx
 	if mlxStatus ~= nil and mlxStatus.status == "loaded" then
