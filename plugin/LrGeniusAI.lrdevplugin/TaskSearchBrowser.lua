@@ -21,28 +21,51 @@ local PAGE_OPEN_WARN_SECONDS = 25
 --- Poll errors in a row that count as "the backend is gone" rather than a blip.
 local MAX_CONSECUTIVE_POLL_ERRORS = 6
 
+--- Whether the page's searches are limited to this catalog: false when no
+--- catalog ID could be worked out, so the context carried none. Read by
+--- `showResults` to explain results Lightroom does not have.
+local scopedToCatalog = true
+
 --- The ID of each photo; photos whose ID cannot be resolved are counted, not
---- sent — the page says how many could not be searched.
-local function idsOf(photos)
+--- sent — the page says how many could not be searched. A large view takes a
+--- while, so the caption counts along and cancelling stops it.
+local function idsOf(photos, scope, what)
 	local ids, unresolved = {}, 0
-	for _, photo in ipairs(photos or {}) do
+	local total = #(photos or {})
+	for i, photo in ipairs(photos or {}) do
+		if scope:isCanceled() then
+			break
+		end
 		local photoId = SearchIndexAPI.getPhotoIdForPhoto(photo)
 		if photoId then
 			ids[#ids + 1] = photoId
 		else
 			unresolved = unresolved + 1
 		end
+		if i % 500 == 0 then
+			scope:setCaption(string.format("Reading the %s... %d of %d photos", what, i, total))
+		end
 	end
 	return ids, unresolved
 end
 
---- Names of the sources Lightroom is showing, for the page's "Current view".
-local function activeSourceNames(catalog)
-	local names = {}
+--- Whether Lightroom is showing All Photographs: the whole catalog.
+local function isAllPhotographs(catalog, source)
+	return source == "kAllPhotos" or (catalog.kAllPhotos ~= nil and source == catalog.kAllPhotos)
+end
+
+--- Names of the sources Lightroom is showing, for the page's "Current view",
+--- and whether one of them is All Photographs.
+local function activeSources(catalog)
+	local names, wholeCatalog = {}, false
 	for _, source in ipairs(catalog:getActiveSources() or {}) do
-		if type(source) == "string" then
-			names[#names + 1] = (source == "kAllPhotos" or source == catalog.kAllPhotos) and "All Photographs"
-				or (source == "kPreviousImport" and "Previous Import" or nil)
+		if isAllPhotographs(catalog, source) then
+			wholeCatalog = true
+			names[#names + 1] = "All Photographs"
+		elseif type(source) == "string" then
+			if source == "kPreviousImport" then
+				names[#names + 1] = "Previous Import"
+			end
 		else
 			local ok, name = LrTasks.pcall(function()
 				return source:getName()
@@ -52,7 +75,22 @@ local function activeSourceNames(catalog)
 			end
 		end
 	end
-	return names
+	return names, wholeCatalog
+end
+
+--- What a search cannot see, said at the top of the page (as the Advanced
+--- Search dialog does before it opens). Best effort: without the answers the
+--- page simply shows no note.
+local function coverageNotices(catalogCount)
+	local searchModelMissing = false
+	local assets = SearchIndexAPI.getAssetStatus()
+	if assets and type(assets.families) == "table" then
+		searchModelMissing = #Util.missingModelFamilies(assets.families, { "clip" }) > 0
+	end
+	return SearchBrowser.coverageNotices({
+		searchModelMissing = searchModelMissing,
+		coverage = Util.searchCoverage(SearchIndexAPI.getStats(), catalogCount),
+	})
 end
 
 --- Reads the view and selection and posts them as the page's context.
@@ -60,25 +98,45 @@ end
 local function postContext(scope)
 	scope:setCaption("Reading the current view and selection...")
 	local catalog = LrApplication.activeCatalog()
-	-- An unreadable view (a collection set, nothing selected in the sources)
-	-- is an empty one for the page, which then offers no "Current view".
-	local viewPhotos = PhotoSelector.getPhotosInScope("view") or {}
-	local selectedPhotos = PhotoSelector.getPhotosInScope("selected") or {}
-	local viewIds, viewUnresolved = idsOf(viewPhotos)
-	local selectionIds, selectionUnresolved = idsOf(selectedPhotos)
+	local sourceNames, wholeCatalog = activeSources(catalog)
+	local catalogCount
+	LrTasks.pcall(function()
+		catalogCount = #catalog:getAllPhotos()
+	end)
+
+	-- All Photographs is the same search as "All indexed photos", so its IDs
+	-- are not resolved one by one (minutes in a large catalog).
+	local viewIds, viewUnresolved = {}, 0
+	if not wholeCatalog then
+		-- An unreadable view (a collection set, nothing selected in the
+		-- sources) is an empty one for the page, which then offers no
+		-- "Current view".
+		viewIds, viewUnresolved = idsOf(PhotoSelector.getPhotosInScope("view") or {}, scope, "current view")
+	end
+	local selectionIds, selectionUnresolved =
+		idsOf(PhotoSelector.getPhotosInScope("selected") or {}, scope, "selection")
+	if scope:isCanceled() then
+		return false, "Cancelled."
+	end
+
+	local catalogId = SearchIndexAPI.catalogIdForRequests()
 	local context = SearchBrowser.context({
-		catalogId = SearchIndexAPI.catalogIdForRequests(),
+		catalogId = catalogId,
 		viewIds = viewIds,
-		viewLabel = SearchBrowser.viewLabel(activeSourceNames(catalog)),
+		viewLabel = SearchBrowser.viewLabel(sourceNames),
 		viewUnresolved = viewUnresolved,
+		viewWholeCatalog = wholeCatalog,
+		viewCount = catalogCount,
 		selectionIds = selectionIds,
 		selectionUnresolved = selectionUnresolved,
+		notices = coverageNotices(catalogCount),
 		prefs = prefs,
 	})
 	local result, err = SearchIndexAPI.setSearchUiContext(context)
 	if not result then
 		return false, Util.userFacingError(tostring(err))
 	end
+	scopedToCatalog = catalogId ~= nil
 	return true
 end
 
@@ -100,7 +158,10 @@ local function showResults(action)
 	end
 
 	local photos = SearchIndexAPI.findPhotosByPhotoIds(ids)
-	local missing = SearchBrowser.missingMessage(#ids, #photos, #photos < #ids and IndexCleanup.requestSoon())
+	-- A search limited to this catalog that names photos it no longer has
+	-- found deleted ones the index cleanup has not caught up with yet.
+	local cleanupStarted = scopedToCatalog and #photos < #ids and IndexCleanup.requestSoon()
+	local missing = SearchBrowser.missingMessage(#ids, #photos, cleanupStarted, scopedToCatalog)
 	if #photos == 0 then
 		LrDialogs.message("Not in this catalog", missing or "None of the results are in this catalog.", "warning")
 		return
@@ -161,7 +222,7 @@ local function runAction(action, scope)
 	end
 	if action.action == "refresh_search_context" then
 		local ok, err = postContext(scope)
-		if not ok then
+		if not ok and not scope:isCanceled() then
 			ErrorHandler.handleError("Could not update the search page", err)
 		end
 		return
@@ -244,10 +305,22 @@ LrTasks.startAsyncTask(function()
 			functionContext = context,
 		})
 
+		-- A page left open after the last Search task ended may have queued
+		-- "Show in Lightroom" since; it was told then that nothing would
+		-- happen. Carrying it out now would make a collection nobody asked
+		-- this task for, so it is dropped.
+		local stale = SearchIndexAPI.takeUiActions("search")
+		if type(stale) == "table" and type(stale.actions) == "table" and #stale.actions > 0 then
+			log:info(string.format("Search (browser): dropped %d request(s) queued while closed", #stale.actions))
+		end
+
 		local ok, err = postContext(scope)
 		if not ok then
+			-- Cancelled while a large view was being read: nothing to report.
+			if not scope:isCanceled() then
+				ErrorHandler.handleError("Could not prepare the search page", err)
+			end
 			scope:done()
-			ErrorHandler.handleError("Could not prepare the search page", err)
 			return
 		end
 

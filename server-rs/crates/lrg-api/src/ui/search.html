@@ -71,7 +71,7 @@
       .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
       .dot.on { background: var(--ok); }
 
-      #banners, #warnings { padding: 0 16px; }
+      #notices, #banners, #warnings { padding: 0 16px; }
       .banner {
         display: flex;
         gap: 10px;
@@ -192,6 +192,7 @@
       </div>
     </header>
 
+    <div id="notices"></div>
     <div id="banners"></div>
     <div id="warnings"></div>
 
@@ -260,6 +261,7 @@
       let contextRevision = 0;
       let results = []; // the last answer, in rank order
       let lastRequest = null; // the options that produced `results`
+      let lastGenreLabel = null; // the genre filter of that search, as shown
       let searchSeq = 0;
       let pluginConnected = false;
       const thumbCache = new Map(); // photo_id -> object URL, or null for none
@@ -272,15 +274,17 @@
       // Returns the decoded body. Failures throw with a message the user can
       // act on; warnings are left in the body for the caller, which decides
       // where they belong (a search's replace the last search's).
-      async function api(method, path, body) {
+      async function api(method, path, body, signal) {
         let response;
         try {
           response = await fetch(withDbPath(path), {
             method,
             headers: authHeaders(body ? { "Content-Type": "application/json" } : {}),
             body: body ? JSON.stringify(body) : undefined,
+            signal,
           });
         } catch (e) {
+          if (signal && signal.aborted) throw e;
           throw new Error(
             "Could not reach the LrGeniusAI backend. It may have stopped — close this page, then " +
               "open Search (browser) again in Lightroom to restart it. (" + e.message + ")"
@@ -379,7 +383,13 @@
 
       function scopeInfo(name) {
         const entry = ((context && context.scopes) || {})[name] || {};
-        return { ids: scopeIds(name), label: entry.label };
+        return { ids: scopeIds(name), label: entry.label, wholeCatalog: entry.whole_catalog === true, count: entry.count };
+      }
+
+      // "Current view" when Lightroom shows All Photographs: the plugin sends
+      // no IDs for it, since it is the same search as "All indexed photos".
+      function scopeIsWholeCatalog(scope) {
+        return scope === "all" || (scope === "view" && scopeInfo("view").wholeCatalog);
       }
 
       function renderScopes() {
@@ -388,9 +398,9 @@
         const selection = scopeInfo("selection");
         for (const option of select.options) {
           if (option.value === "view") {
-            option.textContent =
-              "Current view" + (view.label ? " — " + view.label : "") + " (" + view.ids.length + ")";
-            option.disabled = view.ids.length === 0;
+            const size = view.wholeCatalog ? (typeof view.count === "number" ? view.count : "all") : view.ids.length;
+            option.textContent = "Current view" + (view.label ? " — " + view.label : "") + " (" + size + ")";
+            option.disabled = !view.wholeCatalog && view.ids.length === 0;
           } else if (option.value === "selection") {
             option.textContent = "Selected photos (" + selection.ids.length + ")";
             option.disabled = selection.ids.length === 0;
@@ -418,8 +428,26 @@
         }
       }
 
-      async function loadContext(waitForRevisionAbove) {
-        const deadline = Date.now() + 15000;
+      // What the plugin knows a search here cannot see (no search model,
+      // photos never indexed), as the Advanced Search dialog says before it
+      // opens — replaced, not added to, when the context is read again.
+      function renderNotices() {
+        const host = el("notices");
+        host.replaceChildren();
+        const notices = (context && Array.isArray(context.notices) && context.notices) || [];
+        notices.filter((n) => typeof n === "string" && n).forEach((n) => banner(n, "warn", "notices"));
+        if (context && !context.catalog_id) {
+          banner(
+            "LrGeniusAI could not tell which catalog this is, so a search is not limited to it and can " +
+              "find photos of other catalogs that use the same backend. “Show in Lightroom” leaves those out.",
+            "warn",
+            "notices"
+          );
+        }
+      }
+
+      async function loadContext(waitForRevisionAbove, timeoutMs) {
+        const deadline = Date.now() + (timeoutMs || 15000);
         for (;;) {
           let data;
           try {
@@ -433,6 +461,7 @@
             context = data.context;
             contextRevision = data.revision;
             renderScopes();
+            renderNotices();
             renderHistory();
             return true;
           }
@@ -444,21 +473,29 @@
       async function refreshScopes() {
         const button = el("refresh-scope");
         button.disabled = true;
+        const label = button.textContent;
+        button.textContent = "Reading from Lightroom…";
         try {
           const data = await api("POST", API.actions, { page: PAGE, action: "refresh_search_context" });
           if (!data.plugin_connected) {
             banner(notListening(), "error");
             return;
           }
-          if (await loadContext(contextRevision)) {
+          // A large folder takes Lightroom a while to list.
+          if (await loadContext(contextRevision, 90000)) {
             banner("Updated the current view and selection from Lightroom.", "info");
             if (el("scope").value !== "all") scheduleSearch(0);
           } else {
-            banner("Lightroom did not answer in time. Try again in a moment.", "warn");
+            banner(
+              "Lightroom did not answer in time. If its progress bar still says it is reading the view, " +
+                "wait for it and click “Update from Lightroom” again.",
+              "warn"
+            );
           }
         } catch (e) {
           banner("Could not ask Lightroom for the current view: " + e.message, "error");
         } finally {
+          button.textContent = label;
           button.disabled = false;
         }
       }
@@ -501,7 +538,7 @@
         if (el("genre").value !== "all") body.genres = [el("genre").value];
         if (sort === "combined") body.aesthetic_weight = 0.5;
         const scope = el("scope").value;
-        if (scope !== "all") body.photo_ids = scopeIds(scope);
+        if (!scopeIsWholeCatalog(scope)) body.photo_ids = scopeIds(scope);
         return body;
       }
 
@@ -511,21 +548,31 @@
         searchTimer = setTimeout(runSearch, delay);
       }
 
+      // The search still running, cancelled when a newer one starts: a
+      // dragged slider should not leave the backend working through every
+      // position it passed.
+      let inFlight = null;
+
       async function runSearch() {
         const body = requestBody();
+        const genreLabel = selectedGenreLabel();
         const scope = el("scope").value;
-        if (scope !== "all" && body.photo_ids.length === 0) {
+        const seq = ++searchSeq;
+        if (inFlight) inFlight.abort();
+        inFlight = null;
+        if (!scopeIsWholeCatalog(scope) && body.photo_ids.length === 0) {
           showEmpty("The " + (scope === "view" ? "current view" : "selection") + " is empty in Lightroom.");
           return;
         }
         el("sort").disabled = !body.term;
-        const seq = ++searchSeq;
         el("count").textContent = body.term ? "Searching…" : "Ranking by aesthetic score…";
+        const controller = new AbortController();
+        inFlight = controller;
         let data;
         try {
-          data = await api("POST", API.search, body);
+          data = await api("POST", API.search, body, controller.signal);
         } catch (e) {
-          if (seq !== searchSeq) return;
+          if (seq !== searchSeq || controller.signal.aborted) return;
           el("count").textContent = "";
           el("warnings").replaceChildren();
           banner("The search failed: " + e.message, "error", "warnings");
@@ -533,8 +580,10 @@
         }
         // A slider dragged on: only the newest answer is drawn.
         if (seq !== searchSeq) return;
+        inFlight = null;
         results = Array.isArray(data.results) ? data.results : [];
         lastRequest = body;
+        lastGenreLabel = genreLabel;
         el("warnings").replaceChildren();
         const warnings = Array.isArray(data.warnings) ? data.warnings : data.warning ? [data.warning] : [];
         warnings.forEach((w) => banner(w, "warn", "warnings"));
@@ -662,9 +711,12 @@
           count.append(" · " + missing + " without a preview");
           banner(
             missing +
-              " of these photos have no preview yet: they were indexed before LrGeniusAI stored previews. " +
-              "Select them in Lightroom and run Analyze & Index Photos (Selected photos only, Skip photos " +
-              "with existing data) to add one — nothing else is generated again.",
+              (missing === 1 ? " of these photos has" : " of these photos have") +
+              " no preview yet: indexed before LrGeniusAI stored previews. To add them, click “Show in " +
+              "Lightroom”, select the photos of the new collection and run Library ▸ Plug-in Extras ▸ " +
+              "Analyze & Index Photos with the scope “Selected photos only” and “Skip photos with existing data”: " +
+              "the previews are added, and nothing that is already there is made again. (“New or " +
+              "unprocessed photos” does not pick them up.)",
             "note",
             "warnings"
           );
@@ -693,7 +745,7 @@
             term: lastRequest.term || "",
             sort: lastRequest.sort,
             min_aesthetic: lastRequest.min_aesthetic,
-            genre_label: selectedGenreLabel(),
+            genre_label: lastGenreLabel,
             max_results: lastRequest.max_results,
           });
           if (data.plugin_connected) {
@@ -750,6 +802,9 @@
         set("max-results", d.max_results);
         set("sort", d.sort);
         set("min-aesthetic", d.min_aesthetic_position);
+        // Only a genre the backend still names; otherwise "All genres".
+        if (d.genre && [...el("genre").options].some((o) => o.value === d.genre)) set("genre", d.genre);
+        if (typeof d.metadata === "boolean") el("metadata").checked = d.metadata;
         if (d.scope && ["all", "view", "selection"].includes(d.scope)) set("scope", d.scope);
         renderScopes();
         updateLabels();

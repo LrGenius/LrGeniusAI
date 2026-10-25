@@ -21,7 +21,12 @@ describe("SearchBrowser.defaultsFromPrefs", function()
 			max_results = 500,
 			sort = "combined",
 			min_aesthetic_position = 14,
+			genre = "all",
+			metadata = true,
 		}, d)
+		local more = SearchBrowser.defaultsFromPrefs({ searchGenre = "macro", searchInMetadata = false })
+		assert.are.equal("macro", more.genre)
+		assert.is_false(more.metadata)
 	end)
 
 	it("falls back to the dialog's own defaults", function()
@@ -31,6 +36,8 @@ describe("SearchBrowser.defaultsFromPrefs", function()
 			max_results = 300,
 			sort = "relevance",
 			min_aesthetic_position = 0,
+			genre = "all",
+			metadata = true,
 		}, SearchBrowser.defaultsFromPrefs(nil))
 		assert.are.equal("relevance", SearchBrowser.defaultsFromPrefs({ searchSort = "best" }).sort)
 	end)
@@ -58,6 +65,41 @@ describe("SearchBrowser.context", function()
 		assert.are.same({}, context.scopes.view.photo_ids)
 		assert.are.same({}, context.scopes.selection.photo_ids)
 		assert.are.same({}, context.history)
+		assert.are.same({}, context.notices)
+		assert.is_nil(context.scopes.view.whole_catalog)
+	end)
+
+	it("sends All Photographs as the whole catalog, without IDs", function()
+		local context = SearchBrowser.context({
+			viewIds = { "a" },
+			viewLabel = "All Photographs",
+			viewWholeCatalog = true,
+			viewCount = 14000,
+			notices = { "note" },
+		})
+		assert.is_true(context.scopes.view.whole_catalog)
+		assert.are.same({}, context.scopes.view.photo_ids)
+		assert.are.equal(14000, context.scopes.view.count)
+		assert.are.same({ "note" }, context.notices)
+	end)
+end)
+
+describe("SearchBrowser.coverageNotices", function()
+	it("says nothing when everything can be searched", function()
+		assert.are.same({}, SearchBrowser.coverageNotices({}))
+		assert.are.same({}, SearchBrowser.coverageNotices({ coverage = { total = 10, outdated = 0, unindexed = 0 } }))
+	end)
+
+	it("names the missing model, outdated and unindexed photos, each with what to run", function()
+		local notices = SearchBrowser.coverageNotices({
+			searchModelMissing = true,
+			coverage = { total = 100, outdated = 5, unindexed = 20 },
+		})
+		assert.are.equal(3, #notices)
+		assert.truthy(notices[1]:find("Download AI models", 1, true))
+		assert.truthy(notices[2]:find("5 of 100", 1, true))
+		assert.truthy(notices[3]:find("20 of 100", 1, true))
+		assert.truthy(notices[3]:find("Analyze & Index Photos", 1, true))
 	end)
 end)
 
@@ -115,5 +157,11 @@ describe("SearchBrowser.missingMessage", function()
 		assert.truthy(text:find("holds 7 photo", 1, true))
 		assert.truthy(text:find("background", 1, true))
 		assert.is_nil(SearchBrowser.missingMessage(10, 7, false):find("background", 1, true))
+	end)
+
+	it("does not blame deletions when the search was not limited to this catalog", function()
+		local text = SearchBrowser.missingMessage(10, 7, false, false)
+		assert.truthy(text:find("another catalog", 1, true))
+		assert.is_nil(text:find("deleted", 1, true))
 	end)
 end)
