@@ -623,6 +623,20 @@ cargo run --release -p lrg-store --example memgrow -- 3000
 It replays the exact per-photo write pattern `index_one` performs and
 prints RSS plus LanceDB cache size every 100 photos.
 
+## Disk use: search-page previews
+
+Indexing stores a small JPEG per photo for the browser search page
+(`/v1/ui/search`), served by `GET /v1/photos/thumbnail` — `lrg-api/src/thumbnails.rs`.
+256 px on the long edge at JPEG quality 75 (`lrg_imaging::convert::THUMBNAIL_*`),
+7–20 KB a photo depending on its detail (12.6 KB on average over thirteen
+sample photos), so roughly 130 MB per 10,000 photos. They live as files under
+the lance root, `lrgenius-lance/thumbnails/<aa>/<sha256 of photo_id>.jpg`, not in a
+LanceDB column: every metadata scan would otherwise decode them. Removing a photo
+from the index and the index cleanup's purge delete its preview; `POST /v1/db/backups`
+leaves the folder out, since any indexing pass writes the previews again. Deleting
+the `thumbnails` folder by hand is safe — the page then shows placeholders until
+the photos are indexed again.
+
 ## Status
 
 This is the sole backend implementation (the earlier Python/Flask server

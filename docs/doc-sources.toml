@@ -57,6 +57,9 @@ sources = [
   # The /ui/ section documents the browser↔plugin action queue, which lives
   # here rather than in a route module.
   "server-rs/crates/lrg-api/src/ui_bridge.rs",
+  # Where the search page's previews live, what they cost and who deletes
+  # them (documented under GET /v1/photos/thumbnail).
+  "server-rs/crates/lrg-api/src/thumbnails.rs",
   # Likewise the agent bridge behind /v1/agent/*, and the /mcp endpoint.
   "server-rs/crates/lrg-api/src/agent_bridge.rs",
   "server-rs/crates/lrg-mcp/src/lib.rs",
@@ -217,6 +220,10 @@ sources = [
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskSemanticSearch.lua",
   "server-rs/crates/lrg-api/src/routes/search.rs",
+  # Search (browser): the menu item, its pure helpers and the page it opens.
+  "plugin/LrGeniusAI.lrdevplugin/TaskSearchBrowser.lua",
+  "plugin/LrGeniusAI.lrdevplugin/SearchBrowser.lua",
+  "server-rs/crates/lrg-api/src/ui/search.html",
 ]
 
 [page."Help-Find-Similar.md"]

@@ -97,6 +97,23 @@ needed for metadata: embeddings, faces and species run without one.
     is all wildlife.
   - *Also write the taxonomy as keywords* (off by default) — see below.
 
+### A preview for the browser search
+
+Whatever tasks you pick, every photo the run processes also gets a small preview
+(256 pixels on the long side, about 13 KB) stored beside the search index, which
+[Search (browser)](Help-Advanced-Search#search-in-your-browser) shows for each
+result. It is made from the image the run reads anyway, and also when *Skip
+photos with existing data* skips everything else for a photo. If one cannot be
+saved, the completion dialog lists it as a warning; the photo is indexed all the
+same.
+
+Photos indexed before previews existed get theirs the next time a run processes
+them: with the scope *Selected photos only*, *Current view* or *All photos in
+catalog* and *Skip photos with existing data*, nothing else about them is made
+again. The scope
+*New or unprocessed photos* leaves them out, because nothing a search, a cull or
+a face lookup needs is missing.
+
 ### Turning off AI metadata makes the rest of the run faster
 
 Unchecking **Generate AI metadata** does more than skip the language model.
