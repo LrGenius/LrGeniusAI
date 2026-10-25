@@ -25,18 +25,18 @@
 //! in the query string exactly like the plugin's own requests do — the
 //! auto-bind middleware treats both the same.
 //!
-//! Exposure note: these endpoints are reachable by any page in the user's
-//! browser, the same as every other route on this port. The bridge cannot do
-//! more than the plugin's own menu items already do (build a collection,
-//! change the Library selection) and it only does that while the user has
-//! the task open in Lightroom, so it adds no reach the backend did not
-//! already have.
+//! Exposure note: apart from the pages' HTML, these endpoints need the access
+//! token like every other route on this port (`crate::api_auth`). The bridge
+//! cannot do more than the plugin's own menu items already do (build a
+//! collection, change the Library selection) and it only does that while the
+//! user has the task open in Lightroom, so it adds no reach the backend did
+//! not already have.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
@@ -97,9 +97,29 @@ async fn people_page(State(state): State<Arc<AppState>>) -> Html<&'static str> {
     Html(PEOPLE_HTML)
 }
 
-async fn search_page(State(state): State<Arc<AppState>>) -> Html<&'static str> {
+/// Served without the access token (`api_auth`), like the People and chat
+/// pages: the HTML holds no data, and takes the token from its `#fragment`.
+/// Unlike the People page it shows pictures from the catalog and keeps the
+/// token in `sessionStorage`, so it gets the chat page's headers: nothing may
+/// load from elsewhere (previews arrive as `blob:` URLs made from its own
+/// authenticated fetches), it cannot be framed, and its address — which the
+/// browser shows with the `db_path` in it — is sent to nobody.
+async fn search_page(State(state): State<Arc<AppState>>) -> Response {
     state.ui_bridge.mark_page_seen("search");
-    Html(SEARCH_HTML)
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+                 connect-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'",
+            ),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        SEARCH_HTML,
+    )
+        .into_response()
 }
 
 /// Page heartbeat. The page uses `plugin_connected` to tell the user that
@@ -364,6 +384,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+        assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(headers["referrer-policy"], "no-referrer");
+        let csp = headers["content-security-policy"].to_str().unwrap();
+        // Previews are blob: URLs of the page's own fetches; nothing else.
+        assert!(csp.contains("img-src 'self' blob: data:"), "{csp}");
+        assert!(csp.contains("connect-src 'self'"), "{csp}");
+        assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
         let bytes = http_body_util::BodyExt::collect(response.into_body())
             .await
             .unwrap()

@@ -121,6 +121,11 @@ async fn check_unprocessed(
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
     let current_face_model = state.face.model_id();
+    // A missing search-page preview (`crate::thumbnails`) deliberately does
+    // not make a photo outstanding: the cull pre-flight and the agent's
+    // indexing command ask this route too, and would then offer to prepare
+    // photos that lack nothing they need. Any run that sends the photo writes
+    // its preview; the search page tells the user which run that is.
 
     let Some(store) = state.store() else {
         // No store bound: everything needs processing (matches empty existing).
@@ -497,7 +502,7 @@ async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Valu
                         .cloned()
                         .collect();
                     for (id, e) in crate::thumbnails::delete(&root, &gone) {
-                        // Not reported: a stray preview costs ~10 KB of disk
+                        // Not reported: a stray preview costs ~13 KB of disk
                         // and nothing the user can see.
                         log::warn!("Could not delete the preview of purged photo {id}: {e}");
                     }
@@ -549,8 +554,6 @@ async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Valu
 #[derive(serde::Deserialize)]
 struct ThumbnailQuery {
     photo_id: Option<String>,
-    #[allow(dead_code)]
-    db_path: Option<String>,
 }
 
 /// The photo's stored preview (`crate::thumbnails`) as `image/jpeg`.

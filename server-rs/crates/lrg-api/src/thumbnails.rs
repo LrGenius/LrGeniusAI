@@ -1,7 +1,7 @@
 //! The small preview stored per photo for the browser search page
 //! (`/v1/ui/search`), served by `GET /v1/photos/thumbnail`.
 //!
-//! Files, not a LanceDB column: a preview is ~10 KB of JPEG that only the page
+//! Files, not a LanceDB column: a preview is ~13 KB of JPEG that only the page
 //! ever reads, one at a time. In the metadata blob it would be decoded by every
 //! `scan_meta` (stats, search, cleanup) — the same reason face thumbnails made
 //! full scans of `FACE_TABLE` expensive — and a vector table has no business
@@ -61,7 +61,7 @@ pub fn exists(lance_root: &Path, photo_id: &str) -> bool {
 
 /// Deletes the previews of `photo_ids`. A missing file is not an error; any
 /// other failure is returned with the photo it concerns, for the caller to
-/// log — a stray preview costs 10 KB of disk and nothing else.
+/// log — a stray preview costs ~13 KB of disk and nothing else.
 pub fn delete(lance_root: &Path, photo_ids: &[String]) -> Vec<(String, std::io::Error)> {
     photo_ids
         .iter()

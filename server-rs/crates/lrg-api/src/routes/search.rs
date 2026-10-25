@@ -466,9 +466,14 @@ async fn search(
                     scanned_rows = Some(records);
                 }
                 Err(e) => {
-                    let msg = format!("SigLIP model not available: {e}");
-                    log::info!("{msg}");
-                    warnings.push(msg);
+                    log::info!("SigLIP model not available: {e}");
+                    // Said as what happened to the search and what to do; the
+                    // model's own error last, for a bug report.
+                    warnings.push(format!(
+                        "The AI search model could not be used, so this search only looked at \
+                         keywords, titles and captions. If it is not downloaded yet, run \
+                         \"Download AI models\" in Plug-in Manager. ({e})"
+                    ));
                 }
             }
         }

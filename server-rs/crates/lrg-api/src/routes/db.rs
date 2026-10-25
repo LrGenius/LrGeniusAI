@@ -291,10 +291,13 @@ fn build_backup_zip(lance_root: &Path, backup_name: &str) -> Result<Vec<u8>, Str
     Ok(bytes)
 }
 
-/// Recursively collects file paths under `dir`, skipping `lance_root`'s
-/// own top-level `backups` directory (self-embedding guard, matching
-/// Python's `dirs[:] = [... if not (current_root == db_path and d ==
-/// "backups")]`).
+/// Recursively collects file paths under `dir`, skipping two of
+/// `lance_root`'s own top-level directories:
+/// - `backups` (self-embedding guard, matching Python's `dirs[:] = [... if
+///   not (current_root == db_path and d == "backups")]`);
+/// - the search page's previews (`crate::thumbnails::DIR`): about 13 KB of
+///   already-compressed JPEG per photo, which the in-memory zip would carry
+///   for nothing — any indexing run makes them again from the photo.
 fn collect_backup_files(
     lance_root: &Path,
     dir: &Path,
@@ -305,7 +308,9 @@ fn collect_backup_files(
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            if dir == lance_root && entry.file_name() == "backups" {
+            if dir == lance_root
+                && (entry.file_name() == "backups" || entry.file_name() == crate::thumbnails::DIR)
+            {
                 continue;
             }
             collect_backup_files(lance_root, &path, out)?;
@@ -314,4 +319,37 @@ fn collect_backup_files(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The backup carries the database, not what indexing can make again:
+    /// the search page's previews and earlier backups stay out of it.
+    #[test]
+    fn backups_leave_out_earlier_backups_and_the_search_previews() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("images.lance/data")).unwrap();
+        std::fs::write(root.join("images.lance/data/0.lance"), b"rows").unwrap();
+        std::fs::write(root.join("upgrades.json"), b"{}").unwrap();
+        std::fs::create_dir_all(root.join("backups")).unwrap();
+        std::fs::write(root.join("backups/old.zip"), b"PK").unwrap();
+        crate::thumbnails::write(root, "p1", b"jpeg").unwrap();
+
+        let mut files = Vec::new();
+        collect_backup_files(root, root, &mut files).unwrap();
+        let mut names: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["images.lance/data/0.lance", "upgrades.json"]);
+    }
 }

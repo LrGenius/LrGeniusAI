@@ -119,7 +119,8 @@ fn downscale(image: DynamicImage, max_long_edge: u32) -> DynamicImage {
 ///
 /// 256 px is two grid columns' worth on a high-density screen at the page's
 /// default card size, and at JPEG quality [`THUMBNAIL_JPEG_QUALITY`] it is
-/// about 10 KB — roughly 100 MB per 10,000 photos.
+/// 7–20 KB depending on how much detail the picture has — 12.6 KB on average
+/// over thirteen sample photos — so roughly 130 MB per 10,000 photos.
 pub const THUMBNAIL_LONG_EDGE: u32 = 256;
 
 /// JPEG quality of the stored preview. A preview is looked at, not edited,
