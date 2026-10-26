@@ -239,8 +239,8 @@ Backend work it would have required (none of it done):
    `mtime`, so it does not survive a backup/restore. Proposed replacement:
    `file1:` = MD5 over `<size>:<first 4 MiB>:<last 4 MiB>`, no mtime.
 2. **Separate the training corpus per host.** `POST /v1/edit/training` expects
-   Lightroom SDK keys and crosswalks them through `LR_TO_CANONICAL` in
-   `lrg-analysis/src/training.rs`. Capture One's controls are named differently
+   Lightroom SDK keys and crosswalks them through the `lrg-develop` key
+   registry (`canonical_keys()` in `lrg-analysis/src/training.rs`). Capture One's controls are named differently
    *and scale differently* — mixing them would corrupt the existing style profile.
 3. **Edit-recipe scale and prompt profile.** `temperature` is Kelvin for RAW and
    −100..100 otherwise (a Lightroom convention); `prompts.rs` says "senior

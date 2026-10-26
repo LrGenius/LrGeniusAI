@@ -68,6 +68,10 @@ sources = [
   # The page names the release tags the download routes pull assets from, so a
   # change to how a tag is published belongs in the same review.
   ".github/workflows/model-assets-bioclip.yml",
+  # The /v1/edit/style and /v1/edit/training sections state the white-balance
+  # thresholds and the canonical_version semantics defined in these files.
+  "server-rs/crates/lrg-analysis/src/style_engine.rs",
+  "server-rs/crates/lrg-analysis/src/training.rs",
 ]
 
 [page."Dev-Server-README.md"]
@@ -82,6 +86,9 @@ sources = [
   # check, which is exactly what this module has to stay in step with.
   "server-rs/crates/lrg-ml/src/bioclip_pre.rs",
   "server-rs/scripts/export_bioclip2_fp16.py",
+  # The README's golden-test section documents the shared gate, including
+  # which families are local-only and what `all` means.
+  "server-rs/crates/lrg-ml/tests/common/mod.rs",
 ]
 
 [page."Dev-Build-Environment-Setup.md"]
@@ -289,4 +296,40 @@ sources = [
   "server-rs/crates/lrg-api/src/routes/server.rs",
   "plugin/LrGeniusAI.lrdevplugin/AiProviders.lua",
   "plugin/LrGeniusAI.lrdevplugin/PluginInfoDialogSections.lua",
+]
+
+# The findings are point-in-time, but the page also documents how to run the
+# experiment task, which does move.
+[page."Dev-AI-Edit-XMP-Findings.md"]
+sources = [
+  "plugin/LrGeniusAI.lrdevplugin/TaskDevelopExperiments.lua",
+  "plugin/LrGeniusAI.lrdevplugin/DevelopExperiments.lua",
+  # "What the answers change" and "Still open" name the LuaOptions fields
+  # each experiment bears on (LuaOptions::PROVISIONAL).
+  "server-rs/crates/lrg-develop/src/lua/write.rs",
+]
+
+# The native develop model. `*` in fnmatch also crosses `/`, so this covers
+# src/lib.rs and every module below it (`**/*.rs` would miss src/lib.rs).
+# The generator is listed because the page documents how to re-seed the table.
+[page."Dev-Develop-Model.md"]
+sources = [
+  "server-rs/crates/lrg-develop/src/*.rs",
+  "server-rs/crates/lrg-develop/tests/*.rs",
+  "server-rs/scripts/develop_registry/gen_table_rs.py",
+  # The non-raw default column comes from this readback (and spec.py's rows).
+  "server-rs/scripts/develop_registry/spec.py",
+  "server-rs/testdata/develop/defaults/*.json",
+  # The page documents the fixture hygiene rules, which this script's
+  # --check-only/--self-test and tests/fixture_hygiene.rs implement together.
+  "server-rs/scripts/develop_registry/extract_fixtures.py",
+  # The page documents the LOCAL_ONLY golden families and the gate's
+  # behaviour for them.
+  "server-rs/crates/lrg-ml/tests/common/mod.rs",
+  # The test-roundtrip feature wiring (the self dev-dependency).
+  "server-rs/crates/lrg-develop/Cargo.toml",
+  # The plugin-side contract test of the Lua writer's wire goldens, and the
+  # workflow that runs it when only the goldens change.
+  "plugin/spec/native_wire_format_spec.lua",
+  ".github/workflows/lua-tests.yml",
 ]

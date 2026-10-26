@@ -1,0 +1,26 @@
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="LrGeniusAI test fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmlns:crss="http://ns.adobe.com/camera-raw-saved-settings/1.0/"
+   crs:ProcessVersion="15.4"
+   crs:Exposure2012="+0.20">
+   <crss:SavedSettings>
+    <rdf:Bag>
+     <rdf:li>
+      <rdf:Description
+       crss:Name="Synthetic Text"
+       crss:Type="Snapshot">
+      <crss:Parameters>
+       <rdf:Description
+        crs:ProcessVersion="15.4"
+        crs:Exposure2012="-1.00"
+        crs:NotARealKey="1"/>
+      </crss:Parameters>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Bag>
+   </crss:SavedSettings>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

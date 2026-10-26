@@ -588,12 +588,14 @@ decides two things:
 
 - **How far the guardrails let a recipe push.** Raw files still hold detail
   behind clipped highlights; a rendered file does not.
-- **The unit of `temperature`.** Lightroom's `Temp` is Kelvin for raw and a
-  relative −100..100 for JPEG/TIFF/PNG. The declared JSON schema follows the
+- **The unit of `temperature`.** Lightroom's white balance is Kelvin
+  (`Temperature`) for raw and a relative −100..100 offset
+  (`IncrementalTemperature`) for JPEG/TIFF/PNG. The declared JSON schema follows the
   flag so the model answers in the right unit, and normalization clamps to the
   matching range. A Kelvin-looking value returned for a non-raw photo is
   **dropped, not clamped** — clamping 6200 into −100..100 yields +100, a hard
-  orange cast — and the reason lands in `warnings`.
+  orange cast — and the reason lands in the recipe's own `warnings`
+  (`edit.warnings`, mirrored as `edit_warnings`).
 
 Absent means unknown, which is treated as raw: that is what every catalog
 indexed before the flag existed assumed.
@@ -606,6 +608,8 @@ mask list, plus:
 | `guardrail_reasons` | string[] | Machine-readable codes for what the frame allowed or refused, e.g. `hard_light_no_added_contrast`, `flat_light_contrast_allowed`. Empty when the budget changed nothing |
 | `guardrail_explanations` | string[] | The same, as sentences for the UI |
 | `edit_warnings` | string[] | Unrelated problems worth surfacing (e.g. no training examples found) |
+| `warnings` | string[] | The backend's non-fatal notes about this request, one entry each (on this route, the edit generator's warning). Always present, empty when there is nothing to say |
+| `warning` | string | **Legacy.** The same notes joined with `\n`, only when there are any; kept for installed plugins that read the single string. Remove once every supported plugin reads `warnings` |
 
 Before the recipe is returned, the backend decodes the image, measures the
 scene (light hardness, dynamic range, specular fraction, shadow clipping),
@@ -624,14 +628,141 @@ scene and time of day, and interpolates their develop settings. Needs at least
 five stored examples. The result passes through the same guardrail budget as
 `/v1/edit/recipe` and carries the same `guardrail_reasons`.
 
-`temperature` is blended only from examples whose `is_raw` matches the photo
-being edited, because Lightroom's temperature is Kelvin for raw and a relative
--100..100 for everything else — averaging the two produces a number that is
-meaningless on either scale. When no matched example qualifies the field is
-omitted entirely, and either way the reason is in `warning`. Examples saved
-before `is_raw` was recorded count as compatible with anything. Every other
-develop setting means the same on both kinds of file and is blended normally;
-`tint` differs only in range, which the clamp handles.
+**White balance** is not blended like the other sliders. It is a mode plus a key
+family — Lightroom's `Temperature`/`Tint` are Kelvin and tint on raw files,
+`IncrementalTemperature`/`IncrementalTint` are −100..100 offsets on everything
+else — so `lrg_analysis::style_engine::blend_white_balance` decides it
+separately:
+
+1. The **whole scored candidate pool** (up to 20 examples, not only the three
+   blend winners) votes for a mode, weighted by composite score. Examples
+   without a `WhiteBalance` do not vote; ties go to the more conservative mode
+   (As Shot, Auto, a preset, Custom).
+2. **As Shot** wins: nothing is sent, the photo keeps its own. No warning — that
+   is the habit the examples show.
+3. **Auto** or a **preset** (Daylight, Cloudy, ...) wins: nothing is sent, with
+   a warning. For a non-raw photo always: Lightroom has no presets for it, and
+   in the first experiment run (Lightroom 15.6, run from the Library module)
+   `Auto` alone left the old numbers in the readback within 15 s (E1f/E1g;
+   the Basic-panel check is open). For a raw photo while
+   `EMIT_NAMED_WB_MODES` is `false`, until experiment E1 shows that Lightroom
+   recomputes the temperature for a mode set without numbers on a raw file
+   (E1e has not run); turning it on reaches raw photos only.
+4. **Custom** wins: temperature and tint from up to **3** of the best-scored
+   Custom examples of the photo's own family, weighted over exactly those, and
+   only when at least **2** exist and their temperatures lie within **500 K**
+   (20 for non-raw offsets). Otherwise nothing is sent, with a warning.
+5. Raw examples give Kelvin only to raw photos, non-raw examples offsets only to
+   non-raw photos; an unknown `is_raw` sends nothing. Every "nothing is sent"
+   the user could act on comes back as an entry in `warnings`.
+
+Each `warnings` text is constant per cause: the per-photo numbers (the match
+confidence, the measured temperature spread) stay in `confidence`, the recipe
+summary and the log. The plugin merges warnings by exact text into one
+"(N photos)" line per run, and a number in the text would make every photo its
+own line. Style-path notes: a low or moderate match confidence, each white
+balance that was not transferred, and matching examples that taught nothing
+(re-read rows older than PV2012 or with unreadable settings).
+
+The result travels at **recipe level**, next to `global` and `masks`, never as
+`global.temperature`/`global.tint` and never as `global.white_balance` (that
+name is the LLM schema's `{temperature, tint}` alias):
+
+```json
+"edit": {
+  "summary": "...",
+  "global": {
+    "exposure": 0.35, "contrast": 12, "sharpen_radius": 1.2, "grain_size": 30,
+    "hsl": {"blue": {"hue": -5, "saturation": -20, "luminance": -12}, "...": {}},
+    "color_grading": {"shadows": {"hue": 220, "saturation": 15},
+                      "highlights": {"hue": 40, "saturation": 20}, "balance": -10},
+    "tone_curve": {"shadows": -8, "shadow_split": 20, "midtone_split": 45, "highlight_split": 70}
+  },
+  "masks": [],
+  "warnings": [],
+  "white_balance": {"mode": "Custom", "family": "raw", "temperature": 5450, "tint": 10}
+}
+```
+
+`family` is `"raw"` or `"non_raw"`; `temperature`/`tint` are in that family's
+keys' units and precision. Plugins that predate the field ignore it (they read
+only `summary`/`global`/`masks`/`warnings`). The response also carries the
+top-level `warnings` list and the legacy joined `warning` string described under
+`POST /v1/edit/recipe`; a JPEG target with raw examples gets, for example,
+*"White balance was not transferred: your training examples are raw files and
+this photo is not ..."*. The thresholds are assumptions pinned by tests
+(`style_engine.rs`), and the transfer is not switchable in this release.
+
+The other settings are blended per key over the winners that carry the key (an
+example that never touched a slider does not pull it towards 0) and rounded to
+the key's registry precision (integers for integer sliders, `Exposure2012` to 2
+decimals, `SharpenRadius` to 1). The learned keys are the registry's `global.*`
+recipe aliases: every `global` field the installed plugin's
+`DevelopEditManager` already applies (65 keys since step 1f):
+
+| `global` field(s) | Lightroom keys |
+|---|---|
+| `exposure`, `contrast`, `highlights`, `shadows`, `whites`, `blacks`, `texture`, `clarity`, `dehaze`, `vibrance`, `saturation` | `Exposure2012`, `Contrast2012`, ..., `Saturation` |
+| `sharpening`, `sharpen_radius`, `sharpen_detail`, `sharpen_masking` | `Sharpness`, `SharpenRadius`, `SharpenDetail`, `SharpenEdgeMasking` |
+| `noise_reduction`, `noise_reduction_detail`, `noise_reduction_contrast` | `LuminanceSmoothing`, `LuminanceNoiseReductionDetail`, `LuminanceNoiseReductionContrast` |
+| `color_noise_reduction`, `color_noise_reduction_detail`, `color_noise_reduction_smoothness` | `ColorNoiseReduction`, `ColorNoiseReductionDetail`, `ColorNoiseReductionSmoothness` |
+| `vignette`, `vignette_midpoint`, `vignette_roundness`, `vignette_feather`, `vignette_highlights` | `PostCropVignetteAmount`, `...Midpoint`, `...Roundness`, `...Feather`, `...HighlightContrast` |
+| `grain`, `grain_size`, `grain_roughness` | `GrainAmount`, `GrainSize`, `GrainFrequency` |
+| `hsl.<red..magenta>.{hue,saturation,luminance}` | `HueAdjustment<Colour>`, `SaturationAdjustment<Colour>`, `LuminanceAdjustment<Colour>` |
+| `color_grading.{shadows,highlights}.{hue,saturation}`, `color_grading.balance` | `SplitToning{Shadow,Highlight}{Hue,Saturation}`, `SplitToningBalance` |
+| `tone_curve.{highlights,lights,darks,shadows}`, `tone_curve.{shadow,midtone,highlight}_split` | `Parametric*` |
+
+Not sent: colour-grading midtones, global, luminance and blending (installed
+plugins warn "not supported" and drop them), point curves (averaging curves is
+a later step), lens, crop, `Look`, masks.
+
+Two kinds of key are not plain means:
+
+- **Toning** (`SplitToning{Shadow,Highlight}{Hue,Saturation}`; registry gate
+  `CircularHue(<saturation key>)` on the hue): each winner's zone is a colour
+  vector (hue = angle, saturation = length), and the zone gets the
+  score-weighted mean vector: its angle is the hue, its length the saturation.
+  So 350° and 10° give 0°, a hue left behind at saturation 0 does not pull, and
+  tints that disagree fade towards neutral instead of landing at full strength
+  on a hue none of the examples used (orange 30°/40 and blue 190°/40 give
+  110°/7, not 110°/40). Where the tints agree the saturation equals the plain
+  mean. If the saturations sum to about 0, or the mean vector rounds to
+  saturation 0 (fully cancelling tints), the hue is left out and saturation 0
+  is sent. When the toned winners' agreement (mean resultant length) is below
+  `MIN_HUE_AGREEMENT` (0.5, i.e. the tint lost more than half its strength) and
+  the plain mean saturation is at least 5, `warnings` gets *"Color grading of
+  the shadows was toned down: your matching examples tint the shadows in
+  clearly different colors."* (or highlights).
+- **Curve splits** are blended as one group over the winners that carry all
+  three, which keeps `shadow_split < midtone_split < highlight_split`; if
+  integer rounding makes two equal, the three are left out and `warnings` gets
+  *"The tone curve's region splits were not transferred: your matching
+  examples' splits could not be averaged into a valid order."*
+
+Black-and-white examples (`ConvertToGrayscale`) contribute no toning and no
+colour mixer: the recipe does not carry the B&W switch, so their sepia or
+selenium toning would land on colour photos as a cast. The Basic, curve,
+detail and effects keys they carry are still blended.
+
+`HueAdjustment*` (the colour mixer's hue) is an offset on −100..100, not an
+angle, so it is a plain mean.
+
+The guardrail budget (`edit_budget::measure_and_apply`) acts on contrast,
+clarity, dehaze, the parametric curve strength, shadows and whites only. The
+new keys need no budget of their own: the splits do not change the curve
+strength (a scaled curve keeps them), and HSL saturation, vignette and grain
+are not moves the frame measurements (light hardness, dynamic range, clipping)
+say anything about — like the global `saturation`/`vibrance`, which were never
+budgeted.
+
+Stored examples carry a `canonical_version` (currently 3). A row written by an
+older backend (no version, or a lower one) is re-read from its stored
+`develop_settings` blob when it is retrieved — at most `CANDIDATE_POOL` rows per
+request, nothing is written back — so examples saved before white balance was
+read from the right keys contribute it now, and examples saved before step 1f
+contribute the colour mixer, toning, curve splits and detail/effects sliders. A re-read row that teaches nothing (settings older than
+PV2012, or a blob that cannot be read) is counted, and the response gets one
+`warnings` entry for it.
 
 Only examples embedded with the current search model are compared with the photo
 (`embedding_model` in the example's metadata, written by `POST /v1/edit/training`); a vector
@@ -641,10 +772,11 @@ recorded count as outdated. When *every* stored example is outdated, the endpoin
 that there is nothing stored, and `/v1/edit/recipe` skips style matching with the same
 explanation in `warning`. Saving an example again replaces it.
 
-The `/v1/edit/recipe` few-shot path applies the same rule: an example whose raw status
-conflicts with the target has its white balance stripped before it reaches the
-prompt, so the model is never anchored on a number the schema it must answer in
-cannot express.
+The `/v1/edit/recipe` few-shot path keeps the two scales apart too: an example
+whose raw status conflicts with the target has its whole white-balance family
+(`Temperature`, `Tint`, `IncrementalTemperature`, `IncrementalTint`,
+`WhiteBalance`) stripped before it reaches the prompt, so the model is never
+anchored on a number the schema it must answer in cannot express.
 
 ### `POST /v1/edit/score`
 The aesthetic score of one rendered image, and nothing else: nothing is stored and no
@@ -1181,13 +1313,33 @@ Applies a list of approved keyword merge pairs to the backend's metadata records
 ## Style Training
 
 ### `POST /v1/edit/training`
-Stores one photo's develop settings as a training example. `is_raw` is recorded
-with it and decides, later, whether the example may contribute a temperature —
-see `POST /v1/edit/style`. The SigLIP2 vector is stored together with the
-`embedding_model` that made it, which decides whether the example can still be
-matched after the search model changes.
-
 Saves a photo's Lightroom develop settings as a labeled training example.
+
+`develop_settings` is the plugin's JSON.lua encoding of
+`photo:getDevelopSettings()`. `"[]"` — how JSON.lua writes an empty table — is
+accepted as no settings; any other non-object is a 400. The blob is read with
+`lrg_develop::lua::read` and stored three ways: verbatim (`develop_settings`),
+as the learnable canonical numbers (`canonical_settings`, the registry's recipe
+aliases) and as the typed white balance (`white_balance`, the
+`{mode, family, temperature?, tint?}` shape above, numbers only for Custom),
+together with `canonical_version`.
+
+`is_raw` is stored from the white-balance keys when the blob has them
+(`Temperature` → raw, `IncrementalTemperature` → non-raw, which also covers a
+DNG converted from a JPEG); the plugin's flag is only the fallback, and a
+contradiction is logged. A blob that carries both families is ambiguous: its
+`white_balance` is not stored whatever the flag says, and the response says the
+white balance was not learned. The style engine uses the stored
+`white_balance.family`; `is_raw` is the hint for re-deriving older rows and the
+filter for the `/v1/edit/recipe` few-shot examples.
+
+The SigLIP2 vector is stored together with the `embedding_model` that made it,
+which decides whether the example can still be matched after the search model
+changes.
+
+**Response:** `{status, photo_id, total_count, warnings: [...]}`, plus the
+legacy joined `warning` string when there are warnings (no embedding computed,
+process version older than PV2012, both white-balance families in one blob).
 
 ### `GET /v1/edit/training`
 Lists all stored training examples.
@@ -1452,5 +1604,9 @@ All endpoints return:
 - `results` — the payload (varies per endpoint).
 - `error` — a string if an error occurred, `null` otherwise.
 - `warning` — a non-fatal warning string, `null` otherwise.
+
+Newer endpoints (indexing, faces, `/v1/edit/*`) return a `warnings` array, one
+entry per note. Where both exist, `warning` is a legacy newline-joined copy of
+`warnings` for installed plugins that read only the string.
 
 On HTTP error responses (4xx/5xx), `error` is always set.
