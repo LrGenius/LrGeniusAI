@@ -827,6 +827,16 @@ impl AgentBridge {
                 }
                 _ = watchdog.tick() => {
                     let mut inner = self.inner.lock().unwrap();
+                    // Answered or failed since `rx` was last polled:
+                    // `complete` and `fail_session` remove the entry and
+                    // send the reply under this lock, so it is waiting in
+                    // `rx` for the next turn. Judging by the session here
+                    // instead turned an unregister's `Stopped` into
+                    // `NotConnected` whenever this tick came due in the same
+                    // poll (a loaded Windows runner, v3.5.2's release).
+                    if !inner.entries.contains_key(&id) {
+                        continue;
+                    }
                     let claimed = inner
                         .entries
                         .get(&id)
