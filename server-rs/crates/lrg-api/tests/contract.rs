@@ -264,6 +264,39 @@ async fn middleware_auto_binds_db_path_from_query_string() {
     assert_eq!(state.db_path(), Some(db_path));
 }
 
+/// A remote backend (a container) is started with `--db-path`, and the plugin
+/// sends it no `db_path` at all: it must open that store without being bound.
+#[tokio::test]
+async fn a_backend_started_with_a_db_path_opens_it_without_a_bind() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db");
+    let state = Arc::new(AppState::with_model_paths(
+        Some(db_path.clone()),
+        false,
+        models_absent(),
+    ));
+    assert!(
+        state.store().is_none(),
+        "nothing opens the store eagerly here"
+    );
+
+    // What the middleware does for a request without db_path.
+    let response = app(state.clone())
+        .oneshot(
+            Request::get("/v1/server/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(state.store().is_some());
+    assert_eq!(state.db_path(), Some(db_path));
+
+    // What startup does; a second call is a no-op once the store is open.
+    assert!(!state.ensure_initial_db_path().await.unwrap());
+}
+
 #[tokio::test]
 async fn shutdown_and_restart_respond_before_exiting() {
     let (app, _) = fresh_app();
