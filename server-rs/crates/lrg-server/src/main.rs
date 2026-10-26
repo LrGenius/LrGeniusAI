@@ -309,6 +309,20 @@ async fn run(cli: Cli) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
         ))
         .merge(lrg_chat::router(state.clone(), api, mcp_shutdown.clone()));
 
+    // Started with --db-path, the backend opens that database itself rather
+    // than waiting for the plugin to bind it, which the plugin never does for
+    // a remote backend (a container). In the background, so the port answers
+    // while a first start migrates or upgrades the store; a request that
+    // needs the store meanwhile waits for it in the db_path middleware.
+    if cli.db_path.is_some() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = state.ensure_initial_db_path().await {
+                log::error!("Opening the database given by --db-path failed: {e}");
+            }
+        });
+    }
+
     tokio::spawn(maintenance_loop(state.clone()));
 
     let host = config::host();

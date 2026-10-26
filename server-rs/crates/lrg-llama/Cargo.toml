@@ -10,6 +10,32 @@ license.workspace = true
 # enabled, and so that `cargo build` for anyone touching an unrelated crate
 # stays fast.
 
+# GPU backends for the Linux build, which is what the Docker images ship
+# (server-rs/Dockerfile picks them). Windows needs none of these: its
+# llama-cpp-2 entry below always builds Vulkan as a loadable module, and macOS
+# runs MLX instead of llama.cpp.
+#
+# `vulkan` needs libvulkan-dev, glslc and spirv-headers; `cuda` needs the CUDA
+# toolkit (nvcc + cuBLAS). Either way the binary still runs without the GPU:
+# llama.cpp then registers no GPU device and computes on the CPU.
+[features]
+vulkan = ["llama-cpp-2/vulkan"]
+cuda = ["llama-cpp-2/cuda"]
+# Builds the GPU backend and the CPU code as modules llama.cpp loads at start
+# (libggml-*.so next to the binary) instead of linking them in. What makes this
+# worth it on Linux: a CUDA binary otherwise needs libcuda.so.1 just to start,
+# so the image would not run on a machine without an NVIDIA driver, and the
+# linked-in CPU code is built for the baseline x86-64 (no AVX), where the
+# modules come in one variant per CPU generation and the fastest that runs is
+# picked.
+#
+# x86-64 only for now. On aarch64 Linux, llama-cpp-sys-2 0.1.156 sets
+# GGML_CPU_ARM_ARCH whenever the target CPU is not `native`, and ggml's CMake
+# refuses that together with the GGML_CPU_ALL_VARIANTS this feature turns on
+# ("Cannot use both GGML_CPU_ARM_ARCH and GGML_CPU_ALL_VARIANTS"). So arm64
+# links its backends in, with the armv8-a baseline.
+dynamic-backends = ["llama-cpp-2/dynamic-backends"]
+
 [dependencies]
 log.workspace = true
 serde_json.workspace = true

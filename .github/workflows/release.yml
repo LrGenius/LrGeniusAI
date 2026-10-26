@@ -843,89 +843,29 @@ jobs:
           # 7 days, for the same reason as the matrix payload above.
           retention-days: 7
 
+  # The images themselves are built by docker-images.yml, which pull requests
+  # that change the Dockerfile also run (without pushing).
   build-docker-images:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [validate-tag]
-    runs-on: ubuntu-latest
-    # Observed 31-34 min. Revisit if the commented-out linux/arm64 matrix leg is
-    # ever re-enabled -- emulated builds are slower.
-    timeout-minutes: 90
+    name: Docker images
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            docker_platform: linux/amd64
-          # - arch: aarch64
-          #   docker_platform: linux/arm64
+    uses: ./.github/workflows/docker-images.yml
+    with:
+      push: true
+      version_tag: ${{ github.ref_name }}
 
-    name: Build Docker Image - ${{ matrix.arch }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Resolve backend version build-args from tag
-        id: backend-version
-        shell: bash
-        run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          BUILD_DATE=$(date +%Y%m%d)
-          {
-            echo "version=${VERSION}"
-            echo "release_tag=v${VERSION}"
-            echo "build=${BUILD_DATE}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Backend version build-args: version=${VERSION} build=${BUILD_DATE}"
-
-      - name: Prepare image name
-        id: image-name
-        shell: bash
-        run: |
-          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "registry_image=ghcr.io/${OWNER_LC}/lrgeniusai" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: ./server-rs
-          file: ./server-rs/Dockerfile
-          platforms: ${{ matrix.docker_platform }}
-          push: true
-          build-args: |
-            LRG_BACKEND_VERSION=${{ steps.backend-version.outputs.version }}
-            LRG_BACKEND_RELEASE_TAG=${{ steps.backend-version.outputs.release_tag }}
-            LRG_BACKEND_BUILD=${{ steps.backend-version.outputs.build }}
-          tags: ${{ steps.image-name.outputs.registry_image }}:${{ github.ref_name }}-${{ matrix.arch }}
-          cache-from: type=gha,scope=lrgeniusai-server-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=lrgeniusai-server-${{ matrix.arch }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ github.ref_name }}
-          provenance: false
-          sbom: false
-          # generate-summary: false
-
-  # Combine per-arch pushes into one multi-arch :latest so `docker compose pull` works
-  # with ghcr.io/.../lrgeniusai:latest (amd64 and arm64 clients resolve correctly).
+  # Combine the per-arch pushes into multi-arch tags, so `docker compose pull`
+  # of ghcr.io/.../lrgeniusai:latest works on amd64 and arm64 alike: `v1.2.3`
+  # and `latest` for the default image, `-vulkan` and `-cuda` for the variants
+  # with a local AI model. Runs when some image failed too: each variant whose
+  # images all made it is published, a variant missing one is not (its
+  # `latest` stays on the previous release, where it has every architecture),
+  # and the job then fails.
   publish-docker-manifest:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.create-release.result == 'success' }}
     needs: [build-docker-images, create-release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -945,16 +885,40 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Create and push multi-arch latest
+      - name: Create and push multi-arch tags
         shell: bash
         run: |
           set -euo pipefail
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMG="ghcr.io/${OWNER_LC}/lrgeniusai"
           TAG="${{ github.ref_name }}"
-          docker buildx imagetools create \
-            --tag "${IMG}:latest" \
-            "${IMG}:${TAG}-x64" 
+          failed=0
+
+          # publish <tag suffix> <arch>... -- the arches docker-images.yml's
+          # matrix builds that variant for.
+          publish() {
+            local suffix="$1"; shift
+            local sources=() arch src
+            for arch in "$@"; do
+              src="${IMG}:${TAG}${suffix}-${arch}"
+              if ! docker buildx imagetools inspect "$src" >/dev/null 2>&1; then
+                echo "::error::${src} was not pushed, so ${TAG}${suffix} and latest${suffix} are not published"
+                failed=1
+                return 0
+              fi
+              sources+=("$src")
+            done
+            docker buildx imagetools create \
+              --tag "${IMG}:${TAG}${suffix}" \
+              --tag "${IMG}:latest${suffix}" \
+              "${sources[@]}"
+            echo "Published ${TAG}${suffix} and latest${suffix} from ${sources[*]}"
+          }
+
+          publish "" x64 aarch64
+          publish "-vulkan" x64 aarch64
+          publish "-cuda" x64
+          exit "$failed"
 
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')

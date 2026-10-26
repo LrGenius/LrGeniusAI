@@ -73,11 +73,22 @@ pub async fn auto_bind_db_path(
         db_path = query_param(request.uri().query(), "db_path");
     }
 
-    if let Some(path) = db_path {
-        // Don't fail the request here — let the route's own error handling
-        // report underlying failures with more context (Python parity).
-        if let Err(e) = state.ensure_db_path(&path).await {
-            log::error!("Auto-bind to db_path {path} failed: {e}");
+    // Don't fail the request here — let the route's own error handling
+    // report underlying failures with more context (Python parity).
+    match db_path {
+        Some(path) => {
+            if let Err(e) = state.ensure_db_path(&path).await {
+                log::error!("Auto-bind to db_path {path} failed: {e}");
+            }
+        }
+        // A remote backend's plugin sends no db_path: the backend's own
+        // `--db-path` is the database. Normally opened at startup; this
+        // covers a request that arrives while that is still running (it waits
+        // instead of failing) and retries after a start where it failed.
+        None => {
+            if let Err(e) = state.ensure_initial_db_path().await {
+                log::error!("Opening the database given by --db-path failed: {e}");
+            }
         }
     }
 

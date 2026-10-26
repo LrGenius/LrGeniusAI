@@ -728,20 +728,22 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 	})
 
 	-- Exactly one local engine is offered, and which one is a property of the
-	-- platform rather than a choice the user makes.
+	-- backend rather than a choice the user makes.
 	--
-	-- macOS ships MLX only: the macOS release build does not compile the
-	-- `llamacpp` cargo feature at all (see `cargo_features` in
+	-- A backend on this Mac ships MLX only: the macOS release build does not
+	-- compile the `llamacpp` cargo feature at all (see `cargo_features` in
 	-- .github/workflows/release.yml), so a llama.cpp box there could never do
 	-- anything but report "this backend build has no local-model support".
-	-- Windows is the mirror image — MLX is Apple silicon only, and its half of
-	-- /v1/llm/catalog always comes back unsupported.
+	-- Every other backend is the mirror image — Windows, or a Docker image on
+	-- Linux — since MLX is Apple silicon only, and its half of /v1/llm/catalog
+	-- always comes back unsupported. See LocalModelCatalog.engineFor.
 	--
 	-- Building only the box that applies, rather than hiding the other one,
 	-- keeps the dialog free of a dead group and means neither set of bindings
-	-- is created on a platform that cannot serve them.
+	-- is created for a backend that cannot serve them.
+	local offersMlx = LocalModelCatalog.offeredEngine() == "mlx"
 	local localEngineBox
-	if MAC_ENV then
+	if offersMlx then
 		localEngineBox = f:group_box({
 			width = groupBoxWidth,
 			title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),
@@ -989,7 +991,7 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 			bind_to_object = propertyTable,
 			title = LOC("$$$/LrGeniusAI/PluginInfo/SectionLocalAi=AI model (on this computer)"),
 			f:static_text({
-				title = MAC_ENV
+				title = offersMlx
 						and LOC(
 							"$$$/LrGeniusAI/PluginInfo/LocalAiHintMac=The analysis runs on this computer by default, so no account is\nneeded. On Apple silicon it uses MLX, Apple's own machine learning\nstack. Download one model below and the plug-in is ready."
 						)

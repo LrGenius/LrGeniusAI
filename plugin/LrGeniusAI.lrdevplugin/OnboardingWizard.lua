@@ -365,13 +365,15 @@ function OnboardingWizard.show(manualTrigger)
 							}),
 						}),
 
-						-- One engine per platform, never both. macOS ships MLX
-						-- only (the release build does not compile the llamacpp
-						-- feature there), and MLX is Apple silicon only, so the
-						-- other box would always be a dead group reporting that
-						-- its backend is unsupported. Same reasoning as in
-						-- PluginInfoDialogSections.sectionsForTopOfDialog.
-						MAC_ENV
+						-- One engine per backend, never both. A backend on this
+						-- Mac ships MLX only (the release build does not compile
+						-- the llamacpp feature there), and MLX is Apple silicon
+						-- only, so the other box would always be a dead group
+						-- reporting that its backend is unsupported. Same
+						-- reasoning as in
+						-- PluginInfoDialogSections.sectionsForTopOfDialog; the
+						-- rule is LocalModelCatalog.engineFor.
+						LocalModelCatalog.offeredEngine() == "mlx"
 								and localModelGroup({
 									kind = "mlx",
 									title = LOC("$$$/LrGeniusAI/MlxModel/Title=Local AI Model — MLX (Apple silicon)"),

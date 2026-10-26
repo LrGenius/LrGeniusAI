@@ -33,6 +33,7 @@ Welcome to the project wiki.
 - [Help: Ollama Setup](Help-Ollama-Setup)
 - [Help: LM Studio Setup](Help-LM-Studio-Setup)
 - [Help: Other AI Server](Help-Other-AI-Server) — OpenRouter, llama.cpp server, LiteLLM, vLLM
+- [Help: Docker with GPU Access](Help-Docker-GPU) — the backend in a container on another machine, with a local AI model on its NVIDIA, AMD or Intel GPU
 
 ### Other
 

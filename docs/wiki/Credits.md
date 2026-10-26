@@ -23,7 +23,9 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 - **pybioclip**: The reference implementation whose preprocessing and rank-aggregation semantics `lrg-ml::bioclip` reproduces in Rust. [GitHub](https://github.com/Imageomics/pybioclip)
 
 ## Local Inference Engines
-- **llama.cpp**: Runs GGUF vision models in-process on Windows (Vulkan), via the `llama-cpp-2` bindings. [GitHub](https://github.com/ggml-org/llama.cpp)
+- **llama.cpp**: Runs GGUF vision models in-process on Windows (Vulkan) and in the `-vulkan`/`-cuda` Docker images, via the `llama-cpp-2` bindings. [GitHub](https://github.com/ggml-org/llama.cpp)
+- **NVIDIA CUDA**: The `-cuda` Docker image is built on NVIDIA's CUDA container images and ships their CUDA runtime and cuBLAS, under NVIDIA's license. [Images](https://hub.docker.com/r/nvidia/cuda)
+- **Mesa**: Its Vulkan drivers run the `-vulkan` Docker image on AMD and Intel GPUs. [Website](https://mesa3d.org/)
 - **llguidance**: Turns JSON Schemas into decode-time constraints, so local models return valid structured output. [GitHub](https://github.com/guidance-ai/llguidance)
 - **MLX & mlx-swift-lm**: Apple's array framework and its language-model package, powering the `lrgenius-mlx` sidecar on Apple silicon. [GitHub](https://github.com/ml-explore/mlx-swift-lm)
 - **Gemma, Qwen-VL and SmolVLM**: The open-weights vision models offered in the built-in model catalogs.

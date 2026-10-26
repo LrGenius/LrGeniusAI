@@ -225,7 +225,28 @@ impl AppState {
         if db_path.is_empty() {
             return Ok(false);
         }
-        let new_path = PathBuf::from(db_path);
+        self.bind(PathBuf::from(db_path)).await
+    }
+
+    /// Open the store for the `db_path` the backend already has — the one it
+    /// was started with (`--db-path`) — when no store is open yet. A no-op
+    /// once a store is open, and when there is no path.
+    ///
+    /// The plugin never binds a remote backend (a container): it leaves the
+    /// database to the backend's own `--db-path` and sends no `db_path` in its
+    /// requests. Without this, such a backend answered every photo with
+    /// "database not initialized" until someone bound it by hand.
+    pub async fn ensure_initial_db_path(&self) -> Result<bool, String> {
+        if self.store.read().unwrap().is_some() {
+            return Ok(false);
+        }
+        let Some(path) = self.db_path() else {
+            return Ok(false);
+        };
+        self.bind(path).await
+    }
+
+    async fn bind(&self, new_path: PathBuf) -> Result<bool, String> {
         if self.is_bound_to(&new_path) {
             return Ok(false);
         }
@@ -241,8 +262,11 @@ impl AppState {
                 old.display(),
                 new_path.display()
             ),
-            None => log::info!("Binding backend to db_path from request: {db_path}"),
-            _ => {}
+            None => log::info!(
+                "Binding backend to db_path from request: {}",
+                new_path.display()
+            ),
+            Some(_) => log::info!("Opening catalog database: {}", new_path.display()),
         }
 
         logging::swap_log_file(&config::log_path_for_db(&new_path));

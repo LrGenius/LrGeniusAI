@@ -11,15 +11,20 @@ Plug-in Manager shows that one:
 |---|---|---|---|
 | macOS (Apple silicon) | MLX (helper process) | `mlx` | Metal |
 | Windows | llama.cpp (in-process) | `llamacpp` | Vulkan, CPU fallback |
+| Docker image `-vulkan` / `-cuda` (Linux) | llama.cpp (in-process) | `llamacpp` | Vulkan / CUDA, CPU fallback |
 
 macOS ships MLX because it is Apple's native inference stack and the faster of
 the two on Apple silicon. The two engines use **different model files**, so a
 model downloaded for one is not usable by the other — worth knowing if you move
 a catalog between a Mac and a PC, since each machine needs its own download.
 
-LrGeniusAI is released for Apple silicon Macs and 64-bit Windows. There is no
-Intel Mac or Linux build, so the question of which engine those would use does
-not arise.
+LrGeniusAI is released for Apple silicon Macs and 64-bit Windows, and its
+backend as Docker images for Linux (amd64 and arm64). The engine follows the
+backend, not Lightroom: a Mac whose Backend Server URL points at a Docker image
+or a PC gets the llama.cpp box, since MLX can only run on a backend on this
+Mac. The default Docker image has no local engine; the `-vulkan` and `-cuda` ones
+run llama.cpp on the Docker host's GPU — see
+[Docker with GPU Access](Help-Docker-GPU).
 
 ---
 
@@ -27,8 +32,8 @@ not arise.
 
 1. Open `File → Plug-in Manager → LrGeniusAI`.
 2. Scroll to **AI model (on this computer)**. It carries one box: **Local AI
-   Model — MLX (Apple silicon)** on macOS, **Local AI Model — llama.cpp** on
-   Windows.
+   Model — MLX (Apple silicon)** on a Mac whose backend runs on that Mac,
+   **Local AI Model — llama.cpp** on Windows and for a backend elsewhere.
 3. Pick an entry from the dropdown and click **Download**. The list shows the
    approximate download size; the models are several gigabytes, so this takes a
    while on a slow connection.
@@ -132,7 +137,7 @@ A download that is still in progress is never listed.
 
 ---
 
-## 3. Advanced settings (Windows / llama.cpp only)
+## 3. Advanced settings (llama.cpp only)
 
 Under the llama.cpp section:
 

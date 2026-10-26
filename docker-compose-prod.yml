@@ -1,10 +1,20 @@
 # geniusai-server (Rust backend) using the published GHCR image (same backend as a GitHub release).
 #
-# Default: :latest (multi-arch; CI publishes it on each release tag — see publish-docker-manifest).
-# Override in .env, e.g. LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:v1.2.3-x64
+# Default: :latest (multi-arch, amd64 + arm64; CI publishes it on each release
+# tag — see publish-docker-manifest). Override in .env, e.g.
+#   LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:v1.2.3          (pin a release)
+#   LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:latest-vulkan   (local AI model, any GPU)
+#   LRGENIUS_IMAGE=ghcr.io/lrgenius/lrgeniusai:latest-cuda     (local AI model, NVIDIA, amd64 only)
+# The default image has no local AI model built in; the -vulkan and -cuda ones
+# run one in the backend (llama.cpp), on the GPU when you hand the container
+# one below, otherwise on the CPU. Models downloaded from the plug-in's
+# settings are kept in ./models/llm.
 #
-# Model files aren't fetched at runtime yet — populate ./models yourself, see
-# server-rs/scripts/export_siglip2_fp16.py.
+# Model files: "Download AI models" in the plug-in's Plug-in Manager fetches
+# the search, aesthetic, face and species models into ./models.
+#
+# GPU access for the local AI model, step by step:
+#   https://github.com/LrGenius/LrGeniusAI/wiki/Help-Docker-GPU
 #
 # GENIUSAI_FACES_CLUSTER_* / GENIUSAI_BACKUP_* from the Python backend are
 # intentionally omitted: the Rust backend has no periodic scheduler for
@@ -16,6 +26,8 @@
 #        (paste it in Lightroom: Plug-in Manager > LrGeniusAI > Backend Server >
 #        Access token; kept in ./data/LrGeniusAI/api-token)
 # Logs:  docker compose logs -f geniusai-server
+#        (the line "llama: using ... via Vulkan/CUDA" says which GPU a local
+#        model runs on; "running on CPU" means the container sees none)
 
 services:
   geniusai-server:
@@ -30,3 +42,14 @@ services:
     environment:
       - GENIUSAI_HOST=0.0.0.0
       - GENIUSAI_PORT=19819
+    # -vulkan image, AMD or Intel GPU:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # -cuda or -vulkan image, NVIDIA GPU (needs the NVIDIA Container Toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

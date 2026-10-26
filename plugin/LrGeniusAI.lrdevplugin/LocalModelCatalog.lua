@@ -13,6 +13,32 @@
 LocalModelCatalog = {}
 
 ---
+-- Which local engine the settings dialog and the onboarding wizard offer:
+-- "mlx" or "llm" (llama.cpp). Exactly one, chosen by where the backend runs.
+--
+-- A backend on this Mac is the macOS build, which ships MLX only (the release
+-- does not compile the `llamacpp` feature there). Any other backend runs
+-- llama.cpp or nothing: Windows, and the Docker images, which are Linux and
+-- run llama.cpp in their -vulkan and -cuda variants. A Mac using a backend
+-- like that has to be offered llama.cpp, or it could never pick or download a
+-- model for it.
+--
+-- @param isMac boolean MAC_ENV
+-- @param isLocalBackend boolean SearchIndexAPI.isLocalBackend()
+-- @return string "mlx" or "llm"
+function LocalModelCatalog.engineFor(isMac, isLocalBackend)
+	if isMac and isLocalBackend then
+		return "mlx"
+	end
+	return "llm"
+end
+
+--- `engineFor` for this computer and the backend it is set up to use.
+function LocalModelCatalog.offeredEngine()
+	return LocalModelCatalog.engineFor(MAC_ENV, SearchIndexAPI.isLocalBackend() and true or false)
+end
+
+---
 -- Seeds the fields with safe "still checking" values.
 --
 -- The `*Supported` gates start false so nothing is clickable until the backend
