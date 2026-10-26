@@ -1,6 +1,6 @@
 # geniusai-server (Rust backend) built from ./server-rs (local development).
-# Model files aren't fetched at runtime yet — populate ./models yourself, see
-# server-rs/scripts/export_siglip2_fp16.py and the Dockerfile's own comments.
+# Model files: "Download AI models" in the plug-in's Plug-in Manager fetches
+# them into ./models (see the Dockerfile's own comments).
 #
 # GENIUSAI_FACES_CLUSTER_* / GENIUSAI_BACKUP_* from the Python backend are
 # intentionally omitted: the Rust backend has no periodic scheduler for

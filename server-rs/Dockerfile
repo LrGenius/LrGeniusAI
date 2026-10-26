@@ -3,10 +3,10 @@
 # Run:   docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 #          -e GENIUSAI_HOST=0.0.0.0 geniusai-server
 #
-# Model files: mount /models per the layout below (or trigger POST
-# /clip/download/start once a matching GitHub release with model assets
-# exists — see server-rs/README.md), or the server starts fine but
-# /index and /faces/detect fail until the files are in place.
+# Model files: "Download AI models" in the plug-in's Plug-in Manager fetches
+# them into /models, at the paths set below (or mount a /models you filled
+# yourself). Until they are there the server starts fine, but indexing and
+# face detection fail.
 #
 # Local AI model (llama.cpp, in-process): not built in by default. Pick a
 # GPU backend with --build-arg LLAMACPP=...
@@ -220,16 +220,21 @@ ENV GENIUSAI_PORT=19819
 # or set LRG_API_TOKEN to use a fixed one.
 ENV XDG_CONFIG_HOME=/data
 
-# Model files (SigLIP2, the aesthetic scorer + face models) — mount a populated /models volume;
-# see server-rs/scripts/export_siglip2_fp16.py and
-# server-rs/scripts/export_face_models.py for how to produce them until a
-# signed release asset exists.
+# Model files (SigLIP2, the aesthetic scorer, the face models and BioCLIP 2
+# for species) — all in the /models volume, which is where the plug-in's model
+# download puts them. A family left out of this list resolves to the
+# container's home directory instead, and a recreated container has to fetch it
+# again. To produce them yourself, see server-rs/scripts/export_siglip2_fp16.py
+# and server-rs/scripts/export_face_models.py.
 ENV LRG_SIGLIP_IMAGE_ONNX=/models/siglip2/siglip2_naflex_image_fp16.onnx
 ENV LRG_SIGLIP_TEXT_ONNX=/models/siglip2/siglip2_naflex_text_fp16.onnx
 ENV LRG_SIGLIP_TOKENIZER=/models/siglip2/siglip2_naflex_tokenizer.json
 ENV LRG_AESTHETIC_ONNX=/models/aesthetic/aesthetic_siglip_fp16.onnx
 ENV LRG_YUNET_ONNX=/models/face/yunet_face_detection.onnx
 ENV LRG_FACENET_ONNX=/models/face/facenet_vggface2.onnx
+ENV LRG_BIOCLIP_IMAGE_ONNX=/models/bioclip/bioclip2_image.onnx
+ENV LRG_BIOCLIP_TAXA_BIN=/models/bioclip/bioclip2_taxa.bin
+ENV LRG_BIOCLIP_TAXA_JSON=/models/bioclip/bioclip2_taxa.json
 # Local AI models the plug-in downloads (llama.cpp images): in the /models
 # volume too, instead of the container's home directory, which a recreated
 # container starts without.
