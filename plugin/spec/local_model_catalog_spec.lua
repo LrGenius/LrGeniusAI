@@ -52,3 +52,19 @@ describe("LocalModelCatalog.customDownloadSummary", function()
 		assert.truthy(text:find("ggml-org/gemma-3-12b-it-GGUF (Q4_K_M)", 1, true))
 	end)
 end)
+
+describe("LocalModelCatalog.engineFor", function()
+	it("offers MLX for a backend on this Mac", function()
+		assert.are.equal("mlx", LocalModelCatalog.engineFor(true, true))
+	end)
+
+	it("offers llama.cpp when a Mac uses a backend elsewhere, such as a Docker image", function()
+		-- The -vulkan and -cuda images are Linux: MLX can never run there.
+		assert.are.equal("llm", LocalModelCatalog.engineFor(true, false))
+	end)
+
+	it("offers llama.cpp on Windows, wherever the backend runs", function()
+		assert.are.equal("llm", LocalModelCatalog.engineFor(false, true))
+		assert.are.equal("llm", LocalModelCatalog.engineFor(false, false))
+	end)
+end)

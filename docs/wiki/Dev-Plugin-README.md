@@ -301,7 +301,9 @@ In the plugin settings dialog you can configure:
 - **Local AI Model (no external app)** — browse, download and select vision
   models the backend runs itself, plus the advanced knobs (context size, photos
   in parallel, layers on the GPU). Which engine backs this section is decided
-  per platform: **MLX** on macOS, **llama.cpp** with GGUF models on Windows.
+  by the backend: **MLX** for a backend on this Mac, **llama.cpp** with GGUF
+  models for every other one — Windows, or a Docker image
+  (`LocalModelCatalog.engineFor`).
   The section reports why it is unavailable when the host cannot use it — a
   source build without the `llamacpp` feature, or a missing MLX helper.
 - Export size and quality used for AI processing
