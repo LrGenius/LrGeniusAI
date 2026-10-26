@@ -40,6 +40,8 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Generate metadata
 - Optional face detection and clustering
 - Optional species identification (BioCLIP 2, on-device)
+- Every processed photo also gets a small preview (256 px, ~13 KB, stored by the backend beside
+  the index) for the browser search page
 
 ### Advanced Search
 
@@ -47,6 +49,11 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Metadata field search (`keywords`, `caption`, `title`, `alt_text`)
 - Scope search to current selection/view/catalog
 - Order or restrict results by aesthetic score and genre; with no search term, list the best photos by score
+- *Search (browser)...* (`TaskSearchBrowser.lua`, pure helpers in `SearchBrowser.lua`) runs the
+  same search in the web browser (served by the backend at `/v1/ui/search`) with a preview of
+  every result, searching again as the options change. Lightroom keeps a progress bar running
+  while it is open, which hands the page the current view and selection and turns the results
+  into a collection in rank order
 
 ### People Workflows
 

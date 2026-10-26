@@ -8,7 +8,11 @@ in. Results land in a new Lightroom collection.
 
 In Lightroom Classic:
 
-- `Library → Plug-in Extras → Advanced Search...`
+- `Library → Plug-in Extras → Advanced Search...` — the dialog described on most
+  of this page
+- `Library → Plug-in Extras → Search (browser)...` — the same search in your web
+  browser, with a preview of every result while you adjust it (see
+  [Search in your browser](#search-in-your-browser) below)
 
 ## What the search can see
 
@@ -112,3 +116,74 @@ deleted from Lightroom that are still in the index: when the automatic index
 cleanup is on, the message also says that a cleanup has started in the
 background, and the next search no longer finds them (see the
 [FAQ](FAQ.md#what-happens-to-the-index-when-i-delete-photos-in-lightroom)).
+
+## Search in your browser
+
+`Library → Plug-in Extras → Search (browser)...` opens the search as a page in
+your default web browser, served by the LrGeniusAI backend at
+`http://127.0.0.1:19819/v1/ui/search`. It is the same search as the dialog —
+same index, same ranking, same options — but you see the results while you
+work on it: every change searches again, and each result is shown as a small
+preview with its rank, aesthetic score and genre.
+
+### Where it opens
+
+Lightroom shows a progress bar named *Search (open in your browser)* while the
+page is live. It is what tells the page what Lightroom is showing and what turns
+results into a collection, so leave it running and cancel it when you are done.
+The page shows *Lightroom: connected* at the top right while it is.
+
+If the browser never comes up — a blocked pop-up, no default browser — the
+plugin tells you after about half a minute and gives you the address to open by
+hand. Use that whole address: the part after `#` is the backend's access token,
+and the page cannot load anything without it. A bookmark of the page does not
+keep it, so open the search from Lightroom each time.
+
+### What you can change
+
+- **Search term** — as in the dialog, or empty for your best photos by aesthetic
+  score. The search runs a moment after you stop typing, or at once with
+  **Enter**. The field suggests your earlier searches, the dialog's included.
+- **Scope** — *All indexed photos in this catalog*, *Current view* (the folder or
+  collections open in Lightroom, named in the menu with their photo count) or
+  *Selected photos*. The page learns the view and the selection when it opens;
+  after you change either in Lightroom, click **Update from Lightroom**.
+- **Sort**, **Min. aesthetic**, **Genre**, **Strictness**, **Max results** and
+  **Keywords and captions** (the metadata half of the search, all four fields) —
+  the dialog's controls of the same name. They start where you left them in the
+  dialog.
+
+Sliders and menus search again as you move them. Notes from the backend — no
+search model, photos without a score left out by the minimum, and the like —
+appear above the results with what to do about them, and so do the dialog's
+notes about photos that cannot be found because they were never indexed.
+
+### Previews
+
+The previews are small copies (256 pixels on the long side) that **Analyze &
+Index Photos** stores for each photo it processes, whatever you ask it to do;
+they take about 13 KB a photo on the backend's disk, roughly 130 MB per 10,000
+photos, beside the search index. Photos indexed before this version have none
+yet: they show *No preview yet*, and the page says how many. To add them, click
+**Show in Lightroom**, select the photos of the new collection and run **Analyze
+& Index Photos** with the scope *Selected photos only* and *Skip photos with
+existing data* — the previews are added and nothing that is already there is made again.
+The scope *New or unprocessed photos* does not pick them up, because nothing
+they need for searching is missing.
+
+A preview is deleted with its photo's index data (the index cleanup, or
+removing the photo from the index), and is not part of a database backup —
+indexing makes it again.
+
+### Show in Lightroom
+
+**Show in Lightroom** turns the results on the page into a collection under
+**Search Results**, named like the dialog's, with the photos in the order the
+page shows them, and switches the Library to it. As with the dialog, set the
+collection's sort order to `Custom Order` to keep that order. If some results
+are not in the open catalog, a message says how many: usually photos you
+deleted in Lightroom after they were indexed, which the index cleanup then
+takes out of the index in the background.
+
+If the page says *Lightroom is not listening*, the progress bar in Lightroom
+was cancelled: open **Search (browser)...** again.

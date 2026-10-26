@@ -20,6 +20,7 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/photos/lookup", post(get_photo_data))
+        .route("/photos/thumbnail", get(get_thumbnail))
         .route("/photos/ids", get(get_ids))
         .route("/photos/remove", post(remove_image))
         .route("/photos/metadata/remove", post(remove_metadata))
@@ -120,6 +121,11 @@ async fn check_unprocessed(
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
     let current_face_model = state.face.model_id();
+    // A missing search-page preview (`crate::thumbnails`) deliberately does
+    // not make a photo outstanding: the cull pre-flight and the agent's
+    // indexing command ask this route too, and would then offer to prepare
+    // photos that lack nothing they need. Any run that sends the photo writes
+    // its preview; the search page tells the user which run that is.
 
     let Some(store) = state.store() else {
         // No store bound: everything needs processing (matches empty existing).
@@ -479,6 +485,29 @@ async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Valu
 
     match cleanup::apply(&store, catalog_id, &plan, now).await {
         Ok(outcome) => {
+            // The purged photos' previews go with them. Only those whose row
+            // is really gone: a purge candidate that some catalog re-adopted
+            // between the scan and the purge is kept, and so is its preview.
+            if outcome.purged > 0 {
+                if let Some(root) = state.lance_root() {
+                    let still_there: std::collections::HashSet<String> = store
+                        .get_meta(IMAGE_TABLE, &plan.purge)
+                        .await
+                        .map(|rows| rows.into_iter().map(|(id, _)| id).collect())
+                        .unwrap_or_else(|_| plan.purge.iter().cloned().collect());
+                    let gone: Vec<String> = plan
+                        .purge
+                        .iter()
+                        .filter(|id| !still_there.contains(*id))
+                        .cloned()
+                        .collect();
+                    for (id, e) in crate::thumbnails::delete(&root, &gone) {
+                        // Not reported: a stray preview costs ~13 KB of disk
+                        // and nothing the user can see.
+                        log::warn!("Could not delete the preview of purged photo {id}: {e}");
+                    }
+                }
+            }
             let waiting = plan.waiting + outcome.orphaned;
             // The next purge is due one grace period after the oldest stamp
             // still waiting; rows stamped by this run are the newest there are.
@@ -522,6 +551,52 @@ async fn sync_cleanup(State(state): State<Arc<AppState>>, body: Option<Json<Valu
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ThumbnailQuery {
+    photo_id: Option<String>,
+}
+
+/// The photo's stored preview (`crate::thumbnails`) as `image/jpeg`.
+///
+/// A 404 with `error_code: "no_thumbnail"` for a photo that has none — indexed
+/// before previews were stored, or not indexed at all. The search page shows a
+/// placeholder for those and counts them, so it is an answer, not a failure.
+async fn get_thumbnail(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ThumbnailQuery>,
+) -> Response {
+    let Some(photo_id) = meta::normalize_photo_id(query.photo_id.as_deref(), None) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "photo_id is required"})),
+        )
+            .into_response();
+    };
+    let jpeg = state
+        .lance_root()
+        .and_then(|root| crate::thumbnails::read(&root, &photo_id));
+    match jpeg {
+        Some(bytes) => (
+            [
+                (axum::http::header::CONTENT_TYPE, "image/jpeg"),
+                // Private: it is a picture from the user's catalog. Short:
+                // a re-index replaces it.
+                (axum::http::header::CACHE_CONTROL, "private, max-age=300"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "No preview is stored for this photo. Run Analyze & Index Photos on it to add one.",
+                "error_code": "no_thumbnail",
+            })),
+        )
+            .into_response(),
+    }
+}
+
 fn body_photo_id(body: &Option<Json<Value>>) -> Option<String> {
     let data = body.as_ref()?.0.as_object()?;
     meta::normalize_photo_id(
@@ -561,6 +636,11 @@ async fn remove_image(State(state): State<Arc<AppState>>, body: Option<Json<Valu
         let _ = store
             .delete_by_id_prefix(FACE_TABLE, &format!("{photo_id}_"))
             .await;
+        if let Some(root) = state.lance_root() {
+            for (id, e) in crate::thumbnails::delete(&root, std::slice::from_ref(&photo_id)) {
+                log::warn!("Could not delete the preview of {id}: {e}");
+            }
+        }
         Ok(())
     }
     .await;

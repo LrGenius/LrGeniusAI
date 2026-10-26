@@ -35,6 +35,10 @@ return {
 			file = "TaskSemanticSearch.lua",
 		},
 		{
+			title = "Search (browser)...",
+			file = "TaskSearchBrowser.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images..."),
 			file = "TaskFindSimilarImages.lua",
 		},
@@ -80,6 +84,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/AdvancedSearch=Advanced Search..."),
 			file = "TaskSemanticSearch.lua",
+		},
+		{
+			title = "Search (browser)...",
+			file = "TaskSearchBrowser.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarImages=Find Similar Images..."),

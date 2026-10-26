@@ -31,9 +31,13 @@ the MCP tools and the chat call in-process.
 - **Without the token:** `GET /ping`, `GET /version` and `POST /version/check`
   (a plugin must learn what it is talking to, and that it is too old, before
   it can get in), `/mcp` and `/v1/chat/*` (they check their own tokens), and
-  the HTML of `GET /v1/ui/people` and `GET /v1/ui/chat` (a browser cannot add
-  a header when it opens an address; the page takes the token from the
-  `#fragment` and sends it itself).
+  the HTML of `GET /v1/ui/people`, `GET /v1/ui/search` and `GET /v1/ui/chat`
+  (a browser cannot add a header when it opens an address; the page holds no
+  data, takes the token from the `#fragment` and sends it itself). Only the
+  HTML: what the search page shows — the context the plugin posts, the
+  results, the previews of `GET /v1/photos/thumbnail` — needs the token like
+  any other data, which is why the page fetches previews with the header and
+  shows them as `blob:` URLs instead of pointing `<img src>` at the route.
 - **Also refused, token or not:** a request from a page on another site (an
   `Origin` that is not this server), and — when the backend listens only on
   this computer (`GENIUSAI_HOST` is a loopback address, the default) — any
@@ -231,6 +235,23 @@ provider says so in its own `warning` and it arrives as
 user a clean run that silently produced worse data. Each entry also rides on its
 own photo's `results` element as `warnings`, so a grouped caller can attribute it.
 
+**Search-page preview.** Every pass over a photo — whatever its `tasks`, and
+also when the work itself is skipped because it is already done — stores a small
+JPEG of it for the browser search page (`crate::thumbnails`, served by
+`GET /v1/photos/thumbnail`): 256 px on the long edge, quality 75, made from the
+decode the culling signals already pay for. It is written after the photo's row,
+so a photo that failed to store leaves none behind, and replaced on every pass,
+so a re-index refreshes an edited photo. A preview that could not be made or
+saved costs the photo nothing else, and says so in `warnings` (`"<file>: no
+preview for the browser search page — …"`).
+
+`/v1/index/unprocessed` does **not** count a missing preview as outstanding:
+the cull pre-flight and the agent's indexing command ask it too, and would offer
+to prepare photos that lack nothing they need. A photo indexed before previews
+were stored gets one from the next run that *sends* it — any scope of Analyze &
+Index but *New or unprocessed photos*, with *Skip photos with existing data*, so
+nothing else is made again.
+
 ### `POST /v1/index/photos/by-path`
 Indexes photos using server-side file paths instead of uploading image data (for local-backend
 setups where the server has filesystem access).
@@ -264,6 +285,31 @@ The response carries an `aesthetic` block next to `species`: `score`, `model`, `
 is from another export than this build's, so not comparable with current ones), `genre` (the stable
 id), `genre_label` and `genre_confidence`. It is `null` for a photo with neither. It is a block of
 its own, not part of `metadata`, which is text the plug-in lets the user edit.
+
+### `GET /v1/photos/thumbnail`
+The photo's stored search-page preview (see *Search-page preview* under
+`POST /v1/index/photos`), `?photo_id=<id>`, as `image/jpeg` with
+`Cache-Control: private, max-age=300`. Needs the access token like every data
+route; the search page fetches it with the header and shows the bytes as a
+`blob:` URL.
+
+| Status | Body | When |
+|---|---|---|
+| 200 | the JPEG | a preview is stored |
+| 400 | `{"error"}` | no `photo_id` |
+| 404 | `{"error", "error_code": "no_thumbnail"}` | none is stored: the photo was indexed before previews were, or not at all. An answer, not a failure — the page draws a placeholder and counts these |
+
+**Disk cost and lifetime.** One file per photo,
+`<lance root>/thumbnails/<aa>/<sha256 of the photo_id>.jpg` (the lance root is
+the `lrgenius-lance` folder beside the bound `db_path`; `<aa>` is the hash's
+first two hex digits, so no folder holds more than a few hundred files). About
+7–20 KB a photo depending on its detail (12.6 KB on average over thirteen sample
+photos), roughly 130 MB per 10,000 photos. Files rather than a LanceDB
+column, because every metadata scan (search, stats, cleanup) would otherwise
+decode them. Deleted with the photo by `POST /v1/photos/remove` and by the index
+cleanup's purge (`POST /v1/photos/catalogs/cleanup`), only for rows that are
+really gone; left out of `POST /v1/db/backups`, since any indexing run makes
+them again.
 
 ### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
@@ -306,7 +352,7 @@ model keeps its name, and the absent-is-current rule stays for any row an older 
 the upgrade has run.
 
 ### `POST /v1/photos/remove`
-Removes all data (embeddings, metadata, face data) for a given `photo_id`.
+Removes all data (embeddings, metadata, face data, the search-page preview) for a given `photo_id`.
 
 ### `POST /v1/photos/metadata/remove`
 Removes only the AI-generated metadata fields for a given `photo_id`, leaving embeddings intact.
@@ -332,7 +378,7 @@ Against that inventory, every image row is one of:
 |---|---|
 | claimed by this catalog, not in the inventory | the catalog lets go (`catalog_id` removed). Other catalogs keep theirs. A row left in no catalog is stamped `orphaned_at` (Unix seconds) |
 | in the inventory, in no catalog | re-adopted: the catalog is added back and the stamp cleared — a photo removed by mistake and imported again gets its AI data back |
-| in no catalog, stamped more than 30 days ago | purged for good: image row, its faces (`{photo_id}_n`) and its species embedding. Training examples stay |
+| in no catalog, stamped more than 30 days ago | purged for good: image row, its faces (`{photo_id}_n`), its species embedding and its search-page preview. Training examples stay |
 | in no catalog, no stamp | left alone — rows from before `catalog_ids` existed look like this |
 
 Every row is read again before it is written, and a purge candidate some
@@ -394,8 +440,11 @@ Runs a semantic search query against indexed photos.
 their intersection. (Until August 2026 the metadata half skipped the catalog
 check whenever `photo_ids` was present, leaking results from other catalogs.)
 
-**Response:** `results` array of `{photo_id, uuid, distance, aesthetic_score, genre, genre_label}`
-(`aesthetic_score` is `null` for a photo with no score from the current export). By
+**Response:** `results` array of `{photo_id, uuid, distance, aesthetic_score, genre, genre_label, has_thumbnail}`
+(`aesthetic_score` is `null` for a photo with no score from the current export;
+`has_thumbnail` says whether `GET /v1/photos/thumbnail` has a preview for it — a
+file check per result, at most `max_results` of them — so the browser search
+page can draw a placeholder without asking). By
 default semantic matches come first, ordered by ascending distance; metadata matches follow with
 `distance: null` and fill whatever is left of `max_results`.
 
@@ -784,29 +833,109 @@ drains the queue and performs it. Both ends stamp when they were last heard
 from, so each can tell the user the other one is gone instead of appearing to
 hang.
 
+Queue, stamps and context are kept **per page** — `people` or `search`, named
+by a `page` query parameter (status, the plugin's poll) or body field (an
+action) — because Lightroom runs plug-in tasks side by side: with one shared
+queue the People task would drain, and refuse as unknown, what the search page
+queued for its own task. A request that names no page means `people`, which is
+what every client sent before there was a second page; an unknown page is a
+400 (`ui_bridge::PAGES`).
+
 ### `GET /v1/ui/people`
 Serves the People page: person grid, renaming, re-clustering, filtering, and
 the selection that becomes a Lightroom collection. Replaced the plugin's LrView
 People dialog.
 
+### `GET /v1/ui/search`
+Serves the browser search page (`src/ui/search.html`, opened by
+`TaskSearchBrowser.lua` — *Search (browser)...* in the Library and File menus).
+It runs the same `POST /v1/search` as the Advanced Search dialog, again as the
+options change (typing, debounced; sliders and menus at once, an older request
+cancelled by the newer one): term with the search history, scope (all indexed
+photos, current view, selection), sort, minimum aesthetic score, genre,
+relevance strictness, max results and the metadata half. No ranking of its own:
+what the grid shows is the route's answer, in its order, with its `warnings`
+in a banner. Each result shows its stored preview (`GET /v1/photos/thumbnail`),
+or a placeholder when `has_thumbnail` is false, and the number of those comes
+with what to run to add them. **Show in Lightroom** queues
+`show_search_results` with the result IDs in rank order.
+
+Sent like the chat page, with a `Content-Security-Policy` (`default-src 'none'`,
+`connect-src 'self'`, `img-src 'self' blob: data:`, `frame-ancestors 'none'`),
+`Cache-Control: no-store` and `Referrer-Policy: no-referrer`: unlike the People
+page it shows pictures from the catalog and keeps the access token in
+`sessionStorage`.
+
+### `GET /v1/ui/search/context`
+### `POST /v1/ui/search/context`
+What the search page needs and only Lightroom knows. The plugin task `POST`s it
+before it opens the page and again for each `refresh_search_context` action
+(the page's *Update from Lightroom*); the page `GET`s it. Stored as sent (a JSON
+object, else 400), with a `revision` raised by every `POST`, so a page waiting
+for a refresh can tell the new context from the old. A `POST` also counts as the
+plugin being there.
+
+```json
+{
+  "catalog_id": "…",
+  "scopes": {
+    "view": { "label": "2026-10, Bavaria", "photo_ids": ["…"], "unresolved": 0,
+              "whole_catalog": true, "count": 14000 },
+    "selection": { "photo_ids": ["…"], "unresolved": 1 }
+  },
+  "defaults": { "scope": "all", "relevance_strictness": 50, "max_results": 300, "sort": "relevance",
+                "min_aesthetic_position": 0, "genre": "all", "metadata": true },
+  "history": ["heron", "…"],
+  "notices": ["12 of 14000 photos have no search index yet …"]
+}
+```
+
+`view.whole_catalog` stands for All Photographs, sent without IDs because it is
+the same search as all indexed photos (resolving every photo's ID first would
+take minutes). `unresolved` counts photos whose ID could not be worked out (an
+offline file) and that are therefore not in the scope; the page says so.
+`defaults` are the Advanced Search dialog's saved settings; `notices` are what
+that dialog says before it opens — no search model, photos never indexed or
+indexed with the previous model. `catalog_id` absent means searches cannot be
+limited to this catalog, which the page says too.
+
+`GET` returns `{context, revision, plugin_connected}`, `context` `null` and
+`revision` `0` until the plugin has posted one.
+
 ### `GET /v1/ui/status`
-Page heartbeat. Returns `plugin_connected` — false once the plugin has not
-polled for 5 seconds, which is how the page reports that People was closed in
-Lightroom instead of silently queueing work nobody will run.
+Page heartbeat, `?page=search` for the search page. Returns `plugin_connected`
+— false once that page's plugin task has not polled for 5 seconds, which is how
+the page reports that People (or Search) was closed in Lightroom instead of
+silently queueing work nobody will run.
 
 ### `GET /v1/ui/actions`
-Plugin poll. Returns every queued action and clears the queue, so each action
-is handed out exactly once — a caller that drops the response drops the work.
-Also returns `page_open`, false when no page has been seen for 90 seconds —
-wide enough that a page throttled in a hidden browser tab still counts —
-which lets the plugin report a browser that never opened.
+Plugin poll, `?page=search` for the search task. Returns every queued action of
+that page and clears its queue, so each action is handed out exactly once — a
+caller that drops the response drops the work. Also returns `page_open`, false
+when that page has not been seen for 90 seconds — wide enough that a page
+throttled in a hidden browser tab still counts — which lets the plugin report a
+browser that never opened.
 
 ### `POST /v1/ui/actions`
-Queues one action for the plugin. The body needs an `action` naming one the
-backend knows (`show_in_library`, which additionally needs a non-empty
-`person_ids` array); anything else is a 400 rather than an entry nothing will
-ever run. Returns `plugin_connected` as it was *before* the enqueue — the
-answer to "will anything pick this up".
+Queues one action for the plugin task of the body's `page`. The `action` has to
+be one that page's task knows; anything else is a 400 rather than an entry
+nothing will ever run:
+
+| page | action | needs |
+|---|---|---|
+| `people` | `show_in_library` | a non-empty `person_ids` array |
+| `search` | `show_search_results` | a non-empty `photo_ids` array of strings, in rank order; `term`, `sort`, `min_aesthetic`, `genre_label`, `max_results` name the collection |
+| `search` | `refresh_search_context` | nothing |
+
+Returns `plugin_connected` as it was *before* the enqueue — the answer to "will
+anything pick this up".
+
+`show_search_results` becomes a collection under **Search Results**, named like
+the Advanced Search dialog's, with the photos in the page's rank order.
+Results the catalog does not have are counted in a warning: with the search
+limited to this catalog they are photos deleted since they were indexed, and the
+index cleanup is started; without a catalog ID they may belong to another
+catalog on the same backend.
 
 ---
 
@@ -1293,7 +1422,10 @@ Returns aggregate database statistics:
 - total persons
 
 ### `POST /v1/db/backups`
-Creates and streams a ZIP backup of the full persistent LanceDB data directory.
+Creates and streams a ZIP backup of the full persistent LanceDB data directory,
+less two of its folders: `backups` (the earlier backups) and `thumbnails` (the
+search page's previews — already-compressed JPEG the in-memory zip would only
+carry, and which indexing makes again; see `GET /v1/photos/thumbnail`).
 
 > **Not available:** `POST /db/migrate-photo-ids` existed on the retired Python backend and
 > converted legacy Lightroom UUID-based IDs to `photo_id` values. It was deliberately not

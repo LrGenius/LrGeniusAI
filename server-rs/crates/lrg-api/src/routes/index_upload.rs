@@ -1243,6 +1243,8 @@ struct PreparedPhoto {
     /// `Some` when this photo still needs an LLM call. `None` covers both
     /// "metadata generation is off" and "it already has metadata".
     llm_request: Option<lrg_providers::types::MetadataGenerationRequest>,
+    /// The search page's preview, written once the photo's row is stored.
+    thumbnail: Result<Vec<u8>, String>,
 }
 
 /// Phase 1: everything that does not need the LLM.
@@ -1253,6 +1255,10 @@ struct PreparedPhoto {
 pub(crate) struct CullSignals {
     metrics: lrg_imaging::metrics::CullingMetrics,
     phash: String,
+    /// The photo's preview for the browser search page, made from the same
+    /// decode (see `crate::thumbnails`). An encoding failure is carried, not
+    /// dropped: the photo still indexes, and the run says it has no preview.
+    thumbnail: Result<Vec<u8>, String>,
 }
 
 /// Decodes each image and computes its culling metrics and pHash, in parallel
@@ -1300,6 +1306,14 @@ fn precompute_cull_signals(images: &[Arc<[u8]>]) -> Vec<Result<CullSignals, Stri
             Ok(CullSignals {
                 metrics: culling_metrics(&rgb, &cfg),
                 phash: perceptual_hash(&rgb),
+                thumbnail: lrg_imaging::convert::thumbnail_jpeg(
+                    &pixels,
+                    width as u32,
+                    height as u32,
+                    lrg_imaging::convert::THUMBNAIL_LONG_EDGE,
+                    lrg_imaging::convert::THUMBNAIL_JPEG_QUALITY,
+                )
+                .map_err(|e| e.to_string()),
             })
         })
         .collect()
@@ -1465,7 +1479,11 @@ async fn prepare_one(
     // weights belong. The threshold-shaped fields here (denominators, exposure
     // target, clip thresholds) genuinely need pixels, so changing those still
     // requires a re-index.
-    let CullSignals { metrics, phash } = cull;
+    let CullSignals {
+        metrics,
+        phash,
+        thumbnail,
+    } = cull;
     main_metadata.insert("cull_sharpness".into(), json!(metrics.cull_sharpness));
     main_metadata.insert("cull_exposure".into(), json!(metrics.cull_exposure));
     main_metadata.insert("cull_noise".into(), json!(metrics.cull_noise));
@@ -1721,6 +1739,7 @@ async fn prepare_one(
         species_vector,
         warnings,
         llm_request,
+        thumbnail,
     })
 }
 
@@ -1803,6 +1822,7 @@ async fn finish_one(
         species_vector,
         warnings: warnings_from_phase_1,
         llm_request,
+        thumbnail,
     } = prepared;
     let photo_id = photo_id.as_str();
     let filename = filename.as_str();
@@ -2147,6 +2167,22 @@ async fn finish_one(
         .upsert(IMAGE_TABLE, std::slice::from_ref(&record))
         .await
         .map_err(|e| format!("Database update failed: {e}"))?;
+
+    // After the row, so a photo that failed to store leaves no preview behind.
+    // A preview that could not be made or written costs the photo nothing but
+    // its picture on the search page, which then says it has none — but the
+    // run says so too, since the user asked for this photo to be indexed.
+    let preview = thumbnail.and_then(|jpeg| match state.lance_root() {
+        Some(root) => crate::thumbnails::write(&root, photo_id, &jpeg)
+            .map_err(|e| format!("could not be saved ({e})")),
+        None => Err("no database is bound".to_string()),
+    });
+    if let Err(e) = preview {
+        log::warn!("Photo {photo_id}: no preview for the search page: {e}");
+        warnings.push(format!(
+            "{filename}: no preview for the browser search page — {e}"
+        ));
+    }
 
     if let Some(vector) = species_vector {
         let mut species_meta = Map::new();

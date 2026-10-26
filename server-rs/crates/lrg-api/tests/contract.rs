@@ -3450,3 +3450,149 @@ async fn cleanup_holds_back_a_removal_of_most_of_the_catalog_until_confirmed() {
     assert_eq!(json["disassociated"], 60, "{json}");
     assert!(catalogs_of(&state, "p0").await.is_empty());
 }
+
+/// Indexing stores a small preview of the photo for the browser search page;
+/// `/v1/photos/thumbnail` serves it, the search marks which results have one,
+/// and removing the photo removes the preview with it.
+#[tokio::test]
+async fn indexing_stores_a_preview_that_search_reports_and_remove_deletes() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+
+    let jpeg = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/astronaut.jpg"
+    ))
+    .unwrap();
+    let (content_type, body) = multipart_body(
+        &[
+            ("photo_id", "astro"),
+            ("tasks", "cull"),
+            ("catalog_id", "cat-1"),
+            ("db_path", db_path.as_str()),
+        ],
+        Some(("astronaut.jpg", &jpeg)),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/index/photos")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let indexed = body_json(response).await;
+    assert_eq!(indexed["success_count"], 1, "{indexed}");
+    // The preview is not one of the run's warnings: it was made.
+    assert!(
+        !indexed["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("preview")),
+        "{indexed}"
+    );
+
+    let thumb = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/photos/thumbnail?photo_id=astro&db_path={db_path}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(thumb.status(), StatusCode::OK);
+    assert_eq!(
+        thumb
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "image/jpeg"
+    );
+    let bytes = thumb.into_body().collect().await.unwrap().to_bytes();
+    let preview = image::load_from_memory(&bytes).unwrap();
+    assert_eq!(
+        preview.width().max(preview.height()),
+        lrg_imaging::convert::THUMBNAIL_LONG_EDGE
+    );
+
+    // A photo with no preview is a 404 the page can recognise.
+    let none = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/photos/thumbnail?photo_id=nope&db_path={db_path}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(none.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(none).await["error_code"], "no_thumbnail");
+
+    // "The best N" ranks by aesthetic score, which this test has none of, so
+    // give the photo one and a second photo without a preview.
+    let store = state.store().unwrap();
+    let mut row = store
+        .get(lrg_store::IMAGE_TABLE, &["astro".to_string()])
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    row.metadata
+        .insert("aesthetic_score".into(), serde_json::json!(6.0));
+    row.metadata.insert(
+        "aesthetic_model".into(),
+        serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+    );
+    store.upsert(lrg_store::IMAGE_TABLE, &[row]).await.unwrap();
+    seed_searchable(
+        &state,
+        &[(
+            "old",
+            Some(7.0),
+            lrg_ml::aesthetic::MODEL_ID,
+            None,
+            "indexed before previews",
+        )],
+    )
+    .await;
+    let (_, found) = post_json(
+        &app,
+        "/v1/search",
+        serde_json::json!({"sort": "aesthetic", "db_path": db_path}),
+    )
+    .await;
+    let has = |id: &str| {
+        found["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["photo_id"] == id)
+            .map(|r| r["has_thumbnail"].clone())
+    };
+    assert_eq!(has("astro"), Some(serde_json::json!(true)), "{found}");
+    assert_eq!(has("old"), Some(serde_json::json!(false)), "{found}");
+
+    let (code, _) = post_json(
+        &app,
+        "/v1/photos/remove",
+        serde_json::json!({"photo_id": "astro", "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(!lrg_api::thumbnails::exists(
+        &state.lance_root().unwrap(),
+        "astro"
+    ));
+}

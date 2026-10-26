@@ -115,6 +115,51 @@ fn downscale(image: DynamicImage, max_long_edge: u32) -> DynamicImage {
     DynamicImage::ImageRgb8(dst)
 }
 
+/// Long edge of the preview stored per photo for the browser search page.
+///
+/// 256 px is two grid columns' worth on a high-density screen at the page's
+/// default card size, and at JPEG quality [`THUMBNAIL_JPEG_QUALITY`] it is
+/// 7–20 KB depending on how much detail the picture has — 12.6 KB on average
+/// over thirteen sample photos — so roughly 130 MB per 10,000 photos.
+pub const THUMBNAIL_LONG_EDGE: u32 = 256;
+
+/// JPEG quality of the stored preview. A preview is looked at, not edited,
+/// and the saving over 85 is about a third.
+pub const THUMBNAIL_JPEG_QUALITY: u8 = 75;
+
+/// A small JPEG preview of an already decoded RGB8 image: downscaled to
+/// `long_edge` (never upscaled) with a bilinear filter — a thumbnail is
+/// looked at once and the filter is several times cheaper than Lanczos.
+pub fn thumbnail_jpeg(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    long_edge: u32,
+    quality: u8,
+) -> Result<Vec<u8>, UnsupportedImageError> {
+    let src = RgbImage::from_raw(width, height, pixels.to_vec()).ok_or_else(|| {
+        UnsupportedImageError(format!(
+            "preview: {} bytes do not make a {width}x{height} RGB image",
+            pixels.len()
+        ))
+    })?;
+    let longest = width.max(height).max(1);
+    let image = if longest <= long_edge {
+        DynamicImage::ImageRgb8(src)
+    } else {
+        let scale = f64::from(long_edge) / f64::from(longest);
+        let new_w = ((f64::from(width) * scale).round() as u32).max(1);
+        let new_h = ((f64::from(height) * scale).round() as u32).max(1);
+        let mut dst = RgbImage::new(new_w, new_h);
+        let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+        Resizer::new()
+            .resize(&src, &mut dst, &options)
+            .map_err(|e| UnsupportedImageError(format!("preview resize failed: {e}")))?;
+        DynamicImage::ImageRgb8(dst)
+    };
+    encode_jpeg(&image, quality)
+}
+
 /// Decodes with the `image` crate's default 512 MiB decode-allocation cap
 /// disabled. That cap is meant for untrusted uploads; `data` here is
 /// always the user's own trusted Lightroom catalog file (read from a
@@ -308,6 +353,25 @@ mod tests {
             .unwrap();
         reader.limits(tiny_cap);
         assert!(decode_without_alloc_cap(reader).is_ok());
+    }
+
+    #[test]
+    fn thumbnail_is_a_small_jpeg_with_the_aspect_ratio_kept() {
+        let (w, h) = (1200u32, 800u32);
+        let pixels: Vec<u8> = (0..w * h * 3).map(|i| (i % 251) as u8).collect();
+        let jpeg = thumbnail_jpeg(&pixels, w, h, 256, 75).unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (256, 171));
+        assert!(jpeg.len() < 60_000, "{} bytes", jpeg.len());
+
+        // Never upscaled.
+        let small: Vec<u8> = vec![128; 100 * 50 * 3];
+        let jpeg = thumbnail_jpeg(&small, 100, 50, 256, 75).unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (100, 50));
+
+        // A buffer that does not match the size is an error, not a panic.
+        assert!(thumbnail_jpeg(&small, 101, 50, 256, 75).is_err());
     }
 
     #[test]

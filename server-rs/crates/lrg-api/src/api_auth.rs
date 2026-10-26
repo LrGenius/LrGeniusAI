@@ -20,9 +20,12 @@
 //!   it can know how to get in;
 //! - `/mcp` and `/v1/chat/*`: they check their own tokens (the agent token,
 //!   a chat's own);
-//! - the HTML of the browser pages. A browser cannot add a header when it
-//!   opens an address, and the page holds nothing; it gets the token from the
-//!   address's `#fragment` and sends it with every request of its own.
+//! - the HTML of the browser pages (`/v1/ui/people`, `/v1/ui/search`,
+//!   `/v1/ui/chat`). A browser cannot add a header when it opens an address,
+//!   and the page holds nothing; it gets the token from the address's
+//!   `#fragment` and sends it with every request of its own — including for
+//!   photo previews, which the search page fetches with the header rather
+//!   than through `<img src>`, so they stay behind the token.
 //!
 //! This is applied around the whole app, outside the router the MCP tools and
 //! the chat call in-process: those calls never cross the network.
@@ -100,7 +103,8 @@ fn exempt(method: &Method, path: &str) -> bool {
         || path == "/mcp"
         || path.starts_with("/mcp/")
         || path.starts_with("/v1/chat/")
-        || (method == Method::GET && matches!(path, "/v1/ui/people" | "/v1/ui/chat"))
+        || (method == Method::GET
+            && matches!(path, "/v1/ui/people" | "/v1/ui/search" | "/v1/ui/chat"))
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -187,6 +191,9 @@ mod tests {
             .route("/ping", get(|| async { "pong" }))
             .route("/v1/db/stats", get(|| async { "stats" }))
             .route("/v1/ui/people", get(|| async { "<html>" }))
+            .route("/v1/ui/search", get(|| async { "<html>" }))
+            .route("/v1/ui/search/context", get(|| async { "context" }))
+            .route("/v1/photos/thumbnail", get(|| async { "jpeg" }))
             .route("/v1/ui/actions", post(|| async { "queued" }))
             .route("/v1/chat/sessions", post(|| async { "chat" }))
             .route("/mcp", post(|| async { "mcp" }));
@@ -238,9 +245,15 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_pages_and_self_guarded_routes_need_no_token() {
         let app = app("127.0.0.1");
-        for path in ["/ping", "/v1/ui/people"] {
+        for path in ["/ping", "/v1/ui/people", "/v1/ui/search"] {
             let (code, _) = status(app.clone(), get_req(path, "localhost:19819", None)).await;
             assert_eq!(code, StatusCode::OK, "{path}");
+        }
+        // Only the page's HTML: what it shows — the photos' previews, the
+        // view and selection — needs the token like any other data.
+        for path in ["/v1/ui/search/context", "/v1/photos/thumbnail?photo_id=p1"] {
+            let (code, _) = status(app.clone(), get_req(path, "localhost:19819", None)).await;
+            assert_eq!(code, StatusCode::FORBIDDEN, "{path}");
         }
         for path in ["/mcp", "/v1/chat/sessions"] {
             let request = Request::builder()

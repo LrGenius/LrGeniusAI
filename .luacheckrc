@@ -30,6 +30,7 @@ globals = {
     "PluginInfoDialogSections",
     "PromptConfigProvider",
     "SearchIndexAPI",
+    "SearchBrowser",
     "Secrets",
     "SkipPhotoContextDialog",
     "SpeciesLinks",
