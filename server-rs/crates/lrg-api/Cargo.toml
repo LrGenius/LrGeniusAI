@@ -7,8 +7,13 @@ license.workspace = true
 [features]
 # Compiles the in-process llama.cpp engine in. Off by default so that anyone
 # building an unrelated crate does not need cmake + libclang (and, on Windows,
-# a CUDA toolkit); the release workflow turns it on.
+# the Vulkan SDK); the release workflow turns it on.
 llamacpp = ["dep:lrg-llama"]
+# llama.cpp with a GPU backend, for the Linux build (the Docker images). See
+# the features of crates/lrg-llama.
+llamacpp-vulkan = ["llamacpp", "lrg-llama/vulkan"]
+llamacpp-cuda = ["llamacpp", "lrg-llama/cuda"]
+llamacpp-dynamic-backends = ["llamacpp", "lrg-llama/dynamic-backends"]
 
 # Needs the llama.cpp engine to have something to compare MLX against, so it is
 # not built by a plain `cargo build`/`clippy --all-targets`.

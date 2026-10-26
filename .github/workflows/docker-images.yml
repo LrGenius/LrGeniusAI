@@ -1,0 +1,180 @@
+name: Docker images
+
+# The backend's container images (server-rs/Dockerfile): the default one, and
+# the variants with llama.cpp built in for a local AI model, through Vulkan or
+# CUDA. Each architecture builds natively on a runner of its own: the arm64
+# image used to be built under QEMU on an x64 runner, where compiling the
+# workspace was slow enough that the leg was switched off.
+#
+# - On a pull request that changes how the images are built: build only, push
+#   nothing. It is the one run a Dockerfile change gets before a release does.
+# - From release.yml, for a version tag: build and push one tag per variant and
+#   architecture (`v1.2.3-x64`, `v1.2.3-vulkan-aarch64`, ...), which
+#   publish-docker-manifest there combines into the multi-arch tags.
+on:
+  pull_request:
+    paths:
+      - 'server-rs/Dockerfile'
+      - 'server-rs/.dockerignore'
+      - 'server-rs/crates/lrg-llama/Cargo.toml'
+      - '.github/workflows/docker-images.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      push:
+        description: 'Push the images to GHCR'
+        type: boolean
+        required: true
+      version_tag:
+        description: 'The release tag (v1.2.3) the images are built and tagged for'
+        type: string
+        required: true
+
+# A force-push should not leave several of these hour-long builds racing on the
+# same PR. A release is never cancelled: half its images would be pushed.
+concurrency:
+  group: docker-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Docker image - ${{ matrix.llamacpp }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # The default x64 image took 31-34 min under release.yml. The llama.cpp
+    # variants compile it on top: the Vulkan shaders and, on x64, one CPU
+    # module per CPU generation; CUDA adds nvcc's kernels for every GPU
+    # generation, by far the longest step.
+    timeout-minutes: ${{ matrix.timeout }}
+    permissions:
+      contents: read
+      # Only used to push, which pull requests never do; a fork's token is
+      # read-only regardless.
+      packages: write
+    strategy:
+      # One variant failing must not cancel the others: the manifest job
+      # publishes every variant whose images all made it.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+            docker_platform: linux/amd64
+            llamacpp: none
+            tag_suffix: ''
+            timeout: 90
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            docker_platform: linux/arm64
+            llamacpp: none
+            tag_suffix: ''
+            timeout: 90
+          - arch: x64
+            runner: ubuntu-latest
+            docker_platform: linux/amd64
+            llamacpp: vulkan
+            tag_suffix: '-vulkan'
+            timeout: 150
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            docker_platform: linux/arm64
+            llamacpp: vulkan
+            tag_suffix: '-vulkan'
+            timeout: 150
+          # amd64 only: on arm64 the Dockerfile would have to link the CUDA
+          # backend in, and the server would then not start without an NVIDIA
+          # driver. See the `dynamic-backends` feature in
+          # server-rs/crates/lrg-llama/Cargo.toml.
+          - arch: x64
+            runner: ubuntu-latest
+            docker_platform: linux/amd64
+            llamacpp: cuda
+            tag_suffix: '-cuda'
+            timeout: 300
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # NVIDIA's devel image alone is ~9 GB unpacked, and the build's target
+      # directory comes on top; the runner image's preinstalled SDKs leave too
+      # little of its disk for that.
+      - name: Free disk space
+        if: matrix.llamacpp != 'none'
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/share/powershell
+          sudo docker image prune --all --force >/dev/null
+          df -h /
+
+      - name: Resolve backend version build-args
+        id: backend-version
+        shell: bash
+        env:
+          VERSION_TAG: ${{ inputs.version_tag }}
+        run: |
+          if [[ "$VERSION_TAG" == v[0-9]* ]]; then
+            VERSION="${VERSION_TAG#v}"
+            TAG="$VERSION_TAG"
+          else
+            # A pull request or a manual run: the dev version the binary
+            # itself defaults to, under a tag that is never pushed.
+            VERSION="0.0.0-dev"
+            TAG="ci"
+          fi
+          BUILD_DATE=$(date +%Y%m%d)
+          {
+            echo "version=${VERSION}"
+            echo "release_tag=v${VERSION}"
+            echo "build=${BUILD_DATE}"
+            echo "image_tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Backend version build-args: version=${VERSION} build=${BUILD_DATE}"
+
+      - name: Prepare image name
+        id: image-name
+        shell: bash
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "registry_image=ghcr.io/${OWNER_LC}/lrgeniusai" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.push
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # mode=min: only the runtime stage's layers. The builder's would hit
+      # only on a re-run of the same commit (`COPY . .` changes with every
+      # one), and they hold the whole target directory: several GB per
+      # variant, enough to push the PR jobs' Rust caches out of the repo's
+      # 10 GB Actions cache.
+      - name: Build Docker image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./server-rs
+          file: ./server-rs/Dockerfile
+          platforms: ${{ matrix.docker_platform }}
+          push: ${{ inputs.push == true }}
+          build-args: |
+            LLAMACPP=${{ matrix.llamacpp }}
+            LRG_BACKEND_VERSION=${{ steps.backend-version.outputs.version }}
+            LRG_BACKEND_RELEASE_TAG=${{ steps.backend-version.outputs.release_tag }}
+            LRG_BACKEND_BUILD=${{ steps.backend-version.outputs.build }}
+          tags: ${{ steps.image-name.outputs.registry_image }}:${{ steps.backend-version.outputs.image_tag }}${{ matrix.tag_suffix }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=lrgeniusai-server${{ matrix.tag_suffix }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=min,scope=lrgeniusai-server${{ matrix.tag_suffix }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.backend-version.outputs.image_tag }}
+          provenance: false
+          sbom: false

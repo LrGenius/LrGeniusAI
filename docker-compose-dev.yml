@@ -7,6 +7,10 @@
 # face clustering or backups yet, so those env vars would currently be
 # silently ignored.
 #
+# Local AI model (llama.cpp): set LLAMACPP=vulkan or LLAMACPP=cuda (amd64
+# only) in .env or the shell to build it in, and hand the container a GPU
+# below. The default, none, builds without one. See server-rs/Dockerfile.
+#
 # Start: docker compose -f docker-compose-dev.yml up -d --build
 # Stop:  docker compose -f docker-compose-dev.yml down
 # Token: docker exec geniusai-server /app/geniusai-server token
@@ -19,6 +23,8 @@ services:
     build:
       context: ./server-rs
       dockerfile: Dockerfile
+      args:
+        LLAMACPP: ${LLAMACPP:-none}
     image: geniusai-server:dev
     container_name: geniusai-server
     restart: unless-stopped
@@ -30,3 +36,14 @@ services:
     environment:
       - GENIUSAI_HOST=0.0.0.0
       - GENIUSAI_PORT=19819
+    # LLAMACPP=vulkan, AMD or Intel GPU:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # LLAMACPP=cuda or vulkan, NVIDIA GPU (needs the NVIDIA Container Toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

@@ -14,10 +14,13 @@ There are three layers, each opt-in on top of the last:
    Compiles llama.cpp from source, so it needs `cmake` + `libclang` (for
    `bindgen`), and on Windows a GPU backend (Vulkan, not CUDA — see
    `server-rs/crates/lrg-llama/Cargo.toml`). **This is the shipped local engine
-   on Windows only.** Release builds for macOS leave the feature off and ship
-   MLX instead (see `cargo_features` in `.github/workflows/release.yml`); the
-   feature still compiles on macOS, so enabling it locally to compare engines
-   works, it just is not what users get.
+   on Windows, and in the `-vulkan`/`-cuda` Docker images.** Release builds for
+   macOS leave the feature off and ship MLX instead (see `cargo_features` in
+   `.github/workflows/release.yml`); the feature still compiles on macOS, so
+   enabling it locally to compare engines works, it just is not what users get.
+   On Linux, `--features llamacpp` alone builds CPU-only; the GPU backends are
+   `llamacpp-vulkan` and `llamacpp-cuda`, which the Dockerfile picks (see
+   [Local AI model in a container](Dev-Server-README#local-ai-model-in-a-container)).
 3. **MLX sidecar** — macOS/Apple silicon only. A separate Swift executable,
    not a cargo feature, so it costs nothing to compile on other platforms.
 

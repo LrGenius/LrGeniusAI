@@ -539,7 +539,8 @@ unaffected either way — search rankings and distances are identical.
 ## Docker
 
 `Dockerfile` here builds and ships the compiled binary (multi-stage:
-`rust:1-bookworm` builder, `debian:bookworm-slim` runtime). Model files
+`rust:1-trixie` builder, `debian:trixie-slim` runtime; trixie because the
+ONNX Runtime libraries need glibc 2.38+). Model files
 still need to be supplied via a mounted `/models` volume following the
 env vars above (the Dockerfile pre-sets them to `/models/siglip2/...` and
 `/models/face/...`) — see the Dockerfile's own comments for the
@@ -553,6 +554,11 @@ docker run -p 19819:19819 -v /path/to/data:/data -v /path/to/models:/models \
 
 Or via Compose: `docker compose -f ../docker-compose-dev.yml up -d --build`.
 
+The server opens the database `--db-path` names (`/data/db` in the image) when
+it starts. It has to: the plug-in binds a backend on its own computer to the
+open catalog, but leaves a remote one — a container — on the database it was
+started with, and sends it no `db_path` at all.
+
 The image keeps the access token in its `/data` volume
 (`XDG_CONFIG_HOME=/data`), so it survives the container being recreated. Print
 it for the plug-in with
@@ -563,14 +569,56 @@ warning under [Host and port](#host-and-port) applies. When Lightroom runs on
 the same computer, publish it to that computer only:
 `-p 127.0.0.1:19819:19819`.
 
-The image is built **without** the `llamacpp` feature and has no MLX sidecar, so
-neither local backend is available in a container. Inside the container,
+### Local AI model in a container
+
+The default image has no local AI model: it is built **without** the
+`llamacpp` feature, and the MLX sidecar is macOS-only. Inside the container,
 `localhost` is not the host, so Ollama and LM Studio are not found
 automatically either: enter the one on the host as the plug-in's **Other AI
 server** (e.g. `http://host.docker.internal:1234` for LM Studio), or use a cloud
-provider. Add
-`--features llamacpp` to the Dockerfile's `cargo build` (plus `cmake` and
-`libclang-dev` in the builder stage) if you want in-process inference there.
+provider.
+
+For in-process inference, build with `--build-arg LLAMACPP=...`:
+
+| `LLAMACPP` | GPUs | Architectures | Published as |
+|---|---|---|---|
+| `none` (default) | — | amd64, arm64 | `:latest`, `:v1.2.3` |
+| `vulkan` | AMD, Intel, NVIDIA | amd64, arm64 | `:latest-vulkan`, `:v1.2.3-vulkan` |
+| `cuda` | NVIDIA (faster there than Vulkan) | amd64 | `:latest-cuda`, `:v1.2.3-cuda` |
+
+```bash
+docker build --build-arg LLAMACPP=vulkan -t geniusai-server:vulkan -f server-rs/Dockerfile server-rs
+docker run --device /dev/dri ... geniusai-server:vulkan    # AMD/Intel
+docker run --gpus all ...        geniusai-server:vulkan    # NVIDIA, either image
+```
+
+Both variants run on the CPU when the container is given no GPU, so check the
+log: `llama: using <GPU> via Vulkan` (or `via CUDA`) when a model loads, or
+`llama: no GPU backend registered, running on CPU`. NVIDIA needs the NVIDIA
+Container Toolkit on the host; the Vulkan image asks it for the `graphics`
+capability (`NVIDIA_DRIVER_CAPABILITIES`), which is what mounts NVIDIA's
+Vulkan driver. Models downloaded from the plug-in's settings go to
+`/models/llm` (`LRG_LLAMA_MODEL_DIR`), so they survive the container.
+
+Details that matter when changing this:
+
+- **CUDA** builds on NVIDIA's `devel` image and runs on their `base` image plus
+  cuBLAS (`CUDA_VERSION`, default 12.6.3: a 12.x line, because CUDA 13 drops
+  Pascal). The host driver has to support that CUDA version. Kernels are
+  compiled for ggml's default GPU list; `--build-arg CUDA_ARCHITECTURES=86-real`
+  builds for one generation, much faster. Cards that only get PTX compile it on
+  first use, into `CUDA_CACHE_PATH=/data/cuda-cache`.
+- **amd64** builds llama.cpp's GPU backend and CPU code as modules it loads at
+  start (`llamacpp-dynamic-backends`): the CUDA module needs `libcuda.so.1`,
+  which a linked-in backend would need just to start the server, and the CPU
+  code comes in a variant per CPU generation instead of the no-AVX baseline.
+- **arm64** links them in instead, at the armv8-a baseline, and has no CUDA
+  image: llama-cpp-sys-2 0.1.156 cannot build the modules for aarch64 Linux
+  (see the `dynamic-backends` feature in `crates/lrg-llama/Cargo.toml`).
+- The image build fails when the server or one of its modules links a library
+  the image lacks, apart from the driver's `libcuda.so.1`, so a packaging
+  mistake shows in CI rather than at the first start. Pull requests that touch
+  the Dockerfile build every variant (`.github/workflows/docker-images.yml`).
 
 Not yet implemented: the periodic face-clustering and database-backup
 schedulers — the `GENIUSAI_FACES_CLUSTER_*` / `GENIUSAI_BACKUP_*` env vars

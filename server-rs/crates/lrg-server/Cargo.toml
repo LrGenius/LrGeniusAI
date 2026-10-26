@@ -12,6 +12,10 @@ path = "src/main.rs"
 # Pass-through so `cargo build -p lrg-server --features llamacpp` is all the
 # release workflow needs.
 llamacpp = ["lrg-api/llamacpp"]
+# The same for the Docker images' GPU builds (server-rs/Dockerfile).
+llamacpp-vulkan = ["lrg-api/llamacpp-vulkan"]
+llamacpp-cuda = ["lrg-api/llamacpp-cuda"]
+llamacpp-dynamic-backends = ["lrg-api/llamacpp-dynamic-backends"]
 
 [dependencies]
 lrg-api.workspace = true
