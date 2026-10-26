@@ -22,9 +22,9 @@ LrGeniusAI is released for Apple silicon Macs and 64-bit Windows, and its
 backend as Docker images for Linux (amd64 and arm64). The engine follows the
 backend, not Lightroom: a Mac whose Backend Server URL points at a Docker image
 or a PC gets the llama.cpp box, since MLX can only run on a backend on this
-Mac. The default Docker image has no local engine; see
-[the FAQ](FAQ#can-i-run-the-backend-on-a-different-machine-or-in-docker) for
-the `-vulkan` and `-cuda` ones.
+Mac. The default Docker image has no local engine; the `-vulkan` and `-cuda` ones
+run llama.cpp on the Docker host's GPU — see
+[Docker with GPU Access](Help-Docker-GPU).
 
 ---
 

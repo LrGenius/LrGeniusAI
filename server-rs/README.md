@@ -536,11 +536,12 @@ unaffected either way — search rankings and distances are identical.
 
 `Dockerfile` here builds and ships the compiled binary (multi-stage:
 `rust:1-trixie` builder, `debian:trixie-slim` runtime; trixie because the
-ONNX Runtime libraries need glibc 2.38+). Model files
-still need to be supplied via a mounted `/models` volume following the
-env vars above (the Dockerfile pre-sets them to `/models/siglip2/...` and
-`/models/face/...`) — see the Dockerfile's own comments for the
-`ort`/ONNX-Runtime dylib packaging details.
+ONNX Runtime libraries need glibc 2.38+). Model files live in the `/models`
+volume: the Dockerfile points every family's env var above there
+(`/models/siglip2/...`, `/models/face/...`, `/models/bioclip/...`,
+`/models/llm`), which is where the plug-in's *Download AI models* puts them —
+see the Dockerfile's own comments for the `ort`/ONNX-Runtime dylib packaging
+details.
 
 ```bash
 docker build -t geniusai-server -f server-rs/Dockerfile server-rs
@@ -574,7 +575,10 @@ automatically either: enter the one on the host as the plug-in's **Other AI
 server** (e.g. `http://host.docker.internal:1234` for LM Studio), or use a cloud
 provider.
 
-For in-process inference, build with `--build-arg LLAMACPP=...`:
+For in-process inference, build with `--build-arg LLAMACPP=...`. The user
+side — the host's GPU drivers, the NVIDIA Container Toolkit, Compose files and
+troubleshooting — is the wiki page
+[Docker with GPU Access](https://github.com/LrGenius/LrGeniusAI/wiki/Help-Docker-GPU).
 
 | `LLAMACPP` | GPUs | Architectures | Published as |
 |---|---|---|---|

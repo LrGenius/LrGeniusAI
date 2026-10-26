@@ -46,7 +46,7 @@ Yes. The installers are not code-signed (cost and complexity for an open-source 
 
 ### Can I run the backend on a different machine or in Docker?
 
-Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository. The images run on Intel/AMD (amd64) and ARM (arm64) machines. The default image has no local AI model. `ghcr.io/lrgenius/lrgeniusai:latest-vulkan` (any GPU) and `:latest-cuda` (NVIDIA, amd64 only) run one inside the container, on the GPU you pass to it (`docker-compose-prod.yml` shows how). Without a GPU they run it on the CPU.
+Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository. The images run on Intel/AMD (amd64) and ARM (arm64) machines. The default image has no local AI model. `ghcr.io/lrgenius/lrgeniusai:latest-vulkan` (any GPU) and `:latest-cuda` (NVIDIA, amd64 only) run one inside the container, on the GPU you pass to it (`docker-compose-prod.yml` shows how). Without a GPU they run it on the CPU. [Docker with GPU Access](Help-Docker-GPU) walks through the setup.
 
 The backend only works for whoever has its **access token**. On the computer it runs on, run `geniusai-server token` (in Docker: `docker exec geniusai-server /app/geniusai-server token`) and paste what it prints under *Plug-in Manager → LrGeniusAI → Backend Server → Access token*. A backend on the same computer as Lightroom needs nothing: the plug-in reads the token itself. `geniusai-server token --new` replaces the token (restart the backend afterwards, then paste the new one).
 

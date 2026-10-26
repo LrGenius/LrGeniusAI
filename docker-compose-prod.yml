@@ -10,8 +10,11 @@
 # one below, otherwise on the CPU. Models downloaded from the plug-in's
 # settings are kept in ./models/llm.
 #
-# Model files aren't fetched at runtime yet — populate ./models yourself, see
-# server-rs/scripts/export_siglip2_fp16.py.
+# Model files: "Download AI models" in the plug-in's Plug-in Manager fetches
+# the search, aesthetic, face and species models into ./models.
+#
+# GPU access for the local AI model, step by step:
+#   https://github.com/LrGenius/LrGeniusAI/wiki/Help-Docker-GPU
 #
 # GENIUSAI_FACES_CLUSTER_* / GENIUSAI_BACKUP_* from the Python backend are
 # intentionally omitted: the Rust backend has no periodic scheduler for

@@ -264,6 +264,15 @@ sources = [
 [page."Help-Ollama-Setup.md"]
 sources = ["server-rs/crates/lrg-providers/src/ollama.rs"]
 
+# The image tags, build args, GPU blocks and the `llama:` log lines it quotes.
+[page."Help-Docker-GPU.md"]
+sources = [
+  "server-rs/Dockerfile",
+  "docker-compose-prod.yml",
+  ".github/workflows/docker-images.yml",
+  "server-rs/crates/lrg-llama/src/worker.rs",
+]
+
 [page."Help-LM-Studio-Setup.md"]
 sources = ["server-rs/crates/lrg-providers/src/openai_compatible.rs"]
 
