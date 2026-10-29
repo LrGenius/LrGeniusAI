@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledPlugins": {
+    "lua-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "LSP",
+      "Bash(cargo fmt *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo check *)",
+      "Bash(cargo test *)",
+      "Bash(busted)",
+      "Bash(busted *)",
+      "Bash(luacheck *)",
+      "Bash(stylua --check *)",
+      "Bash(python3 scripts/check-docs.py *)",
+      "Bash(scripts/check-docs.py *)",
+      "Bash(pre-commit run *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/lint-edited-file.py\""
+          }
+        ]
+      }
+    ]
+  }
+}
