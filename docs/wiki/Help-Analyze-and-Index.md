@@ -126,6 +126,15 @@ the backend reads, decodes and measures them across several CPU cores. See
 That makes "embeddings and faces now, metadata later" a genuinely cheaper way
 to work through a large import than doing everything in one pass.
 
+### The Mac stays awake while it runs
+
+On macOS the backend keeps the computer from going to sleep while photos are
+being indexed, and for two minutes after the last one, so a long run left alone
+overnight keeps going instead of stopping whenever the Mac's energy settings
+would put it to sleep. The display can still turn off, and closing the lid still
+puts the Mac to sleep. `pmset -g assertions` in Terminal lists it as
+"LrGeniusAI is indexing photos". On Windows your power settings apply as usual.
+
 ### If a model is not downloaded yet
 
 Pressing **Start** checks that the on-device models the selected tasks need are

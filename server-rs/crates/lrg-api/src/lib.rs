@@ -5,6 +5,7 @@ pub mod agent_bridge;
 pub mod api_auth;
 pub mod edit_budget;
 pub mod hf_repo;
+pub mod keep_awake;
 pub mod llm_engine;
 pub mod llm_models;
 pub mod middleware;

@@ -750,6 +750,9 @@ pub(crate) async fn process_batch(
     pre_failures: Vec<String>,
     reject_empty_batch: bool,
 ) -> Response {
+    // Held to the end of the batch; the computer stays awake for a while
+    // after that too, so the gap to the next photo's request is covered.
+    let _awake = state.keep_awake.hold();
     let options = parse_options(&fields);
     let original_filename = original_filename_field(&fields, photo_ids.len());
     if let Err(e) = reasoning_effort_field(fields.get("reasoning_effort").map(String::as_str)) {
