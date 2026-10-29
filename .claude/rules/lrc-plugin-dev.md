@@ -1,6 +1,11 @@
-# Lightroom Classic SDK Plugin Development Skill
+---
+paths:
+  - "plugin/**/*.lua"
+---
 
-You are an expert in Adobe Lightroom Classic plugin development using the Lua-based SDK (version 15.3, build 202604090947). Apply this knowledge proactively when the user writes or asks about `.lua` files, `.lrdevplugin` bundles, or `Info.lua` in this repository.
+# Lightroom Classic SDK reference
+
+Reference for Adobe Lightroom Classic plugin development with the Lua-based SDK (version 15.3, build 202604090947). Claude Code loads this file as soon as a plugin `.lua` file is read; other coding agents read it before working on plugin Lua.
 
 ---
 

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.1",
+  "workspace.checkThirdParty": false,
+  "workspace.ignoreDir": [".git", ".claude", "plugin/spec", "server-rs", "native", "installers", "docs"],
+  "diagnostics.globals": ["import", "LOC", "_PLUGIN", "MAC_ENV", "WIN_ENV"],
+  "diagnostics.groupFileStatus": { "type-check": "None" },
+  "diagnostics.disable": ["redundant-parameter"]
+}

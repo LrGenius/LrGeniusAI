@@ -79,9 +79,11 @@ AGENTS_ONLY_LINES = {
     "other coding agents when working with code in this repository. It mirrors "
     "`CLAUDE.md` line for line; `scripts/check-docs.py` fails when the two drift "
     "apart.",
-    # `@path` is Claude Code's include syntax; other agents need to be told.
-    "@.claude/skills/lrc-plugin-dev.md": "Lightroom Classic SDK reference: read "
-    "`.claude/skills/lrc-plugin-dev.md` before working on plugin Lua.",
+    # Claude Code loads the path-scoped rule by itself; other agents need to be told.
+    "The Lightroom Classic SDK reference, `.claude/rules/lrc-plugin-dev.md`, "
+    "loads by itself as soon as a plugin `.lua` file is read.": "Lightroom "
+    "Classic SDK reference: read `.claude/rules/lrc-plugin-dev.md` before "
+    "working on plugin Lua.",
 }
 
 
