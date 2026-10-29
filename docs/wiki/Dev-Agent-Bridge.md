@@ -197,7 +197,9 @@ the runbook an agent follows to test everything in a real Lightroom. It covers:
 - clean-up and a report.
 
 Claude Code offers it as the skill `/lrgenius-mcp-full-test`, and `AGENTS.md`
-points other agents to it. Its first rule applies to every live test: no
+points other agents to it. In Claude Code, the main conversation keeps the
+approval and the steps that need the developer, and hands the mechanical
+phases to the agents `lrg-checks` and `lrg-live-tester` (`.claude/agents/`). Its first rule applies to every live test: no
 testing in a developer's production catalog without their approval. That
 includes read-only tests, and an approved test stays within the approved
 scope.
@@ -244,7 +246,7 @@ fixed:
   without touching files (`Util.indexCachedPhotoIds`).
 - Photos without a colour label report `"gray"`.
 
-The SDK facts among these are in `.claude/skills/lrc-plugin-dev.md` under
+The SDK facts among these are in `.claude/rules/lrc-plugin-dev.md` under
 *Common Gotchas*.
 
 ## Security model

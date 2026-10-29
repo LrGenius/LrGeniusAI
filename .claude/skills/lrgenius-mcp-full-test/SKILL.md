@@ -65,6 +65,28 @@ too, within the scope they approved.
 - Headless checks (`cargo`, `busted`, `scripts/check-docs.py`) touch no
   catalog and need no approval.
 
+## Who runs which part
+
+The test needs the developer at a few points; the rest is long and
+mechanical, and runs on cheaper models in agents:
+
+- **You, in the main conversation:** Rule 1, Setup and Phase 0, because the
+  approval, the agent token and Lightroom's state come from the developer.
+  Then Phase 4, whose rows need the developer's hands, and Phase 6 with the
+  report.
+- **The `lrg-checks` agent** (Haiku): the headless rows of Phase 1 (Rust, Lua
+  helpers, Docs). Start it right away; it touches no catalog.
+- **The `lrg-live-tester` agent** (Sonnet): the Lightroom rows of Phase 1,
+  then Phases 2, 3 and 5, within the approved scope. Start it once Rule 1 is
+  settled, and give it the catalog name and path from `get_status`, the
+  approved scope, the agent token, and the phases to run. It stops when the
+  open catalog changes, and lists what needs the developer instead of
+  waiting.
+
+Start Phase 4 only after `lrg-live-tester` has finished: the plugin runs one
+bridge command at a time, and Phase 4 switches the bridge off and restarts
+the backend. Merge the agents' results into the Phase 6 report.
+
 ## Setup
 
 1. **Use the backend from this checkout.** The plugin talks to whatever
