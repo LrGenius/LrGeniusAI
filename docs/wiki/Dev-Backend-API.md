@@ -252,6 +252,17 @@ were stored gets one from the next run that *sends* it — any scope of Analyze 
 Index but *New or unprocessed photos*, with *Skip photos with existing data*, so
 nothing else is made again.
 
+**The computer stays awake.** Both index routes run through `process_batch`,
+which holds `AppState::keep_awake` for the batch (`crate::keep_awake`). On macOS
+that is a `PreventUserIdleSystemSleep` power assertion named "LrGeniusAI is
+indexing photos", kept for two minutes after the last batch so the tens of
+milliseconds between one photo's request and the next do not let a computer
+whose idle timer ran out long ago fall asleep; `run_maintenance` releases it.
+Without it, an unattended run stopped for ~17 minutes at every idle sleep and
+crept on only during dark wakes. Elsewhere it does nothing. A failure to take
+the assertion is logged once and does not touch the response: nobody asked for
+it, and the photos index the same.
+
 ### `POST /v1/index/photos/by-path`
 Indexes photos using server-side file paths instead of uploading image data (for local-backend
 setups where the server has filesystem access).

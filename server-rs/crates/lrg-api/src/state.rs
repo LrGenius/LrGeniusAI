@@ -85,6 +85,9 @@ pub struct AppState {
     /// than per-catalog: which GBIF page `Panthera leo` lives on does not
     /// depend on whose catalog asked.
     pub species_links: Arc<crate::species_links::LinkResolver>,
+    /// Keeps the computer awake while index batches run; released by
+    /// `run_maintenance` once indexing has stopped. See [`crate::keep_awake`].
+    pub keep_awake: Arc<crate::keep_awake::KeepAwake>,
 }
 
 /// Where the three ONNX model families live on disk.
@@ -148,6 +151,7 @@ impl AppState {
             mlx: Arc::default(),
             relaunch_after_shutdown: StdMutex::new(None),
             species_links: Arc::new(crate::species_links::LinkResolver::new()),
+            keep_awake: Arc::default(),
         }
     }
 
@@ -180,6 +184,7 @@ impl AppState {
         self.bioclip.unload_if_idle();
         self.llm.unload_if_idle();
         self.mlx.unload_if_idle();
+        self.keep_awake.release_if_idle();
         if let Some(store) = self.store() {
             if store.pending_write_ops() >= lrg_store::COMPACT_WRITE_THRESHOLD {
                 match store.optimize_all().await {

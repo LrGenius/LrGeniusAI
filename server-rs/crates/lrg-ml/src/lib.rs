@@ -99,6 +99,30 @@ pub(crate) fn ort_environment() -> ort::Result<ort::environment::Environment> {
 pub(crate) const OPTIMIZATION_LEVEL: ort::session::builder::GraphOptimizationLevel =
     ort::session::builder::GraphOptimizationLevel::Level3;
 
+/// The start of every session in this crate: the shared environment,
+/// [`OPTIMIZATION_LEVEL`], and onnxruntime's automatic device selection put
+/// back on the CPU.
+///
+/// `ort`'s `SessionBuilder::new` switches automatic execution provider
+/// selection on with the `MaxEfficiency` policy (prefer an NPU), and it stays
+/// on unless an EP is appended — which the CPU EP never does: registering it
+/// only switches the arena off. Under onnxruntime 1.28 (`ort` rc.13) the CPU
+/// was all that policy could find on a Mac. 1.31 (`ort` rc.14, backend 3.5.0)
+/// offers CoreML as the NPU, so every model was split between the CPU and
+/// CoreML without anyone asking for it: "CoreMLExecutionProvider::GetCapability
+/// … number of nodes supported by CoreML: 3" of SigLIP2's 1199, 97 partitions
+/// of BioCLIP's graph. Measured on an M4 Pro, inference was no faster, each
+/// load took 1–2 s longer, and the log filled with CoreML warnings.
+///
+/// `AutoDevicePolicy::Default` is onnxruntime's "prefer CPU". An EP a builder
+/// appends itself, like `LRG_ML_EP=coreml` in [`tower`], still takes precedence.
+pub(crate) fn session_builder() -> ort::Result<ort::session::builder::SessionBuilder> {
+    let env = ort_environment()?;
+    Ok(ort::session::Session::builder(&env)?
+        .with_auto_device(ort::session::builder::AutoDevicePolicy::Default)?
+        .with_optimization_level(OPTIMIZATION_LEVEL)?)
+}
+
 /// Applies the KleidiAI policy above to a session builder.
 pub(crate) fn apply_kleidiai_policy(
     builder: ort::session::builder::SessionBuilder,
