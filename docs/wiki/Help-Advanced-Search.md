@@ -164,12 +164,11 @@ The previews are small copies (256 pixels on the long side) that **Analyze &
 Index Photos** stores for each photo it processes, whatever you ask it to do;
 they take about 13 KB a photo on the backend's disk, roughly 130 MB per 10,000
 photos, beside the search index. Photos indexed before this version have none
-yet: they show *No preview yet*, and the page says how many. To add them, click
-**Show in Lightroom**, select the photos of the new collection and run **Analyze
-& Index Photos** with the scope *Selected photos only* and *Skip photos with
-existing data* — the previews are added and nothing that is already there is made again.
-The scope *New or unprocessed photos* does not pick them up, because nothing
-they need for searching is missing.
+yet: they show *No preview yet*, and the page says how many. To add them, run
+**Library ▸ Plug-in Extras ▸ Add Missing Search Previews...** — for the whole
+catalog, or click **Show in Lightroom** first and choose *Selected photos*. It
+only adds the previews (from Lightroom's own previews where it can, from a small
+export otherwise); nothing is analyzed again.
 
 A preview is deleted with its photo's index data (the index cleanup, or
 removing the photo from the index), and is not part of a database backup —

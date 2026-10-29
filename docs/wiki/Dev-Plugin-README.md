@@ -41,7 +41,10 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Optional face detection and clustering
 - Optional species identification (BioCLIP 2, on-device)
 - Every processed photo also gets a small preview (256 px, ~13 KB, stored by the backend beside
-  the index) for the browser search page
+  the index) for the browser search page. Photos indexed before previews were stored get theirs
+  from *Add Missing Search Previews...* (`TaskFillSearchPreviews.lua`): it asks the backend which
+  indexed photos lack one, takes Lightroom's cached preview where it is big enough
+  (`LightroomPreviews.lua`) and a small export otherwise, and touches nothing else
 
 ### Advanced Search
 

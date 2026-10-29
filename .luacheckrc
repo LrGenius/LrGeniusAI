@@ -22,6 +22,7 @@ globals = {
     "UpdateCheck",
     "Defaults",
     "KeywordConfigProvider",
+    "LightroomPreviews",
     "LocalModelCatalog",
     "MetadataManager",
     "OnboardingWizard",

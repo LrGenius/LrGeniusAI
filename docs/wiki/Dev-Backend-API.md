@@ -247,10 +247,11 @@ preview for the browser search page — …"`).
 
 `/v1/index/unprocessed` does **not** count a missing preview as outstanding:
 the cull pre-flight and the agent's indexing command ask it too, and would offer
-to prepare photos that lack nothing they need. A photo indexed before previews
-were stored gets one from the next run that *sends* it — any scope of Analyze &
-Index but *New or unprocessed photos*, with *Skip photos with existing data*, so
-nothing else is made again.
+to prepare photos that lack nothing they need. Photos indexed before previews
+were stored get theirs from *Add Missing Search Previews*
+(`POST /v1/photos/thumbnails/missing`, then `POST /v1/photos/thumbnail` per
+photo), which renders only the preview and touches nothing else; the next run
+that *sends* a photo makes one too.
 
 **The computer stays awake.** Both index routes run through `process_batch`,
 which holds `AppState::keep_awake` for the batch (`crate::keep_awake`). On macOS
@@ -308,7 +309,7 @@ route; the search page fetches it with the header and shows the bytes as a
 |---|---|---|
 | 200 | the JPEG | a preview is stored |
 | 400 | `{"error"}` | no `photo_id` |
-| 404 | `{"error", "error_code": "no_thumbnail"}` | none is stored: the photo was indexed before previews were, or not at all. An answer, not a failure — the page draws a placeholder and counts these |
+| 404 | `{"error", "error_code": "no_thumbnail"}` | none is stored: the photo was indexed before previews were, or not at all. An answer, not a failure — the page draws a placeholder and counts these, and names *Add Missing Search Previews* as the fix |
 
 **Disk cost and lifetime.** One file per photo,
 `<lance root>/thumbnails/<aa>/<sha256 of the photo_id>.jpg` (the lance root is
@@ -321,6 +322,38 @@ decode them. Deleted with the photo by `POST /v1/photos/remove` and by the index
 cleanup's purge (`POST /v1/photos/catalogs/cleanup`), only for rows that are
 really gone; left out of `POST /v1/db/backups`, since any indexing run makes
 them again.
+
+### `POST /v1/photos/thumbnails/missing`
+Which **indexed** photos have no search-page preview — what the plug-in's
+*Library ▸ Plug-in Extras ▸ Add Missing Search Previews* asks before it renders
+anything. Body (JSON, every field optional):
+
+| Field | Meaning |
+|---|---|
+| `photo_ids` | Only these photos (the selection). Left out: every indexed photo. Not a list → 400 |
+| `catalog_id` | Only photos this catalog has (`catalog_ids`) |
+
+Returns `{"photo_ids": [...], "indexed": <n>, "missing": <n>}` — `indexed`
+counts the photos the question covered that have an index row, `photo_ids`
+those of them without a preview. A photo that is not indexed is never listed:
+a preview belongs to an index row, and the next indexing run makes one anyway.
+No database bound → the empty answer. Costs a metadata scan (like
+`GET /v1/photos/ids`) plus a file stat per photo.
+
+### `POST /v1/photos/thumbnail`
+Stores the search-page preview of an already indexed photo, without indexing it
+again. Multipart: `photo_id` and one `image` part — any JPEG/PNG; the plug-in
+sends Lightroom's cached preview or a small export. The backend scales it down
+to the size indexing stores (256 px long edge, quality 75) and writes it where
+`GET /v1/photos/thumbnail` reads it, replacing any earlier one. Nothing else
+about the photo changes.
+
+| Status | Body | When |
+|---|---|---|
+| 200 | `{"status": "success", "photo_id"}` | stored |
+| 400 | `{"error"}` | no `photo_id`, no `image`, or an image that cannot be decoded |
+| 404 | `{"error", "error_code": "not_indexed"}` | the photo has no index row — refused, since nothing would ever delete a preview of a photo the index does not know |
+| 503 | `{"error"}` | no database is bound |
 
 ### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.

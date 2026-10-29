@@ -107,12 +107,14 @@ photos with existing data* skips everything else for a photo. If one cannot be
 saved, the completion dialog lists it as a warning; the photo is indexed all the
 same.
 
-Photos indexed before previews existed get theirs the next time a run processes
-them: with the scope *Selected photos only*, *Current view* or *All photos in
-catalog* and *Skip photos with existing data*, nothing else about them is made
-again. The scope
-*New or unprocessed photos* leaves them out, because nothing a search, a cull or
-a face lookup needs is missing.
+Photos indexed before previews existed get theirs from **Library ▸ Plug-in
+Extras ▸ Add Missing Search Previews...**: choose selected photos, the current
+view or the whole catalog, and it adds a preview to every indexed photo that has
+none — from Lightroom's own previews where they are big enough, from a small
+export otherwise — without analyzing anything again. (A run of Analyze & Index
+that processes a photo adds one too, but *New or unprocessed photos* leaves
+these photos out, because nothing a search, a cull or a face lookup needs is
+missing.)
 
 ### Turning off AI metadata makes the rest of the run faster
 

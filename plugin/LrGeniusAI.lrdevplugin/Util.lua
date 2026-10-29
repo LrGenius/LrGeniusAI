@@ -3363,4 +3363,93 @@ function Util.cullFlagSummaryLines(counts)
 	return lines
 end
 
+---
+-- Width and height of a JPEG, read from its frame header (SOFn) without
+-- decoding it. Used to tell whether a preview Lightroom handed back is big
+-- enough to stand in for an export: `requestJpegThumbnail` answers with
+-- whatever it has cached, which can be far smaller than what was asked for.
+-- @param data string The JPEG's bytes.
+-- @return number|nil width, number|nil height nil, nil for anything that is not
+--   a JPEG or has no frame header before the image data.
+--
+function Util.jpegDimensions(data)
+	if type(data) ~= "string" or #data < 4 then
+		return nil, nil
+	end
+	if data:byte(1) ~= 0xFF or data:byte(2) ~= 0xD8 then
+		return nil, nil
+	end
+	local i = 3
+	local n = #data
+	while i + 3 <= n do
+		if data:byte(i) ~= 0xFF then
+			return nil, nil
+		end
+		-- Any number of 0xFF fill bytes may precede a marker.
+		while i <= n and data:byte(i) == 0xFF do
+			i = i + 1
+		end
+		if i > n then
+			return nil, nil
+		end
+		local marker = data:byte(i)
+		i = i + 1
+		if marker == 0xD9 or marker == 0xDA then
+			-- End of image, or start of scan: no frame header came first.
+			return nil, nil
+		end
+		-- Markers without a length: TEM and the restart markers.
+		if not (marker == 0x01 or (marker >= 0xD0 and marker <= 0xD7)) then
+			if i + 1 > n then
+				return nil, nil
+			end
+			local length = data:byte(i) * 256 + data:byte(i + 1)
+			-- SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC).
+			if marker >= 0xC0 and marker <= 0xCF and marker ~= 0xC4 and marker ~= 0xC8 and marker ~= 0xCC then
+				if i + 6 > n then
+					return nil, nil
+				end
+				local height = data:byte(i + 3) * 256 + data:byte(i + 4)
+				local width = data:byte(i + 5) * 256 + data:byte(i + 6)
+				return width, height
+			end
+			if length < 2 then
+				return nil, nil
+			end
+			i = i + length
+		end
+	end
+	return nil, nil
+end
+
+--- Photos per export session when indexing exports JPEGs.
+Util.DEFAULT_EXPORT_CHUNK_SIZE = 25
+
+---
+-- How many photos go into one export session.
+--
+-- Lightroom renders the photos of one session in parallel, so a session per
+-- photo leaves most of the computer idle. One session over the whole
+-- selection is the other extreme: Lightroom keeps what a session rendered
+-- until the session ends, and on a run of thousands of photos its memory
+-- climbs until the computer swaps. A few dozen photos per session keeps the
+-- parallel rendering and gives the memory back between sessions.
+-- @param configured any The saved preference (prefs.exportChunkSize), if any.
+-- @return number Between 1 and 200.
+--
+function Util.exportChunkSize(configured)
+	local n = tonumber(configured)
+	if n == nil or n ~= n then
+		return Util.DEFAULT_EXPORT_CHUNK_SIZE
+	end
+	n = math.floor(n)
+	if n < 1 then
+		return 1
+	end
+	if n > 200 then
+		return 200
+	end
+	return n
+end
+
 return Util

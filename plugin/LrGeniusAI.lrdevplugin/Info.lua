@@ -51,6 +51,10 @@ return {
 			file = "TaskRetrieveMetadata.lua",
 		},
 		{
+			title = "Add Missing Search Previews...",
+			file = "TaskFillSearchPreviews.lua",
+		},
+		{
 			title = LOC("$$$/LrGeniusAI/Menu/People=People..."),
 			file = "TaskPeople.lua",
 		},
@@ -100,6 +104,10 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/RetrieveMetadata=Retrieve Metadata from Backend..."),
 			file = "TaskRetrieveMetadata.lua",
+		},
+		{
+			title = "Add Missing Search Previews...",
+			file = "TaskFillSearchPreviews.lua",
 		},
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/People=People..."),

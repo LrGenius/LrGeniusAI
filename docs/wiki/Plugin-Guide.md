@@ -17,6 +17,7 @@ All actions are available under `Library → Plug-in Extras`:
 | Advanced Search... | Semantic free-text photo search |
 | Cull Similar Photos... | Burst grouping, ranking, Picks/Alternates/Rejects |
 | Retrieve Metadata from Backend... | Pull AI-generated metadata back into Lightroom |
+| Add Missing Search Previews... | Give photos indexed before previews existed their picture on the browser search page, without re-indexing |
 | Import Metadata from Catalog... | Sync existing Lightroom metadata into backend |
 | People... | Browse face clusters, assign names, open person collections |
 | Find Similar Faces... | Find photos with the same face as a selected photo |

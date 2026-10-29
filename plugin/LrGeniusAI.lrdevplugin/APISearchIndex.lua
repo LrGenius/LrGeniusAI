@@ -201,6 +201,10 @@ local ENDPOINTS = {
 	IMPORT_METADATA = "/v1/photos/metadata/import",
 	SYNC_CLAIM = "/v1/photos/catalogs/claim",
 	SYNC_CLEANUP = "/v1/photos/catalogs/cleanup",
+	-- The search page's per-photo preview: which indexed photos lack one, and
+	-- storing one for a photo that is already indexed.
+	THUMBNAIL = "/v1/photos/thumbnail",
+	THUMBNAILS_MISSING = "/v1/photos/thumbnails/missing",
 
 	-- Indexing pipeline
 	INDEX = "/v1/index/photos",
@@ -299,6 +303,24 @@ local EXPORT_SETTINGS = {
 	LR_removeLocationMetadata = false,
 	LR_embeddedMetadataOption = "all",
 }
+
+--- The export settings for one session: the defaults above with the current
+--- size and quality preferences (which can change after this file loaded),
+--- the temp folder as destination, and `overrides` on top. A fresh table each
+--- time, so one caller's override can never leak into the next export.
+local function exportSettingsFor(overrides)
+	local settings = {}
+	for k, v in pairs(EXPORT_SETTINGS) do
+		settings[k] = v
+	end
+	settings.LR_jpeg_quality = tonumber(prefs.exportQuality) or 60
+	settings.LR_size_maxHeight = tonumber(prefs.exportSize) or 1024
+	settings.LR_export_destinationPathPrefix = LrPathUtils.getStandardFilePath("temp")
+	for k, v in pairs(overrides or {}) do
+		settings[k] = v
+	end
+	return settings
+end
 
 --- The two generation settings for a request: the caller's value, else the
 --- saved setting, else the default. Each provider uses only one of them (see
@@ -870,14 +892,11 @@ function SearchIndexAPI.exportPhotoForIndexing(photo)
 		return nil
 	end
 
-	local tempDir = LrPathUtils.getStandardFilePath("temp")
 	local photoName = LrPathUtils.leafName(photo:getFormattedMetadata("fileName"))
-
-	EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
 
 	local exportSession = LrExportSession({
 		photosToExport = { photo },
-		exportSettings = EXPORT_SETTINGS,
+		exportSettings = exportSettingsFor(),
 	})
 
 	local resultPath = nil
@@ -902,28 +921,49 @@ function SearchIndexAPI.exportPhotoForIndexing(photo)
 	return resultPath
 end
 
-function SearchIndexAPI.exportPhotosForIndexing(photos)
+---
+-- Exports several photos in one export session. Lightroom renders the photos
+-- of one session in parallel, so this is much faster than one session per
+-- photo — but keep the batches small (see Util.exportChunkSize): a session
+-- holds on to what it rendered until it ends, which is how one session over a
+-- whole selection let Lightroom's memory climb through a long run.
+-- @param photos table Array of LrPhoto.
+-- @param overrides table|nil Export settings to change, e.g. a smaller
+--   LR_size_maxHeight for a preview.
+-- @param shouldCancel function|nil Returns true to stop: the renditions not
+--   yet rendered are cancelled.
+-- @return table photo -> path of its JPEG (photos that failed are absent),
+--   table photo -> error message for those that failed.
+--
+function SearchIndexAPI.exportPhotosForIndexing(photos, overrides, shouldCancel)
 	if not photos or #photos == 0 then
-		return {}
+		return {}, {}
 	end
-
-	local tempDir = LrPathUtils.getStandardFilePath("temp")
-
-	EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
 
 	local exportSession = LrExportSession({
 		photosToExport = photos,
-		exportSettings = EXPORT_SETTINGS,
+		exportSettings = exportSettingsFor(overrides),
 	})
 
 	local photoPaths = {}
+	local failures = {}
 	for _, rendition in exportSession:renditions() do
-		local success, path = rendition:waitForRender()
+		local canceled = shouldCancel ~= nil and shouldCancel()
+		local success, path
+		if canceled then
+			LrTasks.pcall(function()
+				rendition:skipRender()
+			end)
+		else
+			success, path = rendition:waitForRender()
+		end
 		-- Same reason as in analyzeAndIndexSelectedPhotos: the rendition knows its
 		-- own photo, and a loop counter would mis-key every later path as soon as
 		-- Lightroom skips one rendition.
 		local photo = rendition.photo
-		if photo ~= nil then
+		if canceled then
+			log:trace("Export canceled before rendering a photo")
+		elseif photo ~= nil then
 			local photoName = LrPathUtils.leafName(photo:getFormattedMetadata("fileName"))
 			log:trace(
 				"Export completed for photo: "
@@ -937,13 +977,13 @@ function SearchIndexAPI.exportPhotosForIndexing(photos)
 				photoPaths[photo] = path
 			else
 				log:error("Failed to export photo for indexing. " .. (path or "unknown error"))
-				photoPaths[photo] = nil
+				failures[photo] = path or "unknown error"
 			end
 		else
 			log:error("Photo is nil in exportPhotosForIndexing, probably it got deleted in the meantime.")
 		end
 	end
-	return photoPaths
+	return photoPaths, failures
 end
 
 ---
@@ -5692,6 +5732,61 @@ function SearchIndexAPI.styleEdit(photoId, filepath, options)
 		return false, response.error or "Style engine error"
 	end
 	log:error("styleEdit unexpected status: " .. tostring(response.status))
+	return false, response.error or "Unexpected response"
+end
+
+---
+-- Which indexed photos have no preview for the browser search page.
+-- @param photoIds table|nil Only these photo ids (the selection); nil asks for
+--   every indexed photo of this catalog.
+-- @return table|nil { photo_ids = {...}, indexed = n, missing = n }, string|nil error
+---
+function SearchIndexAPI.getPhotosMissingThumbnails(photoIds)
+	local body = { catalog_id = getCatalogId() }
+	if photoIds ~= nil then
+		body.photo_ids = photoIds
+	end
+	local response, err = _request("POST", SearchIndexAPI.url("THUMBNAILS_MISSING"), body, 300)
+	if not response then
+		return nil, err or "Unknown error"
+	end
+	if type(response.photo_ids) ~= "table" then
+		return nil, response.error or "Unexpected response"
+	end
+	return response, nil
+end
+
+---
+-- Stores the search-page preview of an indexed photo from a rendered image.
+-- The backend scales it to its own preview size, so any JPEG will do.
+-- @param photoId string
+-- @param filepath string A JPEG on disk.
+-- @return boolean success, string|nil error The backend's own words; a photo
+--   that is not indexed is refused with a message that says so.
+---
+function SearchIndexAPI.uploadPhotoThumbnail(photoId, filepath)
+	if not photoId or photoId == "" then
+		return false, "No photo ID provided"
+	end
+	if not filepath or not LrFileUtils.exists(filepath) then
+		return false, "No rendered image to upload"
+	end
+	local mimeChunks = {
+		{ name = "photo_id", value = photoId },
+		{
+			name = "image",
+			fileName = LrPathUtils.leafName(filepath),
+			filePath = filepath,
+			contentType = "image/jpeg",
+		},
+	}
+	local response, err = _requestMultipart(SearchIndexAPI.url("THUMBNAIL"), mimeChunks, 60)
+	if not response then
+		return false, err or "Unknown error"
+	end
+	if response.status == "success" then
+		return true, nil
+	end
 	return false, response.error or "Unexpected response"
 end
 
