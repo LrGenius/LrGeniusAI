@@ -57,6 +57,7 @@ fn models_absent() -> ModelAssetPaths {
         face: lrg_ml::faces::FaceModelPaths {
             det_onnx: dir.join("yunet_face_detection.onnx"),
             rec_onnx: dir.join("facenet_vggface2.onnx"),
+            auraface_onnx: dir.join("auraface_glintr100.onnx"),
         },
         bioclip: lrg_ml::bioclip::BioclipModelPaths {
             image_onnx: dir.join("bioclip2_image.onnx"),
@@ -3725,4 +3726,42 @@ async fn missing_previews_are_listed_and_filled_without_reindexing() {
     )
     .await;
     assert_eq!(after["photo_ids"], serde_json::json!([]), "{after}");
+}
+
+/// The face recognizer is FaceNet until the user picks AuraFace, and AuraFace
+/// cannot be picked before its model is on disk: a switch that fails on the
+/// next photo would leave every run reporting a missing model.
+#[tokio::test]
+async fn auraface_cannot_be_chosen_before_it_is_downloaded() {
+    let (app, state) = fresh_app();
+    let status = get_json(&app, "/v1/faces/recognizer").await;
+    assert_eq!(status["active"], "facenet", "{status}");
+    let ids: Vec<&str> = status["recognizers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["facenet", "auraface"]);
+    assert_eq!(status["recognizers"][1]["ready"], false, "{status}");
+    assert_eq!(status["recognizers"][1]["downloadable"], true, "{status}");
+
+    let (code, refused) = post_json(
+        &app,
+        "/v1/faces/recognizer",
+        serde_json::json!({"recognizer": "auraface"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error_code"], "not_downloaded");
+    assert_eq!(state.face.recognizer(), lrg_ml::faces::Recognizer::FaceNet);
+    assert_eq!(state.face.model_id(), lrg_ml::faces::MODEL_ID);
+
+    let (bad, _) = post_json(
+        &app,
+        "/v1/faces/recognizer",
+        serde_json::json!({"recognizer": "arcface"}),
+    )
+    .await;
+    assert_eq!(bad, StatusCode::BAD_REQUEST);
 }

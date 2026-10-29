@@ -78,3 +78,28 @@ describe("Util.previewFallbackWarning", function()
 		assert.truthy(text:find("Build Standard-Sized Previews", 1, true))
 	end)
 end)
+
+describe("Util.faceRecognizerSummary", function()
+	local state = {
+		active = "auraface",
+		recognizers = {
+			{ id = "facenet", name = "FaceNet", description = "Included." },
+			{ id = "auraface", name = "AuraFace", description = "More accurate." },
+		},
+		warnings = {},
+	}
+
+	it("names the recognizer in use", function()
+		assert.are.equal("In use: AuraFace. More accurate.", Util.faceRecognizerSummary(state))
+	end)
+
+	it("adds the backend's first warning", function()
+		state.warnings = { "AuraFace was chosen, but its model file is missing." }
+		assert.truthy(Util.faceRecognizerSummary(state):find("model file is missing", 1, true))
+	end)
+
+	it("says so when the answer is unusable", function()
+		assert.truthy(Util.faceRecognizerSummary(nil):find("Unknown", 1, true))
+		assert.truthy(Util.faceRecognizerSummary({ active = "x", recognizers = {} }):find("Unknown", 1, true))
+	end)
+end)

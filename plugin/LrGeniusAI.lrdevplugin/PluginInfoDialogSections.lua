@@ -24,6 +24,8 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.bioclipReady = false
 	propertyTable.faceReady = false
 	propertyTable.assetsReady = false
+	propertyTable.faceRecognizerText = "Checking..."
+	propertyTable.faceRecognizerActive = ""
 	propertyTable.keepChecksRunning = true
 
 	checksGeneration = checksGeneration + 1
@@ -50,6 +52,11 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 				-- could usefully tell anyone.
 				propertyTable.faceReady = family.ready == true
 			end
+		end
+		local recognizer = SearchIndexAPI.getFaceRecognizer()
+		if recognizer then
+			propertyTable.faceRecognizerActive = recognizer.active or ""
+			propertyTable.faceRecognizerText = Util.faceRecognizerSummary(recognizer)
 		end
 	end
 
@@ -1068,6 +1075,46 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 					),
 				}),
 			}),
+			f:group_box({
+				width = groupBoxWidth,
+				title = "Face recognition",
+				f:static_text({
+					title = bind("faceRecognizerText"),
+					width_in_chars = 60,
+					height_in_lines = 3,
+					wrap = true,
+				}),
+				f:row({
+					f:push_button({
+						title = "Use FaceNet",
+						enabled = bind({
+							key = "faceRecognizerActive",
+							transform = function(v)
+								return v ~= "facenet"
+							end,
+						}),
+						action = function()
+							LrTasks.startAsyncTask(function()
+								PluginInfoDialogSections.switchFaceRecognizer(propertyTable, "facenet")
+							end)
+						end,
+					}),
+					f:push_button({
+						title = "Use AuraFace...",
+						enabled = bind({
+							key = "faceRecognizerActive",
+							transform = function(v)
+								return v ~= "auraface"
+							end,
+						}),
+						action = function()
+							LrTasks.startAsyncTask(function()
+								PluginInfoDialogSections.switchFaceRecognizer(propertyTable, "auraface")
+							end)
+						end,
+					}),
+				}),
+			}),
 		},
 		{
 			bind_to_object = propertyTable,
@@ -1874,6 +1921,63 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 			}),
 		},
 	}
+end
+
+---
+-- Switches face recognition to `wanted` ("facenet" or "auraface") after the
+-- user confirms, downloading AuraFace first when it is not on disk yet.
+-- Runs in an async task.
+---
+function PluginInfoDialogSections.switchFaceRecognizer(propertyTable, wanted)
+	local current, err = SearchIndexAPI.getFaceRecognizer()
+	if not current then
+		ErrorHandler.handleError("Could not ask the backend about face recognition", err)
+		return
+	end
+	local entry
+	for _, r in ipairs(current.recognizers) do
+		if r.id == wanted then
+			entry = r
+		end
+	end
+	if not entry then
+		ErrorHandler.handleError(
+			"This backend does not offer " .. tostring(wanted),
+			"Update the backend and try again."
+		)
+		return
+	end
+
+	local info = "Faces already found are recognized again the next time their photos are indexed with face "
+		.. 'detection on (Analyze & Index Photos, "New or unprocessed photos" picks them up). Until then '
+		.. "People lists them as unassigned. The names you gave carry over."
+	if wanted == "auraface" and entry.ready ~= true then
+		info = info
+			.. "\n\nThis first downloads AuraFace (about 260 MB, from Hugging Face: fal/AuraFace-v1, Apache-2.0)."
+	end
+	local verb = (entry.ready == true) and ("Use " .. entry.name) or "Download and Use"
+	if LrDialogs.confirm("Use " .. entry.name .. " for face recognition?", info, verb) ~= "ok" then
+		return
+	end
+
+	if entry.ready ~= true then
+		local ok, downloadErr = SearchIndexAPI.downloadAuraFace()
+		if not ok then
+			ErrorHandler.handleError("Could not download AuraFace", downloadErr)
+			return
+		end
+	end
+
+	local result, setErr = SearchIndexAPI.setFaceRecognizer(wanted)
+	if not result then
+		ErrorHandler.handleError("Could not switch face recognition to " .. entry.name, setErr)
+		return
+	end
+	propertyTable.faceRecognizerActive = result.active or ""
+	propertyTable.faceRecognizerText = Util.faceRecognizerSummary(result)
+	if type(result.warnings) == "table" and #result.warnings > 0 then
+		LrDialogs.message("Face recognition: " .. entry.name, table.concat(result.warnings, "\n\n"), "info")
+	end
 end
 
 function PluginInfoDialogSections.endDialog(propertyTable)

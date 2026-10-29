@@ -1,4 +1,5 @@
-//! End-to-end golden verification of the YuNet + FaceNet face pipeline
+//! End-to-end golden verification of the YuNet + FaceNet face pipeline (and,
+//! when its model and reference are present, the AuraFace one)
 //! against the reference implementations — OpenCV's `FaceDetectorYN` and
 //! `facenet-pytorch`'s Inception-ResNet-v1 — as captured by
 //! `testdata/make_face_goldens.py` on a real photo (skimage's astronaut
@@ -14,7 +15,7 @@
 //! `LRG_REQUIRE_GOLDENS=face`, making a broken download a test failure
 //! rather than a silent pass.
 
-use lrg_ml::faces::{FaceModel, FaceModelPaths};
+use lrg_ml::faces::{FaceModel, FaceModelPaths, Recognizer};
 
 mod common;
 
@@ -54,6 +55,7 @@ fn detects_and_embeds_real_face_matching_reference_models() {
     let model = FaceModel::new(FaceModelPaths {
         det_onnx: paths.det_onnx,
         rec_onnx: paths.rec_onnx,
+        auraface_onnx: paths.auraface_onnx,
     });
 
     let golden_path = concat!(
@@ -122,4 +124,74 @@ fn detects_and_embeds_real_face_matching_reference_models() {
             (face.det_score - expected_score).abs()
         );
     }
+}
+
+/// The AuraFace chain (YuNet landmarks, ArcFace warp, `auraface::to_blob`,
+/// the network) against InsightFace's own embedding of the same face, made by
+/// `scripts/auraface_reference.py`. Skips until both the model and that
+/// reference exist; `LRG_REQUIRE_GOLDENS=auraface` makes the skip a failure.
+#[test]
+fn auraface_matches_insightface_reference() {
+    let paths = lrg_ml::model_paths::resolve_face();
+    let golden_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/face_goldens.json"
+    );
+    let goldens: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(golden_path).unwrap()).unwrap();
+    // No reference recorded yet is not a missing download, so it skips even
+    // under `LRG_REQUIRE_GOLDENS=all`: there is nothing to compare against
+    // until `scripts/auraface_reference.py` has been run and its output
+    // committed.
+    let Some(reference) = goldens["astronaut_512"]["faces"][0]["auraface_embedding"].as_array()
+    else {
+        eprintln!(
+            "skipping AuraFace golden: no `auraface_embedding` in face_goldens.json yet \
+             (run scripts/auraface_reference.py)"
+        );
+        return;
+    };
+    if !common::assets_ready(
+        "auraface",
+        paths.ready_for(Recognizer::AuraFace),
+        &format!(
+            "needs {} and {}",
+            paths.det_onnx.display(),
+            paths.auraface_onnx.display()
+        ),
+    ) {
+        return;
+    }
+    let expected: Vec<f32> = reference
+        .iter()
+        .map(|v| v.as_f64().unwrap() as f32)
+        .collect();
+
+    let model = FaceModel::new(FaceModelPaths {
+        det_onnx: paths.det_onnx,
+        rec_onnx: paths.rec_onnx,
+        auraface_onnx: paths.auraface_onnx,
+    });
+    model.set_recognizer(Recognizer::AuraFace).unwrap();
+
+    let img_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/astronaut.jpg");
+    let decoded = image::load_from_memory(&std::fs::read(img_path).unwrap())
+        .unwrap()
+        .to_rgb8();
+    let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+    let (faces, model_id) = model
+        .detect_faces_with_model(
+            &decoded.into_raw(),
+            width,
+            height,
+            &lrg_imaging::cull_config::FaceMetricsConfig::defaults(),
+            lrg_ml::faces::FacePass::Full,
+        )
+        .unwrap();
+    assert_eq!(model_id, lrg_ml::faces::AURAFACE_MODEL_ID);
+    assert_eq!(faces.len(), 1, "face count mismatch");
+    assert_eq!(expected.len(), 512, "reference embedding must be 512-d");
+    let cos = cosine(&faces[0].embedding, &expected);
+    println!("auraface embedding_cosine={cos:.4}");
+    assert!(cos > 0.99, "AuraFace embedding cosine {cos} too low");
 }

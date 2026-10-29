@@ -57,6 +57,10 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ### People Workflows
 
 - Cluster faces into persons
+- Choose the face recognizer in Plug-in Manager (*Face recognition*): FaceNet (default) or
+  AuraFace (more accurate, ~260 MB download). `PluginInfoDialogSections.switchFaceRecognizer`
+  downloads AuraFace when needed and switches via `/v1/faces/recognizer`; names carry over when
+  the photos are re-indexed
 - Rename persons
 - Jump from a person directly to a Lightroom collection
 - The People interface opens in your web browser (served by the backend at

@@ -3471,4 +3471,30 @@ function Util.previewFallbackWarning(exported, total, minEdge)
 		.. "(with the standard preview size in Catalog Settings at least as large)."
 end
 
+---
+-- One paragraph for the Plug-in Manager about the face recognizer, from
+-- GET /v1/faces/recognizer.
+-- @param state table The backend's answer.
+-- @return string
+--
+function Util.faceRecognizerSummary(state)
+	if type(state) ~= "table" or type(state.recognizers) ~= "table" then
+		return "Unknown: the backend did not say which face recognizer it uses."
+	end
+	local active
+	for _, r in ipairs(state.recognizers) do
+		if r.id == state.active then
+			active = r
+		end
+	end
+	if not active then
+		return "Unknown: the backend did not say which face recognizer it uses."
+	end
+	local text = "In use: " .. tostring(active.name) .. ". " .. tostring(active.description or "")
+	if type(state.warnings) == "table" and state.warnings[1] then
+		text = text .. "\n" .. tostring(state.warnings[1])
+	end
+	return text
+end
+
 return Util

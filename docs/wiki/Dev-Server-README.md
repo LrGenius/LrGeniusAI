@@ -419,6 +419,27 @@ which is where `POST /v1/models/assets/downloads` puts them. Assets are publishe
 by `.github/workflows/model-assets-face.yml` to the fixed `face-assets-v1`
 tag, independent of the other two families.
 
+**AuraFace (optional recognizer).** `fal/AuraFace-v1`'s `glintr100.onnx`
+(Apache-2.0, ~260 MB) can replace FaceNet: `POST /v1/faces/recognizer/downloads`
+fetches it from Hugging Face (`HF_ENDPOINT` is honoured) to
+`~/.cache/lrgenius/models/auraface_glintr100.onnx` (or `LRG_AURAFACE_ONNX`),
+and `POST /v1/faces/recognizer` switches. The choice is saved in
+`~/.cache/lrgenius/models/face_recognizer.txt` (or `LRG_FACE_RECOGNIZER_FILE`)
+and restored at start. It runs on the same YuNet landmarks and the same 112x112
+ArcFace crop InsightFace makes, RGB, `(v - 127.5) / 127.5`
+(`lrg-ml/src/auraface.rs`). To check that chain numerically, write
+InsightFace's own embedding into the golden file and run the golden test:
+
+```bash
+uv run --no-project server-rs/scripts/auraface_reference.py --output ~/.cache/lrgenius/models/auraface_glintr100.onnx
+cargo test -p lrg-ml --test face_goldens -- auraface   # LRG_REQUIRE_GOLDENS=auraface to fail instead of skip
+```
+
+The two recognizers' rows carry different `face_model` ids
+(`yunet-2023mar/facenet-vggface2`, `yunet-2023mar/auraface-v1`), so nothing
+compares across them; on re-detection, person assignments from the other
+recognizer's rows are carried over by box overlap (same detector).
+
 These replaced InsightFace's `buffalo_l` (SCRFD + ArcFace), which was
 resolved from `INSIGHTFACE_ROOT` and could not be redistributed — face
 detection was the one family the plugin could not download for you. Note the

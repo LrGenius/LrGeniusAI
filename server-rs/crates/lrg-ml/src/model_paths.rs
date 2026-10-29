@@ -136,7 +136,7 @@ pub fn resolve_bioclip() -> BioclipModelPaths {
     }
 }
 
-/// Where the YuNet detector and FaceNet recognizer live.
+/// Where the YuNet detector and the FaceNet and AuraFace recognizers live.
 ///
 /// Same per-artifact env-var convention and same cache directory as SigLIP2
 /// and BioCLIP. These used to resolve out of `INSIGHTFACE_ROOT`
@@ -151,5 +151,17 @@ pub fn resolve_face() -> FaceModelPaths {
     FaceModelPaths {
         det_onnx: env_or_default("LRG_YUNET_ONNX", dir.join("yunet_face_detection.onnx")),
         rec_onnx: env_or_default("LRG_FACENET_ONNX", dir.join("facenet_vggface2.onnx")),
+        auraface_onnx: env_or_default("LRG_AURAFACE_ONNX", dir.join("auraface_glintr100.onnx")),
     }
+}
+
+/// Where the backend remembers which face recognizer the user chose
+/// (`facenet` or `auraface`, see [`crate::faces::Recognizer`]). A plain text
+/// file next to the models, since the choice belongs to the models on this
+/// computer rather than to one catalog. `LRG_FACE_RECOGNIZER_FILE` moves it.
+pub fn face_recognizer_setting() -> PathBuf {
+    env_or_default(
+        "LRG_FACE_RECOGNIZER_FILE",
+        default_models_dir().join("face_recognizer.txt"),
+    )
 }

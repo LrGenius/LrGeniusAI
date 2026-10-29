@@ -224,6 +224,10 @@ local ENDPOINTS = {
 	FACES_CLUSTER = "/v1/faces/cluster",
 	FACES_PERSONS = "/v1/faces/persons",
 	FACES_PERSON_PHOTOS = "/v1/faces/persons", -- suffix /<id>/photos
+	-- Which network makes face identities (FaceNet or AuraFace), and the
+	-- AuraFace download.
+	FACE_RECOGNIZER = "/v1/faces/recognizer",
+	FACE_RECOGNIZER_DOWNLOADS = "/v1/faces/recognizer/downloads",
 
 	-- AI develop edits and the style-training corpus
 	EDIT = "/v1/edit/recipe",
@@ -3086,6 +3090,16 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 					log:error("Photo is nil in analyze worker, probably it got deleted in the meantime.")
 				end
 			end
+			-- A cancelled run leaves exported JPEGs of photos it never reached.
+			-- Removed here, by the worker, rather than by the caller after the
+			-- wait: on cancel the caller stops waiting while an export may still
+			-- be finishing.
+			for p, path in pairs(exportMemo) do
+				exportMemo[p] = nil
+				LrTasks.pcall(function()
+					LrFileUtils.delete(path)
+				end)
+			end
 			log:trace("Analyze worker thread finished.")
 			activeWorkers = activeWorkers - 1
 		end
@@ -3119,13 +3133,6 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 					LrTasks.sleep(0.5)
 				end
 			end
-		end
-
-		-- A cancelled run leaves exported JPEGs of photos it never reached.
-		for _, path in pairs(exportMemo) do
-			LrTasks.pcall(function()
-				LrFileUtils.delete(path)
-			end)
 		end
 	end
 
@@ -4866,6 +4873,77 @@ end
 -- "finish setting up" for someone upgrading from a version that only had the
 -- search model.
 --
+---
+-- The face recognizer in use and the ones on offer.
+-- @return table|nil { active, saved, recognizers = { {id, name, description,
+--   ready, active, approx_bytes, downloadable}, ... }, warnings }, string|nil error
+---
+function SearchIndexAPI.getFaceRecognizer()
+	local response, err = _request("GET", SearchIndexAPI.url("FACE_RECOGNIZER"))
+	if not response then
+		return nil, err or "Unknown error"
+	end
+	if type(response.recognizers) ~= "table" then
+		return nil, response.error or "Unexpected response"
+	end
+	return response, nil
+end
+
+---
+-- Switches the face recognizer ("facenet" or "auraface"); the backend saves
+-- the choice. Refused while the chosen model is not downloaded.
+-- @return table|nil The new state, with `warnings` to show the user;
+--   string|nil error
+---
+function SearchIndexAPI.setFaceRecognizer(recognizer)
+	local response, err = _request("POST", SearchIndexAPI.url("FACE_RECOGNIZER"), { recognizer = recognizer })
+	if not response then
+		return nil, err or "Unknown error"
+	end
+	if response.error then
+		return nil, response.error
+	end
+	return response, nil
+end
+
+---
+-- Downloads AuraFace with a progress bar and waits for it. Must run in an
+-- async task.
+-- @return boolean success, string|nil error
+---
+function SearchIndexAPI.downloadAuraFace()
+	local _, postErr = _request("POST", SearchIndexAPI.url("FACE_RECOGNIZER_DOWNLOADS"), {})
+	if postErr then
+		return false, postErr
+	end
+	local progressScope = LrProgressScope({ title = "Downloading AuraFace" })
+	while true do
+		local status, err = _request("GET", SearchIndexAPI.url("FACE_RECOGNIZER_DOWNLOADS"))
+		if err then
+			progressScope:done()
+			return false, err
+		end
+		if status ~= nil then
+			if status.status == "downloading" then
+				progressScope:setCaption("Downloading the AuraFace face model...")
+				progressScope:setPortionComplete(tonumber(status.progress) or 0, tonumber(status.total) or 0)
+			elseif status.status == "completed" then
+				progressScope:done()
+				return true, nil
+			else
+				progressScope:done()
+				return false, Util.errorText(status.error, "The download stopped without saying why.")
+			end
+		end
+		-- The download goes on in the backend; this only stops watching it.
+		if progressScope:isCanceled() then
+			progressScope:done()
+			return false, "Stopped watching the download. It continues in the backend; try again in a minute."
+		end
+		LrTasks.sleep(1)
+	end
+end
+
 function SearchIndexAPI.startAssetDownload()
 	local status = SearchIndexAPI.getAssetStatus()
 	if status and status.ready then

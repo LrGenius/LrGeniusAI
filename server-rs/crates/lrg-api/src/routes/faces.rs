@@ -128,7 +128,7 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
     let n_results = data.get("n_results").and_then(Value::as_u64).unwrap_or(10) as usize;
     let face_index = data.get("face_index").and_then(Value::as_u64).unwrap_or(0) as usize;
 
-    let faces = match state.face.detect_faces(
+    let (faces, face_model) = match state.face.detect_faces_with_model(
         &pixels,
         w,
         h,
@@ -171,8 +171,13 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
         }
     };
 
+    // Only faces embedded by the same recognizer: after a switch between
+    // FaceNet and AuraFace the older rows are 512-d unit vectors of another
+    // space, and a distance to them ranks nonsense among real matches. They
+    // come back once their photos are indexed again.
     let mut scored: Vec<(f64, &StoreRecord)> = records
         .iter()
+        .filter(|r| r.metadata.get("face_model").and_then(Value::as_str) == Some(face_model))
         .filter_map(|r| {
             let v = r.vector.as_ref()?;
             Some((cosine_distance(query_emb, v), r))

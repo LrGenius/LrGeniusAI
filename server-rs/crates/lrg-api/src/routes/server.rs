@@ -422,6 +422,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "aesthetic_error": aesthetic_error,
         "face_model": face_status,
         "face_error": face_error,
+        "face_recognizer": state.face.recognizer().as_str(),
         "species_model": species_status,
         "species_error": species_error,
     }))

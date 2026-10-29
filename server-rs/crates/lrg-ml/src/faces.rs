@@ -1,5 +1,5 @@
-//! Top-level face pipeline: YuNet detect + FaceNet embed + quality
-//! metrics + base64 thumbnail.
+//! Top-level face pipeline: YuNet detect + FaceNet (or, opted into, AuraFace)
+//! embed + quality metrics + base64 thumbnail.
 //!
 //! Both models replaced InsightFace's `buffalo_l` pack (SCRFD + ArcFace),
 //! which could not be redistributed with this project. The pipeline's shape
@@ -20,7 +20,7 @@ use ort::value::Tensor;
 use lrg_imaging::cull_config::FaceMetricsConfig;
 use lrg_imaging::pil_resample::{resize_plane, Filter};
 
-use crate::{face_quality, facenet, umeyama, yunet};
+use crate::{auraface, face_quality, facenet, umeyama, yunet};
 
 const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
 
@@ -39,6 +39,56 @@ const IDLE_UNLOAD_SECONDS: i64 = 30 * 60;
 /// alignment framing in [`crate::umeyama::norm_crop_facenet`].
 pub const MODEL_ID: &str = "yunet-2023mar/facenet-vggface2";
 
+/// [`MODEL_ID`] for the AuraFace recognizer. Same detector, so the boxes of a
+/// re-detected photo line up with its FaceNet rows — which is what lets a
+/// switch carry the user's names over (see the carry-over in `lrg-api`).
+pub const AURAFACE_MODEL_ID: &str = "yunet-2023mar/auraface-v1";
+
+/// Which network turns an aligned face into its identity embedding.
+///
+/// FaceNet ships with the default model download. AuraFace is the opt-in
+/// alternative: sharper identities, a 250 MB download. The choice is global
+/// to the backend and changes [`FaceModel::model_id`], so every stored face
+/// from the other recognizer is set aside by clustering and its photo is
+/// re-queued for detection until it is re-done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Recognizer {
+    #[default]
+    FaceNet,
+    AuraFace,
+}
+
+impl Recognizer {
+    pub const ALL: [Recognizer; 2] = [Recognizer::FaceNet, Recognizer::AuraFace];
+
+    /// The name used in the API and in the saved setting.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Recognizer::FaceNet => "facenet",
+            Recognizer::AuraFace => "auraface",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "facenet" => Some(Recognizer::FaceNet),
+            "auraface" => Some(Recognizer::AuraFace),
+            _ => None,
+        }
+    }
+
+    /// What a stored row from this recognizer is stamped with.
+    #[must_use]
+    pub fn model_id(self) -> &'static str {
+        match self {
+            Recognizer::FaceNet => MODEL_ID,
+            Recognizer::AuraFace => AURAFACE_MODEL_ID,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FaceError {
     #[error("ort error: {0}")]
@@ -54,21 +104,47 @@ pub struct FaceModelPaths {
     pub det_onnx: PathBuf,
     /// FaceNet recognizer (`facenet_vggface2.onnx`).
     pub rec_onnx: PathBuf,
+    /// AuraFace recognizer (`auraface_glintr100.onnx`). Optional: only
+    /// needed once the user switches to it.
+    pub auraface_onnx: PathBuf,
 }
 
 impl FaceModelPaths {
+    /// The default pair (YuNet + FaceNet) — what "Download AI models" fetches.
     pub fn all_exist(&self) -> bool {
         self.det_onnx.is_file() && self.rec_onnx.is_file()
+    }
+
+    /// The recognizer's weights.
+    #[must_use]
+    pub fn recognizer_onnx(&self, recognizer: Recognizer) -> &Path {
+        match recognizer {
+            Recognizer::FaceNet => &self.rec_onnx,
+            Recognizer::AuraFace => &self.auraface_onnx,
+        }
+    }
+
+    /// Whether the detector and `recognizer` are both on disk.
+    #[must_use]
+    pub fn ready_for(&self, recognizer: Recognizer) -> bool {
+        self.det_onnx.is_file() && self.recognizer_onnx(recognizer).is_file()
     }
 }
 
 struct Loaded {
     det_session: Session,
     rec_session: Session,
+    /// Which recognizer `rec_session` is. Checked on every use, so a switch
+    /// between two photos reloads instead of embedding with the old network.
+    recognizer: Recognizer,
+    /// The recognizer's input name: FaceNet's export names it `input`,
+    /// InsightFace-family graphs `input.1`, so it is read from the graph.
+    rec_input: String,
 }
 
 pub struct FaceModel {
     paths: FaceModelPaths,
+    recognizer: Mutex<Recognizer>,
     loaded: Mutex<Option<Loaded>>,
     last_used_unix: AtomicI64,
     load_error: Mutex<Option<String>>,
@@ -179,30 +255,85 @@ impl FaceModel {
     pub fn new(paths: FaceModelPaths) -> Self {
         FaceModel {
             paths,
+            recognizer: Mutex::new(Recognizer::default()),
             loaded: Mutex::new(None),
             last_used_unix: AtomicI64::new(0),
             load_error: Mutex::new(None),
         }
     }
 
+    /// Whether the detector and the *active* recognizer are on disk.
     pub fn is_cached(&self) -> bool {
-        self.paths.all_exist()
+        self.paths.ready_for(self.recognizer())
     }
 
-    fn ensure_loaded(&self) -> Result<(), FaceError> {
-        let mut guard = self.loaded.lock().unwrap();
-        if guard.is_some() {
+    /// The model files, for the routes that report or download them.
+    #[must_use]
+    pub fn paths(&self) -> &FaceModelPaths {
+        &self.paths
+    }
+
+    /// The recognizer new embeddings are made with.
+    #[must_use]
+    pub fn recognizer(&self) -> Recognizer {
+        *self.recognizer.lock().unwrap()
+    }
+
+    /// Switches the recognizer. The sessions of the old one are dropped, and
+    /// [`FaceModel::model_id`] changes with it. Refused when the recognizer's
+    /// weights are not on disk: a switch that fails on the next photo would
+    /// leave every run reporting a missing model.
+    pub fn set_recognizer(&self, recognizer: Recognizer) -> Result<(), String> {
+        if !self.paths.recognizer_onnx(recognizer).is_file() {
+            return Err(format!(
+                "the {} model is not downloaded ({} is missing)",
+                recognizer.as_str(),
+                self.paths.recognizer_onnx(recognizer).display()
+            ));
+        }
+        let mut current = self.recognizer.lock().unwrap();
+        if *current != recognizer {
+            log::info!(
+                "Face recognizer: {} -> {}",
+                current.as_str(),
+                recognizer.as_str()
+            );
+            *current = recognizer;
+            drop(current);
+            self.unload_with_reason("recognizer switched");
+        }
+        Ok(())
+    }
+
+    /// Loads the sessions for the active recognizer into `guard` unless they
+    /// are already there. Takes the guard so [`FaceModel::detect_faces_with_model`]
+    /// loads and runs under one lock: a switch can then never land between
+    /// the two and leave a photo embedded by one network and stamped with the
+    /// other's id.
+    fn load_into(&self, guard: &mut Option<Loaded>) -> Result<(), FaceError> {
+        let recognizer = self.recognizer();
+        if guard.as_ref().is_some_and(|l| l.recognizer == recognizer) {
             self.last_used_unix.store(now_unix(), Ordering::Relaxed);
             return Ok(());
         }
+        *guard = None;
         match (
             build_session(&self.paths.det_onnx),
-            build_session(&self.paths.rec_onnx),
+            build_session(self.paths.recognizer_onnx(recognizer)),
         ) {
             (Ok(det_session), Ok(rec_session)) => {
+                let rec_input = rec_session
+                    .inputs()
+                    .first()
+                    .map(|i| i.name().to_string())
+                    .ok_or_else(|| {
+                        FaceError::UnexpectedOutputs("recognizer has no input".to_string())
+                    })?;
                 *guard = Some(Loaded {
                     det_session,
                     rec_session,
+                    recognizer,
+                    rec_input,
                 });
                 *self.load_error.lock().unwrap() = None;
                 self.last_used_unix.store(now_unix(), Ordering::Relaxed);
@@ -248,7 +379,7 @@ impl FaceModel {
     /// of their own, and the paths are fixed filenames, so the only thing that
     /// can change which embeddings this build produces is this build.
     pub fn model_id(&self) -> &'static str {
-        MODEL_ID
+        self.recognizer().model_id()
     }
 
     pub fn status(&self) -> (&'static str, Option<String>) {
@@ -271,9 +402,27 @@ impl FaceModel {
         cfg: &FaceMetricsConfig,
         pass: FacePass,
     ) -> Result<Vec<FaceResult>, FaceError> {
-        self.ensure_loaded()?;
+        self.detect_faces_with_model(pixels, width, height, cfg, pass)
+            .map(|(faces, _)| faces)
+    }
+
+    /// [`FaceModel::detect_faces`], plus the [`Recognizer::model_id`] the
+    /// embeddings were made with — what the caller stamps on stored rows.
+    /// Read from the sessions that actually ran rather than from
+    /// [`FaceModel::model_id`] afterwards, which a concurrent switch could
+    /// already have changed.
+    pub fn detect_faces_with_model(
+        &self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+        cfg: &FaceMetricsConfig,
+        pass: FacePass,
+    ) -> Result<(Vec<FaceResult>, &'static str), FaceError> {
         let mut guard = self.loaded.lock().unwrap();
+        self.load_into(&mut guard)?;
         let loaded = guard.as_mut().ok_or(FaceError::NotLoaded)?;
+        let model_id = loaded.recognizer.model_id();
 
         let pre = yunet::preprocess(pixels, width, height);
         let input = Tensor::from_array(([1, 3, 640, 640], pre.blob))?;
@@ -319,35 +468,50 @@ impl FaceModel {
 
             let embedding = match pass {
                 FacePass::Full => {
-                    // A second warp rather than a resize of `aligned`: FaceNet
-                    // wants a wider framing than ArcFace did (see
-                    // `norm_crop_facenet`), and context outside the 112 crop
-                    // cannot be recovered by upscaling it. `QualityOnly` never
-                    // pays for this, so the cull pass costs exactly what it did.
-                    let wide = umeyama::norm_crop_facenet(
-                        pixels,
-                        width,
-                        height,
-                        &kps_f64,
-                        facenet::INPUT_SIZE,
-                    );
-                    let blob = facenet::to_blob(&wide);
-                    let dim = facenet::INPUT_SIZE;
+                    let (blob, dim, embed_dim) = match loaded.recognizer {
+                        // A second warp rather than a resize of `aligned`:
+                        // FaceNet wants a wider framing than ArcFace did (see
+                        // `norm_crop_facenet`), and context outside the 112
+                        // crop cannot be recovered by upscaling it.
+                        // `QualityOnly` never pays for this, so the cull pass
+                        // costs exactly what it did.
+                        Recognizer::FaceNet => {
+                            let wide = umeyama::norm_crop_facenet(
+                                pixels,
+                                width,
+                                height,
+                                &kps_f64,
+                                facenet::INPUT_SIZE,
+                            );
+                            (
+                                facenet::to_blob(&wide),
+                                facenet::INPUT_SIZE,
+                                facenet::EMBED_DIM,
+                            )
+                        }
+                        // AuraFace is an ArcFace-family network: it takes
+                        // exactly the canonical crop made above.
+                        Recognizer::AuraFace => (
+                            auraface::to_blob(&aligned),
+                            auraface::INPUT_SIZE,
+                            auraface::EMBED_DIM,
+                        ),
+                    };
                     let rec_input = Tensor::from_array(([1, 3, dim, dim], blob))?;
-                    let rec_out = loaded.rec_session.run(ort::inputs!["input" => rec_input])?;
+                    let rec_out = loaded
+                        .rec_session
+                        .run(ort::inputs![loaded.rec_input.as_str() => rec_input])?;
                     let (_, raw_emb) = rec_out[0].try_extract_tensor::<f32>()?;
-                    if raw_emb.len() != facenet::EMBED_DIM {
+                    if raw_emb.len() != embed_dim {
                         return Err(FaceError::UnexpectedOutputs(format!(
-                            "recognizer returned {} dims, expected {}",
+                            "recognizer returned {} dims, expected {embed_dim}",
                             raw_emb.len(),
-                            facenet::EMBED_DIM
                         )));
                     }
                     let mut embedding = raw_emb.to_vec();
-                    // FaceNet normalizes its own output, so this is a no-op on a
-                    // healthy model; it is kept so a re-export that drops the
-                    // final `F.normalize` cannot quietly change what cosine
-                    // distance means for every stored row.
+                    // FaceNet normalizes its own output, so this is a no-op on
+                    // it; AuraFace (like every ArcFace export) does not, and
+                    // cosine distance downstream assumes unit vectors.
                     crate::siglip::l2_normalize(&mut embedding);
                     embedding
                 }
@@ -394,6 +558,51 @@ impl FaceModel {
                 occlusion: round4(occlusion),
             });
         }
-        Ok(results)
+        Ok((results, model_id))
+    }
+}
+
+#[cfg(test)]
+mod recognizer_tests {
+    use super::*;
+
+    fn paths(dir: &Path) -> FaceModelPaths {
+        FaceModelPaths {
+            det_onnx: dir.join("det.onnx"),
+            rec_onnx: dir.join("facenet.onnx"),
+            auraface_onnx: dir.join("auraface.onnx"),
+        }
+    }
+
+    #[test]
+    fn names_round_trip_and_ids_differ() {
+        for r in Recognizer::ALL {
+            assert_eq!(Recognizer::parse(r.as_str()), Some(r));
+        }
+        assert_eq!(Recognizer::parse(" AuraFace\n"), Some(Recognizer::AuraFace));
+        assert_eq!(Recognizer::parse("arcface"), None);
+        assert_ne!(
+            Recognizer::FaceNet.model_id(),
+            Recognizer::AuraFace.model_id()
+        );
+    }
+
+    /// The stamp on stored rows follows the switch; that is what keeps the
+    /// two embedding spaces from being compared.
+    #[test]
+    fn switching_changes_the_model_id_and_needs_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = FaceModel::new(paths(dir.path()));
+        assert_eq!(model.model_id(), MODEL_ID);
+        assert!(model.set_recognizer(Recognizer::AuraFace).is_err());
+        assert_eq!(model.recognizer(), Recognizer::FaceNet);
+
+        std::fs::write(dir.path().join("auraface.onnx"), b"weights").unwrap();
+        model.set_recognizer(Recognizer::AuraFace).unwrap();
+        assert_eq!(model.model_id(), AURAFACE_MODEL_ID);
+        // Readiness is the active recognizer's: no detector here yet.
+        assert!(!model.is_cached());
+        std::fs::write(dir.path().join("det.onnx"), b"weights").unwrap();
+        assert!(model.is_cached());
     }
 }

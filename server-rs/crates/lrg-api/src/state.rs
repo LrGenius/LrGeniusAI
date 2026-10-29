@@ -122,7 +122,12 @@ impl ModelAssetPaths {
 
 impl AppState {
     pub fn new(initial_db_path: Option<PathBuf>, debug: bool) -> Self {
-        Self::with_model_paths(initial_db_path, debug, ModelAssetPaths::from_env())
+        let state = Self::with_model_paths(initial_db_path, debug, ModelAssetPaths::from_env());
+        // Only here, not in `with_model_paths`: tests that supply their own
+        // model paths must not pick up the face recognizer saved on the
+        // machine they run on.
+        crate::routes::face_recognizer::restore(&state.face);
+        state
     }
 
     /// [`AppState::new`] with the ML model locations given explicitly instead

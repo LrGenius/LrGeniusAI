@@ -138,6 +138,7 @@ pub(crate) fn apply_kleidiai_policy(
 }
 
 pub mod aesthetic;
+pub mod auraface;
 pub mod bioclip;
 pub mod bioclip_pre;
 pub mod clip_iqa;
