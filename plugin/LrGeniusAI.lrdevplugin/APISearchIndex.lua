@@ -304,6 +304,10 @@ local EXPORT_SETTINGS = {
 	LR_embeddedMetadataOption = "all",
 }
 
+--- How long indexing waits for Lightroom's cached preview of one photo
+--- before it exports the photo instead.
+local PREVIEW_TIMEOUT_SECONDS = 10
+
 --- The export settings for one session: the defaults above with the current
 --- size and quality preferences (which can change after this file loaded),
 --- the temp folder as destination, and `overrides` on top. A fresh table each
@@ -2578,52 +2582,84 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	-- Opt-in fast path: submit the original file instead of exporting a JPEG.
 	-- Local backend gets just the path; remote backends get the raw upload.
 	local useOriginals = (prefs and prefs.indexSubmitOriginals == true)
+	-- Opt-in: take Lightroom's cached preview instead of exporting, when it is
+	-- big enough (LightroomPreviews). Only meaningful in export mode.
+	local usePreviews = (not useOriginals) and prefs ~= nil and prefs.indexUseLightroomPreviews == true
+	local exportLongEdge = tonumber(prefs and prefs.exportSize) or 1024
+	-- A preview a quarter smaller than the export would have been is still
+	-- plenty for the models (SigLIP2 and the aesthetic scorer look at far
+	-- less); anything smaller is exported.
+	local minPreviewEdge = math.floor(exportLongEdge * 0.75)
+	local chunkSize = Util.exportChunkSize(prefs and prefs.exportChunkSize)
+	local previewStats = { used = 0, exported = 0 }
 
 	local errorMessages = {}
 	local warningsList = {}
 
-	if MAC_ENV and numPhotos > 1 and not useOriginals then
-		-- Pipelined export/index path (macOS only). A producer drives a single
-		-- LrExportSession and pushes rendered JPEG paths into a queue; a consumer
-		-- POSTs each photo to the backend as soon as its export completes, so the
-		-- next export overlaps with the previous photo's backend round-trip.
+	if MAC_ENV and numPhotos > 1 and not useOriginals and not usePreviews then
+		-- Pipelined export/index path (macOS only). A producer drives the export
+		-- sessions and pushes rendered JPEG paths into a queue; a consumer POSTs
+		-- each photo to the backend as soon as its export completes, so the next
+		-- export overlaps with the previous photo's backend round-trip.
 		-- Disabled on Windows because earlier multi-worker attempts crashed Lightroom.
 		-- Skipped when originals are submitted directly: there is nothing to export.
-		local tempDir = LrPathUtils.getStandardFilePath("temp")
-		EXPORT_SETTINGS.LR_export_destinationPathPrefix = tempDir
-
-		local exportSession = LrExportSession({
-			photosToExport = selectedPhotos,
-			exportSettings = EXPORT_SETTINGS,
-		})
-
+		--
+		-- One session per `chunkSize` photos, not one for the whole selection:
+		-- Lightroom keeps what a session rendered until the session ends, and a
+		-- single session over thousands of photos is what made its memory climb
+		-- through a long run. The producer also waits while a chunk's worth of
+		-- rendered files is still queued, so it never runs far ahead of the
+		-- backend and temp files cannot pile up.
 		local queue = {}
 		local producerDone = false
 		local consumerDone = false
 
+		local function stopping()
+			return progressScope:isCanceled() or not keepRunning
+		end
+
 		LrTasks.startAsyncTask(function()
 			local idx = 0
-			for _, rendition in exportSession:renditions() do
-				idx = idx + 1
-				if progressScope:isCanceled() or not keepRunning then
-					LrTasks.pcall(function()
-						rendition:cancel()
-					end)
-				else
-					local success, path = rendition:waitForRender()
-					-- The rendition carries its own photo. Pairing by loop counter
-					-- instead would silently shift every later photo's analysis onto
-					-- the wrong file as soon as Lightroom skips one rendition.
-					local photo = rendition.photo
-					if photo == nil then
-						log:error("Rendition #" .. tostring(idx) .. " carried no photo; skipping it.")
-						table.insert(queue, { exportFailed = true, error = "rendition carried no photo" })
-					elseif success and path then
-						table.insert(queue, { photo = photo, path = path })
+			local chunkStart = 1
+			while chunkStart <= numPhotos and not stopping() do
+				while #queue >= chunkSize and not stopping() do
+					LrTasks.sleep(0.05)
+				end
+				if stopping() then
+					break
+				end
+				local chunk = {}
+				for i = chunkStart, math.min(chunkStart + chunkSize - 1, numPhotos) do
+					table.insert(chunk, selectedPhotos[i])
+				end
+				chunkStart = chunkStart + #chunk
+				local exportSession = LrExportSession({
+					photosToExport = chunk,
+					exportSettings = exportSettingsFor(),
+				})
+				for _, rendition in exportSession:renditions() do
+					idx = idx + 1
+					if stopping() then
+						LrTasks.pcall(function()
+							rendition:skipRender()
+						end)
 					else
-						table.insert(queue, { photo = photo, exportFailed = true, error = path })
+						local success, path = rendition:waitForRender()
+						-- The rendition carries its own photo. Pairing by loop counter
+						-- instead would silently shift every later photo's analysis onto
+						-- the wrong file as soon as Lightroom skips one rendition.
+						local photo = rendition.photo
+						if photo == nil then
+							log:error("Rendition #" .. tostring(idx) .. " carried no photo; skipping it.")
+							table.insert(queue, { exportFailed = true, error = "rendition carried no photo" })
+						elseif success and path then
+							table.insert(queue, { photo = photo, path = path })
+						else
+							table.insert(queue, { photo = photo, exportFailed = true, error = path })
+						end
 					end
 				end
+				log:trace("Indexing export chunk done (" .. tostring(idx) .. " of " .. tostring(numPhotos) .. ")")
 			end
 			producerDone = true
 			log:trace("Indexing export producer finished (" .. tostring(idx) .. " renditions)")
@@ -2837,6 +2873,44 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 			end
 		end
 
+		-- photo -> path of its already exported JPEG. Filled a chunk at a time
+		-- by prefillExports, consumed one photo at a time below.
+		local exportMemo = {}
+
+		---
+		-- Exports `photo` together with the next photos on the stack in one
+		-- export session (Lightroom renders a session's photos in parallel).
+		-- Bounded by `chunkSize`, so the session's memory is given back long
+		-- before a large run ends. A photo whose export failed has no memo and
+		-- gets one more try on its own.
+		--
+		local function prefillExports(photo)
+			local chunk = { photo }
+			for i = 1, math.min(chunkSize - 1, #photoToProcessStack) do
+				local nextPhoto = photoToProcessStack[i]
+				if nextPhoto ~= nil and exportMemo[nextPhoto] == nil then
+					table.insert(chunk, nextPhoto)
+				end
+			end
+			if #chunk > 1 then
+				progressScope:setCaption(
+					"Exporting photos "
+						.. tostring(stats.processed + 1)
+						.. "-"
+						.. tostring(stats.processed + #chunk)
+						.. " of "
+						.. tostring(numPhotos)
+						.. "..."
+				)
+			end
+			local paths = SearchIndexAPI.exportPhotosForIndexing(chunk, nil, function()
+				return progressScope:isCanceled() or not keepRunning
+			end)
+			for p, path in pairs(paths) do
+				exportMemo[p] = path
+			end
+		end
+
 		local analyzeWorker = function()
 			while #photoToProcessStack > 0 do
 				if progressScope:isCanceled() then
@@ -2920,8 +2994,41 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 							end
 						end
 
+						if not success and usePreviews then
+							local previewPath, why = LightroomPreviews.previewFile(
+								photo,
+								exportLongEdge,
+								minPreviewEdge,
+								PREVIEW_TIMEOUT_SECONDS
+							)
+							if previewPath then
+								log:trace("Using Lightroom's preview for " .. filename)
+								previewStats.used = previewStats.used + 1
+								success, indexResponse =
+									SearchIndexAPI.analyzeAndIndexPhoto(photoId, previewPath, photoOptions)
+								LrTasks.pcall(function()
+									LrFileUtils.delete(previewPath)
+								end)
+							else
+								log:trace(
+									"No usable Lightroom preview for " .. filename .. " (" .. tostring(why) .. ")"
+								)
+								previewStats.exported = previewStats.exported + 1
+							end
+						end
+
 						if not success then
-							local exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
+							-- Pure export mode renders the next photos with this one,
+							-- in one session (see prefillExports). In the other modes
+							-- an export is the exception, so it stays a single one.
+							if not useOriginals and not usePreviews and exportMemo[photo] == nil then
+								prefillExports(photo)
+							end
+							local exportedPhotoPath = exportMemo[photo]
+							exportMemo[photo] = nil
+							if exportedPhotoPath == nil then
+								exportedPhotoPath = SearchIndexAPI.exportPhotoForIndexing(photo)
+							end
 							if exportedPhotoPath then
 								log:trace("Using exported JPEG for " .. filename)
 								success, indexResponse =
@@ -3013,6 +3120,13 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 				end
 			end
 		end
+
+		-- A cancelled run leaves exported JPEGs of photos it never reached.
+		for _, path in pairs(exportMemo) do
+			LrTasks.pcall(function()
+				LrFileUtils.delete(path)
+			end)
+		end
 	end
 
 	if shouldCloseScope then
@@ -3021,6 +3135,19 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 
 	if progressScope:isCanceled() then
 		return "canceled", stats.processed, stats.failed, processedPhotos
+	end
+
+	-- Not a failure — those photos were exported instead — but the user chose
+	-- previews to make the run faster, and this is why it was not.
+	if usePreviews and previewStats.exported > 0 then
+		table.insert(
+			warningsList,
+			Util.previewFallbackWarning(
+				previewStats.exported,
+				previewStats.used + previewStats.exported,
+				minPreviewEdge
+			)
+		)
 	end
 
 	local status, combinedError, combinedWarnings = SearchIndexAPI.summarizeRun(stats, errorMessages, warningsList)

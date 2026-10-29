@@ -312,7 +312,10 @@ In the plugin settings dialog you can configure:
   (`LocalModelCatalog.engineFor`).
   The section reports why it is unavailable when the host cannot use it — a
   source build without the `llamacpp` feature, or a missing MLX helper.
-- Export size and quality used for AI processing
+- Export size and quality used for AI processing, photos per export session (indexing exports
+  in batches of that size, `Util.exportChunkSize`, so Lightroom frees its memory between them),
+  and whether indexing may use Lightroom's cached previews instead of exporting
+  (`LightroomPreviews.lua`; photos without a large-enough preview are exported)
 - Prompt presets — a preset is the *system* prompt: which expert is looking at
   the photo, which vocabulary they use, how specific they may be, and what they
   must never invent. **Default** (the analytical voice) and **Family &

@@ -3452,4 +3452,23 @@ function Util.exportChunkSize(configured)
 	return n
 end
 
+---
+-- The run-end note for indexing with "Use Lightroom previews" on, when some
+-- photos had no cached preview big enough and were exported instead.
+-- @param exported number Photos exported instead.
+-- @param total number Photos that went through the preview check.
+-- @param minEdge number The smallest long edge a preview needed.
+-- @return string
+--
+function Util.previewFallbackWarning(exported, total, minEdge)
+	return tostring(exported)
+		.. " of "
+		.. tostring(total)
+		.. " photos had no Lightroom preview of at least "
+		.. tostring(minEdge)
+		.. " px and were exported instead, which is slower. To use previews for all of them next time, "
+		.. "select the photos and run Library > Previews > Build Standard-Sized Previews first "
+		.. "(with the standard preview size in Catalog Settings at least as large)."
+end
+
 return Util

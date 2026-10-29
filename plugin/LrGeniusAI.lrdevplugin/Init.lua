@@ -138,6 +138,10 @@ if _G.prefs.indexSubmitOriginals == nil then
 	_G.prefs.indexSubmitOriginals = false
 end
 
+if _G.prefs.indexUseLightroomPreviews == nil then
+	_G.prefs.indexUseLightroomPreviews = false
+end
+
 if _G.prefs.exportSize == nil then
 	_G.prefs.exportSize = Defaults.defaultExportSize
 end
