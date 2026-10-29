@@ -130,10 +130,11 @@ fn now_unix() -> i64 {
 ///
 /// Optimization level pinned per [`crate::OPTIMIZATION_LEVEL`] — onnxruntime
 /// segfaults loading `siglip2_text.onnx` at its own `ORT_ENABLE_ALL` default,
-/// and triples the image tower's resident memory.
+/// and triples the image tower's resident memory. Without `LRG_ML_EP` the
+/// session is CPU-only: see [`crate::session_builder`] for why that has to be
+/// said to onnxruntime explicitly.
 pub(crate) fn build_session(path: &Path) -> ort::Result<Session> {
-    let env = crate::ort_environment()?;
-    let mut builder = Session::builder(&env)?.with_optimization_level(crate::OPTIMIZATION_LEVEL)?;
+    let mut builder = crate::session_builder()?;
     #[cfg(target_os = "macos")]
     if std::env::var("LRG_ML_EP").as_deref() == Ok("coreml") {
         use ort::ep::coreml::{ComputeUnits, ModelFormat};
