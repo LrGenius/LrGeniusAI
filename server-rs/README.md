@@ -423,11 +423,14 @@ and `POST /v1/faces/recognizer` switches. The choice is saved in
 `~/.cache/lrgenius/models/face_recognizer.txt` (or `LRG_FACE_RECOGNIZER_FILE`)
 and restored at start. It runs on the same YuNet landmarks and the same 112x112
 ArcFace crop InsightFace makes, RGB, `(v - 127.5) / 127.5`
-(`lrg-ml/src/auraface.rs`). To check that chain numerically, write
-InsightFace's own embedding into the golden file and run the golden test:
+(`lrg-ml/src/auraface.rs`). The download is pinned to the Hugging Face commit
+(`AURAFACE_REVISION` in `lrg-api/src/routes/face_recognizer.rs`) whose model
+InsightFace's own embedding in `testdata/face_goldens.json` was made from; the
+golden test checks the chain against it (cosine 0.9988, needs > 0.99). To move
+the pin, record the reference for the new commit and run the test again:
 
 ```bash
-uv run --no-project server-rs/scripts/auraface_reference.py --output ~/.cache/lrgenius/models/auraface_glintr100.onnx
+uv run --no-project server-rs/scripts/auraface_reference.py --revision <commit> --output ~/.cache/lrgenius/models/auraface_glintr100.onnx
 cargo test -p lrg-ml --test face_goldens -- auraface   # LRG_REQUIRE_GOLDENS=auraface to fail instead of skip
 ```
 

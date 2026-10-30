@@ -31,10 +31,12 @@ const DOWNLOAD_KEY: &str = "face_recognizer";
 
 /// Where AuraFace is published, Apache-2.0.
 const AURAFACE_REPO: &str = "fal/AuraFace-v1";
-/// The repository revision downloaded. `main` until the exact commit has been
-/// verified against `scripts/auraface_reference.py`'s reference embedding;
-/// pin it then, like YuNet's commit in `export_face_models.py`.
-const AURAFACE_REVISION: &str = "main";
+/// The repository revision downloaded: the commit whose `glintr100.onnx`
+/// (sha256 `a7933ea5…`) `scripts/auraface_reference.py` made the golden
+/// reference embedding from, which the Rust chain matches (cosine 0.9988).
+/// Pinned like YuNet's commit in `export_face_models.py`; moving it means
+/// running the script for the new commit and the golden test again.
+const AURAFACE_REVISION: &str = "af6d057c9b0ec4071d4c49c80e3539258798b609";
 /// The recognition network in that repository (the others are InsightFace's
 /// detector and attribute models, which this pipeline does not use).
 const AURAFACE_FILE: &str = "glintr100.onnx";
