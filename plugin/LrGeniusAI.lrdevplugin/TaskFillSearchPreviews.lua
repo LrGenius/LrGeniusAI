@@ -4,27 +4,19 @@
     without indexing them again.
 
     The backend says which photos of the chosen scope are indexed but have no
-    preview (/v1/photos/thumbnails/missing). For each of those this task takes
-    Lightroom's own cached preview when it is big enough (LightroomPreviews),
-    and exports a small JPEG — a few dozen photos per export session — for the
-    rest. Each picture goes to /v1/photos/thumbnail, which scales it to the
-    preview size. Nothing else about a photo is touched.
+    preview (/v1/photos/thumbnails/missing). Those are exported as small JPEGs,
+    a few dozen photos per export session, and each goes to
+    /v1/photos/thumbnail, which scales it to the preview size. Nothing else
+    about a photo is touched.
+
+    Export, not `photo:requestJpegThumbnail`: Lightroom answers that a few
+    times and then stops delivering, so a run over a catalog ends up exporting
+    anyway, after a timeout per photo.
 ]]
 
---- Long edge asked of Lightroom and of the fallback export. The backend
---- stores 256 px, so this leaves room for its own downscale.
+--- Long edge of the export. The backend stores 256 px, so this leaves room
+--- for its own downscale.
 local RENDER_LONG_EDGE = 512
-
---- Smallest cached preview that is still used: the stored size itself.
-local MIN_PREVIEW_LONG_EDGE = 256
-
---- How long to wait for Lightroom's answer per photo before exporting it.
-local PREVIEW_TIMEOUT_SECONDS = 5
-
---- Misses in a row after which Lightroom's previews are not asked any more:
---- a catalog whose previews were never built would otherwise cost the full
---- timeout per photo before each export.
-local MAX_PREVIEW_MISSES_IN_A_ROW = 10
 
 --- Photo ids per question to the backend, so a whole catalog does not go out
 --- as one request body.
@@ -42,8 +34,8 @@ local function chooseScope(context)
 		spacing = f:control_spacing(),
 		f:static_text({
 			title = "Photos indexed before LrGeniusAI stored previews have no picture on the\n"
-				.. "browser search page. This adds one to each of them, from Lightroom's\n"
-				.. "previews where possible. Nothing else about the photos changes.",
+				.. "browser search page. This exports a small picture of each of them and\n"
+				.. "adds it. Nothing else about the photos changes.",
 		}),
 		f:row({
 			f:static_text({ title = "Photos:" }),
@@ -168,21 +160,13 @@ local function run(context)
 
 	local total = #missing
 	local added, failures = 0, {}
-	local fromPreview, exported = 0, 0
-	local needExport = {}
-
-	local function upload(photoId, path, how)
+	local function upload(photoId, path)
 		local ok, err = SearchIndexAPI.uploadPhotoThumbnail(photoId, path)
 		LrTasks.pcall(function()
 			LrFileUtils.delete(path)
 		end)
 		if ok then
 			added = added + 1
-			if how == "preview" then
-				fromPreview = fromPreview + 1
-			else
-				exported = exported + 1
-			end
 		else
 			local photo = byId[photoId]
 			local name = photo and photo:getFormattedMetadata("fileName") or photoId
@@ -197,43 +181,14 @@ local function run(context)
 		scope:setCaption(caption .. " (" .. done .. " of " .. total .. ")")
 	end
 
-	-- Pass 1: Lightroom's cached previews.
-	local missesInARow = 0
-	for _, photoId in ipairs(missing) do
-		if scope:isCanceled() then
-			break
-		end
-		if missesInARow >= MAX_PREVIEW_MISSES_IN_A_ROW then
-			table.insert(needExport, photoId)
-		else
-			local photo = byId[photoId]
-			local path, reason =
-				LightroomPreviews.previewFile(photo, RENDER_LONG_EDGE, MIN_PREVIEW_LONG_EDGE, PREVIEW_TIMEOUT_SECONDS)
-			if path then
-				missesInARow = 0
-				upload(photoId, path, "preview")
-				step("Adding previews")
-			else
-				missesInARow = missesInARow + 1
-				log:trace(
-					"No usable Lightroom preview for " .. photoId .. " (" .. tostring(reason) .. "); exporting it"
-				)
-				table.insert(needExport, photoId)
-				if missesInARow == MAX_PREVIEW_MISSES_IN_A_ROW then
-					log:info("Search previews: no usable Lightroom preview for 10 photos in a row; exporting the rest")
-				end
-			end
-		end
-	end
-
-	-- Pass 2: small exports for the rest, a few dozen per session.
+	-- Small exports, a few dozen per session.
 	local chunkSize = Util.exportChunkSize(prefs.exportChunkSize)
 	local index = 1
-	while index <= #needExport and not scope:isCanceled() do
+	while index <= #missing and not scope:isCanceled() do
 		local chunkIds, chunkPhotos = {}, {}
-		for i = index, math.min(index + chunkSize - 1, #needExport) do
-			table.insert(chunkIds, needExport[i])
-			table.insert(chunkPhotos, byId[needExport[i]])
+		for i = index, math.min(index + chunkSize - 1, #missing) do
+			table.insert(chunkIds, missing[i])
+			table.insert(chunkPhotos, byId[missing[i]])
 		end
 		index = index + #chunkIds
 		local paths, exportFailures = SearchIndexAPI.exportPhotosForIndexing(chunkPhotos, {
@@ -245,7 +200,7 @@ local function run(context)
 		for i, photoId in ipairs(chunkIds) do
 			local photo = chunkPhotos[i]
 			if paths[photo] then
-				upload(photoId, paths[photo], "export")
+				upload(photoId, paths[photo])
 			elseif not scope:isCanceled() then
 				table.insert(
 					failures,
@@ -264,14 +219,7 @@ local function run(context)
 	local canceled = scope:isCanceled()
 	scope:done()
 
-	local summary = added
-		.. " of "
-		.. total
-		.. " photos got a preview ("
-		.. fromPreview
-		.. " from Lightroom's previews, "
-		.. exported
-		.. " exported)."
+	local summary = added .. " of " .. total .. " photos got a preview."
 	if canceled then
 		summary = "Stopped. " .. summary
 	end

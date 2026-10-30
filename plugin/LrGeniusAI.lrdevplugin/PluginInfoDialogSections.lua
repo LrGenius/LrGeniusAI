@@ -75,7 +75,6 @@ function PluginInfoDialogSections.startDialog(propertyTable)
 	propertyTable.exportSize = prefs.exportSize
 	propertyTable.exportQuality = prefs.exportQuality
 	propertyTable.indexSubmitOriginals = (prefs.indexSubmitOriginals == true)
-	propertyTable.indexUseLightroomPreviews = (prefs.indexUseLightroomPreviews == true)
 	propertyTable.exportChunkSize = tostring(Util.exportChunkSize(prefs.exportChunkSize))
 
 	propertyTable.promptTitles = Util.promptMenuItems(prefs.prompts, Defaults.defaultPromptName)
@@ -1556,30 +1555,6 @@ function PluginInfoDialogSections.sectionsForTopOfDialog(f, propertyTable)
 						enabled = false,
 					}),
 				}),
-				f:row({
-					fill_horizontal = 1,
-					f:checkbox({
-						value = bind("indexUseLightroomPreviews"),
-						title = "Use Lightroom's previews where they are large enough (faster)",
-						enabled = LrView.bind({
-							key = "indexSubmitOriginals",
-							transform = function(v)
-								return v ~= true
-							end,
-						}),
-					}),
-				}),
-				f:row({
-					fill_horizontal = 1,
-					f:static_text({
-						title = "Takes Lightroom's cached preview instead of exporting when it is at least three\n"
-							.. "quarters of the export size; other photos are exported as usual. Previews show your\n"
-							.. "edits, but one Lightroom has not re-rendered since the last edit shows the photo as\n"
-							.. "it was then — which matters for the aesthetic score. Build Standard-Sized Previews\n"
-							.. "(Library > Previews) first to get the most out of this.",
-						enabled = false,
-					}),
-				}),
 			}),
 		},
 		{
@@ -2004,7 +1979,6 @@ function PluginInfoDialogSections.endDialog(propertyTable)
 	prefs.exportSize = propertyTable.exportSize
 	prefs.exportQuality = propertyTable.exportQuality
 	prefs.indexSubmitOriginals = (propertyTable.indexSubmitOriginals == true)
-	prefs.indexUseLightroomPreviews = (propertyTable.indexUseLightroomPreviews == true)
 	prefs.exportChunkSize = Util.exportChunkSize(propertyTable.exportChunkSize)
 
 	prefs.prompts = propertyTable.prompts

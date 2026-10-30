@@ -308,10 +308,6 @@ local EXPORT_SETTINGS = {
 	LR_embeddedMetadataOption = "all",
 }
 
---- How long indexing waits for Lightroom's cached preview of one photo
---- before it exports the photo instead.
-local PREVIEW_TIMEOUT_SECONDS = 10
-
 --- The export settings for one session: the defaults above with the current
 --- size and quality preferences (which can change after this file loaded),
 --- the temp folder as destination, and `overrides` on top. A fresh table each
@@ -2586,21 +2582,12 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 	-- Opt-in fast path: submit the original file instead of exporting a JPEG.
 	-- Local backend gets just the path; remote backends get the raw upload.
 	local useOriginals = (prefs and prefs.indexSubmitOriginals == true)
-	-- Opt-in: take Lightroom's cached preview instead of exporting, when it is
-	-- big enough (LightroomPreviews). Only meaningful in export mode.
-	local usePreviews = (not useOriginals) and prefs ~= nil and prefs.indexUseLightroomPreviews == true
-	local exportLongEdge = tonumber(prefs and prefs.exportSize) or 1024
-	-- A preview a quarter smaller than the export would have been is still
-	-- plenty for the models (SigLIP2 and the aesthetic scorer look at far
-	-- less); anything smaller is exported.
-	local minPreviewEdge = math.floor(exportLongEdge * 0.75)
 	local chunkSize = Util.exportChunkSize(prefs and prefs.exportChunkSize)
-	local previewStats = { used = 0, exported = 0 }
 
 	local errorMessages = {}
 	local warningsList = {}
 
-	if MAC_ENV and numPhotos > 1 and not useOriginals and not usePreviews then
+	if MAC_ENV and numPhotos > 1 and not useOriginals then
 		-- Pipelined export/index path (macOS only). A producer drives the export
 		-- sessions and pushes rendered JPEG paths into a queue; a consumer POSTs
 		-- each photo to the backend as soon as its export completes, so the next
@@ -2998,34 +2985,11 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 							end
 						end
 
-						if not success and usePreviews then
-							local previewPath, why = LightroomPreviews.previewFile(
-								photo,
-								exportLongEdge,
-								minPreviewEdge,
-								PREVIEW_TIMEOUT_SECONDS
-							)
-							if previewPath then
-								log:trace("Using Lightroom's preview for " .. filename)
-								previewStats.used = previewStats.used + 1
-								success, indexResponse =
-									SearchIndexAPI.analyzeAndIndexPhoto(photoId, previewPath, photoOptions)
-								LrTasks.pcall(function()
-									LrFileUtils.delete(previewPath)
-								end)
-							else
-								log:trace(
-									"No usable Lightroom preview for " .. filename .. " (" .. tostring(why) .. ")"
-								)
-								previewStats.exported = previewStats.exported + 1
-							end
-						end
-
 						if not success then
-							-- Pure export mode renders the next photos with this one,
-							-- in one session (see prefillExports). In the other modes
-							-- an export is the exception, so it stays a single one.
-							if not useOriginals and not usePreviews and exportMemo[photo] == nil then
+							-- Export mode renders the next photos with this one, in one
+							-- session (see prefillExports). With originals an export is
+							-- the exception (a fallback), so it stays a single one.
+							if not useOriginals and exportMemo[photo] == nil then
 								prefillExports(photo)
 							end
 							local exportedPhotoPath = exportMemo[photo]
@@ -3142,19 +3106,6 @@ function SearchIndexAPI.analyzeAndIndexSelectedPhotos(selectedPhotos, progressSc
 
 	if progressScope:isCanceled() then
 		return "canceled", stats.processed, stats.failed, processedPhotos
-	end
-
-	-- Not a failure — those photos were exported instead — but the user chose
-	-- previews to make the run faster, and this is why it was not.
-	if usePreviews and previewStats.exported > 0 then
-		table.insert(
-			warningsList,
-			Util.previewFallbackWarning(
-				previewStats.exported,
-				previewStats.used + previewStats.exported,
-				minPreviewEdge
-			)
-		)
 	end
 
 	local status, combinedError, combinedWarnings = SearchIndexAPI.summarizeRun(stats, errorMessages, warningsList)

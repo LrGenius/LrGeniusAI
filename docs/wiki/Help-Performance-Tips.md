@@ -107,21 +107,15 @@ batch, so a run over thousands of photos no longer makes it swell until the
 computer slows to a crawl. Lower it if Lightroom still grows on your computer;
 raise it on a machine with plenty of memory for slightly faster runs.
 
-### Use Lightroom's previews where they are large enough
+### Why exports and not Lightroom's previews
 
-With **Use Lightroom's previews where they are large enough (faster)** on,
-indexing takes Lightroom's cached preview of a photo instead of exporting it,
-whenever that preview is at least three quarters of the export size (768 px
-for the default 1024 px). Photos without such a preview are exported as usual,
-and the run's completion dialog says how many that were. Previews show your
-develop edits, so crops and adjustments still count — with one caveat: a
-preview Lightroom has not re-rendered since your last edit shows the photo as
-it was, and the aesthetic score is made from what the backend sees.
-
-To get the most out of it, select the photos and run *Library ▸ Previews ▸
-Build Standard-Sized Previews* first, with *Standard Preview Size* in
-*Catalog Settings ▸ File Handling* at least as large as the export size. The
-option is off by default and has no effect when *Submit original files* is on.
+Lightroom's cached previews (`requestJpegThumbnail` in its plug-in SDK) would
+skip the export, but they are not reliable for indexing: Lightroom delivers a
+few and then stops answering, and the ones it delivers come in whatever size
+happens to be cached. Embeddings and aesthetic scores made from pictures of
+varying size drift apart from the ones made from exports, which makes search
+and culling less consistent. Every photo is therefore exported at the size set
+above; batching is what makes that fast.
 
 ---
 
@@ -199,13 +193,13 @@ parallelism in a batched run is entirely on the backend's side, inside one
 request: it is free to use several cores, while the plugin still waits for a
 single answer.
 
-On macOS, when you're *not* using "submit originals" or Lightroom's
-previews, the plugin pipelines export and upload — the next batch's JPEG
+On macOS, when you're *not* using "submit originals," the plugin pipelines
+export and upload — the next batch's JPEG
 export overlaps with the previous photos' backend round-trips, so you're not
 paying export time and network time back-to-back. On Windows the exports of a
 batch are still rendered together, in one export session, and then sent one
-by one; there the "submit originals" fast path (§4), Lightroom's previews
-(§3) or a smaller export size buy you more.
+by one; there the "submit originals" fast path (§4) or a smaller export size
+(§3) buys you more.
 
 ---
 

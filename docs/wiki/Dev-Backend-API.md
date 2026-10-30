@@ -344,7 +344,7 @@ No database bound → the empty answer. Costs a metadata scan (like
 ### `POST /v1/photos/thumbnail`
 Stores the search-page preview of an already indexed photo, without indexing it
 again. Multipart: `photo_id` and one `image` part — any JPEG/PNG; the plug-in
-sends Lightroom's cached preview or a small export. The backend scales it down
+sends a small export (512 px). The backend scales it down
 to the size indexing stores (256 px long edge, quality 75) and writes it where
 `GET /v1/photos/thumbnail` reads it, replacing any earlier one. Nothing else
 about the photo changes.

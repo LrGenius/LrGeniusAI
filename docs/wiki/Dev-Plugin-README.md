@@ -43,8 +43,8 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Every processed photo also gets a small preview (256 px, ~13 KB, stored by the backend beside
   the index) for the browser search page. Photos indexed before previews were stored get theirs
   from *Add Missing Search Previews...* (`TaskFillSearchPreviews.lua`): it asks the backend which
-  indexed photos lack one, takes Lightroom's cached preview where it is big enough
-  (`LightroomPreviews.lua`) and a small export otherwise, and touches nothing else
+  indexed photos lack one, exports small JPEGs of those in batches, and touches nothing else.
+  (Not `requestJpegThumbnail`: Lightroom delivers a few previews and then stops answering.)
 
 ### Advanced Search
 
@@ -321,9 +321,7 @@ In the plugin settings dialog you can configure:
   The section reports why it is unavailable when the host cannot use it — a
   source build without the `llamacpp` feature, or a missing MLX helper.
 - Export size and quality used for AI processing, photos per export session (indexing exports
-  in batches of that size, `Util.exportChunkSize`, so Lightroom frees its memory between them),
-  and whether indexing may use Lightroom's cached previews instead of exporting
-  (`LightroomPreviews.lua`; photos without a large-enough preview are exported)
+  in batches of that size, `Util.exportChunkSize`, so Lightroom frees its memory between them)
 - Prompt presets — a preset is the *system* prompt: which expert is looking at
   the photo, which vocabulary they use, how specific they may be, and what they
   must never invent. **Default** (the analytical voice) and **Family &

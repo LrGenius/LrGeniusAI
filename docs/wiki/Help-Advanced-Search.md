@@ -167,8 +167,8 @@ photos, beside the search index. Photos indexed before this version have none
 yet: they show *No preview yet*, and the page says how many. To add them, run
 **Library ▸ Plug-in Extras ▸ Add Missing Search Previews...** — for the whole
 catalog, or click **Show in Lightroom** first and choose *Selected photos*. It
-only adds the previews (from Lightroom's own previews where it can, from a small
-export otherwise); nothing is analyzed again.
+only adds the previews, from a small export of each photo; nothing is analyzed
+again.
 
 A preview is deleted with its photo's index data (the index cleanup, or
 removing the photo from the index), and is not part of a database backup —

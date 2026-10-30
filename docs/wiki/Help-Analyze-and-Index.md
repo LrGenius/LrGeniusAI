@@ -110,8 +110,7 @@ same.
 Photos indexed before previews existed get theirs from **Library ▸ Plug-in
 Extras ▸ Add Missing Search Previews...**: choose selected photos, the current
 view or the whole catalog, and it adds a preview to every indexed photo that has
-none — from Lightroom's own previews where they are big enough, from a small
-export otherwise — without analyzing anything again. (A run of Analyze & Index
+none, from a small export of each photo, without analyzing anything again. (A run of Analyze & Index
 that processes a photo adds one too, but *New or unprocessed photos* leaves
 these photos out, because nothing a search, a cull or a face lookup needs is
 missing.)

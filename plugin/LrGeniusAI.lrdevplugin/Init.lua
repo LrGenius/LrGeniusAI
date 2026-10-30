@@ -40,7 +40,6 @@ require("PromptConfigProvider")
 require("UpdateCheck")
 require("ErrorHandler")
 require("APISearchIndex")
-require("LightroomPreviews")
 require("IndexCleanup")
 require("SpeciesLinks")
 require("PhotoSelector")
@@ -136,10 +135,6 @@ end
 
 if _G.prefs.indexSubmitOriginals == nil then
 	_G.prefs.indexSubmitOriginals = false
-end
-
-if _G.prefs.indexUseLightroomPreviews == nil then
-	_G.prefs.indexUseLightroomPreviews = false
 end
 
 if _G.prefs.exportSize == nil then
