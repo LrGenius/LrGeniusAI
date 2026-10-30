@@ -662,6 +662,12 @@ in MiB:
 | `GENIUSAI_LANCE_INDEX_CACHE_MB` | 128 |
 | `GENIUSAI_LANCE_METADATA_CACHE_MB` | 128 |
 
+Writes have a ceiling of their own. Once the `id` index covers a table,
+LanceDB's `merge_insert` loads its whole input into a fixed 150 MB pool it
+cannot spill out of, so `Store::upsert` splits anything over 32 MB
+(`UPSERT_CHUNK_BYTES`) into several commits. Face clustering, which writes
+every face back at once, is the caller that reaches it: about 60,000 faces.
+
 Indexing reads and normalises several photos at once, which is the other
 place a batch can grow its peak: that many originals — 25-50 MB apiece for
 raw — are resident before any of them has been shrunk to a normalised JPEG.

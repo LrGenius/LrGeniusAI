@@ -80,6 +80,20 @@ const RETIRED_VERTEX_TABLE: &str = "image_embeddings_vertex";
 /// GET_IDS_CHUNK_SIZE rationale (bounded query size on large catalogs).
 const GET_IDS_CHUNK_SIZE: usize = 1000;
 
+/// Most bytes of row data (ids, vectors, metadata JSON) that one
+/// `merge_insert` in [`Store::upsert`] takes in.
+///
+/// Once the `id` index covers a table, Lance runs `merge_insert` as a hash
+/// join that first loads the entire input into memory, inside a fixed 150 MB
+/// pool it cannot spill out of (lance-datafusion's
+/// `DEFAULT_LANCE_MEM_POOL_SIZE_PER_PARTITION`). Face clustering writes every
+/// face back in one `upsert`, and at about 2.5 KB a face (the 512-d vector is
+/// 2 KB of it) a catalog with ~60,000 faces failed with "Resources exhausted
+/// … HashJoinInput". Raising the pool through `LANCE_MEM_POOL_SIZE` would only
+/// move that limit, so inputs are split instead, well under the pool because
+/// the rest of the plan draws from it too.
+const UPSERT_CHUNK_BYTES: usize = 32 * 1024 * 1024;
+
 /// `LIKE` terms per `DELETE` in [`Store::delete_by_id_prefixes`]. Each term is
 /// a pattern match, not an index lookup, so this stays well under
 /// `GET_IDS_CHUNK_SIZE`.
@@ -310,10 +324,25 @@ fn id_prefix_predicate(prefix: &str) -> String {
 }
 
 fn records_to_batch(table: &str, records: &[StoreRecord]) -> Result<RecordBatch> {
+    // An unlimited budget never closes a batch early, so this is the only one.
+    Ok(records_to_batches(table, records, usize::MAX)?.swap_remove(0))
+}
+
+/// Builds `records` into batches of about `max_bytes` of row data each. A
+/// batch is closed once it reaches the budget, so a record bigger than the
+/// budget still gets a batch of its own. Always returns at least one batch.
+fn records_to_batches(
+    table: &str,
+    records: &[StoreRecord],
+    max_bytes: usize,
+) -> Result<Vec<RecordBatch>> {
     let dim = table_dim(table)?;
+    let vector_bytes = dim as usize * std::mem::size_of::<f32>();
     let mut ids = StringBuilder::new();
     let mut vectors = FixedSizeListBuilder::new(Float32Builder::new(), dim);
     let mut metadatas = StringBuilder::new();
+    let mut batches = Vec::new();
+    let mut rows = 0usize;
 
     for record in records {
         ids.append_value(&record.id);
@@ -336,8 +365,27 @@ fn records_to_batch(table: &str, records: &[StoreRecord]) -> Result<RecordBatch>
             }
         }
         metadatas.append_value(Value::Object(record.metadata.clone()).to_string());
-    }
+        rows += 1;
 
+        let bytes = ids.values_slice().len() + metadatas.values_slice().len() + rows * vector_bytes;
+        if bytes >= max_bytes {
+            batches.push(finish_batch(dim, &mut ids, &mut vectors, &mut metadatas)?);
+            rows = 0;
+        }
+    }
+    if rows > 0 || batches.is_empty() {
+        batches.push(finish_batch(dim, &mut ids, &mut vectors, &mut metadatas)?);
+    }
+    Ok(batches)
+}
+
+/// Turns what the builders hold into a batch and leaves them empty for the next.
+fn finish_batch(
+    dim: i32,
+    ids: &mut StringBuilder,
+    vectors: &mut FixedSizeListBuilder<Float32Builder>,
+    metadatas: &mut StringBuilder,
+) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(
         table_schema(dim),
         vec![
@@ -555,24 +603,40 @@ impl Store {
     }
 
     /// Insert-or-replace by id (Chroma add/update semantics).
+    ///
+    /// A large `records` is written in several `merge_insert`s (see
+    /// [`UPSERT_CHUNK_BYTES`]), each a commit of its own: when one fails, the
+    /// chunks before it have already been written.
     pub async fn upsert(&self, table: &str, records: &[StoreRecord]) -> Result<()> {
+        self.upsert_in_chunks(table, records, UPSERT_CHUNK_BYTES)
+            .await
+    }
+
+    /// `upsert` with an explicit chunk budget, so tests can split a handful
+    /// of rows instead of building 32 MB of them.
+    async fn upsert_in_chunks(
+        &self,
+        table: &str,
+        records: &[StoreRecord],
+        max_bytes: usize,
+    ) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
-        let batch = records_to_batch(table, records)?;
-        let schema = batch.schema();
-        let reader = RecordBatchIterator::new([Ok(batch)], schema);
         let tbl = self.table(table).await?;
-        let mut builder = tbl.merge_insert(&["id"]);
-        builder
-            .when_matched_update_all(None)
-            .when_not_matched_insert_all();
-        builder
-            .execute(
-                Box::new(reader) as Box<dyn lancedb::arrow::arrow_array::RecordBatchReader + Send>
-            )
-            .await?;
-        self.write_ops.fetch_add(1, Ordering::Relaxed);
+        for batch in records_to_batches(table, records, max_bytes)? {
+            let schema = batch.schema();
+            let reader = RecordBatchIterator::new([Ok(batch)], schema);
+            let mut builder = tbl.merge_insert(&["id"]);
+            builder
+                .when_matched_update_all(None)
+                .when_not_matched_insert_all();
+            builder
+                .execute(Box::new(reader)
+                    as Box<dyn lancedb::arrow::arrow_array::RecordBatchReader + Send>)
+                .await?;
+            self.write_ops.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -1298,5 +1362,78 @@ mod tests {
             Some("person_3")
         );
         assert!(got[0].vector.is_some(), "the embedding has to come along");
+    }
+
+    fn face_rows(n: usize, person: &str) -> Vec<StoreRecord> {
+        (0..n)
+            .map(|i| {
+                record(
+                    &format!("photo-{i:06}_face_0"),
+                    Some(vec![0.01; 512]),
+                    json!({"person_id": person, "padding": "x".repeat(300)}),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn upsert_splits_large_input_and_writes_every_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        store
+            .append(FACE_TABLE, &face_rows(10, "person_1"))
+            .await
+            .unwrap();
+        store.optimize_all().await.unwrap();
+
+        // Rows 0-9 exist and are updated, 10-24 are new. A 2.3 KB face
+        // against a 5 KB budget closes a batch every third row.
+        let rows = face_rows(25, "person_2");
+        assert_eq!(
+            records_to_batches(FACE_TABLE, &rows, 5_000).unwrap().len(),
+            9
+        );
+        store
+            .upsert_in_chunks(FACE_TABLE, &rows, 5_000)
+            .await
+            .unwrap();
+
+        assert_eq!(store.pending_write_ops(), 9, "one commit per chunk");
+        let all = store.scan_all(FACE_TABLE).await.unwrap();
+        assert_eq!(all.len(), 25);
+        assert!(all
+            .iter()
+            .all(|r| r.metadata.get("person_id") == Some(&json!("person_2"))));
+    }
+
+    #[test]
+    fn records_to_batches_gives_an_oversized_record_its_own_batch() {
+        let rows = face_rows(3, "person_1");
+        let batches = records_to_batches(FACE_TABLE, &rows, 1).unwrap();
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1]
+        );
+        // An empty input still yields the (empty) batch `append` relies on.
+        assert_eq!(records_to_batches(FACE_TABLE, &[], 1).unwrap().len(), 1);
+    }
+
+    /// The failure this guards against: clustering writes every face back in
+    /// one `upsert`, and once the `id` index covers the table Lance's merge
+    /// loaded all of it into a 150 MB pool. 70,000 faces asked for 172 MB.
+    #[tokio::test]
+    #[ignore = "builds ~170 MB of faces; run with --ignored"]
+    async fn upsert_of_every_face_in_a_large_catalog_fits_lances_memory_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        let rows = face_rows(70_000, "person_unassigned");
+        store.append(FACE_TABLE, &rows).await.unwrap();
+        // Brings the rows under the `id` index, which is what routes
+        // `merge_insert` through the capped hash join.
+        store.optimize_all().await.unwrap();
+        store.upsert(FACE_TABLE, &rows).await.unwrap();
     }
 }
