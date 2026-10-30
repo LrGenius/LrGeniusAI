@@ -193,7 +193,7 @@ local function run(context)
 		index = index + #chunkIds
 		local paths, exportFailures = SearchIndexAPI.exportPhotosForIndexing(chunkPhotos, {
 			LR_size_maxHeight = RENDER_LONG_EDGE,
-			LR_jpeg_quality = 80,
+			LR_jpeg_quality = 0.8, -- 0 to 1, not percent
 		}, function()
 			return scope:isCanceled()
 		end)

@@ -18,6 +18,26 @@ describe("Util.exportChunkSize", function()
 	end)
 end)
 
+describe("Util.jpegQualityFromPercent", function()
+	it("turns the percent into Lightroom's 0-1 scale", function()
+		assert.are.equal(0.5, Util.jpegQualityFromPercent(50))
+		assert.are.equal(0.8, Util.jpegQualityFromPercent("80"))
+		assert.are.equal(1, Util.jpegQualityFromPercent(100))
+	end)
+
+	it("keeps the result within Lightroom's range", function()
+		assert.are.equal(0.01, Util.jpegQualityFromPercent(0))
+		assert.are.equal(0.01, Util.jpegQualityFromPercent(-20))
+		assert.are.equal(1, Util.jpegQualityFromPercent(250))
+	end)
+
+	it("uses the default when nothing usable is saved", function()
+		assert.are.equal(0.6, Util.jpegQualityFromPercent(nil))
+		assert.are.equal(0.5, Util.jpegQualityFromPercent("high", 50))
+		assert.are.equal(0.5, Util.jpegQualityFromPercent(0 / 0, 50))
+	end)
+end)
+
 describe("Util.faceRecognizerSummary", function()
 	local state = {
 		active = "auraface",

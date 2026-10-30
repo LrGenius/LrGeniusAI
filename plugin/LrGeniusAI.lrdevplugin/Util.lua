@@ -3363,6 +3363,26 @@ function Util.cullFlagSummaryLines(counts)
 	return lines
 end
 
+---
+-- Lightroom's `LR_jpeg_quality` for a quality in percent (the Plug-in
+-- Manager's "Export JPEG quality in percent").
+--
+-- The export setting runs from 0 to 1. Lightroom takes anything above 1 as
+-- full quality, so passing the percent straight through exported every photo
+-- at 100%: about nine times the bytes of 50%, for nothing the models can see.
+-- @param percent any The saved preference (prefs.exportQuality), if any.
+-- @param default number|nil Percent to use when `percent` is not a number
+--   (60 when left out).
+-- @return number Between 0.01 and 1.
+--
+function Util.jpegQualityFromPercent(percent, default)
+	local n = tonumber(percent)
+	if n == nil or n ~= n then
+		n = tonumber(default) or 60
+	end
+	return math.max(1, math.min(100, n)) / 100
+end
+
 --- Photos per export session when indexing exports JPEGs.
 Util.DEFAULT_EXPORT_CHUNK_SIZE = 25
 

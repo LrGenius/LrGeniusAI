@@ -85,9 +85,12 @@ Every photo sent to a vision LLM is first exported to a temporary JPEG
 (unless you use the originals fast path below). Two settings in *Plug-in
 Manager → LrGeniusAI* control that export:
 
-- **Export size in pixels (long edge)** — default **1024px**. Options: 512,
+- **Export size in pixels (long edge)** — default **3072px**. Options: 512,
   1024, 2048, 3072, 4096.
-- **Export JPEG quality in percent** — default **60%**.
+- **Export JPEG quality in percent** — default **50%**. Plug-ins before this
+  version exported at 100% whatever this said, so the temporary JPEGs are now
+  several times smaller; embeddings shift slightly the next time a photo is
+  indexed.
 
 Everything else about the export is fixed so that two exports of the same
 photo always come out the same: **sRGB**, no output sharpening, and photos

@@ -304,7 +304,7 @@ local EXPORT_SETTINGS = {
 	-- A photo smaller than the export size stays as it is: upscaling adds no
 	-- detail, only interpolation the models would read as softness.
 	LR_size_doNotEnlarge = true,
-	LR_jpeg_quality = tonumber(prefs.exportQuality) or 60,
+	-- LR_jpeg_quality comes from the preference, per session: exportSettingsFor.
 	LR_minimizeEmbeddedMetadata = false,
 	LR_outputSharpeningOn = false,
 	LR_size_doConstrain = true,
@@ -326,7 +326,8 @@ local function exportSettingsFor(overrides)
 	for k, v in pairs(EXPORT_SETTINGS) do
 		settings[k] = v
 	end
-	settings.LR_jpeg_quality = tonumber(prefs.exportQuality) or 60
+	-- 0 to 1, not percent: anything above 1 exports at full quality.
+	settings.LR_jpeg_quality = Util.jpegQualityFromPercent(prefs.exportQuality)
 	settings.LR_size_maxHeight = tonumber(prefs.exportSize) or 1024
 	settings.LR_export_destinationPathPrefix = LrPathUtils.getStandardFilePath("temp")
 	for k, v in pairs(overrides or {}) do
