@@ -128,7 +128,7 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
     let n_results = data.get("n_results").and_then(Value::as_u64).unwrap_or(10) as usize;
     let face_index = data.get("face_index").and_then(Value::as_u64).unwrap_or(0) as usize;
 
-    let faces = match state.face.detect_faces(
+    let (faces, face_model) = match state.face.detect_faces_with_model(
         &pixels,
         w,
         h,
@@ -171,8 +171,15 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
         }
     };
 
+    // Only faces embedded by the same recognizer: after a switch between
+    // FaceNet and AuraFace the older rows are 512-d unit vectors of another
+    // space, and a distance to them ranks nonsense among real matches. They
+    // come back once their photos are indexed again.
+    let same_model =
+        |r: &StoreRecord| r.metadata.get("face_model").and_then(Value::as_str) == Some(face_model);
     let mut scored: Vec<(f64, &StoreRecord)> = records
         .iter()
+        .filter(|r| same_model(r))
         .filter_map(|r| {
             let v = r.vector.as_ref()?;
             Some((cosine_distance(query_emb, v), r))
@@ -180,6 +187,21 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
         .collect();
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     scored.truncate(n_results);
+    // Left out silently, a switch looks like a search that finds nobody.
+    let set_aside = records.iter().filter(|r| !same_model(r)).count();
+    let warnings: Vec<String> = set_aside_warning(
+        set_aside,
+        records.len(),
+        crate::routes::face_recognizer::name_of(state.face.recognizer()),
+    )
+    .into_iter()
+    .collect();
+    if !warnings.is_empty() {
+        log::warn!(
+            "Face search: {set_aside} of {} faces set aside",
+            records.len()
+        );
+    }
 
     let results: Vec<Value> = scored
         .into_iter()
@@ -200,7 +222,29 @@ async fn query(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) ->
             })
         })
         .collect();
-    Json(json!({"status": "ok", "results": results})).into_response()
+    Json(json!({"status": "ok", "results": results, "warnings": warnings})).into_response()
+}
+
+/// What to tell the user when `set_aside` of the `total` stored faces were
+/// embedded by another recognizer than `active` (the one in use) and so left
+/// out of a face search; `None` when every face was searched.
+fn set_aside_warning(set_aside: usize, total: usize, active: &str) -> Option<String> {
+    if set_aside == 0 {
+        return None;
+    }
+    let reindex = "They come back once their photos are indexed again with face detection \
+                   on: run Analyze & Index Photos with \"New or unprocessed photos\".";
+    Some(if set_aside >= total {
+        format!(
+            "None of the {total} faces in the index was found with {active}, the face \
+             recognizer in use, so this search could not compare any of them. {reindex}"
+        )
+    } else {
+        format!(
+            "{set_aside} of the {total} faces in the index were found with another face \
+             recognizer than {active} and were left out of this search. {reindex}"
+        )
+    })
 }
 
 fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
@@ -1506,4 +1550,32 @@ async fn merge_persons(State(state): State<Arc<AppState>>, body: Option<Json<Val
         "warnings": warnings,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_aside_warning;
+
+    #[test]
+    fn a_search_over_faces_of_one_recognizer_warns_nothing() {
+        assert_eq!(set_aside_warning(0, 135, "FaceNet"), None);
+        assert_eq!(set_aside_warning(0, 0, "FaceNet"), None);
+    }
+
+    /// Right after a switch every stored face belongs to the other
+    /// recognizer: the search finds nobody, and has to say why.
+    #[test]
+    fn a_switch_without_reindex_says_nothing_could_be_compared() {
+        let w = set_aside_warning(135, 135, "AuraFace").unwrap();
+        assert!(w.starts_with("None of the 135 faces"), "{w}");
+        assert!(w.contains("AuraFace"), "{w}");
+        assert!(w.contains("New or unprocessed photos"), "{w}");
+    }
+
+    #[test]
+    fn a_partial_reindex_counts_the_faces_left_out() {
+        let w = set_aside_warning(40, 135, "AuraFace").unwrap();
+        assert!(w.starts_with("40 of the 135 faces"), "{w}");
+        assert!(w.contains("New or unprocessed photos"), "{w}");
+    }
 }

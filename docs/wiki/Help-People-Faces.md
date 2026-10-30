@@ -197,6 +197,35 @@ the whole indexed catalog.
 - The fastest way to judge a threshold is not to guess it but to look. Double-click your biggest person, sort by *outliers first*, and see whether the faces at the far end are still the same human. If they are, the threshold can go up; if strangers appear, it should come down.
 - For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eye openness, blink detection, face sharpness). See [Help: Cull Photos](Help-Cull-Photos).
 
+## Choosing the face recognizer: FaceNet or AuraFace
+
+Which faces belong to the same person is decided by a *face recognizer*. Two are
+available, under **Face recognition** in the plugin settings (*On-device AI
+models*):
+
+- **FaceNet** — the default, part of **Download AI models**. Good for telling
+  family and friends apart.
+- **AuraFace** — more accurate: it keeps similar-looking people apart more
+  reliably and recognises the same person across ages, angles and difficult
+  light better. It is a separate download of about 260 MB (from Hugging Face,
+  `fal/AuraFace-v1`, Apache-2.0 licensed) and takes somewhat longer per face.
+  Click **Use AuraFace...**; the plugin downloads it and switches.
+
+The two recognizers describe faces in different ways that cannot be compared,
+so after a switch:
+
+- Faces found with the other recognizer are left **unassigned** by **Cluster
+  faces** and are not offered by **Find Similar Faces**, which says how many it
+  left out.
+- Their photos count as unprocessed again, so **Analyze & Index Photos** with
+  *New or unprocessed photos* and *Enable face detection* recognises them anew.
+- **Names you gave are kept.** The face *detector* is the same for both, so a
+  re-detected face lands on the same spot of the photo and takes over the person
+  it was assigned to — including faces you detached from a person by hand.
+
+Then run **Cluster faces** once more. You can switch back at any time; the same
+applies in the other direction.
+
 ## Upgrading from a version before the face-model change
 
 The face pipeline used to run InsightFace's `buffalo_l` models, which could not

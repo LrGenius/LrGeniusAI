@@ -1963,7 +1963,7 @@ async fn finish_one(
             // A decode failure is reported the same way a detector failure is,
             // as a warning: faces are optional and must not sink the photo.
             let t_decode = Instant::now();
-            let face_result: Result<Vec<_>, String> = if !state.face.is_cached() {
+            let face_result: Result<(Vec<_>, &str), String> = if !state.face.is_cached() {
                 // Checked before decoding: without the model files the detector
                 // fails anyway, and the decode would be pure waste.
                 //
@@ -1971,11 +1971,19 @@ async fn finish_one(
                 // cause is a run started before the models finished
                 // downloading, and "model not loaded" left the user with a
                 // symptom and nowhere to go.
-                Err(
-                    "face model is not downloaded yet — run \"Download AI models\" \
-                     in Plug-in Manager and index these photos again"
+                Err(match state.face.recognizer() {
+                    lrg_ml::faces::Recognizer::AuraFace
+                        if state.face.paths().det_onnx.is_file() =>
+                    {
+                        "the AuraFace face model is missing — download it again under \
+                         Face recognition in Plug-in Manager, or switch back to FaceNet, \
+                         and index these photos again"
+                            .to_string()
+                    }
+                    _ => "face model is not downloaded yet — run \"Download AI models\" \
+                          in Plug-in Manager and index these photos again"
                         .to_string(),
-                )
+                })
             } else {
                 match image::load_from_memory(&image_bytes).map(|img| img.to_rgb8()) {
                     Ok(decoded) => {
@@ -1988,7 +1996,7 @@ async fn finish_one(
                         let t0 = Instant::now();
                         let result = state
                             .face
-                            .detect_faces(
+                            .detect_faces_with_model(
                                 &pixels,
                                 width,
                                 height,
@@ -2010,7 +2018,7 @@ async fn finish_one(
                 // full run had established. It also deliberately leaves
                 // `faces_checked` unset, so `/v1/index/unprocessed` still
                 // reports the photo as needing a real face pass later.
-                Ok(faces) if options.face_pass == FacePass::QualityOnly => {
+                Ok((faces, _)) if options.face_pass == FacePass::QualityOnly => {
                     let inputs: Vec<FaceMetricsInput> = faces
                         .iter()
                         .map(|f| FaceMetricsInput {
@@ -2029,7 +2037,7 @@ async fn finish_one(
                         faces.len()
                     );
                 }
-                Ok(faces) => {
+                Ok((faces, face_model)) => {
                     let prefix = format!("{photo_id}_");
                     // Read before deleting: detection replaces this photo's rows
                     // wholesale, and a fresh row starts with an empty
@@ -2073,14 +2081,26 @@ async fn finish_one(
                         // tight enough that it would mostly refuse to carry
                         // anything over — but "mostly" is how one person's name
                         // ends up on another person's face.
-                        let previous: Vec<StoreRecord> = previous
-                            .into_iter()
-                            .filter(|r| {
+                        let (previous, other_model): (Vec<StoreRecord>, Vec<StoreRecord>) =
+                            previous.into_iter().partition(|r| {
                                 r.metadata.get("face_model").and_then(Value::as_str)
-                                    == Some(state.face.model_id())
-                            })
-                            .collect();
-                        let carried = carry_over_person_ids(&previous, &embeddings);
+                                    == Some(face_model)
+                            });
+                        let mut carried = carry_over_person_ids(&previous, &embeddings);
+                        // Rows from the other recognizer (the user switched
+                        // between FaceNet and AuraFace) are matched by where the
+                        // face is instead: both use the same detector, so a
+                        // re-detected face lands on its old box, and the names
+                        // the user gave survive the switch.
+                        let boxes: Vec<[i64; 4]> = faces.iter().map(|f| f.bbox).collect();
+                        for (slot, by_box) in carried
+                            .iter_mut()
+                            .zip(carry_over_person_ids_by_box(&other_model, &boxes))
+                        {
+                            if slot.0.is_empty() && !slot.1 {
+                                *slot = by_box;
+                            }
+                        }
                         let carried_count = carried
                             .iter()
                             .filter(|(p, manual)| !p.is_empty() || *manual)
@@ -2115,7 +2135,7 @@ async fn finish_one(
                                 m.insert("face_eye_openness".into(), json!(f.eye_openness));
                                 m.insert("face_blink_penalty".into(), json!(f.blink_penalty));
                                 m.insert("face_occlusion".into(), json!(f.occlusion));
-                                m.insert("face_model".into(), json!(state.face.model_id()));
+                                m.insert("face_model".into(), json!(face_model));
                                 StoreRecord {
                                     id: format!("{photo_id}_{i}"),
                                     vector: Some(f.embedding.clone()),
@@ -2151,7 +2171,7 @@ async fn finish_one(
                     // replaces the photo's rows, which is how person assignments
                     // used to disappear on a plain re-index.
                     main_metadata.insert("faces_checked".into(), json!(true));
-                    main_metadata.insert("face_model".into(), json!(state.face.model_id()));
+                    main_metadata.insert("face_model".into(), json!(face_model));
                 }
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");
@@ -2422,6 +2442,92 @@ fn carry_over_person_ids(previous: &[StoreRecord], embeddings: &[&[f32]]) -> Vec
             .and_then(Value::as_bool)
             .unwrap_or(false);
         out[i] = (person.to_string(), manual);
+        new_taken[i] = true;
+        old_taken[j] = true;
+    }
+    out
+}
+
+/// Overlap (intersection over union) above which a re-detected face counts as
+/// the same detection as a previous row from the *other* recognizer.
+///
+/// The detector did not change, so the same pixels give the same box and a
+/// genuine match lands near 1.0; a re-export at another size or a small crop
+/// change shifts it a little. Two different faces in one frame overlap far
+/// less than this even in a tight group shot.
+const FACE_CARRY_OVER_MIN_IOU: f64 = 0.6;
+
+fn box_iou(a: [i64; 4], b: [i64; 4]) -> f64 {
+    let ix = (a[2].min(b[2]) - a[0].max(b[0])).max(0) as f64;
+    let iy = (a[3].min(b[3]) - a[1].max(b[1])).max(0) as f64;
+    let inter = ix * iy;
+    let area = |r: [i64; 4]| ((r[2] - r[0]).max(0) * (r[3] - r[1]).max(0)) as f64;
+    let union = area(a) + area(b) - inter;
+    if union <= 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+fn stored_bbox(record: &StoreRecord) -> Option<[i64; 4]> {
+    match record.metadata.get("bbox")? {
+        Value::String(s) => serde_json::from_str::<[i64; 4]>(s).ok(),
+        other => serde_json::from_value::<[i64; 4]>(other.clone()).ok(),
+    }
+}
+
+/// [`carry_over_person_ids`] for previous rows whose embeddings come from the
+/// other recognizer and so cannot be compared: matched by box overlap
+/// instead, globally best-first, each old row claimed at most once. Faces with
+/// no match get an empty assignment.
+fn carry_over_person_ids_by_box(
+    previous: &[StoreRecord],
+    boxes: &[[i64; 4]],
+) -> Vec<(String, bool)> {
+    let mut out = vec![(String::new(), false); boxes.len()];
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (j, old) in previous.iter().enumerate() {
+        let manual = old
+            .metadata
+            .get("person_manual")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let person = old
+            .metadata
+            .get("person_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !manual && person.is_empty() {
+            continue;
+        }
+        let Some(old_box) = stored_bbox(old) else {
+            continue;
+        };
+        for (i, new_box) in boxes.iter().enumerate() {
+            let iou = box_iou(*new_box, old_box);
+            if iou >= FACE_CARRY_OVER_MIN_IOU {
+                pairs.push((iou, i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut new_taken = vec![false; boxes.len()];
+    let mut old_taken = vec![false; previous.len()];
+    for (_, i, j) in pairs {
+        if new_taken[i] || old_taken[j] {
+            continue;
+        }
+        let meta = &previous[j].metadata;
+        out[i] = (
+            meta.get("person_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            meta.get("person_manual")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        );
         new_taken[i] = true;
         old_taken[j] = true;
     }
@@ -2716,6 +2822,56 @@ mod face_carry_over_tests {
         assert_eq!(
             carry_over_person_ids(&previous, &[&embedding]),
             vec![("person_7".to_string(), true)]
+        );
+    }
+
+    fn boxed_row(id: &str, person: &str, bbox: [i64; 4], manual: bool) -> StoreRecord {
+        let mut row = face_row(id, person, vec![0.0, 0.0, 1.0]);
+        row.metadata
+            .insert("bbox".into(), json!(serde_json::to_string(&bbox).unwrap()));
+        if manual {
+            row.metadata.insert("person_manual".into(), json!(true));
+        }
+        row
+    }
+
+    /// Switching recognizer (FaceNet <-> AuraFace) leaves embeddings that
+    /// cannot be compared, but the detector is the same, so a face lands on
+    /// its old box and keeps the name the user gave it.
+    #[test]
+    fn a_recognizer_switch_carries_names_by_box() {
+        let previous = vec![
+            boxed_row("p_0", "person_7", [100, 100, 200, 220], false),
+            boxed_row("p_1", "person_9", [300, 90, 390, 200], true),
+        ];
+        // Detected in the other order, one box shifted by a few pixels.
+        let boxes = [[302, 92, 391, 203], [100, 100, 200, 220]];
+        assert_eq!(
+            carry_over_person_ids_by_box(&previous, &boxes),
+            vec![("person_9".to_string(), true), guessed("person_7")]
+        );
+    }
+
+    #[test]
+    fn a_box_elsewhere_in_the_frame_inherits_nothing() {
+        let previous = vec![boxed_row("p_0", "person_7", [100, 100, 200, 220], false)];
+        // Overlaps the old face a little, as a neighbour in a group shot can.
+        let boxes = [[170, 110, 270, 230]];
+        assert_eq!(
+            carry_over_person_ids_by_box(&previous, &boxes),
+            vec![nobody()]
+        );
+    }
+
+    #[test]
+    fn a_row_without_a_box_or_a_name_is_skipped() {
+        let previous = vec![
+            face_row("p_0", "person_7", vec![1.0]),
+            boxed_row("p_1", "", [0, 0, 50, 50], false),
+        ];
+        assert_eq!(
+            carry_over_person_ids_by_box(&previous, &[[0, 0, 50, 50]]),
+            vec![nobody()]
         );
     }
 

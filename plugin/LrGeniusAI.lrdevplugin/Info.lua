@@ -62,14 +62,6 @@ return {
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces..."),
 			file = "TaskFindSimilarFaces.lua",
 		},
-		{
-			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
-			file = "TaskTrainFromEdits.lua",
-		},
-		{
-			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
-			file = "TaskDeduplicateKeywords.lua",
-		},
 	},
 
 	LrExportMenuItems = {
@@ -113,14 +105,6 @@ return {
 			title = LOC("$$$/LrGeniusAI/Menu/FindSimilarFaces=Find Similar Faces..."),
 			file = "TaskFindSimilarFaces.lua",
 		},
-		{
-			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
-			file = "TaskTrainFromEdits.lua",
-		},
-		{
-			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
-			file = "TaskDeduplicateKeywords.lua",
-		},
 	},
 
 	LrHelpMenuItems = {
@@ -135,6 +119,18 @@ return {
 		{
 			title = LOC("$$$/LrGeniusAI/Menu/ExportCullFixture=Export Culling Fixture..."),
 			file = "TaskExportCullFixture.lua",
+		},
+		{
+			title = "Add Missing Search Previews...",
+			file = "TaskFillSearchPreviews.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/Training/MenuItem=Save Edits as AI Training Examples..."),
+			file = "TaskTrainFromEdits.lua",
+		},
+		{
+			title = LOC("$$$/LrGeniusAI/Menu/DeduplicateKeywords=Deduplicate Keyword Synonyms..."),
+			file = "TaskDeduplicateKeywords.lua",
 		},
 	},
 

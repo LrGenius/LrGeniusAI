@@ -297,14 +297,11 @@ LrTasks.startAsyncTask(function()
 				)
 				table.insert(resolutionWarnings, "One of the faces could not be looked up, so it is not named.")
 			end
-			if qResp and qResp.warning then
+			for _, warning in ipairs(Util.responseWarnings(qResp)) do
 				log:warn(
-					"queryFacesByImage warning during face resolution (idx "
-						.. tostring(i - 1)
-						.. "): "
-						.. tostring(qResp.warning)
+					"queryFacesByImage warning during face resolution (idx " .. tostring(i - 1) .. "): " .. warning
 				)
-				table.insert(resolutionWarnings, tostring(qResp.warning))
+				table.insert(resolutionWarnings, warning)
 			end
 			local qResults = (qResp and qResp.results) and qResp.results or {}
 			if qResults[1] and qResults[1].person_id then
@@ -331,20 +328,24 @@ LrTasks.startAsyncTask(function()
 			ErrorHandler.handleError(LOC("$$$/LrGeniusAI/FindSimilarFaces/QueryError=Search failed"), err)
 			return
 		end
-		if queryResp and queryResp.warning then
-			LrDialogs.message(LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"), queryResp.warning, "warning")
-		end
+		-- Faces left out of the search (found with the other face recognizer)
+		-- explain an empty or short result, so they are shown either way.
+		local queryWarnings = Util.formatWarningList(Util.responseWarnings(queryResp))
 
 		local results = (queryResp and queryResp.results) and queryResp.results or {}
 		if #results == 0 then
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/FindSimilarFaces/NoResultsTitle=No similar faces"),
-				LOC(
-					"$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled."
-				),
-				"info"
+				queryWarnings
+					or LOC(
+						"$$$/LrGeniusAI/FindSimilarFaces/NoResultsMessage=No similar faces found in the index. Run 'Analyze & Index' with face detection enabled."
+					),
+				queryWarnings and "warning" or "info"
 			)
 			return
+		end
+		if queryWarnings then
+			LrDialogs.message(LOC("$$$/LrGeniusAI/common/BackendWarning=Backend Warning"), queryWarnings, "warning")
 		end
 
 		-- 4) Get cluster: prefer person_id from first result, then get all photos for that person

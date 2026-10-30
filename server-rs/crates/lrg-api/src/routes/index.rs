@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Multipart, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -20,7 +20,8 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/photos/lookup", post(get_photo_data))
-        .route("/photos/thumbnail", get(get_thumbnail))
+        .route("/photos/thumbnail", get(get_thumbnail).post(put_thumbnail))
+        .route("/photos/thumbnails/missing", post(missing_thumbnails))
         .route("/photos/ids", get(get_ids))
         .route("/photos/remove", post(remove_image))
         .route("/photos/metadata/remove", post(remove_metadata))
@@ -589,12 +590,187 @@ async fn get_thumbnail(
         None => (
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "No preview is stored for this photo. Run Analyze & Index Photos on it to add one.",
+                "error": "No preview is stored for this photo. Run Help > Add Missing Search Previews in Lightroom to add one.",
                 "error_code": "no_thumbnail",
             })),
         )
             .into_response(),
     }
+}
+
+/// Which indexed photos have no search-page preview (`crate::thumbnails`).
+///
+/// Photos indexed before previews were stored have every signal but no
+/// picture, and nothing in `/v1/index/unprocessed` asks for one (see the note
+/// there). This is the question the plug-in's "Add Missing Search Previews"
+/// asks instead, before it renders anything: `photo_ids` narrows it to those
+/// photos (the selection), its absence means every photo of `catalog_id` (or
+/// of the database). Photos that are not indexed are never listed — a preview
+/// belongs to an index row, and `POST /v1/photos/thumbnail` refuses one
+/// without it.
+async fn missing_thumbnails(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let data = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    let catalog_id = data
+        .get("catalog_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let wanted: Option<Vec<String>> = match data.get("photo_ids") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(list)) => Some(
+            list.iter()
+                .filter_map(Value::as_str)
+                .filter_map(|s| meta::normalize_photo_id(Some(s), None))
+                .collect(),
+        ),
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "photo_ids must be a list, or left out for every photo"})),
+            )
+                .into_response()
+        }
+    };
+
+    let (Some(store), Some(root)) = (state.store(), state.lance_root()) else {
+        return Json(json!({"photo_ids": [], "indexed": 0, "missing": 0})).into_response();
+    };
+    let rows = match &wanted {
+        Some(ids) if ids.is_empty() => Ok(Vec::new()),
+        Some(ids) => store.get_meta(IMAGE_TABLE, ids).await,
+        None => store.scan_meta(IMAGE_TABLE).await,
+    };
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::error!("Listing photos without a preview failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    let indexed: Vec<String> = rows
+        .into_iter()
+        .filter(|(_, m)| catalog_id.is_none_or(|cat| meta::parse_catalog_ids(m).contains(cat)))
+        .map(|(id, _)| id)
+        .collect();
+    // A stat per photo: about a second per 100,000 on a local disk, which is
+    // what one press of the button costs — not something the page polls.
+    let missing: Vec<String> = indexed
+        .iter()
+        .filter(|id| !crate::thumbnails::exists(&root, id))
+        .cloned()
+        .collect();
+    log::info!(
+        "Search previews: {} of {} indexed photo(s) have none",
+        missing.len(),
+        indexed.len()
+    );
+    Json(json!({
+        "photo_ids": missing,
+        "indexed": indexed.len(),
+        "missing": missing.len(),
+    }))
+    .into_response()
+}
+
+/// Stores the search-page preview of an already indexed photo from an image
+/// the plug-in rendered (multipart: `photo_id` and `image`).
+///
+/// The image is scaled down to the same size indexing stores
+/// (`lrg_imaging::convert::THUMBNAIL_LONG_EDGE`), so the plug-in can send
+/// whatever Lightroom hands it — a cached preview or a small export — without
+/// knowing that size. Nothing else about the photo is touched: this is how
+/// photos indexed before previews existed get one without being indexed again.
+///
+/// A photo with no index row is refused (`error_code: "not_indexed"`): the
+/// preview would have no photo to belong to, and nothing would ever delete it.
+async fn put_thumbnail(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+    let bad_request =
+        |msg: String| (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response();
+    let form = match crate::routes::route_util::parse_multipart(&mut multipart).await {
+        Ok(form) => form.into_single_photo(),
+        Err(e) => return bad_request(e),
+    };
+    let Some(photo_id) = form
+        .photo_ids
+        .first()
+        .and_then(|id| meta::normalize_photo_id(Some(id), None))
+    else {
+        return bad_request("photo_id is required".to_string());
+    };
+    let Some(image_bytes) = form.image_bytes.filter(|b| !b.is_empty()) else {
+        return bad_request("an image part is required".to_string());
+    };
+    let (Some(store), Some(root)) = (state.store(), state.lance_root()) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "No database is open. Restart the backend from Plug-in Manager and try again."})),
+        )
+            .into_response();
+    };
+
+    match store
+        .get_meta(IMAGE_TABLE, std::slice::from_ref(&photo_id))
+        .await
+    {
+        Ok(rows) if rows.is_empty() => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "This photo is not indexed, so it gets its preview when Analyze & Index Photos runs on it.",
+                    "error_code": "not_indexed",
+                })),
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+
+    let encoded = tokio::task::spawn_blocking(move || {
+        let decoded = image::load_from_memory(&image_bytes)
+            .map_err(|e| format!("could not decode the image: {e}"))?
+            .to_rgb8();
+        let (width, height) = (decoded.width(), decoded.height());
+        lrg_imaging::convert::thumbnail_jpeg(
+            decoded.as_raw(),
+            width,
+            height,
+            lrg_imaging::convert::THUMBNAIL_LONG_EDGE,
+            lrg_imaging::convert::THUMBNAIL_JPEG_QUALITY,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("preview task failed: {e}"))
+    .and_then(|r| r);
+    let jpeg = match encoded {
+        Ok(jpeg) => jpeg,
+        Err(e) => return bad_request(e),
+    };
+    if let Err(e) = crate::thumbnails::write(&root, &photo_id, &jpeg) {
+        log::error!("Photo {photo_id}: could not save its preview: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("The preview could not be saved: {e}")})),
+        )
+            .into_response();
+    }
+    log::debug!("Photo {photo_id}: preview stored ({} bytes)", jpeg.len());
+    Json(json!({"status": "success", "photo_id": photo_id})).into_response()
 }
 
 fn body_photo_id(body: &Option<Json<Value>>) -> Option<String> {

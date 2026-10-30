@@ -57,6 +57,7 @@ fn models_absent() -> ModelAssetPaths {
         face: lrg_ml::faces::FaceModelPaths {
             det_onnx: dir.join("yunet_face_detection.onnx"),
             rec_onnx: dir.join("facenet_vggface2.onnx"),
+            auraface_onnx: dir.join("auraface_glintr100.onnx"),
         },
         bioclip: lrg_ml::bioclip::BioclipModelPaths {
             image_onnx: dir.join("bioclip2_image.onnx"),
@@ -3628,4 +3629,139 @@ async fn indexing_stores_a_preview_that_search_reports_and_remove_deletes() {
         &state.lance_root().unwrap(),
         "astro"
     ));
+}
+
+/// Photos indexed before previews were stored get one without being indexed
+/// again: `/v1/photos/thumbnails/missing` lists them (catalog-scoped, and only
+/// photos that are indexed), `POST /v1/photos/thumbnail` stores a preview
+/// scaled to the indexing size, and a photo with no index row is refused.
+#[tokio::test]
+async fn missing_previews_are_listed_and_filled_without_reindexing() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db_path).await.unwrap();
+    seed_searchable(
+        &state,
+        &[
+            ("old", None, "", None, "indexed before previews"),
+            ("other", None, "", None, "another catalog's photo"),
+            ("done", None, "", None, "already has one"),
+        ],
+    )
+    .await;
+    let store = state.store().unwrap();
+    let mut rows = store
+        .get(
+            lrg_store::IMAGE_TABLE,
+            &["old".to_string(), "other".to_string(), "done".to_string()],
+        )
+        .await
+        .unwrap();
+    for row in &mut rows {
+        let catalog = if row.id == "other" { "cat-2" } else { "cat-1" };
+        row.metadata
+            .insert("catalog_ids".into(), serde_json::json!([catalog]));
+    }
+    store.upsert(lrg_store::IMAGE_TABLE, &rows).await.unwrap();
+    let root = state.lance_root().unwrap();
+    lrg_api::thumbnails::write(&root, "done", b"jpeg").unwrap();
+
+    let (status, listed) = post_json(
+        &app,
+        "/v1/photos/thumbnails/missing",
+        serde_json::json!({"catalog_id": "cat-1", "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["photo_ids"], serde_json::json!(["old"]), "{listed}");
+    assert_eq!(listed["indexed"], 2, "{listed}");
+
+    // Narrowed to a selection: a photo that is not indexed is not listed.
+    let (_, selection) = post_json(
+        &app,
+        "/v1/photos/thumbnails/missing",
+        serde_json::json!({"photo_ids": ["other", "never-indexed"], "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(
+        selection["photo_ids"],
+        serde_json::json!(["other"]),
+        "{selection}"
+    );
+
+    let jpeg = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../testdata/astronaut.jpg"
+    ))
+    .unwrap();
+    let upload = |id: &'static str| {
+        let (content_type, body) = multipart_body(
+            &[("photo_id", id), ("db_path", db_path.as_str())],
+            Some(("preview.jpg", &jpeg)),
+        );
+        Request::post("/v1/photos/thumbnail")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let stored = app.clone().oneshot(upload("old")).await.unwrap();
+    assert_eq!(stored.status(), StatusCode::OK);
+    let preview =
+        image::load_from_memory(&lrg_api::thumbnails::read(&root, "old").unwrap()).unwrap();
+    assert_eq!(
+        preview.width().max(preview.height()),
+        lrg_imaging::convert::THUMBNAIL_LONG_EDGE
+    );
+
+    let refused = app.clone().oneshot(upload("never-indexed")).await.unwrap();
+    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(refused).await["error_code"], "not_indexed");
+    assert!(!lrg_api::thumbnails::exists(&root, "never-indexed"));
+
+    let (_, after) = post_json(
+        &app,
+        "/v1/photos/thumbnails/missing",
+        serde_json::json!({"catalog_id": "cat-1", "db_path": db_path}),
+    )
+    .await;
+    assert_eq!(after["photo_ids"], serde_json::json!([]), "{after}");
+}
+
+/// The face recognizer is FaceNet until the user picks AuraFace, and AuraFace
+/// cannot be picked before its model is on disk: a switch that fails on the
+/// next photo would leave every run reporting a missing model.
+#[tokio::test]
+async fn auraface_cannot_be_chosen_before_it_is_downloaded() {
+    let (app, state) = fresh_app();
+    let status = get_json(&app, "/v1/faces/recognizer").await;
+    assert_eq!(status["active"], "facenet", "{status}");
+    let ids: Vec<&str> = status["recognizers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["facenet", "auraface"]);
+    assert_eq!(status["recognizers"][1]["ready"], false, "{status}");
+    assert_eq!(status["recognizers"][1]["downloadable"], true, "{status}");
+
+    let (code, refused) = post_json(
+        &app,
+        "/v1/faces/recognizer",
+        serde_json::json!({"recognizer": "auraface"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error_code"], "not_downloaded");
+    assert_eq!(state.face.recognizer(), lrg_ml::faces::Recognizer::FaceNet);
+    assert_eq!(state.face.model_id(), lrg_ml::faces::MODEL_ID);
+
+    let (bad, _) = post_json(
+        &app,
+        "/v1/faces/recognizer",
+        serde_json::json!({"recognizer": "arcface"}),
+    )
+    .await;
+    assert_eq!(bad, StatusCode::BAD_REQUEST);
 }

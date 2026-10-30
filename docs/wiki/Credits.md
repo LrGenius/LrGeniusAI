@@ -5,6 +5,7 @@ LrGeniusAI is made possible by these amazing open-source projects and AI framewo
 ## Core Backend Dependencies
 - **YuNet**: Fast, lightweight face detector from the OpenCV Model Zoo; provides the face boxes and five landmarks. [GitHub](https://github.com/opencv/opencv_zoo)
 - **FaceNet (facenet-pytorch)**: Inception-ResNet-v1 with VGGFace2 weights; produces the face embeddings that group photos by person. [GitHub](https://github.com/timesler/facenet-pytorch)
+- **AuraFace (fal.ai)**: ArcFace-style ResNet-100 trained on commercially usable data, Apache-2.0; the optional, more accurate face recognizer. [Hugging Face](https://huggingface.co/fal/AuraFace-v1)
 - **SigLIP2 (NaFlex)** (Apache-2.0): Google's `siglip2-so400m-patch16-naflex` ([SigLIP 2, Tschannen et al., 2025](https://arxiv.org/abs/2502.14786)), the vision-language model behind semantic search and the photo genre; it keeps each photo's aspect ratio. Exported with Hugging Face Transformers. [Model](https://huggingface.co/google/siglip2-so400m-patch16-naflex)
 - **AestheticSigLIP**: Gowthami Somepalli's `AestheticSigLIP`, a SigLIP 2 So400m NaFlex encoder fine-tuned to score photos from 1 to 9, which provides the *Aesthetic score*. Apache-2.0. [Model](https://huggingface.co/somepago/AestheticSigLIP)
 - **CLIP-IQA**: The prompt-pair method (Wang, Chan & Loy, *Exploring CLIP for Assessing the Look and Feel of Images*, AAAI 2023) behind the moment, emotion and kiss-gate questions culling asks of a photo. [Paper](https://arxiv.org/abs/2207.12396)

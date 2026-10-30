@@ -3363,4 +3363,80 @@ function Util.cullFlagSummaryLines(counts)
 	return lines
 end
 
+---
+-- Lightroom's `LR_jpeg_quality` for a quality in percent (the Plug-in
+-- Manager's "Export JPEG quality in percent").
+--
+-- The export setting runs from 0 to 1. Lightroom takes anything above 1 as
+-- full quality, so passing the percent straight through exported every photo
+-- at 100%: about nine times the bytes of 50%, for nothing the models can see.
+-- @param percent any The saved preference (prefs.exportQuality), if any.
+-- @param default number|nil Percent to use when `percent` is not a number
+--   (60 when left out).
+-- @return number Between 0.01 and 1.
+--
+function Util.jpegQualityFromPercent(percent, default)
+	local n = tonumber(percent)
+	if n == nil or n ~= n then
+		n = tonumber(default) or 60
+	end
+	return math.max(1, math.min(100, n)) / 100
+end
+
+--- Photos per export session when indexing exports JPEGs.
+Util.DEFAULT_EXPORT_CHUNK_SIZE = 25
+
+---
+-- How many photos go into one export session.
+--
+-- Lightroom renders the photos of one session in parallel, so a session per
+-- photo leaves most of the computer idle. One session over the whole
+-- selection is the other extreme: Lightroom keeps what a session rendered
+-- until the session ends, and on a run of thousands of photos its memory
+-- climbs until the computer swaps. A few dozen photos per session keeps the
+-- parallel rendering and gives the memory back between sessions.
+-- @param configured any The saved preference (prefs.exportChunkSize), if any.
+-- @return number Between 1 and 200.
+--
+function Util.exportChunkSize(configured)
+	local n = tonumber(configured)
+	if n == nil or n ~= n then
+		return Util.DEFAULT_EXPORT_CHUNK_SIZE
+	end
+	n = math.floor(n)
+	if n < 1 then
+		return 1
+	end
+	if n > 200 then
+		return 200
+	end
+	return n
+end
+
+---
+-- One paragraph for the Plug-in Manager about the face recognizer, from
+-- GET /v1/faces/recognizer.
+-- @param state table The backend's answer.
+-- @return string
+--
+function Util.faceRecognizerSummary(state)
+	if type(state) ~= "table" or type(state.recognizers) ~= "table" then
+		return "Unknown: the backend did not say which face recognizer it uses."
+	end
+	local active
+	for _, r in ipairs(state.recognizers) do
+		if r.id == state.active then
+			active = r
+		end
+	end
+	if not active then
+		return "Unknown: the backend did not say which face recognizer it uses."
+	end
+	local text = "In use: " .. tostring(active.name) .. ". " .. tostring(active.description or "")
+	if type(state.warnings) == "table" and state.warnings[1] then
+		text = text .. "\n" .. tostring(state.warnings[1])
+	end
+	return text
+end
+
 return Util

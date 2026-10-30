@@ -45,6 +45,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(routes::bioclip::router())
         .merge(routes::assets::router())
         .merge(routes::faces::router())
+        .merge(routes::face_recognizer::router())
         .merge(routes::index_upload::router())
         .merge(routes::index_by_reference::router())
         .merge(routes::jobs::router())

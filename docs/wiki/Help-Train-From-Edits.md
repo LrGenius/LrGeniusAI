@@ -4,7 +4,7 @@ The **Save Edits as AI Training Examples** workflow lets you teach LrGeniusAI yo
 
 ## How to use it
 
-`Library → Plug-in Extras → Save Edits as AI Training Examples...`
+`Help → Save Edits as AI Training Examples...`
 
 1. Edit a set of photos in Lightroom's Develop module the way you like them.
 2. Select those photos in the Library grid.

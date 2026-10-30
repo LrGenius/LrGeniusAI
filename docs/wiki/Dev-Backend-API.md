@@ -62,7 +62,8 @@ when it is `"failed"`.
 | `clip_image_model` / `clip_image_error` | The SigLIP2 **image** tower alone — what indexing and the training path embed with. |
 | `clip_text_model` / `clip_text_error` | The SigLIP2 **text** tower alone — what search, keyword lookup and the CLIP-IQA prompt sets embed with. |
 | `aesthetic_model` / `aesthetic_error` | AestheticSigLIP, the photo quality scorer. Its own backbone, loaded and idle-unloaded on its own clock. |
-| `face_model` / `face_error` | YuNet + FaceNet. |
+| `face_model` / `face_error` | YuNet + the active recognizer (FaceNet or AuraFace). |
+| `face_recognizer` | Which recognizer is active: `"facenet"` or `"auraface"` (see `GET /v1/faces/recognizer`). |
 | `species_model` / `species_error` | BioCLIP 2. |
 
 The two SigLIP2 towers load and idle-unload **independently**, so an
@@ -247,10 +248,11 @@ preview for the browser search page — …"`).
 
 `/v1/index/unprocessed` does **not** count a missing preview as outstanding:
 the cull pre-flight and the agent's indexing command ask it too, and would offer
-to prepare photos that lack nothing they need. A photo indexed before previews
-were stored gets one from the next run that *sends* it — any scope of Analyze &
-Index but *New or unprocessed photos*, with *Skip photos with existing data*, so
-nothing else is made again.
+to prepare photos that lack nothing they need. Photos indexed before previews
+were stored get theirs from *Add Missing Search Previews*
+(`POST /v1/photos/thumbnails/missing`, then `POST /v1/photos/thumbnail` per
+photo), which renders only the preview and touches nothing else; the next run
+that *sends* a photo makes one too.
 
 **The computer stays awake.** Both index routes run through `process_batch`,
 which holds `AppState::keep_awake` for the batch (`crate::keep_awake`). On macOS
@@ -308,7 +310,7 @@ route; the search page fetches it with the header and shows the bytes as a
 |---|---|---|
 | 200 | the JPEG | a preview is stored |
 | 400 | `{"error"}` | no `photo_id` |
-| 404 | `{"error", "error_code": "no_thumbnail"}` | none is stored: the photo was indexed before previews were, or not at all. An answer, not a failure — the page draws a placeholder and counts these |
+| 404 | `{"error", "error_code": "no_thumbnail"}` | none is stored: the photo was indexed before previews were, or not at all. An answer, not a failure — the page draws a placeholder and counts these, and names *Add Missing Search Previews* as the fix |
 
 **Disk cost and lifetime.** One file per photo,
 `<lance root>/thumbnails/<aa>/<sha256 of the photo_id>.jpg` (the lance root is
@@ -321,6 +323,38 @@ decode them. Deleted with the photo by `POST /v1/photos/remove` and by the index
 cleanup's purge (`POST /v1/photos/catalogs/cleanup`), only for rows that are
 really gone; left out of `POST /v1/db/backups`, since any indexing run makes
 them again.
+
+### `POST /v1/photos/thumbnails/missing`
+Which **indexed** photos have no search-page preview — what the plug-in's
+*Help ▸ Add Missing Search Previews* asks before it renders
+anything. Body (JSON, every field optional):
+
+| Field | Meaning |
+|---|---|
+| `photo_ids` | Only these photos (the selection). Left out: every indexed photo. Not a list → 400 |
+| `catalog_id` | Only photos this catalog has (`catalog_ids`) |
+
+Returns `{"photo_ids": [...], "indexed": <n>, "missing": <n>}` — `indexed`
+counts the photos the question covered that have an index row, `photo_ids`
+those of them without a preview. A photo that is not indexed is never listed:
+a preview belongs to an index row, and the next indexing run makes one anyway.
+No database bound → the empty answer. Costs a metadata scan (like
+`GET /v1/photos/ids`) plus a file stat per photo.
+
+### `POST /v1/photos/thumbnail`
+Stores the search-page preview of an already indexed photo, without indexing it
+again. Multipart: `photo_id` and one `image` part — any JPEG/PNG; the plug-in
+sends a small export (512 px). The backend scales it down
+to the size indexing stores (256 px long edge, quality 75) and writes it where
+`GET /v1/photos/thumbnail` reads it, replacing any earlier one. Nothing else
+about the photo changes.
+
+| Status | Body | When |
+|---|---|---|
+| 200 | `{"status": "success", "photo_id"}` | stored |
+| 400 | `{"error"}` | no `photo_id`, no `image`, or an image that cannot be decoded |
+| 404 | `{"error", "error_code": "not_indexed"}` | the photo has no index row — refused, since nothing would ever delete a preview of a photo the index does not know |
+| 503 | `{"error"}` | no database is bound |
 
 ### `GET /v1/photos/ids`
 Returns a list of all indexed `photo_id` values, optionally filtered by catalog.
@@ -694,7 +728,50 @@ them decides what a re-cluster is allowed to touch:
 Detects faces in an uploaded image and stores their embeddings.
 
 ### `POST /v1/faces/search`
-Finds photos containing faces similar to those in a reference image.
+Finds photos containing faces similar to those in a reference image. Only
+stored faces from the recognizer that embedded the query (`face_model`) are
+ranked: after a FaceNet/AuraFace switch the other rows are vectors of another
+space until their photos are re-indexed. How many were left out comes back in
+`warnings`, so a search right after a switch (no results at all) says why
+instead of looking like nobody matched.
+
+### `GET /v1/faces/recognizer`
+Which network makes face identity embeddings (`lrg_ml::faces::Recognizer`):
+
+```json
+{"active": "facenet", "saved": "facenet", "model_id": "yunet-2023mar/facenet-vggface2",
+ "recognizers": [{"id": "facenet", "name": "FaceNet", "description": "...", "ready": true,
+                  "active": true, "model_id": "...", "approx_bytes": 0, "downloadable": false},
+                 {"id": "auraface", "name": "AuraFace", "ready": false, "downloadable": true,
+                  "approx_bytes": 261000000, ...}],
+ "warnings": []}
+```
+
+`saved` differs from `active` when the saved choice could not be restored at
+start (AuraFace's file is gone); `warnings` then says so, for the Plug-in
+Manager.
+
+### `POST /v1/faces/recognizer`
+`{"recognizer": "facenet" | "auraface"}` — switches, saves the choice (restored
+at start) and answers like `GET`, plus `changed` and `warnings` for the user
+(the faces of the other recognizer are set aside until re-indexed; names carry
+over). 400 for an unknown name; 409 `error_code: "not_downloaded"` when the
+recognizer's model is not on disk.
+
+The switch changes `face_model` on every row written afterwards. Clustering,
+`/v1/faces/search` and `/v1/index/unprocessed` only treat rows of the active
+model as current, so the two spaces are never compared. On re-detection
+(`POST /v1/index/photos` with faces), person assignments of previous rows from
+the *other* recognizer are carried over by box overlap (IoU ≥ 0.6) — the
+detector is the same, so a face lands on its old box — while rows of the same
+recognizer keep matching by embedding.
+
+### `POST /v1/faces/recognizer/downloads` / `GET /v1/faces/recognizer/downloads`
+Starts the AuraFace download (`fal/AuraFace-v1`, `glintr100.onnx`, from
+Hugging Face — `HF_ENDPOINT` is honoured) / reports its progress, in the same
+shape as `/v1/models/assets/downloads` (`status`, `progress`, `total`,
+`current_file`, `error`). Does not switch; the plugin calls
+`POST /v1/faces/recognizer` once it completed.
 
 ### `POST /v1/faces/cluster`
 Re-clusters all stored face embeddings into person groups. The policy lives in

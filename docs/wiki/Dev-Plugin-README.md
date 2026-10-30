@@ -41,7 +41,10 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Optional face detection and clustering
 - Optional species identification (BioCLIP 2, on-device)
 - Every processed photo also gets a small preview (256 px, ~13 KB, stored by the backend beside
-  the index) for the browser search page
+  the index) for the browser search page. Photos indexed before previews were stored get theirs
+  from *Add Missing Search Previews...* (`TaskFillSearchPreviews.lua`): it asks the backend which
+  indexed photos lack one, exports small JPEGs of those in batches, and touches nothing else.
+  (Not `requestJpegThumbnail`: Lightroom delivers a few previews and then stops answering.)
 
 ### Advanced Search
 
@@ -58,6 +61,10 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 ### People Workflows
 
 - Cluster faces into persons
+- Choose the face recognizer in Plug-in Manager (*Face recognition*): FaceNet (default) or
+  AuraFace (more accurate, ~260 MB download). `PluginInfoDialogSections.switchFaceRecognizer`
+  downloads AuraFace when needed and switches via `/v1/faces/recognizer`; names carry over when
+  the photos are re-indexed
 - Rename persons
 - Jump from a person directly to a Lightroom collection
 - The People interface opens in your web browser (served by the backend at
@@ -313,7 +320,8 @@ In the plugin settings dialog you can configure:
   (`LocalModelCatalog.engineFor`).
   The section reports why it is unavailable when the host cannot use it — a
   source build without the `llamacpp` feature, or a missing MLX helper.
-- Export size and quality used for AI processing
+- Export size and quality used for AI processing, photos per export session (indexing exports
+  in batches of that size, `Util.exportChunkSize`, so Lightroom frees its memory between them)
 - Prompt presets — a preset is the *system* prompt: which expert is looking at
   the photo, which vocabulary they use, how specific they may be, and what they
   must never invent. **Default** (the analytical voice) and **Family &

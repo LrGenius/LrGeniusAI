@@ -85,9 +85,16 @@ Every photo sent to a vision LLM is first exported to a temporary JPEG
 (unless you use the originals fast path below). Two settings in *Plug-in
 Manager → LrGeniusAI* control that export:
 
-- **Export size in pixels (long edge)** — default **1024px**. Options: 512,
+- **Export size in pixels (long edge)** — default **3072px**. Options: 512,
   1024, 2048, 3072, 4096.
-- **Export JPEG quality in percent** — default **60%**.
+- **Export JPEG quality in percent** — default **50%**. Plug-ins before this
+  version exported at 100% whatever this said, so the temporary JPEGs are now
+  several times smaller; embeddings shift slightly the next time a photo is
+  indexed.
+
+Everything else about the export is fixed so that two exports of the same
+photo always come out the same: **sRGB**, no output sharpening, and photos
+smaller than the export size are **not enlarged**.
 
 Larger/higher-quality exports mean bigger uploads (cloud) and more pixels for
 a local model to decode (local) — both cost time, and for cloud providers
@@ -96,6 +103,26 @@ keywording and descriptions. Drop to **512px** for a fast first-pass bulk run
 where you mainly want keywords, not fine detail; go up to **2048px+** only if
 you need the model to read small text or catch fine detail, and only on
 smaller batches.
+
+### Photos per export batch
+
+Lightroom renders the photos of one export session in parallel, but keeps
+what a session rendered until it ends. LrGeniusAI therefore exports in
+batches — **25 photos** by default, *Photos per export batch* in the same
+section (10, 25, 50, 100). Lightroom's memory goes back down after every
+batch, so a run over thousands of photos no longer makes it swell until the
+computer slows to a crawl. Lower it if Lightroom still grows on your computer;
+raise it on a machine with plenty of memory for slightly faster runs.
+
+### Why exports and not Lightroom's previews
+
+Lightroom's cached previews (`requestJpegThumbnail` in its plug-in SDK) would
+skip the export, but they are not reliable for indexing: Lightroom delivers a
+few and then stops answering, and the ones it delivers come in whatever size
+happens to be cached. Embeddings and aesthetic scores made from pictures of
+varying size drift apart from the ones made from exports, which makes search
+and culling less consistent. Every photo is therefore exported at the size set
+above; batching is what makes that fast.
 
 ---
 
@@ -174,11 +201,12 @@ request: it is free to use several cores, while the plugin still waits for a
 single answer.
 
 On macOS, when you're *not* using "submit originals," the plugin pipelines
-export and upload — the next photo's JPEG export overlaps with the previous
-photo's backend round-trip, so you're not paying export time and network
-time back-to-back. This pipelining isn't available on Windows, so on Windows
-the "submit originals" fast path (§4) or a smaller export size (§3) buys you
-more.
+export and upload — the next batch's JPEG
+export overlaps with the previous photos' backend round-trips, so you're not
+paying export time and network time back-to-back. On Windows the exports of a
+batch are still rendered together, in one export session, and then sent one
+by one; there the "submit originals" fast path (§4) or a smaller export size
+(§3) buys you more.
 
 ---
 

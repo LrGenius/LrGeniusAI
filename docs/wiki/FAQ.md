@@ -182,7 +182,7 @@ None. AI Edit does not call a language model at all — it interpolates the deve
 
 ### AI Edit says my style profile is not ready
 
-It needs at least five saved training examples before it can produce anything. Edit some photos the way you like them and run **Save Edits as AI Training Examples** (*Library → Plug-in Extras*). See [Help: Train from Edits](Help-Train-From-Edits).
+It needs at least five saved training examples before it can produce anything. Edit some photos the way you like them and run **Save Edits as AI Training Examples** (*Help* menu). See [Help: Train from Edits](Help-Train-From-Edits).
 
 ### I want to review edits before they are applied
 

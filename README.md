@@ -64,8 +64,8 @@ Whether you prefer running local models to ensure maximum privacy or want to lev
    - **Cull Similar Photos...** *(beta)* — burst grouping and auto-ranking
    - **People...** — face clusters and named person collections
    - **Find Similar Images...** — find near-duplicates or visually similar photos
-   - **Deduplicate Keyword Synonyms...** — clean up synonym sprawl in your catalog
-6. For AI Edit, first teach it your style: edit a few photos by hand and run **Save Edits as AI Training Examples...**. AI Edit builds every recipe from those examples and needs at least five of them — it calls no LLM. Keep **Review each proposed edit before applying it** enabled while you validate the results.
+   - **Deduplicate Keyword Synonyms...** — clean up synonym sprawl in your catalog (in the **Help** menu)
+6. For AI Edit, first teach it your style: edit a few photos by hand and run **Save Edits as AI Training Examples...** (in the **Help** menu). AI Edit builds every recipe from those examples and needs at least five of them — it calls no LLM. Keep **Review each proposed edit before applying it** enabled while you validate the results.
 
 *For comprehensive details, model setup guides, and tips, please visit [lrgenius.com/help](http://lrgenius.com/help/).*
 

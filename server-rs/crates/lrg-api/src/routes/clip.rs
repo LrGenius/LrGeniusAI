@@ -200,14 +200,33 @@ pub(crate) async fn download_release_assets(
     label: &str,
     assets: &[ReleaseAsset<'_>],
 ) {
+    let urls: Vec<UrlAsset<'_>> = assets
+        .iter()
+        .map(|(tag, name, dest)| (asset_url(tag, name), *name, *dest))
+        .collect();
+    download_url_assets(state, key, label, &urls).await;
+}
+
+/// One file to fetch from anywhere: its URL, the name progress reports it
+/// under, and where it goes on disk.
+pub(crate) type UrlAsset<'a> = (String, &'a str, &'a std::path::Path);
+
+/// [`download_release_assets`] for files that are not GitHub release assets
+/// (AuraFace comes from Hugging Face). Same HEAD pass, `.part` staging and
+/// progress reporting.
+pub(crate) async fn download_url_assets(
+    state: &Downloads,
+    key: &str,
+    label: &str,
+    assets: &[UrlAsset<'_>],
+) {
     let client = reqwest::Client::new();
 
     // Resolve sizes up front (HEAD per asset) so total progress is known
     // from the start, matching Python's up-front HfApi files_metadata call.
     let mut total: u64 = 0;
-    for (tag, name, _) in assets {
-        let url = asset_url(tag, name);
-        let resp = match client.head(&url).send().await {
+    for (url, name, _) in assets {
+        let resp = match client.head(url.as_str()).send().await {
             Ok(r) => r,
             Err(e) => {
                 return set_error(state, key, label, format!("failed to resolve {name}: {e}"))
@@ -219,7 +238,7 @@ pub(crate) async fn download_release_assets(
                 key,
                 label,
                 format!(
-                    "release asset {name} not found for {tag} (HTTP {}) — the model-assets release may not exist yet",
+                    "{name} not found at {url} (HTTP {}) — the release may not exist yet",
                     resp.status()
                 ),
             );
@@ -229,12 +248,11 @@ pub(crate) async fn download_release_assets(
     with_status(state, key, |s| s.total = total);
 
     let mut downloaded: u64 = 0;
-    for (tag, name, dest) in assets {
+    for (url, name, dest) in assets {
         with_status(state, key, |s| s.current_file = Some(name.to_string()));
 
-        let url = asset_url(tag, name);
         log::info!("Starting {label} asset download: {name} from {url}");
-        let resp = match client.get(&url).send().await {
+        let resp = match client.get(url.as_str()).send().await {
             Ok(r) if r.status().is_success() => r,
             Ok(r) => {
                 return set_error(
