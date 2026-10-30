@@ -131,7 +131,7 @@ fn describe(state: &AppState) -> Value {
     })
 }
 
-fn name_of(r: Recognizer) -> &'static str {
+pub(crate) fn name_of(r: Recognizer) -> &'static str {
     match r {
         Recognizer::FaceNet => "FaceNet",
         Recognizer::AuraFace => "AuraFace",

@@ -215,7 +215,8 @@ The two recognizers describe faces in different ways that cannot be compared,
 so after a switch:
 
 - Faces found with the other recognizer are left **unassigned** by **Cluster
-  faces** and are not offered by **Find Similar Faces**.
+  faces** and are not offered by **Find Similar Faces**, which says how many it
+  left out.
 - Their photos count as unprocessed again, so **Analyze & Index Photos** with
   *New or unprocessed photos* and *Enable face detection* recognises them anew.
 - **Names you gave are kept.** The face *detector* is the same for both, so a

@@ -731,7 +731,9 @@ Detects faces in an uploaded image and stores their embeddings.
 Finds photos containing faces similar to those in a reference image. Only
 stored faces from the recognizer that embedded the query (`face_model`) are
 ranked: after a FaceNet/AuraFace switch the other rows are vectors of another
-space until their photos are re-indexed.
+space until their photos are re-indexed. How many were left out comes back in
+`warnings`, so a search right after a switch (no results at all) says why
+instead of looking like nobody matched.
 
 ### `GET /v1/faces/recognizer`
 Which network makes face identity embeddings (`lrg_ml::faces::Recognizer`):
