@@ -89,6 +89,10 @@ Manager → LrGeniusAI* control that export:
   1024, 2048, 3072, 4096.
 - **Export JPEG quality in percent** — default **60%**.
 
+Everything else about the export is fixed so that two exports of the same
+photo always come out the same: **sRGB**, no output sharpening, and photos
+smaller than the export size are **not enlarged**.
+
 Larger/higher-quality exports mean bigger uploads (cloud) and more pixels for
 a local model to decode (local) — both cost time, and for cloud providers
 also cost more tokens/money. **1024px / 60%** is a reasonable default for

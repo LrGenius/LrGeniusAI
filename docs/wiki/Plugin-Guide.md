@@ -8,7 +8,7 @@ For detailed technical usage of the plugin component, please view the [`plugin/R
 
 ## All menu items
 
-All actions are available under `Library → Plug-in Extras`:
+The everyday actions are under `Library → Plug-in Extras`:
 
 | Menu item | What it does |
 |---|---|
@@ -17,11 +17,16 @@ All actions are available under `Library → Plug-in Extras`:
 | Advanced Search... | Semantic free-text photo search |
 | Cull Similar Photos... | Burst grouping, ranking, Picks/Alternates/Rejects |
 | Retrieve Metadata from Backend... | Pull AI-generated metadata back into Lightroom |
-| Add Missing Search Previews... | Give photos indexed before previews existed their picture on the browser search page, without re-indexing |
 | Import Metadata from Catalog... | Sync existing Lightroom metadata into backend |
 | People... | Browse face clusters, assign names, open person collections |
 | Find Similar Faces... | Find photos with the same face as a selected photo |
 | Find Similar Images... | Find near-duplicates or visually similar photos |
+
+Occasional and maintenance actions are in the `Help` menu:
+
+| Menu item | What it does |
+|---|---|
+| Add Missing Search Previews... | Give photos indexed before previews existed their picture on the browser search page, without re-indexing |
 | Save Edits as AI Training Examples... | Feed your own edits to the AI as style reference |
 | Deduplicate Keyword Synonyms... | Find and merge near-duplicate keywords in your catalog |
 

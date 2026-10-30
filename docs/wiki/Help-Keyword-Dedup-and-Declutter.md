@@ -17,7 +17,7 @@ This is a **catalog-modifying operation**. Back up your catalog before running i
 
 ### How to run it
 
-`Library -> Plug-in Extras -> Deduplicate Keyword Synonyms...`
+`Help -> Deduplicate Keyword Synonyms...`
 
 The workflow has five steps:
 

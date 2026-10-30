@@ -329,7 +329,7 @@ LrTasks.startAsyncTask(function()
 			LrDialogs.message(
 				LOC("$$$/LrGeniusAI/TaskAiEditPhotos/NoStyleProfileTitle=Style profile not ready"),
 				LOC(
-					"$$$/LrGeniusAI/TaskAiEditPhotos/NoStyleProfile=AI Edit builds every recipe from your own saved edits, and it needs at least ^1 training examples to do that. You currently have ^2.\n\nEdit a handful of photos the way you like them, then run Library → Plug-in Extras → Save Edits as AI Training Examples and start AI Edit again.",
+					"$$$/LrGeniusAI/TaskAiEditPhotos/NoStyleProfile=AI Edit builds every recipe from your own saved edits, and it needs at least ^1 training examples to do that. You currently have ^2.\n\nEdit a handful of photos the way you like them, then run Help → Save Edits as AI Training Examples and start AI Edit again.",
 					tostring(MIN_TRAINING_EXAMPLES),
 					tostring(trainingCount)
 				),

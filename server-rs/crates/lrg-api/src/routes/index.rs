@@ -590,7 +590,7 @@ async fn get_thumbnail(
         None => (
             StatusCode::NOT_FOUND,
             Json(json!({
-                "error": "No preview is stored for this photo. Run Library > Plug-in Extras > Add Missing Search Previews to add one.",
+                "error": "No preview is stored for this photo. Run Help > Add Missing Search Previews in Lightroom to add one.",
                 "error_code": "no_thumbnail",
             })),
         )

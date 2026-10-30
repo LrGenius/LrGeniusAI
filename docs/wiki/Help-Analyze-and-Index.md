@@ -107,8 +107,8 @@ photos with existing data* skips everything else for a photo. If one cannot be
 saved, the completion dialog lists it as a warning; the photo is indexed all the
 same.
 
-Photos indexed before previews existed get theirs from **Library ▸ Plug-in
-Extras ▸ Add Missing Search Previews...**: choose selected photos, the current
+Photos indexed before previews existed get theirs from **Help ▸ Add Missing
+Search Previews...**: choose selected photos, the current
 view or the whole catalog, and it adds a preview to every indexed photo that has
 none, from a small export of each photo, without analyzing anything again. (A run of Analyze & Index
 that processes a photo adds one too, but *New or unprocessed photos* leaves

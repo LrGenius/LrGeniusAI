@@ -326,7 +326,7 @@ them again.
 
 ### `POST /v1/photos/thumbnails/missing`
 Which **indexed** photos have no search-page preview — what the plug-in's
-*Library ▸ Plug-in Extras ▸ Add Missing Search Previews* asks before it renders
+*Help ▸ Add Missing Search Previews* asks before it renders
 anything. Body (JSON, every field optional):
 
 | Field | Meaning |

@@ -291,10 +291,19 @@ local ENDPOINTS = {
 	AGENT_COMMANDS = "/v1/agent/commands", -- suffix /<id>/result, /<id>/progress
 }
 
+-- Every setting that changes the pixels is stated rather than left to
+-- Lightroom's defaults: embeddings, aesthetic scores and faces are compared
+-- across runs, so two exports of the same photo have to come out the same.
 local EXPORT_SETTINGS = {
 	LR_export_destinationType = "specificFolder",
 	LR_export_useSubfolder = false,
 	LR_format = "JPEG",
+	-- The models expect sRGB, and a profile Lightroom picks by default could
+	-- change between versions or presets.
+	LR_export_colorSpace = "sRGB",
+	-- A photo smaller than the export size stays as it is: upscaling adds no
+	-- detail, only interpolation the models would read as softness.
+	LR_size_doNotEnlarge = true,
 	LR_jpeg_quality = tonumber(prefs.exportQuality) or 60,
 	LR_minimizeEmbeddedMetadata = false,
 	LR_outputSharpeningOn = false,

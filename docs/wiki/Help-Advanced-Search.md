@@ -165,7 +165,7 @@ Index Photos** stores for each photo it processes, whatever you ask it to do;
 they take about 13 KB a photo on the backend's disk, roughly 130 MB per 10,000
 photos, beside the search index. Photos indexed before this version have none
 yet: they show *No preview yet*, and the page says how many. To add them, run
-**Library ▸ Plug-in Extras ▸ Add Missing Search Previews...** — for the whole
+**Help ▸ Add Missing Search Previews...** — for the whole
 catalog, or click **Show in Lightroom** first and choose *Selected photos*. It
 only adds the previews, from a small export of each photo; nothing is analyzed
 again.
