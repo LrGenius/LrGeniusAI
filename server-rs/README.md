@@ -138,13 +138,14 @@ LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
 LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
 ```
 
-Family names are `face`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
+Family names are `face`, `auraface`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
-(89 MB, 2.2 GB, 868 MB and 834 MB respectively).
+(89 MB, 261 MB, 2.2 GB, 868 MB and 834 MB respectively).
 
 CI uses both halves: `server-rs-tests.yml` downloads the face pair on every PR
 and sets `LRG_REQUIRE_GOLDENS=face`, while the nightly `golden-tests-full.yml`
-fetches all three and runs with `all`. The models resolve through the same
+fetches every family (AuraFace from its pinned Hugging Face commit, the
+rest from releases) and runs with `all`. The models resolve through the same
 `LRG_*_ONNX` env vars and `~/.cache/lrgenius/models/` fallback the server uses,
 so a machine that has run the plugin's model download needs no extra setup.
 
