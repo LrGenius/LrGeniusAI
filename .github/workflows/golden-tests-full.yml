@@ -3,9 +3,10 @@ name: "Golden tests (all model assets)"
 # The ML golden tests skip when their model files are absent, and a skipped
 # test is reported as a pass. `server-rs-tests.yml` closes that hole for the
 # face family (89 MB, cheap enough per PR), but BioCLIP (834 MB) and SigLIP2
-# (2.2 GB) are too heavy to fetch on every push. This job fetches all three
-# and runs with LRG_REQUIRE_GOLDENS=all, so a missing asset fails instead of
-# skipping — the numerical checks either run or the job goes red.
+# (2.2 GB) are too heavy to fetch on every push. This job fetches every
+# family — AuraFace (261 MB) from Hugging Face, the rest from releases — and
+# runs with LRG_REQUIRE_GOLDENS=all, so a missing asset fails instead of
+# skipping: the numerical checks either run or the job goes red.
 #
 # Deliberately *not* cached. A fresh download each night also verifies that
 # the published release assets are still present and fetchable, which is what
@@ -96,6 +97,19 @@ jobs:
           mv "$dest/aesthetic_siglip_fp16.onnx" "$dest/aesthetic_siglip.onnx"
           mv "$dest/aesthetic_goldens.json" "$GITHUB_WORKSPACE/server-rs/testdata/aesthetic_goldens.json"
           mv "$dest/bioclip2_image_fp16.onnx" "$dest/bioclip2_image.onnx"
+
+          # AuraFace is not a release asset: the server downloads it from
+          # Hugging Face at a pinned commit (routes/face_recognizer.rs). The
+          # repo, revision, file and sha256 the golden reference was made from
+          # are recorded next to that reference in face_goldens.json, so take
+          # them from there and refuse a file whose hash does not match.
+          src_json="$GITHUB_WORKSPACE/server-rs/testdata/face_goldens.json"
+          read -r af_repo af_rev af_file af_sha < <(jq -r \
+            '.astronaut_512.auraface_source | "\(.repo) \(.revision) \(.file) \(.sha256)"' \
+            "$src_json")
+          curl -fsSL --retry 4 --retry-all-errors -o "$dest/auraface_glintr100.onnx" \
+            "https://huggingface.co/$af_repo/resolve/$af_rev/$af_file?download=true"
+          echo "$af_sha  $dest/auraface_glintr100.onnx" | sha256sum -c -
 
           ls -lh "$dest"
           df -h .
