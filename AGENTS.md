@@ -89,7 +89,7 @@ reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
 are present (`face`, `auraface`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
 failure — this is what stops CI being green on numerical checks that never ran.
 PR CI provisions the face pair (89 MB) and requires it; the nightly
-`golden-tests-full.yml` fetches all three. If you add a golden test, gate it
+`golden-tests-full.yml` fetches every family. If you add a golden test, gate it
 through `crates/lrg-ml/tests/common/assets_ready` rather than an early
 `return`.
 
