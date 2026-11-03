@@ -11,7 +11,7 @@ them as signposts rather than exact addresses.
 
 ## Where the quality ceiling is
 
-### Sharpness is global, and that is the wrong question — FIXED (region), OUTSTANDING (eye crop)
+### Sharpness is global, and that is the wrong question — FIXED
 `metrics.rs:196-211` takes Laplacian variance over the whole 512 px frame.
 
 - **Shallow DOF is punished.** An f/1.4 portrait or a 400 mm wildlife frame has a razor-sharp
@@ -39,7 +39,9 @@ them as signposts rather than exact addresses.
 > `√((Jxx−Jyy)² + 4Jxy²)/(Jxx+Jyy)` is the same quantity for two axes and costs three
 > accumulators. It is **not scored**, only used to label a soft frame `motion_blur` instead of
 > `blurred`, because directional *content* (architecture, horizons, rain) raises it identically.
-> Point 2 — the native-resolution eye crop — is still outstanding.
+> Point 2 shipped too: eye and face focus are measured on the full-size original, around the
+> sharper eye and over the face box, with the blur-effect measure rather than a Laplacian
+> variance — see [Eye focus at full resolution](Dev-Image-Culling-Implementation-Plan.md#eye-focus-at-full-resolution).
 
 ### Eye-openness: the aggregation is inverted for group shots — FIXED
 `face_aggregate.rs:68-135` rolls multiple faces up as `eye_openness = max`,

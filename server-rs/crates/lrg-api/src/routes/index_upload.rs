@@ -539,7 +539,30 @@ impl ImageSource {
 /// What normalising one photo produces: the JPEG every later stage reads, the
 /// name to report it under, and whatever the original said about where it was
 /// taken before the conversion dropped its metadata.
-type NormalizedImage = (Vec<u8>, String, Option<LocationTags>);
+type NormalizedImage = (Vec<u8>, String, Option<LocationTags>, Option<FullSource>);
+
+/// Where a photo's full-size original can be had again, for measuring focus
+/// on the faces found on its working copy.
+///
+/// Faces are detected on the ≤2048 px working copy, where an eye in a
+/// half-length portrait is a dozen pixels and carries no sign of where the
+/// focus landed. The face step decodes this — only for a photo that turned out
+/// to have faces — and re-measures eye and face focus on it
+/// (`lrg_ml::faces::refine_focus`).
+enum FullSource {
+    /// A file on disk, read again when needed. Nothing is held in between,
+    /// which matters for raw originals of 50 MB and more.
+    Path(String),
+    /// An uploaded file: the plugin's export (3072 px by default), kept until
+    /// the face step since there is nowhere to read it from again. Small next
+    /// to a raw original.
+    Bytes { bytes: Arc<[u8]>, filename: String },
+}
+
+/// At most this many full-size originals are decoded for focus at once,
+/// across all requests. A 45-megapixel frame is ~135 MB as RGB, so this is
+/// what keeps concurrent indexing requests from multiplying that.
+static FULL_DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 /// One photo after normalisation, on its way into phase 1.
 struct NormalizedPhoto {
@@ -551,6 +574,7 @@ struct NormalizedPhoto {
     /// What the original file said about where it was taken, read before
     /// normalisation dropped its metadata. See [`load_and_normalize`].
     file_location: Option<LocationTags>,
+    full_source: Option<FullSource>,
 }
 
 /// One photo's bytes, or where to find them.
@@ -639,6 +663,7 @@ async fn load_and_normalize(
     max_edge: u32,
     quality: u8,
     read_location: bool,
+    keep_full: bool,
 ) -> Result<NormalizedImage, String> {
     let source_path = match &pending {
         PendingImage::Path(path) => Some(path.clone()),
@@ -651,7 +676,7 @@ async fn load_and_normalize(
     let bytes = img.bytes;
     // `normalize_image_bytes` is hundreds of milliseconds of pure CPU for a raw
     // original; it used to run directly on a tokio worker thread.
-    let (result, filename, file_location) = tokio::task::spawn_blocking(move || {
+    let (result, filename, file_location, full_source) = tokio::task::spawn_blocking(move || {
         let location = read_location
             .then(|| {
                 let mut tags = lrg_imaging::location::extract_location_tags(&bytes);
@@ -671,7 +696,22 @@ async fn load_and_normalize(
             })
             .flatten();
         let out = normalize_image_bytes(&bytes, Some(&filename), max_edge, quality);
-        (out, filename, location)
+        // Only where normalisation actually shrank or converted the file: a
+        // small JPEG or PNG passes through byte for byte and is its own
+        // full-size original.
+        let full_source = match &out {
+            Ok((normalized, _)) if keep_full && normalized.as_slice() != bytes.as_slice() => {
+                Some(match source_path {
+                    Some(path) => FullSource::Path(path),
+                    None => FullSource::Bytes {
+                        bytes: Arc::from(bytes),
+                        filename: filename.clone(),
+                    },
+                })
+            }
+            _ => None,
+        };
+        (out, filename, location, full_source)
     })
     .await
     .map_err(|e| format!("image conversion panicked: {e}"))?;
@@ -681,7 +721,7 @@ async fn load_and_normalize(
         t0.elapsed()
     );
     result
-        .map(|(bytes, filename)| (bytes, filename, file_location))
+        .map(|(bytes, filename)| (bytes, filename, file_location, full_source))
         .map_err(|UnsupportedImageError(msg)| msg)
 }
 
@@ -845,7 +885,14 @@ pub(crate) async fn process_batch(
             .zip(photo_ids.iter().cloned()),
     )
     .map(|(pending, photo_id)| {
-        load_and_normalize(pending, photo_id, max_edge, quality, read_location)
+        load_and_normalize(
+            pending,
+            photo_id,
+            max_edge,
+            quality,
+            read_location,
+            options.compute_faces,
+        )
     })
     .buffered(concurrency)
     .collect()
@@ -860,13 +907,16 @@ pub(crate) async fn process_batch(
         photo_ids.into_iter().zip(overrides).zip(normalized)
     {
         match result {
-            Ok((bytes, filename, file_location)) => normalized_photos.push(NormalizedPhoto {
-                bytes: Arc::from(bytes),
-                photo_id,
-                filename: original_filename.clone().unwrap_or(filename),
-                overrides: photo_overrides,
-                file_location,
-            }),
+            Ok((bytes, filename, file_location, full_source)) => {
+                normalized_photos.push(NormalizedPhoto {
+                    bytes: Arc::from(bytes),
+                    photo_id,
+                    filename: original_filename.clone().unwrap_or(filename),
+                    overrides: photo_overrides,
+                    file_location,
+                    full_source,
+                })
+            }
             Err(msg) => {
                 log::warn!("Skipping {photo_id}: {msg}");
                 results.push(json!({
@@ -999,6 +1049,7 @@ pub(crate) async fn process_batch(
             filename,
             overrides: photo_overrides,
             file_location,
+            full_source,
         } = photo;
         let Some(store_ref) = store.as_ref() else {
             failure_count += 1;
@@ -1033,7 +1084,10 @@ pub(crate) async fn process_batch(
         )
         .await
         {
-            Ok(photo) => prepared.push(photo),
+            Ok(mut photo) => {
+                photo.full_source = full_source;
+                prepared.push(photo)
+            }
             Err(e) => {
                 failure_count += 1;
                 results.push(json!({
@@ -1248,6 +1302,9 @@ struct PreparedPhoto {
     llm_request: Option<lrg_providers::types::MetadataGenerationRequest>,
     /// The search page's preview, written once the photo's row is stored.
     thumbnail: Result<Vec<u8>, String>,
+    /// The full-size original, for re-measuring focus on the faces phase 2
+    /// finds. Set by the caller after [`prepare_one`], which has no use for it.
+    full_source: Option<FullSource>,
 }
 
 /// Phase 1: everything that does not need the LLM.
@@ -1743,6 +1800,7 @@ async fn prepare_one(
         warnings,
         llm_request,
         thumbnail,
+        full_source: None,
     })
 }
 
@@ -1826,6 +1884,7 @@ async fn finish_one(
         warnings: warnings_from_phase_1,
         llm_request,
         thumbnail,
+        full_source,
     } = prepared;
     let photo_id = photo_id.as_str();
     let filename = filename.as_str();
@@ -1954,7 +2013,13 @@ async fn finish_one(
             .unwrap_or(false)
             && main_metadata.get("face_model").and_then(Value::as_str)
                 == Some(state.face.model_id());
-        if options.regenerate_metadata || !already_checked {
+        // The cull pass also runs on a photo whose faces are already checked
+        // when it was indexed before eye and face focus were measured — the
+        // only way those reach a fully indexed catalog without re-running
+        // identity, which the cull pass never writes.
+        let focus_missing = options.face_pass == FacePass::QualityOnly
+            && !main_metadata.contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY);
+        if options.regenerate_metadata || !already_checked || focus_missing {
             // Decoded here rather than carried from phase 1: full RGB is by far
             // the largest per-photo allocation, and holding one per photo in
             // flight is how a bigger group would turn into a memory problem.
@@ -1963,6 +2028,7 @@ async fn finish_one(
             // A decode failure is reported the same way a detector failure is,
             // as a warning: faces are optional and must not sink the photo.
             let t_decode = Instant::now();
+            let mut working_dims = (0usize, 0usize);
             let face_result: Result<(Vec<_>, &str), String> = if !state.face.is_cached() {
                 // Checked before decoding: without the model files the detector
                 // fails anyway, and the decode would be pure waste.
@@ -1988,6 +2054,7 @@ async fn finish_one(
                 match image::load_from_memory(&image_bytes).map(|img| img.to_rgb8()) {
                     Ok(decoded) => {
                         let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+                        working_dims = (width, height);
                         let pixels = decoded.into_raw();
                         log::debug!(
                             "Photo {photo_id}: re-decode for faces took {:?}",
@@ -2010,6 +2077,28 @@ async fn finish_one(
                     Err(e) => Err(format!("could not decode image: {e}")),
                 }
             };
+            // Eye and face focus again on the full-size original — only now
+            // that there are faces to measure, never for a photo without any.
+            // A failure here costs the photo nothing but accuracy, and says
+            // so: the readings from the working copy stay.
+            let face_result = match (face_result, full_source) {
+                (Ok((mut faces, model)), Some(source)) if !faces.is_empty() => {
+                    let t_full = Instant::now();
+                    if let Err(e) = refine_focus_from(&mut faces, working_dims, source).await {
+                        log::warn!("Photo {photo_id}: full-size focus measurement failed: {e}");
+                        warnings.push(format!(
+                            "{filename}: eye focus was measured on the reduced working copy, \
+                             because the original could not be decoded again ({e})"
+                        ));
+                    }
+                    log::debug!(
+                        "Photo {photo_id}: full-size focus took {:?}",
+                        t_full.elapsed()
+                    );
+                    Ok((faces, model))
+                }
+                (other, _) => other,
+            };
             match face_result {
                 // The quality-only pass has no identity embedding and no
                 // thumbnail, so it must not touch FACE_TABLE at all: writing
@@ -2029,6 +2118,8 @@ async fn finish_one(
                             eye_openness: f.eye_openness,
                             blink_penalty: f.blink_penalty,
                             occlusion: Some(f.occlusion),
+                            eye_focus: f.eye_focus,
+                            face_focus: f.face_focus,
                         })
                         .collect();
                     apply_face_aggregate(&mut main_metadata, &inputs);
@@ -2135,6 +2226,11 @@ async fn finish_one(
                                 m.insert("face_eye_openness".into(), json!(f.eye_openness));
                                 m.insert("face_blink_penalty".into(), json!(f.blink_penalty));
                                 m.insert("face_occlusion".into(), json!(f.occlusion));
+                                // Null when the face was too small to measure.
+                                m.insert("face_eye_focus".into(), json!(f.eye_focus));
+                                m.insert("face_focus".into(), json!(f.face_focus));
+                                m.insert("face_eye_px".into(), json!(f.eye_px));
+                                m.insert("face_focus_scale".into(), json!(f.focus_scale));
                                 m.insert("face_model".into(), json!(face_model));
                                 StoreRecord {
                                     id: format!("{photo_id}_{i}"),
@@ -2158,6 +2254,8 @@ async fn finish_one(
                                 eye_openness: f.eye_openness,
                                 blink_penalty: f.blink_penalty,
                                 occlusion: Some(f.occlusion),
+                                eye_focus: f.eye_focus,
+                                face_focus: f.face_focus,
                             })
                             .collect();
                         apply_face_aggregate(&mut main_metadata, &inputs);
@@ -2551,6 +2649,94 @@ fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsI
     metadata.insert("cull_blink_penalty".into(), json!(agg.cull_blink_penalty));
     metadata.insert("cull_occlusion".into(), json!(agg.cull_occlusion));
     metadata.insert("cull_faces_present".into(), json!(agg.cull_faces_present));
+    // Absent, not 0, when no prominent face was large enough to measure: a
+    // stale reading from an earlier pass must not survive into this one.
+    for (key, value) in [
+        ("cull_eye_focus", agg.cull_eye_focus),
+        ("cull_face_focus", agg.cull_face_focus),
+    ] {
+        match value {
+            Some(v) => {
+                metadata.insert(key.into(), json!(v));
+            }
+            None => {
+                metadata.remove(key);
+            }
+        }
+    }
+    // What tells "too small to measure" from "indexed before focus was
+    // measured" — see `lrg_analysis::grouping::FOCUS_VERSION_KEY`.
+    metadata.insert(
+        lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
+        json!(lrg_analysis::grouping::FOCUS_VERSION),
+    );
+}
+
+/// Decodes `source` at full size and re-measures the focus of `faces` there
+/// (`lrg_ml::faces::refine_focus`). Waits for one of [`FULL_DECODES`], and
+/// decodes off the async workers.
+async fn refine_focus_from(
+    faces: &mut Vec<lrg_ml::faces::FaceResult>,
+    working: (usize, usize),
+    source: FullSource,
+) -> Result<(), String> {
+    let _permit = FULL_DECODES
+        .acquire()
+        .await
+        .map_err(|e| format!("decode queue closed: {e}"))?;
+    let taken = std::mem::take(faces);
+    let (outcome, back) = tokio::task::spawn_blocking(move || {
+        let mut faces = taken;
+        let outcome = decode_and_refine(&mut faces, working, source);
+        (outcome, faces)
+    })
+    .await
+    .map_err(|e| format!("focus measurement panicked: {e}"))?;
+    *faces = back;
+    outcome
+}
+
+/// The blocking half of [`refine_focus_from`].
+fn decode_and_refine(
+    faces: &mut [lrg_ml::faces::FaceResult],
+    working: (usize, usize),
+    source: FullSource,
+) -> Result<(), String> {
+    let (data, filename): (Arc<[u8]>, String) = match source {
+        FullSource::Path(path) => {
+            let data = std::fs::read(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            (Arc::from(data), name)
+        }
+        FullSource::Bytes { bytes, filename } => (bytes, filename),
+    };
+    let image = lrg_imaging::convert::decode_oriented(&data, &filename)
+        .map_err(|UnsupportedImageError(msg)| msg)?;
+    drop(data);
+    let rgb = image.into_rgb8();
+    let (width, height) = (rgb.width() as usize, rgb.height() as usize);
+    if !lrg_ml::faces::refine_focus(
+        faces,
+        working.0,
+        working.1,
+        rgb.as_raw(),
+        width,
+        height,
+        &FaceMetricsConfig::defaults(),
+    ) {
+        // Not an error: the original is no larger than the working copy (a
+        // raw whose embedded preview is small), so the readings already taken
+        // are the best there are.
+        log::debug!(
+            "{filename}: original {width}x{height} adds nothing over the {}x{} working copy",
+            working.0,
+            working.1
+        );
+    }
+    Ok(())
 }
 
 /// The wire provider name for this run, lowercased, defaulting to "ollama".

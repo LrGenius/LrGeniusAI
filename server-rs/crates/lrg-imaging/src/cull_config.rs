@@ -156,6 +156,39 @@ pub struct FaceMetricsConfig {
     /// bystander at the edge of the frame would sink every frame equally and
     /// the signal would stop discriminating.
     pub prominent_face_area_fraction: f64,
+    /// Half the side of the square measured around each eye for `eye_focus`,
+    /// as a fraction of the distance between the eyes.
+    ///
+    /// An adult eye opening is about half the interocular distance wide, so
+    /// 0.25 spans the opening and the lashes above and below it without
+    /// reaching the brow — the detail a photographer zooms in on to check
+    /// focus.
+    pub eye_focus_patch_ratio: f64,
+    /// Smallest interocular distance, in pixels of the image measured, at
+    /// which eye focus is judged at all. Below it the eye is reported as not
+    /// measurable rather than guessed at.
+    ///
+    /// 40 px makes a 21 px patch. Calibrated on `testdata/astronaut.jpg`: a
+    /// 23 px eye patch separates sharp from a sigma-2 blur by 0.22, a 21 px
+    /// one still by 0.19, but a 13 px patch only by 0.06 — the re-blur window
+    /// then covers the whole eye and the measure saturates.
+    pub eye_focus_min_iod_px: f64,
+    /// Smallest face box side, in pixels of the image measured, for
+    /// `face_focus`.
+    pub face_focus_min_side_px: f64,
+    /// Longest side an eye patch is measured at; a larger one is
+    /// box-downsampled by a whole factor first. Bounds the cost of a tight
+    /// headshot from a high-resolution body without changing which frame of a
+    /// burst is sharper, and keeps the reading of a very large eye from being
+    /// dominated by how soft the sensor is at 100 % — 128 px is an eye 256 px
+    /// from the other, far beyond the size at which a missed focus shows.
+    pub eye_focus_max_patch_side: usize,
+    /// Longest side a face is measured at for `face_focus`; see
+    /// [`Self::eye_focus_max_patch_side`].
+    pub face_focus_max_side: usize,
+    /// Length of the box filter the focus measure re-blurs with
+    /// (`skimage.measure.blur_effect`'s `h_size`).
+    pub focus_blur_window: usize,
 }
 
 impl FaceMetricsConfig {
@@ -181,6 +214,12 @@ impl FaceMetricsConfig {
             occlusion_symmetry_weight: 0.35,
             occlusion_geometry_normalizer: 0.06,
             prominent_face_area_fraction: 0.25,
+            eye_focus_patch_ratio: 0.25,
+            eye_focus_min_iod_px: 40.0,
+            face_focus_min_side_px: 32.0,
+            eye_focus_max_patch_side: 128,
+            face_focus_max_side: 768,
+            focus_blur_window: crate::focus::BLUR_WINDOW,
         }
     }
 }

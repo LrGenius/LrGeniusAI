@@ -150,6 +150,50 @@ for some photos or for all of them, the plugin tells you why and what to do.
 > frame, export a culling fixture (`Library → Plug-in Extras → Export Culling
 > Fixture...`) from a shoot you culled by hand and share it.
 
+## Focus on the eyes
+
+For photos of people, the question most culls turn on is whether the eyes are
+sharp — or whether the focus landed on the nose, an ear or the hair. That cannot
+be answered on the reduced copy the analysis otherwise works with: there, an eye
+in a half-length portrait is a dozen pixels. So for every photo with faces, the
+backend measures focus a second time on the **full-size original**, around each
+eye and over the face as a whole.
+
+- **The sharper eye counts.** With a shallow depth of field the near eye is sharp
+  and the far one is not, which is how it should be.
+- **In a couple or group shot, the least sharp prominent face decides**: the
+  frame is only sharp when everyone in it is. Small faces in the background do
+  not count.
+- **Too small to judge is not the same as soft.** When the eyes are too small in
+  the photo to measure (less than about 40 pixels apart in the original), they
+  are left out and the face as a whole stands in for them.
+- **Frames are compared with each other.** A frame is reported as "the eyes are
+  not sharp" only when a sharper frame of the same burst exists, and it becomes a
+  reject candidate only when it is clearly behind that frame. A single photo is
+  never rejected for its eye focus alone.
+- The explanation shows **eye focus N/10 within the group**: 10 is the frame
+  with the sharpest eyes of its group, and each point below it is a step
+  softer. It is a comparison, not an absolute grade — how sharp a photo is at
+  the pixel level depends on the camera, the lens, the ISO and how large the
+  face is, as much as on the focus. A photo with no other measured frame in its
+  group gets no number.
+
+**Portrait** weights eye focus most and holds it to the highest bar, **Default**
+and **Event** less, **Sports** least (the athlete as a whole has to be sharp,
+and motion softens faces a little), and **Street** not at all, because the
+moment counts there, not the technique.
+
+**Where the original comes from.** With the backend on this computer it is the
+photo file itself — for a raw file, the full-size JPEG the camera embedded in it
+(some cameras embed only a smaller one, which is then what is measured). With
+the backend on another computer it is the JPEG the plugin sends, at the
+**Export size** set in Plug-in Manager (3072 pixels by default).
+
+Photos prepared for culling before this existed have no eye-focus reading. The
+culling dialog offers to prepare them again; if you skip that, the bursts they
+are in are ranked without eye focus, and the culling warning says how many
+photos that affects.
+
 ## Result collections in Lightroom
 
 For each culling run, the plugin creates a new collection set:
@@ -200,7 +244,9 @@ For each photo, the backend stores culling-related fields such as:
   subject)
 - face scores: `cull_face_score`, `cull_face_count`, `cull_face_sharpness`,
   `cull_face_prominence`, `cull_face_visibility`, `cull_eye_openness`,
-  `cull_blink_penalty`, `cull_occlusion`
+  `cull_blink_penalty`, `cull_occlusion`, and `cull_eye_focus` /
+  `cull_face_focus` (focus on the eyes and on the face, measured on the
+  full-size original; absent when the faces were too small to judge)
 - aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
   photo's **Aesthetic score** from the AestheticSigLIP model, stored at
   indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`
@@ -227,6 +273,11 @@ Typical reason codes include:
 - `best_face_quality` / `weak_face_quality`
 - `eyes_open_best`
 - `possible_blink`
+- `eyes_out_of_focus` – the eyes are clearly softer than in a sharper frame of
+  the same burst; the focus landed elsewhere
+- `face_out_of_focus` – the same for the whole face, where the eyes were too
+  small to measure
+- `eyes_sharpest_in_group`
 - `possible_occlusion`
 - `no_face_detected_in_group`
 - `near_duplicate_weaker`
@@ -242,8 +293,10 @@ These help explain why a specific frame was chosen as a pick or flagged as a rej
 
 ## "Some culling signals are missing"
 
-When the selected photos have no culling data yet, the plugin offers to prepare
-them — a fast pass that computes only what culling reads. It never runs a
+When the selected photos have no culling data yet — or were prepared by an
+older version that did not measure everything culling now reads, such as the
+capture time or eye focus — the plugin offers to prepare them: a fast pass that
+computes only what culling reads. It never runs a
 language model, so when the backend is on this machine it hands over a group of
 photos at a time and they are read and measured across several CPU cores rather
 than one after another. If a signal could not be computed, the plugin says so

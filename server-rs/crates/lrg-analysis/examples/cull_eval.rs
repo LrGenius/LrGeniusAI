@@ -70,10 +70,17 @@ fn ablate(mut cfg: CullingConfig, knob: &str) -> CullingConfig {
         "kiss-gate" => cfg.ranking.eyes_closed_intent_threshold = 0.0,
         "single-rejects" => cfg.ranking.reject_blurred_without_alternative = false,
         "sets" => cfg.sets.enabled = false,
+        "eye-focus" => {
+            cfg.ranking.eye_focus_weight = 0.0;
+            cfg.ranking.reason_eye_focus_threshold = 0.0;
+            cfg.ranking.reject_eye_focus_threshold = 0.0;
+            cfg.ranking.reason_face_focus_threshold = 0.0;
+            cfg.ranking.reject_face_focus_threshold = 0.0;
+        }
         other => panic!(
             "unknown --ablate knob {other:?}; expected one of: \
-             sharpness-peak, relative, iqa, semantic, emotion, usable-gate, kiss-gate, \
-             single-rejects, sets"
+             sharpness-peak, relative, aesthetic-model, semantic, emotion, usable-gate, \
+             kiss-gate, single-rejects, sets, eye-focus"
         ),
     }
     cfg

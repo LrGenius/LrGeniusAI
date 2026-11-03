@@ -580,16 +580,22 @@ LrTasks.startAsyncTask(function()
 						.. "This computes the culling signals and the image analysis the moment "
 						.. "(emotion, expression, action) is judged from. It takes longer than the culling "
 						.. "signals alone, but no AI descriptions are generated. Without it, photos with no "
-						.. "culling data are skipped and the rest are ranked without their moment.",
+						.. "culling data are skipped and the rest are ranked without the signals they are missing.",
 					#missing,
 					#photoIds
 				)
 				skipVerb = "Cull without preparing"
 			else
-				prepMessage = LOC(
-					"$$$/LrGeniusAI/CullTask/NeedsPrepMessage=^1 of ^2 selected photos have no culling data yet and would be skipped. Prepare them now? This only computes culling signals, so it is much faster than a full Analyze & Index.",
-					tostring(#missing),
-					tostring(#photoIds)
+				-- Not only photos with no culling data: also ones prepared before a
+				-- signal existed (capture time, eye and face focus), which are
+				-- culled either way but ranked without it.
+				prepMessage = string.format(
+					"%d of %d selected photos are not fully prepared for culling. Prepare them now?\n\n"
+						.. "This only computes the culling signals, so it is much faster than a full "
+						.. "Analyze & Index. Without it, photos with no culling data are skipped and the rest "
+						.. "are ranked without the signals they are missing (for example eye focus).",
+					#missing,
+					#photoIds
 				)
 				skipVerb = LOC("$$$/LrGeniusAI/CullTask/NeedsPrepSkip=Cull without them")
 			end

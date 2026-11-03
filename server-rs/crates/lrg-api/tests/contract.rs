@@ -3765,3 +3765,181 @@ async fn auraface_cannot_be_chosen_before_it_is_downloaded() {
     .await;
     assert_eq!(bad, StatusCode::BAD_REQUEST);
 }
+
+// ---------------------------------------------------------------------------
+// Eye and face focus
+// ---------------------------------------------------------------------------
+
+/// A photo with faces prepared before eye and face focus were measured is
+/// prepared once more; one that went through the pass is not, even when its
+/// faces were too small to measure, and a faceless photo never is.
+#[tokio::test]
+async fn check_unprocessed_remeasures_faces_prepared_before_eye_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let row = |id: &str, faces: i64, version: bool, eye_focus: Option<f64>| {
+        let mut m = serde_json::Map::new();
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
+        m.insert("cull_face_count".into(), serde_json::json!(faces));
+        m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        if version {
+            m.insert("cull_focus_version".into(), serde_json::json!(1));
+        }
+        if let Some(v) = eye_focus {
+            m.insert("cull_eye_focus".into(), serde_json::json!(v));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                row("faces_before_focus", 2, false, None),
+                row("faces_measured", 1, true, Some(0.66)),
+                row("faces_too_small", 3, true, None),
+                row("faceless_before_focus", 0, false, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": [
+                            "faces_before_focus", "faces_measured",
+                            "faces_too_small", "faceless_before_focus",
+                        ],
+                        "tasks": "cull",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["photo_ids"], serde_json::json!(["faces_before_focus"]));
+}
+
+/// Two portrait frames, focus on the eyes and focus missed: the response
+/// carries the readings, the reason in words and the 0–10 the plugin writes
+/// into the explanation. A third photo prepared before focus existed is named
+/// in a warning, with the fix.
+#[tokio::test]
+async fn cull_ranks_on_eye_focus_and_names_photos_without_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let frame = |id: &str, t: i64, eye: Option<f64>, measured: bool| {
+        let mut m = serde_json::Map::new();
+        m.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        m.insert("capture_time".into(), serde_json::json!(t));
+        m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+        m.insert("cull_sharpness".into(), serde_json::json!(0.6));
+        m.insert("cull_sharpness_peak".into(), serde_json::json!(0.6));
+        m.insert("cull_exposure".into(), serde_json::json!(0.7));
+        m.insert("cull_noise".into(), serde_json::json!(0.1));
+        m.insert("cull_face_count".into(), serde_json::json!(1));
+        m.insert("cull_face_score".into(), serde_json::json!(0.6));
+        m.insert("cull_eye_openness".into(), serde_json::json!(0.8));
+        m.insert("cull_blink_penalty".into(), serde_json::json!(0.2));
+        m.insert("cull_occlusion".into(), serde_json::json!(0.1));
+        m.insert("aesthetic_score".into(), serde_json::json!(6.0));
+        m.insert(
+            "aesthetic_model".into(),
+            serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+        );
+        if measured {
+            m.insert("cull_focus_version".into(), serde_json::json!(1));
+        }
+        if let Some(v) = eye {
+            m.insert("cull_eye_focus".into(), serde_json::json!(v));
+            m.insert("cull_face_focus".into(), serde_json::json!(0.5));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: Some(vec![0.5f32; 1152]),
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                frame("missed", 1_700_000_000, Some(0.40), true),
+                frame("sharp", 1_700_000_001, Some(0.69), true),
+                // Far outside the burst window: its own group.
+                frame("older", 1_700_009_000, None, false),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["missed", "sharp", "older"],
+            "culling_preset": "portrait",
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    let groups = json["groups"].as_array().unwrap();
+    let burst = groups
+        .iter()
+        .find(|g| g["group_size"] == 2)
+        .expect("the two frames form one group");
+    assert_eq!(burst["winner_photo_id"], "sharp");
+    let photo = |id: &str| {
+        burst["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["photo_id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let missed = photo("missed");
+    assert_eq!(missed["metrics"]["eye_focus"], 0.4);
+    assert_eq!(missed["reject_candidate"], true);
+    assert!(missed["reason_codes"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("eyes_out_of_focus")));
+    let explanation = photo("sharp")["explanation"].as_str().unwrap().to_string();
+    assert!(
+        explanation.contains("eye focus 10/10 within the group"),
+        "{explanation}"
+    );
+
+    let warnings = json["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("1 photo(s) with faces were prepared before eye and face focus")),
+        "{warnings:?}"
+    );
+}

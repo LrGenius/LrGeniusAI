@@ -201,6 +201,96 @@ pub fn occlusion_from_crop(
     unit(cfg.occlusion_geometry_weight * geometry + cfg.occlusion_symmetry_weight * symmetry)
 }
 
+/// How sharp a face and its sharper eye are, measured by
+/// [`lrg_imaging::focus`] on the largest copy of the photo available.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceFocus {
+    /// Focus of the sharper of the two eyes, `0..1`, higher is sharper.
+    ///
+    /// The *sharper* eye, because with a shallow depth of field a three-quarter
+    /// portrait correctly has the near eye sharp and the far one soft, and a
+    /// photographer checks the near one. `None` when the eyes are too small in
+    /// the measured image to judge ([`FaceMetricsConfig::eye_focus_min_iod_px`]),
+    /// lie outside it, or carry no structure (a blown highlight, sunglasses).
+    pub eye_focus: Option<f64>,
+    /// Focus of the face box as a whole, `0..1`; `None` when the face is too
+    /// small ([`FaceMetricsConfig::face_focus_min_side_px`]).
+    pub face_focus: Option<f64>,
+    /// Distance between the eyes in pixels of the measured image.
+    pub eye_px: f64,
+}
+
+/// Measures [`FaceFocus`] for one face on `image`, an RGB8 copy of the photo
+/// that has the detection image's geometry scaled by `scale_x`/`scale_y`.
+///
+/// `bbox` and `kps` are in detection-image pixels, as the detector reported
+/// them; they are scaled here. Pass a scale of 1 to measure on the detection
+/// image itself.
+#[allow(clippy::too_many_arguments)]
+pub fn face_focus(
+    image: &[u8],
+    width: usize,
+    height: usize,
+    scale_x: f64,
+    scale_y: f64,
+    bbox: [i64; 4],
+    kps: &[[f64; 2]; 5],
+    cfg: &FaceMetricsConfig,
+) -> FaceFocus {
+    use lrg_imaging::focus::{focus, luma_region};
+
+    let window = cfg.focus_blur_window;
+    let eyes = [
+        [kps[0][0] * scale_x, kps[0][1] * scale_y],
+        [kps[1][0] * scale_x, kps[1][1] * scale_y],
+    ];
+    let eye_px = ((eyes[1][0] - eyes[0][0]).powi(2) + (eyes[1][1] - eyes[0][1]).powi(2)).sqrt();
+
+    let eye_focus = if eye_px >= cfg.eye_focus_min_iod_px {
+        let half = cfg.eye_focus_patch_ratio * eye_px;
+        // A patch clamped by the frame edge to a sliver would saturate the
+        // measure the same way a too-small eye does, so it must keep at least
+        // the side the minimum interocular distance would give it (in the
+        // pixels it is measured at, after any downsampling).
+        let min_side = (2.0 * cfg.eye_focus_patch_ratio * cfg.eye_focus_min_iod_px).floor();
+        let min_side = (min_side as usize).min(cfg.eye_focus_max_patch_side.max(1));
+        eyes.iter()
+            .filter_map(|e| {
+                let rect = [e[0] - half, e[1] - half, e[0] + half, e[1] + half];
+                let patch = luma_region(image, width, height, rect, cfg.eye_focus_max_patch_side)?;
+                if patch.width.min(patch.height) < min_side {
+                    return None;
+                }
+                focus(&patch, window)
+            })
+            .fold(None, |best: Option<f64>, v| {
+                Some(best.map_or(v, |b| b.max(v)))
+            })
+    } else {
+        None
+    };
+
+    let rect = [
+        bbox[0] as f64 * scale_x,
+        bbox[1] as f64 * scale_y,
+        bbox[2] as f64 * scale_x,
+        bbox[3] as f64 * scale_y,
+    ];
+    let face_side = (rect[2] - rect[0]).min(rect[3] - rect[1]);
+    let face_focus = if face_side >= cfg.face_focus_min_side_px {
+        luma_region(image, width, height, rect, cfg.face_focus_max_side)
+            .and_then(|patch| focus(&patch, window))
+    } else {
+        None
+    };
+
+    FaceFocus {
+        eye_focus,
+        face_focus,
+        eye_px,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +407,116 @@ mod tests {
             let occ = occlusion_from_crop(&vec![value; 112 * 112 * 3], 112, &canonical_kps(), &cfg);
             assert!(occ.is_finite() && occ < 0.1, "value {value}: {occ}");
         }
+    }
+
+    /// A textured RGB test image: sines at several frequencies, like skin and
+    /// lashes and iris all at once, so a blur has detail to remove.
+    fn textured(w: usize, h: usize) -> Vec<u8> {
+        let mut px = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let (xf, yf) = (x as f64, y as f64);
+                let v = 0.5
+                    + 0.2 * (xf * 1.1).sin() * (yf * 0.8).cos()
+                    + 0.15 * (xf * 0.31 + yf * 0.17).sin()
+                    + 0.1 * ((xf + 2.0 * yf) * 1.9).sin();
+                let i = (y * w + x) * 3;
+                px[i..i + 3].fill((v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+        }
+        px
+    }
+
+    /// Box-blurs the square of half-side `r` around `(cx, cy)` in place.
+    fn blur_square(px: &mut [u8], w: usize, cx: usize, cy: usize, r: usize, radius: usize) {
+        let src = px.to_vec();
+        for y in cy - r..cy + r {
+            for x in cx - r..cx + r {
+                let (mut sum, mut n) = (0u32, 0u32);
+                for yy in y - radius..=y + radius {
+                    for xx in x - radius..=x + radius {
+                        sum += src[(yy * w + xx) * 3] as u32;
+                        n += 1;
+                    }
+                }
+                let i = (y * w + x) * 3;
+                px[i..i + 3].fill((sum / n) as u8);
+            }
+        }
+    }
+
+    /// Eyes 100 px apart in a 400x300 frame, face box around them.
+    fn eye_kps() -> [[f64; 2]; 5] {
+        [
+            [150.0, 120.0],
+            [250.0, 120.0],
+            [200.0, 170.0],
+            [165.0, 210.0],
+            [235.0, 210.0],
+        ]
+    }
+    const FACE: [i64; 4] = [110, 60, 290, 250];
+
+    #[test]
+    fn focus_missing_the_eyes_shows_in_eye_focus_more_than_face_focus() {
+        let cfg = FaceMetricsConfig::defaults();
+        let sharp = textured(400, 300);
+        let mut eyes_soft = sharp.clone();
+        for (x, y) in [(150usize, 120usize), (250, 120)] {
+            blur_square(&mut eyes_soft, 400, x, y, 30, 2);
+        }
+        let a = face_focus(&sharp, 400, 300, 1.0, 1.0, FACE, &eye_kps(), &cfg);
+        let b = face_focus(&eyes_soft, 400, 300, 1.0, 1.0, FACE, &eye_kps(), &cfg);
+        let (ea, eb) = (a.eye_focus.unwrap(), b.eye_focus.unwrap());
+        let (fa, fb) = (a.face_focus.unwrap(), b.face_focus.unwrap());
+        assert!(ea - eb > 0.1, "eye focus must drop clearly: {ea} -> {eb}");
+        assert!(
+            ea - eb > fa - fb,
+            "the eyes lost more focus than the face: eyes {ea}->{eb}, face {fa}->{fb}"
+        );
+        assert!((a.eye_px - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn eyes_too_small_to_judge_are_not_measured() {
+        let cfg = FaceMetricsConfig::defaults();
+        let img = textured(400, 300);
+        // Eyes 30 px apart: below the 40 px minimum.
+        let mut kps = eye_kps();
+        kps[0] = [185.0, 120.0];
+        kps[1] = [215.0, 120.0];
+        let m = face_focus(&img, 400, 300, 1.0, 1.0, FACE, &kps, &cfg);
+        assert_eq!(m.eye_focus, None);
+        assert!(
+            m.face_focus.is_some(),
+            "the face itself is still large enough"
+        );
+        // ...but at twice the resolution the same eyes are 60 px apart.
+        let big = textured(800, 600);
+        let m = face_focus(&big, 800, 600, 2.0, 2.0, FACE, &kps, &cfg);
+        assert!(m.eye_focus.is_some());
+        assert!((m.eye_px - 60.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_eye_cut_off_by_the_frame_edge_falls_back_to_the_other_one() {
+        let cfg = FaceMetricsConfig::defaults();
+        let img = textured(400, 300);
+        let mut kps = eye_kps();
+        // Right at the left edge: its patch would be a sliver.
+        kps[0] = [1.0, 120.0];
+        kps[1] = [101.0, 120.0];
+        let m = face_focus(&img, 400, 300, 1.0, 1.0, FACE, &kps, &cfg);
+        assert!(m.eye_focus.is_some(), "the other eye is inside the frame");
+        // Both eyes outside: nothing to measure.
+        let kps = [
+            [-300.0, -300.0],
+            [-200.0, -300.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+        ];
+        let m = face_focus(&img, 400, 300, 1.0, 1.0, FACE, &kps, &cfg);
+        assert_eq!(m.eye_focus, None);
     }
 }

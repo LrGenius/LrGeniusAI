@@ -347,6 +347,15 @@ struct GroupingOutcome {
     /// Whether the photo quality model is on disk, which decides what the
     /// warning about missing scores tells the user to do.
     aesthetic_model_ready: bool,
+    /// Ranked photos with faces that were prepared before eye and face focus
+    /// were measured, when the preset judges focus. Ranking leaves focus out
+    /// of their whole group.
+    ///
+    /// Photos whose faces were measured but too small to judge are *not*
+    /// counted: nothing the user can do changes that, and their explanation
+    /// already shows no eye-focus reading. Saying so on every cull of an
+    /// event full of small faces would only teach people to skip the dialog.
+    focus_unmeasured: usize,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -482,6 +491,7 @@ async fn compute_groups(
             moment_missing: 0,
             aesthetic_missing: 0,
             aesthetic_model_ready: state.aesthetic.is_cached(),
+            focus_unmeasured: 0,
             unavailable: None,
             stored_metadata: Default::default(),
         });
@@ -602,6 +612,24 @@ async fn compute_groups(
         0
     };
 
+    let focus_unmeasured = if cfg.ranking.judges_focus() {
+        records
+            .iter()
+            .filter(|r| {
+                r.metadata
+                    .get("cull_face_count")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    > 0
+                    && !r
+                        .metadata
+                        .contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY)
+            })
+            .count()
+    } else {
+        0
+    };
+
     // Captured after the IQA passes and before grouping consumes the records,
     // so it reflects exactly the inputs this run ranked on — including the
     // injected `cull_*_iqa` scores, which are not stored
@@ -630,6 +658,7 @@ async fn compute_groups(
         moment_missing,
         aesthetic_missing,
         aesthetic_model_ready: state.aesthetic.is_cached(),
+        focus_unmeasured,
         unavailable,
     })
 }
@@ -695,6 +724,15 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
                 outcome.aesthetic_missing
             )
         });
+    }
+    // Also independent of embeddings: focus is measured by the face pass.
+    if outcome.focus_unmeasured > 0 {
+        warnings.push(format!(
+            "{} photo(s) with faces were prepared before eye and face focus were measured, so \
+             they and the photos grouped with them were ranked without it. Run 'Cull Similar \
+             Photos' again and choose 'Prepare now' to measure it.",
+            outcome.focus_unmeasured
+        ));
     }
     if outcome.embedded_count == 0 {
         warnings.push(if outcome.moment_asked {
@@ -872,9 +910,26 @@ mod tests {
             moment_missing: 0,
             aesthetic_missing: 0,
             aesthetic_model_ready: true,
+            focus_unmeasured: 0,
             unavailable: None,
             stored_metadata: Default::default(),
         }
+    }
+
+    /// Photos prepared before focus was measured are ranked without it, and
+    /// the fix is one the user can take: prepare them again.
+    #[test]
+    fn photos_prepared_before_focus_existed_are_named_with_the_fix() {
+        let mut o = outcome(10, 0);
+        o.focus_unmeasured = 3;
+        let warnings = grouping_warnings(&o);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("3 photo(s) with faces"));
+        assert!(warnings[0].contains("Prepare now"));
+        // Said even when grouping fell back to hashes: a different problem.
+        let mut o = outcome(0, 0);
+        o.focus_unmeasured = 2;
+        assert_eq!(grouping_warnings(&o).len(), 2);
     }
 
     #[test]

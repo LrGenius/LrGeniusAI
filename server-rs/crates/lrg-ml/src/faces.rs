@@ -188,6 +188,69 @@ pub struct FaceResult {
     pub eye_openness: f64,
     pub blink_penalty: f64,
     pub occlusion: f64,
+    /// The detector's five landmarks — both eyes, the nose tip and the two
+    /// mouth corners — in pixels of the image detection ran on.
+    pub kps: [[f64; 2]; 5],
+    /// Focus of the sharper eye and of the whole face, `0..1`
+    /// ([`face_quality::face_focus`]). Measured on the detection image by
+    /// [`FaceModel::detect_faces_with_model`] and re-measured on a larger copy
+    /// of the photo by [`refine_focus`] when the caller has one.
+    pub eye_focus: Option<f64>,
+    pub face_focus: Option<f64>,
+    /// Distance between the eyes in pixels of the image the focus was
+    /// measured on.
+    pub eye_px: f64,
+    /// How many times larger than the detection image that image was: 1 when
+    /// focus was measured on the detection image itself.
+    pub focus_scale: f64,
+}
+
+/// Re-measures every face's eye and face focus on `image`, a larger copy of
+/// the image the faces were detected on (`detected_width` ×
+/// `detected_height`), with the same geometry — the full-size photo the
+/// working copy was shrunk from (`lrg_imaging::convert::decode_oriented`).
+///
+/// Detection stays on the working copy: the detector, the stored boxes and
+/// the identity embeddings must not depend on how large an original happens to
+/// be. Only focus needs the pixels. On the working copy an eye in a
+/// half-length portrait is a patch of a dozen pixels that carries no defocus
+/// signal at all; at full size it does.
+///
+/// Returns `false`, changing nothing, when `image` is not larger than the
+/// detection image or does not have its proportions (a RAW whose embedded
+/// preview is cropped differently, say) — mapping boxes onto a different
+/// picture would measure the wrong pixels.
+pub fn refine_focus(
+    faces: &mut [FaceResult],
+    detected_width: usize,
+    detected_height: usize,
+    image: &[u8],
+    width: usize,
+    height: usize,
+    cfg: &FaceMetricsConfig,
+) -> bool {
+    if detected_width == 0 || detected_height == 0 || image.len() < width * height * 3 {
+        return false;
+    }
+    let scale_x = width as f64 / detected_width as f64;
+    let scale_y = height as f64 / detected_height as f64;
+    // The working copy's sides are each truncated to a whole pixel, so the
+    // two scales differ by up to a pixel's worth; a different crop or a
+    // rotated preview differs by far more.
+    let one_pixel = 1.5 / detected_width.min(detected_height) as f64;
+    if scale_x <= 1.0 || scale_y <= 1.0 || (scale_x / scale_y - 1.0).abs() > one_pixel.max(0.005) {
+        return false;
+    }
+    for face in faces.iter_mut() {
+        let measured = face_quality::face_focus(
+            image, width, height, scale_x, scale_y, face.bbox, &face.kps, cfg,
+        );
+        face.eye_focus = measured.eye_focus.map(round4);
+        face.face_focus = measured.face_focus.map(round4);
+        face.eye_px = round4(measured.eye_px);
+        face.focus_scale = round4((scale_x + scale_y) / 2.0);
+    }
+    true
 }
 
 fn round4(v: f64) -> f64 {
@@ -540,6 +603,18 @@ impl FaceModel {
 
             let det_score = det.score as f64;
             let occlusion = face_quality::occlusion_from_crop(&aligned, 112, &kps_f64, cfg);
+            // On the detection image to begin with; `refine_focus` re-measures
+            // on the full-size photo when the caller has it.
+            let focus = face_quality::face_focus(
+                pixels,
+                width,
+                height,
+                1.0,
+                1.0,
+                [x1, y1, x2, y2],
+                &kps_f64,
+                cfg,
+            );
             let thumbnail_base64 = match pass {
                 FacePass::Full => thumbnail_112_jpeg(&crop, cw, ch),
                 FacePass::QualityOnly => String::new(),
@@ -556,6 +631,11 @@ impl FaceModel {
                 eye_openness: round4(eye_openness),
                 blink_penalty: round4((1.0 - eye_openness).clamp(0.0, 1.0)),
                 occlusion: round4(occlusion),
+                kps: kps_f64,
+                eye_focus: focus.eye_focus.map(round4),
+                face_focus: focus.face_focus.map(round4),
+                eye_px: round4(focus.eye_px),
+                focus_scale: 1.0,
             });
         }
         Ok((results, model_id))
@@ -604,5 +684,102 @@ mod recognizer_tests {
         assert!(!model.is_cached());
         std::fs::write(dir.path().join("det.onnx"), b"weights").unwrap();
         assert!(model.is_cached());
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    /// Sines at several frequencies: detail a blur would remove.
+    fn textured(w: usize, h: usize) -> Vec<u8> {
+        let mut px = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let (xf, yf) = (x as f64, y as f64);
+                let v = 0.5
+                    + 0.2 * (xf * 1.1).sin() * (yf * 0.8).cos()
+                    + 0.15 * (xf * 0.31 + yf * 0.17).sin()
+                    + 0.1 * ((xf + 2.0 * yf) * 1.9).sin();
+                let i = (y * w + x) * 3;
+                px[i..i + 3].fill((v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+        }
+        px
+    }
+
+    /// A face found on a 200x150 working copy, eyes 25 px apart: too small
+    /// there for eye focus to be judged.
+    fn small_face() -> FaceResult {
+        FaceResult {
+            embedding: Vec::new(),
+            thumbnail_base64: String::new(),
+            bbox: [55, 30, 145, 125],
+            area_ratio: 0.28,
+            sharpness: 0.5,
+            det_score: 0.9,
+            center_proximity: 0.9,
+            eye_openness: 0.5,
+            blink_penalty: 0.5,
+            occlusion: 0.1,
+            kps: [
+                [87.5, 60.0],
+                [112.5, 60.0],
+                [100.0, 85.0],
+                [90.0, 105.0],
+                [110.0, 105.0],
+            ],
+            eye_focus: None,
+            face_focus: Some(0.5),
+            eye_px: 25.0,
+            focus_scale: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_full_size_photo_makes_small_eyes_measurable() {
+        let cfg = FaceMetricsConfig::defaults();
+        let mut faces = vec![small_face()];
+        // The original is four times the working copy's size.
+        let big = textured(800, 600);
+        assert!(refine_focus(&mut faces, 200, 150, &big, 800, 600, &cfg));
+        let face = &faces[0];
+        assert!(
+            face.eye_focus.is_some(),
+            "eyes are 100 px apart at full size"
+        );
+        assert!((face.eye_px - 100.0).abs() < 1e-9);
+        assert!((face.focus_scale - 4.0).abs() < 1e-9);
+        // Detection output is left alone: boxes stay in working-copy pixels.
+        assert_eq!(face.bbox, small_face().bbox);
+    }
+
+    #[test]
+    fn a_differently_shaped_or_smaller_image_is_refused() {
+        let cfg = FaceMetricsConfig::defaults();
+        let mut faces = vec![small_face()];
+        // A 4:3 working copy against a 16:9 "original" — a preview cropped
+        // differently from the file is not the same picture.
+        let wide = textured(800, 450);
+        assert!(!refine_focus(&mut faces, 200, 150, &wide, 800, 450, &cfg));
+        // Not larger: nothing to gain.
+        let same = textured(200, 150);
+        assert!(!refine_focus(&mut faces, 200, 150, &same, 200, 150, &cfg));
+        // A buffer that does not hold the stated size.
+        assert!(!refine_focus(&mut faces, 200, 150, &same, 800, 600, &cfg));
+        assert_eq!(faces[0].eye_focus, None);
+        assert_eq!(faces[0].focus_scale, 1.0);
+    }
+
+    /// `normalize_image_bytes` truncates each side to a whole pixel, so the
+    /// two axes scale by slightly different factors; that must not count as
+    /// a different picture.
+    #[test]
+    fn whole_pixel_truncation_is_not_a_different_shape() {
+        let cfg = FaceMetricsConfig::defaults();
+        let mut faces = vec![small_face()];
+        // 6000x4000 shrunk to 2048 long edge is 2048x1365, not 2048x1365.33.
+        let big = textured(600, 400);
+        assert!(refine_focus(&mut faces, 204, 136, &big, 600, 400, &cfg));
     }
 }

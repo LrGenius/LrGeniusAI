@@ -259,6 +259,49 @@ pub struct RankingConfig {
     /// and the maintainers asked to hold them until a hand-cull comparison
     /// across genres exists. `--ablate` them in `cull_eval` once it does.
     pub relative_blur_rule: bool,
+    /// How much of the face term in a face group's score comes from the eye
+    /// focus (`cull_eye_focus`, scored against the group like exposure) rather
+    /// than the stored composite `cull_face_score`. 0 switches eye focus out
+    /// of the score.
+    ///
+    /// The composite's own sharpness share is a Laplacian variance over the
+    /// whole face box on the ≤2048 px working copy, which cannot tell a frame
+    /// focused on the eyes from one focused on the nose or the hair. Eye focus
+    /// is measured on the eyes at full resolution (`lrg_imaging::focus`).
+    /// Applies only when every frame of the group with a face has been
+    /// measured, all or nothing like the moment, so a burst is never compared
+    /// on two different questions.
+    pub eye_focus_weight: f64,
+    /// Below this eye focus a frame is labelled `eyes_out_of_focus` — when it
+    /// has siblings and, under [`Self::relative_defect_rules`], is also
+    /// clearly behind the sharpest eyes of its group. 0 switches the label and
+    /// the defect off.
+    ///
+    /// Thresholds are on `1 - blur_effect`. On the reference portrait
+    /// (`testdata/astronaut.jpg`) the sharp eye reads 0.69, a Gaussian blur of
+    /// sigma 1 0.60, sigma 1.5 0.53, sigma 2 0.47 and sigma 3 0.39. The
+    /// absolute level moves with how many pixels the eye has, which is why the
+    /// group comparison carries the weight. **Hypotheses until a hand-culled
+    /// fixture says otherwise.**
+    pub reason_eye_focus_threshold: f64,
+    /// Below this eye focus a frame with siblings that is also clearly behind
+    /// the group's sharpest eyes is a clear defect — one no edit repairs — and
+    /// a reject candidate. Never for a single or the only measurable frame:
+    /// without a sibling there is no evidence the shot could have been sharper.
+    pub reject_eye_focus_threshold: f64,
+    /// The same pair for the whole face (`cull_face_focus`), used only for a
+    /// frame whose eyes could not be measured — too small, turned away. On the
+    /// reference portrait the face reads 0.55 sharp, 0.43 at sigma 1, 0.36 at
+    /// sigma 1.5 and 0.30 at sigma 2.
+    pub reason_face_focus_threshold: f64,
+    pub reject_face_focus_threshold: f64,
+    /// How far behind the group's best eye (or face) focus a frame must be for
+    /// the relative focus rules — about the difference between a sharp eye
+    /// and a sigma-1 blur of it on the reference portrait.
+    pub relative_focus_margin: f64,
+    /// A pick within this of the group's best eye focus is reported as having
+    /// the sharpest eyes of the group (`eyes_sharpest_in_group`).
+    pub reason_eye_focus_delta: f64,
 }
 
 /// Which deliberately-captured multi-frame set a group is, if any.
@@ -333,6 +376,19 @@ pub struct CullingConfig {
     pub sets: SetDetectionConfig,
 }
 
+impl RankingConfig {
+    /// Whether this configuration reads eye or face focus at all — in the
+    /// score, a label or a reject. `street` and the Python-parity config do
+    /// not, so photos without the measurement cost them nothing.
+    pub fn judges_focus(&self) -> bool {
+        self.eye_focus_weight > 0.0
+            || self.reason_eye_focus_threshold > 0.0
+            || self.reject_eye_focus_threshold > 0.0
+            || self.reason_face_focus_threshold > 0.0
+            || self.reject_face_focus_threshold > 0.0
+    }
+}
+
 impl CullingConfig {
     /// The configuration as it was when this was a straight port of the Python
     /// backend: every signal added since is switched off.
@@ -358,6 +414,8 @@ impl CullingConfig {
     ///   the best of a blurred burst was always a pick
     /// - `relative_defect_rules` — the face proxies fire on nearly every real
     ///   frame, so absolute thresholds rejected 84% of a real shoot
+    /// - eye and face focus — the composite face score cannot tell focus on
+    ///   the eyes from focus on the nose (outstanding item 3)
     pub fn python_parity() -> Self {
         let mut cfg = BASE;
         cfg.ranking.sharpness_peak_weight = 0.0;
@@ -369,6 +427,11 @@ impl CullingConfig {
         cfg.ranking.usable_gate = false;
         cfg.ranking.reject_blurred_without_alternative = false;
         cfg.ranking.relative_defect_rules = false;
+        cfg.ranking.eye_focus_weight = 0.0;
+        cfg.ranking.reason_eye_focus_threshold = 0.0;
+        cfg.ranking.reject_eye_focus_threshold = 0.0;
+        cfg.ranking.reason_face_focus_threshold = 0.0;
+        cfg.ranking.reject_face_focus_threshold = 0.0;
         cfg
     }
 }
@@ -432,6 +495,13 @@ const BASE: CullingConfig = CullingConfig {
         // range) is the measured candidate — see `relative_blur_rule`.
         relative_occlusion_margin: 0.10,
         relative_blur_rule: false,
+        eye_focus_weight: 0.35,
+        reason_eye_focus_threshold: 0.52,
+        reject_eye_focus_threshold: 0.45,
+        reason_face_focus_threshold: 0.36,
+        reject_face_focus_threshold: 0.28,
+        relative_focus_margin: 0.08,
+        reason_eye_focus_delta: 0.02,
     },
     sets: SetDetectionConfig {
         enabled: true,
@@ -476,6 +546,11 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // A couple's portrait has a kiss in it, and a good laugh shuts the
             // eyes; neither is a blink.
             cfg.ranking.eyes_closed_intent_threshold = 0.7;
+            // The eye plane is what a portrait is judged on, at 100 %: eye
+            // focus carries more of the face term and is held to a higher bar.
+            cfg.ranking.eye_focus_weight = 0.55;
+            cfg.ranking.reason_eye_focus_threshold = 0.55;
+            cfg.ranking.reject_eye_focus_threshold = 0.47;
         }
         "street" => {
             cfg.ranking.face_group_weight_technical = 0.70;
@@ -496,6 +571,14 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // tidy they are is close to the opposite of the job.
             cfg.ranking.semantic_prompt_set = Some("candid");
             cfg.ranking.semantic_weight = 0.32;
+            // Moment over technique, and grain and motion blur are part of
+            // the look: focus on the eyes is not what a street frame is
+            // judged on, so it neither ranks nor rejects here.
+            cfg.ranking.eye_focus_weight = 0.0;
+            cfg.ranking.reason_eye_focus_threshold = 0.0;
+            cfg.ranking.reject_eye_focus_threshold = 0.0;
+            cfg.ranking.reason_face_focus_threshold = 0.0;
+            cfg.ranking.reject_face_focus_threshold = 0.0;
         }
         "event" => {
             cfg.grouping.time_window_default_seconds = 2;
@@ -556,6 +639,14 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.semantic_prompt_set = Some("action");
             cfg.ranking.emotion_prompt_set = Some("sport_emotion");
             cfg.ranking.semantic_weight = 0.55;
+            // Motion softens faces a little on frames that are still the
+            // keeper, and what has to be sharp is the athlete as a whole: eye
+            // focus counts for less and rejects only a clear miss.
+            cfg.ranking.eye_focus_weight = 0.20;
+            cfg.ranking.reason_eye_focus_threshold = 0.48;
+            cfg.ranking.reject_eye_focus_threshold = 0.40;
+            cfg.ranking.reason_face_focus_threshold = 0.32;
+            cfg.ranking.reject_face_focus_threshold = 0.25;
         }
         _ => {}
     }
