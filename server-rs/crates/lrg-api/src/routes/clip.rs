@@ -413,8 +413,8 @@ async fn run_download(state: Arc<Downloads>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::fake_release::{asset, content, serve, size_of};
     use super::*;
+    use crate::fake_release::{asset, content, serve, size_of};
 
     #[tokio::test]
     async fn sizes_are_what_the_server_announces() {

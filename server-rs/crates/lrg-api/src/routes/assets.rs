@@ -365,10 +365,12 @@ fn failure_summary(failed: &[String], others_ready: bool) -> String {
     if others_ready {
         text.push_str("The other AI models are downloaded and ready. ");
     }
+    // Both causes in one line: a reason can be the network ("not found",
+    // "download failed") or the disk ("failed to create", "failed writing").
     text.push_str(
         "Press \"Download AI models\" in the Plug-in Manager again later; it fetches only \
          what is still missing. If it keeps failing, check that the computer the backend \
-         runs on can reach github.com.",
+         runs on can reach github.com, and that the backend can write to its model folder.",
     );
     text
 }
