@@ -44,6 +44,12 @@ Yes. The installers are not code-signed (cost and complexity for an open-source 
 3. Try starting the server manually: `lrgenius-server/lrgenius-server` (macOS) or `lrgenius-server/lrgenius-server.cmd` (Windows).
 4. Check the **Plugin Manager → Backend Server** section — it shows the server status and URL.
 
+### Why is the backend still running after I close Lightroom?
+
+That is intended. The installer sets the backend up to start when you log in, so Lightroom does not have to wait for it, and on macOS the system restarts it if it stops. When you quit Lightroom, the plug-in tells it to release the search and face models right away; a local AI model follows once it has been idle for a while. What remains is a small idle process.
+
+It does not stop you from ejecting the drive your catalog is on, because it keeps no files open there. Older versions kept their log file open next to the catalog, which blocked ejecting the drive with a "disk in use" message. If `lrgenius-server` is named as the reason, update LrGeniusAI.
+
 ### Can I run the backend on a different machine or in Docker?
 
 Yes. Change the **Backend Server URL** in *Plug-in Manager → LrGeniusAI* to point to the remote host, e.g. `http://192.168.1.100:19819`. Docker Compose files are included in the repository. The images run on Intel/AMD (amd64) and ARM (arm64) machines. The default image has no local AI model. `ghcr.io/lrgenius/lrgeniusai:latest-vulkan` (any GPU) and `:latest-cuda` (NVIDIA, amd64 only) run one inside the container, on the GPU you pass to it (`docker-compose-prod.yml` shows how). Without a GPU they run it on the CPU. [Docker with GPU Access](Help-Docker-GPU) walks through the setup.
