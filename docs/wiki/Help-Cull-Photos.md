@@ -194,6 +194,39 @@ culling dialog offers to prepare them again; if you skip that, the bursts they
 are in are ranked without eye focus, and the culling warning says how many
 photos that affects.
 
+## Eyes open, smile and gaze
+
+Whether the eyes are open is judged by an AI model made for exactly that:
+Google's MediaPipe face mesh and expression model, which places 478 points on
+each face and reads 52 expressions from them — among them how far each eye is
+closed, the smile and where the eyes look. It replaces an earlier rough
+estimate that, on the small faces of a ceremony, called almost every frame a
+blink.
+
+- **Open, half closed, closed — or unknown.** Each prominent face gets one of
+  these. A face turned far away, barely visible or too small in the photo is
+  *unknown*: it is never called a blink, and it does not count for or against
+  the frame.
+- **One blink spoils the group.** The most closed eyes among the people that
+  matter in the frame decide, so a group shot with one person blinking is not
+  "eyes open". Small faces in the background do not count.
+- **Compared with the burst.** A frame becomes a reject candidate for closed
+  eyes only when another frame of the same burst has them open. Half-closed
+  eyes (a squint into the sun, a mid-blink) are named in the explanation but
+  never make a frame a reject candidate.
+- **A laugh is not a blink.** A broad smile with the eyes shut counts as a
+  laugh, like a kiss already did.
+- **The smile counts in Portrait and Event.** Between otherwise equal frames,
+  the one where everyone smiles more wins, and its explanation says
+  "best smile in group". **Portrait** also notes when someone is looking away
+  from the camera.
+
+Like focus, the face is read on the full-size original where there is one.
+The model is part of **Download AI models** (about 7 MB). Without it culling
+uses the old rough estimate for blinks and says so in a culling warning, with
+the fix; photos prepared before the model was downloaded are offered for
+preparing again once it is there.
+
 ## Result collections in Lightroom
 
 For each culling run, the plugin creates a new collection set:
@@ -246,7 +279,9 @@ For each photo, the backend stores culling-related fields such as:
   `cull_face_prominence`, `cull_face_visibility`, `cull_eye_openness`,
   `cull_blink_penalty`, `cull_occlusion`, and `cull_eye_focus` /
   `cull_face_focus` (focus on the eyes and on the face, measured on the
-  full-size original; absent when the faces were too small to judge)
+  full-size original; absent when the faces were too small to judge), and
+  `cull_eye_state` / `cull_eye_closed`, `cull_smile`, `cull_gaze_away` (from
+  the face model; absent when no face could be judged)
 - aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
   photo's **Aesthetic score** from the AestheticSigLIP model, stored at
   indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`
@@ -272,7 +307,13 @@ Typical reason codes include:
 - `underexposed` / `overexposed`
 - `best_face_quality` / `weak_face_quality`
 - `eyes_open_best`
-- `possible_blink`
+- `eyes_closed` – the eyes are closed, and another frame of the burst has them
+  open
+- `eyes_half_closed` – half closed or squinting (never a reject on its own)
+- `looking_away` – looking away from the camera (Portrait)
+- `best_smile` – the broadest smile of the group (Portrait, Event)
+- `possible_blink` – the older rough estimate, used when the eye model is not
+  downloaded
 - `eyes_out_of_focus` – the eyes are clearly softer than in a sharper frame of
   the same burst; the focus landed elsewhere
 - `face_out_of_focus` – the same for the whole face, where the eyes were too
@@ -303,7 +344,9 @@ than one after another. If a signal could not be computed, the plugin says so
 before the culling run starts instead of quietly grading photos without it. The usual cause is that the on-device models are not
 downloaded yet: open **File → Plug-in Manager → LrGeniusAI** and press
 **Download AI models**, then run culling again. Culling still works in the
-meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive,
+meantime, but face-aware ranking (eyes open, sharpness, occlusion) is inactive
+(or, when only the small eye and expression model is missing, blinks are judged
+by a rough estimate),
 and with a moment preset the moment is not judged either.
 
 The same applies after the run: when the moment could not be judged for some

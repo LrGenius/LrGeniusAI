@@ -509,11 +509,11 @@ out of a real complaint about a soccer series. Item 2 of *this* list (the
 noise estimator) is done too — see
 [Flat-region noise and the Lightroom workflow](#flat-region-noise-and-the-lightroom-workflow).
 
-1. **A real eye-state classifier.** `blink_penalty` is still exactly
-   `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
-   a patch clamped to ≤8px radius that stops scaling with face size. YuNet's
-   single keypoint per eye cannot support an eye-aspect-ratio measure, so this
-   needs a small ONNX eye-state model shipped as a new asset.
+1. ~~**A real eye-state classifier.**~~ **Done** — see
+   [Eye state with MediaPipe](#eye-state-with-mediapipe). `blink_penalty` was
+   exactly `1 - eye_openness`, and the underlying signal a mean vertical
+   gradient in a patch clamped to ≤8px radius that stopped scaling with face
+   size.
 2. **A noise estimator that does not compete with sharpness.** The current one
    is a 3×3 box-blur residual, so real detail reads as grain: measured on two
    frames of one scene differing only in focus, it scores the *sharp* frame
@@ -1157,3 +1157,59 @@ mechanism works.
 - Eye *state* is still the gradient proxy (outstanding item 1). With the eyes
   now measured at full size, the classifier that replaces it can work on the
   same crops.
+
+## Eye state with MediaPipe
+
+Outstanding item 1, and the second package of the commercial-criteria work:
+Lightroom's Assisted Culling has *Eyes Open* with a "Can't Tell" state,
+Narrative marks blinks red and squints yellow per face, Aftershoot and Excire
+read expressions. The proxy could do none of that — on the first real shoot it
+read "closed" on 767 of 769 frames.
+
+### What shipped
+
+- **Models.** MediaPipe Face Mesh V2 (478 landmarks, iris included) and
+  Blendshape V2 (52 coefficients), Apache-2.0 per both model cards, whose only
+  out-of-scope uses are life-critical decisions and identifying people.
+  `scripts/export_face_state.py` takes them from the pinned
+  `face_landmarker.task`, converts them with tf2onnx and checks them against
+  the TFLite originals (≤ 4e-4 px on landmarks, ≤ 1.3e-6 on blendshapes). Own
+  family `face_state` (~7 MB, `face-state-assets-v1`), so face detection never
+  depends on it.
+- **Pipeline** (`lrg-ml/src/face_state.rs`), with every constant taken from
+  MediaPipe's FaceLandmarker sources: a square region 1.5× the face rotated to
+  level the eyes, 256 px, `0..1`, border replicated; once from YuNet's box and
+  eyes, once more from the mesh's own landmarks (MediaPipe's tracking mode,
+  the mode its model card says the mesh is accurate in); 146 landmarks in image
+  pixels into the blendshape model. Against Python MediaPipe on the reference
+  portrait (`tests/face_state_goldens.rs`): landmarks within ~1% of the
+  interocular distance, blink and smile within 0.01; the closed-lid path
+  exactly, by moving MediaPipe's own upper-lid landmarks onto the lower ones.
+- **Per face**: `eye_closed` (mean `eyeBlink`, only the near eye from 35° of
+  head turn), `eye_state` open/half/closed/unknown (unknown below 0.5 presence,
+  beyond 60° of yaw, or with the eyes under 24 px apart), smile, gaze, yaw.
+  Faces under 64 px are not run — the model card warns against rescaling them.
+  Prominent faces only (the aggregation's gate), at most 12, on the full-size
+  original from the focus step when there is one.
+- **Per photo**: the most closed prominent eyes, the weakest smile, the
+  furthest gaze, and `cull_face_state_version`.
+- **Ranking**: where the group has the version throughout, the model's reading
+  becomes blink penalty and eye openness, judged at its own thresholds (closed
+  ≥ 0.6, label ≥ 0.5; sports 0.8/0.7, street 0.85/0.75, portrait 0.55/0.45);
+  `eyes_closed`, `eyes_half_closed` (label only), `looking_away` (portrait),
+  `best_smile`; a smile of 0.6 or more with the eyes shut is a laugh; smile
+  weight 0.15 portrait, 0.10 event. An unknown face is never a blink.
+- **Migration**: re-queued by `/index/unprocessed` once the model is on disk;
+  `/cull/grade` names the fix that applies, "Prepare now" or "Download AI
+  models".
+
+### Calibration — and its limits
+
+There is no photograph with closed eyes under a free license in the
+repository, so the closed path is pinned synthetically (lids moved shut:
+0.81/0.76) and the open path on the reference portrait (0.04/0.03). The
+thresholds sit between those with room on both sides, and the relative rules
+still apply on top, but **they are hypotheses** until a hand-culled shoot with
+real blinks has been scored with `cull_eval --ablate` — the same caveat as every
+other threshold here.
+

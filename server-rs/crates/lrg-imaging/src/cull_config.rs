@@ -189,6 +189,31 @@ pub struct FaceMetricsConfig {
     /// Length of the box filter the focus measure re-blurs with
     /// (`skimage.measure.blur_effect`'s `h_size`).
     pub focus_blur_window: usize,
+    /// Smallest face box side, in pixels of the image analysed, that the face
+    /// state model (`lrg_ml::face_state`) is run on. The MediaPipe model card
+    /// warns that a face too small to rescale to its 256 px input loses
+    /// accuracy; at 64 px the region it sees is upsampled about 2.7x.
+    pub face_state_min_face_px: f64,
+    /// Below this face-presence probability the mesh is not looking at a face,
+    /// and the eye state is unknown (MediaPipe's own default threshold).
+    pub face_state_min_presence: f64,
+    /// Beyond this head turn, in degrees, the eye state is unknown. The model
+    /// card puts the model's limit at 80°; landmarks degrade well before that.
+    pub face_state_max_yaw_degrees: f64,
+    /// From this head turn on, only the near eye is read: the far one is
+    /// foreshortened or hidden, and reads as closed when it is not.
+    pub face_state_near_eye_yaw_degrees: f64,
+    /// Smallest interocular distance, in pixels of the image analysed, at
+    /// which the eye state is judged.
+    pub face_state_min_eye_px: f64,
+    /// `eyeBlink` at or above this is closed eyes. On the reference portrait
+    /// an open eye reads 0.03–0.04 and the same landmarks with the lids moved
+    /// shut 0.76–0.81. **A hypothesis until a hand-culled fixture says
+    /// otherwise.**
+    pub face_state_closed_threshold: f64,
+    /// `eyeBlink` at or above this, but below the closed threshold, is half
+    /// closed: a squint, a mid-blink, a sleepy look.
+    pub face_state_half_threshold: f64,
 }
 
 impl FaceMetricsConfig {
@@ -220,6 +245,13 @@ impl FaceMetricsConfig {
             eye_focus_max_patch_side: 128,
             face_focus_max_side: 768,
             focus_blur_window: crate::focus::BLUR_WINDOW,
+            face_state_min_face_px: 64.0,
+            face_state_min_presence: 0.5,
+            face_state_max_yaw_degrees: 60.0,
+            face_state_near_eye_yaw_degrees: 35.0,
+            face_state_min_eye_px: 24.0,
+            face_state_closed_threshold: 0.6,
+            face_state_half_threshold: 0.35,
         }
     }
 }

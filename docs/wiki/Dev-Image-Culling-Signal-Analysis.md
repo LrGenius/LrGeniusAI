@@ -52,7 +52,7 @@ backwards, and group shots are the highest-value case in event work.
 **Fix:** aggregate eyes-open as a **face-size-weighted min** (worst prominent face decides),
 keep `max` only for prominence. Currently nothing is weighted by face size at all.
 
-### Blink detection itself is a ≤8 px gradient — OUTSTANDING
+### Blink detection itself is a ≤8 px gradient — FIXED
 `face_quality.rs:56-104`: mean absolute *vertical* gradient in a patch of radius
 `clamp(min(w,h) × 0.08, 2, 8)` around YuNet's two eye keypoints.
 
@@ -70,6 +70,14 @@ keep `max` only for prominence. Currently nothing is weighted by face size at al
 1–3 MB, sub-millisecond). YuNet's single point per eye cannot support an eye-aspect-ratio
 measure, so this genuinely needs a model. Remove `blink_penalty` as a separate field or derive
 it from the classifier's confidence.
+
+> **Status.** Shipped as MediaPipe Face Mesh V2 + Blendshape V2 rather than a crop classifier:
+> 478 landmarks place the eyelids exactly, and `eyeBlinkLeft/Right` is a trained answer to the
+> question (0.03–0.04 on the reference portrait's open eyes, 0.76–0.81 with the lids moved shut).
+> It also yields squint, smile, gaze and head turn, and says when a face cannot be judged.
+> Where a group has it throughout, `cull_eye_closed` *is* the blink penalty; the proxy and
+> `blink_penalty` remain only for photos without it. See
+> [Eye state with MediaPipe](Dev-Image-Culling-Implementation-Plan.md#eye-state-with-mediapipe).
 
 ### `occlusion` does not measure occlusion — FIXED
 `face_quality.rs:107`: `1 − (0.55·det_score + 0.20·center_proximity + 0.25·eye_openness)`. It

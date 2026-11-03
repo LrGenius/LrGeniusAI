@@ -356,6 +356,11 @@ struct GroupingOutcome {
     /// already shows no eye-focus reading. Saying so on every cull of an
     /// event full of small faces would only teach people to skip the dialog.
     focus_unmeasured: usize,
+    /// Ranked photos with faces whose eyes were not analysed by the face state
+    /// model; their group falls back to the rough eye estimate.
+    state_unmeasured: usize,
+    /// Whether that model is on disk, which decides the fix the warning names.
+    face_state_model_ready: bool,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -492,6 +497,8 @@ async fn compute_groups(
             aesthetic_missing: 0,
             aesthetic_model_ready: state.aesthetic.is_cached(),
             focus_unmeasured: 0,
+            state_unmeasured: 0,
+            face_state_model_ready: state.face_state.is_cached(),
             unavailable: None,
             stored_metadata: Default::default(),
         });
@@ -630,6 +637,22 @@ async fn compute_groups(
         0
     };
 
+    // Every preset reads the eyes (the blink rules), so this is counted
+    // whatever the preset.
+    let state_unmeasured = records
+        .iter()
+        .filter(|r| {
+            r.metadata
+                .get("cull_face_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                > 0
+                && !r
+                    .metadata
+                    .contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY)
+        })
+        .count();
+
     // Captured after the IQA passes and before grouping consumes the records,
     // so it reflects exactly the inputs this run ranked on — including the
     // injected `cull_*_iqa` scores, which are not stored
@@ -659,6 +682,8 @@ async fn compute_groups(
         aesthetic_missing,
         aesthetic_model_ready: state.aesthetic.is_cached(),
         focus_unmeasured,
+        state_unmeasured,
+        face_state_model_ready: state.face_state.is_cached(),
         unavailable,
     })
 }
@@ -725,13 +750,34 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
             )
         });
     }
-    // Also independent of embeddings: focus is measured by the face pass.
-    if outcome.focus_unmeasured > 0 {
+    // Also independent of embeddings: focus and the face state come from the
+    // face pass. One fix ("Prepare now") is said once, naming what it brings;
+    // a missing model is a different fix and a message of its own.
+    let state_needs_prep = outcome.face_state_model_ready && outcome.state_unmeasured > 0;
+    let prep_count = outcome.focus_unmeasured.max(if state_needs_prep {
+        outcome.state_unmeasured
+    } else {
+        0
+    });
+    if prep_count > 0 {
+        let what = match (outcome.focus_unmeasured > 0, state_needs_prep) {
+            (true, true) => "eye focus and eye state",
+            (true, false) => "eye and face focus",
+            _ => "eye state, smile and gaze",
+        };
         warnings.push(format!(
-            "{} photo(s) with faces were prepared before eye and face focus were measured, so \
+            "{prep_count} photo(s) with faces were prepared before {what} were measured, so \
              they and the photos grouped with them were ranked without it. Run 'Cull Similar \
-             Photos' again and choose 'Prepare now' to measure it.",
-            outcome.focus_unmeasured
+             Photos' again and choose 'Prepare now' to measure it."
+        ));
+    }
+    if !outcome.face_state_model_ready && outcome.state_unmeasured > 0 {
+        warnings.push(format!(
+            "Eye state, smile and gaze were not analysed for {} photo(s) with faces because \
+             the eye and expression model is not downloaded yet, so a rough eye estimate \
+             decided blinks. Run \"Download AI models\" in Plug-in Manager, then 'Cull \
+             Similar Photos' and 'Prepare now'.",
+            outcome.state_unmeasured
         ));
     }
     if outcome.embedded_count == 0 {
@@ -911,6 +957,8 @@ mod tests {
             aesthetic_missing: 0,
             aesthetic_model_ready: true,
             focus_unmeasured: 0,
+            state_unmeasured: 0,
+            face_state_model_ready: true,
             unavailable: None,
             stored_metadata: Default::default(),
         }
@@ -930,6 +978,27 @@ mod tests {
         let mut o = outcome(0, 0);
         o.focus_unmeasured = 2;
         assert_eq!(grouping_warnings(&o).len(), 2);
+    }
+
+    /// Old preparation and a missing model are two problems with two fixes;
+    /// two signals with the same fix are one message.
+    #[test]
+    fn face_state_warnings_name_the_fix_that_applies() {
+        let mut o = outcome(10, 0);
+        o.state_unmeasured = 4;
+        let w = grouping_warnings(&o);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("eye state, smile and gaze") && w[0].contains("Prepare now"));
+
+        o.focus_unmeasured = 4;
+        let w = grouping_warnings(&o);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("eye focus and eye state"));
+
+        o.face_state_model_ready = false;
+        let w = grouping_warnings(&o);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[1].contains("Download AI models"));
     }
 
     #[test]

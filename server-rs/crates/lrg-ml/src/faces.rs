@@ -203,6 +203,11 @@ pub struct FaceResult {
     /// How many times larger than the detection image that image was: 1 when
     /// focus was measured on the detection image itself.
     pub focus_scale: f64,
+    /// Eye state, smile and gaze from MediaPipe's face mesh and blendshapes
+    /// (`crate::face_state`), filled in by the caller after detection when the
+    /// model is on disk. `None` when it did not run for this face (not
+    /// prominent, too small, model missing).
+    pub state: Option<crate::face_state::FaceState>,
 }
 
 /// Re-measures every face's eye and face focus on `image`, a larger copy of
@@ -636,6 +641,7 @@ impl FaceModel {
                 face_focus: focus.face_focus.map(round4),
                 eye_px: round4(focus.eye_px),
                 focus_scale: 1.0,
+                state: None,
             });
         }
         Ok((results, model_id))
@@ -733,6 +739,7 @@ mod focus_tests {
             face_focus: Some(0.5),
             eye_px: 25.0,
             focus_scale: 1.0,
+            state: None,
         }
     }
 

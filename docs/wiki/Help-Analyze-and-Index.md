@@ -85,8 +85,9 @@ needed for metadata: embeddings, faces and species run without one.
 - **Enable face detection** — detects and embeds faces for
   [People](Help-People-Faces). A photo with faces is also read once more at
   full size, to measure focus on the eyes for
-  [culling](Help-Cull-Photos.md#focus-on-the-eyes); a photo without faces is
-  not.
+  [culling](Help-Cull-Photos.md#focus-on-the-eyes) and — with the eye and
+  expression model downloaded — whether the eyes are open, the smile and the
+  gaze; a photo without faces is not.
 - **Identify animal and plant species** — runs BioCLIP 2 and writes a
   taxonomic identification. Greyed out until the models have been downloaded
   in the Plug-in Manager, under *On-device AI models* — one **Download AI
