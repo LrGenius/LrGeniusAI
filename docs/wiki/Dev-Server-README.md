@@ -391,7 +391,8 @@ Assets are published by `.github/workflows/model-assets-bioclip.yml` to the
 fixed `bioclip-assets-v1` tag, independent of SigLIP2's `model-assets-v2`.
 **That release does not exist yet**, so the download route reports a 404 until
 the workflow has run once; an export placed in the cache directory by hand works
-in the meantime.
+in the meantime. The combined `POST /v1/models/assets/downloads` skips BioCLIP
+in that case, still fetches the other families, and names it in its `error`.
 
 ### Face detection/recognition (YuNet + FaceNet)
 

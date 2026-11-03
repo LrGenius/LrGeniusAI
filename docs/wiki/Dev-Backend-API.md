@@ -1327,11 +1327,31 @@ could not fix. Replacing them with YuNet + FaceNet removed that carve-out;
 ### `POST /v1/models/assets/downloads`
 Downloads every downloadable family that is **missing**, under one progress
 entry keyed `assets`. Families already on disk are skipped, so this doubles as
-"finish setting up" after an upgrade. With nothing missing it reports
-`completed` rather than idling.
+"finish setting up" after an upgrade, or after a run that could not fetch one
+family. With nothing missing it reports `completed` rather than idling.
+
+It goes **family by family**. A family whose files cannot be resolved (its
+up-front HEAD request fails or is not 2xx) or fetched is skipped, and the
+others still download. Each family has its own release tag, published by its
+own workflow. One that is not published yet, a failed workflow run or a
+blocked host used to stop the whole download, the search model included.
+
+- `total` is known before the first byte. It is the summed `Content-Length`
+  of the families whose HEAD requests answered. A family that fails part-way
+  takes the bytes it will not fetch out of `total`, so `progress` still ends
+  at `total`.
+- The job stays `downloading` until every family has been tried. It ends
+  `completed` only if every family landed; otherwise it ends `error`:
+  - `error_messages` holds one `"<family name>: <reason>"` per family that did
+    not download, with the `name` from `GET /v1/models/assets` — e.g.
+    `"Species identification: bioclip2_taxa.bin not found at … (HTTP 404 Not
+    Found) — the release may not exist yet"`.
+  - `error` lists them all and says what to do next. The plugin shows it.
+  - `GET /v1/models/assets` then reports the families that landed as `ready`.
 
 ### `GET /v1/models/assets/downloads`
-Same shape as the other download-status routes.
+Same shape as the other download-status routes, plus `error_messages` (see
+above) when a family did not download. The key is absent otherwise.
 
 ---
 

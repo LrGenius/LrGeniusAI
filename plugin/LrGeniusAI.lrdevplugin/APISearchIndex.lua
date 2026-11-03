@@ -4970,10 +4970,16 @@ function SearchIndexAPI.startAssetDownload()
 					loopStatus.status == "error"
 					or (loopStatus.error and loopStatus.error ~= "null" and loopStatus.error ~= "")
 				then
-					ErrorHandler.handleError(
-						LOC("$$$/LrGeniusAI/AssetDownload/ErrorTitle=Error downloading AI models"),
-						loopStatus.error or "Unknown download error"
-					)
+					-- The backend downloads model by model and skips one it cannot
+					-- fetch, so by now the others have usually landed. `error` names
+					-- each model that is still missing, why, and what to do;
+					-- `error_messages` holds one line per such model. The Plug-in
+					-- Manager's indicators show which ones are ready.
+					local title = LOC("$$$/LrGeniusAI/AssetDownload/ErrorTitle=Error downloading AI models")
+					if type(loopStatus.error_messages) == "table" and #loopStatus.error_messages > 0 then
+						title = "Not all AI models could be downloaded"
+					end
+					ErrorHandler.handleError(title, loopStatus.error or "Unknown download error")
 					progressScope:done()
 					break
 				else

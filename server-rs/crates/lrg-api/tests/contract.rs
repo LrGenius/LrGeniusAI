@@ -342,6 +342,72 @@ async fn health_reports_model_states() {
     assert!(json["clip_error"].is_null());
 }
 
+/// `GET /v1/models/assets`: the Plug-in Manager's indicators, the setup
+/// wizard's "about N GB" line and the run preflight all read it. With no model
+/// on disk every family is missing, and `missing_approx_bytes` is their sum.
+#[tokio::test]
+async fn model_assets_report_every_family_the_plugin_reads() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::get("/v1/models/assets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+
+    assert_eq!(json["ready"], serde_json::json!(false));
+    let families = json["families"].as_array().expect("families array");
+    let ids: Vec<&str> = families
+        .iter()
+        .map(|family| family["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["clip", "aesthetic", "bioclip", "face"]);
+    for family in families {
+        assert_eq!(family["ready"], serde_json::json!(false), "{family}");
+        assert_eq!(family["downloadable"], serde_json::json!(true), "{family}");
+        assert!(
+            family["name"].as_str().is_some_and(|name| !name.is_empty()),
+            "{family}"
+        );
+        assert!(
+            family["approx_bytes"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > 0),
+            "{family}"
+        );
+    }
+    let sum: u64 = families
+        .iter()
+        .map(|family| family["approx_bytes"].as_u64().unwrap())
+        .sum();
+    assert_eq!(json["missing_approx_bytes"].as_u64(), Some(sum));
+}
+
+/// `error_messages` is only there when a combined download skipped a family,
+/// so a status without failures (and every single-family route's) keeps the
+/// shape it always had.
+#[tokio::test]
+async fn model_download_status_has_no_error_list_without_failures() {
+    let (app, _) = fresh_app();
+    let response = app
+        .oneshot(
+            Request::get("/v1/models/assets/downloads")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "not_started");
+    assert!(json["error"].is_null());
+    assert!(json.get("error_messages").is_none(), "{json}");
+}
+
 #[tokio::test]
 async fn unknown_raw_log_type_returns_404() {
     let (app, _) = fresh_app();

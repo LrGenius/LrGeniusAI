@@ -4,6 +4,8 @@
 pub mod agent_bridge;
 pub mod api_auth;
 pub mod edit_budget;
+#[cfg(test)]
+mod fake_release;
 pub mod hf_repo;
 pub mod keep_awake;
 pub mod llm_engine;
