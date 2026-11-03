@@ -29,6 +29,20 @@ pub struct FaceMetricsInput {
     /// in face`), which recomputes it from det/center/eye instead of
     /// defaulting to 0.0 — distinct from an explicit `Some(0.0)`.
     pub occlusion: Option<f64>,
+    /// Focus of the face's sharper eye and of the face as a whole, `0..1`,
+    /// measured at full resolution (`lrg_ml::face_quality::face_focus`).
+    /// `None` when the face is too small to judge, or was indexed before the
+    /// measurement existed.
+    pub eye_focus: Option<f64>,
+    pub face_focus: Option<f64>,
+    /// How closed the eyes are, `0..1`, from MediaPipe's blendshapes
+    /// (`lrg_ml::face_state`). `None` when the face state did not run for this
+    /// face or could not judge the eyes (turned away, too small).
+    pub eye_closed: Option<f64>,
+    /// `mouthSmile`, `0..1`; `None` like `eye_closed`.
+    pub smile: Option<f64>,
+    /// The strongest `eyeLook*` coefficient, `0..1`; 0 is looking into the lens.
+    pub gaze_away: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +56,21 @@ pub struct AggregatedFaceMetrics {
     pub cull_blink_penalty: f64,
     pub cull_occlusion: f64,
     pub cull_faces_present: bool,
+    /// Eye focus of the *least* sharp prominent face whose eyes could be
+    /// measured, `None` when no prominent face's could.
+    pub cull_eye_focus: Option<f64>,
+    /// The same for the whole face.
+    pub cull_face_focus: Option<f64>,
+    /// Eyes of the prominent face whose eyes are the most closed, from the
+    /// face state model; `None` when no prominent face's eyes could be judged.
+    pub cull_eye_closed: Option<f64>,
+    /// That reading as `open`/`half`/`closed`, at the face-state thresholds.
+    pub cull_eye_state: Option<&'static str>,
+    /// The weakest smile among the prominent faces: a group only smiles when
+    /// everyone in it does.
+    pub cull_smile: Option<f64>,
+    /// The prominent face looking furthest away from the lens.
+    pub cull_gaze_away: Option<f64>,
 }
 
 impl AggregatedFaceMetrics {
@@ -56,6 +85,12 @@ impl AggregatedFaceMetrics {
             cull_blink_penalty: 1.0,
             cull_occlusion: 0.0,
             cull_faces_present: false,
+            cull_eye_focus: None,
+            cull_face_focus: None,
+            cull_eye_closed: None,
+            cull_eye_state: None,
+            cull_smile: None,
+            cull_gaze_away: None,
         }
     }
 }
@@ -137,6 +172,42 @@ pub fn aggregate_face_culling_metrics(
     let eye_openness_agg = best_of_prominent(&eye_openness);
     let blink_penalty_agg = worst_of(&blink_penalty);
     let occlusion_agg = worst_of(&occlusion);
+    // Focus answers both questions at once, and the second one decides: a
+    // couple or a group is only sharp when every prominent face is, so the
+    // weakest measured one speaks for the frame. Faces too small to measure
+    // abstain rather than count as soft — a bystander's 20-pixel eyes say
+    // nothing about where the focus went.
+    let least_focused = |pick: fn(&FaceMetricsInput) -> Option<f64>| {
+        prominent
+            .iter()
+            .filter_map(|&i| pick(&faces[i]).map(unit))
+            .fold(None, |acc: Option<f64>, v| {
+                Some(acc.map_or(v, |a| a.min(v)))
+            })
+    };
+    let eye_focus_agg = least_focused(|f| f.eye_focus);
+    let face_focus_agg = least_focused(|f| f.face_focus);
+    // The face state answers the "is anyone spoiling the frame" questions too:
+    // the most closed eyes and the face looking furthest away speak for it, the
+    // weakest smile says whether the group is smiling. Faces it could not judge
+    // abstain, exactly as for focus.
+    let measured = |pick: fn(&FaceMetricsInput) -> Option<f64>| {
+        prominent
+            .iter()
+            .filter_map(move |&i| pick(&faces[i]).map(unit))
+    };
+    let eye_closed_agg = measured(|f| f.eye_closed).reduce(f64::max);
+    let smile_agg = measured(|f| f.smile).reduce(f64::min);
+    let gaze_away_agg = measured(|f| f.gaze_away).reduce(f64::max);
+    let eye_state_agg = eye_closed_agg.map(|v| {
+        if v >= cfg.face_state_closed_threshold {
+            "closed"
+        } else if v >= cfg.face_state_half_threshold {
+            "half"
+        } else {
+            "open"
+        }
+    });
 
     let weight_total = cfg.score_weight_sharpness
         + cfg.score_weight_prominence
@@ -160,6 +231,12 @@ pub fn aggregate_face_culling_metrics(
         cull_blink_penalty: round4(blink_penalty_agg),
         cull_occlusion: round4(occlusion_agg),
         cull_faces_present: true,
+        cull_eye_focus: eye_focus_agg.map(round4),
+        cull_face_focus: face_focus_agg.map(round4),
+        cull_eye_closed: eye_closed_agg.map(round4),
+        cull_eye_state: eye_state_agg,
+        cull_smile: smile_agg.map(round4),
+        cull_gaze_away: gaze_away_agg.map(round4),
     }
 }
 
@@ -189,6 +266,11 @@ mod tests {
             eye_openness: 1.0,
             blink_penalty: 0.0,
             occlusion: Some(0.0),
+            eye_focus: Some(0.7),
+            face_focus: Some(0.55),
+            eye_closed: Some(0.03),
+            smile: Some(0.9),
+            gaze_away: Some(0.1),
         }];
         let m = aggregate_face_culling_metrics(&faces, &fm());
         assert_eq!(m.cull_face_count, 1);
@@ -320,6 +402,119 @@ mod tests {
         assert_eq!(m.cull_eye_openness, 0.42);
         assert_eq!(m.cull_blink_penalty, 0.58);
         assert_eq!(m.cull_occlusion, 0.37);
+    }
+
+    /// One person blinking spoils a couple's portrait; the smile of the
+    /// group is its weakest; a bystander and an unjudged face abstain.
+    #[test]
+    fn face_state_takes_the_worst_judged_prominent_face() {
+        let faces = vec![
+            FaceMetricsInput {
+                area_ratio: 0.20,
+                eye_closed: Some(0.04),
+                smile: Some(0.9),
+                gaze_away: Some(0.1),
+                ..Default::default()
+            },
+            FaceMetricsInput {
+                area_ratio: 0.18,
+                eye_closed: Some(0.81),
+                smile: Some(0.6),
+                gaze_away: Some(0.2),
+                ..Default::default()
+            },
+            // Turned away: the model could not judge the eyes.
+            FaceMetricsInput {
+                area_ratio: 0.19,
+                ..Default::default()
+            },
+            // A bystander far smaller: does not get a say.
+            FaceMetricsInput {
+                area_ratio: 0.01,
+                eye_closed: Some(0.99),
+                smile: Some(0.0),
+                gaze_away: Some(0.9),
+                ..Default::default()
+            },
+        ];
+        let m = aggregate_face_culling_metrics(&faces, &fm());
+        assert_eq!(m.cull_eye_closed, Some(0.81));
+        assert_eq!(m.cull_eye_state, Some("closed"));
+        assert_eq!(m.cull_smile, Some(0.6));
+        assert_eq!(m.cull_gaze_away, Some(0.2));
+
+        let open = aggregate_face_culling_metrics(&faces[..1], &fm());
+        assert_eq!(open.cull_eye_state, Some("open"));
+        let unjudged = aggregate_face_culling_metrics(&faces[2..3], &fm());
+        assert_eq!(
+            (unjudged.cull_eye_closed, unjudged.cull_eye_state),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn eye_focus_is_the_least_sharp_measured_prominent_face() {
+        let faces = vec![
+            FaceMetricsInput {
+                area_ratio: 0.20,
+                eye_focus: Some(0.70),
+                face_focus: Some(0.55),
+                ..Default::default()
+            },
+            // The partner, as large, focus behind her eyes.
+            FaceMetricsInput {
+                area_ratio: 0.18,
+                eye_focus: Some(0.48),
+                face_focus: Some(0.50),
+                ..Default::default()
+            },
+            // A bystander far smaller: does not get a say.
+            FaceMetricsInput {
+                area_ratio: 0.01,
+                eye_focus: Some(0.20),
+                face_focus: Some(0.10),
+                ..Default::default()
+            },
+        ];
+        let m = aggregate_face_culling_metrics(&faces, &fm());
+        assert_eq!(m.cull_eye_focus, Some(0.48));
+        assert_eq!(m.cull_face_focus, Some(0.50));
+    }
+
+    /// A face too small to measure abstains instead of reading as soft, and a
+    /// frame where no prominent face could be measured has no eye focus.
+    #[test]
+    fn unmeasured_faces_abstain() {
+        let faces = vec![
+            FaceMetricsInput {
+                area_ratio: 0.20,
+                eye_focus: None,
+                face_focus: Some(0.40),
+                ..Default::default()
+            },
+            FaceMetricsInput {
+                area_ratio: 0.19,
+                eye_focus: Some(0.66),
+                face_focus: None,
+                ..Default::default()
+            },
+        ];
+        let m = aggregate_face_culling_metrics(&faces, &fm());
+        assert_eq!(m.cull_eye_focus, Some(0.66));
+        assert_eq!(m.cull_face_focus, Some(0.40));
+
+        let none = aggregate_face_culling_metrics(
+            &[FaceMetricsInput {
+                area_ratio: 0.2,
+                ..Default::default()
+            }],
+            &fm(),
+        );
+        assert_eq!((none.cull_eye_focus, none.cull_face_focus), (None, None));
+        assert_eq!(
+            aggregate_face_culling_metrics(&[], &fm()).cull_eye_focus,
+            None
+        );
     }
 
     #[test]

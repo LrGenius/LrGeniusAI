@@ -509,22 +509,23 @@ out of a real complaint about a soccer series. Item 2 of *this* list (the
 noise estimator) is done too — see
 [Flat-region noise and the Lightroom workflow](#flat-region-noise-and-the-lightroom-workflow).
 
-1. **A real eye-state classifier.** `blink_penalty` is still exactly
-   `1 - eye_openness`, and the underlying signal is a mean vertical gradient in
-   a patch clamped to ≤8px radius that stops scaling with face size. YuNet's
-   single keypoint per eye cannot support an eye-aspect-ratio measure, so this
-   needs a small ONNX eye-state model shipped as a new asset.
+1. ~~**A real eye-state classifier.**~~ **Done** — see
+   [Eye state with MediaPipe](#eye-state-with-mediapipe). `blink_penalty` was
+   exactly `1 - eye_openness`, and the underlying signal a mean vertical
+   gradient in a patch clamped to ≤8px radius that stopped scaling with face
+   size.
 2. **A noise estimator that does not compete with sharpness.** The current one
    is a 3×3 box-blur residual, so real detail reads as grain: measured on two
    frames of one scene differing only in focus, it scores the *sharp* frame
    0.082 and the blurred one 0.012. That is why noise was deliberately left out
    of the group-relative pass (see below) — normalising a signal that points the
    wrong way only amplifies it.
-3. **Native-resolution eye-region sharpness.** Tiled sharpness fixed the
-   shallow-depth-of-field failure, but eye-vs-nose focus — the most common
-   portrait cull decision there is — still is not resolvable, because face
-   sharpness is measured on the 2048px working image rather than a
-   native-resolution crop around the eye.
+3. ~~**Native-resolution eye-region sharpness.**~~ **Done** — see
+   [Eye focus at full resolution](#eye-focus-at-full-resolution). Tiled
+   sharpness fixed the shallow-depth-of-field failure, but eye-vs-nose focus —
+   the most common portrait cull decision there is — was not resolvable,
+   because face sharpness was measured on the 2048px working image rather than
+   a native-resolution crop around the eye.
 4. **Job/progress/cancellation.** `/cull` is still one blocking request with a
    binary 0→100% progress bar. `JobRegistry` has no progress field, no
    cancellation, and destroys a finished job on first read.
@@ -1061,3 +1062,154 @@ Fixture* on this shoot is for, and it is the next step.
 Both fixed, English re-derived from the Lua source (which is what "sync" should
 mean and previously did not), the damaged German and French strings retranslated,
 and the round trip is now idempotent.
+
+## Eye focus at full resolution
+
+Outstanding item 3, prompted by the question whether culling checks focus on
+faces and eyes at all. It checked faces only coarsely — a Laplacian variance
+over the whole face box on the ≤2048 px working copy, 35% of the composite face
+score, never a defect of its own — and eyes not at all. The commercial culling
+tools all treat the two as separate criteria (Lightroom's own Assisted Culling
+has a *subject focus* and an *eye focus* threshold, Excire grades face and eye
+sharpness separately, Narrative scores each face's focus out of 10).
+
+### What shipped
+
+- **A focus measure that compares frames, not scenes.**
+  `lrg_imaging::focus::blur_effect` is the no-reference blur effect of
+  Crété-Roffet et al. (2007), ported from `skimage.measure.blur_effect` and
+  pinned against it (`testdata/focus_goldens.json`, made by
+  `testdata/make_focus_goldens.py`): re-blur a patch with a box filter and see
+  how much of its gradient energy survives. Being a ratio of the patch's own
+  energies it depends far less on content and contrast than a Laplacian
+  variance (half the contrast moves it by under 0.01), which is what a burst
+  comparison needs. Focus is `1 - blur_effect`.
+- **Measured on the full-size original.** Detection stays on the working copy,
+  so YuNet, the stored boxes and the identity embeddings do not change. The face
+  step then decodes the original once more — only for a photo with faces —
+  through `convert::decode_oriented`, which shares its decode and orientation
+  code with `normalize_image_bytes`, so the working copy is that image scaled by
+  one factor and boxes map across exactly (`lrg_ml::faces::refine_focus`).
+  By-path the file is read again; an upload is kept until the face step. At most
+  two full-size decodes run at once (`FULL_DECODES`).
+- **Per face**: `eye_focus` (the sharper eye, a square of 0.5 × the interocular
+  distance around each YuNet eye point), `face_focus` (the face box), `eye_px`.
+  **Per photo**: `cull_eye_focus`/`cull_face_focus`, the least sharp prominent
+  face (same prominence gate as the eye-openness aggregate), absent when none
+  could be measured, and `cull_focus_version` so "too small" is told apart from
+  "indexed before this existed".
+- **Ranking** (`RankingConfig::eye_focus_weight` and the
+  `*_eye_focus_threshold`/`*_face_focus_threshold` pairs): eye focus takes a
+  share of the face term, scored against the group; `eyes_out_of_focus` (or
+  `face_out_of_focus` where the eyes are too small) is a label below the reason
+  threshold and a clear defect below the reject threshold — both only with a
+  sibling and only `relative_focus_margin` behind the sharpest. A single is never
+  rejected for focus. All or nothing per group, like the moment. Portrait 0.55,
+  default and event 0.35, sports 0.20, street off.
+- **The explanation's `eye focus N/10 within the group`** is relative: 10 for
+  the sharpest eyes of the group, one point less per 0.03 below them, and no
+  number for a frame with nothing to compare against. See the calibration
+  below for why an absolute grade would mislead.
+- **Cost**: about 0.24 s more per photo *with faces* for a 24-megapixel JPEG
+  original in release (0.21 s to decode it again, 0.03 s to measure the face and
+  both eyes; `examples/bench_cull_metrics.rs` on a 4-core container), nothing
+  for a photo without faces.
+- **Migration**: `/index/unprocessed` re-queues cull-prepared photos with faces
+  and no `cull_focus_version`; the cull pass then re-runs the face step even on a
+  photo whose faces are checked (writing no identities). `/cull/grade` warns
+  about photos still without it.
+
+### Calibration — and its limits
+
+On the reference portrait (`testdata/astronaut.jpg`, interocular distance 45 px)
+the eye reads 0.69 sharp, 0.60 / 0.53 / 0.47 / 0.39 after a Gaussian blur of
+sigma 1 / 1.5 / 2 / 3; the whole face 0.55, 0.43, 0.36, 0.30, 0.22. Blurring
+only the eyes moves the eye reading from 0.69 to 0.53 and the face reading not at
+all — the nose-versus-eye case. The same eye on a half-size copy (a 13 px patch)
+reads 0.86 sharp and 0.80 at sigma 2: the measure saturates once the re-blur
+window covers the eye, which is why `eye_focus_min_iod_px` is 40 and why the
+original matters. The absolute level also drifts with patch size (0.69 at 23 px,
+0.80 at 15 px), and with how sharp the image is *per pixel*: in the live test,
+a 6× enlargement of the same portrait (3072 px, so the plumbing ran on a real
+full-size decode) read 0.39 on its sharp eye — sharp at viewing size, soft at
+100 %, as a high-resolution sensor can be too. The ranking was right all the
+same (sharp eyes first; focus on the nose 0.09, `eyes_out_of_focus` and a
+reject; the frame blurred all over `blurred`), because frames of one burst share
+camera, lens, ISO and magnification and differ in focus. So the group
+comparison carries the decision, the thresholds are a backstop, the display is
+relative, and eye patches are capped at 128 px (`eye_focus_max_patch_side`) so
+a very large eye is judged at a size where focus, not sensor softness,
+dominates. **All thresholds are hypotheses** until a hand-culled
+portrait shoot has been scored with `cull_eval --ablate eye-focus`; the synthetic
+`portrait.json` group `p3` (eyes / nose / behind the head) only shows the
+mechanism works.
+
+### Known gaps
+
+- A raw whose embedded preview is no larger than the working copy (some Fuji,
+  Panasonic and older Sony bodies) gains nothing; it is measured at what the file
+  offers, silently, since the user cannot change it.
+- An upload (remote backend) is the plugin's export at `prefs.exportSize` and
+  JPEG quality `prefs.exportQuality` (default 50); block artefacts at low quality
+  read as detail.
+- High-ISO noise reads as detail too. Within one burst the ISO is the same, so
+  the comparison holds; across bursts the absolute numbers do not.
+- Eye *state* is still the gradient proxy (outstanding item 1). With the eyes
+  now measured at full size, the classifier that replaces it can work on the
+  same crops.
+
+## Eye state with MediaPipe
+
+Outstanding item 1, and the second package of the commercial-criteria work:
+Lightroom's Assisted Culling has *Eyes Open* with a "Can't Tell" state,
+Narrative marks blinks red and squints yellow per face, Aftershoot and Excire
+read expressions. The proxy could do none of that — on the first real shoot it
+read "closed" on 767 of 769 frames.
+
+### What shipped
+
+- **Models.** MediaPipe Face Mesh V2 (478 landmarks, iris included) and
+  Blendshape V2 (52 coefficients), Apache-2.0 per both model cards, whose only
+  out-of-scope uses are life-critical decisions and identifying people.
+  `scripts/export_face_state.py` takes them from the pinned
+  `face_landmarker.task`, converts them with tf2onnx and checks them against
+  the TFLite originals (≤ 4e-4 px on landmarks, ≤ 1.3e-6 on blendshapes). Own
+  family `face_state` (~7 MB, `face-state-assets-v1`), so face detection never
+  depends on it.
+- **Pipeline** (`lrg-ml/src/face_state.rs`), with every constant taken from
+  MediaPipe's FaceLandmarker sources: a square region 1.5× the face rotated to
+  level the eyes, 256 px, `0..1`, border replicated; once from YuNet's box and
+  eyes, once more from the mesh's own landmarks (MediaPipe's tracking mode,
+  the mode its model card says the mesh is accurate in); 146 landmarks in image
+  pixels into the blendshape model. Against Python MediaPipe on the reference
+  portrait (`tests/face_state_goldens.rs`): landmarks within ~1% of the
+  interocular distance, blink and smile within 0.01; the closed-lid path
+  exactly, by moving MediaPipe's own upper-lid landmarks onto the lower ones.
+- **Per face**: `eye_closed` (mean `eyeBlink`, only the near eye from 35° of
+  head turn), `eye_state` open/half/closed/unknown (unknown below 0.5 presence,
+  beyond 60° of yaw, or with the eyes under 24 px apart), smile, gaze, yaw.
+  Faces under 64 px are not run — the model card warns against rescaling them.
+  Prominent faces only (the aggregation's gate), at most 12, on the full-size
+  original from the focus step when there is one.
+- **Per photo**: the most closed prominent eyes, the weakest smile, the
+  furthest gaze, and `cull_face_state_version`.
+- **Ranking**: where the group has the version throughout, the model's reading
+  becomes blink penalty and eye openness, judged at its own thresholds (closed
+  ≥ 0.6, label ≥ 0.5; sports 0.8/0.7, street 0.85/0.75, portrait 0.55/0.45);
+  `eyes_closed`, `eyes_half_closed` (label only), `looking_away` (portrait),
+  `best_smile`; a smile of 0.6 or more with the eyes shut is a laugh; smile
+  weight 0.15 portrait, 0.10 event. An unknown face is never a blink.
+- **Migration**: re-queued by `/index/unprocessed` once the model is on disk;
+  `/cull/grade` names the fix that applies, "Prepare now" or "Download AI
+  models".
+
+### Calibration — and its limits
+
+There is no photograph with closed eyes under a free license in the
+repository, so the closed path is pinned synthetically (lids moved shut:
+0.81/0.76) and the open path on the reference portrait (0.04/0.03). The
+thresholds sit between those with room on both sides, and the relative rules
+still apply on top, but **they are hypotheses** until a hand-culled shoot with
+real blinks has been scored with `cull_eval --ablate` — the same caveat as every
+other threshold here.
+

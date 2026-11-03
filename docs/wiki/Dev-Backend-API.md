@@ -64,6 +64,7 @@ when it is `"failed"`.
 | `aesthetic_model` / `aesthetic_error` | AestheticSigLIP, the photo quality scorer. Its own backbone, loaded and idle-unloaded on its own clock. |
 | `face_model` / `face_error` | YuNet + the active recognizer (FaceNet or AuraFace). |
 | `face_recognizer` | Which recognizer is active: `"facenet"` or `"auraface"` (see `GET /v1/faces/recognizer`). |
+| `face_state_model` / `face_state_error` | MediaPipe Face Mesh V2 + Blendshape V2, which read eye state, smile and gaze for culling. |
 | `species_model` / `species_error` | BioCLIP 2. |
 
 The two SigLIP2 towers load and idle-unload **independently**, so an
@@ -246,6 +247,35 @@ so a re-index refreshes an edited photo. A preview that could not be made or
 saved costs the photo nothing else, and says so in `warnings` (`"<file>: no
 preview for the browser search page — …"`).
 
+**Eye and face focus.** Faces are detected on the working copy (≤2048 px,
+`GENIUSAI_CONVERT_MAX_EDGE`), where an eye in a half-length portrait is a dozen
+pixels and says nothing about where the focus landed. So for every photo with
+faces, the face step measures focus again on the full-size original — read again
+from disk on `/v1/index/photos/by-path` (a raw through its embedded preview,
+`lrg_imaging::convert::decode_oriented`), or the upload itself, kept until then,
+on this route. Never for a photo without faces, and at most two such decodes at
+once across all requests. It stores per face `face_eye_focus`, `face_focus`,
+`face_eye_px` and `face_focus_scale` (null when the face was too small) and per
+photo `cull_eye_focus` and `cull_face_focus` (absent when no prominent face could
+be measured) plus `cull_focus_version`, which tells "too small to measure" from
+"indexed before focus was measured". When the original cannot be decoded again,
+the readings from the working copy stay and `warnings` says so (`"<file>: eye
+focus was measured on the reduced working copy …"`).
+
+**Eye state, smile and gaze.** In the same step, when the `face_state` model is
+on disk, MediaPipe's face mesh and blendshapes run on the prominent faces (at
+most 12, largest first) of the same full-size image, or of the working copy
+when there is no larger one (`lrg_ml::face_state`). Per face the row gets
+`face_eye_state` (`open`/`half`/`closed`, `unknown` when the face is turned too
+far, barely a face or too small), `face_eye_closed`, `face_smile`,
+`face_gaze_away` and `face_yaw` (null when the model did not run for it). Per
+photo: `cull_eye_closed` (the most closed prominent eyes), `cull_eye_state`,
+`cull_smile` (the weakest smile among the prominent faces), `cull_gaze_away` —
+absent when no prominent face could be judged — plus `cull_face_state_version`
+and `cull_face_state_model` when the model ran on this pass. Without the model
+the response says once that a rough eye estimate was used, with the fix
+(`"Photos were analysed without eye state, smile and gaze: …"`).
+
 `/v1/index/unprocessed` does **not** count a missing preview as outstanding:
 the cull pre-flight and the agent's indexing command ask it too, and would offer
 to prepare photos that lack nothing they need. Photos indexed before previews
@@ -372,7 +402,7 @@ producer this build uses*, not merely present:
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
-| `cull` | no `cull_phash`, no `cull_faces_present` key, or no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again) |
+| `cull` | faces (`cull_face_count` > 0) and no `cull_face_state_version` while the face state model is on disk; no `cull_phash`, no `cull_faces_present` key, no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again), or faces (`cull_face_count` > 0) but no `cull_focus_version` — prepared before eye and face focus were measured. The cull pass then runs the face step again even on a photo whose faces are already checked; it writes no identities, only the culling fields |
 | `metadata` | no title, caption, alt_text or keywords |
 
 `regenerate_metadata` overrides all of them.
@@ -557,8 +587,38 @@ preset's axis (`cull_semantic_iqa`: action, expression or candid) and, for
 computed per request from the stored embedding against prompt vectors kept in
 the database (below), and never stored themselves. Within a
 group the moment applies only when every frame has it, and frames with a
-defect no edit repairs (blur, unintended closed eyes, occlusion) always rank
-below usable ones.
+defect no edit repairs (blur, unintended closed eyes, occlusion, focus that
+missed the eyes) always rank below usable ones.
+
+**Eye and face focus** (`cull_eye_focus`, `cull_face_focus`, stored by the
+face pass of `/v1/index/photos`) are `1 - blur_effect` (Crété-Roffet, as
+`skimage.measure.blur_effect`) around the sharper eye of each face and over
+the face box, measured on the full-size original rather than the working copy.
+A photo's value is its weakest prominent face's; faces too small to measure
+abstain. They act only when every frame of a group with a face carries
+`cull_focus_version` (all or nothing, like the moment):
+
+- in the score, as `eye_focus_weight` of the face term, against the group like exposure;
+- as the reason `eyes_out_of_focus` (or `face_out_of_focus` where the eyes were
+  not measurable) below `reason_eye_focus_threshold`, and as a clear defect below
+  `reject_eye_focus_threshold` — both only with a sibling to compare against and,
+  under the relative rules, only `relative_focus_margin` behind the group's
+  sharpest. A single is never rejected for its focus;
+- as `eyes_sharpest_in_group` on a pick within `reason_eye_focus_delta` of the best.
+
+`portrait` weights and gates focus most, `sports` least, `street` not at all.
+
+**Eye state, smile and gaze** (`cull_eye_closed`, `cull_smile`, `cull_gaze_away`)
+replace the eye-openness proxy where every frame of a group with a face
+carries `cull_face_state_version` (all or nothing): the blink penalty is then
+the model's `eyeBlink`, judged at `reason_eye_closed_threshold` /
+`reject_eye_closed_threshold` (plus the relative rules) instead of the proxy's
+thresholds, and a face it could not judge is never a blink. Reasons:
+`eyes_closed`, `eyes_half_closed` (a label, never a defect),
+`looking_away` (`portrait`), `best_smile`; a smile at
+`laugh_smile_threshold` with the eyes shut counts as `eyes_closed_intentional`.
+`smile_weight` (portrait 0.15, event 0.10) takes a share of the face term,
+against the group.
 
 **Response:**
 
@@ -567,8 +627,8 @@ below usable ones.
 | `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
-| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eyes_closed_intended` when true, and always `clear_defect` |
-| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos whose moment was not judged. Empty when there is nothing to say |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`gaze_away` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
 The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a
@@ -1316,8 +1376,10 @@ network does which job.
 
 ### `GET /v1/models/assets`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
-for the "this will download about N GB" line. All four families — `clip`, `aesthetic`
-(the photo quality scorer), `bioclip` and `face` — are `downloadable: true` and all four gate `ready`.
+for the "this will download about N GB" line. All five families — `clip`, `aesthetic`
+(the photo quality scorer), `bioclip`, `face` and `face_state` (eye state, smile and gaze,
+~7 MB, tag `face-state-assets-v1`) — are `downloadable: true` and all five gate `ready`.
+`face_state` is a family of its own so that face detection never reports "not ready" because of it.
 Face detection used to be the exception: its `buffalo_l` weights came from
 `INSIGHTFACE_ROOT`, were not redistributable, and had to be excluded from
 `ready` so the button did not stay red forever over something the download

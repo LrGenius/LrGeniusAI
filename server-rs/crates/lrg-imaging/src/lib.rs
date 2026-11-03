@@ -1,4 +1,5 @@
 //! Image pipeline: Pillow-exact resampling, pHash, culling metrics,
+//! region focus at full resolution (`focus`),
 //! source-state measurement for the edit path (`scene`),
 //! RAW decoding (`raw`, via `rawler`), JPEG/PNG conversion (`convert`),
 //! location metadata (`location`) and offline reverse geocoding (`geocode`).
@@ -7,6 +8,7 @@
 pub mod capture;
 pub mod convert;
 pub mod cull_config;
+pub mod focus;
 pub mod geocode;
 pub mod location;
 pub mod metrics;

@@ -58,7 +58,7 @@ jobs:
 
       # Asset names and tags mirror the download routes, which are the
       # authority: routes/clip.rs (MODEL_ASSETS_RELEASE_TAG), routes/assets.rs
-      # (FACE_ASSETS_RELEASE_TAG) and routes/bioclip.rs
+      # (FACE_ASSETS_RELEASE_TAG, FACE_STATE_ASSETS_RELEASE_TAG) and routes/bioclip.rs
       # (BIOCLIP_ASSETS_RELEASE_TAG). They land in the same
       # ~/.cache/lrgenius/models directory model_paths.rs falls back to, so no
       # LRG_*_ONNX overrides are needed.
@@ -73,6 +73,14 @@ jobs:
           gh release download face-assets-v1 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
             --pattern 'yunet_face_detection.onnx' \
             --pattern 'facenet_vggface2.onnx'
+
+          # MediaPipe Face Mesh V2 + Blendshape V2 (eye state, smile, gaze),
+          # published by model-assets-face-state.yml. The goldens they are
+          # checked against are committed (testdata/face_state_goldens.json):
+          # MediaPipe's own answer does not change with the export.
+          gh release download face-state-assets-v1 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
+            --pattern 'face_mesh_v2.onnx' \
+            --pattern 'face_blendshapes_v2.onnx'
 
           gh release download bioclip-assets-v1 --repo "$GITHUB_REPOSITORY" --dir "$dest" \
             --pattern 'bioclip2_image_fp16.onnx' \

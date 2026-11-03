@@ -86,7 +86,7 @@ cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
 
 **The ML golden tests skip when their model files are absent, and a skip is
 reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
-are present (`face`, `auraface`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
+are present (`face`, `auraface`, `facestate`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
 failure — this is what stops CI being green on numerical checks that never ran.
 PR CI provisions the face pair (89 MB) and requires it; the nightly
 `golden-tests-full.yml` fetches every family. If you add a golden test, gate it
@@ -158,7 +158,7 @@ Cargo workspace, one binary (`geniusai-server`) across these crates:
 - `lrg-common` — config/CLI, error→envelope, version (baked in via `LRG_BACKEND_*` build-time env vars, `option_env!`), logging+rotation, PID/OK lifecycle handshake.
 - `lrg-store` — LanceDB wrapper, Arrow schemas, `db_path` bind state machine, backup, stats. `lrg-chroma-reader` is migration-only: reads an old ChromaDB directory (WAL + HNSW segment binaries) left over from the retired Python backend, to migrate its data into LanceDB — no Chroma dependency at runtime.
 - `lrg-imaging` — image conversion, EXIF/IPTC/XMP, pHash, culling metrics.
-- `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding. Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
+- `lrg-ml` — ONNX Runtime (`ort` crate) session management, SigLIP2 pre/post-processing + `tokenizers`-crate Gemma tokenizer, YuNet face detection + FaceNet embedding, MediaPipe Face Mesh V2 + Blendshape V2 for eye state, smile and gaze (`face_state.rs`). Model file locations resolved in `model_paths.rs` (env vars, see [server-rs/README.md](server-rs/README.md)).
 - `lrg-analysis` — clustering, person matching, group/cull grading, style engine, keyword clustering.
 - `lrg-providers` — LLM provider trait + REST clients (OpenAI, Gemini, Anthropic — Claude through Anthropic's own Messages API in `anthropic.rs`, not its OpenAI-compatible endpoint, which lists no models and ignores the answer format — Ollama, OpenAI-compatible servers — LM Studio found on this computer, and the user's own "Other AI server" such as OpenRouter, llama.cpp `llama-server` or LiteLLM, both in `openai_compatible.rs`), edit-recipe schemas. `local_provider.rs` serves *both* local backends off one `LocalEngine` trait; it has no llama.cpp or MLX dependency of its own.
 - `lrg-mlx` — supervises the `lrgenius-mlx` Swift sidecar (`native/mlx-sidecar/`) and speaks its JSON-lines stdio protocol. No native build step, no cargo feature; Apple silicon only at runtime.

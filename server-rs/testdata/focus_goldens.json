@@ -1,0 +1,94 @@
+{
+ "cases": [
+  {
+   "name": "sines",
+   "width": 48,
+   "height": 48,
+   "window": 5,
+   "blur_effect": 0.4292783739281753,
+   "tolerance": 1e-09
+  },
+  {
+   "name": "sines",
+   "width": 48,
+   "height": 48,
+   "window": 11,
+   "blur_effect": 0.27701535743988054,
+   "tolerance": 1e-09
+  },
+  {
+   "name": "sines_wide",
+   "width": 61,
+   "height": 23,
+   "window": 11,
+   "blur_effect": 0.26346058065304856,
+   "tolerance": 1e-09
+  },
+  {
+   "name": "lcg",
+   "width": 32,
+   "height": 40,
+   "window": 3,
+   "blur_effect": 0.4263513932849252,
+   "tolerance": 1e-09
+  },
+  {
+   "name": "lcg",
+   "width": 32,
+   "height": 40,
+   "window": 11,
+   "blur_effect": 0.12053917503088987,
+   "tolerance": 1e-09
+  },
+  {
+   "name": "checker4",
+   "width": 40,
+   "height": 40,
+   "window": 11,
+   "blur_effect": 0.14141414141414146,
+   "tolerance": 1e-09
+  },
+  {
+   "name": "astronaut_right_eye",
+   "width": 24,
+   "height": 24,
+   "window": 11,
+   "blur_effect": 0.31374156267469033,
+   "tolerance": 0.01,
+   "rect": [
+    191.75,
+    89.75,
+    214.25,
+    112.25
+   ]
+  },
+  {
+   "name": "astronaut_left_eye",
+   "width": 24,
+   "height": 24,
+   "window": 11,
+   "blur_effect": 0.3028201593461297,
+   "tolerance": 0.01,
+   "rect": [
+    236.75,
+    91.75,
+    259.25,
+    114.25
+   ]
+  },
+  {
+   "name": "astronaut_face",
+   "width": 100,
+   "height": 120,
+   "window": 11,
+   "blur_effect": 0.4509339428903421,
+   "tolerance": 0.01,
+   "rect": [
+    175.0,
+    70.0,
+    275.0,
+    190.0
+   ]
+  }
+ ]
+}

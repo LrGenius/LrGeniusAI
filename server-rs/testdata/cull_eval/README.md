@@ -12,7 +12,7 @@ cargo run --release -p lrg-analysis --example cull_eval -- testdata/cull_eval --
 
 # attribute a delta to one change
 cargo run --release -p lrg-analysis --example cull_eval -- testdata/cull_eval \
-  --ablate sharpness-peak     # or: relative | aesthetic-model | sets
+  --ablate sharpness-peak     # or: relative | aesthetic-model | sets | eye-focus
 ```
 
 ## What is in here, and what it is not

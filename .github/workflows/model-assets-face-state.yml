@@ -1,0 +1,96 @@
+name: Export Face State Model Assets
+
+# MediaPipe Face Mesh V2 + Blendshape V2 (~7 MB) for the backend's eye state,
+# smile and gaze per face (server-rs/crates/lrg-ml/src/face_state.rs), which
+# culling reads instead of the old eye-openness proxy. Same reasoning as the
+# other model jobs: the upstream models do not change per app release, so this
+# publishes to a stable tag that only moves when the export changes.
+#
+# Both models come out of Google's `face_landmarker.task` bundle, pinned by URL
+# and SHA-256 in the export script, and both model cards state Apache License
+# 2.0. The script converts them with tf2onnx and checks every output against
+# the TFLite originals before anything is written.
+#
+# Its **own** tag, like the face and BioCLIP families: the eye-state models are
+# not part of face detection, and face detection must never report "not
+# ready" because of them. If the export changes in a way older binaries cannot
+# read, bump both this workflow's `tag_name` and
+# `FACE_STATE_ASSETS_RELEASE_TAG` in routes/assets.rs together. That is a
+# different question from `lrg_ml::face_state::MODEL_ID` and
+# `FACE_STATE_VERSION`, which mark stored readings as no longer comparable.
+#
+# macos-latest for the same reason as the other model jobs: ubuntu-latest
+# intermittently segfaulted during ONNX Runtime verification.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'server-rs/scripts/export_face_state.py'
+      - '.github/workflows/model-assets-face-state.yml'
+
+# Publishes to a FIXED release tag with overwrite_files: true, so two runs are
+# delete-then-upload racing each other. Never cancelled: cancelling
+# mid-upload is the one thing that could truncate a published asset.
+concurrency:
+  group: model-assets-face-state
+  cancel-in-progress: false
+
+# Default for the workflow; the export job raises itself to contents: write to
+# publish the asset release.
+permissions:
+  contents: read
+
+jobs:
+  export-face-state-assets:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    name: Export MediaPipe Face Mesh V2 + Blendshape V2
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+
+      # --no-project: the script carries its own PEP 723 dependencies
+      # (TensorFlow for tf2onnx and the TFLite reference), which do not belong
+      # in the shared server-rs/scripts export project. It downloads the
+      # bundle against a pinned SHA-256, converts both models and verifies
+      # them against TFLite — it fails rather than publishing a bad asset.
+      - name: Export face state models
+        run: |
+          set -euo pipefail
+          uv run --no-project server-rs/scripts/export_face_state.py \
+            --output-dir face-state-assets
+          echo "=== Exported face state assets ==="
+          ls -lh face-state-assets/
+
+      - name: Publish to the stable face-state-assets release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: face-state-assets-v1
+          name: Face state model assets (MediaPipe Face Mesh V2 + Blendshape V2)
+          body: |
+            ONNX assets for the backend's eye state, smile and gaze analysis,
+            fetched by `POST /v1/models/assets/downloads`.
+
+            - `face_mesh_v2.onnx` — MediaPipe Face Mesh V2 (478 landmarks),
+              Apache-2.0
+            - `face_blendshapes_v2.onnx` — MediaPipe Blendshape V2 (52
+              expression coefficients), Apache-2.0
+
+            Converted from Google's `face_landmarker.task` with tf2onnx; see
+            `server-rs/scripts/export_face_state.py` and
+            `.github/workflows/model-assets-face-state.yml`.
+          files: face-state-assets/*
+          draft: false
+          prerelease: false
+          make_latest: false
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

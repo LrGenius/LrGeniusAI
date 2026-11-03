@@ -233,6 +233,30 @@ struct Scored<'a> {
     /// rules are.
     blink: bool,
     occluded: bool,
+    /// Eye and face focus at full resolution (`cull_eye_focus`,
+    /// `cull_face_focus`); `None` when the faces were too small to measure or
+    /// the photo predates the measurement.
+    cull_eye_focus: Option<f64>,
+    cull_face_focus: Option<f64>,
+    /// The photo went through the face pass that measures focus
+    /// (`cull_focus_version` is stored), whether or not any face was large
+    /// enough to measure. Tells "not measurable" apart from "not measured".
+    focus_measured: bool,
+    /// The focus *labels*, at the reason thresholds: the eyes are clearly
+    /// softer than the group's sharpest, or — where the eyes could not be
+    /// measured — the face is.
+    eyes_soft: bool,
+    face_soft: bool,
+    /// From the face state model (`cull_eye_closed`, `cull_smile`,
+    /// `cull_gaze_away`); `None` when no prominent face could be judged.
+    cull_eye_closed: Option<f64>,
+    cull_smile: Option<f64>,
+    cull_gaze_away: Option<f64>,
+    /// The photo went through the face state pass (`cull_face_state_version`
+    /// is stored), whether or not its faces could be judged.
+    state_measured: bool,
+    /// The eyes read half closed: a squint, a mid-blink. A label only.
+    half_closed: bool,
     /// Blurred, eyes shut or face obstructed: the defects that make a frame
     /// unusable however strong its moment, because no edit repairs them.
     hard_defect: bool,
@@ -259,6 +283,49 @@ struct Scored<'a> {
     cull_eye_openness: f64,
     cull_blink_penalty: f64,
     cull_score: f64,
+}
+
+/// Stored on every photo whose faces went through the pass that measures eye
+/// and face focus, faces or not. Its presence is what tells a face too small
+/// to measure (no `cull_eye_focus`, key present) from a photo indexed before
+/// the measurement existed (key absent).
+pub const FOCUS_VERSION_KEY: &str = "cull_focus_version";
+
+/// The value stored under [`FOCUS_VERSION_KEY`]. Bump it when a change to the
+/// measurement makes stored readings incomparable with new ones; `/index/
+/// unprocessed` then has every photo with faces measured again.
+pub const FOCUS_VERSION: i64 = 1;
+
+/// Stored on every photo whose faces went through the face state pass
+/// (`lrg_ml::face_state`, MediaPipe's face mesh and blendshapes). Like
+/// [`FOCUS_VERSION_KEY`], its presence tells "the model could not judge these
+/// eyes" from "indexed before the model ran".
+pub const FACE_STATE_VERSION_KEY: &str = "cull_face_state_version";
+
+/// The value stored under [`FACE_STATE_VERSION_KEY`]. Bump it when stored
+/// readings become incomparable with new ones.
+pub const FACE_STATE_VERSION: i64 = 1;
+
+/// How much eye focus one point of the 0–10 in the explanation is worth.
+///
+/// On the reference portrait (`testdata/astronaut.jpg`) a Gaussian blur of
+/// sigma 1 costs the eye 0.09, sigma 1.5 0.16, sigma 2 0.22 and sigma 3 0.29,
+/// so at 0.03 a point those read 7, 5, 3 and 0.
+const EYE_FOCUS_POINT: f64 = 0.03;
+
+/// Eye focus against the sharpest eyes of the group, as the 0–10 a
+/// photographer reads in the explanation: 10 is the sharpest frame, each point
+/// below it [`EYE_FOCUS_POINT`] softer.
+///
+/// Relative on purpose. The raw reading is sharpness *per pixel*, which depends
+/// on the camera, the lens, the ISO and how large the face is in the frame as
+/// much as on focus: a 6x enlargement of a sharp portrait read 0.39 on its
+/// sharp eye, where the same eye at its own size reads 0.69. Two frames of one
+/// burst share all of that, so the difference between them is the focus.
+fn eye_focus_out_of_ten(eye_focus: f64, best: f64) -> u32 {
+    (10.0 - (best - eye_focus).max(0.0) / EYE_FOCUS_POINT)
+        .round()
+        .clamp(0.0, 10.0) as u32
 }
 
 fn explanation_from_reason_codes(codes: &[String]) -> String {
@@ -293,8 +360,15 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
                 "no clear face detected while alternatives have faces".to_string()
             }
             "possible_occlusion" => "possible facial occlusion or weak visibility".to_string(),
+            "eyes_out_of_focus" => "the eyes are not sharp — focus landed elsewhere".to_string(),
+            "face_out_of_focus" => "the face is not sharp".to_string(),
+            "eyes_sharpest_in_group" => "sharpest eyes in group".to_string(),
             "eyes_open_best" => "best eyes-open result in group".to_string(),
             "possible_blink" => "possible blink or eyes less open".to_string(),
+            "eyes_closed" => "eyes closed".to_string(),
+            "eyes_half_closed" => "eyes half closed or squinting".to_string(),
+            "looking_away" => "looking away from the camera".to_string(),
+            "best_smile" => "best smile in group".to_string(),
             "near_duplicate_weaker" => "weaker duplicate or burst alternative".to_string(),
             other => other.replace('_', " "),
         }
@@ -458,6 +532,16 @@ fn rank_group_records(
                 / face_weight_sum.max(1e-6);
             let face_score = metric(m, "cull_face_score", face_default);
             let blink_penalty = metric(m, "cull_blink_penalty", 1.0);
+            let cull_eye_focus = m.get("cull_eye_focus").and_then(Value::as_f64).map(unit);
+            let cull_face_focus = m.get("cull_face_focus").and_then(Value::as_f64).map(unit);
+            let focus_measured = m.contains_key(FOCUS_VERSION_KEY);
+            let read = |key: &str| m.get(key).and_then(Value::as_f64).map(unit);
+            let (cull_eye_closed, cull_smile, cull_gaze_away) = (
+                read("cull_eye_closed"),
+                read("cull_smile"),
+                read("cull_gaze_away"),
+            );
+            let state_measured = m.contains_key(FACE_STATE_VERSION_KEY);
             // Injected by the API layer only when the preset asks the gate
             // question, so an absent score never lifts a blink.
             let intent_threshold = cfg.ranking.eyes_closed_intent_threshold;
@@ -484,6 +568,16 @@ fn rank_group_records(
                 soft: false,
                 blink: false,
                 occluded: false,
+                cull_eye_focus,
+                cull_face_focus,
+                focus_measured,
+                eyes_soft: false,
+                face_soft: false,
+                cull_eye_closed,
+                cull_smile,
+                cull_gaze_away,
+                state_measured,
+                half_closed: false,
                 hard_defect: false,
                 weak_face: false,
                 cull_exposure: exposure,
@@ -530,6 +624,59 @@ fn rank_group_records(
         item.moment = if moment_active { moment } else { None };
     }
 
+    // The face state model replaces the eye-openness proxy where the whole
+    // group has it — all or nothing, like the moment and focus, so a burst is
+    // never judged on two different instruments. From here on, blink penalty
+    // and eye openness *are* the model's reading; a face it could not judge
+    // (turned away, too small) carries no penalty and is never called a blink.
+    let state_active = group_has_faces
+        && scored
+            .iter()
+            .filter(|s| s.cull_face_count > 0)
+            .all(|s| s.state_measured);
+    if state_active {
+        for item in scored.iter_mut().filter(|s| s.cull_face_count > 0) {
+            let closed = item.cull_eye_closed.unwrap_or(0.0);
+            item.cull_blink_penalty = closed;
+            item.cull_eye_openness = 1.0 - closed;
+            // A broad smile with the eyes shut is a laugh, not a blink —
+            // per face, where the CLIP gate above judges the whole scene.
+            if rk.laugh_smile_threshold > 0.0
+                && item
+                    .cull_smile
+                    .is_some_and(|s| s >= rk.laugh_smile_threshold)
+                && closed >= rk.reason_eye_closed_threshold
+            {
+                item.eyes_closed_intended = true;
+            }
+        }
+    }
+    // The proxy's thresholds were tuned against a reading that said "closed"
+    // on nearly every small face; the model's mean what they say.
+    let (reject_blink, reason_blink) = if state_active {
+        (
+            rk.reject_eye_closed_threshold,
+            rk.reason_eye_closed_threshold,
+        )
+    } else {
+        (
+            rk.reject_blink_penalty_threshold,
+            rk.reason_possible_blink_threshold,
+        )
+    };
+    let smile_values: Vec<f64> = scored
+        .iter()
+        .filter(|s| s.cull_face_count > 0)
+        .filter_map(|s| s.cull_smile)
+        .collect();
+    let blend_smile = state_active
+        && rk.smile_weight > 0.0
+        && scored
+            .iter()
+            .filter(|s| s.cull_face_count > 0)
+            .all(|s| s.cull_smile.is_some());
+    let best_smile = smile_values.iter().cloned().reduce(f64::max);
+
     // The group's best face readings, for the relative defect rules: a proxy
     // that reads "closed" on every frame of a burst says nothing about any one
     // of them, but a frame that reads clearly worse than its siblings does.
@@ -552,6 +699,48 @@ fn rank_group_records(
     let margin = rk.relative_defect_margin.max(0.0);
     let occlusion_margin = rk.relative_occlusion_margin.max(0.0);
 
+    // Eye and face focus are judged only when every frame of the group that
+    // has a face went through the pass that measures them — all or nothing,
+    // like the moment, so frames indexed before it existed never sit next to
+    // frames judged on it. A face too small to measure is fine: it simply
+    // carries no value and abstains.
+    let focus_active = group_has_faces
+        && scored
+            .iter()
+            .filter(|s| s.cull_face_count > 0)
+            .all(|s| s.focus_measured);
+    let eye_focus_values: Vec<f64> = scored
+        .iter()
+        .filter(|s| s.cull_face_count > 0)
+        .filter_map(|s| s.cull_eye_focus)
+        .collect();
+    let best_eye_focus = eye_focus_values.iter().cloned().reduce(f64::max);
+    let best_face_focus = scored
+        .iter()
+        .filter(|s| s.cull_face_count > 0)
+        .filter_map(|s| s.cull_face_focus)
+        .reduce(f64::max);
+    // In the score only when *every* frame with a face has a reading: a frame
+    // with none would otherwise be compared on a different question.
+    let blend_eye_focus = focus_active
+        && rk.eye_focus_weight > 0.0
+        && scored
+            .iter()
+            .filter(|s| s.cull_face_count > 0)
+            .all(|s| s.cull_eye_focus.is_some());
+    let focus_margin = rk.relative_focus_margin.max(0.0);
+    // Clearly behind the group on focus: below `threshold`, with a sibling to
+    // compare against, and — under the relative rules — behind the group's
+    // best by the margin. A single never qualifies: with nothing sharper
+    // beside it there is no evidence the shot could have been sharper, and
+    // the measure is not calibrated enough to reject on its own.
+    let behind = |value: f64, threshold: f64, best: Option<f64>| {
+        threshold > 0.0
+            && value < threshold
+            && group_size > 1
+            && (!relative || best.is_some_and(|b| value < b - focus_margin))
+    };
+
     for item in scored.iter_mut() {
         // A kiss or a laugh with the eyes shut is not a blink, so the gate
         // lifts the penalty. See `RankingConfig::eyes_closed_intent_threshold`.
@@ -565,8 +754,30 @@ fn rank_group_records(
                 let weight_sum = rk.face_group_weight_technical
                     + rk.face_group_weight_face
                     + rk.face_group_weight_aesthetic;
+                // The stored composite cannot tell focus on the eyes from focus
+                // on the nose; where the group has eye focus throughout, part
+                // of the face term is taken from it, scored against the group.
+                // The smile, where the preset asks about it and the whole
+                // group has a reading, is scored against the group the same way.
+                let eye_part = item.cull_eye_focus.filter(|_| blend_eye_focus).map(|v| {
+                    (
+                        rk.eye_focus_weight,
+                        relative_to_group(&eye_focus_values, v, cfg),
+                    )
+                });
+                let smile_part = item
+                    .cull_smile
+                    .filter(|_| blend_smile)
+                    .map(|v| (rk.smile_weight, relative_to_group(&smile_values, v, cfg)));
+                let (mut share, mut blended) = (0.0, 0.0);
+                for (w, v) in [eye_part, smile_part].into_iter().flatten() {
+                    let w = w.clamp(0.0, 1.0 - share);
+                    share += w;
+                    blended += w * v;
+                }
+                let face_term = (1.0 - share) * item.cull_face_score + blended;
                 let weighted = rk.face_group_weight_technical * item.cull_technical_score
-                    + rk.face_group_weight_face * item.cull_face_score
+                    + rk.face_group_weight_face * face_term
                     + rk.face_group_weight_aesthetic * item.cull_aesthetic;
                 let base = unit(weighted / weight_sum.max(1e-6));
                 unit(
@@ -615,7 +826,7 @@ fn rank_group_records(
         // real shoot they sat past their absolute thresholds on almost every
         // frame, which made every non-pick a "clear defect".
         let blink_defect = !item.eyes_closed_intended
-            && item.cull_blink_penalty > rk.reject_blink_penalty_threshold
+            && item.cull_blink_penalty > reject_blink
             && (!relative || item.cull_eye_openness < best_eye_openness - margin);
         // Occlusion gets its own, wider margin: head turns and side light move
         // it by 0.1–0.35 inside one group of people (median 0.11 measured),
@@ -642,14 +853,43 @@ fn rank_group_records(
         item.blink = group_has_faces
             && item.cull_face_count > 0
             && !item.eyes_closed_intended
-            && item.cull_blink_penalty > rk.reason_possible_blink_threshold
+            && item.cull_blink_penalty > reason_blink
             && (!relative || item.cull_eye_openness < best_eye_openness - margin);
+        // Half closed is a label, never a defect: a squint into the sun is
+        // often the frame the photographer wants.
+        item.half_closed = state_active
+            && item.cull_face_count > 0
+            && !item.blink
+            && !item.eyes_closed_intended
+            && rk.reason_eyes_half_closed_threshold > 0.0
+            && item
+                .cull_eye_closed
+                .is_some_and(|v| v >= rk.reason_eyes_half_closed_threshold && v < reason_blink);
         item.occluded = group_has_faces
             && item.cull_face_count > 0
             && item.cull_occlusion > rk.reason_occlusion_threshold
             && (!relative || item.cull_occlusion > least_occlusion + occlusion_margin);
+        // Focus that missed the eyes — or, where the eyes are too small to
+        // measure, the face — is a defect no edit repairs, like blur. The face
+        // reading is only consulted when the eye one is absent: on a face
+        // large enough to have measurable eyes, the eyes are the question.
+        let has_face = focus_active && item.cull_face_count > 0;
+        let eye_focus = item.cull_eye_focus.filter(|_| has_face);
+        let face_focus = item
+            .cull_face_focus
+            .filter(|_| has_face && eye_focus.is_none());
+        let eye_focus_defect =
+            eye_focus.is_some_and(|v| behind(v, rk.reject_eye_focus_threshold, best_eye_focus));
+        let face_focus_defect =
+            face_focus.is_some_and(|v| behind(v, rk.reject_face_focus_threshold, best_face_focus));
+        item.eyes_soft =
+            eye_focus.is_some_and(|v| behind(v, rk.reason_eye_focus_threshold, best_eye_focus));
+        item.face_soft =
+            face_focus.is_some_and(|v| behind(v, rk.reason_face_focus_threshold, best_face_focus));
         item.hard_defect = blur_defect
-            || (group_has_faces && item.cull_face_count > 0 && (blink_defect || occlusion_defect));
+            || (group_has_faces
+                && item.cull_face_count > 0
+                && (blink_defect || occlusion_defect || eye_focus_defect || face_focus_defect));
         item.weak_face = group_has_faces
             && item.cull_face_count > 0
             && item.cull_face_score < rk.reject_face_score_threshold
@@ -794,16 +1034,58 @@ fn rank_group_records(
             if item.occluded {
                 reason_codes.push("possible_occlusion".to_string());
             }
+            if item.eyes_soft {
+                reason_codes.push("eyes_out_of_focus".to_string());
+            } else if item.face_soft {
+                reason_codes.push("face_out_of_focus".to_string());
+            }
+            // Named only when there was a comparison to win: two or more
+            // frames whose eyes were measured.
+            if is_winner
+                && focus_active
+                && eye_focus_values.len() > 1
+                && item.cull_eye_focus.is_some_and(|v| {
+                    best_eye_focus.is_some_and(|b| v >= b - rk.reason_eye_focus_delta)
+                })
+            {
+                reason_codes.push("eyes_sharpest_in_group".to_string());
+            }
+            // With the face state model, a frame whose eyes it could not judge
+            // has won nothing on them.
+            let eyes_judged = !state_active || item.cull_eye_closed.is_some();
             if item.cull_eye_openness >= (max_eye_openness - rk.reason_eyes_open_delta).max(0.0)
                 && is_winner
+                && eyes_judged
             {
                 reason_codes.push("eyes_open_best".to_string());
-            } else if item.eyes_closed_intended
-                && item.cull_blink_penalty > rk.reason_possible_blink_threshold
-            {
+            } else if item.eyes_closed_intended && item.cull_blink_penalty > reason_blink {
                 reason_codes.push("eyes_closed_intentional".to_string());
             } else if item.blink {
-                reason_codes.push("possible_blink".to_string());
+                // The model's reading is a statement; the proxy's a suspicion.
+                reason_codes.push(if state_active {
+                    "eyes_closed".to_string()
+                } else {
+                    "possible_blink".to_string()
+                });
+            } else if item.half_closed {
+                reason_codes.push("eyes_half_closed".to_string());
+            }
+            if state_active
+                && rk.reason_gaze_away_threshold > 0.0
+                && item
+                    .cull_gaze_away
+                    .is_some_and(|g| g > rk.reason_gaze_away_threshold)
+            {
+                reason_codes.push("looking_away".to_string());
+            }
+            if is_winner
+                && blend_smile
+                && smile_values.len() > 1
+                && item
+                    .cull_smile
+                    .is_some_and(|v| best_smile.is_some_and(|b| v >= b - rk.reason_smile_delta))
+            {
+                reason_codes.push("best_smile".to_string());
             }
         }
         // Explains the pick a technical reading would not have made. Emitted
@@ -935,7 +1217,38 @@ fn rank_group_records(
         if item.eyes_closed_intended {
             metrics.insert("eyes_closed_intended".into(), Value::from(true));
         }
+        // Absent rather than 0 when not measured, so "too small to judge"
+        // is never read as "out of focus".
+        if let Some(eye_focus) = item.cull_eye_focus {
+            metrics.insert("eye_focus".into(), Value::from(round4(eye_focus)));
+        }
+        if let Some(face_focus) = item.cull_face_focus {
+            metrics.insert("face_focus".into(), Value::from(round4(face_focus)));
+        }
+        if state_active {
+            for (key, value) in [
+                ("eye_closed", item.cull_eye_closed),
+                ("smile", item.cull_smile),
+                ("gaze_away", item.cull_gaze_away),
+            ] {
+                if let Some(v) = value {
+                    metrics.insert(key.into(), Value::from(round4(v)));
+                }
+            }
+        }
         metrics.insert("clear_defect".into(), Value::from(item.hard_defect));
+
+        let mut explanation = explanation_from_reason_codes(&reason_codes);
+        // Only where there is a comparison: a frame alone has no sharpest
+        // sibling to be measured against.
+        if focus_active && item.cull_face_count > 0 && eye_focus_values.len() > 1 {
+            if let (Some(eye_focus), Some(best)) = (item.cull_eye_focus, best_eye_focus) {
+                explanation.push_str(&format!(
+                    "; eye focus {}/10 within the group",
+                    eye_focus_out_of_ten(eye_focus, best)
+                ));
+            }
+        }
 
         out.push(RankedPhoto {
             photo_id: item.record.photo_id.clone(),
@@ -943,7 +1256,7 @@ fn rank_group_records(
             cull_score: round4(item.cull_score),
             winner: is_winner,
             reject_candidate,
-            explanation: explanation_from_reason_codes(&reason_codes),
+            explanation,
             reason_codes,
             metrics,
         });
@@ -2066,6 +2379,333 @@ mod tests {
 
     fn photo<'a>(group: &'a Group, id: &str) -> &'a RankedPhoto {
         group.photos.iter().find(|p| p.photo_id == id).unwrap()
+    }
+
+    /// A frame of a portrait burst with one face. `eye`/`face` are the focus
+    /// readings (`None` = too small to measure); `measured` is whether the
+    /// photo went through the pass that measures them at all.
+    fn focus_frame(
+        id: &str,
+        t: f64,
+        sharp: f64,
+        eye: Option<f64>,
+        face: Option<f64>,
+        measured: bool,
+    ) -> GroupingInput {
+        let mut r = with_metrics(
+            rec(id, Some(t), Some(0x3c3c_3c3c_3c3c_3c3c)),
+            &[
+                ("cull_sharpness", sharp),
+                ("cull_sharpness_peak", sharp),
+                ("cull_exposure", 0.7),
+                ("cull_noise", 0.1),
+                ("cull_face_score", 0.6),
+                ("cull_face_sharpness", 0.5),
+                ("cull_eye_openness", 0.8),
+                ("cull_blink_penalty", 0.2),
+                ("cull_occlusion", 0.1),
+            ],
+        );
+        r.metadata.insert("cull_face_count".into(), Value::from(1));
+        if measured {
+            r.metadata.insert(FOCUS_VERSION_KEY.into(), Value::from(1));
+        }
+        if let Some(eye) = eye {
+            r.metadata.insert("cull_eye_focus".into(), Value::from(eye));
+        }
+        if let Some(face) = face {
+            r.metadata
+                .insert("cull_face_focus".into(), Value::from(face));
+        }
+        r
+    }
+
+    fn cull(records: Vec<GroupingInput>, preset: &str) -> Vec<Group> {
+        group_and_sort_images(records, None, None, Some(2), preset)
+    }
+
+    /// The portrait decision the frame metrics cannot make: two frames of one
+    /// burst, the one focused on the nose slightly *sharper* overall. Eye
+    /// focus has to put the eye-sharp frame first.
+    #[test]
+    fn the_frame_with_sharp_eyes_beats_the_one_focused_on_the_nose() {
+        let burst = vec![
+            focus_frame("nose", 1000.0, 0.62, Some(0.52), Some(0.56), true),
+            focus_frame("eyes", 1000.4, 0.60, Some(0.69), Some(0.55), true),
+        ];
+        for preset in ["default", "portrait", "event"] {
+            let groups = cull(burst.clone(), preset);
+            assert_eq!(winner_of(&groups), "eyes", "{preset}");
+            let eyes = photo(&groups[0], "eyes");
+            assert!(
+                eyes.reason_codes
+                    .contains(&"eyes_sharpest_in_group".to_string()),
+                "{preset}: {:?}",
+                eyes.reason_codes
+            );
+            assert_eq!(eyes.metrics["eye_focus"], 0.69);
+            assert!(
+                eyes.explanation
+                    .contains("eye focus 10/10 within the group"),
+                "{}",
+                eyes.explanation
+            );
+            // 0.17 behind the sharpest: about six points down.
+            let nose = photo(&groups[0], "nose");
+            assert!(
+                nose.explanation.contains("eye focus 4/10 within the group"),
+                "{}",
+                nose.explanation
+            );
+        }
+    }
+
+    /// Focus that clearly missed the eyes — below the reject bar and well
+    /// behind the sharpest sibling — is a clear defect, like blur.
+    #[test]
+    fn eyes_clearly_out_of_focus_are_a_defect_with_a_sharper_sibling() {
+        let groups = cull(
+            vec![
+                focus_frame("sharp", 1000.0, 0.6, Some(0.69), Some(0.55), true),
+                focus_frame("missed", 1000.5, 0.6, Some(0.40), Some(0.50), true),
+            ],
+            "portrait",
+        );
+        let missed = photo(&groups[0], "missed");
+        assert!(missed.reject_candidate, "{:?}", missed.reason_codes);
+        assert!(missed
+            .reason_codes
+            .contains(&"eyes_out_of_focus".to_string()));
+        assert_eq!(missed.metrics["clear_defect"], true);
+        assert_eq!(winner_of(&groups), "sharp");
+    }
+
+    /// Without a sibling there is nothing to say the shot could have been
+    /// sharper, and the measure is not calibrated enough to reject alone.
+    #[test]
+    fn a_single_with_soft_eyes_is_not_rejected_for_it() {
+        let groups = cull(
+            vec![focus_frame(
+                "only",
+                1000.0,
+                0.6,
+                Some(0.40),
+                Some(0.30),
+                true,
+            )],
+            "portrait",
+        );
+        let only = photo(&groups[0], "only");
+        assert!(!only.reject_candidate);
+        assert!(!only.reason_codes.iter().any(|c| c.contains("out_of_focus")));
+        // The reading is still reported, but no 0-10: there is nothing to
+        // compare it with.
+        assert_eq!(only.metrics["eye_focus"], 0.4);
+        assert!(
+            !only.explanation.contains("eye focus"),
+            "{}",
+            only.explanation
+        );
+    }
+
+    /// Frames of one burst are never compared on a signal only some of them
+    /// carry: with one frame from before the measurement existed, the group
+    /// ranks exactly as it did without eye focus.
+    #[test]
+    fn a_group_with_an_unmeasured_frame_ignores_focus_entirely() {
+        let with_old = vec![
+            focus_frame("old", 1000.0, 0.62, None, None, false),
+            focus_frame("new", 1000.4, 0.60, Some(0.69), Some(0.55), true),
+        ];
+        let without_focus = vec![
+            focus_frame("old", 1000.0, 0.62, None, None, false),
+            focus_frame("new", 1000.4, 0.60, None, None, false),
+        ];
+        let a = cull(with_old, "portrait");
+        let b = cull(without_focus, "portrait");
+        for id in ["old", "new"] {
+            assert_eq!(
+                photo(&a[0], id).cull_score,
+                photo(&b[0], id).cull_score,
+                "{id}"
+            );
+            assert!(!photo(&a[0], id).explanation.contains("eye focus"));
+        }
+    }
+
+    /// Eyes too small to measure abstain; the face reading stands in for them.
+    #[test]
+    fn face_focus_stands_in_when_the_eyes_are_too_small() {
+        let groups = cull(
+            vec![
+                focus_frame("sharp", 1000.0, 0.6, None, Some(0.55), true),
+                focus_frame("soft", 1000.5, 0.6, None, Some(0.25), true),
+            ],
+            "default",
+        );
+        let soft = photo(&groups[0], "soft");
+        assert!(soft.reason_codes.contains(&"face_out_of_focus".to_string()));
+        assert!(soft.reject_candidate);
+        assert!(!photo(&groups[0], "sharp")
+            .reason_codes
+            .iter()
+            .any(|c| c.contains("out_of_focus")));
+    }
+
+    /// A portrait frame with one face and a face-state reading: `closed` is
+    /// `eyeBlink`, `None` a face the model could not judge.
+    fn state_frame(
+        id: &str,
+        t: f64,
+        closed: Option<f64>,
+        smile: Option<f64>,
+        measured: bool,
+    ) -> GroupingInput {
+        let mut r = focus_frame(id, t, 0.6, None, Some(0.5), true);
+        // The proxy reads "closed" everywhere, as it did on the real shoot.
+        r.metadata
+            .insert("cull_eye_openness".into(), Value::from(0.1));
+        r.metadata
+            .insert("cull_blink_penalty".into(), Value::from(0.9));
+        if measured {
+            r.metadata
+                .insert(FACE_STATE_VERSION_KEY.into(), Value::from(1));
+        }
+        if let Some(v) = closed {
+            r.metadata.insert("cull_eye_closed".into(), Value::from(v));
+        }
+        if let Some(v) = smile {
+            r.metadata.insert("cull_smile".into(), Value::from(v));
+        }
+        r
+    }
+
+    #[test]
+    fn the_face_state_model_finds_the_real_blink_the_proxy_could_not() {
+        let groups = cull(
+            vec![
+                state_frame("open", 1000.0, Some(0.04), Some(0.5), true),
+                state_frame("blink", 1000.5, Some(0.81), Some(0.5), true),
+                state_frame("open2", 1001.0, Some(0.05), Some(0.5), true),
+            ],
+            "event",
+        );
+        let blink = photo(&groups[0], "blink");
+        assert!(blink.reject_candidate, "{:?}", blink.reason_codes);
+        assert!(blink.reason_codes.contains(&"eyes_closed".to_string()));
+        assert_eq!(blink.metrics["eye_closed"], 0.81);
+        // The open frames are not blinks, though the proxy said they were.
+        for id in ["open", "open2"] {
+            let p = photo(&groups[0], id);
+            assert!(
+                !p.reason_codes
+                    .iter()
+                    .any(|c| c.contains("blink") || c == "eyes_closed"),
+                "{id}: {:?}",
+                p.reason_codes
+            );
+        }
+    }
+
+    #[test]
+    fn a_laugh_with_the_eyes_shut_is_not_a_blink() {
+        let groups = cull(
+            vec![
+                state_frame("laugh", 1000.0, Some(0.8), Some(0.85), true),
+                state_frame("neutral", 1000.5, Some(0.04), Some(0.2), true),
+            ],
+            "event",
+        );
+        let laugh = photo(&groups[0], "laugh");
+        assert!(!laugh.reject_candidate, "{:?}", laugh.reason_codes);
+        assert!(laugh
+            .reason_codes
+            .contains(&"eyes_closed_intentional".to_string()));
+    }
+
+    #[test]
+    fn a_face_the_model_could_not_judge_is_never_a_blink() {
+        let groups = cull(
+            vec![
+                state_frame("profile", 1000.0, None, None, true),
+                state_frame("open", 1000.5, Some(0.04), Some(0.3), true),
+            ],
+            "portrait",
+        );
+        let profile = photo(&groups[0], "profile");
+        assert!(
+            !profile.reason_codes.iter().any(|c| c.contains("blink")
+                || c.starts_with("eyes_closed")
+                || c == "eyes_open_best"),
+            "{:?}",
+            profile.reason_codes
+        );
+        assert_eq!(profile.metrics["clear_defect"], false);
+    }
+
+    #[test]
+    fn half_closed_eyes_are_labelled_not_rejected() {
+        let groups = cull(
+            vec![
+                state_frame("open", 1000.0, Some(0.04), Some(0.3), true),
+                state_frame("squint", 1000.5, Some(0.40), Some(0.3), true),
+            ],
+            "event",
+        );
+        let squint = photo(&groups[0], "squint");
+        assert!(squint
+            .reason_codes
+            .contains(&"eyes_half_closed".to_string()));
+        assert_eq!(squint.metrics["clear_defect"], false);
+    }
+
+    /// A burst with one frame from before the model ran keeps the proxy for
+    /// all of them, rather than judging two frames on two instruments.
+    #[test]
+    fn a_group_with_an_unanalysed_frame_keeps_the_proxy() {
+        let groups = cull(
+            vec![
+                state_frame("old", 1000.0, None, None, false),
+                state_frame("new", 1000.5, Some(0.04), Some(0.5), true),
+            ],
+            "event",
+        );
+        for p in &groups[0].photos {
+            assert!(!p.metrics.contains_key("eye_closed"), "{}", p.photo_id);
+            assert!(!p.reason_codes.contains(&"eyes_closed".to_string()));
+        }
+    }
+
+    #[test]
+    fn the_broader_smile_wins_a_portrait_burst() {
+        let groups = cull(
+            vec![
+                state_frame("flat", 1000.0, Some(0.04), Some(0.15), true),
+                state_frame("smile", 1000.5, Some(0.04), Some(0.85), true),
+            ],
+            "portrait",
+        );
+        assert_eq!(winner_of(&groups), "smile");
+        assert!(photo(&groups[0], "smile")
+            .reason_codes
+            .contains(&"best_smile".to_string()));
+    }
+
+    /// Street is judged on the moment; eye focus neither ranks nor rejects.
+    #[test]
+    fn street_ignores_eye_focus() {
+        let groups = cull(
+            vec![
+                focus_frame("a", 1000.0, 0.62, Some(0.40), Some(0.30), true),
+                focus_frame("b", 1000.4, 0.60, Some(0.69), Some(0.55), true),
+            ],
+            "street",
+        );
+        assert!(groups[0].photos.iter().all(|p| !p
+            .reason_codes
+            .iter()
+            .any(|c| c.contains("focus"))
+            && p.metrics["clear_defect"] == false));
     }
 
     /// A single used to land in Picks however blurred it was, because there was

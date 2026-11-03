@@ -55,6 +55,13 @@ embeddings that are not comparable, so previously detected faces are set aside
 as unassigned until they are re-detected. Named people are restored as the
 re-detection proceeds.
 
+The eye and expression model (about 7 MB), which culling uses to tell open
+eyes from closed ones and to read the smile and gaze, comes with the same
+button, as its own entry. Without it face detection works as before; only
+culling falls back to a rough eye estimate and says so in its warning. Once it
+is downloaded, **Cull Similar Photos** offers to prepare the photos with faces
+again.
+
 ---
 
 ### 4. Model "Missing" Even After Installation

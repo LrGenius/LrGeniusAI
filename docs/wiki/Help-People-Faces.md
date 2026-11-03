@@ -195,7 +195,7 @@ the whole indexed catalog.
 - Run indexing with face detection on all portrait-heavy shoots before using the People workflow.
 - Clustering works by visual similarity, so identical twins or people who look very similar can land in the same cluster. Open the person (double-click) to see which faces are actually wrong, move them out, and merge cards that are the same person by dragging one onto the other. Fixing it by hand is worth more than re-running: your corrections are kept and make every later run start from firmer ground.
 - The fastest way to judge a threshold is not to guess it but to look. Double-click your biggest person, sort by *outliers first*, and see whether the faces at the far end are still the same human. If they are, the threshold can go up; if strangers appear, it should come down.
-- For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eye openness, blink detection, face sharpness). See [Help: Cull Photos](Help-Cull-Photos).
+- For culling portrait sessions, face data also feeds into the **Cull Photos** scoring (eyes open or closed, smile, gaze, and focus on the eyes). See [Help: Cull Photos](Help-Cull-Photos).
 
 ## Choosing the face recognizer: FaceNet or AuraFace
 

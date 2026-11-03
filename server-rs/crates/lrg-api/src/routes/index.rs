@@ -118,6 +118,9 @@ async fn check_unprocessed(
     // The genre is made from the stored embedding with prompts the search model
     // embeds, so there is nothing to bring up to date without that model.
     let genre_available = state.siglip.is_cached();
+    // Eye state, smile and gaze: only worth asking for when their model is on
+    // disk, like the aesthetic score.
+    let face_state_available = state.face_state.is_cached();
     // Which detector/recognizer pair this build writes. A compile-time
     // constant rather than something read off disk, unlike the BioCLIP head
     // above — see `lrg_ml::faces::MODEL_ID`.
@@ -263,6 +266,24 @@ async fn check_unprocessed(
                 let needs_cull_time = compute_cull
                     && !m.contains_key("capture_time")
                     && !has_flag("capture_time_unknown");
+                // A photo with faces prepared before eye and face focus were
+                // measured is measured once more; one that went through the
+                // pass carries the version marker even when its faces were
+                // too small to measure, so it is not asked for again.
+                let needs_cull_focus = compute_cull
+                    && m.get("cull_face_count")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0)
+                        > 0
+                    && !m.contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY);
+                // Likewise the face state, once its model is downloaded.
+                let needs_cull_face_state = compute_cull
+                    && face_state_available
+                    && m.get("cull_face_count")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0)
+                        > 0
+                    && !m.contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
                 // A photo is done for `species` only if it was checked *and*
                 // checked by the head currently on disk. Widening the taxa
                 // whitelist changes what BioCLIP can answer, so results from an
@@ -285,6 +306,8 @@ async fn check_unprocessed(
                     || needs_cull_phash
                     || needs_cull_faces
                     || needs_cull_time
+                    || needs_cull_focus
+                    || needs_cull_face_state
                     || needs_species
             })
             .cloned()

@@ -59,6 +59,10 @@ fn models_absent() -> ModelAssetPaths {
             rec_onnx: dir.join("facenet_vggface2.onnx"),
             auraface_onnx: dir.join("auraface_glintr100.onnx"),
         },
+        face_state: lrg_ml::face_state::FaceStatePaths {
+            mesh_onnx: dir.join("face_mesh_v2.onnx"),
+            blendshapes_onnx: dir.join("face_blendshapes_v2.onnx"),
+        },
         bioclip: lrg_ml::bioclip::BioclipModelPaths {
             image_onnx: dir.join("bioclip2_image.onnx"),
             taxa_bin: dir.join("bioclip2_taxa.bin"),
@@ -3764,4 +3768,379 @@ async fn auraface_cannot_be_chosen_before_it_is_downloaded() {
     )
     .await;
     assert_eq!(bad, StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// Eye and face focus
+// ---------------------------------------------------------------------------
+
+/// A photo with faces prepared before eye and face focus were measured is
+/// prepared once more; one that went through the pass is not, even when its
+/// faces were too small to measure, and a faceless photo never is.
+#[tokio::test]
+async fn check_unprocessed_remeasures_faces_prepared_before_eye_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let row = |id: &str, faces: i64, version: bool, eye_focus: Option<f64>| {
+        let mut m = serde_json::Map::new();
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
+        m.insert("cull_face_count".into(), serde_json::json!(faces));
+        m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        if version {
+            m.insert("cull_focus_version".into(), serde_json::json!(1));
+        }
+        if let Some(v) = eye_focus {
+            m.insert("cull_eye_focus".into(), serde_json::json!(v));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                row("faces_before_focus", 2, false, None),
+                row("faces_measured", 1, true, Some(0.66)),
+                row("faces_too_small", 3, true, None),
+                row("faceless_before_focus", 0, false, None),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/index/unprocessed")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": [
+                            "faces_before_focus", "faces_measured",
+                            "faces_too_small", "faceless_before_focus",
+                        ],
+                        "tasks": "cull",
+                        "regenerate_metadata": "false",
+                        "db_path": db_path_str,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["photo_ids"], serde_json::json!(["faces_before_focus"]));
+}
+
+/// Two portrait frames, focus on the eyes and focus missed: the response
+/// carries the readings, the reason in words and the 0–10 the plugin writes
+/// into the explanation. A third photo prepared before focus existed is named
+/// in a warning, with the fix.
+#[tokio::test]
+async fn cull_ranks_on_eye_focus_and_names_photos_without_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let frame = |id: &str, t: i64, eye: Option<f64>, measured: bool| {
+        let mut m = serde_json::Map::new();
+        m.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        m.insert("capture_time".into(), serde_json::json!(t));
+        m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+        m.insert("cull_sharpness".into(), serde_json::json!(0.6));
+        m.insert("cull_sharpness_peak".into(), serde_json::json!(0.6));
+        m.insert("cull_exposure".into(), serde_json::json!(0.7));
+        m.insert("cull_noise".into(), serde_json::json!(0.1));
+        m.insert("cull_face_count".into(), serde_json::json!(1));
+        m.insert("cull_face_score".into(), serde_json::json!(0.6));
+        m.insert("cull_eye_openness".into(), serde_json::json!(0.8));
+        m.insert("cull_blink_penalty".into(), serde_json::json!(0.2));
+        m.insert("cull_occlusion".into(), serde_json::json!(0.1));
+        m.insert("aesthetic_score".into(), serde_json::json!(6.0));
+        m.insert(
+            "aesthetic_model".into(),
+            serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+        );
+        if measured {
+            m.insert("cull_focus_version".into(), serde_json::json!(1));
+        }
+        if let Some(v) = eye {
+            m.insert("cull_eye_focus".into(), serde_json::json!(v));
+            m.insert("cull_face_focus".into(), serde_json::json!(0.5));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: Some(vec![0.5f32; 1152]),
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                frame("missed", 1_700_000_000, Some(0.40), true),
+                frame("sharp", 1_700_000_001, Some(0.69), true),
+                // Far outside the burst window: its own group.
+                frame("older", 1_700_009_000, None, false),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["missed", "sharp", "older"],
+            "culling_preset": "portrait",
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+
+    let groups = json["groups"].as_array().unwrap();
+    let burst = groups
+        .iter()
+        .find(|g| g["group_size"] == 2)
+        .expect("the two frames form one group");
+    assert_eq!(burst["winner_photo_id"], "sharp");
+    let photo = |id: &str| {
+        burst["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["photo_id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let missed = photo("missed");
+    assert_eq!(missed["metrics"]["eye_focus"], 0.4);
+    assert_eq!(missed["reject_candidate"], true);
+    assert!(missed["reason_codes"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("eyes_out_of_focus")));
+    let explanation = photo("sharp")["explanation"].as_str().unwrap().to_string();
+    assert!(
+        explanation.contains("eye focus 10/10 within the group"),
+        "{explanation}"
+    );
+
+    let warnings = json["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .starts_with("1 photo(s) with faces were prepared before eye and face focus")),
+        "{warnings:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Face state (eye state, smile, gaze)
+// ---------------------------------------------------------------------------
+
+/// A family of its own in the asset status, so the Plug-in Manager offers it
+/// and face detection never reports "not ready" because of it.
+#[tokio::test]
+async fn the_face_state_model_is_its_own_downloadable_family() {
+    let (app, _state) = fresh_app();
+    let status = get_json(&app, "/v1/models/assets").await;
+    let family = status["families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "face_state")
+        .expect("face_state family listed");
+    assert_eq!(family["ready"], false);
+    assert_eq!(family["downloadable"], true);
+    assert!(family["approx_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(status["ready"], false);
+}
+
+/// Photos with faces prepared before the face state model was on disk are
+/// prepared again once it is, and not before: re-preparing without the model
+/// would change nothing.
+#[tokio::test]
+async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
+    let row = |id: &str, faces: i64, state: bool| {
+        let mut m = serde_json::Map::new();
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
+        m.insert("cull_face_count".into(), serde_json::json!(faces));
+        m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        m.insert("cull_focus_version".into(), serde_json::json!(1));
+        if state {
+            m.insert("cull_face_state_version".into(), serde_json::json!(1));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: m,
+        }
+    };
+    let rows = [
+        row("faces_without_state", 2, false),
+        row("faces_with_state", 1, true),
+        row("faceless", 0, false),
+    ];
+    let ask = |app: axum::Router, db: String| async move {
+        let response = app
+            .oneshot(
+                Request::post("/v1/index/unprocessed")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "photo_ids": ["faces_without_state", "faces_with_state", "faceless"],
+                            "tasks": "cull",
+                            "regenerate_metadata": "false",
+                            "db_path": db,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await["photo_ids"].clone()
+    };
+
+    // Without the model: nothing to do.
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (without_model, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &rows)
+        .await
+        .unwrap();
+    assert_eq!(ask(without_model, db).await, serde_json::json!([]));
+
+    // With the model on disk (only its presence is checked here).
+    let models = tempfile::tempdir().unwrap();
+    std::fs::write(models.path().join("face_mesh_v2.onnx"), b"x").unwrap();
+    std::fs::write(models.path().join("face_blendshapes_v2.onnx"), b"x").unwrap();
+    let mut paths = models_absent();
+    paths.face_state = lrg_ml::face_state::FaceStatePaths {
+        mesh_onnx: models.path().join("face_mesh_v2.onnx"),
+        blendshapes_onnx: models.path().join("face_blendshapes_v2.onnx"),
+    };
+    let state = Arc::new(AppState::with_model_paths(None, false, paths));
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &rows)
+        .await
+        .unwrap();
+    assert_eq!(
+        ask(app(state.clone()), db).await,
+        serde_json::json!(["faces_without_state"])
+    );
+}
+
+/// The model's reading replaces the proxy: the blinking frame is a reject with
+/// the plain-language reason, its reading is in the metrics, and the frame the
+/// proxy also called "closed" is not.
+#[tokio::test]
+async fn cull_names_a_real_blink_from_the_face_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path_str = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path_str).await.unwrap();
+
+    let frame = |id: &str, t: i64, closed: f64| {
+        let mut m = serde_json::Map::new();
+        m.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        m.insert("capture_time".into(), serde_json::json!(t));
+        m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+        m.insert("cull_sharpness".into(), serde_json::json!(0.6));
+        m.insert("cull_sharpness_peak".into(), serde_json::json!(0.6));
+        m.insert("cull_exposure".into(), serde_json::json!(0.7));
+        m.insert("cull_noise".into(), serde_json::json!(0.1));
+        m.insert("cull_face_count".into(), serde_json::json!(1));
+        m.insert("cull_face_score".into(), serde_json::json!(0.6));
+        // What the proxy said on the real shoot: closed, everywhere.
+        m.insert("cull_eye_openness".into(), serde_json::json!(0.1));
+        m.insert("cull_blink_penalty".into(), serde_json::json!(0.9));
+        m.insert("cull_occlusion".into(), serde_json::json!(0.1));
+        m.insert("cull_focus_version".into(), serde_json::json!(1));
+        m.insert("cull_face_state_version".into(), serde_json::json!(1));
+        m.insert("cull_eye_closed".into(), serde_json::json!(closed));
+        m.insert("cull_smile".into(), serde_json::json!(0.4));
+        m.insert("aesthetic_score".into(), serde_json::json!(6.0));
+        m.insert(
+            "aesthetic_model".into(),
+            serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+        );
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: Some(vec![0.5f32; 1152]),
+            metadata: m,
+        }
+    };
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                frame("open", 1_700_000_000, 0.04),
+                frame("blink", 1_700_000_001, 0.81),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["open", "blink"],
+            "culling_preset": "event",
+            "db_path": db_path_str,
+        }),
+    )
+    .await;
+    let group = &json["groups"][0];
+    assert_eq!(group["winner_photo_id"], "open");
+    let blink = group["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["photo_id"] == "blink")
+        .unwrap();
+    assert_eq!(blink["reject_candidate"], true);
+    assert_eq!(blink["metrics"]["eye_closed"], 0.81);
+    assert!(blink["explanation"]
+        .as_str()
+        .unwrap()
+        .contains("eyes closed"));
+    let open = group["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["photo_id"] == "open")
+        .unwrap();
+    assert!(!open["reason_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "eyes_closed" || c == "possible_blink"));
 }

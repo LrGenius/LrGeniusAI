@@ -44,6 +44,7 @@ const CLIP_APPROX_BYTES: u64 = 2_310_000_000;
 const AESTHETIC_APPROX_BYTES: u64 = 868_000_000;
 const BIOCLIP_APPROX_BYTES: u64 = 876_000_000;
 const FACE_APPROX_BYTES: u64 = 94_200_000;
+const FACE_STATE_APPROX_BYTES: u64 = 6_800_000;
 
 /// Release tag holding the YuNet + FaceNet ONNX files.
 ///
@@ -55,6 +56,13 @@ const FACE_APPROX_BYTES: u64 = 94_200_000;
 /// different question from `lrg_ml::faces::MODEL_ID`, the marker that says
 /// already-stored embeddings are no longer comparable.
 const FACE_ASSETS_RELEASE_TAG: &str = "face-assets-v1";
+
+/// Release tag holding MediaPipe Face Mesh V2 + Blendshape V2 as ONNX
+/// (`scripts/export_face_state.py`). Its own tag again: the eye-state models
+/// are a separate family from detection and recognition, and must never be
+/// what makes face detection report "not ready". Bump together with
+/// `.github/workflows/model-assets-face-state.yml`'s `tag_name`.
+const FACE_STATE_ASSETS_RELEASE_TAG: &str = "face-state-assets-v1";
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -80,6 +88,7 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let aesthetic_ready = state.aesthetic.is_cached();
     let bioclip_ready = state.bioclip.is_cached();
     let face_ready = state.face.is_cached();
+    let face_state_ready = state.face_state.is_cached();
 
     let missing_bytes = if clip_ready { 0 } else { CLIP_APPROX_BYTES }
         + if aesthetic_ready {
@@ -92,10 +101,15 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
         } else {
             BIOCLIP_APPROX_BYTES
         }
-        + if face_ready { 0 } else { FACE_APPROX_BYTES };
+        + if face_ready { 0 } else { FACE_APPROX_BYTES }
+        + if face_state_ready {
+            0
+        } else {
+            FACE_STATE_APPROX_BYTES
+        };
 
     Json(json!({
-        "ready": clip_ready && aesthetic_ready && bioclip_ready && face_ready,
+        "ready": clip_ready && aesthetic_ready && bioclip_ready && face_ready && face_state_ready,
         "missing_approx_bytes": missing_bytes,
         "families": [
             {
@@ -126,6 +140,13 @@ async fn assets_status(State(state): State<Arc<AppState>>) -> Json<Value> {
                 "downloadable": true,
                 "approx_bytes": FACE_APPROX_BYTES,
             },
+            {
+                "id": "face_state",
+                "name": "Eye and expression analysis",
+                "ready": face_state_ready,
+                "downloadable": true,
+                "approx_bytes": FACE_STATE_APPROX_BYTES,
+            },
         ],
     }))
 }
@@ -153,12 +174,14 @@ async fn download_start(State(state): State<Arc<AppState>>) -> Json<Value> {
     let need_aesthetic = !state.aesthetic.is_cached();
     let need_bioclip = !state.bioclip.is_cached();
     let need_face = !state.face.is_cached();
+    let need_face_state = !state.face_state.is_cached();
     tokio::spawn(run_download(
         download_state,
         need_clip,
         need_aesthetic,
         need_bioclip,
         need_face,
+        need_face_state,
     ));
 
     Json(json!({"download": "started"}))
@@ -181,11 +204,13 @@ async fn run_download(
     need_aesthetic: bool,
     need_bioclip: bool,
     need_face: bool,
+    need_face_state: bool,
 ) {
     let clip_paths = lrg_ml::model_paths::resolve();
     let aesthetic_paths = lrg_ml::model_paths::resolve_aesthetic();
     let bioclip_paths = lrg_ml::model_paths::resolve_bioclip();
     let face_paths = lrg_ml::model_paths::resolve_face();
+    let face_state_paths = lrg_ml::model_paths::resolve_face_state();
 
     let mut assets = Vec::new();
     if need_clip {
@@ -199,6 +224,9 @@ async fn run_download(
     }
     if need_face {
         assets.extend(face_assets(&face_paths));
+    }
+    if need_face_state {
+        assets.extend(face_state_assets(&face_state_paths));
     }
 
     if assets.is_empty() {
@@ -216,10 +244,27 @@ async fn run_download(
     }
 
     log::info!(
-        "Downloading {} asset(s): clip={need_clip} aesthetic={need_aesthetic} bioclip={need_bioclip} face={need_face}",
+        "Downloading {} asset(s): clip={need_clip} aesthetic={need_aesthetic} bioclip={need_bioclip} face={need_face} face_state={need_face_state}",
         assets.len()
     );
     download_release_assets(&state, DOWNLOAD_KEY, "AI models", &assets).await;
+}
+
+/// The face-state assets (MediaPipe Face Mesh V2 + Blendshape V2) and where
+/// they go.
+fn face_state_assets(paths: &lrg_ml::face_state::FaceStatePaths) -> Vec<ReleaseAsset<'_>> {
+    vec![
+        (
+            FACE_STATE_ASSETS_RELEASE_TAG,
+            "face_mesh_v2.onnx",
+            paths.mesh_onnx.as_path(),
+        ),
+        (
+            FACE_STATE_ASSETS_RELEASE_TAG,
+            "face_blendshapes_v2.onnx",
+            paths.blendshapes_onnx.as_path(),
+        ),
+    ]
 }
 
 /// The face-model assets and where they go.

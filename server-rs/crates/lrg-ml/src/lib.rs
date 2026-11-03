@@ -1,5 +1,6 @@
 //! ONNX inference: SigLIP2 image/text embedding via `ort`, plus the face
-//! pipeline (YuNet detection + FaceNet recognition).
+//! pipeline (YuNet detection + FaceNet recognition) and the face state
+//! (MediaPipe Face Mesh V2 + Blendshape V2: eye state, smile, gaze).
 
 /// Session config key that turns off MLAS's KleidiAI convolution kernels
 /// (onnxruntime >= 1.25). Ignored on non-arm64 builds, where these kernels
@@ -144,6 +145,7 @@ pub mod bioclip_pre;
 pub mod clip_iqa;
 pub mod cv2_resize;
 pub mod face_quality;
+pub mod face_state;
 pub mod facenet;
 pub mod faces;
 pub mod genre;

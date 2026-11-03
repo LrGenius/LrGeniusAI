@@ -138,7 +138,7 @@ LRG_REQUIRE_GOLDENS=face,siglip   cargo test --workspace   # a subset
 LRG_REQUIRE_GOLDENS=all           cargo test --workspace   # every family
 ```
 
-Family names are `face`, `auraface`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
+Family names are `face`, `auraface`, `facestate`, `siglip`, `aesthetic` and `bioclip`. Per-family rather than a
 single switch because they differ in cost by more than an order of magnitude
 (89 MB, 261 MB, 2.2 GB, 868 MB and 834 MB respectively).
 
@@ -446,6 +446,37 @@ detection was the one family the plugin could not download for you. Note the
 two produce embeddings in **different spaces at the same 512 dims**, so face
 rows carry `lrg_ml::faces::MODEL_ID` and anything written by the old pair is
 ignored by clustering and re-queued for detection.
+
+### Face state models (eye state, smile, gaze)
+
+MediaPipe Face Mesh V2 (478 landmarks) and Blendshape V2 (52 expression
+coefficients such as `eyeBlinkLeft` and `mouthSmileRight`), both Apache-2.0
+per their model cards, as ONNX. Culling reads eye state, smile and gaze from
+them per face (`lrg-ml/src/face_state.rs`) instead of the old eye-openness
+proxy. They are a family of their own (`face_state` in `/v1/models/assets`,
+~7 MB) so that face detection never depends on them; without them culling
+falls back to the proxy and says so.
+
+`scripts/export_face_state.py` takes both out of Google's
+`face_landmarker.task` (pinned by URL and SHA-256), converts them with tf2onnx
+and checks every output against the TFLite originals. Like the face export it
+carries its own PEP 723 header (TensorFlow does not belong in the shared
+export project):
+
+```bash
+uv run --no-project server-rs/scripts/export_face_state.py --output-dir face-state-assets
+# --goldens server-rs/testdata/face_state_goldens.json also runs Python MediaPipe
+# on astronaut.jpg (on Linux it needs libEGL: apt-get install libegl1)
+export LRG_FACE_MESH_ONNX=/path/to/face-state-assets/face_mesh_v2.onnx
+export LRG_FACE_BLENDSHAPES_ONNX=/path/to/face-state-assets/face_blendshapes_v2.onnx
+```
+
+Without the env vars `lrg-ml` falls back to
+`~/.cache/lrgenius/models/{face_mesh_v2.onnx,face_blendshapes_v2.onnx}`.
+Published by `.github/workflows/model-assets-face-state.yml` to the fixed
+`face-state-assets-v1` tag. The golden test (`lrg-ml/tests/face_state_goldens.rs`,
+family `facestate`, which also needs the `face` pair to find the face) checks
+the pipeline against MediaPipe's own FaceLandmarker on the reference portrait.
 
 ### Local LLM (in-process llama.cpp)
 
