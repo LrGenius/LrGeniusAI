@@ -317,7 +317,9 @@ pub fn warp_roi(rgb: &[u8], width: usize, height: usize, roi: &Roi, n: usize) ->
 
 /// Mesh output (pixels of the `n`×`n` input) back to image pixels.
 fn project(raw: &[f32], roi: &Roi, n: usize) -> Vec<[f64; 3]> {
-    raw.chunks_exact(3)
+    raw.as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| {
             let (u, v) = (p[0] as f64 / n as f64, p[1] as f64 / n as f64);
             let xy = roi.to_image(u, v);
