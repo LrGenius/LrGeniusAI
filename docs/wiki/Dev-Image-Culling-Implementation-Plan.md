@@ -1185,17 +1185,20 @@ read "closed" on 767 of 769 frames.
   portrait (`tests/face_state_goldens.rs`): landmarks within ~1% of the
   interocular distance, blink and smile within 0.01; the closed-lid path
   exactly, by moving MediaPipe's own upper-lid landmarks onto the lower ones.
-- **Per face**: `eye_closed` (mean `eyeBlink`, only the near eye from 35° of
-  head turn), `eye_state` open/half/closed/unknown (unknown below 0.5 presence,
-  beyond 60° of yaw, or with the eyes under 24 px apart), smile, gaze, yaw.
+- **Per face**: `eye_closed` (`eyeBlink` of the more closed eye, only the near
+  eye from 35° of head turn), `eye_state` open/half/closed/unknown (unknown below
+  0.5 presence, beyond 60° of yaw, or with the eyes under 24 px apart), smile,
+  squint, `gaze_off_lens` in degrees, head pose (yaw, pitch, roll) and all 52
+  blendshapes, so that a later signal need not decode every original again.
   Faces under 64 px are not run — the model card warns against rescaling them.
   Prominent faces only (the aggregation's gate), at most 12, on the full-size
   original from the focus step when there is one.
 - **Per photo**: the most closed prominent eyes, the weakest smile, the
-  furthest gaze, and `cull_face_state_version`.
+  strongest squint on a face not smiling, the furthest gaze among open eyes, and
+  `cull_face_state_version`, whose value counts: an older one is analysed again.
 - **Ranking**: where the group has the version throughout, the model's reading
   becomes blink penalty and eye openness, judged at its own thresholds (closed
-  ≥ 0.6, label ≥ 0.5; sports 0.8/0.7, street 0.85/0.75, portrait 0.55/0.45);
+  > 0.55, label > 0.5; sports 0.68/0.6, street 0.72/0.62, portrait 0.5/0.45);
   `eyes_closed`, `eyes_half_closed` (label only), `looking_away` (portrait),
   `best_smile`; a smile of 0.6 or more with the eyes shut is a laugh; smile
   weight 0.15 portrait, 0.10 event. An unknown face is never a blink.
@@ -1207,9 +1210,118 @@ read "closed" on 767 of 769 frames.
 
 There is no photograph with closed eyes under a free license in the
 repository, so the closed path is pinned synthetically (lids moved shut:
-0.81/0.76) and the open path on the reference portrait (0.04/0.03). The
-thresholds sit between those with room on both sides, and the relative rules
-still apply on top, but **they are hypotheses** until a hand-culled shoot with
-real blinks has been scored with `cull_eval --ablate` — the same caveat as every
-other threshold here.
+0.81/0.76) and the open path on the reference portrait (0.04/0.03).
+
+Those two points were a poor guide. Measured with `examples/face_state_probe.rs`
+on portraits from Wikimedia Commons (not committed; 285 usable faces to choose the
+thresholds, judged by eye, then 292 from a disjoint sample to check them):
+
+| Reading | On the first sample | On the second sample |
+|---|---|---|
+| Eyes shut or lowered, caught by the first rule (mean ≥ 0.6) | 6 of 22 | about 8 of 24 |
+| The same, caught by the more closed eye > 0.55 | 19 of 22 | about 17 of 24 |
+| Faces with the eyes open and a reading > 0.5 | 0 of 213 | 1 of 178 portraits |
+| Labelled `looking_away` in portraits, old (`eyeLook` > 0.5) → new (> 25°) | | 25–31% → 10–12% |
+| The same in Commons' *People looking away* | | 53% → 67% |
+
+- **`eyeBlink` tops out low.** Eyes shut read 0.54–0.78 on the more closed eye and
+  0.41–0.72 as a mean. No open eye reached 0.35.
+- **`eyeLook*` is the eye inside the head.** People turned 25–30° and looking
+  straight at the camera read 0.85–0.99, and a head turned 39° with the eyes
+  following it 0.14, so the old reading had it backwards. Added to the head's turn
+  at 28° per unit (where the two cancel for people looking back at the lens) it
+  separates well: portraits a median 9°, people looking away 31°. Up and down is
+  weaker: `eyeLookUp` barely moves when a lowered head looks up at the lens, so
+  selfies from above read about 20°. That is why the label sits at 25°. Shut eyes
+  abstain: their `eyeLook*` is noise, 31° on one such portrait.
+- **The head pose** is a frame of bone landmarks, within about 1° of a full
+  Procrustes fit to MediaPipe's canonical face model on yaw and roll and 2° on pitch.
+- **`eyeSquint` runs high for everyone** (median 0.43) and rises on a smile, so it
+  counts only from 0.78 on a face smiling under 0.3. It fired on no face of the
+  second sample; it adds little beyond the lids, and no false alarms.
+- **Several coefficients do not move on photographs at all**: `cheekSquint`,
+  `noseSneer`, `cheekPuff` and `jawForward` stay at 0.00 even at the 99th percentile,
+  and `mouthFrown` and `mouthFunnel` reach about 0.1. Don't build on them: a genuine
+  smile cannot be read from `cheekSquint`. `jawOpen`, `mouthPucker`, `browDown` and
+  `mouthPress` do move.
+
+### A lowered gaze is not a blink
+
+Commons did not show this; the first run on a real shoot did. In a test catalog of
+197 photos, 36 faces read closed, nearly all a child looking down at candles with the
+lids over the eyes. Lids down on a head lowered 10° or more now read `down`:
+
+| Faces reading closed (0.5 or more on the lids) | Called `down` |
+|---|---|
+| This catalog, nearly all really looking down | 30 of 39 |
+| Commons, eyes really shut, mostly people asleep | 10 of 34 |
+
+The second row is the price, and the direction is the right one: a note where a reject
+would have been. `eyeLookDown` does not help, since it runs high on shut eyes too
+(0.45–0.80). After this the faces reading closed in the catalog fell from 36 to 7, and
+all 18 of the highest `down` readings, checked by eye, really do look down. Of the 7, about
+two are right. The others are lower gazes on a head barely lowered (under 10°), and lids
+on a raised head behind glasses, which read 0.50–0.58 with the eyes open. The relative
+rules hold those back inside a burst.
+
+### Sharp eyes in a soft frame
+
+The same catalog had ten frames of a child behind birthday candles read `blurred`
+throughout, on a frame-wide sharpness of 0.03–0.05, while the eyes read 0.54–0.60 and were
+visibly sharp. With every frame a defect the group had no pick, and all ten were reject
+candidates. A frame whose eyes reach `reason_eye_focus_threshold` is no longer a blur defect.
+Of the 13 frames with faces reading `blurred`, the 10 that pass include the 9 that are clearly sharp at the eyes
+when checked by eye, and the one really smeared frame (0.42) stays. It is one catalog, and
+the reading depends on magnification, so a slightly soft frame shot close can still pass.
+
+### Mouth and the light on the face
+
+Both went in as labels and move no score: there is still no hand-culled shoot to say
+what they are worth. Measured the same way, on 692 usable faces with the second
+sample and 190 photographs of people speaking added.
+
+- **The mouth is `jawOpen` and `mouthLowerDown`.** `mouthPucker` reads up to 0.99 on
+  full lips at rest and `mouthFunnel` barely moves, so neither is used. A lowered head
+  abstains: foreshortened lips read open when closed. From 0.2 the
+  mouth is visibly open on nearly every face judged: 10% of people speaking, 0.6% of
+  portraits. A laugh is open too, so only a face smiling under 0.4 counts.
+- **Blown means two channels.** The top channel at 250 flagged 16% of faces, most of
+  them warm light clipping red on skin that holds its detail. The middle channel at
+  245 leaves 2.6% over 0.05, where surgical masks and white headbands still sit, and
+  from 0.15 what is left is blown skin.
+- **Light across the face holds up.** It compares a face with itself, so it does not
+  care about skin. 10% of faces reach 2 stops, nearly all real side light; hair across
+  a cheek is the main false reading.
+- **A face against its surroundings does not mean what it looks like.** The lowest
+  readings are almost all people with dark skin in front of something bright, and
+  correctly exposed. So it never produces a label. Its only use is to hold back added
+  contrast in AI Edit, which costs that face nothing, and that explanation says what
+  was measured rather than calling the frame backlit.
+- **The same goes for luminance alone**, which is only ever compared with the same
+  people in another frame of the group.
+
+### People, and what clustering did not need
+
+`lrg_analysis::face_expression` answers what People and search ask: eyes open,
+smiling (`mouthSmile` from 0.5, where most faces judged by eye show a smile and a
+snarl can still reach it), looking at the camera (within 20°, so a face between that
+and the 25° of `looking_away` is claimed by neither), and a person's best portrait.
+
+Keeping turned heads out of cluster formation looked like the obvious next step and
+is not in: `examples/face_cluster_eval.rs`, on 370 faces of 18 public figures from
+Commons, scores it the same at every limit from 60° to 30°, because the occlusion gate
+already holds those faces back. That gate holds back over half of them, which looked
+wrong, but raising it from 0.55 lowers the score at every threshold tried. Recall in
+this sample is low (0.29) whichever way, with few photographs per person, so it says
+what these two changes do and not how good clustering is.
+
+### What this does not solve
+
+A slit narrowed against the sun overlaps eyes shut (0.5
+to 0.65), and neither `eyeSquint` nor the lid gap in the landmarks separates them;
+sunglasses read as closed (0.47–0.74); a head lying on its side reads open with the
+eyes shut. The relative rules catch the first two inside a burst, since every frame
+reads alike there. And portraits from Commons are not a shoot, so **the thresholds
+stay hypotheses** until a hand-culled shoot with real blinks has been scored with
+`cull_eval --ablate` — the same caveat as every other threshold here.
 

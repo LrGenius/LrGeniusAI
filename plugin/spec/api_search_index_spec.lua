@@ -101,6 +101,25 @@ describe("SearchIndexAPI.interpretIndexResponse", function()
 	end)
 end)
 
+describe("SearchIndexAPI.personPhotosQuery", function()
+	it("asks nothing when nothing was asked", function()
+		assert.are.equal("", SearchIndexAPI.personPhotosQuery(nil))
+		assert.are.equal("", SearchIndexAPI.personPhotosQuery({ eyes_open = false, best = 0 }))
+	end)
+
+	it("asks only for what was switched on", function()
+		assert.are.equal("?eyes_open=true", SearchIndexAPI.personPhotosQuery({ eyes_open = true, smiling = false }))
+		assert.are.equal(
+			"?smiling=true&looking_at_camera=true",
+			SearchIndexAPI.personPhotosQuery({ smiling = true, looking_at_camera = true })
+		)
+	end)
+
+	it("turns a count into the best photos first", function()
+		assert.are.equal("?sort=best&limit=20", SearchIndexAPI.personPhotosQuery({ best = 20 }))
+	end)
+end)
+
 describe("SearchIndexAPI.interpretEditResponse", function()
 	it("accepts a success response and returns the whole body", function()
 		local response = { status = "success", recipe = { Exposure2012 = 0.3 } }

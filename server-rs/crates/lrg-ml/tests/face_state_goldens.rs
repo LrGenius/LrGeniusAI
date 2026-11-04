@@ -183,8 +183,14 @@ fn the_reference_portrait_reads_like_mediapipe() {
         state.smile
     );
     assert!(
-        state.yaw_degrees.abs() < 30.0,
-        "near frontal: {}",
-        state.yaw_degrees
+        state.pose.yaw.abs() < 30.0,
+        "near frontal: {:?}",
+        state.pose
+    );
+    // She looks straight into the lens, with her head slightly turned.
+    assert!(
+        state.gaze_off_lens < 25.0,
+        "looking at the camera: {}",
+        state.gaze_off_lens
     );
 }

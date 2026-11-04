@@ -17,6 +17,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::{json, Map, Value};
 
+use lrg_analysis::face_expression::{ExpressionFilter, Verdict};
 use lrg_analysis::relevance_filter::{
     clamp_max_results, clamp_strictness, smart_filter_by_relevance, ScoredResult,
 };
@@ -147,11 +148,12 @@ pub const AESTHETIC_RANGE: (f32, f32) =
 struct Restrictions {
     min_aesthetic: Option<f64>,
     genres: Option<HashSet<String>>,
+    expression: ExpressionFilter,
 }
 
 impl Restrictions {
     fn is_empty(&self) -> bool {
-        self.min_aesthetic.is_none() && self.genres.is_none()
+        self.min_aesthetic.is_none() && self.genres.is_none() && self.expression.is_empty()
     }
 }
 
@@ -161,6 +163,7 @@ impl Restrictions {
 struct Dropped {
     no_score: usize,
     no_genre: usize,
+    no_face_state: usize,
 }
 
 /// Applies `restrictions` to `hits`, counting the photos it had to drop for want
@@ -197,6 +200,16 @@ fn restrict(
                     Some(_) => return false,
                     None => {
                         dropped.no_genre += 1;
+                        return false;
+                    }
+                }
+            }
+            if !restrictions.expression.is_empty() {
+                match restrictions.expression.judge_photo(m) {
+                    Verdict::Yes => {}
+                    Verdict::No => return false,
+                    Verdict::Unknown => {
+                        dropped.no_face_state += 1;
                         return false;
                     }
                 }
@@ -326,6 +339,7 @@ async fn search(
         .and_then(Value::as_f64)
         .unwrap_or(0.5)
         .clamp(0.0, 1.0);
+    let wants = |key: &str| body.get(key).and_then(Value::as_bool).unwrap_or(false);
     let restrictions = Restrictions {
         min_aesthetic: body
             .get("min_aesthetic")
@@ -341,6 +355,11 @@ async fn search(
                     .collect::<HashSet<_>>()
             })
             .filter(|set| !set.is_empty()),
+        expression: ExpressionFilter {
+            eyes_open: wants("eyes_open"),
+            smiling: wants("smiling"),
+            looking_at_camera: wants("looking_at_camera"),
+        },
     };
 
     let photo_ids_to_search: Option<HashSet<String>> = body
@@ -602,6 +621,17 @@ async fn search(
             dropped.no_genre
         ));
     }
+    if dropped.no_face_state > 0 {
+        warnings.push(format!(
+            "{} matching photo(s) could not be judged for {} and were left out. A face too small \
+             or turned too far cannot be read. One analysed before the eye and expression model \
+             was on disk can: choose 'Prepare now' in 'Cull Similar Photos' for those photos, or \
+             run 'Analyze & Index Photos' with face detection, after \"Download AI models\" in \
+             Plug-in Manager.",
+            dropped.no_face_state,
+            restrictions.expression.describe()
+        ));
+    }
 
     let mut hits = order(hits, sort, aesthetic_weight, &rows);
     if sort != SortMode::Relevance && term.is_some() {
@@ -807,6 +837,7 @@ mod tests {
         let restrictions = Restrictions {
             min_aesthetic: Some(6.0),
             genres: Some(["macro".to_string()].into_iter().collect()),
+            ..Default::default()
         };
         let (kept, dropped) = restrict(hits, &restrictions, &rows);
         assert_eq!(ids(&kept), ["ok"]);

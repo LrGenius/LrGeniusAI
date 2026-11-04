@@ -423,11 +423,13 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
              it is on the raw Kelvin scale and this photo is not raw."
         );
     }
-    let guardrail_reasons = crate::edit_budget::measure_and_apply(
+    let applied = crate::edit_budget::measure_and_apply(
         &mut styled_recipe,
         &image_bytes,
         &crate::routes::edit::capture_conditions(&options, filename.as_deref(), &image_bytes),
+        crate::edit_budget::FaceReaders::when_downloaded(&state.face, &state.face_state),
     );
+    let guardrail_reasons = applied.reasons;
     if !guardrail_reasons.is_empty() {
         log::info!(
             "Photo {photo_id}: style-engine edit constrained by the frame ({}).",
@@ -446,11 +448,16 @@ async fn style_edit(State(state): State<Arc<AppState>>, mut multipart: Multipart
     {
         log::error!("Failed to persist style_edit recipe for {photo_id}: {e}");
     }
+    let warning = match (result.warning.as_deref(), applied.warning) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (Some(a), None) => Some(a.to_string()),
+        (None, b) => b,
+    };
     let mut payload = success_payload(
         &photo_id,
         &styled_recipe,
         &options,
-        result.warning.as_deref(),
+        warning.as_deref(),
         &guardrail_reasons,
     );
     payload["engine"] = json!("style");

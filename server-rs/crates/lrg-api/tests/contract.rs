@@ -757,6 +757,86 @@ async fn search_without_a_term_returns_the_best_photos_by_aesthetic_score() {
 }
 
 #[tokio::test]
+async fn search_asks_of_the_faces_on_the_photo() {
+    let (app, state) = fresh_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let current = lrg_ml::aesthetic::MODEL_ID;
+    let names = ["all_good", "blink", "frown", "away", "landscape", "old"];
+    let seed: Vec<_> = names
+        .iter()
+        .map(|id| (*id, Some(7.0), current, Some("portrait"), "flower"))
+        .collect();
+    seed_searchable(&state, &seed).await;
+    let store = state.store().unwrap();
+    let ids: Vec<String> = names.iter().map(|id| id.to_string()).collect();
+    let mut rows = store.get(lrg_store::IMAGE_TABLE, &ids).await.unwrap();
+    for row in rows.iter_mut() {
+        let read = |key: &str, value: serde_json::Value, m: &mut serde_json::Map<_, _>| {
+            m.insert(key.to_string(), value);
+        };
+        let m = &mut row.metadata;
+        match row.id.as_str() {
+            "landscape" => read("cull_face_count", serde_json::json!(0), m),
+            "old" => read("cull_face_count", serde_json::json!(1), m),
+            id => {
+                read("cull_face_count", serde_json::json!(2), m);
+                read(
+                    "cull_face_state_version",
+                    serde_json::json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+                    m,
+                );
+                let eyes = if id == "blink" { "closed" } else { "open" };
+                read("cull_eye_state", serde_json::json!(eyes), m);
+                let smile = if id == "frown" { 0.1 } else { 0.8 };
+                read("cull_smile", serde_json::json!(smile), m);
+                let gaze = if id == "away" { 40.0 } else { 6.0 };
+                read("cull_gaze_off_lens", serde_json::json!(gaze), m);
+            }
+        }
+    }
+    store.upsert(lrg_store::IMAGE_TABLE, &rows).await.unwrap();
+
+    let ask = |filter: serde_json::Value| {
+        let mut body = serde_json::json!({"max_results": 50, "db_path": db});
+        body.as_object_mut()
+            .unwrap()
+            .extend(filter.as_object().unwrap().clone());
+        body
+    };
+    let found = |json: &serde_json::Value| {
+        let mut ids: Vec<String> = result_ids(json).into_iter().map(str::to_string).collect();
+        ids.sort();
+        ids
+    };
+
+    let (_, json) = post_json(
+        &app,
+        "/v1/search",
+        ask(serde_json::json!({"smiling": true})),
+    )
+    .await;
+    assert_eq!(found(&json), ["all_good", "away", "blink"]);
+    // The one that was never analysed is counted once; the landscape was
+    // measured, has no faces, and is simply not a match.
+    let warnings = json["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{json}");
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .starts_with("1 matching photo(s) could not be judged"));
+
+    let (_, json) = post_json(
+        &app,
+        "/v1/search",
+        ask(serde_json::json!({"eyes_open": true, "smiling": true, "looking_at_camera": true})),
+    )
+    .await;
+    assert_eq!(found(&json), ["all_good"]);
+}
+
+#[tokio::test]
 async fn search_restricts_by_genre_and_minimum_score() {
     let (app, state) = fresh_app();
     let dir = tempfile::tempdir().unwrap();
@@ -2730,6 +2810,144 @@ async fn person_faces_returns_thumbnails_and_a_distance_per_face() {
 
 /// The unassigned bucket is reachable under a name a URL path can carry, and
 /// answers about faces with no person however their `person_id` is spelled.
+/// One person's row with readings on it, for the questions asked of a person.
+fn read_face(
+    id: &str,
+    photo: &str,
+    eyes: &str,
+    smile: f64,
+    gaze: f64,
+    yaw: f64,
+) -> lrg_store::StoreRecord {
+    let mut row = people_face(id, photo, "person_0", 0.0);
+    let m = &mut row.metadata;
+    m.insert("face_eye_state".into(), serde_json::json!(eyes));
+    m.insert("face_smile".into(), serde_json::json!(smile));
+    m.insert("face_gaze_off_lens".into(), serde_json::json!(gaze));
+    m.insert("face_yaw".into(), serde_json::json!(yaw));
+    row
+}
+
+async fn read_people_fixture() -> (axum::Router, tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db_path).await.unwrap();
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::FACE_TABLE,
+            &[
+                read_face("laugh_0", "laugh", "open", 0.9, 6.0, 3.0),
+                read_face("neutral_0", "neutral", "open", 0.1, 8.0, 5.0),
+                read_face("away_0", "away", "open", 0.8, 38.0, 35.0),
+                read_face("blink_0", "blink", "closed", 0.7, 6.0, 2.0),
+                // Indexed before the model: no reading to ask.
+                people_face("old_0", "old", "person_0", 0.0),
+                // Somebody else's, whatever it reads.
+                {
+                    let mut other = read_face("b1_0", "b1", "open", 0.9, 5.0, 1.0);
+                    other
+                        .metadata
+                        .insert("person_id".into(), serde_json::json!("person_1"));
+                    other
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    (app, dir, db_path)
+}
+
+#[tokio::test]
+async fn a_person_s_photos_answer_what_is_asked_of_their_face() {
+    let (app, _dir, db) = read_people_fixture().await;
+    let ask = |query: &str| format!("/v1/faces/persons/person_0/photos?db_path={db}{query}");
+    let ids = |json: &serde_json::Value| {
+        json["photo_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // Nothing asked: every photo, and no complaint about the old one.
+    let json = get_json(&app, &ask("")).await;
+    assert_eq!(ids(&json), ["away", "blink", "laugh", "neutral", "old"]);
+    assert_eq!(json["not_judged"], 0);
+    assert_eq!(json["warnings"], serde_json::json!([]));
+
+    let json = get_json(&app, &ask("&eyes_open=true")).await;
+    assert_eq!(ids(&json), ["away", "laugh", "neutral"]);
+    // The one that could not be judged is counted and named as fixable.
+    assert_eq!(json["not_judged"], 1);
+    let warning = json["warnings"][0].as_str().unwrap();
+    assert!(warning.contains("Download AI models"), "{warning}");
+
+    let json = get_json(&app, &ask("&smiling=true&eyes_open=true")).await;
+    assert_eq!(ids(&json), ["away", "laugh"]);
+
+    // Shut eyes look nowhere, whatever `eyeLook*` read.
+    let json = get_json(&app, &ask("&looking_at_camera=true&smiling=true")).await;
+    assert_eq!(ids(&json), ["laugh"]);
+}
+
+#[tokio::test]
+async fn a_person_s_best_photos_are_the_ones_with_eyes_open_facing_the_camera() {
+    let (app, _dir, db) = read_people_fixture().await;
+    let json = get_json(
+        &app,
+        &format!("/v1/faces/persons/person_0/photos?db_path={db}&sort=best&limit=2"),
+    )
+    .await;
+    assert_eq!(json["photo_ids"], serde_json::json!(["laugh", "neutral"]));
+}
+
+/// The picture on a person's card, and the first face in their sheet when
+/// sorted for it, is not the sharpest blink.
+#[tokio::test]
+async fn a_person_s_card_does_not_show_them_blinking() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let mut blink = read_face("blink_0", "blink", "closed", 0.1, 5.0, 1.0);
+    blink
+        .metadata
+        .insert("face_sharpness".into(), serde_json::json!(0.95));
+    blink
+        .metadata
+        .insert("thumbnail".into(), serde_json::json!("BLINK"));
+    let mut open = read_face("open_0", "open", "open", 0.3, 6.0, 4.0);
+    open.metadata
+        .insert("face_sharpness".into(), serde_json::json!(0.5));
+    open.metadata
+        .insert("thumbnail".into(), serde_json::json!("OPEN"));
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::FACE_TABLE, &[blink, open])
+        .await
+        .unwrap();
+
+    let persons = get_json(&app, &format!("/v1/faces/persons?db_path={db}")).await;
+    assert_eq!(persons["persons"][0]["thumbnail"], "OPEN", "{persons}");
+    let thumb = get_json(
+        &app,
+        &format!("/v1/faces/persons/person_0/thumbnail?db_path={db}"),
+    )
+    .await;
+    assert_eq!(thumb["thumbnail"], "OPEN");
+    let faces = get_json(
+        &app,
+        &format!("/v1/faces/persons/person_0/faces?db_path={db}&sort=portrait"),
+    )
+    .await;
+    assert_eq!(faces["faces"][0]["face_id"], "open_0");
+}
+
 #[tokio::test]
 async fn the_unassigned_bucket_can_be_opened_like_a_person() {
     let (app, _state, _dir, db_path) = people_fixture().await;
@@ -4041,15 +4259,15 @@ async fn the_face_state_model_is_its_own_downloadable_family() {
 /// would change nothing.
 #[tokio::test]
 async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
-    let row = |id: &str, faces: i64, state: bool| {
+    let row = |id: &str, faces: i64, state: Option<i64>| {
         let mut m = serde_json::Map::new();
         m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
         m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
         m.insert("cull_face_count".into(), serde_json::json!(faces));
         m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
         m.insert("cull_focus_version".into(), serde_json::json!(1));
-        if state {
-            m.insert("cull_face_state_version".into(), serde_json::json!(1));
+        if let Some(version) = state {
+            m.insert("cull_face_state_version".into(), serde_json::json!(version));
         }
         lrg_store::StoreRecord {
             id: id.into(),
@@ -4058,9 +4276,18 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
         }
     };
     let rows = [
-        row("faces_without_state", 2, false),
-        row("faces_with_state", 1, true),
-        row("faceless", 0, false),
+        row("faces_without_state", 2, None),
+        row(
+            "faces_with_state",
+            1,
+            Some(lrg_analysis::grouping::FACE_STATE_VERSION),
+        ),
+        row(
+            "faces_with_older_state",
+            1,
+            Some(lrg_analysis::grouping::FACE_STATE_VERSION - 1),
+        ),
+        row("faceless", 0, None),
     ];
     let ask = |app: axum::Router, db: String| async move {
         let response = app
@@ -4069,7 +4296,12 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "photo_ids": ["faces_without_state", "faces_with_state", "faceless"],
+                            "photo_ids": [
+                                "faces_without_state",
+                                "faces_with_state",
+                                "faces_with_older_state",
+                                "faceless",
+                            ],
                             "tasks": "cull",
                             "regenerate_metadata": "false",
                             "db_path": db,
@@ -4118,8 +4350,75 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
         .unwrap();
     assert_eq!(
         ask(app(state.clone()), db).await,
-        serde_json::json!(["faces_without_state"])
+        serde_json::json!(["faces_without_state", "faces_with_older_state"])
     );
+}
+
+/// A photo goes back through the full face pass when its readings are out of date
+/// or when a cull pass could not bring its face rows along. Its own readings being
+/// current is no help then, and People would otherwise never be able to read it.
+#[tokio::test]
+async fn check_unprocessed_asks_the_face_pass_for_rows_left_behind() {
+    let models = tempfile::tempdir().unwrap();
+    std::fs::write(models.path().join("face_mesh_v2.onnx"), b"x").unwrap();
+    std::fs::write(models.path().join("face_blendshapes_v2.onnx"), b"x").unwrap();
+    let mut paths = models_absent();
+    paths.face_state = lrg_ml::face_state::FaceStatePaths {
+        mesh_onnx: models.path().join("face_mesh_v2.onnx"),
+        blendshapes_onnx: models.path().join("face_blendshapes_v2.onnx"),
+    };
+    let state = Arc::new(AppState::with_model_paths(None, false, paths));
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    state.ensure_db_path(&db).await.unwrap();
+    let row = |id: &str, version: i64, behind: bool| {
+        let mut m = serde_json::Map::new();
+        // Everything else a face run asks about is done, so only the face state
+        // can bring a photo back.
+        m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
+        m.insert("cull_face_count".into(), serde_json::json!(1));
+        m.insert("cull_face_state_version".into(), serde_json::json!(version));
+        m.insert("faces_checked".into(), serde_json::json!(true));
+        m.insert(
+            "face_model".into(),
+            serde_json::json!(lrg_ml::faces::MODEL_ID),
+        );
+        if behind {
+            m.insert("face_rows_behind".into(), serde_json::json!(true));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: m,
+        }
+    };
+    let current = lrg_analysis::grouping::FACE_STATE_VERSION;
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                row("up_to_date", current, false),
+                row("older", current - 1, false),
+                row("behind", current, true),
+            ],
+        )
+        .await
+        .unwrap();
+    let (status, json) = post_json(
+        &app(state.clone()),
+        "/v1/index/unprocessed",
+        serde_json::json!({
+            "photo_ids": ["up_to_date", "older", "behind"],
+            "tasks": "faces",
+            "regenerate_metadata": "false",
+            "db_path": db,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["photo_ids"], serde_json::json!(["older", "behind"]));
 }
 
 /// The model's reading replaces the proxy: the blinking frame is a reject with
@@ -4148,7 +4447,10 @@ async fn cull_names_a_real_blink_from_the_face_state() {
         m.insert("cull_blink_penalty".into(), serde_json::json!(0.9));
         m.insert("cull_occlusion".into(), serde_json::json!(0.1));
         m.insert("cull_focus_version".into(), serde_json::json!(1));
-        m.insert("cull_face_state_version".into(), serde_json::json!(1));
+        m.insert(
+            "cull_face_state_version".into(),
+            serde_json::json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+        );
         m.insert("cull_eye_closed".into(), serde_json::json!(closed));
         m.insert("cull_smile".into(), serde_json::json!(0.4));
         m.insert("aesthetic_score".into(), serde_json::json!(6.0));

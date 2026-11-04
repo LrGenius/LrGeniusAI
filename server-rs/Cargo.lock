@@ -4489,6 +4489,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "log",
+ "lrg-analysis",
  "lrg-api",
  "lrg-common",
  "lrg-store",

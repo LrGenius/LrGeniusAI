@@ -57,23 +57,51 @@ local function photoIdsFromPersonResponse(resp)
 		or (type(resp.photo_uuids) == "table" and resp.photo_uuids or {})
 end
 
+--- What a selection on the People page asked for, in words: "best 20, eyes open".
+local function describePhotoOptions(options)
+	options = options or {}
+	local parts = {}
+	if type(options.best) == "number" then
+		parts[#parts + 1] = string.format("best %d", options.best)
+	end
+	if options.eyes_open then
+		parts[#parts + 1] = "eyes open"
+	end
+	if options.smiling then
+		parts[#parts + 1] = "smiling"
+	end
+	if options.looking_at_camera then
+		parts[#parts + 1] = "looking at the camera"
+	end
+	return table.concat(parts, ", ")
+end
+
+--- Collects what a person-photos response says went short, in either field.
+local function addResponseWarnings(warnings, resp)
+	if resp.warning then
+		log:warn("GetPhotosForPerson warning: " .. tostring(resp.warning))
+		addWarning(warnings, resp.warning)
+	end
+	for _, warning in ipairs(type(resp.warnings) == "table" and resp.warnings or {}) do
+		log:warn("GetPhotosForPerson warning: " .. tostring(warning))
+		addWarning(warnings, warning)
+	end
+end
+
 --- Union: jedes Foto, das mindestens eine der Personen enthält (Reihenfolge: erstes Auftreten).
-local function unionPhotoIdsForEntries(entries, warnings)
+local function unionPhotoIdsForEntries(entries, warnings, options)
 	local seen = {}
 	local photoIdsOrdered = {}
 	for _, ent in ipairs(entries) do
 		local pid = ent and ent.person_id
 		if pid and pid ~= "" then
-			local resp, err = SearchIndexAPI.getPhotosForPerson(pid)
+			local resp, err = SearchIndexAPI.getPhotosForPerson(pid, options)
 			if err or type(resp) ~= "table" then
 				ErrorHandler.handleError("Could not get photos for person", err or "No data")
 				return nil
 			end
 
-			if resp and resp.warning then
-				log:warn("GetPhotosForPerson warning: " .. tostring(resp.warning))
-				addWarning(warnings, resp.warning)
-			end
+			addResponseWarnings(warnings, resp)
 
 			local ids = photoIdsFromPersonResponse(resp)
 			for _, photoId in ipairs(ids) do
@@ -88,7 +116,7 @@ local function unionPhotoIdsForEntries(entries, warnings)
 end
 
 --- Schnittmenge: Fotos, in denen alle Personen gemeinsam vorkommen (Reihenfolge wie erste Person).
-local function intersectPhotoIdsForEntries(entries, warnings)
+local function intersectPhotoIdsForEntries(entries, warnings, options)
 	if #entries == 0 then
 		return {}
 	end
@@ -99,15 +127,12 @@ local function intersectPhotoIdsForEntries(entries, warnings)
 		if not pid or pid == "" then
 			return {}
 		end
-		local resp, err = SearchIndexAPI.getPhotosForPerson(pid)
+		local resp, err = SearchIndexAPI.getPhotosForPerson(pid, options)
 		if err or type(resp) ~= "table" then
 			ErrorHandler.handleError("Could not get photos for person", err or "No data")
 			return nil
 		end
-		if resp.warning then
-			log:warn("GetPhotosForPerson warning: " .. tostring(resp.warning))
-			addWarning(warnings, resp.warning)
-		end
+		addResponseWarnings(warnings, resp)
 		local ids = photoIdsFromPersonResponse(resp)
 		if not firstIds then
 			firstIds = ids
@@ -142,7 +167,7 @@ local function intersectPhotoIdsForEntries(entries, warnings)
 end
 
 --- Führt "Show in Library" aus. entries: { person_id, person_name? }[]; matchMode: "union" | "intersection".
-local function doShowInLibrary(entries, matchMode)
+local function doShowInLibrary(entries, matchMode, options)
 	if not entries or #entries == 0 then
 		LrDialogs.message("No people selected", "Select one or more people on the People page, then try again.", "info")
 		return
@@ -152,9 +177,9 @@ local function doShowInLibrary(entries, matchMode)
 	local warnings = {}
 	local photoIdsOrdered
 	if mode == "intersection" and #entries >= 2 then
-		photoIdsOrdered = intersectPhotoIdsForEntries(entries, warnings)
+		photoIdsOrdered = intersectPhotoIdsForEntries(entries, warnings, options)
 	else
-		photoIdsOrdered = unionPhotoIdsForEntries(entries, warnings)
+		photoIdsOrdered = unionPhotoIdsForEntries(entries, warnings, options)
 	end
 
 	if photoIdsOrdered == nil then
@@ -166,7 +191,10 @@ local function doShowInLibrary(entries, matchMode)
 	reportWarnings(warnings)
 
 	if #photoIdsOrdered == 0 then
-		if mode == "intersection" and #entries >= 2 then
+		local asked = describePhotoOptions(options)
+		if asked ~= "" then
+			LrDialogs.message("No photos", string.format("No photos of this selection match: %s.", asked), "info")
+		elseif mode == "intersection" and #entries >= 2 then
 			LrDialogs.message("No photos", "No photos contain all selected people together.", "info")
 		else
 			LrDialogs.message("No photos", "No photos found for this person.", "info")
@@ -195,6 +223,10 @@ local function doShowInLibrary(entries, matchMode)
 	local label = table.concat(nameParts, ", ")
 	if #label > 100 then
 		label = string.format("People (%d)", #entries)
+	end
+	local asked = describePhotoOptions(options)
+	if asked ~= "" then
+		label = string.format("%s (%s)", label, asked)
 	end
 	local collectionName = string.format("%s @ %s", label, LrDate.timeToW3CDate(LrDate.currentTime()))
 
@@ -249,7 +281,12 @@ local function runAction(action)
 			)
 			return
 		end
-		doShowInLibrary(entries, action.match_mode)
+		doShowInLibrary(entries, action.match_mode, {
+			eyes_open = action.eyes_open == true,
+			smiling = action.smiling == true,
+			looking_at_camera = action.looking_at_camera == true,
+			best = type(action.best) == "number" and action.best or nil,
+		})
 		return
 	end
 

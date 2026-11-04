@@ -152,6 +152,10 @@ keep it, so open the search from Lightroom each time.
   **Keywords and captions** (the metadata half of the search, all four fields) —
   the dialog's controls of the same name. They start where you left them in the
   dialog.
+- **Faces** — *eyes open*, *smiling*, *looking at the camera*: only photos where
+  that holds for everyone who matters in the frame. It is read off the faces, so it
+  is more reliable than searching for "smiling". Photos without faces are left out,
+  and the page says how many could not be judged and what to run on them.
 
 Sliders and menus search again as you move them. Notes from the backend — no
 search model, photos without a score left out by the minimum, and the like —

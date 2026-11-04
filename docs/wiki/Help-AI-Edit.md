@@ -133,7 +133,10 @@ thin style profile from one caused by an unusual photo.
 When enabled, a **review dialog** opens for each photo before the edit is applied. You see:
 
 - The proposed develop values, plus how confident the style match was and which of your saved edits it drew on.
-- Any guardrail explanations — what the frame allowed, and what got capped.
+- Any guardrail explanations — what the frame allowed, and what got capped. With
+  the face models downloaded these include the faces in the frame: hard light across
+  a face leaves clarity alone, a face well below the frame around it keeps contrast
+  from pushing it darker, and blown skin holds the white point back.
 - Options to **Apply** or **Skip**.
 
 **Recommended for first use.** Disable only after you've validated the results for your shooting style.

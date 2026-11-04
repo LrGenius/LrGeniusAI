@@ -40,9 +40,9 @@ Behind those requests the agent uses these tools:
 | Tool | What it does |
 |---|---|
 | `get_status` | Whether Lightroom is connected, the open catalog, the selection, how much is indexed |
-| `search_photos` | Semantic search: describe what is in the picture. Can also rank by aesthetic score and keep only some genres; with no description it returns your best photos (see [Advanced Search](Help-Advanced-Search#ranking)) |
+| `search_photos` | Semantic search: describe what is in the picture. Can also rank by aesthetic score, keep only some genres, and ask of the faces (eyes open, smiling, looking at the camera); with no description it returns your best photos (see [Advanced Search](Help-Advanced-Search#ranking)) |
 | `find_similar_photos` | Photos that look alike, or near-duplicates |
-| `list_people`, `find_photos_of_people` | People from LrGeniusAI's face recognition |
+| `list_people`, `find_photos_of_people` | People from LrGeniusAI's face recognition, also narrowed by what their face shows (eyes open, smiling, looking at the camera) or to their best portraits |
 | `find_photos_in_catalog` | Lightroom's own filters: rating, flag, label, keywords, folder, dates, camera, lens |
 | `cull_photos` | Groups bursts and duplicates, names winners and reject candidates |
 | `get_photo_details`, `view_photo` | Metadata (including aesthetic score and genre) — on request every field Lightroom keeps, IPTC, EXIF, GPS and other plug-ins' fields included — and the photo as Lightroom renders it now |

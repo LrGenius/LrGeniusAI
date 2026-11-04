@@ -266,13 +266,23 @@ focus was measured on the reduced working copy …"`).
 on disk, MediaPipe's face mesh and blendshapes run on the prominent faces (at
 most 12, largest first) of the same full-size image, or of the working copy
 when there is no larger one (`lrg_ml::face_state`). Per face the row gets
-`face_eye_state` (`open`/`half`/`closed`, `unknown` when the face is turned too
-far, barely a face or too small), `face_eye_closed`, `face_smile`,
-`face_gaze_away` and `face_yaw` (null when the model did not run for it). Per
+`face_eye_state` (`open`/`half`/`closed`, `down` for lids down on a lowered head,
+`unknown` when the face is turned too far, barely a face or too small), `face_eye_closed` (the more closed eye),
+`face_smile`, `face_eye_squint`, `face_mouth_open`, `face_gaze_off_lens` (degrees from
+the lens, head turn included), `face_yaw`, `face_pitch`, `face_roll` (degrees), the light
+on the skin as `face_luminance`, `face_against_surround_stops`, `face_across_stops` and
+`face_blown`, and `face_blendshapes` (all 52, in the order of
+`lrg_ml::face_state::BLENDSHAPE_NAMES`); all null when the model did not run for it. A
+pass that only prepares culling writes no rows of its own, but brings these readings
+to the rows an earlier full pass wrote, matched by box, and touches nothing else on them. Per
 photo: `cull_eye_closed` (the most closed prominent eyes), `cull_eye_state`,
-`cull_smile` (the weakest smile among the prominent faces), `cull_gaze_away` —
-absent when no prominent face could be judged — plus `cull_face_state_version`
-and `cull_face_state_model` when the model ran on this pass. Without the model
+`cull_smile` (the weakest smile among the prominent faces), `cull_eye_squint` (the
+strongest squint among the prominent faces not smiling), `cull_gaze_off_lens` (the
+prominent face with open eyes looking furthest from the lens), `cull_mouth_open` (the
+most open mouth among those not smiling), `cull_face_luminance` (the darkest),
+`cull_face_across_stops` (the hardest light) and `cull_face_blown` (the most blown skin) —
+absent when no prominent face could be judged — plus `cull_face_state_version` and `cull_face_state_model` when
+the model ran on this pass. Without the model
 the response says once that a rough eye estimate was used, with the fix
 (`"Photos were analysed without eye state, smile and gaze: …"`).
 
@@ -398,7 +408,7 @@ producer this build uses*, not merely present:
 | task | outstanding when |
 | --- | --- |
 | `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
-| `faces` | no face rows and no `faces_checked`, or a `face_model` that is not this build's |
+| `faces` | no face rows and no `faces_checked`, a `face_model` that is not this build's, or — once its model is on disk — a photo with faces whose `cull_face_state_version` is missing or older, or that a culling pass left with face rows it could not match (`face_rows_behind`) |
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
@@ -502,6 +512,7 @@ Runs a semantic search query against indexed photos.
 | `sort` | string | `relevance`, `aesthetic` or `combined`. Default `relevance` with a term, `aesthetic` without. `relevance` and `combined` without a term are a **400** ("need a search term"), as is an unknown value |
 | `min_aesthetic` | float | Only photos whose current aesthetic score is at least this (1–9). A photo with no score from the current export cannot be judged and is left out |
 | `genres` | array | Only photos whose `genre` is one of these ids (see `GET /v1/search/genres`). A photo with no genre is left out |
+| `eyes_open`, `smiling`, `looking_at_camera` | bool | Only photos where this holds for everyone who matters in the frame, read off `cull_eye_state`, `cull_smile` (0.5 or more) and `cull_gaze_off_lens` (20° or less). A photo measured to have no faces is simply no match; one with no current reading cannot be judged and is left out and counted |
 | `aesthetic_weight` | float | `combined` only, 0–1, default 0.5: the share of the ordering that is the aesthetic score rather than relevance |
 | `catalog_id` | string | Restrict to a specific catalog |
 | `photo_ids` | array | Restrict search to specific `photo_id` values (`uuids` is accepted as an alias) |
@@ -530,7 +541,7 @@ match in the title, caption or keywords, which has no distance — counts as ful
 matches without a current score go **last**, in their earlier order: they are not on the scale, and
 a warning says how many.
 
-`min_aesthetic` and `genres` are applied **after** the relevance cut, so they never move the cut
+`min_aesthetic`, `genres` and the face questions are applied **after** the relevance cut, so they never move the cut
 (it is computed over the whole candidate list) and can leave fewer than `max_results`. What they
 drop for want of data, rather than for its value, is counted in `warnings`, since that is a problem
 the user can fix by indexing; a photo that was judged and found short of the minimum is simply not a
@@ -606,17 +617,31 @@ abstain. They act only when every frame of a group with a face carries
   sharpest. A single is never rejected for its focus;
 - as `eyes_sharpest_in_group` on a pick within `reason_eye_focus_delta` of the best.
 
-`portrait` weights and gates focus most, `sports` least, `street` not at all.
+`portrait` weights and gates focus most, `sports` least, `street` not at all. Eyes measured
+at or above `reason_eye_focus_threshold` also overrule a low frame-wide sharpness: such a
+frame is not a blur defect.
 
-**Eye state, smile and gaze** (`cull_eye_closed`, `cull_smile`, `cull_gaze_away`)
-replace the eye-openness proxy where every frame of a group with a face
-carries `cull_face_state_version` (all or nothing): the blink penalty is then
-the model's `eyeBlink`, judged at `reason_eye_closed_threshold` /
+**Eye state, smile and gaze** (`cull_eye_closed`, `cull_smile`, `cull_eye_squint`,
+`cull_gaze_off_lens`) replace the eye-openness proxy where every frame of a group
+with a face carries the current `cull_face_state_version` (all or nothing; an older
+version counts as not analysed, and `/index/unprocessed` queues the photo again): the
+blink penalty is then the model's `eyeBlink` of the more closed eye, judged at `reason_eye_closed_threshold` /
 `reject_eye_closed_threshold` (plus the relative rules) instead of the proxy's
 thresholds, and a face it could not judge is never a blink. Reasons:
 `eyes_closed`, `eyes_half_closed` (a label, never a defect),
-`looking_away` (`portrait`), `best_smile`; a smile at
+`looking_away` (`portrait`), `looking_down` (a note, and such a face is left out of
+the blink reading), `best_smile`; a smile at
 `laugh_smile_threshold` with the eyes shut counts as `eyes_closed_intentional`.
+
+**Mouth and the light on the face** are labels only and move no score, until a
+hand-culled shoot says what they are worth: `mouth_open` (`portrait` and `event`:
+`cull_mouth_open` at `reason_mouth_open_threshold`, with a sibling clearly less
+open), `face_darker` (the frame's darkest face at `reason_face_darker_stops` below the
+group's brightest), `face_hard_light` (`cull_face_across_stops` at
+`reason_face_hard_light_stops`, with a sibling clearly softer) and `face_blown`
+(`cull_face_blown` at `reason_face_blown_threshold`, also on a single). `street` and
+`sports` ask none of them. `cull_face_luminance` is only ever compared within a group,
+since skin ranges over several stops between people.
 `smile_weight` (portrait 0.15, event 0.10) takes a share of the face term,
 against the group.
 
@@ -627,7 +652,7 @@ against the group.
 | `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
-| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`gaze_away` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`eye_squint`/`gaze_off_lens`/`mouth_open`/`face_luminance`/`face_across_stops`/`face_blown` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
 | `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
@@ -708,7 +733,7 @@ mask list, plus:
 
 | Field | Type | Description |
 |---|---|---|
-| `guardrail_reasons` | string[] | Machine-readable codes for what the frame allowed or refused, e.g. `hard_light_no_added_contrast`, `flat_light_contrast_allowed`. Empty when the budget changed nothing |
+| `guardrail_reasons` | string[] | Machine-readable codes (with the face and expression models on disk, also `face_hard_light`, `face_below_surroundings`, `face_blown`, read off the faces in the frame; if that read fails, `warning` says so and the edit goes on without them) for what the frame allowed or refused, e.g. `hard_light_no_added_contrast`, `flat_light_contrast_allowed`. Empty when the budget changed nothing |
 | `guardrail_explanations` | string[] | The same, as sentences for the UI |
 | `edit_warnings` | string[] | Unrelated problems worth surfacing (e.g. no training examples found) |
 
@@ -893,8 +918,10 @@ returned as warnings rather than failing the request.
 Returns all detected persons with `person_id`, `name`, `face_count`,
 `photo_count`, `manual_count` (how many of the faces a human placed) and a
 representative `thumbnail` (base64 JPEG, empty when the person has none). The
-representative is the highest-scoring face by `det_score + sharpness`, not the
-first row found.
+representative is the person's best portrait (`lrg_analysis::face_expression::portrait_score`):
+detector confidence and sharpness, less a shut eye, a turned head and a gaze off
+the lens, plus a little for a smile. A row without a reading pays a fixed price, so
+it yields to a portrait known to be good.
 
 Every face without a person — an empty `person_id` from a row that was never
 clustered, or `person_unassigned` written by the clusterer — is reported as a
@@ -939,13 +966,22 @@ already has — as its merge gesture: it asks, then either posts to
 really are different people with the same name.
 
 ### `GET /v1/faces/persons/<person_id>/photos`
-Returns the list of `photo_id` values associated with a specific person.
+The ids of the photos showing this person, in `photo_ids` (`photo_uuids` is the same list). `_unassigned` opens the faces without a person.
+
+| Query | Meaning |
+|---|---|
+| `eyes_open`, `smiling`, `looking_at_camera` | `true` keeps only photos where this person's face answers yes (`lrg_analysis::face_expression`). A person twice on a photo counts when either face does |
+| `sort` | `best` puts the person's best portrait first; otherwise by photo id |
+| `limit` | At most this many |
+
+`not_judged` counts the photos left out because the face has no reading, and `warnings` says so with the fix, since that is a problem the user can solve, where a frown is simply not a smile.
 
 ### `GET /v1/faces/persons/<person_id>/faces`
 Returns the individual faces in one person, which is what the People page's
 detail view is built on. Query parameters: `limit` (default 200, max 500),
 `offset`, and `sort` — `typical` (closest to the cluster centroid first),
-`outlier` (furthest first, which surfaces wrong faces) or `quality`.
+`outlier` (furthest first, which surfaces wrong faces), `quality` or `portrait` (the
+best picture of them first, as for the person's card).
 
 Only this person's vectors are fetched, so the endpoint is cheap enough to page
 through. Each face carries `face_id`, `photo_id`, `thumbnail`, `distance` from
@@ -1071,7 +1107,7 @@ nothing will ever run:
 
 | page | action | needs |
 |---|---|---|
-| `people` | `show_in_library` | a non-empty `person_ids` array |
+| `people` | `show_in_library` | a non-empty `person_ids` array; `eyes_open`, `smiling`, `looking_at_camera`, `best` are passed on to `GET /v1/faces/persons/<person_id>/photos` |
 | `search` | `show_search_results` | a non-empty `photo_ids` array of strings, in rank order; `term`, `sort`, `min_aesthetic`, `genre_label`, `max_results` name the collection |
 | `search` | `refresh_search_context` | nothing |
 

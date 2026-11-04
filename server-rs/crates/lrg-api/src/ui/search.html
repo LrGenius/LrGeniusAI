@@ -176,6 +176,12 @@
           >Genre
           <select id="genre"><option value="all">All genres</option></select>
         </label>
+        <span class="inline" title="Everyone who matters in the frame. Photos without faces are left out.">
+          Faces
+          <label class="inline"><input id="eyes-open" type="checkbox" /> eyes open</label>
+          <label class="inline"><input id="smiling" type="checkbox" /> smiling</label>
+          <label class="inline"><input id="looking" type="checkbox" /> looking at the camera</label>
+        </span>
         <label class="inline" title="How sharply weak matches are cut off; 0 keeps everything up to the maximum"
           >Strictness
           <input id="strictness" type="range" min="0" max="100" step="5" value="50" />
@@ -536,6 +542,9 @@
         const min = minAesthetic();
         if (min !== null) body.min_aesthetic = min;
         if (el("genre").value !== "all") body.genres = [el("genre").value];
+        if (el("eyes-open").checked) body.eyes_open = true;
+        if (el("smiling").checked) body.smiling = true;
+        if (el("looking").checked) body.looking_at_camera = true;
         if (sort === "combined") body.aesthetic_weight = 0.5;
         const scope = el("scope").value;
         if (!scopeIsWholeCatalog(scope)) body.photo_ids = scopeIds(scope);

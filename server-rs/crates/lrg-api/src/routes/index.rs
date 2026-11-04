@@ -249,8 +249,19 @@ async fn check_unprocessed(
                     || has_flag("alt_text")
                     || has_flag("keywords");
                 let needs_metadata = compute_metadata && (regenerate_metadata || !has_any_metadata);
-                let needs_faces =
-                    compute_faces && (regenerate_metadata || !faces_checked.contains(*pid));
+                // A photo with faces whose readings are missing or from an older
+                // analysis goes through the face pass again once the model is on
+                // disk. Person assignments carry over, and this is how a catalog
+                // indexed earlier gets what People's filters ask about.
+                let needs_face_state = face_state_available
+                    && m.get("cull_face_count")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0)
+                        > 0
+                    && (!lrg_analysis::grouping::face_state_is_current(&m)
+                        || has_flag("face_rows_behind"));
+                let needs_faces = compute_faces
+                    && (regenerate_metadata || !faces_checked.contains(*pid) || needs_face_state);
                 let needs_cull_phash = any_task && (regenerate_metadata || !has_flag("cull_phash"));
                 // `cull_faces_present` is legitimately `false` for a photo with
                 // no faces, so completion is "the key exists", not "it is
@@ -283,7 +294,7 @@ async fn check_unprocessed(
                         .and_then(Value::as_i64)
                         .unwrap_or(0)
                         > 0
-                    && !m.contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+                    && !lrg_analysis::grouping::face_state_is_current(&m);
                 // A photo is done for `species` only if it was checked *and*
                 // checked by the head currently on disk. Widening the taxa
                 // whitelist changes what BioCLIP can answer, so results from an

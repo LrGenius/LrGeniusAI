@@ -16,10 +16,17 @@
 //! which is what a harsh frame actually wants — is never scaled.
 
 use lrg_analysis::edit_guardrails::{
-    derive_budget, fit_contrast_moves, CaptureConditions, EditBudget, GuardrailConfig,
+    derive_budget_with_faces, fit_contrast_moves, CaptureConditions, EditBudget, FaceConditions,
+    GuardrailConfig,
 };
+use lrg_imaging::cull_config::FaceMetricsConfig;
 use lrg_imaging::scene::{scene_state, SceneState, SceneStateConfig};
+use lrg_ml::face_state::{EyeState, FaceGeometry, FaceStateModel};
+use lrg_ml::faces::{FaceModel, FacePass};
 use serde_json::{json, Map, Value};
+
+/// The most faces of one frame the guardrails read, largest first.
+const MAX_FACES_READ: usize = 12;
 
 /// The plain recipe fields that add contrast, in the order
 /// [`fit_contrast_moves`] sees them. The tone curve is budgeted alongside them
@@ -161,28 +168,116 @@ pub fn apply_budget(recipe: &mut Value, budget: &EditBudget) -> Vec<String> {
         .collect()
 }
 
+/// The models that read faces, when both are on this computer.
+pub struct FaceReaders<'a> {
+    pub faces: &'a FaceModel,
+    pub state: &'a FaceStateModel,
+}
+
+impl<'a> FaceReaders<'a> {
+    /// `None` without the models. The edit goes on without the face rules and
+    /// without a word: the user did not ask for them, an edit does not need
+    /// them, and the settings already offer the download where it does matter.
+    pub fn when_downloaded(
+        faces: &'a FaceModel,
+        state: &'a FaceStateModel,
+    ) -> Option<FaceReaders<'a>> {
+        (faces.is_cached() && state.is_cached()).then_some(FaceReaders { faces, state })
+    }
+
+    /// What the faces that matter in the frame show. A failure here leaves the
+    /// recipe under the frame's other rules, and the caller says so.
+    fn read(&self, pixels: &[u8], width: usize, height: usize) -> Result<FaceConditions, String> {
+        let cfg = FaceMetricsConfig::defaults();
+        let detected = self
+            .faces
+            .detect_faces(pixels, width, height, &cfg, FacePass::QualityOnly)
+            .map_err(|e| e.to_string())?;
+        let largest = detected.iter().map(|f| f.area_ratio).fold(0.0f64, f64::max);
+        let cutoff = largest * cfg.prominent_face_area_fraction;
+        let mut prominent: Vec<_> = detected.iter().filter(|f| f.area_ratio >= cutoff).collect();
+        prominent.sort_by(|a, b| b.area_ratio.total_cmp(&a.area_ratio));
+        prominent.truncate(MAX_FACES_READ);
+        let geometry: Vec<FaceGeometry> = prominent
+            .iter()
+            .map(|f| FaceGeometry {
+                bbox: f.bbox.map(|v| v as f64),
+                kps: f.kps,
+            })
+            .collect();
+        let states = self
+            .state
+            .analyze(pixels, width, height, &geometry, &cfg)
+            .map_err(|e| e.to_string())?;
+        let lights: Vec<_> = states
+            .iter()
+            .flatten()
+            .filter(|s| s.eye_state != EyeState::Unknown)
+            .filter_map(|s| s.light)
+            .collect();
+        Ok(FaceConditions {
+            across_face_stops: lights
+                .iter()
+                .filter_map(|l| l.across_face_stops)
+                .reduce(f64::max),
+            against_surround_stops: lights
+                .iter()
+                .filter_map(|l| l.against_surround_stops)
+                .reduce(f64::min),
+            blown: lights.iter().map(|l| l.blown).reduce(f64::max),
+        })
+    }
+}
+
+/// What [`measure_and_apply`] did to a recipe.
+#[derive(Debug, Default)]
+pub struct Applied {
+    /// The reason codes for whatever fired, empty when nothing did.
+    pub reasons: Vec<String>,
+    /// Something that went short and the user should hear about.
+    pub warning: Option<String>,
+}
+
 /// Measure the frame and constrain the recipe to what it can absorb.
 ///
-/// Returns the reason codes for whatever fired, empty when nothing did. A
-/// decode failure is not an error: the recipe is returned unconstrained, which
+/// A decode failure is not an error: the recipe is returned unconstrained, which
 /// is exactly how the edit path behaved before guardrails existed.
 pub fn measure_and_apply(
     recipe: &mut Value,
     image_bytes: &[u8],
     capture: &CaptureConditions,
-) -> Vec<String> {
+    readers: Option<FaceReaders<'_>>,
+) -> Applied {
     if !recipe_needs_budget(recipe) {
-        return Vec::new();
+        return Applied::default();
     }
     let Ok(decoded) = image::load_from_memory(image_bytes) else {
         log::warn!("Edit guardrails: could not decode the image; recipe left unconstrained.");
-        return Vec::new();
+        return Applied::default();
     };
     let rgb = decoded.to_rgb8();
     let (width, height) = (rgb.width() as usize, rgb.height() as usize);
     let pixels = rgb.into_raw();
     let scene = scene_state(&pixels, width, height, &SceneStateConfig::defaults());
-    apply_with_scene(recipe, &scene, capture)
+    let (faces, warning) = match readers.map(|r| r.read(&pixels, width, height)) {
+        Some(Err(e)) => {
+            log::warn!("Edit guardrails: faces not read ({e}).");
+            (
+                FaceConditions::default(),
+                Some(format!(
+                    "The faces in this photo could not be read ({e}), so the edit was not limited \
+                     by the light on them. If this keeps happening, run \"Download AI models\" in \
+                     Plug-in Manager again."
+                )),
+            )
+        }
+        Some(Ok(faces)) => (faces, None),
+        None => (FaceConditions::default(), None),
+    };
+    Applied {
+        reasons: apply_with_faces(recipe, &scene, capture, &faces),
+        warning,
+    }
 }
 
 /// [`measure_and_apply`] with the measurement already done.
@@ -191,7 +286,17 @@ pub fn apply_with_scene(
     scene: &SceneState,
     capture: &CaptureConditions,
 ) -> Vec<String> {
-    let budget = derive_budget(scene, capture, &GuardrailConfig::defaults());
+    apply_with_faces(recipe, scene, capture, &FaceConditions::default())
+}
+
+/// [`apply_with_scene`] with what was read off the faces in the frame.
+pub fn apply_with_faces(
+    recipe: &mut Value,
+    scene: &SceneState,
+    capture: &CaptureConditions,
+    faces: &FaceConditions,
+) -> Vec<String> {
+    let budget = derive_budget_with_faces(scene, capture, faces, &GuardrailConfig::defaults());
     apply_budget(recipe, &budget)
 }
 
@@ -244,6 +349,73 @@ mod tests {
             reasons.is_empty(),
             "nothing was constrained, so nothing to explain"
         );
+    }
+
+    /// The canonical portrait case: an ordinary frame, a habitual `+20 clarity`,
+    /// and hard light across the face it would deepen.
+    #[test]
+    fn hard_light_on_a_face_takes_the_clarity_out_of_the_recipe() {
+        let mut recipe = recipe_with(json!({"contrast": 8.0, "clarity": 20.0}));
+        let faces = FaceConditions {
+            across_face_stops: Some(3.0),
+            ..Default::default()
+        };
+        let reasons = apply_with_faces(
+            &mut recipe,
+            &ordinary(),
+            &CaptureConditions::default(),
+            &faces,
+        );
+        let global = global_of(&recipe);
+        assert_eq!(global["clarity"].as_f64().unwrap(), 0.0);
+        assert!(global["contrast"].as_f64().unwrap() <= 10.0);
+        assert_eq!(reasons, vec!["face_hard_light".to_string()]);
+    }
+
+    /// A frame without a face reading edits as it always did.
+    #[test]
+    fn no_faces_read_changes_nothing() {
+        let mut with = recipe_with(json!({"contrast": 15.0, "clarity": 10.0}));
+        let mut without = with.clone();
+        apply_with_scene(&mut with, &ordinary(), &CaptureConditions::default());
+        apply_with_faces(
+            &mut without,
+            &ordinary(),
+            &CaptureConditions::default(),
+            &FaceConditions::default(),
+        );
+        assert_eq!(with, without);
+    }
+
+    /// A failed read costs the edit its face rules, and the user hears about it:
+    /// the models are there, so they would otherwise assume the rules applied.
+    #[test]
+    fn faces_that_could_not_be_read_are_reported_and_the_edit_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name);
+        let faces = FaceModel::new(lrg_ml::faces::FaceModelPaths {
+            det_onnx: path("det.onnx"),
+            rec_onnx: path("rec.onnx"),
+            auraface_onnx: path("aura.onnx"),
+        });
+        let state = FaceStateModel::new(lrg_ml::face_state::FaceStatePaths {
+            mesh_onnx: path("mesh.onnx"),
+            blendshapes_onnx: path("blend.onnx"),
+        });
+        let readers = FaceReaders {
+            faces: &faces,
+            state: &state,
+        };
+        let mut recipe = recipe_with(json!({"contrast": 5.0}));
+        let applied = measure_and_apply(
+            &mut recipe,
+            &flat_soft_jpeg(),
+            &CaptureConditions::default(),
+            Some(readers),
+        );
+        let warning = applied.warning.expect("the failed read is reported");
+        assert!(warning.contains("Download AI models"), "{warning}");
+        assert_eq!(global_of(&recipe)["contrast"].as_f64().unwrap(), 5.0);
     }
 
     /// A frame can be harshly lit without the recipe ever asking for contrast.
@@ -380,8 +552,13 @@ mod tests {
         // No decode is attempted, so deliberately invalid image bytes are fine.
         let mut recipe = recipe_with(json!({"temperature": 5600.0, "contrast": -10.0}));
         assert!(!recipe_needs_budget(&recipe));
-        let reasons =
-            measure_and_apply(&mut recipe, b"not an image", &CaptureConditions::default());
+        let reasons = measure_and_apply(
+            &mut recipe,
+            b"not an image",
+            &CaptureConditions::default(),
+            None,
+        )
+        .reasons;
         assert!(reasons.is_empty());
         assert_eq!(global_of(&recipe)["temperature"].as_f64().unwrap(), 5600.0);
     }
@@ -441,7 +618,9 @@ mod tests {
             &mut recipe,
             &harshly_lit_jpeg(),
             &CaptureConditions::default(),
-        );
+            None,
+        )
+        .reasons;
 
         let g = global_of(&recipe);
         assert_eq!(g["contrast"].as_f64().unwrap(), 0.0, "reasons: {reasons:?}");
@@ -464,7 +643,9 @@ mod tests {
             &mut recipe,
             &flat_soft_jpeg(),
             &CaptureConditions::default(),
-        );
+            None,
+        )
+        .reasons;
 
         assert_eq!(recipe, before, "flat light should widen, never narrow");
         assert!(reasons.is_empty(), "got {reasons:?}");
@@ -474,8 +655,13 @@ mod tests {
     fn an_undecodable_image_leaves_the_recipe_alone() {
         let mut recipe = recipe_with(json!({"contrast": 90.0}));
         let before = recipe.clone();
-        let reasons =
-            measure_and_apply(&mut recipe, b"not an image", &CaptureConditions::default());
+        let reasons = measure_and_apply(
+            &mut recipe,
+            b"not an image",
+            &CaptureConditions::default(),
+            None,
+        )
+        .reasons;
         assert!(reasons.is_empty());
         assert_eq!(recipe, before, "a decode failure must not change the edit");
     }

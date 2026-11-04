@@ -88,6 +88,8 @@ needed for metadata: embeddings, faces and species run without one.
   [culling](Help-Cull-Photos.md#focus-on-the-eyes) and — with the eye and
   expression model downloaded — whether the eyes are open, the smile and the
   gaze; a photo without faces is not.
+  Photos whose faces were indexed before that model was on disk are read again the
+  next time you run this with face detection on them, and keep the people you named.
 - **Identify animal and plant species** — runs BioCLIP 2 and writes a
   taxonomic identification. Greyed out until the models have been downloaded
   in the Plug-in Manager, under *On-device AI models* — one **Download AI

@@ -26,5 +26,8 @@ ort = { version = "2.0.0-rc.13", features = ["coreml"] }
 [[example]]
 name = "bench_image"
 
+[[example]]
+name = "face_state_probe"
+
 [dev-dependencies]
 tempfile.workspace = true

@@ -4398,14 +4398,38 @@ function SearchIndexAPI.setPersonName(personId, name)
 end
 
 ---
+-- The query string asking for only some of a person's photos.
+-- @param options table|nil eyes_open, smiling, looking_at_camera (booleans), best (a count)
+-- @return string "" when it asks nothing, else starting with "?"
+function SearchIndexAPI.personPhotosQuery(options)
+	options = options or {}
+	local parts = {}
+	for _, key in ipairs({ "eyes_open", "smiling", "looking_at_camera" }) do
+		if options[key] == true then
+			parts[#parts + 1] = key .. "=true"
+		end
+	end
+	if type(options.best) == "number" and options.best > 0 then
+		parts[#parts + 1] = "sort=best"
+		parts[#parts + 1] = string.format("limit=%d", options.best)
+	end
+	if #parts == 0 then
+		return ""
+	end
+	return "?" .. table.concat(parts, "&")
+end
+
+---
 -- Get photo UUIDs that contain this person.
 -- @param personId string e.g. "person_0"
--- @return table|nil { status, person_id, photo_uuids } or nil, err
-function SearchIndexAPI.getPhotosForPerson(personId)
+-- @param options table|nil see personPhotosQuery
+-- @return table|nil { status, person_id, photo_uuids, not_judged, warnings } or nil, err
+function SearchIndexAPI.getPhotosForPerson(personId, options)
 	if not personId or personId == "" then
 		return nil, "person_id required"
 	end
 	local url = SearchIndexAPI.url("FACES_PERSON_PHOTOS", personId, "photos")
+		.. SearchIndexAPI.personPhotosQuery(options)
 	local result, err = _request("GET", url, {})
 	if err then
 		log:error("getPhotosForPerson failed: " .. err)

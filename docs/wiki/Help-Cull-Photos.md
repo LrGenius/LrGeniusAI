@@ -161,6 +161,9 @@ eye and over the face as a whole.
 
 - **The sharper eye counts.** With a shallow depth of field the near eye is sharp
   and the far one is not, which is how it should be.
+- **Sharp eyes overrule a soft-looking frame.** A small face against something dark
+  or out of focus can make the whole frame measure soft. Where the eyes were measured
+  sharp, the frame is not called blurred.
 - **In a couple or group shot, the least sharp prominent face decides**: the
   frame is only sharp when everyone in it is. Small faces in the background do
   not count.
@@ -209,17 +212,36 @@ blink.
   the frame.
 - **One blink spoils the group.** The most closed eyes among the people that
   matter in the frame decide, so a group shot with one person blinking is not
-  "eyes open". Small faces in the background do not count.
+  "eyes open". One shut eye counts as well, even when the other is open. Small
+  faces in the background do not count.
 - **Compared with the burst.** A frame becomes a reject candidate for closed
   eyes only when another frame of the same burst has them open. Half-closed
   eyes (a squint into the sun, a mid-blink) are named in the explanation but
-  never make a frame a reject candidate.
+  never make a frame a reject candidate. The model cannot always tell eyes
+  narrowed to a slit from eyes shut, so a hard squint can read as closed, and
+  sunglasses can too. Comparing with the burst keeps either from costing a frame
+  when the whole burst looks the same.
 - **A laugh is not a blink.** A broad smile with the eyes shut counts as a
   laugh, like a kiss already did.
+- **Looking down is not a blink.** Lids down on a lowered head, a child looking at
+  the candles say, read much like shut eyes. Such a frame says "looking down" and
+  is never a reject candidate for it. Someone really asleep with the head down gets
+  the same note, which costs a warning and no photo.
 - **The smile counts in Portrait and Event.** Between otherwise equal frames,
   the one where everyone smiles more wins, and its explanation says
-  "best smile in group". **Portrait** also notes when someone is looking away
-  from the camera.
+  "best smile in group".
+- **The mouth, in Portrait and Event.** A frame with the mouth caught open mid-word
+  says so when another frame of the burst has it closed. A note only; a broad
+  smile or a laugh does not count.
+- **The light on the face.** The explanation names a face darker than in another
+  frame of the burst, harder light across the face than in another frame, and skin
+  that is blown out. Not at **Street** or **Sports**. These are notes and move no
+  score. A face is only ever compared with itself in another frame, never with a
+  standard, because skin differs by several stops between people.
+- **Looking away means from the lens.** **Portrait** notes when someone looks
+  away from the camera. Head and eyes count together: a head turned to the side
+  with the eyes back on the camera is looking at it, and a head turned with the
+  eyes following it is not. It is a note, never a reason to reject.
 
 Like focus, the face is read on the full-size original where there is one.
 The model is part of **Download AI models** (about 7 MB). Without it culling
@@ -280,8 +302,10 @@ For each photo, the backend stores culling-related fields such as:
   `cull_blink_penalty`, `cull_occlusion`, and `cull_eye_focus` /
   `cull_face_focus` (focus on the eyes and on the face, measured on the
   full-size original; absent when the faces were too small to judge), and
-  `cull_eye_state` / `cull_eye_closed`, `cull_smile`, `cull_gaze_away` (from
-  the face model; absent when no face could be judged)
+  `cull_eye_state` / `cull_eye_closed`, `cull_smile`, `cull_eye_squint`,
+  `cull_gaze_off_lens`, `cull_mouth_open`, `cull_face_luminance`,
+  `cull_face_across_stops`, `cull_face_blown` (from the face model; absent when no
+  face could be judged)
 - aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
   photo's **Aesthetic score** from the AestheticSigLIP model, stored at
   indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`

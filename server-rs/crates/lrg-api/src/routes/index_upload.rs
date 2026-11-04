@@ -2031,10 +2031,18 @@ async fn finish_one(
         let focus_missing = options.face_pass == FacePass::QualityOnly
             && !main_metadata.contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY);
         // The same for the face state, once its model is on disk: a photo
-        // prepared before it was downloaded is analysed on the next cull pass.
-        let state_missing = options.face_pass == FacePass::QualityOnly
+        // prepared before it was downloaded is analysed on the next pass. A full
+        // pass only when the photo has faces, since it re-runs identity for them.
+        let has_faces = main_metadata
+            .get("cull_face_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            > 0;
+        let rows_behind =
+            options.face_pass == FacePass::Full && main_metadata.contains_key(FACE_ROWS_BEHIND_KEY);
+        let state_missing = (options.face_pass == FacePass::QualityOnly || has_faces)
             && state.face_state.is_cached()
-            && !main_metadata.contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+            && (rows_behind || !lrg_analysis::grouping::face_state_is_current(&main_metadata));
         if options.regenerate_metadata || !already_checked || focus_missing || state_missing {
             // Decoded here rather than carried from phase 1: full RGB is by far
             // the largest per-photo allocation, and holding one per photo in
@@ -2150,12 +2158,48 @@ async fn finish_one(
                             occlusion: Some(f.occlusion),
                             eye_focus: f.eye_focus,
                             face_focus: f.face_focus,
-                            eye_closed: judged(f).map(|s| s.eye_closed),
+                            eye_closed: judged(f)
+                                .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
+                                .map(|s| s.eye_closed),
+                            looking_down: judged(f)
+                                .is_some_and(|s| s.eye_state == lrg_ml::face_state::EyeState::Down),
                             smile: judged(f).map(|s| s.smile),
-                            gaze_away: judged(f).map(|s| s.gaze_away),
+                            eye_squint: judged(f).map(|s| s.eye_squint),
+                            gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
+                            mouth_open: judged(f).map(|s| s.mouth_open),
+                            luminance: judged_light(f).map(|l| l.luminance),
+                            across_face_stops: judged_light(f).and_then(|l| l.across_face_stops),
+                            blown: judged_light(f).map(|l| l.blown),
                         })
                         .collect();
-                    apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
+                    // Before the readings are stamped as current: a photo whose rows
+                    // could not be saved must be asked for again, or People could
+                    // never read it.
+                    let mut stamped = state_ran;
+                    if state_ran {
+                        match merge_face_state_into_rows(store, photo_id, &faces).await {
+                            Ok(0) => {
+                                main_metadata.remove(FACE_ROWS_BEHIND_KEY);
+                            }
+                            // Nothing to tell the user yet: People says so when
+                            // asked, and names the full pass this queues.
+                            Ok(unmatched) => {
+                                log::debug!(
+                                    "Photo {photo_id}: {unmatched} face row(s) match no face."
+                                );
+                                main_metadata.insert(FACE_ROWS_BEHIND_KEY.into(), json!(true));
+                            }
+                            Err(e) => {
+                                log::warn!("Photo {photo_id}: face rows not updated: {e}");
+                                stamped = false;
+                                warnings.push(format!(
+                                    "{filename}: eyes, smile and gaze could not be saved ({e}). \
+                                     Choose 'Prepare now' in 'Cull Similar Photos' to try again."
+                                ));
+                            }
+                        }
+                    }
+                    apply_face_aggregate(&mut main_metadata, &inputs, stamped);
                     log::debug!(
                         "Photo {photo_id}: cull pass scored {} face(s), no identity written.",
                         faces.len()
@@ -2264,18 +2308,7 @@ async fn finish_one(
                                 m.insert("face_focus".into(), json!(f.face_focus));
                                 m.insert("face_eye_px".into(), json!(f.eye_px));
                                 m.insert("face_focus_scale".into(), json!(f.focus_scale));
-                                // Null when the face state did not run for this
-                                // face; `face_eye_state` is "unknown" when it ran
-                                // and could not judge the eyes.
-                                let st = f.state.as_ref();
-                                m.insert(
-                                    "face_eye_state".into(),
-                                    json!(st.map(|s| s.eye_state.as_str())),
-                                );
-                                m.insert("face_eye_closed".into(), json!(st.map(|s| s.eye_closed)));
-                                m.insert("face_smile".into(), json!(st.map(|s| s.smile)));
-                                m.insert("face_gaze_away".into(), json!(st.map(|s| s.gaze_away)));
-                                m.insert("face_yaw".into(), json!(st.map(|s| s.yaw_degrees)));
+                                insert_face_state(&mut m, f.state.as_ref());
                                 m.insert("face_model".into(), json!(face_model));
                                 StoreRecord {
                                     id: format!("{photo_id}_{i}"),
@@ -2301,9 +2334,20 @@ async fn finish_one(
                                 occlusion: Some(f.occlusion),
                                 eye_focus: f.eye_focus,
                                 face_focus: f.face_focus,
-                                eye_closed: judged(f).map(|s| s.eye_closed),
+                                eye_closed: judged(f)
+                                    .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
+                                    .map(|s| s.eye_closed),
+                                looking_down: judged(f).is_some_and(|s| {
+                                    s.eye_state == lrg_ml::face_state::EyeState::Down
+                                }),
                                 smile: judged(f).map(|s| s.smile),
-                                gaze_away: judged(f).map(|s| s.gaze_away),
+                                eye_squint: judged(f).map(|s| s.eye_squint),
+                                gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
+                                mouth_open: judged(f).map(|s| s.mouth_open),
+                                luminance: judged_light(f).map(|l| l.luminance),
+                                across_face_stops: judged_light(f)
+                                    .and_then(|l| l.across_face_stops),
+                                blown: judged_light(f).map(|l| l.blown),
                             })
                             .collect();
                         apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
@@ -2318,6 +2362,7 @@ async fn finish_one(
                     // used to disappear on a plain re-index.
                     main_metadata.insert("faces_checked".into(), json!(true));
                     main_metadata.insert("face_model".into(), json!(face_model));
+                    main_metadata.remove(FACE_ROWS_BEHIND_KEY);
                 }
                 Err(e) => {
                     log::warn!("Face detection/indexing failed for {photo_id}: {e}");
@@ -2682,6 +2727,10 @@ fn carry_over_person_ids_by_box(
 
 /// The face state of a face, when it ran and could judge the eyes; a face it
 /// could not judge abstains from every eye, smile and gaze aggregate.
+fn judged_light(face: &lrg_ml::faces::FaceResult) -> Option<lrg_ml::face_state::FaceLight> {
+    judged(face).and_then(|s| s.light)
+}
+
 fn judged(face: &lrg_ml::faces::FaceResult) -> Option<&lrg_ml::face_state::FaceState> {
     face.state
         .as_ref()
@@ -2716,7 +2765,12 @@ fn apply_face_aggregate(
         ("cull_face_focus", agg.cull_face_focus),
         ("cull_eye_closed", agg.cull_eye_closed),
         ("cull_smile", agg.cull_smile),
-        ("cull_gaze_away", agg.cull_gaze_away),
+        ("cull_eye_squint", agg.cull_eye_squint),
+        ("cull_gaze_off_lens", agg.cull_gaze_off_lens),
+        ("cull_mouth_open", agg.cull_mouth_open),
+        ("cull_face_luminance", agg.cull_face_luminance),
+        ("cull_face_across_stops", agg.cull_face_across_stops),
+        ("cull_face_blown", agg.cull_face_blown),
     ] {
         match value {
             Some(v) => {
@@ -2733,6 +2787,11 @@ fn apply_face_aggregate(
         lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
         json!(lrg_analysis::grouping::FOCUS_VERSION),
     );
+    if agg.cull_looking_down {
+        metadata.insert("cull_looking_down".into(), json!(true));
+    } else {
+        metadata.remove("cull_looking_down");
+    }
     match agg.cull_eye_state {
         Some(state) => {
             metadata.insert("cull_eye_state".into(), json!(state));
@@ -2757,6 +2816,97 @@ fn apply_face_aggregate(
         metadata.remove(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
         metadata.remove("cull_face_state_model");
     }
+}
+
+/// A face's readings from the face state model on its row. Null when the model
+/// did not run for this face; `face_eye_state` is "unknown" when it ran and could
+/// not judge the eyes.
+fn insert_face_state(m: &mut Map<String, Value>, st: Option<&lrg_ml::face_state::FaceState>) {
+    m.insert(
+        "face_eye_state".into(),
+        json!(st.map(|s| s.eye_state.as_str())),
+    );
+    m.insert("face_eye_closed".into(), json!(st.map(|s| s.eye_closed)));
+    m.insert("face_smile".into(), json!(st.map(|s| s.smile)));
+    m.insert("face_eye_squint".into(), json!(st.map(|s| s.eye_squint)));
+    m.insert("face_mouth_open".into(), json!(st.map(|s| s.mouth_open)));
+    let light = st.and_then(|s| s.light);
+    m.insert("face_luminance".into(), json!(light.map(|l| l.luminance)));
+    m.insert(
+        "face_against_surround_stops".into(),
+        json!(light.and_then(|l| l.against_surround_stops)),
+    );
+    m.insert(
+        "face_across_stops".into(),
+        json!(light.and_then(|l| l.across_face_stops)),
+    );
+    m.insert("face_blown".into(), json!(light.map(|l| l.blown)));
+    m.insert(
+        "face_gaze_off_lens".into(),
+        json!(st.map(|s| s.gaze_off_lens)),
+    );
+    m.insert("face_yaw".into(), json!(st.map(|s| s.pose.yaw)));
+    m.insert("face_pitch".into(), json!(st.map(|s| s.pose.pitch)));
+    m.insert("face_roll".into(), json!(st.map(|s| s.pose.roll)));
+    // All 52, in `BLENDSHAPE_NAMES` order, to three places: a later signal can
+    // then read them without decoding every original again.
+    m.insert(
+        "face_blendshapes".into(),
+        json!(st.map(|s| s
+            .blendshapes
+            .iter()
+            .map(|v| (*v as f64 * 1000.0).round() / 1000.0)
+            .collect::<Vec<f64>>())),
+    );
+}
+
+/// Marks a photo whose face rows a quality-only pass could not bring up to date,
+/// so the next full pass re-detects them. Its own readings are current, so nothing
+/// else would ever ask for that.
+const FACE_ROWS_BEHIND_KEY: &str = "face_rows_behind";
+
+/// Brings a quality-only pass's readings to the rows a full pass wrote earlier,
+/// each to the row whose box it landed on, and touches nothing else on them. A
+/// catalog whose faces were indexed before the model was on disk gets its readings
+/// this way, so People can ask about them without re-running identity. Returns how
+/// many rows no detected face landed on: those keep no reading.
+async fn merge_face_state_into_rows(
+    store: &lrg_store::Store,
+    photo_id: &str,
+    faces: &[lrg_ml::faces::FaceResult],
+) -> Result<usize, String> {
+    let mut rows = store
+        .get_by_id_prefix(FACE_TABLE, &format!("{photo_id}_"))
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut changed = Vec::new();
+    let mut unmatched = 0;
+    for row in rows.iter_mut() {
+        let best = stored_bbox(row).and_then(|old_box| {
+            faces
+                .iter()
+                .map(|f| (box_iou(f.bbox, old_box), f))
+                .filter(|(iou, _)| *iou >= FACE_CARRY_OVER_MIN_IOU)
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+        });
+        match best {
+            None => unmatched += 1,
+            // A bystander too small for the model has a box and no reading,
+            // which a re-detection would not change.
+            Some((_, face)) if face.state.is_some() => {
+                insert_face_state(&mut row.metadata, face.state.as_ref());
+                changed.push(row.clone());
+            }
+            Some(_) => {}
+        }
+    }
+    if !changed.is_empty() {
+        store
+            .upsert(FACE_TABLE, &changed)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(unmatched)
 }
 
 /// At most this many faces of one photo get the face state model, largest
