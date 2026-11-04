@@ -30,19 +30,21 @@ Using a newer plugin with an older backend (or vice versa) causes API errors.
 
 ### 3. On-Device AI Models Missing or Not Downloading
 
-Two features run their own model on the backend machine: smart photo search
-(SigLIP2) and species identification (BioCLIP 2). Neither model ships with the
-installer — you fetch them once from *Plug-in Manager → LrGeniusAI →
-**On-device AI models*** → **Download AI models**, which is also where their
-readiness is reported. Roughly 3 GB in total.
+Several features run their own model on the backend machine: smart photo
+search (SigLIP2), photo quality scoring, species identification (BioCLIP 2),
+face detection, and the eye and expression analysis culling uses. None of them
+ships with the installer — you fetch them once from *Plug-in Manager →
+LrGeniusAI → **On-device AI models*** → **Download AI models**, which is also
+where their readiness is reported. A few GB in total.
 
 - **Symptom:** *Enable smart photo search* or *Identify animal and plant species* is greyed out in the Analyze & Index dialog, an indicator under *On-device AI models* stays red, or indexing reports `species: model not downloaded`.
 - **Resolution:**
-  1. Click **Download AI models** and leave the progress bar running. It fetches only what is missing, so it is safe to press again after a failed attempt — an existing installation that already has the search model will only download the species one.
-  2. Check your internet connection **on the machine running the backend**, not the one running Lightroom. If they are different machines, the models must be downloaded on the server.
-  3. Make sure the backend has write permission to its model cache: `~/.cache/lrgenius/models/`, or `%USERPROFILE%\.cache\lrgenius\models\` on Windows. It is the home directory of the account the *backend* runs as, which is not necessarily yours if you installed it as a service.
-  4. If a download fails part-way, the error is reported verbatim in the Lightroom dialog and in the backend log — worth reading before retrying, since a 404 means the release assets could not be reached rather than anything wrong with your setup.
-  5. If an indicator stays red after a download that reported success, restart the backend so it re-checks the files on disk.
+  1. Click **Download AI models** and leave the progress bar running. It fetches only what is missing, so it is safe to press again after a failed attempt — an installation that already has some of the models downloads only the others.
+  2. If some models arrive and others do not, the dialog at the end (*Not all AI models could be downloaded*) names each model that is still missing and why. Each model downloads on its own, so one that cannot be fetched no longer holds the others back: every model the dialog does not name is ready to use. Press **Download AI models** again later to fetch the rest; *All AI models are ready* under *On-device AI models* turns green once the last one is in.
+  3. Check your internet connection **on the machine running the backend**, not the one running Lightroom. If they are different machines, the models must be downloaded on the server.
+  4. Make sure the backend has write permission to its model cache: `~/.cache/lrgenius/models/`, or `%USERPROFILE%\.cache\lrgenius\models\` on Windows. It is the home directory of the account the *backend* runs as, which is not necessarily yours if you installed it as a service.
+  5. Read the reason given for each missing model before retrying; it is also in the backend log. A 404 (*"the release may not exist yet"*) means that model's files could not be found on GitHub, not that anything is wrong with your setup. It typically happens to a model a newer version has just added, before its files are published. The other models work in the meantime; try again later.
+  6. If an indicator stays red after a download that reported success, restart the backend so it re-checks the files on disk.
 
 Face detection is fetched by the same button as everything else. It was not
 always: until the pipeline moved to YuNet + FaceNet, it ran InsightFace's
