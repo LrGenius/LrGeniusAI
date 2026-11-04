@@ -267,12 +267,18 @@ on disk, MediaPipe's face mesh and blendshapes run on the prominent faces (at
 most 12, largest first) of the same full-size image, or of the working copy
 when there is no larger one (`lrg_ml::face_state`). Per face the row gets
 `face_eye_state` (`open`/`half`/`closed`, `unknown` when the face is turned too
-far, barely a face or too small), `face_eye_closed`, `face_smile`,
-`face_gaze_away` and `face_yaw` (null when the model did not run for it). Per
+far, barely a face or too small), `face_eye_closed` (the more closed eye),
+`face_smile`, `face_eye_squint`, `face_gaze_off_lens` (degrees from the lens, head
+turn included), `face_yaw`, `face_pitch`, `face_roll` (degrees) and
+`face_blendshapes` (all 52, in the order of `lrg_ml::face_state::BLENDSHAPE_NAMES`);
+all null when the model did not run for it. These rows exist only where the pass
+writes faces, not on a pass that only prepares culling. Per
 photo: `cull_eye_closed` (the most closed prominent eyes), `cull_eye_state`,
-`cull_smile` (the weakest smile among the prominent faces), `cull_gaze_away` —
-absent when no prominent face could be judged — plus `cull_face_state_version`
-and `cull_face_state_model` when the model ran on this pass. Without the model
+`cull_smile` (the weakest smile among the prominent faces), `cull_eye_squint` (the
+strongest squint among the prominent faces not smiling), `cull_gaze_off_lens` (the
+prominent face with open eyes looking furthest from the lens) — absent when no
+prominent face could be judged — plus `cull_face_state_version` and `cull_face_state_model` when
+the model ran on this pass. Without the model
 the response says once that a rough eye estimate was used, with the fix
 (`"Photos were analysed without eye state, smile and gaze: …"`).
 
@@ -608,10 +614,11 @@ abstain. They act only when every frame of a group with a face carries
 
 `portrait` weights and gates focus most, `sports` least, `street` not at all.
 
-**Eye state, smile and gaze** (`cull_eye_closed`, `cull_smile`, `cull_gaze_away`)
-replace the eye-openness proxy where every frame of a group with a face
-carries `cull_face_state_version` (all or nothing): the blink penalty is then
-the model's `eyeBlink`, judged at `reason_eye_closed_threshold` /
+**Eye state, smile and gaze** (`cull_eye_closed`, `cull_smile`, `cull_eye_squint`,
+`cull_gaze_off_lens`) replace the eye-openness proxy where every frame of a group
+with a face carries the current `cull_face_state_version` (all or nothing; an older
+version counts as not analysed, and `/index/unprocessed` queues the photo again): the
+blink penalty is then the model's `eyeBlink` of the more closed eye, judged at `reason_eye_closed_threshold` /
 `reject_eye_closed_threshold` (plus the relative rules) instead of the proxy's
 thresholds, and a face it could not judge is never a blink. Reasons:
 `eyes_closed`, `eyes_half_closed` (a label, never a defect),
@@ -627,7 +634,7 @@ against the group.
 | `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
-| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`gaze_away` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
+| `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`eye_squint`/`gaze_off_lens` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
 | `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 

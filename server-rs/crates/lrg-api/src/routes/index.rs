@@ -283,7 +283,7 @@ async fn check_unprocessed(
                         .and_then(Value::as_i64)
                         .unwrap_or(0)
                         > 0
-                    && !m.contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+                    && !lrg_analysis::grouping::face_state_is_current(&m);
                 // A photo is done for `species` only if it was checked *and*
                 // checked by the head currently on disk. Widening the taxa
                 // whitelist changes what BioCLIP can answer, so results from an

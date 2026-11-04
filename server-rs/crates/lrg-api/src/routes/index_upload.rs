@@ -2034,7 +2034,7 @@ async fn finish_one(
         // prepared before it was downloaded is analysed on the next cull pass.
         let state_missing = options.face_pass == FacePass::QualityOnly
             && state.face_state.is_cached()
-            && !main_metadata.contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+            && !lrg_analysis::grouping::face_state_is_current(&main_metadata);
         if options.regenerate_metadata || !already_checked || focus_missing || state_missing {
             // Decoded here rather than carried from phase 1: full RGB is by far
             // the largest per-photo allocation, and holding one per photo in
@@ -2152,7 +2152,8 @@ async fn finish_one(
                             face_focus: f.face_focus,
                             eye_closed: judged(f).map(|s| s.eye_closed),
                             smile: judged(f).map(|s| s.smile),
-                            gaze_away: judged(f).map(|s| s.gaze_away),
+                            eye_squint: judged(f).map(|s| s.eye_squint),
+                            gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
                         })
                         .collect();
                     apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
@@ -2274,8 +2275,25 @@ async fn finish_one(
                                 );
                                 m.insert("face_eye_closed".into(), json!(st.map(|s| s.eye_closed)));
                                 m.insert("face_smile".into(), json!(st.map(|s| s.smile)));
-                                m.insert("face_gaze_away".into(), json!(st.map(|s| s.gaze_away)));
-                                m.insert("face_yaw".into(), json!(st.map(|s| s.yaw_degrees)));
+                                m.insert("face_eye_squint".into(), json!(st.map(|s| s.eye_squint)));
+                                m.insert(
+                                    "face_gaze_off_lens".into(),
+                                    json!(st.map(|s| s.gaze_off_lens)),
+                                );
+                                m.insert("face_yaw".into(), json!(st.map(|s| s.pose.yaw)));
+                                m.insert("face_pitch".into(), json!(st.map(|s| s.pose.pitch)));
+                                m.insert("face_roll".into(), json!(st.map(|s| s.pose.roll)));
+                                // All 52, in `BLENDSHAPE_NAMES` order, to three
+                                // places: a later signal can then read them
+                                // without decoding every original again.
+                                m.insert(
+                                    "face_blendshapes".into(),
+                                    json!(st.map(|s| s
+                                        .blendshapes
+                                        .iter()
+                                        .map(|v| (*v as f64 * 1000.0).round() / 1000.0)
+                                        .collect::<Vec<f64>>())),
+                                );
                                 m.insert("face_model".into(), json!(face_model));
                                 StoreRecord {
                                     id: format!("{photo_id}_{i}"),
@@ -2303,7 +2321,8 @@ async fn finish_one(
                                 face_focus: f.face_focus,
                                 eye_closed: judged(f).map(|s| s.eye_closed),
                                 smile: judged(f).map(|s| s.smile),
-                                gaze_away: judged(f).map(|s| s.gaze_away),
+                                eye_squint: judged(f).map(|s| s.eye_squint),
+                                gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
                             })
                             .collect();
                         apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
@@ -2716,7 +2735,8 @@ fn apply_face_aggregate(
         ("cull_face_focus", agg.cull_face_focus),
         ("cull_eye_closed", agg.cull_eye_closed),
         ("cull_smile", agg.cull_smile),
-        ("cull_gaze_away", agg.cull_gaze_away),
+        ("cull_eye_squint", agg.cull_eye_squint),
+        ("cull_gaze_off_lens", agg.cull_gaze_off_lens),
     ] {
         match value {
             Some(v) => {

@@ -3975,15 +3975,15 @@ async fn the_face_state_model_is_its_own_downloadable_family() {
 /// would change nothing.
 #[tokio::test]
 async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
-    let row = |id: &str, faces: i64, state: bool| {
+    let row = |id: &str, faces: i64, state: Option<i64>| {
         let mut m = serde_json::Map::new();
         m.insert("cull_phash".into(), serde_json::json!("abcd0123abcd0123"));
         m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
         m.insert("cull_face_count".into(), serde_json::json!(faces));
         m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
         m.insert("cull_focus_version".into(), serde_json::json!(1));
-        if state {
-            m.insert("cull_face_state_version".into(), serde_json::json!(1));
+        if let Some(version) = state {
+            m.insert("cull_face_state_version".into(), serde_json::json!(version));
         }
         lrg_store::StoreRecord {
             id: id.into(),
@@ -3992,9 +3992,18 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
         }
     };
     let rows = [
-        row("faces_without_state", 2, false),
-        row("faces_with_state", 1, true),
-        row("faceless", 0, false),
+        row("faces_without_state", 2, None),
+        row(
+            "faces_with_state",
+            1,
+            Some(lrg_analysis::grouping::FACE_STATE_VERSION),
+        ),
+        row(
+            "faces_with_older_state",
+            1,
+            Some(lrg_analysis::grouping::FACE_STATE_VERSION - 1),
+        ),
+        row("faceless", 0, None),
     ];
     let ask = |app: axum::Router, db: String| async move {
         let response = app
@@ -4003,7 +4012,12 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "photo_ids": ["faces_without_state", "faces_with_state", "faceless"],
+                            "photo_ids": [
+                                "faces_without_state",
+                                "faces_with_state",
+                                "faces_with_older_state",
+                                "faceless",
+                            ],
                             "tasks": "cull",
                             "regenerate_metadata": "false",
                             "db_path": db,
@@ -4052,7 +4066,7 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
         .unwrap();
     assert_eq!(
         ask(app(state.clone()), db).await,
-        serde_json::json!(["faces_without_state"])
+        serde_json::json!(["faces_without_state", "faces_with_older_state"])
     );
 }
 
@@ -4082,7 +4096,10 @@ async fn cull_names_a_real_blink_from_the_face_state() {
         m.insert("cull_blink_penalty".into(), serde_json::json!(0.9));
         m.insert("cull_occlusion".into(), serde_json::json!(0.1));
         m.insert("cull_focus_version".into(), serde_json::json!(1));
-        m.insert("cull_face_state_version".into(), serde_json::json!(1));
+        m.insert(
+            "cull_face_state_version".into(),
+            serde_json::json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+        );
         m.insert("cull_eye_closed".into(), serde_json::json!(closed));
         m.insert("cull_smile".into(), serde_json::json!(0.4));
         m.insert("aesthetic_score".into(), serde_json::json!(6.0));

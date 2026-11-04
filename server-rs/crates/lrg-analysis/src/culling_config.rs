@@ -302,13 +302,13 @@ pub struct RankingConfig {
     /// A pick within this of the group's best eye focus is reported as having
     /// the sharpest eyes of the group (`eyes_sharpest_in_group`).
     pub reason_eye_focus_delta: f64,
-    /// With the face state model (`cull_eye_closed`, MediaPipe's `eyeBlink`),
-    /// above this a frame is labelled `eyes_closed`; above
-    /// [`Self::reject_eye_closed_threshold`] it is a blink defect. They replace
-    /// `reason_possible_blink_threshold`/`reject_blink_penalty_threshold`,
+    /// With the face state model (`cull_eye_closed`, MediaPipe's `eyeBlink` of
+    /// the more closed eye), above this a frame is labelled `eyes_closed`;
+    /// above [`Self::reject_eye_closed_threshold`] it is a blink defect. They
+    /// replace `reason_possible_blink_threshold`/`reject_blink_penalty_threshold`,
     /// which were tuned against a proxy that read "closed" on almost every
-    /// small face; the relative rules still apply on top. On the reference
-    /// portrait an open eye reads 0.03–0.04 and shut lids 0.76–0.81.
+    /// small face; the relative rules still apply on top. On real photographs
+    /// judged by hand, eyes shut read 0.54–0.78 and no open eye reached 0.35.
     /// **Hypotheses until a hand-culled fixture says otherwise.**
     pub reason_eye_closed_threshold: f64,
     pub reject_eye_closed_threshold: f64,
@@ -316,6 +316,10 @@ pub struct RankingConfig {
     /// squint, a mid-blink — and the frame is labelled `eyes_half_closed`.
     /// Never a defect. 0 switches the label off.
     pub reason_eyes_half_closed_threshold: f64,
+    /// `cull_eye_squint` at or above this gets the same label, for eyes
+    /// narrowed against the sun with the lids reading open. Half of all faces
+    /// read above 0.43, so it has to sit far up.
+    pub reason_eye_squint_threshold: f64,
     /// A smile at least this broad with the eyes shut is a laugh, not a blink
     /// (per face, next to the scene-level CLIP gate). 0 switches it off.
     pub laugh_smile_threshold: f64,
@@ -326,9 +330,9 @@ pub struct RankingConfig {
     /// A pick within this of the group's broadest smile is reported as having
     /// the best smile (`best_smile`).
     pub reason_smile_delta: f64,
-    /// Above this `eyeLook*` a frame is labelled `looking_away`. 0 switches the
-    /// label off; it is never a defect.
-    pub reason_gaze_away_threshold: f64,
+    /// Above this many degrees from the lens (`cull_gaze_off_lens`) a frame is
+    /// labelled `looking_away`. 0 switches the label off; it is never a defect.
+    pub reason_gaze_off_lens_degrees: f64,
 }
 
 /// Which deliberately-captured multi-frame set a group is, if any.
@@ -462,7 +466,7 @@ impl CullingConfig {
         cfg.ranking.smile_weight = 0.0;
         cfg.ranking.laugh_smile_threshold = 0.0;
         cfg.ranking.reason_eyes_half_closed_threshold = 0.0;
-        cfg.ranking.reason_gaze_away_threshold = 0.0;
+        cfg.ranking.reason_gaze_off_lens_degrees = 0.0;
         cfg
     }
 }
@@ -534,12 +538,13 @@ const BASE: CullingConfig = CullingConfig {
         relative_focus_margin: 0.08,
         reason_eye_focus_delta: 0.02,
         reason_eye_closed_threshold: 0.5,
-        reject_eye_closed_threshold: 0.6,
+        reject_eye_closed_threshold: 0.55,
         reason_eyes_half_closed_threshold: 0.35,
+        reason_eye_squint_threshold: 0.78,
         laugh_smile_threshold: 0.6,
         smile_weight: 0.0,
         reason_smile_delta: 0.05,
-        reason_gaze_away_threshold: 0.0,
+        reason_gaze_off_lens_degrees: 0.0,
     },
     sets: SetDetectionConfig {
         enabled: true,
@@ -593,9 +598,9 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // smile per face is worth scoring, and eye contact is a question
             // worth answering.
             cfg.ranking.reason_eye_closed_threshold = 0.45;
-            cfg.ranking.reject_eye_closed_threshold = 0.55;
+            cfg.ranking.reject_eye_closed_threshold = 0.5;
             cfg.ranking.smile_weight = 0.15;
-            cfg.ranking.reason_gaze_away_threshold = 0.5;
+            cfg.ranking.reason_gaze_off_lens_degrees = 25.0;
         }
         "street" => {
             cfg.ranking.face_group_weight_technical = 0.70;
@@ -625,8 +630,8 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.reason_face_focus_threshold = 0.0;
             cfg.ranking.reject_face_focus_threshold = 0.0;
             // Closed eyes are often the moment in street work.
-            cfg.ranking.reason_eye_closed_threshold = 0.75;
-            cfg.ranking.reject_eye_closed_threshold = 0.85;
+            cfg.ranking.reason_eye_closed_threshold = 0.62;
+            cfg.ranking.reject_eye_closed_threshold = 0.72;
         }
         "event" => {
             cfg.grouping.time_window_default_seconds = 2;
@@ -698,8 +703,8 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.reason_face_focus_threshold = 0.32;
             cfg.ranking.reject_face_focus_threshold = 0.25;
             // Athletes squint and grimace; only shut eyes count.
-            cfg.ranking.reason_eye_closed_threshold = 0.7;
-            cfg.ranking.reject_eye_closed_threshold = 0.8;
+            cfg.ranking.reason_eye_closed_threshold = 0.6;
+            cfg.ranking.reject_eye_closed_threshold = 0.68;
             cfg.ranking.reason_eyes_half_closed_threshold = 0.0;
         }
         _ => {}

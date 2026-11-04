@@ -248,10 +248,12 @@ struct Scored<'a> {
     eyes_soft: bool,
     face_soft: bool,
     /// From the face state model (`cull_eye_closed`, `cull_smile`,
-    /// `cull_gaze_away`); `None` when no prominent face could be judged.
+    /// `cull_eye_squint`, `cull_gaze_off_lens`); `None` when no prominent face
+    /// could be judged. The last is in degrees, the others `0..1`.
     cull_eye_closed: Option<f64>,
     cull_smile: Option<f64>,
-    cull_gaze_away: Option<f64>,
+    cull_eye_squint: Option<f64>,
+    cull_gaze_off_lens: Option<f64>,
     /// The photo went through the face state pass (`cull_face_state_version`
     /// is stored), whether or not its faces could be judged.
     state_measured: bool,
@@ -303,8 +305,19 @@ pub const FOCUS_VERSION: i64 = 1;
 pub const FACE_STATE_VERSION_KEY: &str = "cull_face_state_version";
 
 /// The value stored under [`FACE_STATE_VERSION_KEY`]. Bump it when stored
-/// readings become incomparable with new ones.
-pub const FACE_STATE_VERSION: i64 = 1;
+/// readings become incomparable with new ones; `/index/unprocessed` then has
+/// those photos analysed again, and until then they rank like photos without
+/// the model.
+///
+/// 2: `cull_eye_closed` is the more closed eye instead of the mean of both, and
+/// `cull_gaze_off_lens` replaces `cull_gaze_away`.
+pub const FACE_STATE_VERSION: i64 = 2;
+
+/// Whether a photo's face state was read by this version of the analysis. The
+/// key's value counts, not its presence, or a bump would change nothing.
+pub fn face_state_is_current(metadata: &serde_json::Map<String, Value>) -> bool {
+    metadata.get(FACE_STATE_VERSION_KEY).and_then(Value::as_i64) == Some(FACE_STATE_VERSION)
+}
 
 /// How much eye focus one point of the 0–10 in the explanation is worth.
 ///
@@ -536,12 +549,14 @@ fn rank_group_records(
             let cull_face_focus = m.get("cull_face_focus").and_then(Value::as_f64).map(unit);
             let focus_measured = m.contains_key(FOCUS_VERSION_KEY);
             let read = |key: &str| m.get(key).and_then(Value::as_f64).map(unit);
-            let (cull_eye_closed, cull_smile, cull_gaze_away) = (
+            let (cull_eye_closed, cull_smile, cull_eye_squint) = (
                 read("cull_eye_closed"),
                 read("cull_smile"),
-                read("cull_gaze_away"),
+                read("cull_eye_squint"),
             );
-            let state_measured = m.contains_key(FACE_STATE_VERSION_KEY);
+            // Degrees, so not through `read`'s clamp to `0..1`.
+            let cull_gaze_off_lens = m.get("cull_gaze_off_lens").and_then(Value::as_f64);
+            let state_measured = face_state_is_current(m);
             // Injected by the API layer only when the preset asks the gate
             // question, so an absent score never lifts a blink.
             let intent_threshold = cfg.ranking.eyes_closed_intent_threshold;
@@ -575,7 +590,8 @@ fn rank_group_records(
                 face_soft: false,
                 cull_eye_closed,
                 cull_smile,
-                cull_gaze_away,
+                cull_eye_squint,
+                cull_gaze_off_lens,
                 state_measured,
                 half_closed: false,
                 hard_defect: false,
@@ -862,9 +878,12 @@ fn rank_group_records(
             && !item.blink
             && !item.eyes_closed_intended
             && rk.reason_eyes_half_closed_threshold > 0.0
-            && item
+            && (item
                 .cull_eye_closed
-                .is_some_and(|v| v >= rk.reason_eyes_half_closed_threshold && v < reason_blink);
+                .is_some_and(|v| v >= rk.reason_eyes_half_closed_threshold && v < reason_blink)
+                || item
+                    .cull_eye_squint
+                    .is_some_and(|v| v >= rk.reason_eye_squint_threshold));
         item.occluded = group_has_faces
             && item.cull_face_count > 0
             && item.cull_occlusion > rk.reason_occlusion_threshold
@@ -1053,9 +1072,13 @@ fn rank_group_records(
             // With the face state model, a frame whose eyes it could not judge
             // has won nothing on them.
             let eyes_judged = !state_active || item.cull_eye_closed.is_some();
+            // The most open eyes of a group can still be shut, and a single is
+            // always its own best: only the model can say so.
+            let eyes_open = !state_active || item.cull_blink_penalty <= reason_blink;
             if item.cull_eye_openness >= (max_eye_openness - rk.reason_eyes_open_delta).max(0.0)
                 && is_winner
                 && eyes_judged
+                && eyes_open
             {
                 reason_codes.push("eyes_open_best".to_string());
             } else if item.eyes_closed_intended && item.cull_blink_penalty > reason_blink {
@@ -1071,10 +1094,10 @@ fn rank_group_records(
                 reason_codes.push("eyes_half_closed".to_string());
             }
             if state_active
-                && rk.reason_gaze_away_threshold > 0.0
+                && rk.reason_gaze_off_lens_degrees > 0.0
                 && item
-                    .cull_gaze_away
-                    .is_some_and(|g| g > rk.reason_gaze_away_threshold)
+                    .cull_gaze_off_lens
+                    .is_some_and(|g| g > rk.reason_gaze_off_lens_degrees)
             {
                 reason_codes.push("looking_away".to_string());
             }
@@ -1229,7 +1252,8 @@ fn rank_group_records(
             for (key, value) in [
                 ("eye_closed", item.cull_eye_closed),
                 ("smile", item.cull_smile),
-                ("gaze_away", item.cull_gaze_away),
+                ("eye_squint", item.cull_eye_squint),
+                ("gaze_off_lens", item.cull_gaze_off_lens),
             ] {
                 if let Some(v) = value {
                     metrics.insert(key.into(), Value::from(round4(v)));
@@ -2568,8 +2592,10 @@ mod tests {
         r.metadata
             .insert("cull_blink_penalty".into(), Value::from(0.9));
         if measured {
-            r.metadata
-                .insert(FACE_STATE_VERSION_KEY.into(), Value::from(1));
+            r.metadata.insert(
+                FACE_STATE_VERSION_KEY.into(),
+                Value::from(FACE_STATE_VERSION),
+            );
         }
         if let Some(v) = closed {
             r.metadata.insert("cull_eye_closed".into(), Value::from(v));
@@ -2657,6 +2683,94 @@ mod tests {
             .reason_codes
             .contains(&"eyes_half_closed".to_string()));
         assert_eq!(squint.metrics["clear_defect"], false);
+    }
+
+    #[test]
+    fn shut_eyes_are_never_the_best_open_eyes() {
+        let groups = cull(
+            vec![state_frame("shut", 1000.0, Some(0.66), Some(0.2), true)],
+            "portrait",
+        );
+        let shut = photo(&groups[0], "shut");
+        assert!(
+            !shut.reason_codes.contains(&"eyes_open_best".to_string()),
+            "{:?}",
+            shut.reason_codes
+        );
+        let groups = cull(
+            vec![state_frame("open", 1000.0, Some(0.05), Some(0.2), true)],
+            "portrait",
+        );
+        assert!(photo(&groups[0], "open")
+            .reason_codes
+            .contains(&"eyes_open_best".to_string()));
+    }
+
+    /// Eyes narrowed against the sun with the lids reading open: the label, and
+    /// still no defect.
+    #[test]
+    fn a_squint_with_the_lids_reading_open_is_labelled() {
+        let mut squint = state_frame("squint", 1000.5, Some(0.25), Some(0.1), true);
+        squint
+            .metadata
+            .insert("cull_eye_squint".into(), Value::from(0.82));
+        let groups = cull(
+            vec![
+                state_frame("open", 1000.0, Some(0.04), Some(0.1), true),
+                squint,
+            ],
+            "event",
+        );
+        let squint = photo(&groups[0], "squint");
+        assert!(squint
+            .reason_codes
+            .contains(&"eyes_half_closed".to_string()));
+        assert_eq!(squint.metrics["eye_squint"], 0.82);
+        assert_eq!(squint.metrics["clear_defect"], false);
+        let open = photo(&groups[0], "open");
+        assert!(!open.reason_codes.contains(&"eyes_half_closed".to_string()));
+    }
+
+    /// Degrees from the lens, not clamped to `0..1`, and only where the preset
+    /// asks.
+    #[test]
+    fn looking_away_is_judged_in_degrees_from_the_lens() {
+        let frame = |id, t, off: f64| {
+            let mut r = state_frame(id, t, Some(0.04), Some(0.5), true);
+            r.metadata
+                .insert("cull_gaze_off_lens".into(), Value::from(off));
+            r
+        };
+        let records = || vec![frame("at_lens", 1000.0, 6.0), frame("away", 1000.5, 38.0)];
+        let groups = cull(records(), "portrait");
+        let away = photo(&groups[0], "away");
+        assert!(away.reason_codes.contains(&"looking_away".to_string()));
+        assert_eq!(away.metrics["gaze_off_lens"], 38.0);
+        assert_eq!(away.metrics["clear_defect"], false);
+        let at_lens = photo(&groups[0], "at_lens");
+        assert!(!at_lens.reason_codes.contains(&"looking_away".to_string()));
+
+        let groups = cull(records(), "event");
+        let away = photo(&groups[0], "away");
+        assert!(!away.reason_codes.contains(&"looking_away".to_string()));
+    }
+
+    /// The version's value counts: a reading from before a bump means something
+    /// else, and must not be ranked as if it were today's.
+    #[test]
+    fn a_reading_from_an_older_analysis_counts_as_unanalysed() {
+        let mut stale = state_frame("stale", 1000.0, Some(0.04), Some(0.5), true);
+        stale.metadata.insert(
+            FACE_STATE_VERSION_KEY.into(),
+            Value::from(FACE_STATE_VERSION - 1),
+        );
+        assert!(!face_state_is_current(&stale.metadata));
+        let current = state_frame("current", 1000.5, Some(0.04), Some(0.5), true);
+        assert!(face_state_is_current(&current.metadata));
+        let groups = cull(vec![stale, current], "event");
+        for p in &groups[0].photos {
+            assert!(!p.metrics.contains_key("eye_closed"), "{}", p.photo_id);
+        }
     }
 
     /// A burst with one frame from before the model ran keeps the proxy for

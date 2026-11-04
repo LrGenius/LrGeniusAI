@@ -41,8 +41,11 @@ pub struct FaceMetricsInput {
     pub eye_closed: Option<f64>,
     /// `mouthSmile`, `0..1`; `None` like `eye_closed`.
     pub smile: Option<f64>,
-    /// The strongest `eyeLook*` coefficient, `0..1`; 0 is looking into the lens.
-    pub gaze_away: Option<f64>,
+    /// `eyeSquint`, `0..1`; `None` like `eye_closed`.
+    pub eye_squint: Option<f64>,
+    /// How far from the lens the eyes point, in degrees, head turn included;
+    /// `None` like `eye_closed`.
+    pub gaze_off_lens: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,8 +72,11 @@ pub struct AggregatedFaceMetrics {
     /// The weakest smile among the prominent faces: a group only smiles when
     /// everyone in it does.
     pub cull_smile: Option<f64>,
-    /// The prominent face looking furthest away from the lens.
-    pub cull_gaze_away: Option<f64>,
+    /// The strongest squint among the prominent faces that are not smiling; a
+    /// broad smile narrows the eyes too, and that is not a squint.
+    pub cull_eye_squint: Option<f64>,
+    /// The prominent face looking furthest from the lens, in degrees.
+    pub cull_gaze_off_lens: Option<f64>,
 }
 
 impl AggregatedFaceMetrics {
@@ -90,7 +96,8 @@ impl AggregatedFaceMetrics {
             cull_eye_closed: None,
             cull_eye_state: None,
             cull_smile: None,
-            cull_gaze_away: None,
+            cull_eye_squint: None,
+            cull_gaze_off_lens: None,
         }
     }
 }
@@ -198,7 +205,24 @@ pub fn aggregate_face_culling_metrics(
     };
     let eye_closed_agg = measured(|f| f.eye_closed).reduce(f64::max);
     let smile_agg = measured(|f| f.smile).reduce(f64::min);
-    let gaze_away_agg = measured(|f| f.gaze_away).reduce(f64::max);
+    let eye_squint_agg = prominent
+        .iter()
+        .map(|&i| &faces[i])
+        .filter(|f| f.smile.is_some_and(|s| s < cfg.face_state_squint_max_smile))
+        .filter_map(|f| f.eye_squint.map(unit))
+        .reduce(f64::max);
+    // Degrees, so not through `measured`'s clamp to `0..1`. Shut eyes look
+    // nowhere: their `eyeLook*` is noise (31° on a portrait with the eyes shut),
+    // so such a face abstains.
+    let gaze_off_lens_agg = prominent
+        .iter()
+        .map(|&i| &faces[i])
+        .filter(|f| {
+            f.eye_closed
+                .is_none_or(|c| c < cfg.face_state_closed_threshold)
+        })
+        .filter_map(|f| f.gaze_off_lens)
+        .reduce(f64::max);
     let eye_state_agg = eye_closed_agg.map(|v| {
         if v >= cfg.face_state_closed_threshold {
             "closed"
@@ -236,7 +260,8 @@ pub fn aggregate_face_culling_metrics(
         cull_eye_closed: eye_closed_agg.map(round4),
         cull_eye_state: eye_state_agg,
         cull_smile: smile_agg.map(round4),
-        cull_gaze_away: gaze_away_agg.map(round4),
+        cull_eye_squint: eye_squint_agg.map(round4),
+        cull_gaze_off_lens: gaze_off_lens_agg.map(round4),
     }
 }
 
@@ -270,7 +295,8 @@ mod tests {
             face_focus: Some(0.55),
             eye_closed: Some(0.03),
             smile: Some(0.9),
-            gaze_away: Some(0.1),
+            eye_squint: Some(0.4),
+            gaze_off_lens: Some(4.0),
         }];
         let m = aggregate_face_culling_metrics(&faces, &fm());
         assert_eq!(m.cull_face_count, 1);
@@ -413,14 +439,14 @@ mod tests {
                 area_ratio: 0.20,
                 eye_closed: Some(0.04),
                 smile: Some(0.9),
-                gaze_away: Some(0.1),
+                gaze_off_lens: Some(32.5),
                 ..Default::default()
             },
             FaceMetricsInput {
                 area_ratio: 0.18,
                 eye_closed: Some(0.81),
                 smile: Some(0.6),
-                gaze_away: Some(0.2),
+                gaze_off_lens: Some(40.0),
                 ..Default::default()
             },
             // Turned away: the model could not judge the eyes.
@@ -433,7 +459,7 @@ mod tests {
                 area_ratio: 0.01,
                 eye_closed: Some(0.99),
                 smile: Some(0.0),
-                gaze_away: Some(0.9),
+                gaze_off_lens: Some(70.0),
                 ..Default::default()
             },
         ];
@@ -441,7 +467,7 @@ mod tests {
         assert_eq!(m.cull_eye_closed, Some(0.81));
         assert_eq!(m.cull_eye_state, Some("closed"));
         assert_eq!(m.cull_smile, Some(0.6));
-        assert_eq!(m.cull_gaze_away, Some(0.2));
+        assert_eq!(m.cull_gaze_off_lens, Some(32.5));
 
         let open = aggregate_face_culling_metrics(&faces[..1], &fm());
         assert_eq!(open.cull_eye_state, Some("open"));
@@ -450,6 +476,42 @@ mod tests {
             (unjudged.cull_eye_closed, unjudged.cull_eye_state),
             (None, None)
         );
+    }
+
+    #[test]
+    fn eyes_that_are_shut_do_not_look_away() {
+        let face = |closed, off| FaceMetricsInput {
+            area_ratio: 0.2,
+            eye_closed: Some(closed),
+            gaze_off_lens: Some(off),
+            ..Default::default()
+        };
+        let shut = aggregate_face_culling_metrics(&[face(0.66, 31.0)], &fm());
+        assert_eq!(shut.cull_gaze_off_lens, None);
+        let group = [face(0.66, 31.0), face(0.05, 12.0)];
+        let group = aggregate_face_culling_metrics(&group, &fm());
+        assert_eq!(group.cull_gaze_off_lens, Some(12.0));
+    }
+
+    /// `eyeSquint` runs high on a broad smile, so only an unsmiling face's
+    /// counts as a squint; a face the smile was not read on says nothing.
+    #[test]
+    fn a_squint_only_counts_on_a_face_that_is_not_smiling() {
+        let face = |squint, smile: Option<f64>| FaceMetricsInput {
+            area_ratio: 0.2,
+            eye_squint: Some(squint),
+            smile,
+            ..Default::default()
+        };
+        let smiling = aggregate_face_culling_metrics(&[face(0.9, Some(0.8))], &fm());
+        assert_eq!(smiling.cull_eye_squint, None);
+        let squinting = aggregate_face_culling_metrics(&[face(0.84, Some(0.1))], &fm());
+        assert_eq!(squinting.cull_eye_squint, Some(0.84));
+        let group = [face(0.9, Some(0.8)), face(0.6, Some(0.1))];
+        let group = aggregate_face_culling_metrics(&group, &fm());
+        assert_eq!(group.cull_eye_squint, Some(0.6));
+        let unread = aggregate_face_culling_metrics(&[face(0.9, None)], &fm());
+        assert_eq!(unread.cull_eye_squint, None);
     }
 
     #[test]

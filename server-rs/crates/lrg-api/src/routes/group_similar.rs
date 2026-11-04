@@ -647,9 +647,7 @@ async fn compute_groups(
                 .and_then(Value::as_i64)
                 .unwrap_or(0)
                 > 0
-                && !r
-                    .metadata
-                    .contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY)
+                && !lrg_analysis::grouping::face_state_is_current(&r.metadata)
         })
         .count();
 

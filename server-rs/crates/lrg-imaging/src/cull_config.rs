@@ -206,14 +206,25 @@ pub struct FaceMetricsConfig {
     /// Smallest interocular distance, in pixels of the image analysed, at
     /// which the eye state is judged.
     pub face_state_min_eye_px: f64,
-    /// `eyeBlink` at or above this is closed eyes. On the reference portrait
-    /// an open eye reads 0.03–0.04 and the same landmarks with the lids moved
-    /// shut 0.76–0.81. **A hypothesis until a hand-culled fixture says
-    /// otherwise.**
+    /// `eyeBlink` of the more closed eye at or above this is closed eyes. On
+    /// real photographs, judged by hand, eyes shut read 0.54–0.78 and no open
+    /// eye reached 0.35; a slit narrowed against the sun overlaps the shut
+    /// range, and no coefficient separates the two. **A hypothesis until a
+    /// hand-culled fixture says otherwise.**
     pub face_state_closed_threshold: f64,
     /// `eyeBlink` at or above this, but below the closed threshold, is half
     /// closed: a squint, a mid-blink, a sleepy look.
     pub face_state_half_threshold: f64,
+    /// How many degrees of turn inside the head one unit of `eyeLook*` is
+    /// worth, sideways and up or down. Sideways from people turned away and
+    /// looking back at the lens, where the eyes' reading cancels the head's
+    /// turn at about this; up and down from the portraits' pitch against
+    /// `eyeLookUp/Down`, the rougher of the two.
+    pub face_state_gaze_across_degrees: f64,
+    pub face_state_gaze_up_degrees: f64,
+    /// `eyeSquint` rises on a broad smile as well, so it only counts as a
+    /// squint on a face smiling less than this.
+    pub face_state_squint_max_smile: f64,
 }
 
 impl FaceMetricsConfig {
@@ -250,8 +261,11 @@ impl FaceMetricsConfig {
             face_state_max_yaw_degrees: 60.0,
             face_state_near_eye_yaw_degrees: 35.0,
             face_state_min_eye_px: 24.0,
-            face_state_closed_threshold: 0.6,
+            face_state_closed_threshold: 0.55,
             face_state_half_threshold: 0.35,
+            face_state_gaze_across_degrees: 28.0,
+            face_state_gaze_up_degrees: 20.0,
+            face_state_squint_max_smile: 0.3,
         }
     }
 }

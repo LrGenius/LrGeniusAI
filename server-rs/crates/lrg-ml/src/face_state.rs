@@ -29,6 +29,15 @@
 //! than 80° away, less than half visible, or too small to rescale to the input
 //! without loss. Such a face gets [`EyeState::Unknown`] and abstains from
 //! every decision that reads the eyes.
+//!
+//! Two readings needed real photographs to get right (`examples/
+//! face_state_probe.rs`, about 300 portraits from Wikimedia Commons; numbers in
+//! `docs/wiki/Dev-Image-Culling-Implementation-Plan.md`). `eyeBlink` tops out
+//! well below 1: eyes shut in a photograph read 0.54–0.78 on the more closed
+//! eye, where lids moved shut on the mesh read 0.8. And `eyeLook*` measures the
+//! eye inside the head, so it says nothing about the lens until the head's own
+//! turn is added: someone turned 30° and looking straight at the camera reads
+//! 0.99, someone turned 40° with the eyes following the head 0.14.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -42,7 +51,7 @@ use lrg_imaging::cull_config::FaceMetricsConfig;
 
 /// Stamped on every stored face state (`cull_face_state_model`). Bump when a
 /// change would make new readings incomparable with stored ones.
-pub const MODEL_ID: &str = "mediapipe-facemesh-v2+blendshape-v2/1";
+pub const MODEL_ID: &str = "mediapipe-facemesh-v2+blendshape-v2/2";
 
 pub const MESH_INPUT_SIZE: usize = 256;
 pub const LANDMARK_COUNT: usize = 478;
@@ -122,8 +131,14 @@ pub const BLENDSHAPE_NAMES: [&str; BLENDSHAPE_COUNT] = [
 
 const EYE_BLINK_LEFT: usize = 9;
 const EYE_BLINK_RIGHT: usize = 10;
-const EYE_LOOK_FIRST: usize = 11;
-const EYE_LOOK_LAST: usize = 18;
+const EYE_LOOK_DOWN_LEFT: usize = 11;
+const EYE_LOOK_DOWN_RIGHT: usize = 12;
+const EYE_LOOK_IN_LEFT: usize = 13;
+const EYE_LOOK_IN_RIGHT: usize = 14;
+const EYE_LOOK_OUT_LEFT: usize = 15;
+const EYE_LOOK_OUT_RIGHT: usize = 16;
+const EYE_LOOK_UP_LEFT: usize = 17;
+const EYE_LOOK_UP_RIGHT: usize = 18;
 const EYE_SQUINT_LEFT: usize = 19;
 const EYE_SQUINT_RIGHT: usize = 20;
 const MOUTH_SMILE_LEFT: usize = 44;
@@ -135,8 +150,22 @@ const RIGHT_EYE_OUTER: usize = 33;
 const RIGHT_EYE_INNER: usize = 133;
 const LEFT_EYE_INNER: usize = 362;
 const LEFT_EYE_OUTER: usize = 263;
-const RIGHT_FACE_EDGE: usize = 234;
-const LEFT_FACE_EDGE: usize = 454;
+
+// What the head pose is measured on: landmark pairs spanning the face across
+// (the subject's right to left) and upwards, all on bone rather than on the jaw
+// or the lips, so that an expression barely moves them.
+const POSE_ACROSS: [(usize, usize); 5] = [
+    (RIGHT_EYE_OUTER, LEFT_EYE_OUTER),
+    (RIGHT_EYE_INNER, LEFT_EYE_INNER),
+    (234, 454),
+    (127, 356),
+    (70, 300),
+];
+const POSE_UP: [(usize, usize); 4] = [(195, 10), (197, 151), (195, 9), (6, 10)];
+/// How far the [`POSE_UP`] pairs lean back from the face's own vertical on
+/// MediaPipe's canonical face model (`canonical_face_model.obj`). With the face
+/// symmetric about x, this one angle is all of that model the pose needs.
+const POSE_UP_LEAN_DEGREES: f64 = 16.1844;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FaceStateError {
@@ -199,24 +228,36 @@ pub struct FaceState {
     /// Probability that the region holds a face at all (the mesh's own
     /// presence output, through a sigmoid as MediaPipe applies it).
     pub presence: f64,
-    /// How closed the eyes are, `0..1`: the mean of `eyeBlinkLeft/Right`, or
-    /// only the near eye's when the head is turned so far that the far one is
-    /// hidden ([`FaceMetricsConfig::face_state_near_eye_yaw_degrees`]).
+    /// How closed the eyes are, `0..1`: the more closed of `eyeBlinkLeft/Right`,
+    /// or only the near eye's when the head is turned so far that the far one
+    /// is hidden ([`FaceMetricsConfig::face_state_near_eye_yaw_degrees`]).
     pub eye_closed: f64,
+    /// Mean of `eyeSquintLeft/Right`. High on a broad smile too, so it means a
+    /// squint only without one.
     pub eye_squint: f64,
     /// Mean of `mouthSmileLeft/Right`.
     pub smile: f64,
-    /// The strongest of the eight `eyeLook*` coefficients: 0 is looking into
-    /// the lens.
-    pub gaze_away: f64,
-    /// Head turn in degrees from frontal, from the depth of the two face
-    /// edges; positive turns the subject's left cheek away.
-    pub yaw_degrees: f64,
+    /// How far from the lens the eyes point, in degrees: the head's turn and
+    /// the eyes' own turn inside it ([`gaze_off_lens_degrees`]).
+    pub gaze_off_lens: f64,
+    pub pose: HeadPose,
     pub eye_state: EyeState,
     pub blendshapes: [f32; BLENDSHAPE_COUNT],
     /// The 478 landmarks in pixels of the image analysed (`z` scaled like
     /// `x`).
     pub landmarks: Vec<[f64; 3]>,
+}
+
+/// Which way the head points, in degrees from facing the camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeadPose {
+    /// Positive turns the nose to the right of the image, and the subject's
+    /// left cheek away.
+    pub yaw: f64,
+    /// Positive lifts the chin.
+    pub pitch: f64,
+    /// Positive raises the eye on the right of the image.
+    pub roll: f64,
 }
 
 /// The square, rotated region the mesh model sees, in image pixels.
@@ -336,14 +377,78 @@ fn dist2(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-/// Head turn from frontal, in degrees, from the depth difference of the two
-/// face edges against their horizontal distance.
-pub fn yaw_degrees(landmarks: &[[f64; 3]]) -> f64 {
-    let r = landmarks[RIGHT_FACE_EDGE];
-    let l = landmarks[LEFT_FACE_EDGE];
-    (l[2] - r[2])
-        .atan2((l[0] - r[0]).abs().max(1e-6))
-        .to_degrees()
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn along(a: [f64; 3], scale: f64) -> [f64; 3] {
+    [a[0] * scale, a[1] * scale, a[2] * scale]
+}
+
+fn plus(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn normalized(a: [f64; 3]) -> [f64; 3] {
+    along(a, 1.0 / dot(a, a).sqrt().max(1e-9))
+}
+
+/// The head's pose from a frame of its landmarks: an axis across the face, one
+/// up it, and the one straight out of it. On about 280 real faces this stays
+/// within 1° of a full Procrustes fit of all 468 points to MediaPipe's canonical
+/// face model on yaw and roll, and within 2° on pitch, at no linear algebra
+/// dependency.
+pub fn head_pose(landmarks: &[[f64; 3]]) -> HeadPose {
+    // Into the canonical model's axes: x right, y up, z towards the viewer.
+    let at = |i: usize| {
+        let p = landmarks[i];
+        [p[0], -p[1], -p[2]]
+    };
+    let span = |pairs: &[(usize, usize)]| {
+        pairs.iter().fold([0.0; 3], |sum, &(from, to)| {
+            plus(sum, plus(at(to), along(at(from), -1.0)))
+        })
+    };
+    let across = normalized(span(&POSE_ACROSS));
+    let up = span(&POSE_UP);
+    let up = normalized(plus(up, along(across, -dot(across, up))));
+    let out = [
+        across[1] * up[2] - across[2] * up[1],
+        across[2] * up[0] - across[0] * up[2],
+        across[0] * up[1] - across[1] * up[0],
+    ];
+    let (sin, cos) = POSE_UP_LEAN_DEGREES.to_radians().sin_cos();
+    let forward = plus(along(up, -sin), along(out, cos));
+    HeadPose {
+        yaw: forward[0].atan2(forward[2]).to_degrees(),
+        pitch: forward[1].atan2(forward[0].hypot(forward[2])).to_degrees(),
+        roll: across[1].atan2(across[0]).to_degrees(),
+    }
+}
+
+/// How far from the lens the eyes point, in degrees: the head's turn plus the
+/// eyes' own turn inside it, read off `eyeLook*`. Someone with the head turned
+/// who looks back at the camera comes out near 0; the eyes' turn cancels the
+/// head's.
+///
+/// The up-and-down part is the weaker of the two: `eyeLookUp` barely moves when
+/// a lowered head looks up at the lens, so such a face reads 15–20° off it.
+pub fn gaze_off_lens_degrees(
+    pose: HeadPose,
+    blendshapes: &[f32; BLENDSHAPE_COUNT],
+    cfg: &FaceMetricsConfig,
+) -> f64 {
+    let b = |i: usize| blendshapes[i] as f64;
+    // Towards the subject's left, the right of the image.
+    let across = (b(EYE_LOOK_OUT_LEFT) - b(EYE_LOOK_IN_LEFT) + b(EYE_LOOK_IN_RIGHT)
+        - b(EYE_LOOK_OUT_RIGHT))
+        / 2.0;
+    let up = (b(EYE_LOOK_UP_LEFT) + b(EYE_LOOK_UP_RIGHT)
+        - b(EYE_LOOK_DOWN_LEFT)
+        - b(EYE_LOOK_DOWN_RIGHT))
+        / 2.0;
+    (pose.yaw + cfg.face_state_gaze_across_degrees * across)
+        .hypot(pose.pitch + cfg.face_state_gaze_up_degrees * up)
 }
 
 /// Turns the raw model outputs into [`FaceState`]. `eye_px` is the
@@ -356,10 +461,12 @@ pub fn derive_state(
     cfg: &FaceMetricsConfig,
 ) -> FaceState {
     let b = |i: usize| blendshapes[i] as f64;
-    let yaw = yaw_degrees(&landmarks);
+    let pose = head_pose(&landmarks);
     // Turned far enough that one eye is hidden: only the near one says
-    // anything. The near eye is the wider one in the image.
-    let eye_closed = if yaw.abs() >= cfg.face_state_near_eye_yaw_degrees {
+    // anything. The near eye is the wider one in the image. Otherwise the more
+    // closed eye speaks: the mean let one shut eye hide behind an open one, and
+    // read 0.56 on eyes shut that the worse eye put at 0.65.
+    let eye_closed = if pose.yaw.abs() >= cfg.face_state_near_eye_yaw_degrees {
         let right_w = dist2(landmarks[RIGHT_EYE_OUTER], landmarks[RIGHT_EYE_INNER]);
         let left_w = dist2(landmarks[LEFT_EYE_OUTER], landmarks[LEFT_EYE_INNER]);
         // MediaPipe's "left" blendshapes are the subject's left eye.
@@ -369,15 +476,13 @@ pub fn derive_state(
             b(EYE_BLINK_RIGHT)
         }
     } else {
-        (b(EYE_BLINK_LEFT) + b(EYE_BLINK_RIGHT)) / 2.0
+        b(EYE_BLINK_LEFT).max(b(EYE_BLINK_RIGHT))
     };
     let eye_squint = (b(EYE_SQUINT_LEFT) + b(EYE_SQUINT_RIGHT)) / 2.0;
     let smile = (b(MOUTH_SMILE_LEFT) + b(MOUTH_SMILE_RIGHT)) / 2.0;
-    let gaze_away = (EYE_LOOK_FIRST..=EYE_LOOK_LAST)
-        .map(b)
-        .fold(0.0f64, f64::max);
+    let gaze_off_lens = gaze_off_lens_degrees(pose, &blendshapes, cfg);
     let eye_state = if presence < cfg.face_state_min_presence
-        || yaw.abs() > cfg.face_state_max_yaw_degrees
+        || pose.yaw.abs() > cfg.face_state_max_yaw_degrees
         || eye_px < cfg.face_state_min_eye_px
     {
         EyeState::Unknown
@@ -393,8 +498,8 @@ pub fn derive_state(
         eye_closed: eye_closed.clamp(0.0, 1.0),
         eye_squint: eye_squint.clamp(0.0, 1.0),
         smile: smile.clamp(0.0, 1.0),
-        gaze_away: gaze_away.clamp(0.0, 1.0),
-        yaw_degrees: yaw,
+        gaze_off_lens,
+        pose,
         eye_state,
         blendshapes,
         landmarks,
@@ -708,15 +813,84 @@ mod tests {
         assert!((p[0][2] - 16.0).abs() < 1e-5, "{}", p[0][2]);
     }
 
-    fn frontal_landmarks() -> Vec<[f64; 3]> {
+    /// The points [`head_pose`] reads, from MediaPipe's canonical face model,
+    /// turned by the given pose and placed in the image as the mesh would.
+    fn posed_landmarks(yaw: f64, pitch: f64, roll: f64) -> Vec<[f64; 3]> {
+        const CANONICAL: [(usize, [f64; 3]); 16] = [
+            (6, [0.0, 2.473255, 5.788627]),
+            (9, [0.0, 4.885979, 5.385258]),
+            (10, [0.0, 8.261778, 4.481535]),
+            (33, [-4.445859, 2.663991, 3.173422]),
+            (70, [-5.720968, 4.254584, 2.830852]),
+            (127, [-7.743095, 2.364999, -2.005167]),
+            (133, [-1.856432, 2.585245, 3.757904]),
+            (151, [0.0, 6.54539, 5.027311]),
+            (195, [0.0, 1.059413, 6.774605]),
+            (197, [0.0, 1.728369, 6.31675]),
+            (234, [-7.664182, 0.673132, -2.435867]),
+            (263, [4.445859, 2.663991, 3.173422]),
+            (300, [5.720968, 4.254584, 2.830852]),
+            (356, [7.743095, 2.364999, -2.005167]),
+            (362, [1.856432, 2.585245, 3.757904]),
+            (454, [7.664182, 0.673132, -2.435867]),
+        ];
+        let (sy, cy) = yaw.to_radians().sin_cos();
+        let (sp, cp) = pitch.to_radians().sin_cos();
+        let (sr, cr) = roll.to_radians().sin_cos();
         let mut lm = vec![[0.0f64; 3]; LANDMARK_COUNT];
-        lm[RIGHT_EYE_OUTER] = [100.0, 100.0, 0.0];
-        lm[RIGHT_EYE_INNER] = [130.0, 100.0, 0.0];
-        lm[LEFT_EYE_INNER] = [170.0, 100.0, 0.0];
-        lm[LEFT_EYE_OUTER] = [200.0, 100.0, 0.0];
-        lm[RIGHT_FACE_EDGE] = [70.0, 130.0, 0.0];
-        lm[LEFT_FACE_EDGE] = [230.0, 130.0, 0.0];
+        for (i, [x, y, z]) in CANONICAL {
+            // Pitch about x, so +z goes towards +y; then yaw about y, so +z goes
+            // towards +x; then roll about the viewing axis. The order
+            // [`head_pose`] reads them back in.
+            let (y, z) = (y * cp + z * sp, z * cp - y * sp);
+            let (x, z) = (x * cy + z * sy, z * cy - x * sy);
+            let (x, y) = (x * cr - y * sr, x * sr + y * cr);
+            // Back into the image: y down, z away from the viewer.
+            lm[i] = [200.0 + 10.0 * x, 200.0 - 10.0 * y, -10.0 * z];
+        }
         lm
+    }
+
+    fn frontal_landmarks() -> Vec<[f64; 3]> {
+        posed_landmarks(0.0, 0.0, 0.0)
+    }
+
+    #[test]
+    fn the_head_pose_recovers_a_known_pose() {
+        for (yaw, pitch, roll) in [
+            (0.0, 0.0, 0.0),
+            (30.0, 0.0, 0.0),
+            (-30.0, 0.0, 0.0),
+            (0.0, 20.0, 0.0),
+            (0.0, -20.0, 0.0),
+            (0.0, 0.0, 15.0),
+            (-40.0, -15.0, 0.0),
+        ] {
+            let got = head_pose(&posed_landmarks(yaw, pitch, roll));
+            assert!((got.yaw - yaw).abs() < 0.1, "yaw {yaw}: {got:?}");
+            assert!((got.pitch - pitch).abs() < 0.1, "pitch {pitch}: {got:?}");
+            assert!((got.roll - roll).abs() < 0.1, "roll {roll}: {got:?}");
+        }
+    }
+
+    /// Which way each sign points, against the geometry and not the formula: a
+    /// nose moved right, a chin lifted, the right-hand eye raised.
+    #[test]
+    fn the_head_pose_signs_mean_what_they_say() {
+        let turned = posed_landmarks(30.0, 0.0, 0.0);
+        let (nose, left, right) = (turned[195], turned[454], turned[234]);
+        assert!(nose[0] > (left[0] + right[0]) / 2.0, "nose to image right");
+        assert!(left[2] > right[2], "the subject's left cheek goes away");
+
+        let lifted = posed_landmarks(0.0, 20.0, 0.0);
+        let (level, up) = (frontal_landmarks()[195][1], lifted[195][1]);
+        assert!(up < level, "the nose rises in the image: {up} {level}");
+
+        let rolled = posed_landmarks(0.0, 0.0, 15.0);
+        assert!(
+            rolled[LEFT_EYE_OUTER][1] < rolled[RIGHT_EYE_OUTER][1],
+            "the eye on the right of the image is the higher one"
+        );
     }
 
     fn shapes(blink: (f32, f32), smile: f32) -> [f32; BLENDSHAPE_COUNT] {
@@ -735,7 +909,22 @@ mod tests {
         assert_eq!(state((0.04, 0.03)).eye_state, EyeState::Open);
         assert_eq!(state((0.45, 0.40)).eye_state, EyeState::Half);
         assert_eq!(state((0.81, 0.76)).eye_state, EyeState::Closed);
-        assert!((state((0.81, 0.76)).eye_closed - 0.785).abs() < 1e-6);
+        assert!((state((0.81, 0.76)).eye_closed - 0.81).abs() < 1e-6);
+    }
+
+    /// One eye shut on a frontal face: the mean would have read this as open.
+    #[test]
+    fn the_more_closed_eye_speaks_for_a_frontal_face() {
+        let c = cfg();
+        let s = derive_state(
+            0.99,
+            shapes((0.62, 0.11), 0.0),
+            frontal_landmarks(),
+            100.0,
+            &c,
+        );
+        assert!((s.eye_closed - 0.62).abs() < 1e-6);
+        assert_eq!(s.eye_state, EyeState::Closed);
     }
 
     #[test]
@@ -747,40 +936,81 @@ mod tests {
         // Eyes too small in the image.
         let s = derive_state(0.99, shapes((0.9, 0.9), 0.0), frontal_landmarks(), 8.0, &c);
         assert_eq!(s.eye_state, EyeState::Unknown);
-        // Turned almost to profile: the left edge far deeper than the right.
-        let mut lm = frontal_landmarks();
-        lm[LEFT_FACE_EDGE][2] = 1000.0;
+        // Turned almost to profile.
+        let lm = posed_landmarks(70.0, 0.0, 0.0);
         let s = derive_state(0.99, shapes((0.9, 0.9), 0.0), lm, 100.0, &c);
-        assert!(s.yaw_degrees > 80.0, "{}", s.yaw_degrees);
+        assert!(s.pose.yaw > 60.0, "{:?}", s.pose);
         assert_eq!(s.eye_state, EyeState::Unknown);
     }
 
     #[test]
     fn a_turned_head_is_judged_on_the_near_eye() {
         let c = cfg();
-        // About 40 degrees turned, the subject's left eye (on the right of
-        // the image) seen wide, the right one foreshortened and reading closed.
-        let mut lm = frontal_landmarks();
-        lm[LEFT_FACE_EDGE][2] = 134.0;
-        lm[RIGHT_EYE_INNER] = [112.0, 100.0, 0.0];
-        let s = derive_state(0.99, shapes((0.05, 0.9), 0.0), lm, 100.0, &c);
-        assert!(
-            s.yaw_degrees > 35.0 && s.yaw_degrees < 60.0,
-            "{}",
-            s.yaw_degrees
-        );
+        // 40 degrees to the right of the image: the subject's right eye, on
+        // the left of the image, is the near one and seen wide; the far one is
+        // foreshortened and reads closed.
+        let lm = posed_landmarks(40.0, 0.0, 0.0);
+        let s = derive_state(0.99, shapes((0.9, 0.05), 0.0), lm, 100.0, &c);
         assert_eq!(s.eye_state, EyeState::Open);
         assert!((s.eye_closed - 0.05).abs() < 1e-6);
     }
 
+    fn eyes_turned(towards_image_right: f32, up: f32) -> [f32; BLENDSHAPE_COUNT] {
+        let mut b = [0f32; BLENDSHAPE_COUNT];
+        if towards_image_right >= 0.0 {
+            b[EYE_LOOK_OUT_LEFT] = towards_image_right;
+            b[EYE_LOOK_IN_RIGHT] = towards_image_right;
+        } else {
+            b[EYE_LOOK_IN_LEFT] = -towards_image_right;
+            b[EYE_LOOK_OUT_RIGHT] = -towards_image_right;
+        }
+        if up >= 0.0 {
+            b[EYE_LOOK_UP_LEFT] = up;
+            b[EYE_LOOK_UP_RIGHT] = up;
+        } else {
+            b[EYE_LOOK_DOWN_LEFT] = -up;
+            b[EYE_LOOK_DOWN_RIGHT] = -up;
+        }
+        b
+    }
+
+    /// The portrait pose that used to be labelled "looking away": the head
+    /// turned, the eyes back at the camera. Real readings from the probe.
     #[test]
-    fn smile_and_gaze_come_from_their_blendshapes() {
+    fn eyes_that_come_back_to_the_lens_cancel_the_head_turn() {
         let c = cfg();
-        let mut b = shapes((0.0, 0.0), 0.9);
-        b[EYE_LOOK_FIRST + 3] = 0.7;
-        let s = derive_state(0.99, b, frontal_landmarks(), 100.0, &c);
+        let gaze = |yaw, eyes| {
+            derive_state(0.99, eyes, posed_landmarks(yaw, 0.0, 0.0), 100.0, &c).gaze_off_lens
+        };
+        assert!(gaze(-29.0, eyes_turned(0.99, 0.0)) < 5.0);
+        assert!(gaze(25.0, eyes_turned(-0.84, 0.0)) < 5.0);
+        // The head turned and the eyes following it: that is looking away,
+        // though the eyes themselves are centred.
+        assert!(gaze(39.0, eyes_turned(0.0, 0.0)) > 35.0);
+        // A frontal head with the eyes off to the side is looking away too.
+        assert!(gaze(0.0, eyes_turned(0.9, 0.0)) > 20.0);
+        // The same turn the other way round does not cancel, it adds up.
+        assert!(gaze(25.0, eyes_turned(0.5, 0.0)) > 35.0);
+    }
+
+    #[test]
+    fn eyes_looking_down_from_a_level_head_are_off_the_lens() {
+        let c = cfg();
+        let s = derive_state(0.99, eyes_turned(0.0, -0.8), frontal_landmarks(), 100.0, &c);
+        assert!(s.gaze_off_lens > 15.0, "{}", s.gaze_off_lens);
+    }
+
+    #[test]
+    fn the_smile_comes_from_its_blendshapes() {
+        let c = cfg();
+        let s = derive_state(
+            0.99,
+            shapes((0.0, 0.0), 0.9),
+            frontal_landmarks(),
+            100.0,
+            &c,
+        );
         assert!((s.smile - 0.9).abs() < 1e-6);
-        assert!((s.gaze_away - 0.7).abs() < 1e-6);
     }
 
     #[test]
