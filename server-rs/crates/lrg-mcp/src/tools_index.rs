@@ -3,6 +3,7 @@
 //! Lightroom (scoped to the open catalog when it is connected), because the
 //! index lives in the backend.
 
+use lrg_analysis::face_expression::ExpressionFilter;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -55,6 +56,18 @@ pub struct SearchArgs {
     /// it is not a verdict. Photos without a score are left out.
     #[serde(default)]
     pub min_aesthetic: Option<f64>,
+    /// Only photos where everyone who matters in the frame has their eyes open.
+    /// Photos without faces are left out.
+    #[serde(default)]
+    pub eyes_open: Option<bool>,
+    /// Only photos where everyone who matters in the frame is smiling. Read off
+    /// the face, so more reliable than asking for "smiling" in the query.
+    #[serde(default)]
+    pub smiling: Option<bool>,
+    /// Only photos where everyone who matters in the frame is looking at the
+    /// camera, head turn and eyes together.
+    #[serde(default)]
+    pub looking_at_camera: Option<bool>,
     /// Only photos of these genres: landscape, portrait, street, wildlife,
     /// sport, event, architecture, macro, food, still_life, astro, concert,
     /// aerial or other.
@@ -139,6 +152,17 @@ fn search_body(args: &SearchArgs) -> Result<(Value, String), String> {
         body["min_aesthetic"] = json!(min);
         parts.push(format!("aesthetic ≥ {min}"));
     }
+    let expression = ExpressionFilter {
+        eyes_open: args.eyes_open.unwrap_or(false),
+        smiling: args.smiling.unwrap_or(false),
+        looking_at_camera: args.looking_at_camera.unwrap_or(false),
+    };
+    if !expression.is_empty() {
+        body["eyes_open"] = json!(expression.eyes_open);
+        body["smiling"] = json!(expression.smiling);
+        body["looking_at_camera"] = json!(expression.looking_at_camera);
+        parts.push(expression.describe());
+    }
     if let Some(genres) = &args.genres {
         let known = search::genre_ids();
         let mut wanted: Vec<String> = Vec::new();
@@ -163,6 +187,30 @@ fn search_body(args: &SearchArgs) -> Result<(Value, String), String> {
         }
     }
     Ok((body, parts.join(", ")))
+}
+
+/// The query string for `/v1/faces/persons/{id}/photos`, empty when it asks
+/// nothing.
+fn person_photos_query(filter: &ExpressionFilter, best: Option<usize>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (key, on) in [
+        ("eyes_open", filter.eyes_open),
+        ("smiling", filter.smiling),
+        ("looking_at_camera", filter.looking_at_camera),
+    ] {
+        if on {
+            parts.push(format!("{key}=true"));
+        }
+    }
+    if let Some(best) = best {
+        parts.push("sort=best".to_string());
+        parts.push(format!("limit={best}"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", parts.join("&"))
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -215,6 +263,21 @@ pub struct PeopleArgs {
     /// "any" (default) or "all".
     #[serde(default, rename = "match")]
     pub match_mode: Option<PeopleMatch>,
+    /// Only photos where the person named has their eyes open. Read per
+    /// person, so with several people each of them is asked.
+    #[serde(default)]
+    pub eyes_open: Option<bool>,
+    /// Only photos where the person named is smiling.
+    #[serde(default)]
+    pub smiling: Option<bool>,
+    /// Only photos where the person named is looking at the camera, head turn
+    /// and eyes together.
+    #[serde(default)]
+    pub looking_at_camera: Option<bool>,
+    /// Only each person's N best portraits, best first: eyes open, facing the
+    /// camera, sharp.
+    #[serde(default)]
+    pub best: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -589,11 +652,29 @@ impl LrGeniusMcp {
         }
 
         let all = matches!(args.match_mode, Some(PeopleMatch::All));
+        let filter = ExpressionFilter {
+            eyes_open: args.eyes_open.unwrap_or(false),
+            smiling: args.smiling.unwrap_or(false),
+            looking_at_camera: args.looking_at_camera.unwrap_or(false),
+        };
+        let query = person_photos_query(&filter, args.best);
         let mut combined: Option<Vec<String>> = None;
-        for (person_id, _) in &resolved {
-            let path = format!("/v1/faces/persons/{}/photos", encode(person_id));
+        let mut not_judged = 0u64;
+        let mut warnings: Vec<String> = Vec::new();
+        for (person_id, name) in &resolved {
+            let path = format!("/v1/faces/persons/{}/photos{query}", encode(person_id));
             let ids = match self.api().get(&path).await {
-                Ok(r) => string_list(&r["photo_ids"]),
+                Ok(r) => {
+                    // Faces are not stored per catalog, so this can count photos
+                    // outside the open one, unlike the set below.
+                    not_judged += r["not_judged"].as_u64().unwrap_or(0);
+                    warnings.extend(
+                        string_list(&r["warnings"])
+                            .into_iter()
+                            .map(|w| format!("{name}: {w}")),
+                    );
+                    string_list(&r["photo_ids"])
+                }
                 Err(e) => return Ok(tool_error(format!("Could not load photos: {e}"))),
             };
             combined = Some(match combined {
@@ -626,12 +707,23 @@ impl LrGeniusMcp {
         }
 
         let names: Vec<&str> = resolved.iter().map(|(_, n)| n.as_str()).collect();
-        let label = format!(
+        let mut label = format!(
             "photos of {}",
             names.join(if all { " and " } else { " or " })
         );
+        if !filter.is_empty() {
+            label = format!("{label}, {}", filter.describe());
+        }
+        if let Some(best) = args.best {
+            label = format!("best {best} {label}");
+        }
         let set = self.sets().create(label, ids);
-        Ok(json_result(self.set_answer(&set, json!({})).await))
+        let extra = if warnings.is_empty() {
+            json!({})
+        } else {
+            json!({"not_judged": not_judged, "warnings": warnings})
+        };
+        Ok(json_result(self.set_answer(&set, extra).await))
     }
 
     /// Culling: groups bursts, duplicates and near-identical frames, ranks
@@ -911,6 +1003,40 @@ mod tests {
             let err = search_body(&args(json!({"sort": sort}))).unwrap_err();
             assert!(err.contains("needs one"), "{sort}: {err}");
         }
+    }
+
+    #[test]
+    fn the_faces_can_be_asked_about_in_a_search() {
+        let (body, label) = search_body(&args(
+            json!({"query": "beach", "smiling": true, "looking_at_camera": true}),
+        ))
+        .unwrap();
+        assert_eq!(body["smiling"], true);
+        assert_eq!(body["looking_at_camera"], true);
+        assert_eq!(body["eyes_open"], false);
+        assert!(
+            label.contains("smiling and looking at the camera"),
+            "{label}"
+        );
+
+        let (body, _) = search_body(&args(json!({"query": "beach"}))).unwrap();
+        assert!(body.get("smiling").is_none());
+    }
+
+    #[test]
+    fn a_person_s_photos_ask_only_what_was_asked() {
+        let none = ExpressionFilter::default();
+        assert_eq!(person_photos_query(&none, None), "");
+        let some = ExpressionFilter {
+            eyes_open: true,
+            looking_at_camera: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            person_photos_query(&some, None),
+            "?eyes_open=true&looking_at_camera=true"
+        );
+        assert_eq!(person_photos_query(&none, Some(20)), "?sort=best&limit=20");
     }
 
     #[test]

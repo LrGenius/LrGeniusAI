@@ -223,6 +223,14 @@ blink.
 - **The smile counts in Portrait and Event.** Between otherwise equal frames,
   the one where everyone smiles more wins, and its explanation says
   "best smile in group".
+- **The mouth, in Portrait and Event.** A frame with the mouth caught open mid-word
+  says so when another frame of the burst has it closed. A note only; a broad
+  smile or a laugh does not count.
+- **The light on the face.** The explanation names a face darker than in another
+  frame of the burst, harder light across the face than in another frame, and skin
+  that is blown out. Not at **Street** or **Sports**. These are notes and move no
+  score. A face is only ever compared with itself in another frame, never with a
+  standard, because skin differs by several stops between people.
 - **Looking away means from the lens.** **Portrait** notes when someone looks
   away from the camera. Head and eyes count together: a head turned to the side
   with the eyes back on the camera is looking at it, and a head turned with the
@@ -288,7 +296,9 @@ For each photo, the backend stores culling-related fields such as:
   `cull_face_focus` (focus on the eyes and on the face, measured on the
   full-size original; absent when the faces were too small to judge), and
   `cull_eye_state` / `cull_eye_closed`, `cull_smile`, `cull_eye_squint`,
-  `cull_gaze_off_lens` (from the face model; absent when no face could be judged)
+  `cull_gaze_off_lens`, `cull_mouth_open`, `cull_face_luminance`,
+  `cull_face_across_stops`, `cull_face_blown` (from the face model; absent when no
+  face could be judged)
 - aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
   photo's **Aesthetic score** from the AestheticSigLIP model, stored at
   indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`

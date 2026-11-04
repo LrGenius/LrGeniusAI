@@ -10,6 +10,7 @@ base64 = "0.23"
 chrono.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 log.workspace = true
+lrg-analysis.workspace = true
 lrg-api.workspace = true
 lrg-common.workspace = true
 lrg-store.workspace = true

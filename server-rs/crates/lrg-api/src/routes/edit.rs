@@ -611,11 +611,19 @@ pub(crate) async fn generate_edit_recipe_for_photo(
             // switched off must not first be scaled and then discarded, which
             // would spend budget on a field that never reaches the photo and
             // shrink the ones that do.
-            response.guardrail_reasons = crate::edit_budget::measure_and_apply(
+            let applied = crate::edit_budget::measure_and_apply(
                 &mut recipe,
                 image_bytes,
                 &capture_conditions(options, filename, image_bytes),
+                crate::edit_budget::FaceReaders::when_downloaded(&state.face, &state.face_state),
             );
+            response.guardrail_reasons = applied.reasons;
+            if let Some(msg) = applied.warning {
+                response.warning = Some(match response.warning.take() {
+                    Some(existing) => format!("{existing}\n{msg}"),
+                    None => msg,
+                });
+            }
             if !response.guardrail_reasons.is_empty() {
                 log::info!(
                     "Photo {photo_id}: edit constrained by the frame ({}).",
@@ -813,13 +821,16 @@ pub(crate) fn success_payload(
 /// a newer backend should show nothing rather than a bare identifier.
 fn guardrail_explanations(codes: &[String]) -> Vec<String> {
     use lrg_analysis::edit_guardrails::GuardrailReason::*;
-    const ALL: [lrg_analysis::edit_guardrails::GuardrailReason; 6] = [
+    const ALL: [lrg_analysis::edit_guardrails::GuardrailReason; 9] = [
         HardLightNoAddedContrast,
         NoTonalHeadroom,
         FlatLightContrastAllowed,
         HighlightsUnrecoverable,
         HighIsoShadowsLimited,
         ShadowsAlreadyClipped,
+        FaceHardLight,
+        FaceBelowSurroundings,
+        FaceBlown,
     ];
     codes
         .iter()

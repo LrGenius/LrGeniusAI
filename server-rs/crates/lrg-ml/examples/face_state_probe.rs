@@ -4,7 +4,10 @@
 //!
 //! ```bash
 //! cargo run --release -p lrg-ml --example face_state_probe -- a.jpg b.jpg > faces.jsonl
+//! cargo run --release -p lrg-ml --example face_state_probe -- --embed a.jpg > faces.jsonl
 //! ```
+//!
+//! `--embed` adds each face's identity embedding, for scoring clustering.
 //!
 //! Needs the YuNet detector and the two face state models, found where the
 //! server finds them (`LRG_FACE_MESH_ONNX` / `LRG_FACE_BLENDSHAPES_ONNX`, else
@@ -23,8 +26,15 @@ fn main() {
     assert!(faces.is_cached(), "face detection models not found");
     assert!(state.is_cached(), "face state models not found");
 
-    for path in std::env::args().skip(1) {
-        let img = match image::open(&path) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let embed = args.iter().any(|a| a == "--embed");
+    let pass = if embed {
+        FacePass::Full
+    } else {
+        FacePass::QualityOnly
+    };
+    for path in args.iter().filter(|a| *a != "--embed") {
+        let img = match image::open(path) {
             Ok(img) => img.to_rgb8(),
             Err(e) => {
                 eprintln!("{path}: {e}");
@@ -33,7 +43,7 @@ fn main() {
         };
         let (w, h) = (img.width() as usize, img.height() as usize);
         let rgb = img.into_raw();
-        let detected = match faces.detect_faces(&rgb, w, h, &cfg, FacePass::QualityOnly) {
+        let detected = match faces.detect_faces(&rgb, w, h, &cfg, pass) {
             Ok(detected) => detected,
             Err(e) => {
                 eprintln!("{path}: {e}");
@@ -80,6 +90,15 @@ fn main() {
                     "yaw": st.pose.yaw,
                     "pitch": st.pose.pitch,
                     "roll": st.pose.roll,
+                    "light": st.light.map(|l| json!({
+                        "luminance": l.luminance,
+                        "against_surround_stops": l.against_surround_stops,
+                        "across_face_stops": l.across_face_stops,
+                        "blown": l.blown,
+                    })),
+                    "sharpness": face.sharpness,
+                    "occlusion": face.occlusion,
+                    "embedding": embed.then(|| face.embedding.clone()),
                     "blendshapes": shapes,
                     "landmarks": st.landmarks,
                 })

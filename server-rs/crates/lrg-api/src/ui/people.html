@@ -355,6 +355,25 @@
           <option value="union">photos with any selected person</option>
         </select>
       </label>
+      <span
+        class="inline"
+        title="Read off each person's face. Faces too small or turned too far to judge are left out, and Lightroom says how many."
+      >
+        Only
+        <label class="inline"><input id="only-eyes-open" type="checkbox" /> eyes open</label>
+        <label class="inline"><input id="only-smiling" type="checkbox" /> smiling</label>
+        <label class="inline"
+          ><input id="only-looking" type="checkbox" /> looking at the camera</label
+        >
+      </span>
+      <label class="inline" title="Each person's best portraits: eyes open, facing the camera, sharp">
+        Photos
+        <select id="photo-limit">
+          <option value="">all</option>
+          <option value="20">best 20</option>
+          <option value="50">best 50</option>
+        </select>
+      </label>
       <button id="show-in-library" class="primary">Show in Lightroom</button>
       <button id="merge-selected">Merge into one person…</button>
       <button id="clear-selection">Clear selection</button>
@@ -376,6 +395,7 @@
               <option value="outlier">least like this person first</option>
               <option value="typical">most like this person first</option>
               <option value="quality">best quality first</option>
+              <option value="portrait">best portrait first</option>
             </select>
           </label>
           <button id="detail-close">Close</button>
@@ -1569,6 +1589,10 @@
             person_ids: ids,
             person_names: names,
             match_mode: ids.length > 1 ? el("match-mode").value : "union",
+            eyes_open: el("only-eyes-open").checked,
+            smiling: el("only-smiling").checked,
+            looking_at_camera: el("only-looking").checked,
+            best: Number(el("photo-limit").value) || null,
           });
           if (data.plugin_connected) {
             state.textContent = "Sent — switch to Lightroom.";

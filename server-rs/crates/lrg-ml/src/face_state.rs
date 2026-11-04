@@ -143,6 +143,9 @@ const EYE_SQUINT_LEFT: usize = 19;
 const EYE_SQUINT_RIGHT: usize = 20;
 const MOUTH_SMILE_LEFT: usize = 44;
 const MOUTH_SMILE_RIGHT: usize = 45;
+const JAW_OPEN: usize = 25;
+const MOUTH_LOWER_DOWN_LEFT: usize = 34;
+const MOUTH_LOWER_DOWN_RIGHT: usize = 35;
 
 // Mesh landmarks. "Right" and "left" are the subject's, as in MediaPipe: the
 // right eye is the one on the left of the image of a frontal face.
@@ -166,6 +169,26 @@ const POSE_UP: [(usize, usize); 4] = [(195, 10), (197, 151), (195, 9), (6, 10)];
 /// MediaPipe's canonical face model (`canonical_face_model.obj`). With the face
 /// symmetric about x, this one angle is all of that model the pose needs.
 const POSE_UP_LEAN_DEGREES: f64 = 16.1844;
+
+// Skin to read the light on, clear of the eyes, the brows and a beard: the
+// middle of the forehead, and high on each cheek.
+const LIGHT_FOREHEAD: usize = 151;
+const LIGHT_RIGHT_CHEEK: [usize; 2] = [50, 205];
+const LIGHT_LEFT_CHEEK: [usize; 2] = [280, 425];
+/// A patch's radius against the distance between the eyes.
+const LIGHT_PATCH_RATIO: f64 = 0.1;
+/// The most samples a side of a patch gets, so a large face costs what a small
+/// one does.
+const LIGHT_PATCH_MAX_SAMPLES_ACROSS: f64 = 32.0;
+/// About how many pixels of the frame are sampled for its surroundings.
+const LIGHT_SURROUND_SAMPLES: f64 = 40_000.0;
+/// Below this share of the frame outside the faces there are no surroundings
+/// worth comparing with.
+const LIGHT_MIN_SURROUND_SHARE: f64 = 0.2;
+/// The middle of a pixel's three channels at or past this is blown. Not the top
+/// one: warm light clips red on skin that still holds its detail, and reading
+/// that as blown called a third of well-exposed faces so.
+const LIGHT_BLOWN: u8 = 245;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FaceStateError {
@@ -237,15 +260,182 @@ pub struct FaceState {
     pub eye_squint: f64,
     /// Mean of `mouthSmileLeft/Right`.
     pub smile: f64,
+    /// How far the mouth is open, `0..1`: the larger of `jawOpen` and the mean
+    /// `mouthLowerDown`, which between them catch a dropped jaw and lips parted
+    /// on a word. Not `mouthPucker`, which reads up to 0.99 on full lips at rest,
+    /// nor `mouthFunnel`, which barely moves on photographs.
+    pub mouth_open: f64,
     /// How far from the lens the eyes point, in degrees: the head's turn and
     /// the eyes' own turn inside it ([`gaze_off_lens_degrees`]).
     pub gaze_off_lens: f64,
     pub pose: HeadPose,
     pub eye_state: EyeState,
+    /// `None` when no skin patch fell inside the image, and always from
+    /// [`derive_state`], which sees no pixels.
+    pub light: Option<FaceLight>,
     pub blendshapes: [f32; BLENDSHAPE_COUNT],
     /// The 478 landmarks in pixels of the image analysed (`z` scaled like
     /// `x`).
     pub landmarks: Vec<[f64; 3]>,
+}
+
+/// How the light falls on a face, read on its skin.
+///
+/// Everything here but [`Self::luminance`] compares the face with itself or
+/// with its own frame, and that one is only ever compared with the same face in
+/// another frame. Skin ranges over several stops between people, so an absolute
+/// reading would call dark skin underexposed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceLight {
+    /// Median linear luminance of the skin, `0..1`.
+    pub luminance: f64,
+    /// Against the median of the frame outside the faces, in stops: negative
+    /// is a face darker than its surroundings. `None` when the faces fill the
+    /// frame.
+    pub against_surround_stops: Option<f64>,
+    /// Between the two cheeks, in stops. `None` when the head is turned so far
+    /// that only one is seen.
+    pub across_face_stops: Option<f64>,
+    /// Share of the skin samples blown out, `0..1`.
+    pub blown: f64,
+}
+
+fn linear_channel(c: u8) -> f64 {
+    let v = c as f64 / 255.0;
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_luminance(rgb: &[u8], i: usize) -> f64 {
+    0.2126 * linear_channel(rgb[i])
+        + 0.7152 * linear_channel(rgb[i + 1])
+        + 0.0722 * linear_channel(rgb[i + 2])
+}
+
+fn median(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mid = values.len() / 2;
+    let (_, m, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
+    Some(*m)
+}
+
+fn stops(a: f64, b: f64) -> f64 {
+    (a.max(1e-4) / b.max(1e-4)).log2()
+}
+
+/// The median luminance of `rgb` outside `faces`' boxes grown 1.5×, or `None`
+/// when too little of the frame is left.
+fn surround_luminance(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+    faces: &[FaceGeometry],
+) -> Option<f64> {
+    let step = (((width * height) as f64 / LIGHT_SURROUND_SAMPLES).sqrt() as usize).max(1);
+    let boxes: Vec<[f64; 4]> = faces
+        .iter()
+        .map(|f| {
+            let (cx, cy) = ((f.bbox[0] + f.bbox[2]) / 2.0, (f.bbox[1] + f.bbox[3]) / 2.0);
+            let half = (f.bbox[2] - f.bbox[0]).max(f.bbox[3] - f.bbox[1]) * 0.75;
+            [cx - half, cy - half, cx + half, cy + half]
+        })
+        .collect();
+    let (mut samples, mut seen) = (Vec::new(), 0usize);
+    for y in (0..height).step_by(step) {
+        for x in (0..width).step_by(step) {
+            seen += 1;
+            let (px, py) = (x as f64, y as f64);
+            if boxes
+                .iter()
+                .any(|b| px >= b[0] && px < b[2] && py >= b[1] && py < b[3])
+            {
+                continue;
+            }
+            samples.push(linear_luminance(rgb, (y * width + x) * 3));
+        }
+    }
+    if (samples.len() as f64) < seen as f64 * LIGHT_MIN_SURROUND_SHARE {
+        return None;
+    }
+    median(&mut samples)
+}
+
+/// Reads [`FaceLight`] off the skin patches of one face. `None` when none of
+/// them falls inside the image.
+fn face_light(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+    landmarks: &[[f64; 3]],
+    pose: HeadPose,
+    surround: Option<f64>,
+    cfg: &FaceMetricsConfig,
+) -> Option<FaceLight> {
+    let radius = dist2(landmarks[RIGHT_EYE_OUTER], landmarks[LEFT_EYE_OUTER]) * LIGHT_PATCH_RATIO;
+    let step = ((radius * 2.0 / LIGHT_PATCH_MAX_SAMPLES_ACROSS) as usize).max(1);
+    let r = radius.ceil() as i64;
+    // Each sample's luminance, and whether it is blown.
+    let read = |points: &[usize]| {
+        let mut samples: Vec<(f64, bool)> = Vec::new();
+        for &point in points {
+            let (cx, cy) = (landmarks[point][0] as i64, landmarks[point][1] as i64);
+            for dy in (-r..=r).step_by(step) {
+                for dx in (-r..=r).step_by(step) {
+                    let (x, y) = (cx + dx, cy + dy);
+                    if dx * dx + dy * dy > r * r
+                        || x < 0
+                        || y < 0
+                        || x >= width as i64
+                        || y >= height as i64
+                    {
+                        continue;
+                    }
+                    let i = (y as usize * width + x as usize) * 3;
+                    let (a, b, c) = (rgb[i], rgb[i + 1], rgb[i + 2]);
+                    let middle = a.max(b).min(a.min(b).max(c));
+                    samples.push((linear_luminance(rgb, i), middle >= LIGHT_BLOWN));
+                }
+            }
+        }
+        samples
+    };
+    let luminances = |samples: &[(f64, bool)]| samples.iter().map(|s| s.0).collect::<Vec<f64>>();
+    let forehead = read(&[LIGHT_FOREHEAD]);
+    let right = read(&LIGHT_RIGHT_CHEEK);
+    let left = read(&LIGHT_LEFT_CHEEK);
+    // Turned far enough and the far cheek is on its way out of sight, so only
+    // the near one is skin worth reading. Positive yaw turns the left cheek away.
+    let both_cheeks = pose.yaw.abs() < cfg.face_state_near_eye_yaw_degrees;
+    let across_face_stops = if both_cheeks {
+        match (
+            median(&mut luminances(&right)),
+            median(&mut luminances(&left)),
+        ) {
+            (Some(a), Some(b)) => Some(stops(a, b).abs()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let mut skin = forehead;
+    if both_cheeks || pose.yaw < 0.0 {
+        skin.extend(left);
+    }
+    if both_cheeks || pose.yaw > 0.0 {
+        skin.extend(right);
+    }
+    let luminance = median(&mut luminances(&skin))?;
+    Some(FaceLight {
+        luminance,
+        against_surround_stops: surround.map(|s| stops(luminance, s)),
+        across_face_stops,
+        blown: skin.iter().filter(|s| s.1).count() as f64 / skin.len() as f64,
+    })
 }
 
 /// Which way the head points, in degrees from facing the camera.
@@ -480,6 +670,7 @@ pub fn derive_state(
     };
     let eye_squint = (b(EYE_SQUINT_LEFT) + b(EYE_SQUINT_RIGHT)) / 2.0;
     let smile = (b(MOUTH_SMILE_LEFT) + b(MOUTH_SMILE_RIGHT)) / 2.0;
+    let mouth_open = b(JAW_OPEN).max((b(MOUTH_LOWER_DOWN_LEFT) + b(MOUTH_LOWER_DOWN_RIGHT)) / 2.0);
     let gaze_off_lens = gaze_off_lens_degrees(pose, &blendshapes, cfg);
     let eye_state = if presence < cfg.face_state_min_presence
         || pose.yaw.abs() > cfg.face_state_max_yaw_degrees
@@ -498,9 +689,11 @@ pub fn derive_state(
         eye_closed: eye_closed.clamp(0.0, 1.0),
         eye_squint: eye_squint.clamp(0.0, 1.0),
         smile: smile.clamp(0.0, 1.0),
+        mouth_open: mouth_open.clamp(0.0, 1.0),
         gaze_off_lens,
         pose,
         eye_state,
+        light: None,
         blendshapes,
         landmarks,
     }
@@ -693,6 +886,7 @@ impl FaceStateModel {
         let mut guard = self.loaded.lock().unwrap();
         self.load_into(&mut guard)?;
         let loaded = guard.as_mut().ok_or(FaceStateError::NotLoaded)?;
+        let surround = surround_luminance(rgb, width, height, faces);
         let mut out = Vec::with_capacity(faces.len());
         for face in faces {
             let side = (face.bbox[2] - face.bbox[0]).min(face.bbox[3] - face.bbox[1]);
@@ -708,13 +902,17 @@ impl FaceStateModel {
             let (landmarks, presence) = Self::run_mesh(loaded, rgb, width, height, &second)?;
             let blendshapes = Self::run_blendshapes(loaded, &landmarks)?;
             let eye_px = dist2(landmarks[RIGHT_EYE_OUTER], landmarks[LEFT_EYE_OUTER]);
-            out.push(Some(derive_state(
-                presence,
-                blendshapes,
-                landmarks,
-                eye_px,
+            let mut state = derive_state(presence, blendshapes, landmarks, eye_px, cfg);
+            state.light = face_light(
+                rgb,
+                width,
+                height,
+                &state.landmarks,
+                state.pose,
+                surround,
                 cfg,
-            )));
+            );
+            out.push(Some(state));
         }
         self.last_used_unix.store(now_unix(), Ordering::Relaxed);
         Ok(out)
@@ -998,6 +1196,138 @@ mod tests {
         let c = cfg();
         let s = derive_state(0.99, eyes_turned(0.0, -0.8), frontal_landmarks(), 100.0, &c);
         assert!(s.gaze_off_lens > 15.0, "{}", s.gaze_off_lens);
+    }
+
+    #[test]
+    fn the_mouth_reads_a_dropped_jaw_and_parted_lips_alike() {
+        let c = cfg();
+        let open = |set: &[(usize, f32)]| {
+            let mut b = [0f32; BLENDSHAPE_COUNT];
+            for (i, v) in set {
+                b[*i] = *v;
+            }
+            derive_state(0.99, b, frontal_landmarks(), 100.0, &c).mouth_open
+        };
+        assert!((open(&[(JAW_OPEN, 0.52)]) - 0.52).abs() < 1e-6);
+        let lips = [(MOUTH_LOWER_DOWN_LEFT, 0.7), (MOUTH_LOWER_DOWN_RIGHT, 0.5)];
+        assert!((open(&lips) - 0.6).abs() < 1e-6);
+        assert_eq!(open(&[]), 0.0);
+    }
+
+    fn flat_grey(width: usize, height: usize, value: u8) -> Vec<u8> {
+        vec![value; width * height * 3]
+    }
+
+    /// Paints the disk around each given landmark, as a light would a cheek.
+    fn lit(rgb: &mut [u8], width: usize, lm: &[[f64; 3]], points: &[usize], value: u8) {
+        for &point in points {
+            let (cx, cy) = (lm[point][0] as i64, lm[point][1] as i64);
+            for y in (cy - 14)..(cy + 14) {
+                for x in (cx - 14)..(cx + 14) {
+                    let i = (y as usize * width + x as usize) * 3;
+                    rgb[i..i + 3].fill(value);
+                }
+            }
+        }
+    }
+
+    /// The points [`face_light`] reads, placed on a level head.
+    fn light_landmarks() -> Vec<[f64; 3]> {
+        let mut lm = frontal_landmarks();
+        lm[LIGHT_FOREHEAD] = [200.0, 120.0, 0.0];
+        lm[LIGHT_RIGHT_CHEEK[0]] = [150.0, 210.0, 0.0];
+        lm[LIGHT_RIGHT_CHEEK[1]] = [150.0, 240.0, 0.0];
+        lm[LIGHT_LEFT_CHEEK[0]] = [250.0, 210.0, 0.0];
+        lm[LIGHT_LEFT_CHEEK[1]] = [250.0, 240.0, 0.0];
+        lm
+    }
+
+    fn level() -> HeadPose {
+        HeadPose {
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+        }
+    }
+
+    #[test]
+    fn light_across_a_face_is_read_cheek_against_cheek() {
+        let c = cfg();
+        let (w, h) = (400usize, 400usize);
+        let mut rgb = flat_grey(w, h, 128);
+        let lm = light_landmarks();
+        // A stop in linear light is about 1.36x in sRGB around here: 188 and
+        // 100 are 2 stops apart, within what rounding leaves of it.
+        lit(&mut rgb, w, &lm, &LIGHT_RIGHT_CHEEK, 188);
+        lit(&mut rgb, w, &lm, &LIGHT_LEFT_CHEEK, 100);
+        let light = face_light(&rgb, w, h, &lm, level(), None, &c).unwrap();
+        let across = light.across_face_stops.unwrap();
+        assert!((across - 2.0).abs() < 0.2, "{across}");
+        assert_eq!(light.against_surround_stops, None);
+        assert_eq!(light.blown, 0.0);
+    }
+
+    #[test]
+    fn a_turned_head_has_no_reading_across_it_and_is_read_on_the_near_cheek() {
+        let c = cfg();
+        let (w, h) = (400usize, 400usize);
+        let mut rgb = flat_grey(w, h, 128);
+        let lm = light_landmarks();
+        lit(&mut rgb, w, &lm, &LIGHT_RIGHT_CHEEK, 200);
+        lit(&mut rgb, w, &lm, &[LIGHT_FOREHEAD], 200);
+        // The left cheek is going out of sight, whatever it reads.
+        lit(&mut rgb, w, &lm, &LIGHT_LEFT_CHEEK, 10);
+        let pose = HeadPose {
+            yaw: 45.0,
+            ..level()
+        };
+        let light = face_light(&rgb, w, h, &lm, pose, None, &c).unwrap();
+        assert_eq!(light.across_face_stops, None);
+        assert!((light.luminance - linear_channel(200)).abs() < 0.01);
+    }
+
+    /// Warm light clips the red channel on skin that still holds its detail; it
+    /// takes two channels gone to call it blown.
+    #[test]
+    fn red_alone_at_the_top_is_not_blown_skin() {
+        let c = cfg();
+        let (w, h) = (400usize, 400usize);
+        let lm = light_landmarks();
+        let mut warm = flat_grey(w, h, 128);
+        for px in warm.as_chunks_mut::<3>().0 {
+            *px = [255, 200, 170];
+        }
+        let light = face_light(&warm, w, h, &lm, level(), None, &c).unwrap();
+        assert_eq!(light.blown, 0.0);
+
+        let mut white = flat_grey(w, h, 128);
+        for px in white.as_chunks_mut::<3>().0 {
+            *px = [255, 250, 240];
+        }
+        let light = face_light(&white, w, h, &lm, level(), None, &c).unwrap();
+        assert_eq!(light.blown, 1.0);
+    }
+
+    #[test]
+    fn the_surroundings_leave_the_faces_out_and_give_up_when_they_fill_the_frame() {
+        let (w, h) = (400usize, 400usize);
+        let mut rgb = flat_grey(w, h, 200);
+        for y in 150..250 {
+            for x in 150..250 {
+                let i = (y * w + x) * 3;
+                rgb[i..i + 3].fill(30);
+            }
+        }
+        let geometry = |bbox: [f64; 4]| FaceGeometry {
+            bbox,
+            kps: [[0.0; 2]; 5],
+        };
+        let small = [geometry([150.0, 150.0, 250.0, 250.0])];
+        let surround = surround_luminance(&rgb, w, h, &small).unwrap();
+        assert!((surround - linear_channel(200)).abs() < 0.01, "{surround}");
+
+        let filling = [geometry([0.0, 0.0, 400.0, 400.0])];
+        assert_eq!(surround_luminance(&rgb, w, h, &filling), None);
     }
 
     #[test]

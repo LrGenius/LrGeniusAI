@@ -35,7 +35,8 @@ does not keep it, so open People from Lightroom each time.
 
 A grid of persons from your indexed photos. Each card has:
 
-- A thumbnail of the representative face.
+- A thumbnail of their best portrait: eyes open and facing the camera, where the
+  model could read that.
 - A name field, or *Unassigned faces* for the faces not yet grouped into a
   person.
 - The number of photos this person appears in and how many faces are in the
@@ -117,8 +118,9 @@ actually right.
 Each face shows how much it looks like the rest of the group. A face further
 from the group than the clustering threshold is marked as an outlier, and a
 face that failed the quality gate says which measurement was bad. The **sort**
-control offers *least like this person first*, *most like this person first*
-and *best quality first* — the first of those is the fast way to spot a face
+control offers *least like this person first*, *most like this person first*,
+*best quality first* and *best portrait first* (eyes open, facing the camera,
+sharp) — the first of those is the fast way to spot a face
 that does not belong, so it is what the view opens on.
 
 Click faces to select them (shift-click for a range), then:
@@ -153,8 +155,16 @@ several people selected, the dropdown decides what you get:
   together (the default)
 - **photos with any selected person** — the union
 
+**Only** narrows that down by what the person's face shows: *eyes open*,
+*smiling*, *looking at the camera*. With several people selected, each of them is
+asked. **Photos** takes only each person's best 20 or 50 portraits instead of all
+of them. A photo whose face could not be judged is left out, and Lightroom says how
+many that was and what to do about it: their faces were indexed before the eye and
+expression model was downloaded. Running **Analyze & Index Photos** with face
+detection reads them, and keeps the people you named.
+
 The collection goes into the `People` collection set and is named after the
-selected people plus a timestamp. People without a name appear in it once, as
+selected people, what you asked for, and a timestamp. People without a name appear in it once, as
 "Unnamed person"; a name list longer than 100 characters becomes
 `People (<count>)`.
 

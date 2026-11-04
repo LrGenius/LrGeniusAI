@@ -1245,7 +1245,49 @@ thresholds, judged by eye, then 292 from a disjoint sample to check them):
   smile cannot be read from `cheekSquint`. `jawOpen`, `mouthPucker`, `browDown` and
   `mouthPress` do move.
 
-What this does not solve: a slit narrowed against the sun overlaps eyes shut (0.5
+### Mouth and the light on the face
+
+Both went in as labels and move no score: there is still no hand-culled shoot to say
+what they are worth. Measured the same way, on 692 usable faces with the second
+sample and 190 photographs of people speaking added.
+
+- **The mouth is `jawOpen` and `mouthLowerDown`.** `mouthPucker` reads up to 0.99 on
+  full lips at rest and `mouthFunnel` barely moves, so neither is used. From 0.2 the
+  mouth is visibly open on nearly every face judged: 10% of people speaking, 0.6% of
+  portraits. A laugh is open too, so only a face smiling under 0.4 counts.
+- **Blown means two channels.** The top channel at 250 flagged 16% of faces, most of
+  them warm light clipping red on skin that holds its detail. The middle channel at
+  245 leaves 2.6% over 0.05, where surgical masks and white headbands still sit, and
+  from 0.15 what is left is blown skin.
+- **Light across the face holds up.** It compares a face with itself, so it does not
+  care about skin. 10% of faces reach 2 stops, nearly all real side light; hair across
+  a cheek is the main false reading.
+- **A face against its surroundings does not mean what it looks like.** The lowest
+  readings are almost all people with dark skin in front of something bright, and
+  correctly exposed. So it never produces a label. Its only use is to hold back added
+  contrast in AI Edit, which costs that face nothing, and that explanation says what
+  was measured rather than calling the frame backlit.
+- **The same goes for luminance alone**, which is only ever compared with the same
+  people in another frame of the group.
+
+### People, and what clustering did not need
+
+`lrg_analysis::face_expression` answers what People and search ask: eyes open,
+smiling (`mouthSmile` from 0.5, where most faces judged by eye show a smile and a
+snarl can still reach it), looking at the camera (within 20°, so a face between that
+and the 25° of `looking_away` is claimed by neither), and a person's best portrait.
+
+Keeping turned heads out of cluster formation looked like the obvious next step and
+is not in: `examples/face_cluster_eval.rs`, on 370 faces of 18 public figures from
+Commons, scores it the same at every limit from 60° to 30°, because the occlusion gate
+already holds those faces back. That gate holds back over half of them, which looked
+wrong, but raising it from 0.55 lowers the score at every threshold tried. Recall in
+this sample is low (0.29) whichever way, with few photographs per person, so it says
+what these two changes do and not how good clustering is.
+
+### What this does not solve
+
+A slit narrowed against the sun overlaps eyes shut (0.5
 to 0.65), and neither `eyeSquint` nor the lid gap in the landmarks separates them;
 sunglasses read as closed (0.47–0.74); a head lying on its side reads open with the
 eyes shut. The relative rules catch the first two inside a burst, since every frame

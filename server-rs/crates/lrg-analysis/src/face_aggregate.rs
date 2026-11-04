@@ -46,6 +46,13 @@ pub struct FaceMetricsInput {
     /// How far from the lens the eyes point, in degrees, head turn included;
     /// `None` like `eye_closed`.
     pub gaze_off_lens: Option<f64>,
+    /// How far the mouth is open, `0..1`; `None` like `eye_closed`.
+    pub mouth_open: Option<f64>,
+    /// The light on the skin (`lrg_ml::face_state::FaceLight`); `None` like
+    /// `eye_closed`, or when no skin patch fell inside the image.
+    pub luminance: Option<f64>,
+    pub across_face_stops: Option<f64>,
+    pub blown: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +84,15 @@ pub struct AggregatedFaceMetrics {
     pub cull_eye_squint: Option<f64>,
     /// The prominent face looking furthest from the lens, in degrees.
     pub cull_gaze_off_lens: Option<f64>,
+    /// The most open mouth among the prominent faces not smiling.
+    pub cull_mouth_open: Option<f64>,
+    /// The darkest prominent face. Only ever compared with this same frame's
+    /// siblings: skin ranges over several stops between people.
+    pub cull_face_luminance: Option<f64>,
+    /// The hardest light across a prominent face, in stops.
+    pub cull_face_across_stops: Option<f64>,
+    /// The largest share of a prominent face's skin that is blown out.
+    pub cull_face_blown: Option<f64>,
 }
 
 impl AggregatedFaceMetrics {
@@ -98,6 +114,10 @@ impl AggregatedFaceMetrics {
             cull_smile: None,
             cull_eye_squint: None,
             cull_gaze_off_lens: None,
+            cull_mouth_open: None,
+            cull_face_luminance: None,
+            cull_face_across_stops: None,
+            cull_face_blown: None,
         }
     }
 }
@@ -223,6 +243,19 @@ pub fn aggregate_face_culling_metrics(
         })
         .filter_map(|f| f.gaze_off_lens)
         .reduce(f64::max);
+    let mouth_open_agg = prominent
+        .iter()
+        .map(|&i| &faces[i])
+        .filter(|f| f.smile.is_some_and(|s| s < cfg.face_state_mouth_max_smile))
+        .filter_map(|f| f.mouth_open.map(unit))
+        .reduce(f64::max);
+    let luminance_agg = measured(|f| f.luminance).reduce(f64::min);
+    let blown_agg = measured(|f| f.blown).reduce(f64::max);
+    // Stops, so not through `measured`'s clamp to `0..1`.
+    let across_agg = prominent
+        .iter()
+        .filter_map(|&i| faces[i].across_face_stops)
+        .reduce(f64::max);
     let eye_state_agg = eye_closed_agg.map(|v| {
         if v >= cfg.face_state_closed_threshold {
             "closed"
@@ -262,6 +295,10 @@ pub fn aggregate_face_culling_metrics(
         cull_smile: smile_agg.map(round4),
         cull_eye_squint: eye_squint_agg.map(round4),
         cull_gaze_off_lens: gaze_off_lens_agg.map(round4),
+        cull_mouth_open: mouth_open_agg.map(round4),
+        cull_face_luminance: luminance_agg.map(round4),
+        cull_face_across_stops: across_agg.map(round4),
+        cull_face_blown: blown_agg.map(round4),
     }
 }
 
@@ -297,6 +334,10 @@ mod tests {
             smile: Some(0.9),
             eye_squint: Some(0.4),
             gaze_off_lens: Some(4.0),
+            mouth_open: Some(0.02),
+            luminance: Some(0.3),
+            across_face_stops: Some(0.4),
+            blown: Some(0.0),
         }];
         let m = aggregate_face_culling_metrics(&faces, &fm());
         assert_eq!(m.cull_face_count, 1);
@@ -476,6 +517,37 @@ mod tests {
             (unjudged.cull_eye_closed, unjudged.cull_eye_state),
             (None, None)
         );
+    }
+
+    /// A laugh is open too, and not what the mouth reading is after.
+    #[test]
+    fn an_open_mouth_only_counts_on_a_face_that_is_not_smiling() {
+        let face = |open, smile| FaceMetricsInput {
+            area_ratio: 0.2,
+            mouth_open: Some(open),
+            smile: Some(smile),
+            ..Default::default()
+        };
+        let laugh = aggregate_face_culling_metrics(&[face(0.6, 0.8)], &fm());
+        assert_eq!(laugh.cull_mouth_open, None);
+        let word = aggregate_face_culling_metrics(&[face(0.3, 0.1)], &fm());
+        assert_eq!(word.cull_mouth_open, Some(0.3));
+    }
+
+    #[test]
+    fn the_light_takes_the_worst_prominent_face() {
+        let face = |luminance, across, blown| FaceMetricsInput {
+            area_ratio: 0.2,
+            luminance: Some(luminance),
+            across_face_stops: Some(across),
+            blown: Some(blown),
+            ..Default::default()
+        };
+        let group = [face(0.4, 0.5, 0.0), face(0.2, 3.1, 0.3)];
+        let m = aggregate_face_culling_metrics(&group, &fm());
+        assert_eq!(m.cull_face_luminance, Some(0.2));
+        assert_eq!(m.cull_face_across_stops, Some(3.1));
+        assert_eq!(m.cull_face_blown, Some(0.3));
     }
 
     #[test]

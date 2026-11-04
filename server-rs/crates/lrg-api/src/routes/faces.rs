@@ -31,6 +31,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use lrg_analysis::face_cluster::{self, ClusterParams, FaceInput, QualityGate};
+use lrg_analysis::face_expression::{portrait_score, ExpressionFilter, Verdict};
 use lrg_analysis::{clustering, persons};
 use lrg_store::{StoreRecord, FACE_TABLE};
 
@@ -318,6 +319,16 @@ fn photo_of(meta: &Map<String, Value>) -> &str {
 
 fn number_at(meta: &Map<String, Value>, key: &str) -> f64 {
     meta.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+/// Of two faces of one person on one photo, the answer that counts for the
+/// photo: a yes settles it, and only when no face answers is it unknown.
+fn best_verdict(a: Verdict, b: Verdict) -> Verdict {
+    match (a, b) {
+        (Verdict::Yes, _) | (_, Verdict::Yes) => Verdict::Yes,
+        (Verdict::Unknown, _) | (_, Verdict::Unknown) => Verdict::Unknown,
+        _ => Verdict::No,
+    }
 }
 
 /// The same, but keeping "the row does not have this" distinct from "the row
@@ -758,7 +769,7 @@ async fn list_persons(State(state): State<Arc<AppState>>) -> Response {
             entry.manual_count += 1;
         }
         entry.photo_ids.insert(photo_of(meta).to_string());
-        let quality = number_at(meta, "face_det_score") + number_at(meta, "face_sharpness");
+        let quality = portrait_score(meta);
         if entry.thumbnail.is_none() || quality > entry.thumbnail_quality {
             if let Some(thumb) = meta
                 .get("thumbnail")
@@ -815,7 +826,13 @@ async fn person_thumbnail(
     let thumb = match store.scan_meta(FACE_TABLE).await {
         Ok(rows) => rows
             .into_iter()
-            .find(|(_, m)| person_of(m) == person_id)
+            .filter(|(_, m)| person_of(m) == person_id)
+            .filter(|(_, m)| {
+                m.get("thumbnail")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| !t.is_empty())
+            })
+            .max_by(|(_, a), (_, b)| portrait_score(a).total_cmp(&portrait_score(b)))
             .and_then(|(_, m)| {
                 m.get("thumbnail")
                     .and_then(Value::as_str)
@@ -947,9 +964,24 @@ async fn confirm_person_faces(state: &AppState, person_id: &str) -> Result<usize
     Ok(count)
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PersonPhotosQuery {
+    /// Only photos where this person's eyes are open.
+    eyes_open: bool,
+    /// Only photos where this person is smiling.
+    smiling: bool,
+    /// Only photos where this person is looking at the camera.
+    looking_at_camera: bool,
+    /// `best`: this person's best portrait first. Otherwise by photo id.
+    sort: Option<String>,
+    limit: Option<usize>,
+}
+
 async fn person_photos(
     State(state): State<Arc<AppState>>,
     UrlPath(person_id): UrlPath<String>,
+    Query(params): Query<PersonPhotosQuery>,
 ) -> Response {
     log::info!(
         "Get photos for person request received for person_id={}",
@@ -972,26 +1004,64 @@ async fn person_photos(
         }
     };
     let wants_unassigned = is_unassigned(&person_id);
-    let mut photo_ids: Vec<String> = rows
+    let filter = ExpressionFilter {
+        eyes_open: params.eyes_open,
+        smiling: params.smiling,
+        looking_at_camera: params.looking_at_camera,
+    };
+    // A person can be on a photo twice (a mirror, a poster): the photo counts
+    // when any of those faces answers yes, and scores as the best of them.
+    let mut photos: HashMap<String, (Verdict, f64)> = HashMap::new();
+    for (_, m) in &rows {
+        let mine = if wants_unassigned {
+            is_unassigned(person_of(m))
+        } else {
+            person_of(m) == person_id
+        };
+        let photo = photo_of(m);
+        if !mine || photo.is_empty() {
+            continue;
+        }
+        let (verdict, score) = (filter.judge_face(m), portrait_score(m));
+        let entry = photos.entry(photo.to_string()).or_insert((verdict, score));
+        entry.0 = best_verdict(entry.0, verdict);
+        entry.1 = entry.1.max(score);
+    }
+    let not_judged = photos
+        .values()
+        .filter(|(v, _)| *v == Verdict::Unknown)
+        .count();
+    let mut matching: Vec<(String, f64)> = photos
         .into_iter()
-        .filter(|(_, m)| {
-            if wants_unassigned {
-                is_unassigned(person_of(m))
-            } else {
-                person_of(m) == person_id
-            }
-        })
-        .map(|(_, m)| photo_of(&m).to_string())
-        .filter(|id| !id.is_empty())
-        .collect::<HashSet<_>>()
-        .into_iter()
+        .filter(|(_, (v, _))| *v == Verdict::Yes)
+        .map(|(id, (_, score))| (id, score))
         .collect();
-    photo_ids.sort();
+    if params.sort.as_deref() == Some("best") {
+        matching.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    } else {
+        matching.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    if let Some(limit) = params.limit {
+        matching.truncate(limit);
+    }
+    let photo_ids: Vec<String> = matching.into_iter().map(|(id, _)| id).collect();
+    let mut warnings = Vec::new();
+    if not_judged > 0 {
+        warnings.push(format!(
+            "{not_judged} photo(s) of this person could not be judged for {} and were left out. A \
+             face too small or turned too far cannot be read. One indexed before the eye and \
+             expression model was on disk can: run 'Analyze & Index Photos' with face detection \
+             on those photos, after \"Download AI models\" in Plug-in Manager.",
+            filter.describe()
+        ));
+    }
     Json(json!({
         "status": "ok",
         "person_id": person_id,
         "photo_ids": photo_ids.clone(),
         "photo_uuids": photo_ids,
+        "not_judged": not_judged,
+        "warnings": warnings,
     }))
     .into_response()
 }
@@ -1003,7 +1073,8 @@ struct PersonFacesQuery {
     limit: Option<usize>,
     offset: Option<usize>,
     /// `typical` (closest to the person's average face first), `outlier` (the
-    /// reverse — where wrong faces surface), or `quality`.
+    /// reverse — where wrong faces surface), `quality`, or `portrait` (the best
+    /// picture of them first: eyes open, facing the camera).
     sort: Option<String>,
 }
 
@@ -1115,6 +1186,9 @@ async fn person_faces(
             + 0.1 * (number_at(m, "face_area_ratio") / 0.12).clamp(0.0, 1.0)
     };
     match sort.as_str() {
+        "portrait" => {
+            mine.sort_by(|(_, a), (_, b)| portrait_score(b).total_cmp(&portrait_score(a)))
+        }
         "quality" => mine.sort_by(|(_, a), (_, b)| {
             quality_score(b)
                 .partial_cmp(&quality_score(a))

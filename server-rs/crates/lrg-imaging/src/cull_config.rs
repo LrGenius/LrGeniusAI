@@ -225,6 +225,9 @@ pub struct FaceMetricsConfig {
     /// `eyeSquint` rises on a broad smile as well, so it only counts as a
     /// squint on a face smiling less than this.
     pub face_state_squint_max_smile: f64,
+    /// Likewise an open mouth is a laugh on a face smiling more than this, and
+    /// only something to mention below it.
+    pub face_state_mouth_max_smile: f64,
 }
 
 impl FaceMetricsConfig {
@@ -266,6 +269,7 @@ impl FaceMetricsConfig {
             face_state_gaze_across_degrees: 28.0,
             face_state_gaze_up_degrees: 20.0,
             face_state_squint_max_smile: 0.3,
+            face_state_mouth_max_smile: 0.4,
         }
     }
 }

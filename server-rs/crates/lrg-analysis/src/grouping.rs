@@ -254,6 +254,13 @@ struct Scored<'a> {
     cull_smile: Option<f64>,
     cull_eye_squint: Option<f64>,
     cull_gaze_off_lens: Option<f64>,
+    /// Labels only, until a hand-culled shoot says what they are worth to the
+    /// ranking: `cull_mouth_open`, `cull_face_luminance`,
+    /// `cull_face_across_stops` (in stops) and `cull_face_blown`.
+    cull_mouth_open: Option<f64>,
+    cull_face_luminance: Option<f64>,
+    cull_face_across_stops: Option<f64>,
+    cull_face_blown: Option<f64>,
     /// The photo went through the face state pass (`cull_face_state_version`
     /// is stored), whether or not its faces could be judged.
     state_measured: bool,
@@ -382,6 +389,10 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             "eyes_half_closed" => "eyes half closed or squinting".to_string(),
             "looking_away" => "looking away from the camera".to_string(),
             "best_smile" => "best smile in group".to_string(),
+            "mouth_open" => "mouth open, caught mid-word — a sibling has it closed".to_string(),
+            "face_darker" => "the face is darker than in a sibling frame".to_string(),
+            "face_blown" => "the skin on the face is blown out".to_string(),
+            "face_hard_light" => "harder light across the face than in a sibling frame".to_string(),
             "near_duplicate_weaker" => "weaker duplicate or burst alternative".to_string(),
             other => other.replace('_', " "),
         }
@@ -556,6 +567,7 @@ fn rank_group_records(
             );
             // Degrees, so not through `read`'s clamp to `0..1`.
             let cull_gaze_off_lens = m.get("cull_gaze_off_lens").and_then(Value::as_f64);
+            let cull_face_across_stops = m.get("cull_face_across_stops").and_then(Value::as_f64);
             let state_measured = face_state_is_current(m);
             // Injected by the API layer only when the preset asks the gate
             // question, so an absent score never lifts a blink.
@@ -592,6 +604,10 @@ fn rank_group_records(
                 cull_smile,
                 cull_eye_squint,
                 cull_gaze_off_lens,
+                cull_mouth_open: read("cull_mouth_open"),
+                cull_face_luminance: read("cull_face_luminance"),
+                cull_face_across_stops,
+                cull_face_blown: read("cull_face_blown"),
                 state_measured,
                 half_closed: false,
                 hard_defect: false,
@@ -692,6 +708,20 @@ fn rank_group_records(
             .filter(|s| s.cull_face_count > 0)
             .all(|s| s.cull_smile.is_some());
     let best_smile = smile_values.iter().cloned().reduce(f64::max);
+    // The group's best face readings for the labels below, which only ever say
+    // that one frame is worse than a sibling.
+    let least_open_mouth = scored
+        .iter()
+        .filter_map(|s| s.cull_mouth_open)
+        .reduce(f64::min);
+    let brightest_face = scored
+        .iter()
+        .filter_map(|s| s.cull_face_luminance)
+        .reduce(f64::max);
+    let softest_light = scored
+        .iter()
+        .filter_map(|s| s.cull_face_across_stops)
+        .reduce(f64::min);
 
     // The group's best face readings, for the relative defect rules: a proxy
     // that reads "closed" on every frame of a burst says nothing about any one
@@ -1110,6 +1140,39 @@ fn rank_group_records(
             {
                 reason_codes.push("best_smile".to_string());
             }
+            if rk.reason_mouth_open_threshold > 0.0
+                && !item.eyes_closed_intended
+                && item.cull_mouth_open.is_some_and(|open| {
+                    open >= rk.reason_mouth_open_threshold
+                        && least_open_mouth.is_some_and(|l| open >= l + rk.reason_mouth_open_delta)
+                })
+            {
+                reason_codes.push("mouth_open".to_string());
+            }
+            if rk.reason_face_darker_stops > 0.0
+                && item.cull_face_luminance.is_some_and(|l| {
+                    brightest_face.is_some_and(|b| {
+                        (b.max(1e-4) / l.max(1e-4)).log2() >= rk.reason_face_darker_stops
+                    })
+                })
+            {
+                reason_codes.push("face_darker".to_string());
+            }
+            if rk.reason_face_blown_threshold > 0.0
+                && item
+                    .cull_face_blown
+                    .is_some_and(|b| b >= rk.reason_face_blown_threshold)
+            {
+                reason_codes.push("face_blown".to_string());
+            }
+            if rk.reason_face_hard_light_stops > 0.0
+                && item.cull_face_across_stops.is_some_and(|a| {
+                    a >= rk.reason_face_hard_light_stops
+                        && softest_light.is_some_and(|s| a >= s + rk.reason_face_hard_light_delta)
+                })
+            {
+                reason_codes.push("face_hard_light".to_string());
+            }
         }
         // Explains the pick a technical reading would not have made. Emitted
         // for the winner only, and only when the moment is what carried it — a
@@ -1254,6 +1317,10 @@ fn rank_group_records(
                 ("smile", item.cull_smile),
                 ("eye_squint", item.cull_eye_squint),
                 ("gaze_off_lens", item.cull_gaze_off_lens),
+                ("mouth_open", item.cull_mouth_open),
+                ("face_luminance", item.cull_face_luminance),
+                ("face_across_stops", item.cull_face_across_stops),
+                ("face_blown", item.cull_face_blown),
             ] {
                 if let Some(v) = value {
                     metrics.insert(key.into(), Value::from(round4(v)));
@@ -2704,6 +2771,120 @@ mod tests {
         assert!(photo(&groups[0], "open")
             .reason_codes
             .contains(&"eyes_open_best".to_string()));
+    }
+
+    fn frame_with(id: &str, t: f64, readings: &[(&str, f64)]) -> GroupingInput {
+        let mut r = state_frame(id, t, Some(0.04), Some(0.2), true);
+        for (key, value) in readings {
+            r.metadata.insert((*key).into(), Value::from(*value));
+        }
+        r
+    }
+
+    #[test]
+    fn an_open_mouth_is_named_only_against_a_sibling_and_where_the_preset_asks() {
+        let records = || {
+            vec![
+                frame_with("closed", 1000.0, &[("cull_mouth_open", 0.02)]),
+                frame_with("word", 1000.5, &[("cull_mouth_open", 0.4)]),
+            ]
+        };
+        let groups = cull(records(), "event");
+        let word = photo(&groups[0], "word");
+        assert!(word.reason_codes.contains(&"mouth_open".to_string()));
+        // A label, never a defect.
+        assert_eq!(word.metrics["clear_defect"], false);
+        let closed = photo(&groups[0], "closed");
+        assert!(!closed.reason_codes.contains(&"mouth_open".to_string()));
+
+        let groups = cull(records(), "default");
+        let word = photo(&groups[0], "word");
+        assert!(!word.reason_codes.contains(&"mouth_open".to_string()));
+
+        // Speaking all the way through a burst says nothing about any one frame.
+        let groups = cull(
+            vec![
+                frame_with("a", 1000.0, &[("cull_mouth_open", 0.4)]),
+                frame_with("b", 1000.5, &[("cull_mouth_open", 0.45)]),
+            ],
+            "event",
+        );
+        for id in ["a", "b"] {
+            assert!(!photo(&groups[0], id)
+                .reason_codes
+                .contains(&"mouth_open".to_string()));
+        }
+    }
+
+    /// Dark skin is not an underexposed face: the reading only ever compares a
+    /// frame with its siblings, so a burst that is uniformly dark says nothing.
+    #[test]
+    fn a_dark_face_is_named_only_against_a_brighter_sibling() {
+        let groups = cull(
+            vec![
+                frame_with("even1", 1000.0, &[("cull_face_luminance", 0.05)]),
+                frame_with("even2", 1000.5, &[("cull_face_luminance", 0.052)]),
+            ],
+            "event",
+        );
+        for id in ["even1", "even2"] {
+            assert!(!photo(&groups[0], id)
+                .reason_codes
+                .contains(&"face_darker".to_string()));
+        }
+        let groups = cull(
+            vec![
+                frame_with("bright", 1000.0, &[("cull_face_luminance", 0.2)]),
+                frame_with("dark", 1000.5, &[("cull_face_luminance", 0.08)]),
+            ],
+            "event",
+        );
+        let dark = photo(&groups[0], "dark");
+        assert!(dark.reason_codes.contains(&"face_darker".to_string()));
+        assert_eq!(dark.metrics["clear_defect"], false);
+    }
+
+    #[test]
+    fn blown_skin_is_named_even_on_a_single() {
+        let groups = cull(
+            vec![frame_with("hot", 1000.0, &[("cull_face_blown", 0.3)])],
+            "default",
+        );
+        assert!(photo(&groups[0], "hot")
+            .reason_codes
+            .contains(&"face_blown".to_string()));
+        let groups = cull(
+            vec![frame_with("mask", 1000.0, &[("cull_face_blown", 0.08)])],
+            "default",
+        );
+        assert!(!photo(&groups[0], "mask")
+            .reason_codes
+            .contains(&"face_blown".to_string()));
+    }
+
+    #[test]
+    fn hard_light_is_named_against_a_softer_sibling_in_stops() {
+        let groups = cull(
+            vec![
+                frame_with("soft", 1000.0, &[("cull_face_across_stops", 0.5)]),
+                frame_with("hard", 1000.5, &[("cull_face_across_stops", 3.5)]),
+            ],
+            "default",
+        );
+        let hard = photo(&groups[0], "hard");
+        assert!(hard.reason_codes.contains(&"face_hard_light".to_string()));
+        assert_eq!(hard.metrics["face_across_stops"], 3.5);
+        let groups = cull(
+            vec![frame_with(
+                "alone",
+                1000.0,
+                &[("cull_face_across_stops", 3.5)],
+            )],
+            "default",
+        );
+        assert!(!photo(&groups[0], "alone")
+            .reason_codes
+            .contains(&"face_hard_light".to_string()));
     }
 
     /// Eyes narrowed against the sun with the lids reading open: the label, and

@@ -14,10 +14,16 @@
 //! surprising edit that explains itself is debuggable, and one that does not is
 //! indistinguishable from a bug.
 //!
+//! The rules about faces read [`FaceConditions`], which the caller measures on
+//! the same frame. Every one of them compares a face with itself or with its own
+//! frame, and none calls a face too dark: skin ranges over several stops between
+//! people, so a dark face in bright surroundings is just as often exposed
+//! perfectly. All such a reading may do here is hold contrast back, which costs
+//! that face nothing.
+//!
 //! What is **not** here yet, because it needs signals this crate cannot reach:
-//! the face-differential rule (needs face boxes), mixed-light detection (needs a
-//! regional illuminant estimate) and the backlight rule (needs a subject
-//! region). [`EditBudget`] is shaped so those slot in without changing callers.
+//! mixed-light detection (needs a regional illuminant estimate). [`EditBudget`]
+//! is shaped so it slots in without changing callers.
 
 use lrg_imaging::scene::SceneState;
 
@@ -33,6 +39,21 @@ pub struct CaptureConditions {
     /// recoverable — `SceneState::highlight_clip` measures the rendering and
     /// deliberately does not guess at this.
     pub is_raw: bool,
+}
+
+/// What was measured about the faces in the frame, as far as it limits an edit.
+/// The worst of the faces that matter in the frame speaks for it, and `None` is
+/// "not measured": no faces, or no face model on this computer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FaceConditions {
+    /// Between the two cheeks of the hardest-lit face, in stops.
+    pub across_face_stops: Option<f64>,
+    /// The darkest face against the frame around it, in stops; negative is
+    /// darker. A backlit face reads low, and so does dark skin in bright
+    /// surroundings, which is why this only ever holds contrast back.
+    pub against_surround_stops: Option<f64>,
+    /// The largest share of a face's skin that is blown out, `0..1`.
+    pub blown: Option<f64>,
 }
 
 /// Tunables for [`derive_budget`].
@@ -66,6 +87,17 @@ pub struct GuardrailConfig {
     pub contrast_budget_flat: f64,
     /// Largest clarity value on an ordinary frame.
     pub clarity_budget_default: f64,
+    /// Light this many stops apart between the two cheeks is hard light on the
+    /// face. 10% of faces in a sample of 600 portraits reach 2, nearly all of
+    /// them real side light.
+    pub face_hard_light_stops: f64,
+    /// A face this many stops below the frame around it. 2.4% of that sample.
+    pub face_below_surround_stops: f64,
+    /// This share of a face's skin blown out; below it sit surgical masks and
+    /// white headbands.
+    pub face_blown_share: f64,
+    /// Largest total of contrast-increasing moves on a face that needs it.
+    pub contrast_budget_face: f64,
 }
 
 impl GuardrailConfig {
@@ -81,6 +113,10 @@ impl GuardrailConfig {
             contrast_budget_default: 25.0,
             contrast_budget_flat: 40.0,
             clarity_budget_default: 20.0,
+            face_hard_light_stops: 2.0,
+            face_below_surround_stops: 2.0,
+            face_blown_share: 0.15,
+            contrast_budget_face: 10.0,
         }
     }
 }
@@ -107,6 +143,12 @@ pub enum GuardrailReason {
     HighIsoShadowsLimited,
     /// Shadows are already blocked; lifting them cannot recover detail.
     ShadowsAlreadyClipped,
+    /// Hard light across a face: clarity and contrast would deepen the split.
+    FaceHardLight,
+    /// A face well below the frame around it: contrast would push it further.
+    FaceBelowSurroundings,
+    /// Blown skin on a face: the white point must not push it further.
+    FaceBlown,
 }
 
 impl GuardrailReason {
@@ -120,6 +162,9 @@ impl GuardrailReason {
             GuardrailReason::HighlightsUnrecoverable => "highlights_unrecoverable",
             GuardrailReason::HighIsoShadowsLimited => "high_iso_shadows_limited",
             GuardrailReason::ShadowsAlreadyClipped => "shadows_already_clipped",
+            GuardrailReason::FaceHardLight => "face_hard_light",
+            GuardrailReason::FaceBelowSurroundings => "face_below_surroundings",
+            GuardrailReason::FaceBlown => "face_blown",
         }
     }
 
@@ -142,6 +187,15 @@ impl GuardrailReason {
             }
             GuardrailReason::ShadowsAlreadyClipped => {
                 "Shadows are already blocked, so lifting them further would not recover detail."
+            }
+            GuardrailReason::FaceHardLight => {
+                "Hard light falls across a face, so clarity was left alone and contrast limited: both would deepen the split."
+            }
+            GuardrailReason::FaceBelowSurroundings => {
+                "A face sits well below the frame around it, so contrast was limited to keep it from going darker."
+            }
+            GuardrailReason::FaceBlown => {
+                "Skin on a face is blown out, so the white point was held back."
             }
         }
     }
@@ -283,6 +337,43 @@ pub fn derive_budget(
         budget.reasons.push(GuardrailReason::ShadowsAlreadyClipped);
     }
 
+    budget
+}
+
+/// What this frame can absorb, faces included. See [`FaceConditions`] for why
+/// these rules only ever remove, and never call a face too dark.
+pub fn derive_budget_with_faces(
+    scene: &SceneState,
+    capture: &CaptureConditions,
+    faces: &FaceConditions,
+    cfg: &GuardrailConfig,
+) -> EditBudget {
+    let mut budget = derive_budget(scene, capture, cfg);
+    if faces
+        .across_face_stops
+        .is_some_and(|s| s >= cfg.face_hard_light_stops)
+    {
+        budget.clarity_budget = 0.0;
+        budget.contrast_budget = budget.contrast_budget.min(cfg.contrast_budget_face);
+        budget.reasons.push(GuardrailReason::FaceHardLight);
+    }
+    if faces
+        .against_surround_stops
+        .is_some_and(|s| s <= -cfg.face_below_surround_stops)
+    {
+        budget.contrast_budget = budget.contrast_budget.min(cfg.contrast_budget_face);
+        budget.reasons.push(GuardrailReason::FaceBelowSurroundings);
+    }
+    // The same split as highlights in general: raw usually holds something above
+    // the rendering, a JPEG never does.
+    if faces.blown.is_some_and(|b| b >= cfg.face_blown_share) {
+        budget.whites_budget = if capture.is_raw {
+            budget.whites_budget.min(cfg.contrast_budget_default * 0.5)
+        } else {
+            0.0
+        };
+        budget.reasons.push(GuardrailReason::FaceBlown);
+    }
     budget
 }
 
@@ -503,5 +594,104 @@ mod tests {
         for reason in all {
             assert!(!reason.explanation().is_empty());
         }
+    }
+
+    fn with_faces(faces: FaceConditions, is_raw: bool) -> EditBudget {
+        derive_budget_with_faces(
+            &scene(0.3, 5.0),
+            &CaptureConditions { iso: None, is_raw },
+            &faces,
+            &cfg(),
+        )
+    }
+
+    #[test]
+    fn no_face_reading_leaves_the_budget_as_it_was() {
+        let plain = derive_budget(&scene(0.3, 5.0), &CaptureConditions::default(), &cfg());
+        let budget = with_faces(FaceConditions::default(), false);
+        assert_eq!(budget.contrast_budget, plain.contrast_budget);
+        assert_eq!(budget.clarity_budget, plain.clarity_budget);
+        assert_eq!(budget.whites_budget, plain.whites_budget);
+        assert!(budget.reasons.is_empty());
+    }
+
+    #[test]
+    fn hard_light_across_a_face_takes_clarity_and_most_of_the_contrast() {
+        let budget = with_faces(
+            FaceConditions {
+                across_face_stops: Some(3.2),
+                ..Default::default()
+            },
+            false,
+        );
+        assert_eq!(budget.clarity_budget, 0.0);
+        assert_eq!(budget.contrast_budget, cfg().contrast_budget_face);
+        assert_eq!(budget.reasons, vec![GuardrailReason::FaceHardLight]);
+
+        let soft = with_faces(
+            FaceConditions {
+                across_face_stops: Some(0.8),
+                ..Default::default()
+            },
+            false,
+        );
+        assert!(soft.reasons.is_empty());
+    }
+
+    /// This reading is as low on dark skin in bright surroundings as on a
+    /// backlit face, so it may only ever hold contrast back: never the shadows a
+    /// dim face could use, never the clarity.
+    #[test]
+    fn a_face_below_its_surroundings_only_holds_contrast_back() {
+        let plain = with_faces(FaceConditions::default(), false);
+        let budget = with_faces(
+            FaceConditions {
+                against_surround_stops: Some(-3.1),
+                ..Default::default()
+            },
+            false,
+        );
+        assert_eq!(budget.contrast_budget, cfg().contrast_budget_face);
+        assert_eq!(budget.shadow_lift_budget, plain.shadow_lift_budget);
+        assert_eq!(budget.clarity_budget, plain.clarity_budget);
+        assert_eq!(budget.reasons, vec![GuardrailReason::FaceBelowSurroundings]);
+
+        let brighter = with_faces(
+            FaceConditions {
+                against_surround_stops: Some(1.5),
+                ..Default::default()
+            },
+            false,
+        );
+        assert!(brighter.reasons.is_empty());
+    }
+
+    #[test]
+    fn blown_skin_holds_the_white_point_back_by_what_the_source_can_recover() {
+        let blown = FaceConditions {
+            blown: Some(0.4),
+            ..Default::default()
+        };
+        assert_eq!(with_faces(blown, false).whites_budget, 0.0);
+        assert!(with_faces(blown, true).whites_budget > 0.0);
+        assert_eq!(
+            with_faces(blown, false).reasons,
+            vec![GuardrailReason::FaceBlown]
+        );
+    }
+
+    /// A ceiling never rises: a flat frame's wider contrast still gives way.
+    #[test]
+    fn face_rules_only_ever_remove() {
+        let flat = derive_budget_with_faces(
+            &scene(0.1, 3.0),
+            &CaptureConditions::default(),
+            &FaceConditions {
+                across_face_stops: Some(3.0),
+                ..Default::default()
+            },
+            &cfg(),
+        );
+        assert_eq!(flat.contrast_budget, cfg().contrast_budget_face);
     }
 }

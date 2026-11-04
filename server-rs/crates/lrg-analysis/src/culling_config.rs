@@ -333,6 +333,27 @@ pub struct RankingConfig {
     /// Above this many degrees from the lens (`cull_gaze_off_lens`) a frame is
     /// labelled `looking_away`. 0 switches the label off; it is never a defect.
     pub reason_gaze_off_lens_degrees: f64,
+    /// `cull_mouth_open` from here up, on a frame with a sibling whose mouth is
+    /// [`Self::reason_mouth_open_delta`] less open, is labelled `mouth_open`.
+    /// Measured: 10% of photographs of people speaking reach 0.2, and 0.6% of
+    /// portraits. 0 switches the label off; it is never a defect.
+    pub reason_mouth_open_threshold: f64,
+    pub reason_mouth_open_delta: f64,
+    /// A frame whose darkest face is this many stops below the same reading in
+    /// its group's brightest frame is labelled `face_darker`. Only within a
+    /// group, since skin ranges over several stops between people and this
+    /// must never call dark skin underexposed. 0 switches the label off.
+    pub reason_face_darker_stops: f64,
+    /// `cull_face_blown` from here up is labelled `face_blown`. 0 switches it
+    /// off. Measured: 2.6% of faces pass 0.05, where surgical masks and white
+    /// headbands still sit, and from 0.15 what is left is blown skin.
+    pub reason_face_blown_threshold: f64,
+    /// `cull_face_across_stops` from here up, on a frame with a sibling whose
+    /// light is [`Self::reason_face_hard_light_delta`] stops softer, is labelled
+    /// `face_hard_light`. 10% of faces reach 2 stops, nearly all real side
+    /// light. 0 switches the label off.
+    pub reason_face_hard_light_stops: f64,
+    pub reason_face_hard_light_delta: f64,
 }
 
 /// Which deliberately-captured multi-frame set a group is, if any.
@@ -467,6 +488,10 @@ impl CullingConfig {
         cfg.ranking.laugh_smile_threshold = 0.0;
         cfg.ranking.reason_eyes_half_closed_threshold = 0.0;
         cfg.ranking.reason_gaze_off_lens_degrees = 0.0;
+        cfg.ranking.reason_mouth_open_threshold = 0.0;
+        cfg.ranking.reason_face_darker_stops = 0.0;
+        cfg.ranking.reason_face_blown_threshold = 0.0;
+        cfg.ranking.reason_face_hard_light_stops = 0.0;
         cfg
     }
 }
@@ -545,6 +570,12 @@ const BASE: CullingConfig = CullingConfig {
         smile_weight: 0.0,
         reason_smile_delta: 0.05,
         reason_gaze_off_lens_degrees: 0.0,
+        reason_mouth_open_threshold: 0.0,
+        reason_mouth_open_delta: 0.15,
+        reason_face_darker_stops: 0.75,
+        reason_face_blown_threshold: 0.15,
+        reason_face_hard_light_stops: 2.0,
+        reason_face_hard_light_delta: 1.0,
     },
     sets: SetDetectionConfig {
         enabled: true,
@@ -601,6 +632,7 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.reject_eye_closed_threshold = 0.5;
             cfg.ranking.smile_weight = 0.15;
             cfg.ranking.reason_gaze_off_lens_degrees = 25.0;
+            cfg.ranking.reason_mouth_open_threshold = 0.2;
         }
         "street" => {
             cfg.ranking.face_group_weight_technical = 0.70;
@@ -632,6 +664,9 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // Closed eyes are often the moment in street work.
             cfg.ranking.reason_eye_closed_threshold = 0.62;
             cfg.ranking.reject_eye_closed_threshold = 0.72;
+            cfg.ranking.reason_face_darker_stops = 0.0;
+            cfg.ranking.reason_face_blown_threshold = 0.0;
+            cfg.ranking.reason_face_hard_light_stops = 0.0;
         }
         "event" => {
             cfg.grouping.time_window_default_seconds = 2;
@@ -665,6 +700,7 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.eyes_closed_intent_threshold = 0.7;
             // Everyone smiling is half of a group picture.
             cfg.ranking.smile_weight = 0.10;
+            cfg.ranking.reason_mouth_open_threshold = 0.2;
         }
         "sports" => {
             cfg.grouping.time_window_default_seconds = 3;
@@ -706,6 +742,9 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.reason_eye_closed_threshold = 0.6;
             cfg.ranking.reject_eye_closed_threshold = 0.68;
             cfg.ranking.reason_eyes_half_closed_threshold = 0.0;
+            cfg.ranking.reason_face_darker_stops = 0.0;
+            cfg.ranking.reason_face_blown_threshold = 0.0;
+            cfg.ranking.reason_face_hard_light_stops = 0.0;
         }
         _ => {}
     }
