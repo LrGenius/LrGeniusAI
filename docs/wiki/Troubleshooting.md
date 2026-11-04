@@ -31,10 +31,11 @@ Using a newer plugin with an older backend (or vice versa) causes API errors.
 ### 3. On-Device AI Models Missing or Not Downloading
 
 Several features run their own model on the backend machine: smart photo
-search (SigLIP2), photo quality scoring, species identification (BioCLIP 2) and
-face detection. None of them ships with the installer — you fetch them once
-from *Plug-in Manager → LrGeniusAI → **On-device AI models*** → **Download AI
-models**, which is also where their readiness is reported. A few GB in total.
+search (SigLIP2), photo quality scoring, species identification (BioCLIP 2),
+face detection, and the eye and expression analysis culling uses. None of them
+ships with the installer — you fetch them once from *Plug-in Manager →
+LrGeniusAI → **On-device AI models*** → **Download AI models**, which is also
+where their readiness is reported. A few GB in total.
 
 - **Symptom:** *Enable smart photo search* or *Identify animal and plant species* is greyed out in the Analyze & Index dialog, an indicator under *On-device AI models* stays red, or indexing reports `species: model not downloaded`.
 - **Resolution:**
@@ -55,6 +56,13 @@ re-run indexing over photos with people in them: the two model families produce
 embeddings that are not comparable, so previously detected faces are set aside
 as unassigned until they are re-detected. Named people are restored as the
 re-detection proceeds.
+
+The eye and expression model (about 7 MB), which culling uses to tell open
+eyes from closed ones and to read the smile and gaze, comes with the same
+button, as its own entry. Without it face detection works as before; only
+culling falls back to a rough eye estimate and says so in its warning. Once it
+is downloaded, **Cull Similar Photos** offers to prepare the photos with faces
+again.
 
 ---
 

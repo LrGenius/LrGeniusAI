@@ -2663,10 +2663,14 @@ function Util.requiredModelFamilies(tasks)
 			needed.clip = true
 			needed.aesthetic = true
 		elseif task == "faces" then
+			-- Eye state, smile and gaze are read from the faces found, by a
+			-- model of their own (MediaPipe's face mesh and blendshapes).
 			needed.face = true
+			needed.face_state = true
 		elseif task == "cull" then
 			-- The fast cull ingest also scores each photo's aesthetic.
 			needed.face = true
+			needed.face_state = true
 			needed.aesthetic = true
 		elseif task == "species" then
 			needed.bioclip = true
@@ -2675,7 +2679,7 @@ function Util.requiredModelFamilies(tasks)
 	-- Fixed order rather than pairs(): the result reaches a dialog, and a list
 	-- that reshuffles between runs reads like a different problem each time.
 	local result = {}
-	for _, id in ipairs({ "clip", "aesthetic", "face", "bioclip" }) do
+	for _, id in ipairs({ "clip", "aesthetic", "face", "face_state", "bioclip" }) do
 		if needed[id] then
 			table.insert(result, id)
 		end

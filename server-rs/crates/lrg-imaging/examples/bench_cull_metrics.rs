@@ -6,11 +6,14 @@
 //! ```
 //!
 //! Runs against a synthetic 2048px image, which is the working resolution the
-//! plugin normalizes to (`GENIUSAI_CONVERT_MAX_EDGE`).
+//! plugin normalizes to (`GENIUSAI_CONVERT_MAX_EDGE`), and then times what a
+//! photo *with faces* adds on top: decoding a 24-megapixel original once more
+//! and measuring a face and its eyes on it (`lrg_imaging::focus`).
 
 use std::time::Instant;
 
-use lrg_imaging::cull_config::ImageMetricsConfig;
+use lrg_imaging::cull_config::{FaceMetricsConfig, ImageMetricsConfig};
+use lrg_imaging::focus::{focus, luma_region};
 use lrg_imaging::metrics::{culling_metrics, perceptual_hash, RgbImage};
 
 /// Deterministic noise with structure, so sharpness and colourfulness are not
@@ -73,5 +76,58 @@ fn main() {
         "{:<28} {:>9.2} ms/photo",
         "TOTAL",
         (metrics + phash) * 1000.0
+    );
+
+    // A 24-megapixel original as the camera wrote it, and a half-length
+    // portrait in it: the face 1200 px across, the eyes 300 px apart.
+    let (fw, fh) = (6000u32, 4000u32);
+    let full = synth(fw as usize, fh as usize);
+    let mut jpeg = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_raw(fw, fh, full)
+        .unwrap()
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut jpeg, 92,
+        ))
+        .unwrap();
+    let jpeg = jpeg.into_inner();
+    let face_cfg = FaceMetricsConfig::defaults();
+    println!(
+        "\nphoto with faces: {fw}x{fh} JPEG original, {} KB",
+        jpeg.len() / 1024
+    );
+    let decode = time_it("decode_oriented (full size)", iters.min(5), || {
+        std::hint::black_box(lrg_imaging::convert::decode_oriented(&jpeg, "original.jpg").unwrap());
+    });
+    let decoded = lrg_imaging::convert::decode_oriented(&jpeg, "original.jpg")
+        .unwrap()
+        .into_rgb8();
+    let (dw, dh) = (decoded.width() as usize, decoded.height() as usize);
+    let rgb = decoded.into_raw();
+    let measure = time_it("face + both eyes focus", iters, || {
+        let face = luma_region(
+            &rgb,
+            dw,
+            dh,
+            [2400.0, 1000.0, 3600.0, 2400.0],
+            face_cfg.face_focus_max_side,
+        )
+        .unwrap();
+        std::hint::black_box(focus(&face, face_cfg.focus_blur_window));
+        for x in [2850.0, 3150.0] {
+            let eye = luma_region(
+                &rgb,
+                dw,
+                dh,
+                [x - 75.0, 1525.0, x + 75.0, 1675.0],
+                face_cfg.eye_focus_max_patch_side,
+            )
+            .unwrap();
+            std::hint::black_box(focus(&eye, face_cfg.focus_blur_window));
+        }
+    });
+    println!(
+        "{:<28} {:>9.2} ms/photo with faces",
+        "EXTRA FOR FOCUS",
+        (decode + measure) * 1000.0
     );
 }

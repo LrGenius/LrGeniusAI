@@ -539,7 +539,30 @@ impl ImageSource {
 /// What normalising one photo produces: the JPEG every later stage reads, the
 /// name to report it under, and whatever the original said about where it was
 /// taken before the conversion dropped its metadata.
-type NormalizedImage = (Vec<u8>, String, Option<LocationTags>);
+type NormalizedImage = (Vec<u8>, String, Option<LocationTags>, Option<FullSource>);
+
+/// Where a photo's full-size original can be had again, for measuring focus
+/// on the faces found on its working copy.
+///
+/// Faces are detected on the ≤2048 px working copy, where an eye in a
+/// half-length portrait is a dozen pixels and carries no sign of where the
+/// focus landed. The face step decodes this — only for a photo that turned out
+/// to have faces — and re-measures eye and face focus on it
+/// (`lrg_ml::faces::refine_focus`).
+enum FullSource {
+    /// A file on disk, read again when needed. Nothing is held in between,
+    /// which matters for raw originals of 50 MB and more.
+    Path(String),
+    /// An uploaded file: the plugin's export (3072 px by default), kept until
+    /// the face step since there is nowhere to read it from again. Small next
+    /// to a raw original.
+    Bytes { bytes: Arc<[u8]>, filename: String },
+}
+
+/// At most this many full-size originals are decoded for focus at once,
+/// across all requests. A 45-megapixel frame is ~135 MB as RGB, so this is
+/// what keeps concurrent indexing requests from multiplying that.
+static FULL_DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 /// One photo after normalisation, on its way into phase 1.
 struct NormalizedPhoto {
@@ -551,6 +574,7 @@ struct NormalizedPhoto {
     /// What the original file said about where it was taken, read before
     /// normalisation dropped its metadata. See [`load_and_normalize`].
     file_location: Option<LocationTags>,
+    full_source: Option<FullSource>,
 }
 
 /// One photo's bytes, or where to find them.
@@ -639,6 +663,7 @@ async fn load_and_normalize(
     max_edge: u32,
     quality: u8,
     read_location: bool,
+    keep_full: bool,
 ) -> Result<NormalizedImage, String> {
     let source_path = match &pending {
         PendingImage::Path(path) => Some(path.clone()),
@@ -651,7 +676,7 @@ async fn load_and_normalize(
     let bytes = img.bytes;
     // `normalize_image_bytes` is hundreds of milliseconds of pure CPU for a raw
     // original; it used to run directly on a tokio worker thread.
-    let (result, filename, file_location) = tokio::task::spawn_blocking(move || {
+    let (result, filename, file_location, full_source) = tokio::task::spawn_blocking(move || {
         let location = read_location
             .then(|| {
                 let mut tags = lrg_imaging::location::extract_location_tags(&bytes);
@@ -671,7 +696,22 @@ async fn load_and_normalize(
             })
             .flatten();
         let out = normalize_image_bytes(&bytes, Some(&filename), max_edge, quality);
-        (out, filename, location)
+        // Only where normalisation actually shrank or converted the file: a
+        // small JPEG or PNG passes through byte for byte and is its own
+        // full-size original.
+        let full_source = match &out {
+            Ok((normalized, _)) if keep_full && normalized.as_slice() != bytes.as_slice() => {
+                Some(match source_path {
+                    Some(path) => FullSource::Path(path),
+                    None => FullSource::Bytes {
+                        bytes: Arc::from(bytes),
+                        filename: filename.clone(),
+                    },
+                })
+            }
+            _ => None,
+        };
+        (out, filename, location, full_source)
     })
     .await
     .map_err(|e| format!("image conversion panicked: {e}"))?;
@@ -681,7 +721,7 @@ async fn load_and_normalize(
         t0.elapsed()
     );
     result
-        .map(|(bytes, filename)| (bytes, filename, file_location))
+        .map(|(bytes, filename)| (bytes, filename, file_location, full_source))
         .map_err(|UnsupportedImageError(msg)| msg)
 }
 
@@ -845,7 +885,14 @@ pub(crate) async fn process_batch(
             .zip(photo_ids.iter().cloned()),
     )
     .map(|(pending, photo_id)| {
-        load_and_normalize(pending, photo_id, max_edge, quality, read_location)
+        load_and_normalize(
+            pending,
+            photo_id,
+            max_edge,
+            quality,
+            read_location,
+            options.compute_faces,
+        )
     })
     .buffered(concurrency)
     .collect()
@@ -860,13 +907,16 @@ pub(crate) async fn process_batch(
         photo_ids.into_iter().zip(overrides).zip(normalized)
     {
         match result {
-            Ok((bytes, filename, file_location)) => normalized_photos.push(NormalizedPhoto {
-                bytes: Arc::from(bytes),
-                photo_id,
-                filename: original_filename.clone().unwrap_or(filename),
-                overrides: photo_overrides,
-                file_location,
-            }),
+            Ok((bytes, filename, file_location, full_source)) => {
+                normalized_photos.push(NormalizedPhoto {
+                    bytes: Arc::from(bytes),
+                    photo_id,
+                    filename: original_filename.clone().unwrap_or(filename),
+                    overrides: photo_overrides,
+                    file_location,
+                    full_source,
+                })
+            }
             Err(msg) => {
                 log::warn!("Skipping {photo_id}: {msg}");
                 results.push(json!({
@@ -917,6 +967,17 @@ pub(crate) async fn process_batch(
     // Aesthetic scores need the photo quality model. Said once for the run: a
     // degraded success (the photos are otherwise indexed), never one line per
     // photo.
+    // Eye state, smile and gaze need their own model; without it culling falls
+    // back to the rough eye estimate. Only said when face detection itself can
+    // run, which otherwise reports its own, more fundamental problem.
+    if options.compute_faces && state.face.is_cached() && !state.face_state.is_cached() {
+        warnings.push(
+            "Photos were analysed without eye state, smile and gaze: the eye and expression \
+             model is not downloaded yet, so a rough eye estimate was used. Run \"Download AI \
+             models\" in Plug-in Manager and prepare them again."
+                .to_string(),
+        );
+    }
     if options.compute_aesthetic && !state.aesthetic.is_cached() {
         warnings.push(
             "Photos were indexed without an aesthetic score: the photo quality model is not \
@@ -999,6 +1060,7 @@ pub(crate) async fn process_batch(
             filename,
             overrides: photo_overrides,
             file_location,
+            full_source,
         } = photo;
         let Some(store_ref) = store.as_ref() else {
             failure_count += 1;
@@ -1033,7 +1095,10 @@ pub(crate) async fn process_batch(
         )
         .await
         {
-            Ok(photo) => prepared.push(photo),
+            Ok(mut photo) => {
+                photo.full_source = full_source;
+                prepared.push(photo)
+            }
             Err(e) => {
                 failure_count += 1;
                 results.push(json!({
@@ -1248,6 +1313,9 @@ struct PreparedPhoto {
     llm_request: Option<lrg_providers::types::MetadataGenerationRequest>,
     /// The search page's preview, written once the photo's row is stored.
     thumbnail: Result<Vec<u8>, String>,
+    /// The full-size original, for re-measuring focus on the faces phase 2
+    /// finds. Set by the caller after [`prepare_one`], which has no use for it.
+    full_source: Option<FullSource>,
 }
 
 /// Phase 1: everything that does not need the LLM.
@@ -1743,6 +1811,7 @@ async fn prepare_one(
         warnings,
         llm_request,
         thumbnail,
+        full_source: None,
     })
 }
 
@@ -1826,6 +1895,7 @@ async fn finish_one(
         warnings: warnings_from_phase_1,
         llm_request,
         thumbnail,
+        full_source,
     } = prepared;
     let photo_id = photo_id.as_str();
     let filename = filename.as_str();
@@ -1954,7 +2024,18 @@ async fn finish_one(
             .unwrap_or(false)
             && main_metadata.get("face_model").and_then(Value::as_str)
                 == Some(state.face.model_id());
-        if options.regenerate_metadata || !already_checked {
+        // The cull pass also runs on a photo whose faces are already checked
+        // when it was indexed before eye and face focus were measured — the
+        // only way those reach a fully indexed catalog without re-running
+        // identity, which the cull pass never writes.
+        let focus_missing = options.face_pass == FacePass::QualityOnly
+            && !main_metadata.contains_key(lrg_analysis::grouping::FOCUS_VERSION_KEY);
+        // The same for the face state, once its model is on disk: a photo
+        // prepared before it was downloaded is analysed on the next cull pass.
+        let state_missing = options.face_pass == FacePass::QualityOnly
+            && state.face_state.is_cached()
+            && !main_metadata.contains_key(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+        if options.regenerate_metadata || !already_checked || focus_missing || state_missing {
             // Decoded here rather than carried from phase 1: full RGB is by far
             // the largest per-photo allocation, and holding one per photo in
             // flight is how a bigger group would turn into a memory problem.
@@ -1963,6 +2044,12 @@ async fn finish_one(
             // A decode failure is reported the same way a detector failure is,
             // as a warning: faces are optional and must not sink the photo.
             let t_decode = Instant::now();
+            let mut working_dims = (0usize, 0usize);
+            let face_state_model = state
+                .face_state
+                .is_cached()
+                .then(|| Arc::clone(&state.face_state));
+            let mut working_pixels: Option<Vec<u8>> = None;
             let face_result: Result<(Vec<_>, &str), String> = if !state.face.is_cached() {
                 // Checked before decoding: without the model files the detector
                 // fails anyway, and the decode would be pure waste.
@@ -1988,6 +2075,7 @@ async fn finish_one(
                 match image::load_from_memory(&image_bytes).map(|img| img.to_rgb8()) {
                     Ok(decoded) => {
                         let (width, height) = (decoded.width() as usize, decoded.height() as usize);
+                        working_dims = (width, height);
                         let pixels = decoded.into_raw();
                         log::debug!(
                             "Photo {photo_id}: re-decode for faces took {:?}",
@@ -2005,10 +2093,41 @@ async fn finish_one(
                             )
                             .map_err(|e| e.to_string());
                         log::debug!("Photo {photo_id}: face detect took {:?}", t0.elapsed());
+                        if face_state_model.is_some() {
+                            working_pixels = Some(pixels);
+                        }
                         result
                     }
                     Err(e) => Err(format!("could not decode image: {e}")),
                 }
+            };
+            // Eye and face focus again on the full-size original, and the face
+            // state (eyes, smile, gaze) on the largest copy there is — only now
+            // that there are faces, never for a photo without any. A failure
+            // here costs the photo accuracy, not its faces, and says so.
+            let state_ran = face_state_model.is_some();
+            let (face_result, state_ran) = match face_result {
+                Ok((faces, model)) if !faces.is_empty() => {
+                    let t_full = Instant::now();
+                    let measured = measure_faces(
+                        faces,
+                        working_dims,
+                        working_pixels.take(),
+                        full_source,
+                        face_state_model,
+                    )
+                    .await;
+                    for problem in measured.warnings {
+                        log::warn!("Photo {photo_id}: {problem}");
+                        warnings.push(format!("{filename}: {problem}"));
+                    }
+                    log::debug!(
+                        "Photo {photo_id}: focus and face state took {:?}",
+                        t_full.elapsed()
+                    );
+                    (Ok((measured.faces, model)), measured.state_ran)
+                }
+                other => (other, state_ran),
             };
             match face_result {
                 // The quality-only pass has no identity embedding and no
@@ -2029,9 +2148,14 @@ async fn finish_one(
                             eye_openness: f.eye_openness,
                             blink_penalty: f.blink_penalty,
                             occlusion: Some(f.occlusion),
+                            eye_focus: f.eye_focus,
+                            face_focus: f.face_focus,
+                            eye_closed: judged(f).map(|s| s.eye_closed),
+                            smile: judged(f).map(|s| s.smile),
+                            gaze_away: judged(f).map(|s| s.gaze_away),
                         })
                         .collect();
-                    apply_face_aggregate(&mut main_metadata, &inputs);
+                    apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
                     log::debug!(
                         "Photo {photo_id}: cull pass scored {} face(s), no identity written.",
                         faces.len()
@@ -2135,6 +2259,23 @@ async fn finish_one(
                                 m.insert("face_eye_openness".into(), json!(f.eye_openness));
                                 m.insert("face_blink_penalty".into(), json!(f.blink_penalty));
                                 m.insert("face_occlusion".into(), json!(f.occlusion));
+                                // Null when the face was too small to measure.
+                                m.insert("face_eye_focus".into(), json!(f.eye_focus));
+                                m.insert("face_focus".into(), json!(f.face_focus));
+                                m.insert("face_eye_px".into(), json!(f.eye_px));
+                                m.insert("face_focus_scale".into(), json!(f.focus_scale));
+                                // Null when the face state did not run for this
+                                // face; `face_eye_state` is "unknown" when it ran
+                                // and could not judge the eyes.
+                                let st = f.state.as_ref();
+                                m.insert(
+                                    "face_eye_state".into(),
+                                    json!(st.map(|s| s.eye_state.as_str())),
+                                );
+                                m.insert("face_eye_closed".into(), json!(st.map(|s| s.eye_closed)));
+                                m.insert("face_smile".into(), json!(st.map(|s| s.smile)));
+                                m.insert("face_gaze_away".into(), json!(st.map(|s| s.gaze_away)));
+                                m.insert("face_yaw".into(), json!(st.map(|s| s.yaw_degrees)));
                                 m.insert("face_model".into(), json!(face_model));
                                 StoreRecord {
                                     id: format!("{photo_id}_{i}"),
@@ -2158,12 +2299,17 @@ async fn finish_one(
                                 eye_openness: f.eye_openness,
                                 blink_penalty: f.blink_penalty,
                                 occlusion: Some(f.occlusion),
+                                eye_focus: f.eye_focus,
+                                face_focus: f.face_focus,
+                                eye_closed: judged(f).map(|s| s.eye_closed),
+                                smile: judged(f).map(|s| s.smile),
+                                gaze_away: judged(f).map(|s| s.gaze_away),
                             })
                             .collect();
-                        apply_face_aggregate(&mut main_metadata, &inputs);
+                        apply_face_aggregate(&mut main_metadata, &inputs, state_ran);
                         log::info!("Photo {photo_id}: indexed {} face(s).", faces.len());
                     } else {
-                        apply_face_aggregate(&mut main_metadata, &[]);
+                        apply_face_aggregate(&mut main_metadata, &[], state_ran);
                     }
                     // Set for *both* outcomes. Flagging only the faceless branch
                     // meant a photo that has faces never counted as checked, so
@@ -2534,7 +2680,19 @@ fn carry_over_person_ids_by_box(
     out
 }
 
-fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsInput]) {
+/// The face state of a face, when it ran and could judge the eyes; a face it
+/// could not judge abstains from every eye, smile and gaze aggregate.
+fn judged(face: &lrg_ml::faces::FaceResult) -> Option<&lrg_ml::face_state::FaceState> {
+    face.state
+        .as_ref()
+        .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Unknown)
+}
+
+fn apply_face_aggregate(
+    metadata: &mut Map<String, Value>,
+    faces: &[FaceMetricsInput],
+    state_ran: bool,
+) {
     let agg = aggregate_face_culling_metrics(faces, &FaceMetricsConfig::defaults());
     metadata.insert("cull_face_count".into(), json!(agg.cull_face_count));
     metadata.insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
@@ -2551,6 +2709,215 @@ fn apply_face_aggregate(metadata: &mut Map<String, Value>, faces: &[FaceMetricsI
     metadata.insert("cull_blink_penalty".into(), json!(agg.cull_blink_penalty));
     metadata.insert("cull_occlusion".into(), json!(agg.cull_occlusion));
     metadata.insert("cull_faces_present".into(), json!(agg.cull_faces_present));
+    // Absent, not 0, when no prominent face was large enough to measure: a
+    // stale reading from an earlier pass must not survive into this one.
+    for (key, value) in [
+        ("cull_eye_focus", agg.cull_eye_focus),
+        ("cull_face_focus", agg.cull_face_focus),
+        ("cull_eye_closed", agg.cull_eye_closed),
+        ("cull_smile", agg.cull_smile),
+        ("cull_gaze_away", agg.cull_gaze_away),
+    ] {
+        match value {
+            Some(v) => {
+                metadata.insert(key.into(), json!(v));
+            }
+            None => {
+                metadata.remove(key);
+            }
+        }
+    }
+    // What tells "too small to measure" from "indexed before focus was
+    // measured" — see `lrg_analysis::grouping::FOCUS_VERSION_KEY`.
+    metadata.insert(
+        lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
+        json!(lrg_analysis::grouping::FOCUS_VERSION),
+    );
+    match agg.cull_eye_state {
+        Some(state) => {
+            metadata.insert("cull_eye_state".into(), json!(state));
+        }
+        None => {
+            metadata.remove("cull_eye_state");
+        }
+    }
+    // Present only when the face state model ran on this pass: a stamp left
+    // from an earlier pass over different faces would claim readings these
+    // rows do not have.
+    if state_ran {
+        metadata.insert(
+            lrg_analysis::grouping::FACE_STATE_VERSION_KEY.into(),
+            json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+        );
+        metadata.insert(
+            "cull_face_state_model".into(),
+            json!(lrg_ml::face_state::MODEL_ID),
+        );
+    } else {
+        metadata.remove(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+        metadata.remove("cull_face_state_model");
+    }
+}
+
+/// At most this many faces of one photo get the face state model, largest
+/// first. Only prominent faces count towards the photo's eye state anyway, and
+/// a group of forty would otherwise cost forty mesh passes.
+const MAX_STATE_FACES: usize = 12;
+
+/// What the second look at a photo's faces produced.
+struct FaceMeasurements {
+    faces: Vec<lrg_ml::faces::FaceResult>,
+    /// Degradations to report against the photo.
+    warnings: Vec<String>,
+    /// The face state model ran on the faces.
+    state_ran: bool,
+}
+
+/// Re-measures focus on the full-size original (when there is one) and runs
+/// the face state model on the largest copy there is, in one decode and off
+/// the async workers. Waits for one of [`FULL_DECODES`] only when it decodes.
+async fn measure_faces(
+    faces: Vec<lrg_ml::faces::FaceResult>,
+    working: (usize, usize),
+    working_pixels: Option<Vec<u8>>,
+    source: Option<FullSource>,
+    face_state: Option<Arc<lrg_ml::face_state::FaceStateModel>>,
+) -> FaceMeasurements {
+    let _permit = match source {
+        Some(_) => FULL_DECODES.acquire().await.ok(),
+        None => None,
+    };
+    let backup = faces.clone();
+    let wanted_state = face_state.is_some();
+    tokio::task::spawn_blocking(move || {
+        measure_faces_blocking(faces, working, working_pixels, source, face_state)
+    })
+    .await
+    .unwrap_or_else(|e| FaceMeasurements {
+        faces: backup,
+        warnings: vec![format!(
+            "focus and eye state were not measured again ({e}); the readings from the \
+             reduced working copy stand"
+        )],
+        state_ran: !wanted_state,
+    })
+}
+
+/// The blocking half of [`measure_faces`].
+fn measure_faces_blocking(
+    mut faces: Vec<lrg_ml::faces::FaceResult>,
+    working: (usize, usize),
+    working_pixels: Option<Vec<u8>>,
+    source: Option<FullSource>,
+    face_state: Option<Arc<lrg_ml::face_state::FaceStateModel>>,
+) -> FaceMeasurements {
+    let cfg = FaceMetricsConfig::defaults();
+    let mut warnings = Vec::new();
+
+    // The full-size original, kept only when it really is the working copy
+    // enlarged (`refine_focus` checks that) so the face state can use it too.
+    let mut full: Option<(Vec<u8>, usize, usize)> = None;
+    if let Some(source) = source {
+        match decode_full(source) {
+            Ok((rgb, width, height)) => {
+                if lrg_ml::faces::refine_focus(
+                    &mut faces, working.0, working.1, &rgb, width, height, &cfg,
+                ) {
+                    full = Some((rgb, width, height));
+                } else {
+                    // Not an error: the original is no larger than the working
+                    // copy (a raw whose embedded preview is small), so the
+                    // readings already taken are the best there are.
+                    log::debug!(
+                        "original {width}x{height} adds nothing over the {}x{} working copy",
+                        working.0,
+                        working.1
+                    );
+                }
+            }
+            Err(e) => warnings.push(format!(
+                "eye focus was measured on the reduced working copy, because the original \
+                 could not be decoded again ({e})"
+            )),
+        }
+    }
+
+    let mut state_ran = false;
+    if let Some(model) = face_state {
+        let image = match (&full, &working_pixels) {
+            (Some((rgb, w, h)), _) => Some((rgb.as_slice(), *w, *h)),
+            (None, Some(rgb)) => Some((rgb.as_slice(), working.0, working.1)),
+            (None, None) => None,
+        };
+        if let Some((rgb, width, height)) = image {
+            let (sx, sy) = (
+                width as f64 / working.0.max(1) as f64,
+                height as f64 / working.1.max(1) as f64,
+            );
+            // The prominent faces, largest first: the ones the photo's eye
+            // state is aggregated from.
+            let largest = faces.iter().map(|f| f.area_ratio).fold(0.0f64, f64::max);
+            let cutoff = largest * cfg.prominent_face_area_fraction;
+            let mut selected: Vec<usize> = (0..faces.len())
+                .filter(|&i| faces[i].area_ratio >= cutoff)
+                .collect();
+            selected.sort_by(|&a, &b| faces[b].area_ratio.total_cmp(&faces[a].area_ratio));
+            selected.truncate(MAX_STATE_FACES);
+            let geometry: Vec<lrg_ml::face_state::FaceGeometry> = selected
+                .iter()
+                .map(|&i| {
+                    let f = &faces[i];
+                    lrg_ml::face_state::FaceGeometry {
+                        bbox: [
+                            f.bbox[0] as f64 * sx,
+                            f.bbox[1] as f64 * sy,
+                            f.bbox[2] as f64 * sx,
+                            f.bbox[3] as f64 * sy,
+                        ],
+                        kps: f.kps.map(|p| [p[0] * sx, p[1] * sy]),
+                    }
+                })
+                .collect();
+            match model.analyze(rgb, width, height, &geometry, &cfg) {
+                Ok(states) => {
+                    for (&i, state) in selected.iter().zip(states) {
+                        faces[i].state = state;
+                    }
+                    state_ran = true;
+                }
+                Err(e) => warnings.push(format!(
+                    "eye state, smile and gaze could not be analysed ({e}); the rough eye \
+                     estimate is used instead"
+                )),
+            }
+        }
+    }
+    FaceMeasurements {
+        faces,
+        warnings,
+        state_ran,
+    }
+}
+
+/// The full-size, upright original as RGB8.
+fn decode_full(source: FullSource) -> Result<(Vec<u8>, usize, usize), String> {
+    let (data, filename): (Arc<[u8]>, String) = match source {
+        FullSource::Path(path) => {
+            let data = std::fs::read(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            (Arc::from(data), name)
+        }
+        FullSource::Bytes { bytes, filename } => (bytes, filename),
+    };
+    let image = lrg_imaging::convert::decode_oriented(&data, &filename)
+        .map_err(|UnsupportedImageError(msg)| msg)?;
+    drop(data);
+    let rgb = image.into_rgb8();
+    let (width, height) = (rgb.width() as usize, rgb.height() as usize);
+    Ok((rgb.into_raw(), width, height))
 }
 
 /// The wire provider name for this run, lowercased, defaulting to "ollama".

@@ -52,6 +52,7 @@ const CLIP_APPROX_BYTES: u64 = 2_310_000_000;
 const AESTHETIC_APPROX_BYTES: u64 = 868_000_000;
 const BIOCLIP_APPROX_BYTES: u64 = 876_000_000;
 const FACE_APPROX_BYTES: u64 = 94_200_000;
+const FACE_STATE_APPROX_BYTES: u64 = 6_800_000;
 
 /// Release tag holding the YuNet + FaceNet ONNX files.
 ///
@@ -64,6 +65,13 @@ const FACE_APPROX_BYTES: u64 = 94_200_000;
 /// already-stored embeddings are no longer comparable.
 const FACE_ASSETS_RELEASE_TAG: &str = "face-assets-v1";
 
+/// Release tag holding MediaPipe Face Mesh V2 + Blendshape V2 as ONNX
+/// (`scripts/export_face_state.py`). Its own tag again: the eye-state models
+/// are a separate family from detection and recognition, and must never be
+/// what makes face detection report "not ready". Bump together with
+/// `.github/workflows/model-assets-face-state.yml`'s `tag_name`.
+const FACE_STATE_ASSETS_RELEASE_TAG: &str = "face-state-assets-v1";
+
 /// A model family as the user meets it: one indicator in the Plug-in Manager,
 /// one entry in `/v1/models/assets`, and the unit the combined download skips
 /// when it cannot be fetched.
@@ -73,16 +81,18 @@ enum Family {
     Aesthetic,
     Bioclip,
     Face,
+    FaceState,
 }
 
 impl Family {
     /// Every family, in the order `/v1/models/assets` lists them and the
     /// combined download fetches them.
-    const ALL: [Family; 4] = [
+    const ALL: [Family; 5] = [
         Family::Clip,
         Family::Aesthetic,
         Family::Bioclip,
         Family::Face,
+        Family::FaceState,
     ];
 
     fn id(self) -> &'static str {
@@ -91,6 +101,7 @@ impl Family {
             Family::Aesthetic => "aesthetic",
             Family::Bioclip => "bioclip",
             Family::Face => "face",
+            Family::FaceState => "face_state",
         }
     }
 
@@ -102,6 +113,7 @@ impl Family {
             Family::Aesthetic => "Photo quality scoring",
             Family::Bioclip => "Species identification",
             Family::Face => "Face detection",
+            Family::FaceState => "Eye and expression analysis",
         }
     }
 
@@ -111,6 +123,7 @@ impl Family {
             Family::Aesthetic => AESTHETIC_APPROX_BYTES,
             Family::Bioclip => BIOCLIP_APPROX_BYTES,
             Family::Face => FACE_APPROX_BYTES,
+            Family::FaceState => FACE_STATE_APPROX_BYTES,
         }
     }
 
@@ -121,6 +134,7 @@ impl Family {
             Family::Aesthetic => state.aesthetic.is_cached(),
             Family::Bioclip => state.bioclip.is_cached(),
             Family::Face => state.face.is_cached(),
+            Family::FaceState => state.face_state.is_cached(),
         }
     }
 }
@@ -214,6 +228,7 @@ async fn run_download(state: Arc<Downloads>, missing: Vec<Family>) {
     let aesthetic_paths = lrg_ml::model_paths::resolve_aesthetic();
     let bioclip_paths = lrg_ml::model_paths::resolve_bioclip();
     let face_paths = lrg_ml::model_paths::resolve_face();
+    let face_state_paths = lrg_ml::model_paths::resolve_face_state();
 
     let families: Vec<FamilyDownload<'_>> = missing
         .iter()
@@ -223,6 +238,7 @@ async fn run_download(state: Arc<Downloads>, missing: Vec<Family>) {
                 Family::Aesthetic => aesthetic_assets(&aesthetic_paths),
                 Family::Bioclip => bioclip_assets(&bioclip_paths),
                 Family::Face => face_assets(&face_paths),
+                Family::FaceState => face_state_assets(&face_state_paths),
             };
             FamilyDownload {
                 name: family.name(),
@@ -373,6 +389,23 @@ fn failure_summary(failed: &[String], others_ready: bool) -> String {
          runs on can reach github.com, and that the backend can write to its model folder.",
     );
     text
+}
+
+/// The face-state assets (MediaPipe Face Mesh V2 + Blendshape V2) and where
+/// they go.
+fn face_state_assets(paths: &lrg_ml::face_state::FaceStatePaths) -> Vec<ReleaseAsset<'_>> {
+    vec![
+        (
+            FACE_STATE_ASSETS_RELEASE_TAG,
+            "face_mesh_v2.onnx",
+            paths.mesh_onnx.as_path(),
+        ),
+        (
+            FACE_STATE_ASSETS_RELEASE_TAG,
+            "face_blendshapes_v2.onnx",
+            paths.blendshapes_onnx.as_path(),
+        ),
+    ]
 }
 
 /// The face-model assets and where they go.

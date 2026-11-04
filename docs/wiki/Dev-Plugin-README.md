@@ -111,6 +111,14 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
 - Judge the moment as well as sharpness: the Sports and Event presets ask
   about action and emotion, keep usable frames ahead of flawed ones, and do not
   count a kiss or a laugh with closed eyes as a blink
+- Check focus on the eyes, measured on the full-size original rather than a
+  reduced copy: a frame focused on the eyes ranks above one focused on the nose
+  or the ear, and a frame whose focus clearly missed the eyes is a reject
+  candidate when a sharper frame of the same burst exists
+- Read eyes open, half closed or closed, the smile and the gaze of every
+  prominent face with Google's MediaPipe face model: one blink spoils a group
+  shot, a laugh with the eyes shut is not a blink, and in Portrait and Event the
+  broader smile wins between otherwise equal frames
 - Nominate a clearly blurred single, or a burst blurred throughout, as reject
   candidates instead of picking it by default
 - Detect exposure brackets, focus stacks and panoramas and route them to a

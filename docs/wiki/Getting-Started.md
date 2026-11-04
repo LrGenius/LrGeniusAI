@@ -86,8 +86,9 @@ LrGeniusAI server in the background.
    advice as [above](#before-you-start-back-up-your-catalog)) and check that
    *Server Status* says **Running**.
 4. Switch to the **AI Models** tab:
-   1. Click **Download AI Models** (about 4.1 GB). These power search, photo
-      quality scoring, species and face detection.
+   1. Click **Download AI Models** (about 4.2 GB). These power search, quality
+      scoring, species and face detection, and the eye and expression analysis
+      culling uses.
    2. Further down, in **Local AI Model — MLX** (Mac) or **Local AI Model —
       llama.cpp** (Windows), pick **Gemma 4 E4B (recommended)** and click
       **Download** (about 5–6 GB). This is the model that writes your

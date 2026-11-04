@@ -184,15 +184,8 @@ fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, Unsupported
     Ok(out.into_inner())
 }
 
-/// Port of `normalize_image_bytes`. Returns (jpeg_ready_bytes, filename).
-pub fn normalize_image_bytes(
-    data: &[u8],
-    filename: Option<&str>,
-    max_long_edge: u32,
-    quality: u8,
-) -> Result<(Vec<u8>, String), UnsupportedImageError> {
-    let filename = filename.unwrap_or("photo");
-
+/// The checks every path below starts with: no bytes, or a video.
+fn check_decodable(data: &[u8], filename: &str) -> Result<(), UnsupportedImageError> {
     if data.is_empty() {
         return Err(UnsupportedImageError(format!(
             "Empty image data for '{filename}'"
@@ -203,28 +196,85 @@ pub fn normalize_image_bytes(
             "'{filename}' is a video file and cannot be indexed"
         )));
     }
+    Ok(())
+}
+
+/// A RAW file decoded and turned upright.
+fn decode_raw_oriented(data: &[u8], filename: &str) -> Result<DynamicImage, UnsupportedImageError> {
+    // Never let the generic decoder open TIFF-based raws (NEF/CR2/DNG) —
+    // it would return thumbnails or unprocessed sensor data.
+    let t_decode = std::time::Instant::now();
+    let decoded = decode_raw(data).map_err(|e| {
+        UnsupportedImageError(format!("Failed to decode raw file '{filename}': {e}"))
+    })?;
+    log::debug!(
+        "'{filename}': raw decode ({}x{}) took {:?}",
+        decoded.width(),
+        decoded.height(),
+        t_decode.elapsed()
+    );
+    // Most RAW formats are TIFF-based containers, so the same
+    // container-level EXIF reader used for JPEG/TIFF picks up the
+    // root IFD's Orientation tag directly from the raw bytes here
+    // too; formats with a non-TIFF container (CR3, RAF, X3F) simply
+    // won't match and are left unrotated rather than failing.
+    Ok(match exif_orientation(data) {
+        Some(o) => apply_orientation(decoded, o),
+        None => decoded,
+    })
+}
+
+/// Anything the `image` crate reads, decoded and turned upright.
+fn decode_generic_oriented(
+    data: &[u8],
+    filename: &str,
+) -> Result<DynamicImage, UnsupportedImageError> {
+    let reader = ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?;
+    let decoded = decode_without_alloc_cap(reader)
+        .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?;
+    Ok(match exif_orientation(data) {
+        Some(o) => apply_orientation(decoded, o),
+        None => decoded,
+    })
+}
+
+/// The full-size, upright image that [`normalize_image_bytes`] shrinks to
+/// make the working copy: a RAW through its embedded preview (or a demosaic
+/// when it has none), anything else through the `image` crate, with the
+/// file's EXIF orientation applied — by the same code, so the two can never
+/// disagree about which way up the picture is.
+///
+/// The working copy is therefore this image scaled by one factor, and a point
+/// found on it maps here by multiplying with `full_width / working_width`.
+/// That is what lets a face found on the working copy have its *eyes*
+/// measured at the resolution the photo really has (see `crate::focus`).
+///
+/// Only meaningful where normalisation actually decoded the file. A JPEG or
+/// PNG within the size limit passes through byte for byte, *not* turned
+/// upright, so it is its own working copy and never needs this.
+pub fn decode_oriented(data: &[u8], filename: &str) -> Result<DynamicImage, UnsupportedImageError> {
+    check_decodable(data, filename)?;
     if is_raw_filename(filename) {
-        // Never let the generic decoder open TIFF-based raws (NEF/CR2/DNG) —
-        // it would return thumbnails or unprocessed sensor data.
-        let t_decode = std::time::Instant::now();
-        let decoded = decode_raw(data).map_err(|e| {
-            UnsupportedImageError(format!("Failed to decode raw file '{filename}': {e}"))
-        })?;
-        log::debug!(
-            "'{filename}': raw decode ({}x{}) took {:?}",
-            decoded.width(),
-            decoded.height(),
-            t_decode.elapsed()
-        );
-        // Most RAW formats are TIFF-based containers, so the same
-        // container-level EXIF reader used for JPEG/TIFF picks up the
-        // root IFD's Orientation tag directly from the raw bytes here
-        // too; formats with a non-TIFF container (CR3, RAF, X3F) simply
-        // won't match and are left unrotated rather than failing.
-        let oriented = match exif_orientation(data) {
-            Some(o) => apply_orientation(decoded, o),
-            None => decoded,
-        };
+        decode_raw_oriented(data, filename)
+    } else {
+        decode_generic_oriented(data, filename)
+    }
+}
+
+/// Port of `normalize_image_bytes`. Returns (jpeg_ready_bytes, filename).
+pub fn normalize_image_bytes(
+    data: &[u8],
+    filename: Option<&str>,
+    max_long_edge: u32,
+    quality: u8,
+) -> Result<(Vec<u8>, String), UnsupportedImageError> {
+    let filename = filename.unwrap_or("photo");
+
+    check_decodable(data, filename)?;
+    if is_raw_filename(filename) {
+        let oriented = decode_raw_oriented(data, filename)?;
         let t_resize = std::time::Instant::now();
         let resized = downscale(oriented, max_long_edge);
         log::debug!(
@@ -259,16 +309,7 @@ pub fn normalize_image_bytes(
         return Ok((data.to_vec(), filename.to_string()));
     }
 
-    let reader = ImageReader::new(Cursor::new(data))
-        .with_guessed_format()
-        .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?;
-    let decoded = decode_without_alloc_cap(reader)
-        .map_err(|e| UnsupportedImageError(format!("Failed to convert image '{filename}': {e}")))?;
-
-    let oriented = match exif_orientation(data) {
-        Some(o) => apply_orientation(decoded, o),
-        None => decoded,
-    };
+    let oriented = decode_generic_oriented(data, filename)?;
     let resized = downscale(oriented, max_long_edge);
     Ok((encode_jpeg(&resized, quality)?, jpeg_filename(filename)))
 }
@@ -305,6 +346,26 @@ mod tests {
         // int(3000 * 2048/3000) = 2048, int(2000 * 0.6826...) = 1365
         assert_eq!((img.width(), img.height()), (2048, 1365));
         assert_ne!(out, data);
+    }
+
+    /// The working copy is the full-size decode scaled by one factor, which is
+    /// what lets a face found on it be measured on the original.
+    #[test]
+    fn decode_oriented_is_the_image_the_working_copy_was_shrunk_from() {
+        let data = png_bytes(3000, 2000);
+        let full = decode_oriented(&data, "big.png").unwrap();
+        assert_eq!((full.width(), full.height()), (3000, 2000));
+        let (out, _) = normalize_image_bytes(&data, Some("big.png"), 2048, 85).unwrap();
+        let working = image::load_from_memory(&out).unwrap();
+        let (sx, sy) = (
+            full.width() as f64 / working.width() as f64,
+            full.height() as f64 / working.height() as f64,
+        );
+        assert!((sx / sy - 1.0).abs() < 0.001, "{sx} vs {sy}");
+
+        assert!(decode_oriented(b"", "a.jpg").is_err());
+        assert!(decode_oriented(b"x", "a.mov").is_err());
+        assert!(decode_oriented(b"x", "a.nef").is_err());
     }
 
     #[test]

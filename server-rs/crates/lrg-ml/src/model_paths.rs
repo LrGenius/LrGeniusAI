@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::aesthetic::AestheticPaths;
 use crate::bioclip::BioclipModelPaths;
+use crate::face_state::FaceStatePaths;
 use crate::faces::FaceModelPaths;
 use crate::siglip::ModelPaths;
 
@@ -152,6 +153,21 @@ pub fn resolve_face() -> FaceModelPaths {
         det_onnx: env_or_default("LRG_YUNET_ONNX", dir.join("yunet_face_detection.onnx")),
         rec_onnx: env_or_default("LRG_FACENET_ONNX", dir.join("facenet_vggface2.onnx")),
         auraface_onnx: env_or_default("LRG_AURAFACE_ONNX", dir.join("auraface_glintr100.onnx")),
+    }
+}
+
+/// MediaPipe Face Mesh V2 and Blendshape V2, as `scripts/export_face_state.py`
+/// exports them and `/v1/models/assets/downloads` fetches them
+/// (`face-state-assets-v1`). Same directory and per-file env-var convention as
+/// the face pair.
+pub fn resolve_face_state() -> FaceStatePaths {
+    let dir = default_models_dir();
+    FaceStatePaths {
+        mesh_onnx: env_or_default("LRG_FACE_MESH_ONNX", dir.join("face_mesh_v2.onnx")),
+        blendshapes_onnx: env_or_default(
+            "LRG_FACE_BLENDSHAPES_ONNX",
+            dir.join("face_blendshapes_v2.onnx"),
+        ),
     }
 }
 

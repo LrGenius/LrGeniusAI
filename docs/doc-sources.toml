@@ -162,6 +162,11 @@ sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskCullPhotos.lua",
   "server-rs/crates/lrg-analysis/src/culling_config.rs",
   "server-rs/crates/lrg-analysis/src/grouping.rs",
+  # "Focus on the eyes" and "Eyes open, smile and gaze": what is measured on
+  # each face and how a photo's faces are summed up.
+  "server-rs/crates/lrg-imaging/src/focus.rs",
+  "server-rs/crates/lrg-ml/src/face_state.rs",
+  "server-rs/crates/lrg-analysis/src/face_aggregate.rs",
 ]
 
 [page."Help-AI-Agents.md"]

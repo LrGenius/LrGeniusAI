@@ -398,6 +398,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let (clip_text_status, clip_text_error) = state.siglip.text_status();
     let (aesthetic_status, aesthetic_error) = state.aesthetic.status();
     let (face_status, face_error) = state.face.status();
+    let (face_state_status, face_state_error) = state.face_state.status();
     let (species_status, species_error) = state.bioclip.status();
     // Deliberately no LLM provider status here: this GET carries no API keys
     // or base URLs to probe (unlike POST /models, which accepts them), so
@@ -423,6 +424,8 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "face_model": face_status,
         "face_error": face_error,
         "face_recognizer": state.face.recognizer().as_str(),
+        "face_state_model": face_state_status,
+        "face_state_error": face_state_error,
         "species_model": species_status,
         "species_error": species_error,
     }))
