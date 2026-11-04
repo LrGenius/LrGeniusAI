@@ -220,6 +220,10 @@ blink.
   when the whole burst looks the same.
 - **A laugh is not a blink.** A broad smile with the eyes shut counts as a
   laugh, like a kiss already did.
+- **Looking down is not a blink.** Lids down on a lowered head, a child looking at
+  the candles say, read much like shut eyes. Such a frame says "looking down" and
+  is never a reject candidate for it. Someone really asleep with the head down gets
+  the same note, which costs a warning and no photo.
 - **The smile counts in Portrait and Event.** Between otherwise equal frames,
   the one where everyone smiles more wins, and its explanation says
   "best smile in group".

@@ -266,8 +266,8 @@ focus was measured on the reduced working copy …"`).
 on disk, MediaPipe's face mesh and blendshapes run on the prominent faces (at
 most 12, largest first) of the same full-size image, or of the working copy
 when there is no larger one (`lrg_ml::face_state`). Per face the row gets
-`face_eye_state` (`open`/`half`/`closed`, `unknown` when the face is turned too
-far, barely a face or too small), `face_eye_closed` (the more closed eye),
+`face_eye_state` (`open`/`half`/`closed`, `down` for lids down on a lowered head,
+`unknown` when the face is turned too far, barely a face or too small), `face_eye_closed` (the more closed eye),
 `face_smile`, `face_eye_squint`, `face_mouth_open`, `face_gaze_off_lens` (degrees from
 the lens, head turn included), `face_yaw`, `face_pitch`, `face_roll` (degrees), the light
 on the skin as `face_luminance`, `face_against_surround_stops`, `face_across_stops` and
@@ -627,7 +627,8 @@ blink penalty is then the model's `eyeBlink` of the more closed eye, judged at `
 `reject_eye_closed_threshold` (plus the relative rules) instead of the proxy's
 thresholds, and a face it could not judge is never a blink. Reasons:
 `eyes_closed`, `eyes_half_closed` (a label, never a defect),
-`looking_away` (`portrait`), `best_smile`; a smile at
+`looking_away` (`portrait`), `looking_down` (a note, and such a face is left out of
+the blink reading), `best_smile`; a smile at
 `laugh_smile_threshold` with the eyes shut counts as `eyes_closed_intentional`.
 
 **Mouth and the light on the face** are labels only and move no score, until a

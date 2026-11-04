@@ -261,6 +261,8 @@ struct Scored<'a> {
     cull_face_luminance: Option<f64>,
     cull_face_across_stops: Option<f64>,
     cull_face_blown: Option<f64>,
+    /// A prominent face has its lids down on a lowered head: looking down.
+    looking_down: bool,
     /// The photo went through the face state pass (`cull_face_state_version`
     /// is stored), whether or not its faces could be judged.
     state_measured: bool,
@@ -318,7 +320,8 @@ pub const FACE_STATE_VERSION_KEY: &str = "cull_face_state_version";
 ///
 /// 2: `cull_eye_closed` is the more closed eye instead of the mean of both, and
 /// `cull_gaze_off_lens` replaces `cull_gaze_away`.
-pub const FACE_STATE_VERSION: i64 = 2;
+/// 3: lids down on a lowered head read `down`, no longer closed.
+pub const FACE_STATE_VERSION: i64 = 3;
 
 /// Whether a photo's face state was read by this version of the analysis. The
 /// key's value counts, not its presence, or a bump would change nothing.
@@ -388,6 +391,7 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             "eyes_closed" => "eyes closed".to_string(),
             "eyes_half_closed" => "eyes half closed or squinting".to_string(),
             "looking_away" => "looking away from the camera".to_string(),
+            "looking_down" => "looking down, which is not counted as a blink".to_string(),
             "best_smile" => "best smile in group".to_string(),
             "mouth_open" => "mouth open, caught mid-word — a sibling has it closed".to_string(),
             "face_darker" => "the face is darker than in a sibling frame".to_string(),
@@ -608,6 +612,10 @@ fn rank_group_records(
                 cull_face_luminance: read("cull_face_luminance"),
                 cull_face_across_stops,
                 cull_face_blown: read("cull_face_blown"),
+                looking_down: m
+                    .get("cull_looking_down")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 state_measured,
                 half_closed: false,
                 hard_defect: false,
@@ -1104,7 +1112,8 @@ fn rank_group_records(
             let eyes_judged = !state_active || item.cull_eye_closed.is_some();
             // The most open eyes of a group can still be shut, and a single is
             // always its own best: only the model can say so.
-            let eyes_open = !state_active || item.cull_blink_penalty <= reason_blink;
+            let eyes_open =
+                !state_active || (item.cull_blink_penalty <= reason_blink && !item.looking_down);
             if item.cull_eye_openness >= (max_eye_openness - rk.reason_eyes_open_delta).max(0.0)
                 && is_winner
                 && eyes_judged
@@ -1123,7 +1132,9 @@ fn rank_group_records(
             } else if item.half_closed {
                 reason_codes.push("eyes_half_closed".to_string());
             }
-            if state_active
+            if state_active && item.looking_down {
+                reason_codes.push("looking_down".to_string());
+            } else if state_active
                 && rk.reason_gaze_off_lens_degrees > 0.0
                 && item
                     .cull_gaze_off_lens
@@ -2771,6 +2782,28 @@ mod tests {
         assert!(photo(&groups[0], "open")
             .reason_codes
             .contains(&"eyes_open_best".to_string()));
+    }
+
+    /// A child looking at the candles next to one looking up: a note, no defect,
+    /// and no claim about the best open eyes.
+    #[test]
+    fn looking_down_is_named_and_never_a_defect() {
+        let mut down = state_frame("down", 1000.0, None, Some(0.2), true);
+        down.metadata
+            .insert("cull_looking_down".into(), Value::Bool(true));
+        down.metadata
+            .insert("cull_gaze_off_lens".into(), Value::from(40.0));
+        let groups = cull(
+            vec![down, state_frame("up", 1000.5, Some(0.05), Some(0.2), true)],
+            "portrait",
+        );
+        let down = photo(&groups[0], "down");
+        assert!(down.reason_codes.contains(&"looking_down".to_string()));
+        assert!(!down.reason_codes.contains(&"looking_away".to_string()));
+        assert!(!down.reason_codes.contains(&"eyes_closed".to_string()));
+        assert!(!down.reason_codes.contains(&"eyes_open_best".to_string()));
+        assert!(!down.reject_candidate, "{:?}", down.reason_codes);
+        assert_eq!(down.metrics["clear_defect"], false);
     }
 
     fn frame_with(id: &str, t: f64, readings: &[(&str, f64)]) -> GroupingInput {

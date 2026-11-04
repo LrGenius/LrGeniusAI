@@ -2158,7 +2158,11 @@ async fn finish_one(
                             occlusion: Some(f.occlusion),
                             eye_focus: f.eye_focus,
                             face_focus: f.face_focus,
-                            eye_closed: judged(f).map(|s| s.eye_closed),
+                            eye_closed: judged(f)
+                                .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
+                                .map(|s| s.eye_closed),
+                            looking_down: judged(f)
+                                .is_some_and(|s| s.eye_state == lrg_ml::face_state::EyeState::Down),
                             smile: judged(f).map(|s| s.smile),
                             eye_squint: judged(f).map(|s| s.eye_squint),
                             gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
@@ -2330,7 +2334,12 @@ async fn finish_one(
                                 occlusion: Some(f.occlusion),
                                 eye_focus: f.eye_focus,
                                 face_focus: f.face_focus,
-                                eye_closed: judged(f).map(|s| s.eye_closed),
+                                eye_closed: judged(f)
+                                    .filter(|s| s.eye_state != lrg_ml::face_state::EyeState::Down)
+                                    .map(|s| s.eye_closed),
+                                looking_down: judged(f).is_some_and(|s| {
+                                    s.eye_state == lrg_ml::face_state::EyeState::Down
+                                }),
                                 smile: judged(f).map(|s| s.smile),
                                 eye_squint: judged(f).map(|s| s.eye_squint),
                                 gaze_off_lens: judged(f).map(|s| s.gaze_off_lens),
@@ -2778,6 +2787,11 @@ fn apply_face_aggregate(
         lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
         json!(lrg_analysis::grouping::FOCUS_VERSION),
     );
+    if agg.cull_looking_down {
+        metadata.insert("cull_looking_down".into(), json!(true));
+    } else {
+        metadata.remove("cull_looking_down");
+    }
     match agg.cull_eye_state {
         Some(state) => {
             metadata.insert("cull_eye_state".into(), json!(state));

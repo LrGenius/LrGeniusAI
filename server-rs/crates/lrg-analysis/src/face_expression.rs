@@ -98,9 +98,9 @@ impl ExpressionFilter {
             verdict = verdict.and(Verdict::of(smile.map(|s| s >= SMILING_FROM)));
         }
         if self.looking_at_camera {
-            // Shut eyes look nowhere, whatever `eyeLook*` says, and that is an
-            // answer rather than a missing reading.
-            let looking = if eye_state == Some("closed") {
+            // Shut eyes look nowhere, whatever `eyeLook*` says, and eyes going
+            // down are not on the lens. Both are answers, not missing readings.
+            let looking = if matches!(eye_state, Some("closed" | "down")) {
                 Some(false)
             } else {
                 gaze_off_lens.map(|g| g <= LOOKING_AT_CAMERA_WITHIN_DEGREES)
@@ -152,7 +152,7 @@ pub fn portrait_score(face: &Map<String, Value>) -> f64 {
         number("face_det_score").unwrap_or(0.0) + number("face_sharpness").unwrap_or(0.0);
     match face.get("face_eye_state").and_then(Value::as_str) {
         Some("closed") => score -= 1.0,
-        Some("half") => score -= 0.4,
+        Some("half" | "down") => score -= 0.4,
         Some(_) => {}
         None => score -= UNREAD_COST,
     }
@@ -284,6 +284,13 @@ mod tests {
             filter(false, true, false).judge_photo(&stale),
             Verdict::Unknown
         );
+    }
+
+    #[test]
+    fn eyes_going_down_are_neither_open_nor_on_the_camera() {
+        let face = row(json!({"face_eye_state": "down", "face_gaze_off_lens": 12.0}));
+        assert_eq!(filter(true, false, false).judge_face(&face), Verdict::No);
+        assert_eq!(filter(false, false, true).judge_face(&face), Verdict::No);
     }
 
     /// Shut eyes look nowhere: a plain no, not a reading to go and fetch, and not

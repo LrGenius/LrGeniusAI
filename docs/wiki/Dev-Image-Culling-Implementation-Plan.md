@@ -1245,6 +1245,25 @@ thresholds, judged by eye, then 292 from a disjoint sample to check them):
   smile cannot be read from `cheekSquint`. `jawOpen`, `mouthPucker`, `browDown` and
   `mouthPress` do move.
 
+### A lowered gaze is not a blink
+
+Commons did not show this; the first run on a real shoot did. In a test catalog of
+197 photos, 36 faces read closed, nearly all a child looking down at candles with the
+lids over the eyes. Lids down on a head lowered 10° or more now read `down`:
+
+| Faces reading closed (0.5 or more on the lids) | Called `down` |
+|---|---|
+| This catalog, nearly all really looking down | 30 of 39 |
+| Commons, eyes really shut, mostly people asleep | 10 of 34 |
+
+The second row is the price, and the direction is the right one: a note where a reject
+would have been. `eyeLookDown` does not help, since it runs high on shut eyes too
+(0.45–0.80). After this the faces reading closed in the catalog fell from 36 to 7, and
+all 18 of the highest `down` readings, checked by eye, really do look down. Of the 7, about
+two are right. The others are lower gazes on a head barely lowered (under 10°), and lids
+on a raised head behind glasses, which read 0.50–0.58 with the eyes open. The relative
+rules hold those back inside a burst.
+
 ### Mouth and the light on the face
 
 Both went in as labels and move no score: there is still no hand-culled shoot to say

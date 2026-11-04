@@ -39,6 +39,9 @@ pub struct FaceMetricsInput {
     /// (`lrg_ml::face_state`). `None` when the face state did not run for this
     /// face or could not judge the eyes (turned away, too small).
     pub eye_closed: Option<f64>,
+    /// The lids are down on a lowered head (`EyeState::Down`). Such a face's
+    /// `eye_closed` is `None`: looking down is not a blink.
+    pub looking_down: bool,
     /// `mouthSmile`, `0..1`; `None` like `eye_closed`.
     pub smile: Option<f64>,
     /// `eyeSquint`, `0..1`; `None` like `eye_closed`.
@@ -74,8 +77,12 @@ pub struct AggregatedFaceMetrics {
     /// Eyes of the prominent face whose eyes are the most closed, from the
     /// face state model; `None` when no prominent face's eyes could be judged.
     pub cull_eye_closed: Option<f64>,
-    /// That reading as `open`/`half`/`closed`, at the face-state thresholds.
+    /// That reading as `open`/`half`/`closed`, at the face-state thresholds, or
+    /// `down` when eyes that would read open are next to a face looking down, or
+    /// no other face could be judged.
     pub cull_eye_state: Option<&'static str>,
+    /// A prominent face is looking down.
+    pub cull_looking_down: bool,
     /// The weakest smile among the prominent faces: a group only smiles when
     /// everyone in it does.
     pub cull_smile: Option<f64>,
@@ -111,6 +118,7 @@ impl AggregatedFaceMetrics {
             cull_face_focus: None,
             cull_eye_closed: None,
             cull_eye_state: None,
+            cull_looking_down: false,
             cull_smile: None,
             cull_eye_squint: None,
             cull_gaze_off_lens: None,
@@ -256,15 +264,15 @@ pub fn aggregate_face_culling_metrics(
         .iter()
         .filter_map(|&i| faces[i].across_face_stops)
         .reduce(f64::max);
-    let eye_state_agg = eye_closed_agg.map(|v| {
-        if v >= cfg.face_state_closed_threshold {
-            "closed"
-        } else if v >= cfg.face_state_half_threshold {
-            "half"
-        } else {
-            "open"
-        }
-    });
+    let looking_down_agg = prominent.iter().any(|&i| faces[i].looking_down);
+    let eye_state_agg = match eye_closed_agg {
+        Some(v) if v >= cfg.face_state_closed_threshold => Some("closed"),
+        Some(v) if v >= cfg.face_state_half_threshold => Some("half"),
+        // Someone's eyes are not on the frame, so "everyone's eyes open" is out.
+        _ if looking_down_agg => Some("down"),
+        Some(_) => Some("open"),
+        None => None,
+    };
 
     let weight_total = cfg.score_weight_sharpness
         + cfg.score_weight_prominence
@@ -292,6 +300,7 @@ pub fn aggregate_face_culling_metrics(
         cull_face_focus: face_focus_agg.map(round4),
         cull_eye_closed: eye_closed_agg.map(round4),
         cull_eye_state: eye_state_agg,
+        cull_looking_down: looking_down_agg,
         cull_smile: smile_agg.map(round4),
         cull_eye_squint: eye_squint_agg.map(round4),
         cull_gaze_off_lens: gaze_off_lens_agg.map(round4),
@@ -331,6 +340,7 @@ mod tests {
             eye_focus: Some(0.7),
             face_focus: Some(0.55),
             eye_closed: Some(0.03),
+            looking_down: false,
             smile: Some(0.9),
             eye_squint: Some(0.4),
             gaze_off_lens: Some(4.0),
@@ -517,6 +527,37 @@ mod tests {
             (unjudged.cull_eye_closed, unjudged.cull_eye_state),
             (None, None)
         );
+    }
+
+    #[test]
+    fn a_face_looking_down_is_no_blink_but_the_eyes_are_not_all_open() {
+        let down = FaceMetricsInput {
+            area_ratio: 0.2,
+            looking_down: true,
+            ..Default::default()
+        };
+        let open = FaceMetricsInput {
+            area_ratio: 0.2,
+            eye_closed: Some(0.05),
+            ..Default::default()
+        };
+        let shut = FaceMetricsInput {
+            area_ratio: 0.2,
+            eye_closed: Some(0.7),
+            ..Default::default()
+        };
+        let alone = aggregate_face_culling_metrics(std::slice::from_ref(&down), &fm());
+        assert!(alone.cull_looking_down);
+        assert_eq!(alone.cull_eye_closed, None);
+        assert_eq!(alone.cull_eye_state, Some("down"));
+
+        let with_open = aggregate_face_culling_metrics(&[down, open], &fm());
+        assert_eq!(with_open.cull_eye_closed, Some(0.05));
+        assert_eq!(with_open.cull_eye_state, Some("down"));
+
+        // A real blink next to it still speaks.
+        let with_shut = aggregate_face_culling_metrics(&[down, shut], &fm());
+        assert_eq!(with_shut.cull_eye_state, Some("closed"));
     }
 
     /// A laugh is open too, and not what the mouth reading is after.

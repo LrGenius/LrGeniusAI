@@ -228,6 +228,12 @@ pub struct FaceMetricsConfig {
     /// Likewise an open mouth is a laugh on a face smiling more than this, and
     /// only something to mention below it.
     pub face_state_mouth_max_smile: f64,
+    /// Lids reading closed on a head lowered at least this far are a gaze going
+    /// down, not a blink: a child looking at the candles reads like eyes shut.
+    /// Of 34 faces with the eyes really shut, mostly people asleep, this takes 10
+    /// for looking down, and the cost of that is a note where a reject would have
+    /// been.
+    pub face_state_lowered_pitch_degrees: f64,
 }
 
 impl FaceMetricsConfig {
@@ -270,6 +276,7 @@ impl FaceMetricsConfig {
             face_state_gaze_up_degrees: 20.0,
             face_state_squint_max_smile: 0.3,
             face_state_mouth_max_smile: 0.4,
+            face_state_lowered_pitch_degrees: -10.0,
         }
     }
 }

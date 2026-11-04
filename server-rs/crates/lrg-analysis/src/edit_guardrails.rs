@@ -189,7 +189,7 @@ impl GuardrailReason {
                 "Shadows are already blocked, so lifting them further would not recover detail."
             }
             GuardrailReason::FaceHardLight => {
-                "Hard light falls across a face, so clarity was left alone and contrast limited: both would deepen the split."
+                "Hard light falls across a face, so no clarity was added and contrast was limited: both would deepen the split."
             }
             GuardrailReason::FaceBelowSurroundings => {
                 "A face sits well below the frame around it, so contrast was limited to keep it from going darker."

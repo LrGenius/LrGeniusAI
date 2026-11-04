@@ -219,6 +219,9 @@ pub enum EyeState {
     /// Half closed: squinting into the sun, mid-blink, a sleepy look.
     Half,
     Closed,
+    /// The lids are down on a lowered head: looking down, which reads like shut
+    /// eyes and is not a blink.
+    Down,
     /// The model cannot say: the face is turned too far, barely a face, or
     /// too small. Abstains from every eye decision.
     Unknown,
@@ -230,6 +233,7 @@ impl EyeState {
             EyeState::Open => "open",
             EyeState::Half => "half",
             EyeState::Closed => "closed",
+            EyeState::Down => "down",
             EyeState::Unknown => "unknown",
         }
     }
@@ -239,6 +243,7 @@ impl EyeState {
             "open" => Some(EyeState::Open),
             "half" => Some(EyeState::Half),
             "closed" => Some(EyeState::Closed),
+            "down" => Some(EyeState::Down),
             "unknown" => Some(EyeState::Unknown),
             _ => None,
         }
@@ -677,6 +682,10 @@ pub fn derive_state(
         || eye_px < cfg.face_state_min_eye_px
     {
         EyeState::Unknown
+    } else if eye_closed >= cfg.face_state_half_threshold
+        && pose.pitch <= cfg.face_state_lowered_pitch_degrees
+    {
+        EyeState::Down
     } else if eye_closed >= cfg.face_state_closed_threshold {
         EyeState::Closed
     } else if eye_closed >= cfg.face_state_half_threshold {
@@ -1110,6 +1119,29 @@ mod tests {
         assert!((state((0.81, 0.76)).eye_closed - 0.81).abs() < 1e-6);
     }
 
+    /// A child looking at the candles: the lids are down and the head with them.
+    /// Real readings from a test catalog, 0.83 on the lids at about 25 degrees.
+    #[test]
+    fn lids_down_on_a_lowered_head_are_a_gaze_and_not_a_blink() {
+        let c = cfg();
+        let at = |pitch, blink| {
+            derive_state(
+                0.99,
+                shapes(blink, 0.0),
+                posed_landmarks(0.0, pitch, 0.0),
+                100.0,
+                &c,
+            )
+            .eye_state
+        };
+        assert_eq!(at(-25.0, (0.83, 0.75)), EyeState::Down);
+        assert_eq!(at(-25.0, (0.40, 0.38)), EyeState::Down);
+        // The same lids on a level head are shut.
+        assert_eq!(at(0.0, (0.83, 0.75)), EyeState::Closed);
+        // And a lowered head with the eyes open is simply open.
+        assert_eq!(at(-25.0, (0.05, 0.04)), EyeState::Open);
+    }
+
     /// One eye shut on a frontal face: the mean would have read this as open.
     #[test]
     fn the_more_closed_eye_speaks_for_a_frontal_face() {
@@ -1349,6 +1381,7 @@ mod tests {
             EyeState::Open,
             EyeState::Half,
             EyeState::Closed,
+            EyeState::Down,
             EyeState::Unknown,
         ] {
             assert_eq!(EyeState::parse(s.as_str()), Some(s));
