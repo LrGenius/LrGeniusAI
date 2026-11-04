@@ -161,6 +161,9 @@ eye and over the face as a whole.
 
 - **The sharper eye counts.** With a shallow depth of field the near eye is sharp
   and the far one is not, which is how it should be.
+- **Sharp eyes overrule a soft-looking frame.** A small face against something dark
+  or out of focus can make the whole frame measure soft. Where the eyes were measured
+  sharp, the frame is not called blurred.
 - **In a couple or group shot, the least sharp prominent face decides**: the
   frame is only sharp when everyone in it is. Small faces in the background do
   not count.

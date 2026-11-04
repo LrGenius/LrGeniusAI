@@ -763,6 +763,14 @@ fn rank_group_records(
             .iter()
             .filter(|s| s.cull_face_count > 0)
             .all(|s| s.focus_measured);
+    let eyes_in_focus = |item: &Scored| {
+        focus_active
+            && rk.reason_eye_focus_threshold > 0.0
+            && item.cull_face_count > 0
+            && item
+                .cull_eye_focus
+                .is_some_and(|v| v >= rk.reason_eye_focus_threshold)
+    };
     let eye_focus_values: Vec<f64> = scored
         .iter()
         .filter(|s| s.cull_face_count > 0)
@@ -895,7 +903,13 @@ fn rank_group_records(
         // When the sharpest frame is itself soft there is no usable sibling
         // to measure against, and the burst missed focus throughout: every
         // frame is a defect, as before.
-        let blur_defect = item.sharpness_effective < rk.reason_blur_threshold
+        //
+        // Unless the eyes were measured sharp, which settles it. The frame-wide
+        // reading also falls for a small face against something dark or out of
+        // focus: on a shoot, ten frames of a child behind birthday candles all
+        // read "blurred" with sharp eyes and lost the group its pick.
+        let blur_defect = !eyes_in_focus(item)
+            && item.sharpness_effective < rk.reason_blur_threshold
             && (!relative
                 || !rk.relative_blur_rule
                 || group_size == 1
@@ -1016,7 +1030,8 @@ fn rank_group_records(
             if intentional_set.is_some() {
                 return false;
             }
-            let is_soft = item.sharpness_effective < rk.reason_blur_threshold;
+            let is_soft =
+                item.sharpness_effective < rk.reason_blur_threshold && !eyes_in_focus(item);
             if i == 0 {
                 // Nothing better to compare with: a single, or the best of its
                 // group. Only blur counts here; see
@@ -2804,6 +2819,41 @@ mod tests {
         assert!(!down.reason_codes.contains(&"eyes_open_best".to_string()));
         assert!(!down.reject_candidate, "{:?}", down.reason_codes);
         assert_eq!(down.metrics["clear_defect"], false);
+    }
+
+    /// Candlelight: little detail anywhere in the frame, the child's eyes sharp.
+    /// Readings from a real group of ten, which used to lose its pick.
+    #[test]
+    fn eyes_measured_sharp_overrule_a_soft_frame() {
+        let groups = cull(
+            vec![
+                focus_frame("a", 1000.0, 0.04, Some(0.60), Some(0.47), true),
+                focus_frame("b", 1000.5, 0.03, Some(0.57), Some(0.48), true),
+            ],
+            "portrait",
+        );
+        let a = photo(&groups[0], "a");
+        assert!(!a.reason_codes.contains(&"blurred".to_string()));
+        assert_eq!(a.metrics["clear_defect"], false);
+        // The group has its pick, and the best frame is no reject candidate.
+        assert!(a.winner, "{:?}", a.reason_codes);
+        assert!(!a.reject_candidate);
+    }
+
+    /// Soft eyes are no rescue, and neither are eyes nobody measured.
+    #[test]
+    fn a_soft_frame_without_sharp_eyes_stays_blurred() {
+        let groups = cull(
+            vec![
+                focus_frame("soft_eyes", 1000.0, 0.04, Some(0.42), Some(0.39), true),
+                focus_frame("no_reading", 1000.5, 0.04, None, Some(0.40), true),
+            ],
+            "portrait",
+        );
+        for id in ["soft_eyes", "no_reading"] {
+            let p = photo(&groups[0], id);
+            assert!(p.reason_codes.contains(&"blurred".to_string()), "{id}");
+        }
     }
 
     fn frame_with(id: &str, t: f64, readings: &[(&str, f64)]) -> GroupingInput {

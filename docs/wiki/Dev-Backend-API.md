@@ -617,7 +617,9 @@ abstain. They act only when every frame of a group with a face carries
   sharpest. A single is never rejected for its focus;
 - as `eyes_sharpest_in_group` on a pick within `reason_eye_focus_delta` of the best.
 
-`portrait` weights and gates focus most, `sports` least, `street` not at all.
+`portrait` weights and gates focus most, `sports` least, `street` not at all. Eyes measured
+at or above `reason_eye_focus_threshold` also overrule a low frame-wide sharpness: such a
+frame is not a blur defect.
 
 **Eye state, smile and gaze** (`cull_eye_closed`, `cull_smile`, `cull_eye_squint`,
 `cull_gaze_off_lens`) replace the eye-openness proxy where every frame of a group

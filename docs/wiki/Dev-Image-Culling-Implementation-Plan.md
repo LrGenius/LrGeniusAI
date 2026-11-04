@@ -1264,6 +1264,16 @@ two are right. The others are lower gazes on a head barely lowered (under 10°),
 on a raised head behind glasses, which read 0.50–0.58 with the eyes open. The relative
 rules hold those back inside a burst.
 
+### Sharp eyes in a soft frame
+
+The same catalog had ten frames of a child behind birthday candles read `blurred`
+throughout, on a frame-wide sharpness of 0.03–0.05, while the eyes read 0.54–0.60 and were
+visibly sharp. With every frame a defect the group had no pick, and all ten were reject
+candidates. A frame whose eyes reach `reason_eye_focus_threshold` is no longer a blur defect.
+Of the 13 frames with faces reading `blurred`, the 10 that pass include the 9 that are clearly sharp at the eyes
+when checked by eye, and the one really smeared frame (0.42) stays. It is one catalog, and
+the reading depends on magnification, so a slightly soft frame shot close can still pass.
+
 ### Mouth and the light on the face
 
 Both went in as labels and move no score: there is still no hand-culled shoot to say
@@ -1271,7 +1281,8 @@ what they are worth. Measured the same way, on 692 usable faces with the second
 sample and 190 photographs of people speaking added.
 
 - **The mouth is `jawOpen` and `mouthLowerDown`.** `mouthPucker` reads up to 0.99 on
-  full lips at rest and `mouthFunnel` barely moves, so neither is used. From 0.2 the
+  full lips at rest and `mouthFunnel` barely moves, so neither is used. A lowered head
+  abstains: foreshortened lips read open when closed. From 0.2 the
   mouth is visibly open on nearly every face judged: 10% of people speaking, 0.6% of
   portraits. A laugh is open too, so only a face smiling under 0.4 counts.
 - **Blown means two channels.** The top channel at 250 flagged 16% of faces, most of

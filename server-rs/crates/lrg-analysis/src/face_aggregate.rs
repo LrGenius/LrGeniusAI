@@ -254,6 +254,8 @@ pub fn aggregate_face_culling_metrics(
     let mouth_open_agg = prominent
         .iter()
         .map(|&i| &faces[i])
+        // A lowered head foreshortens the lips, and a closed mouth reads open.
+        .filter(|f| !f.looking_down)
         .filter(|f| f.smile.is_some_and(|s| s < cfg.face_state_mouth_max_smile))
         .filter_map(|f| f.mouth_open.map(unit))
         .reduce(f64::max);
@@ -573,6 +575,12 @@ mod tests {
         assert_eq!(laugh.cull_mouth_open, None);
         let word = aggregate_face_culling_metrics(&[face(0.3, 0.1)], &fm());
         assert_eq!(word.cull_mouth_open, Some(0.3));
+        let lowered = FaceMetricsInput {
+            looking_down: true,
+            ..face(0.44, 0.0)
+        };
+        let lowered = aggregate_face_culling_metrics(&[lowered], &fm());
+        assert_eq!(lowered.cull_mouth_open, None);
     }
 
     #[test]
