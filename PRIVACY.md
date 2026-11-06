@@ -1,6 +1,6 @@
 # 🔒 Privacy Policy
 
-**Last Updated:** August 16, 2026
+**Last Updated:** November 6, 2026
 
 > [!IMPORTANT]
 > **LrGeniusAI is local-first by design.**
@@ -49,7 +49,7 @@ If you choose to enable cloud providers (OpenAI, Google Gemini, Anthropic, or a 
 ## 🛡️ Sensitive Data & Security
 
 > [!NOTE]
-> **No Hidden Analytics**: LrGeniusAI does not include background tracking, telemetry, or "usage metrics" that monitor your clicks or workflow without your knowledge.
+> **No Hidden Analytics**: LrGeniusAI does not include background tracking, telemetry, or "usage metrics" that monitor your clicks or workflow without your knowledge. That covers the libraries it is built on too: the backend switches off the usage reporting built into ONNX Runtime, the engine behind face recognition and search, so nothing about your models or photos is sent to Microsoft.
 
 ### 📸 Images and Face Recognition
 We use **YuNet** and **FaceNet** for local face detection and clustering. These biometric templates are stored in your local backend database and are **never** shared with us or any third party.

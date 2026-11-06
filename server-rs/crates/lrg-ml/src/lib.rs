@@ -54,13 +54,47 @@ pub fn kleidiai_disabled() -> bool {
 static ORT_ENVIRONMENT: std::sync::Mutex<Option<ort::environment::Environment>> =
     std::sync::Mutex::new(None);
 
+/// The environment variable that switches off ONNX Runtime's own telemetry
+/// before it starts. See [`disable_onnxruntime_telemetry`].
+pub const ORT_DISABLE_TELEMETRY: &str = "ORT_DISABLE_TELEMETRY";
+
+/// Switches off ONNX Runtime's telemetry for this process. Call it first thing
+/// in `main`, before any other thread exists, since it sets an environment
+/// variable.
+///
+/// The ONNX Runtime this crate links today has nothing to send. `ort` downloads
+/// pyke's builds of it, and the 1.31.0 ones (Linux x86-64 and arm64, macOS
+/// arm64, Windows x64) contain no telemetry uploader. On Windows their ETW
+/// provider is not in Microsoft's telemetry group. This guards against linking
+/// Microsoft's own builds, whether through `ORT_LIB_LOCATION`, a
+/// dynamically loaded library or a GPU package. Since 1.29 their Linux and
+/// macOS builds upload to `mobile.events.data.microsoft.com` unless told not to,
+/// and they need two switches:
+///
+/// - This variable. The uploader starts the moment ONNX Runtime first
+///   initializes, and the process-info event goes out while the environment is
+///   being created, before any API call could turn it off. Only
+///   `ORT_DISABLE_TELEMETRY` read at that point stops both.
+/// - `with_telemetry(false)` in [`ort_environment`]. Windows' ETW provider
+///   ignores the variable and answers only to `DisableTelemetryEvents`, which
+///   `ort` otherwise replaces with `EnableTelemetryEvents`.
+///
+/// `PRIVACY.md` promises no telemetry. Keep both switches so that the promise
+/// does not depend on which build gets linked.
+pub fn disable_onnxruntime_telemetry() {
+    std::env::set_var(ORT_DISABLE_TELEMETRY, "1");
+}
+
 /// The shared environment, created on first use.
+///
+/// Built with telemetry off. See [`disable_onnxruntime_telemetry`] for the half
+/// of that which has to happen before this.
 pub(crate) fn ort_environment() -> ort::Result<ort::environment::Environment> {
     let mut slot = ORT_ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(env) = slot.as_ref() {
         return Ok(env.clone());
     }
-    let env = ort::init().build()?;
+    let env = ort::init().with_telemetry(false).build()?;
     *slot = Some(env.clone());
     Ok(env)
 }
@@ -156,3 +190,14 @@ pub mod text_pre;
 pub(crate) mod tower;
 pub mod umeyama;
 pub mod yunet;
+
+#[cfg(test)]
+mod tests {
+    /// `with_telemetry(false)` makes `ort` call `DisableTelemetryEvents`
+    /// when the environment is built. That call must succeed, or every model
+    /// fails to load.
+    #[test]
+    fn environment_builds_with_telemetry_off() {
+        super::ort_environment().expect("onnxruntime environment with telemetry off");
+    }
+}

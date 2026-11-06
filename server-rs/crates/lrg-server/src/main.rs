@@ -71,6 +71,10 @@ enum Command {
 }
 
 fn main() {
+    // First, while this is the only thread: it sets an environment variable,
+    // and ONNX Runtime reads it the moment it first initializes.
+    lrg_ml::disable_onnxruntime_telemetry();
+
     let cli = Cli::parse();
 
     // Before any logging is set up: the proxy must not touch the server's

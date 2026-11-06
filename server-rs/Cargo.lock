@@ -4564,6 +4564,7 @@ dependencies = [
  "lrg-chroma-reader",
  "lrg-common",
  "lrg-mcp",
+ "lrg-ml",
  "lrg-store",
  "serde_json",
  "tokio",
