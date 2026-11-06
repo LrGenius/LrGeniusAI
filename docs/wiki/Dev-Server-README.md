@@ -593,6 +593,21 @@ It costs roughly **3x indexing throughput on Apple Silicon**
 37 ms -> 60 ms), so leave it unset in normal use. Embeddings are
 unaffected either way — search rankings and distances are identical.
 
+### ONNX Runtime telemetry: off
+
+The server switches off ONNX Runtime's own telemetry in two ways.
+`lrg_ml::disable_onnxruntime_telemetry` sets `ORT_DISABLE_TELEMETRY=1` first
+thing in `main`, and the shared environment is built with
+`with_telemetry(false)`, because `ort` switches telemetry on unless told not
+to. The pyke builds `ort` downloads have no telemetry uploader in them. Both
+switches are for Microsoft's own builds, should one ever be linked
+(`ORT_LIB_LOCATION`, a dynamically loaded library, a GPU package). Since 1.29
+their Linux and macOS builds upload usage data to Microsoft by default. The
+uploader starts, and sends its first event, while the environment is being
+created, so only the variable stops it. On Windows the ETW provider ignores
+the variable and answers only to the API call. See the doc comment on
+`disable_onnxruntime_telemetry` before touching either.
+
 ## Docker
 
 `Dockerfile` here builds and ships the compiled binary (multi-stage:

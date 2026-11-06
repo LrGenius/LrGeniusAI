@@ -10,13 +10,14 @@ use ort::session::Session;
 use ort::value::Tensor;
 
 fn main() -> ort::Result<()> {
+    lrg_ml::disable_onnxruntime_telemetry();
     let mut args = std::env::args().skip(1);
     let model_path = args.next().expect("model path required");
     let ep = args.next().unwrap_or_else(|| "cpu".into());
     let batch: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let iters: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(10);
 
-    let env = ort::init().build()?;
+    let env = ort::init().with_telemetry(false).build()?;
     let builder = Session::builder(&env)?;
     let mut builder = match ep.as_str() {
         // CoreML is only linked in on macOS — see the target-scoped `ort`
