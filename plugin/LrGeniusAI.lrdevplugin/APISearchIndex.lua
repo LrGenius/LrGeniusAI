@@ -2024,9 +2024,11 @@ end
 -- @param options table phash_threshold, clip_threshold, time_delta_seconds,
 --   culling_preset, use_iqa (defaults true; scores the aesthetic term with
 --   CLIP-IQA over stored embeddings), semantic_weight (overrides the preset's
---   weight for the genre axis; 0 disables it), and include_stored_metadata
+--   weight for the genre axis; 0 disables it), include_stored_metadata
 --   (echoes each photo's stored cull_* inputs under photos[].stored_metadata,
---   for building evaluation fixtures).
+--   for building evaluation fixtures) and include_embeddings (echoes each
+--   photo's embedding, packed, as photos[].embedding_q8, so a fixture groups
+--   the way the backend did when it is replayed).
 -- @return table|nil result, string|nil error
 ---
 function SearchIndexAPI.cullPhotos(photoIds, options)
@@ -2049,6 +2051,9 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	end
 	if options.include_stored_metadata then
 		body.include_stored_metadata = true
+	end
+	if options.include_embeddings then
+		body.include_embeddings = true
 	end
 	-- Overrides the preset's own weight for the genre semantic axis (peak
 	-- action, expression, candid moment). Exposed so the signal can be swept

@@ -170,6 +170,7 @@ local function labelledPhotos(groupPhotos, photoById, metricsById, dropped)
 				pickStatus = pickStatus,
 				rating = rating,
 				metrics = metricsById[photoId] or {},
+				embedding = photoResult["embedding_q8"],
 			})
 		elseif dropped then
 			-- A group entry with no photo ID, or with one this catalog has no
@@ -208,6 +209,12 @@ local function labelledPhotos(groupPhotos, photoById, metricsById, dropped)
 			filename = e.photo:getFormattedMetadata("fileName") or "",
 			metadata = e.metrics,
 		}
+		-- Packed embedding: the harness groups with it, so a frame two stops
+		-- brighter or a soft one lands in its burst as it did in the run,
+		-- instead of in a group of its own.
+		if type(e.embedding) == "string" and e.embedding ~= "" then
+			entry.embedding_q8 = e.embedding
+		end
 		local captureTime = e.photo:getRawMetadata("dateTime")
 		if type(captureTime) == "number" then
 			entry.capture_time = LrDate.timeToPosixDate(captureTime)
@@ -288,6 +295,7 @@ LrTasks.startAsyncTask(function()
 		local cullResult, err = SearchIndexAPI.cullPhotos(photoIds, {
 			culling_preset = options.cullingPreset,
 			include_stored_metadata = true,
+			include_embeddings = true,
 		})
 		progressScope:done()
 

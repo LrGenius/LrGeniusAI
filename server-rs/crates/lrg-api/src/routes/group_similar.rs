@@ -55,6 +55,15 @@ struct GroupingParams {
     /// fixture exporter needs. Off by default because it roughly doubles the
     /// per-photo payload and nothing in the normal cull flow reads it.
     include_stored_metadata: bool,
+    /// Echo each photo's stored SigLIP2 embedding, packed by
+    /// [`lrg_analysis::eval::quantize_embedding`], as `embedding_q8`.
+    ///
+    /// For fixtures too. The grouper reads the embedding, so a fixture without
+    /// one is grouped on pHash and capture time alone when it is replayed, and
+    /// a frame two stops brighter, or a soft one, then lands in a group of its
+    /// own and is scored against nothing. About 1.5 KB per photo, which is why
+    /// it is a flag of its own rather than part of `include_stored_metadata`.
+    include_embeddings: bool,
     /// Overrides the preset's `semantic_weight` for this request.
     ///
     /// The genre prompt sets are hypotheses, and the shipped weights are a
@@ -173,6 +182,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
     );
     let use_iqa = flag(data.get("use_iqa"), true);
     let include_stored_metadata = flag(data.get("include_stored_metadata"), false);
+    let include_embeddings = flag(data.get("include_embeddings"), false);
 
     // Clamped, not rejected: a weight outside 0..1 is a tuning fat-finger, and
     // the blend clamps anyway.
@@ -209,6 +219,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         include_debug,
         use_iqa,
         include_stored_metadata,
+        include_embeddings,
         semantic_weight,
         reject_margin_scale,
     })
@@ -275,6 +286,9 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
             });
             if let Some(stored) = outcome.stored_metadata.get(&p.photo_id) {
                 photo["stored_metadata"] = Value::Object(stored.clone());
+            }
+            if let Some(packed) = outcome.embeddings.get(&p.photo_id) {
+                photo["embedding_q8"] = json!(packed);
             }
             photo
         })
@@ -369,6 +383,9 @@ struct GroupingOutcome {
     /// `include_stored_metadata` was requested — building it clones a map per
     /// photo, which is pure waste on the normal cull path.
     stored_metadata: std::collections::HashMap<String, Map<String, Value>>,
+    /// Per photo with a non-zero embedding, the embedding packed for a
+    /// fixture. Empty unless `include_embeddings` was requested.
+    embeddings: std::collections::HashMap<String, String>,
 }
 
 /// The ranking signals a run lost, and the one reason they share.
@@ -501,6 +518,7 @@ async fn compute_groups(
             face_state_model_ready: state.face_state.is_cached(),
             unavailable: None,
             stored_metadata: Default::default(),
+            embeddings: Default::default(),
         });
     };
     let mut records = load_grouping_inputs(&store, &params.photo_ids).await?;
@@ -663,9 +681,26 @@ async fn compute_groups(
     } else {
         Default::default()
     };
+    let embeddings = if params.include_embeddings {
+        records
+            .iter()
+            .filter_map(|r| {
+                let v = r.embedding.as_ref()?;
+                v.iter().any(|x| *x != 0.0).then(|| {
+                    (
+                        r.photo_id.clone(),
+                        lrg_analysis::eval::quantize_embedding(v),
+                    )
+                })
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
 
     Ok(GroupingOutcome {
         stored_metadata,
+        embeddings,
         groups: group_and_sort_images_with_config(
             records,
             params.phash_threshold,
@@ -959,6 +994,7 @@ mod tests {
             face_state_model_ready: true,
             unavailable: None,
             stored_metadata: Default::default(),
+            embeddings: Default::default(),
         }
     }
 

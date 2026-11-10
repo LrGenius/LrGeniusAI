@@ -588,6 +588,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
 | `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
+| `include_embeddings` | bool | Echo each photo's SigLIP2 embedding as `embedding_q8`: base64 of a little-endian `f32` scale and one signed byte per dimension (`lrg_analysis::eval::quantize_embedding`, about 1.5 KB). For fixtures, whose replay groups the way the backend did only with it. Absent for a photo without an embedding |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
 
 Every preset except `default` judges the **moment**: the stronger of the
