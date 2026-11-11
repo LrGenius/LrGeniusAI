@@ -290,9 +290,195 @@ pub fn preprocess(pixels: &[u8], width: usize, height: usize) -> Preprocessed {
     }
 }
 
+/// A part of the image the detector looks at again on its own: the second
+/// pass for faces too small for one 640 px look at the whole frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tile {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+/// Each tile covers this share of the frame's width and height. Four of them,
+/// one per corner, overlap by a fifth of the frame: wider than any face small
+/// enough to need them, so a face cut by one tile's edge lies whole in the
+/// next.
+const TILE_SHARE: f64 = 0.6;
+
+/// The four tiles of a frame, or none where they would add nothing: a frame
+/// at most this much larger than the detector's input is seen at nearly full
+/// resolution already.
+pub fn tiles(width: usize, height: usize) -> Vec<Tile> {
+    if (width.max(height) as f64) <= INPUT_SIZE as f64 * 1.25 {
+        return Vec::new();
+    }
+    let tw = ((width as f64) * TILE_SHARE).round() as usize;
+    let th = ((height as f64) * TILE_SHARE).round() as usize;
+    let mut out = Vec::with_capacity(4);
+    for y in [0, height - th] {
+        for x in [0, width - tw] {
+            out.push(Tile { x, y, w: tw, h: th });
+        }
+    }
+    out
+}
+
+/// The tile's pixels, RGB8, row by row.
+pub fn crop(pixels: &[u8], width: usize, tile: Tile) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tile.w * tile.h * 3);
+    for row in tile.y..tile.y + tile.h {
+        let start = (row * width + tile.x) * 3;
+        out.extend_from_slice(&pixels[start..start + tile.w * 3]);
+    }
+    out
+}
+
+fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
+    let ix = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let iy = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let inter = ix * iy;
+    let area = |r: &[f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let union = area(a) + area(b) - inter;
+    if union <= 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+/// The narrowest face, in the detector's 640 px view, the whole-frame look is
+/// counted on to find. A tile face wider than this in that view is one the
+/// first pass saw at a size it finds faces at, and missed — and on the public
+/// benchmark's photographs such tile faces were as often pots, an accordion, a
+/// horse's flank or an animal's face as people: the closer look finds faces in
+/// texture. Every tile face narrower than it was a face.
+const FIRST_PASS_MIN_FACE: f32 = 20.0;
+
+/// The widest tile face, in frame pixels, worth adding to a `width × height`
+/// frame's first pass: one too small for the first pass to have seen.
+pub fn tile_face_max_width(width: usize, height: usize) -> f32 {
+    let scale = (INPUT_SIZE as f32 / width.max(height).max(1) as f32).min(1.0);
+    FIRST_PASS_MIN_FACE / scale
+}
+
+/// Adds to `kept` the faces the tiles found that it does not already have, in
+/// frame coordinates, after them — so the first pass comes out exactly as it
+/// did. Left out: a face wider than [`tile_face_max_width`], a face cut by a
+/// tile's edge inside the frame (the neighbouring tile has it whole), and one
+/// overlapping a face already kept or centred inside its box.
+pub fn merge_tiles(
+    kept: &mut Vec<Detection>,
+    found: Vec<(Detection, Tile)>,
+    width: usize,
+    height: usize,
+) {
+    const EDGE: f32 = 2.0;
+    let max_width = tile_face_max_width(width, height);
+    for (mut det, tile) in found {
+        if det.bbox[2] - det.bbox[0] > max_width {
+            continue;
+        }
+        let (x0, y0) = (tile.x as f32, tile.y as f32);
+        let (x1, y1) = (x0 + tile.w as f32, y0 + tile.h as f32);
+        det.bbox = [
+            det.bbox[0] + x0,
+            det.bbox[1] + y0,
+            det.bbox[2] + x0,
+            det.bbox[3] + y0,
+        ];
+        for k in &mut det.kps {
+            k[0] += x0;
+            k[1] += y0;
+        }
+        let b = det.bbox;
+        let cut = (tile.x > 0 && b[0] <= x0 + EDGE)
+            || (tile.y > 0 && b[1] <= y0 + EDGE)
+            || (tile.x + tile.w < width && b[2] >= x1 - EDGE)
+            || (tile.y + tile.h < height && b[3] >= y1 - EDGE);
+        if cut {
+            continue;
+        }
+        let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+        let known = kept.iter().any(|k| {
+            iou(&k.bbox, &b) > NMS_THRESH
+                || (cx >= k.bbox[0] && cx <= k.bbox[2] && cy >= k.bbox[1] && cy <= k.bbox[3])
+        });
+        if !known {
+            kept.push(det);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn det(bbox: [f32; 4]) -> Detection {
+        Detection {
+            bbox,
+            score: 0.9,
+            kps: [[bbox[0] + 1.0, bbox[1] + 1.0]; 5],
+        }
+    }
+
+    #[test]
+    fn four_overlapping_tiles_and_none_for_a_small_frame() {
+        assert!(tiles(800, 600).is_empty());
+        let t = tiles(2000, 1500);
+        assert_eq!(t.len(), 4);
+        assert_eq!(
+            t[0],
+            Tile {
+                x: 0,
+                y: 0,
+                w: 1200,
+                h: 900
+            }
+        );
+        assert_eq!(
+            t[3],
+            Tile {
+                x: 800,
+                y: 600,
+                w: 1200,
+                h: 900
+            }
+        );
+        let pixels: Vec<u8> = (0..(2000 * 1500 * 3)).map(|i| (i % 251) as u8).collect();
+        let c = crop(&pixels, 2000, t[3]);
+        assert_eq!(c.len(), 1200 * 900 * 3);
+        assert_eq!(
+            &c[..3],
+            &pixels[(600 * 2000 + 800) * 3..(600 * 2000 + 800) * 3 + 3]
+        );
+    }
+
+    #[test]
+    fn tile_faces_join_after_the_first_pass_once_and_whole() {
+        let (w, h) = (2000, 1500);
+        let t = tiles(w, h);
+        let mut kept = vec![det([100.0, 100.0, 300.0, 300.0])];
+        let found = vec![
+            // The first pass's face again, seen by a tile: dropped.
+            (det([110.0, 105.0, 290.0, 305.0]), t[0]),
+            // A small face in the bottom-right tile: added, in frame
+            // coordinates.
+            (det([400.0, 300.0, 430.0, 330.0]), t[3]),
+            // Cut by the top-left tile's right edge, inside the frame: dropped.
+            (det([1180.0, 50.0, 1200.0, 80.0]), t[0]),
+            // The same small face from another tile: dropped as known.
+            (det([1200.0, 300.0, 1230.0, 330.0]), t[2]),
+            // A "face" the first pass would have seen at its size: dropped.
+            (det([100.0, 400.0, 200.0, 500.0]), t[3]),
+        ];
+        assert!((tile_face_max_width(w, h) - 62.5).abs() < 0.01);
+        merge_tiles(&mut kept, found, w, h);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].bbox, [100.0, 100.0, 300.0, 300.0]);
+        assert_eq!(kept[1].bbox, [1200.0, 900.0, 1230.0, 930.0]);
+        assert_eq!(kept[1].kps[0], [1201.0, 901.0]);
+    }
 
     #[test]
     fn letterbox_preserves_aspect_and_scale() {

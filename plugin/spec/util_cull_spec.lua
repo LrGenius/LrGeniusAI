@@ -26,6 +26,12 @@ describe("Util.cullPrepTasks", function()
 		end
 	end)
 
+	it("adds face recognition for key people", function()
+		assert.are.same({ "cull", "faces" }, Util.cullPrepTasks("default", true))
+		assert.are.same({ "cull", "embeddings", "faces" }, Util.cullPrepTasks("auto", true))
+		assert.are.same({ "cull", "embeddings" }, Util.cullPrepTasks("auto", false))
+	end)
+
 	it("asks for the image model as well as the face model", function()
 		assert.are.same(
 			{ "clip", "aesthetic", "face", "face_state", "subject" },
@@ -58,6 +64,25 @@ describe("Util.cullPresetSummary", function()
 
 	it("falls back to the preset name when an older backend sends no counts", function()
 		assert.are.equal("Auto by genre", Util.cullPresetSummary({ culling_preset = "auto", presets = {} }, "auto"))
+	end)
+end)
+
+describe("Util.cullKeyPeopleLine", function()
+	it("names the key people and counts the rest", function()
+		assert.are.equal(
+			"Key people: Anna, Ben and 2 people not named in People. 7 groups were judged by their faces.",
+			Util.cullKeyPeopleLine({ key_people = { named = { "Anna", "Ben" }, unnamed = 2, groups = 7 } })
+		)
+		assert.are.equal(
+			"Key people: Anna. 1 group was judged by their faces.",
+			Util.cullKeyPeopleLine({ key_people = { named = { "Anna" }, unnamed = 0, groups = 1 } })
+		)
+	end)
+
+	it("says nothing when key people were not asked for or none were found", function()
+		assert.is_nil(Util.cullKeyPeopleLine({}))
+		assert.is_nil(Util.cullKeyPeopleLine(nil))
+		assert.is_nil(Util.cullKeyPeopleLine({ key_people = { named = {}, unnamed = 0, groups = 0 } }))
 	end)
 end)
 

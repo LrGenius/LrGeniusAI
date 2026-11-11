@@ -394,7 +394,25 @@ fn eye_focus_out_of_ten(eye_focus: f64, best: f64) -> u32 {
         .clamp(0.0, 10.0) as u32
 }
 
-fn explanation_from_reason_codes(codes: &[String]) -> String {
+/// The key person a reason is about, by name, where culling's key people
+/// recorded one (`cull_who_*`, written at rank time by the API and never
+/// stored): "Anna: eyes closed" rather than "eyes closed" on a frame of eight.
+pub const WHO_EYES_CLOSED_KEY: &str = "cull_who_eyes_closed";
+pub const WHO_EYE_FOCUS_KEY: &str = "cull_who_eye_focus";
+pub const WHO_LOOKING_AWAY_KEY: &str = "cull_who_looking_away";
+
+fn who_for(code: &str) -> Option<&'static str> {
+    match code {
+        "eyes_closed" | "eyes_half_closed" | "possible_blink" => Some(WHO_EYES_CLOSED_KEY),
+        "eyes_out_of_focus" | "face_out_of_focus" => Some(WHO_EYE_FOCUS_KEY),
+        "looking_away" => Some(WHO_LOOKING_AWAY_KEY),
+        _ => None,
+    }
+}
+
+/// The reasons in words, with the key person named where `metadata` says who
+/// a reason is about.
+fn explanation_naming(codes: &[String], metadata: &Map<String, Value>) -> String {
     if codes.is_empty() {
         return "single image in group".to_string();
     }
@@ -459,7 +477,16 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
     };
     codes
         .iter()
-        .map(|c| label(c))
+        .map(|c| {
+            match who_for(c)
+                .and_then(|key| metadata.get(key))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+            {
+                Some(name) => format!("{name}: {}", label(c)),
+                None => label(c),
+            }
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -1244,7 +1271,18 @@ fn rank_group_records(
             // takes most of it back. On the public benchmark the penalty alone
             // pushed pans past this line, whose streaked background keeps more
             // grain than a twin blurred all round.
-            item.cull_score + item.noise_cost <= (winner_score - rk.reject_score_delta).max(0.0)
+            //
+            // So does a face not found beside siblings whose was, when the
+            // frame's subject is in focus: the face turned away, or the
+            // detector missed it in this exposure — on the benchmark a soft
+            // background or a stop less light was enough to lose a small face
+            // the other frames had. It ranks below them; only a real defect
+            // deletes it.
+            let faceless_but_sharp =
+                group_has_faces && item.cull_face_count == 0 && subject_in_focus(item);
+            (!faceless_but_sharp
+                && item.cull_score + item.noise_cost
+                    <= (winner_score - rk.reject_score_delta).max(0.0))
                 || item.hard_defect
                 || item.cull_exposure < rk.reject_exposure_threshold
                 || item.weak_face
@@ -1604,7 +1642,7 @@ fn rank_group_records(
         }
         metrics.insert("clear_defect".into(), Value::from(item.hard_defect));
 
-        let mut explanation = explanation_from_reason_codes(&reason_codes);
+        let mut explanation = explanation_naming(&reason_codes, &item.record.metadata);
         // Only where there is a comparison: a frame alone has no sharpest
         // sibling to be measured against.
         if focus_active && item.cull_face_count > 0 && eye_focus_values.len() > 1 {
@@ -2221,6 +2259,45 @@ mod tests {
         r.metadata
             .insert(SUBJECT_VERSION_KEY.into(), Value::from(SUBJECT_VERSION));
         r
+    }
+
+    /// A face found in two frames and missed in the third, whose subject is as
+    /// sharp: the third ranks last, but is no reject for the face alone.
+    #[test]
+    fn a_face_missed_on_a_sharp_subject_ranks_lower_but_is_kept() {
+        let with_face = |id: &str, t: f64| {
+            let mut r = subject_frame(id, t, 0.4, 0.66, 0.6);
+            for (k, v) in [
+                ("cull_face_score", 0.6),
+                ("cull_face_sharpness", 0.5),
+                ("cull_eye_openness", 0.9),
+                ("cull_blink_penalty", 0.1),
+            ] {
+                r.metadata.insert(k.into(), Value::from(v));
+            }
+            r.metadata.insert("cull_face_count".into(), Value::from(1));
+            r
+        };
+        let groups = run(vec![
+            with_face("a", 1000.0),
+            with_face("b", 1000.4),
+            subject_frame("missed", 1000.8, 0.4, 0.66, 0.6),
+        ]);
+        let missed = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "missed")
+            .unwrap();
+        assert_eq!(missed.rank, 3);
+        assert!(
+            missed
+                .reason_codes
+                .iter()
+                .any(|c| c == "no_face_detected_in_group"),
+            "{:?}",
+            missed.reason_codes
+        );
+        assert!(!missed.reject_candidate, "{:?}", missed.reason_codes);
     }
 
     /// A shallow depth of field: the frame reads soft, the subject sharp. The

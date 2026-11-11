@@ -1925,7 +1925,7 @@ const FACES_DETECTED_FIELD: &str = "cull_faces_detected";
 /// face pass has readings to bring up to date, for People as much as for
 /// culling. A photo indexed before the two counts differed has only
 /// `cull_face_count`, which then still counted every face.
-pub(super) fn faces_detected(metadata: &Map<String, Value>) -> i64 {
+pub(crate) fn faces_detected(metadata: &Map<String, Value>) -> i64 {
     metadata
         .get(FACES_DETECTED_FIELD)
         .or_else(|| metadata.get("cull_face_count"))
@@ -2406,9 +2406,12 @@ async fn finish_one(
                         t_scan.elapsed()
                     );
 
+                    // Rows, and so People, only for faces with an identity:
+                    // the tile pass's small faces count for culling alone.
+                    let identity = &faces[..faces.iter().take_while(|f| !f.from_tiles).count()];
                     if !faces.is_empty() {
                         let embeddings: Vec<&[f32]> =
-                            faces.iter().map(|f| f.embedding.as_slice()).collect();
+                            identity.iter().map(|f| f.embedding.as_slice()).collect();
                         // Only rows from the current models can be matched by
                         // embedding distance. A cosine distance between an
                         // ArcFace vector and a FaceNet one is a number, not a
@@ -2427,7 +2430,7 @@ async fn finish_one(
                         // face is instead: both use the same detector, so a
                         // re-detected face lands on its old box, and the names
                         // the user gave survive the switch.
-                        let boxes: Vec<[i64; 4]> = faces.iter().map(|f| f.bbox).collect();
+                        let boxes: Vec<[i64; 4]> = identity.iter().map(|f| f.bbox).collect();
                         for (slot, by_box) in carried
                             .iter_mut()
                             .zip(carry_over_person_ids_by_box(&other_model, &boxes))
@@ -2447,7 +2450,7 @@ async fn finish_one(
                             );
                         }
 
-                        let face_records: Vec<StoreRecord> = faces
+                        let face_records: Vec<StoreRecord> = identity
                             .iter()
                             .enumerate()
                             .map(|(i, f)| {
@@ -2961,6 +2964,49 @@ fn apply_face_aggregate(
         .collect();
     let agg = aggregate_face_culling_metrics(&inputs, &FaceMetricsConfig::defaults());
     metadata.insert(FACES_DETECTED_FIELD.into(), json!(faces.len()));
+    write_face_aggregate(metadata, &agg);
+    // What tells "too small to measure" from "indexed before focus was
+    // measured" — see `lrg_analysis::grouping::FOCUS_VERSION_KEY`.
+    metadata.insert(
+        lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
+        json!(lrg_analysis::grouping::FOCUS_VERSION),
+    );
+    match metadata
+        .get(lrg_analysis::grouping::SUBJECT_VERSION_KEY)
+        .filter(|_| lrg_analysis::grouping::subject_is_current(metadata))
+        .cloned()
+    {
+        Some(version) => {
+            metadata.insert(FACE_SUBJECT_KEY.into(), version);
+        }
+        None => {
+            metadata.remove(FACE_SUBJECT_KEY);
+        }
+    }
+    // Present only when the face state model ran on this pass: a stamp left
+    // from an earlier pass over different faces would claim readings these
+    // rows do not have.
+    if state_ran {
+        metadata.insert(
+            lrg_analysis::grouping::FACE_STATE_VERSION_KEY.into(),
+            json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+        );
+        metadata.insert(
+            "cull_face_state_model".into(),
+            json!(lrg_ml::face_state::MODEL_ID),
+        );
+    } else {
+        metadata.remove(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
+        metadata.remove("cull_face_state_model");
+    }
+}
+
+/// Writes a photo's face aggregates — and only them, no version stamp — so
+/// culling's key people can rank on another set of faces than indexing chose.
+pub(crate) fn write_face_aggregate(
+    metadata: &mut Map<String, Value>,
+    agg: &lrg_analysis::face_aggregate::AggregatedFaceMetrics,
+) {
     metadata.insert("cull_face_count".into(), json!(agg.cull_face_count));
     metadata.insert("cull_face_sharpness".into(), json!(agg.cull_face_sharpness));
     metadata.insert(
@@ -2999,12 +3045,6 @@ fn apply_face_aggregate(
             }
         }
     }
-    // What tells "too small to measure" from "indexed before focus was
-    // measured" — see `lrg_analysis::grouping::FOCUS_VERSION_KEY`.
-    metadata.insert(
-        lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
-        json!(lrg_analysis::grouping::FOCUS_VERSION),
-    );
     if agg.cull_looking_down {
         metadata.insert("cull_looking_down".into(), json!(true));
     } else {
@@ -3017,34 +3057,6 @@ fn apply_face_aggregate(
         None => {
             metadata.remove("cull_eye_state");
         }
-    }
-    match metadata
-        .get(lrg_analysis::grouping::SUBJECT_VERSION_KEY)
-        .filter(|_| lrg_analysis::grouping::subject_is_current(metadata))
-        .cloned()
-    {
-        Some(version) => {
-            metadata.insert(FACE_SUBJECT_KEY.into(), version);
-        }
-        None => {
-            metadata.remove(FACE_SUBJECT_KEY);
-        }
-    }
-    // Present only when the face state model ran on this pass: a stamp left
-    // from an earlier pass over different faces would claim readings these
-    // rows do not have.
-    if state_ran {
-        metadata.insert(
-            lrg_analysis::grouping::FACE_STATE_VERSION_KEY.into(),
-            json!(lrg_analysis::grouping::FACE_STATE_VERSION),
-        );
-        metadata.insert(
-            "cull_face_state_model".into(),
-            json!(lrg_ml::face_state::MODEL_ID),
-        );
-    } else {
-        metadata.remove(lrg_analysis::grouping::FACE_STATE_VERSION_KEY);
-        metadata.remove("cull_face_state_model");
     }
 }
 
@@ -4345,6 +4357,7 @@ mod subject_face_tests {
             eye_px: 40.0,
             focus_scale: 1.0,
             state: None,
+            from_tiles: false,
         }
     }
 

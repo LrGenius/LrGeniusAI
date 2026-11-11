@@ -2055,6 +2055,11 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	if options.include_embeddings then
 		body.include_embeddings = true
 	end
+	-- Judge each burst by its key people's faces (named in People, or in many
+	-- of the photos). Needs the faces task in the prep pass.
+	if options.key_people then
+		body.key_people = true
+	end
 	-- Overrides the preset's own weight for the genre semantic axis (peak
 	-- action, expression, candid moment). Exposed so the signal can be swept
 	-- from outside without a backend rebuild; nil leaves the preset in charge.

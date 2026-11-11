@@ -8,6 +8,7 @@ pub mod edit_budget;
 mod fake_release;
 pub mod hf_repo;
 pub mod keep_awake;
+pub mod key_people;
 pub mod llm_engine;
 pub mod llm_models;
 pub mod middleware;

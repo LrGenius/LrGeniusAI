@@ -304,6 +304,37 @@ uses the old rough estimate for blinks and says so in a culling warning, with
 the fix; photos prepared before the model was downloaded are offered for
 preparing again once it is there.
 
+## Key people
+
+Tick **Judge the key people first** in the dialog, and a frame is judged by the
+people who matter in the shoot rather than by whoever is largest in it:
+
+- **Who counts:** everyone you have named in **People** who is in these photos,
+  and anyone who is in at least a fifth of the selected photos that have faces
+  (and in three at least) — the couple at a wedding, the child at a birthday.
+  Faces you have not sorted in People yet are grouped among the selection's
+  photos for this, so it works on a shoot you have never opened People for.
+- **What changes:** in a burst that shows one of them, only their faces count —
+  however small. The bride's blink counts though a guest stands larger in front
+  of her, and a frame where she turned away has no face that matters. Bursts
+  without a key person are judged as before.
+- **Named in the explanation:** "Anna: eyes closed", "Anna: the eyes are not
+  sharp". The completion message lists the key people it found.
+
+It needs face recognition, which the fast culling preparation leaves out:
+with the option on, **Prepare now** also recognises faces, which takes
+longer. Photos that have not been through it are counted in the culling
+warning. The rule of who counts is a first guess: no public collection of
+photographs says who mattered to the photographer, so it is not measured.
+
+**Small faces.** Faces are looked for twice: once in the whole photo, and
+again in four overlapping quarters of it, which finds faces down to about a
+third of the size — the people in the back of a group, the spectators of a
+match. Such a face counts for culling only; it is too small to be recognised,
+so it never appears in People. A small face is not found in every frame alike:
+a frame where it was missed ranks below the frames that show it, but when its
+subject is sharp it is not suggested for rejection for that.
+
 ## Result collections in Lightroom
 
 For each culling run, the plugin creates a new collection set:

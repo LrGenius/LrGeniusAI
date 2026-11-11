@@ -271,7 +271,7 @@ fn person_names_path(state: &AppState) -> Option<std::path::PathBuf> {
     state.lance_root().map(|r| r.join("person_names.json"))
 }
 
-fn load_person_names(state: &AppState) -> HashMap<String, String> {
+pub(crate) fn load_person_names(state: &AppState) -> HashMap<String, String> {
     let Some(path) = person_names_path(state) else {
         return HashMap::new();
     };
@@ -296,7 +296,7 @@ const UNASSIGNED_KEY: &str = "_unassigned";
 /// The spellings of "no person this belongs to": the clusterer writes
 /// `person_unassigned`, a row that has never been clustered has an empty
 /// `person_id`, and a URL path says `_unassigned`.
-fn is_unassigned(person_id: &str) -> bool {
+pub(crate) fn is_unassigned(person_id: &str) -> bool {
     person_id.is_empty() || person_id == UNASSIGNED_KEY || person_id == "person_unassigned"
 }
 

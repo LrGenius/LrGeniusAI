@@ -287,6 +287,16 @@ the model ran on this pass. Without the model
 the response says once that a rough eye estimate was used, with the fix
 (`"Photos were analysed without eye state, smile and gaze: …"`).
 
+**Small faces.** Faces are detected twice on the working copy: once on a 640 px view of the whole
+frame, and again on four tiles of 60 % of its width and height, one per corner
+(`lrg_ml::yunet::tiles`; only when the frame is more than 800 px on its long edge). A tile face is
+added after the first pass's faces, which therefore come out exactly as before, when it is narrower
+than the first pass is counted on to find (20 px in its view, about 64 px on a 2048 px copy: wider
+tile faces were as often texture as faces on the public benchmark), lies whole in its tile, and
+overlaps no face already found. It counts for every culling aggregate, and `cull_faces_detected`
+counts it, but it gets no identity: no embedding, no thumbnail and no `FACE_TABLE` row, so it never
+reaches People or key people.
+
 **The subject, and focus on it.** The `cull` task, or `subject` on its own, finds the
 photo's subject when the `subject` model is on disk (`lrg_ml::subject`, RF-DETR-Seg Nano: COCO
 objects with masks, on a 312 px square of the working copy) and measures focus on it and on
@@ -617,6 +627,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `key_people` | bool | Judge by the selection's key people (`lrg_api::key_people`): the persons named in People who are in the selection, and those in at least a fifth of its photos with faces and at least three (`lrg_analysis::key_people::KeyPeopleRule`). Faces without a person in People are clustered among the selection's for this. In a group where any frame shows one, every frame's face aggregates are summed again from its key faces alone, every one counting however small (no prominence gate), and the reasons about eyes, focus and gaze name the key person (`cull_who_*`, rank time only, never stored and left out of `stored_metadata`). Reads `FACE_TABLE`, so it needs the full face pass. Default false |
 | `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_embeddings` | bool | Echo each photo's SigLIP2 embedding as `embedding_q8`: base64 of a little-endian `f32` scale and one signed byte per dimension (`lrg_analysis::eval::quantize_embedding`, about 1.5 KB). For fixtures, whose replay groups the way the backend did only with it. Absent for a photo without an embedding |
@@ -712,12 +723,12 @@ against the group.
 
 | Field | Type | Description |
 |---|---|---|
-| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count`, and `presets` — under `auto`, groups per chosen preset (`{"sports": 12, "default": 4}`), empty otherwise |
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count`, `presets` — under `auto`, groups per chosen preset (`{"sports": 12, "default": 4}`), empty otherwise — and `key_people`: with `key_people`, `{"named": [names], "unnamed": n, "groups": groups judged by them}`, else null |
 | `groups[].preset` | string | The preset the group was ranked with: the request's, or under `auto` the one its genre called for. Also in `debug.culling_preset` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
 | `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`eye_squint`/`gaze_off_lens`/`mouth_open`/`face_luminance`/`face_across_stops`/`face_blown` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
-| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), under `auto` photos without a genre, photos whose subject was not measured, photos whose moment was not judged. Empty when there is nothing to say |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), under `auto` photos without a genre, with `key_people` photos with faces never through face recognition and a selection where no one is a key person, photos whose subject was not measured, photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
 The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a

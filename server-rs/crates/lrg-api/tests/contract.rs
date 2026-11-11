@@ -1800,6 +1800,146 @@ async fn auto_ranks_each_burst_with_the_preset_its_genre_calls_for() {
     assert!(genre[0].contains("Prepare now"), "{}", genre[0]);
 }
 
+/// `key_people`: the people named in People and those in many of the photos
+/// are the faces a frame is judged by. A guest stands larger in front; the bride
+/// behind her blinks in the sharpest frame. Indexing summed the faces up by
+/// size, so only the key people see the blink — and the explanation names her.
+#[tokio::test]
+async fn key_people_judge_the_frame_and_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let store = state.store().unwrap();
+
+    let t0 = 1_700_000_000;
+    let photo = |i: i64, sharpness: f64| {
+        let mut m = serde_json::Map::new();
+        m.insert("filename".into(), serde_json::json!(format!("w{i}.jpg")));
+        m.insert("capture_time".into(), serde_json::json!(t0 + i));
+        m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+        m.insert("cull_sharpness".into(), serde_json::json!(sharpness));
+        m.insert("cull_exposure".into(), serde_json::json!(0.8));
+        m.insert("cull_noise".into(), serde_json::json!(0.1));
+        // What indexing stored: the guest's open eyes speak for every frame.
+        m.insert("cull_faces_detected".into(), serde_json::json!(2));
+        m.insert("cull_face_count".into(), serde_json::json!(1));
+        m.insert("cull_faces_present".into(), serde_json::json!(true));
+        m.insert("cull_face_score".into(), serde_json::json!(0.6));
+        m.insert("cull_eye_openness".into(), serde_json::json!(0.9));
+        m.insert("cull_blink_penalty".into(), serde_json::json!(0.1));
+        m.insert("cull_eye_closed".into(), serde_json::json!(0.05));
+        m.insert("cull_eye_state".into(), serde_json::json!("open"));
+        m.insert(
+            lrg_analysis::grouping::FACE_STATE_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+        );
+        m.insert(
+            lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::FOCUS_VERSION),
+        );
+        m.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        lrg_store::StoreRecord {
+            id: format!("w{i}"),
+            vector: None,
+            metadata: m,
+        }
+    };
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[photo(0, 0.9), photo(1, 0.8), photo(2, 0.7)],
+        )
+        .await
+        .unwrap();
+    let face = |photo: i64, n: usize, person: &str, area: f64, closed: f64| {
+        let state = if closed >= 0.6 { "closed" } else { "open" };
+        lrg_store::StoreRecord {
+            id: format!("w{photo}_{n}"),
+            vector: Some(vec![0.0; 512]),
+            metadata: serde_json::json!({
+                "photo_id": format!("w{photo}"),
+                "person_id": person,
+                "face_area_ratio": area,
+                "face_sharpness": 0.6,
+                "face_det_score": 0.95,
+                "face_center_proximity": 0.8,
+                "face_eye_openness": 1.0 - closed,
+                "face_blink_penalty": closed,
+                "face_occlusion": 0.1,
+                "face_eye_state": state,
+                "face_eye_closed": closed,
+                "face_smile": 0.3,
+                "face_eye_squint": 0.1,
+                "face_gaze_off_lens": 5.0,
+                "face_mouth_open": 0.1,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }
+    };
+    let mut faces = Vec::new();
+    for i in 0..3 {
+        faces.push(face(i, 0, "person_2", 0.06, 0.05));
+        faces.push(face(
+            i,
+            1,
+            "person_1",
+            0.01,
+            if i == 0 { 0.9 } else { 0.05 },
+        ));
+    }
+    store.upsert(lrg_store::FACE_TABLE, &faces).await.unwrap();
+    let (code, _) = put_json(
+        &app,
+        &format!("/v1/faces/persons/person_1?db_path={db}"),
+        serde_json::json!({"name": "Anna"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    let ask = |key_people: bool| {
+        serde_json::json!({
+            "photo_ids": ["w0", "w1", "w2"],
+            "culling_preset": "event",
+            "use_iqa": false,
+            "key_people": key_people,
+            "db_path": db,
+        })
+    };
+    // By size, the sharpest frame wins: nobody seems to blink.
+    let by_size = cull_request(app.clone(), ask(false)).await;
+    assert_eq!(by_size["groups"][0]["winner_photo_id"], "w0", "{by_size}");
+
+    let json = cull_request(app, ask(true)).await;
+    let group = &json["groups"][0];
+    assert_ne!(group["winner_photo_id"], "w0", "{json}");
+    let w0 = group["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["photo_id"] == "w0")
+        .unwrap();
+    assert!(
+        w0["explanation"]
+            .as_str()
+            .unwrap()
+            .contains("Anna: eyes closed"),
+        "{w0}"
+    );
+    // Both are key people: Anna by name, the guest by being in every frame.
+    assert_eq!(
+        json["summary"]["key_people"]["named"],
+        serde_json::json!(["Anna"])
+    );
+    assert_eq!(json["summary"]["key_people"]["unnamed"], 1);
+    assert_eq!(json["summary"]["key_people"]["groups"], 1);
+}
+
 /// The default preset asks the prompts nothing, so a cull on it neither needs
 /// nor writes any — and has no text tower to miss.
 #[tokio::test]

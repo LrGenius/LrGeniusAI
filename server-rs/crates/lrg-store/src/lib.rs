@@ -749,6 +749,39 @@ impl Store {
         Ok(out)
     }
 
+    /// [`Store::get_by_id_prefix`] for many prefixes at once, a few hundred per
+    /// query: the face rows of every photo in a selection, for culling's key
+    /// people, without a query per photo or a scan of the whole table.
+    pub async fn get_by_id_prefixes(
+        &self,
+        table: &str,
+        prefixes: &[String],
+    ) -> Result<Vec<StoreRecord>> {
+        if prefixes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tbl = self.table(table).await?;
+        let mut out = Vec::new();
+        for chunk in prefixes.chunks(PREFIX_DELETE_CHUNK_SIZE) {
+            let predicate = chunk
+                .iter()
+                .map(|p| format!("({})", id_prefix_predicate(p)))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let batches: Vec<RecordBatch> = tbl
+                .query()
+                .only_if(predicate)
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+            for batch in &batches {
+                out.extend(batch_to_records(batch));
+            }
+        }
+        Ok(out)
+    }
+
     /// Like `get`, but returns only id + metadata (no vector deserialization).
     pub async fn get_meta(
         &self,
@@ -1362,6 +1395,39 @@ mod tests {
             Some("person_3")
         );
         assert!(got[0].vector.is_some(), "the embedding has to come along");
+    }
+
+    /// The batched read covers each prefix exactly, across more prefixes than
+    /// fit in one query, and reaches no other photo's rows.
+    #[tokio::test]
+    async fn get_by_id_prefixes_reads_each_photo_across_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).await.unwrap();
+        let photos = PREFIX_DELETE_CHUNK_SIZE + 3;
+        let mut rows: Vec<StoreRecord> = (0..photos)
+            .map(|i| {
+                record(
+                    &format!("p{i}_0"),
+                    Some(vec![0.0; 512]),
+                    json!({"photo_id": format!("p{i}")}),
+                )
+            })
+            .collect();
+        rows.push(record("p1x_0", Some(vec![0.0; 512]), json!({})));
+        store.append(FACE_TABLE, &rows).await.unwrap();
+
+        let prefixes: Vec<String> = (0..photos).map(|i| format!("p{i}_")).collect();
+        let got = store
+            .get_by_id_prefixes(FACE_TABLE, &prefixes)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), photos);
+        assert!(got.iter().all(|r| r.id != "p1x_0"));
+        assert!(store
+            .get_by_id_prefixes(FACE_TABLE, &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     fn face_rows(n: usize, person: &str) -> Vec<StoreRecord> {

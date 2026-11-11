@@ -51,7 +51,9 @@ list; **Refresh** re-reads it from the backend.
 ### Clustering
 
 Detection during indexing finds faces; grouping them into persons is a separate
-step. Press **Cluster faces** to (re-)group everything the backend has. The run
+step. The very small faces culling also looks for (the back row of a group,
+the crowd at a match) are not recognised and never appear here: a face of a
+few dozen pixels does not tell people apart. Press **Cluster faces** to (re-)group everything the backend has. The run
 reports how many persons and faces it produced, and the grid updates itself.
 
 Anything you decided by hand — a face you moved, two people you merged — is

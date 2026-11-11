@@ -8,6 +8,7 @@ local function showCullDialog(ctx)
 	props.timeDeltaSeconds = prefs.cullTimeDeltaSeconds or 2
 	props.cullingPreset = prefs.cullPreset or "auto"
 	props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
+	props.keyPeople = prefs.cullKeyPeople == true
 	props.cullStrength = prefs.cullStrength or "balanced"
 	-- Flags are what a photographer culls *with*, so picks are flagged by
 	-- default; rejects are opt-in because a reject flag is one menu command
@@ -113,6 +114,13 @@ local function showCullDialog(ctx)
 				}),
 			}),
 			f:checkbox({
+				value = bind("keyPeople"),
+				title = "Judge the key people first",
+				tooltip = "The people you named in People, and those in many of these photos: a frame is "
+					.. "judged by their eyes and focus, however small they are in it. Adds face "
+					.. "recognition to the preparation, which takes longer.",
+			}),
+			f:checkbox({
 				value = bind("createDuplicatesCollection"),
 				title = LOC(
 					"$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection"
@@ -171,6 +179,7 @@ local function showCullDialog(ctx)
 	prefs.cullTimeDeltaSeconds = props.timeDeltaSeconds
 	prefs.cullPreset = props.cullingPreset
 	prefs.cullCreateDuplicatesCollection = props.createDuplicatesCollection
+	prefs.cullKeyPeople = props.keyPeople
 	prefs.cullStrength = props.cullStrength
 	prefs.cullFlagPicks = props.flagPicks
 	prefs.cullFlagRejects = props.flagRejects
@@ -183,6 +192,7 @@ local function showCullDialog(ctx)
 		timeDeltaSeconds = props.timeDeltaSeconds,
 		cullingPreset = props.cullingPreset,
 		createDuplicatesCollection = props.createDuplicatesCollection,
+		keyPeople = props.keyPeople,
 		cullStrength = props.cullStrength,
 		flagPicks = props.flagPicks,
 		flagRejects = props.flagRejects,
@@ -572,7 +582,7 @@ LrTasks.startAsyncTask(function()
 		-- and skips the LLM entirely. Presets that judge the moment also need
 		-- the embedding, so a photo culled before with the default preset
 		-- counts as unprepared for them.
-		local prepTasks = Util.cullPrepTasks(options.cullingPreset)
+		local prepTasks = Util.cullPrepTasks(options.cullingPreset, options.keyPeople)
 		local judgesMoment = Util.cullPresetJudgesMoment(options.cullingPreset)
 		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, prepTasks)
 		if missingErr then
@@ -655,6 +665,7 @@ LrTasks.startAsyncTask(function()
 			time_delta_seconds = options.timeDeltaSeconds,
 			culling_preset = options.cullingPreset,
 			reject_margin_scale = Util.cullRejectMarginScale(options.cullStrength),
+			key_people = options.keyPeople,
 		})
 		local groups = cullResult and cullResult.groups or nil
 		local summary = (cullResult and cullResult.summary) or {}
@@ -937,6 +948,11 @@ LrTasks.startAsyncTask(function()
 					tostring(setGroups),
 					tostring(summary.intentional_set_photo_count or #setPhotos)
 				)
+		end
+
+		local keyPeopleLine = Util.cullKeyPeopleLine(summary)
+		if keyPeopleLine then
+			completionMessage = completionMessage .. "\n\n" .. keyPeopleLine
 		end
 
 		if strongMomentRejects > 0 then

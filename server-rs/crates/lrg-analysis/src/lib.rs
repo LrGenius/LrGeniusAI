@@ -10,6 +10,7 @@ pub mod face_aggregate;
 pub mod face_cluster;
 pub mod face_expression;
 pub mod grouping;
+pub mod key_people;
 pub mod keywords;
 pub mod persons;
 pub mod relevance_filter;

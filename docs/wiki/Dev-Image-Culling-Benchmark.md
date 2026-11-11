@@ -219,12 +219,53 @@ the same moment, so the answers are near equal within one.
 CI holds `auto` at or above the hand-chosen presets on winner, pairs, both
 reject numbers and keepers (`auto_ranks_as_well_as_the_preset_chosen_by_hand`).
 
+## People: key people and small faces
+
+Step 3 (2026-11-11), in two parts.
+
+**Small faces.** The detector looks at the whole frame once, at 640 px, and
+misses faces under about 20 px there — 64 px on the 2048 px working copy. A
+second look at four overlapping tiles finds them. On the benchmark's 120
+photographs (`lrg-ml`'s `tile_faces_probe` example) it found 176 → 224 faces
+in the events, 84 → 133 in sport (39 of them the crowd of one match), 34 → 37
+in the portraits, 2 → 3 in wildlife and none in the landscapes. Every one of
+the 101 added faces was looked at: about 92 are faces, mostly spectators and
+the back of a group; the rest are the back of a head, a shoulder, an arm, a
+horse's head. Before tile faces were limited to the size the first look
+misses, the larger ones were as often pots, an accordion or a horse's flank as
+people, whatever the detector's confidence (0.61–0.88 either way).
+
+On the ranking, re-indexed, against the measurements of step 2:
+
+| | before | tiles | tiles, and a missed face on a sharp subject kept |
+|---|---|---|---|
+| winner top-1 | 73.3 % | 73.3 % | 73.3 % |
+| pair order | 85.9 % | 85.9 % | 85.9 % |
+| reject precision | 93.0 % | 92.5 % | 92.8 % |
+| reject recall | 69.2 % | 70.8 % | 70.8 % |
+| must-keep lost | 9.1 % | 9.8 % | 9.1 % |
+
+Found by defect: eyes that missed focus 80 → 82 %, blur 72 → 74 %, focus behind
+the subject 70 → 72 %. The one keeper the tiles cost was the frame where a
+soft background hid the small face the athlete's other frames now had; a frame
+whose face was not found beside siblings whose was, with its subject in focus,
+now ranks below them but is no reject on the score margin alone.
+
+**Key people.** Not measured: no public collection of photographs says whom
+the photographer cared about, and a benchmark series is one photograph, not a
+shoot. The rule (named in People, or in a fifth of the photos with faces) is a
+first guess, and a contract test holds what it does: a guest standing larger in
+front no longer hides the bride's blink, and the explanation says "Anna: eyes
+closed".
+
 ## Open: what the benchmark found and this did not fix
 
 - **A face found in one frame and not the next.** Where the face detector
   finds the subject's face in one exposure of a burst only (a dark frame lifted
   a stop, a soft background that changed the context), the frames without it
-  are "faceless" beside it and lose to it: 2 of the 12 keepers still lost.
+  are "faceless" beside it and rank below it. Since step 3 such a frame is kept
+  when its subject is in focus; the two keepers of a very dark match photograph
+  still go, as underexposed.
 - **The occlusion proxy reads up to 0.25 apart** between a frame and its
   soft-background or darker twin, and the darkest frame sets the group's bar:
   4 keepers. The benchmark has no occluded frames to weigh a wider margin

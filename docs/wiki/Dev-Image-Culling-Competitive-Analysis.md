@@ -82,7 +82,9 @@ Missing, in the order the plan takes them:
    still picks the preset. *Done: `auto` chooses per burst
    ([numbers](Dev-Image-Culling-Benchmark.md#the-preset-from-the-genre)).*
 4. **People who matter** (Aftershoot's key faces, Narrative's main faces) and
-   small faces in a crowd.
+   small faces in a crowd. *Done: key people, named in the explanation, and a
+   second look for small faces
+   ([numbers](Dev-Image-Culling-Benchmark.md#people-key-people-and-small-faces)).*
 5. **Scenes, a target count and highlights** across a shoot.
 6. **Animal eyes.**
 7. **Learning from the user** — a Lightroom catalog holds years of the

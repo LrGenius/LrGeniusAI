@@ -2878,14 +2878,61 @@ end
 -- without one the backend has nothing to judge it from and quietly ranks on
 -- sharpness alone — the very gap the moment exists to close.
 --
+-- Key people add `faces`: telling people apart needs face recognition, which
+-- the fast pass leaves out.
+--
 -- @param preset string|nil Culling preset name.
+-- @param keyPeople boolean|nil Whether the cull judges by key people.
 -- @return table Task names.
 --
-function Util.cullPrepTasks(preset)
+function Util.cullPrepTasks(preset, keyPeople)
+	local tasks = { "cull" }
 	if Util.cullPresetJudgesMoment(preset) then
-		return { "cull", "embeddings" }
+		table.insert(tasks, "embeddings")
 	end
-	return { "cull" }
+	if keyPeople then
+		table.insert(tasks, "faces")
+	end
+	return tasks
+end
+
+---
+-- The line of the cull's completion message about key people, or nil when
+-- they were not asked for.
+--
+-- @param summary table|nil The `/v1/cull/grade` summary.
+-- @return string|nil
+--
+function Util.cullKeyPeopleLine(summary)
+	local key = type(summary) == "table" and summary.key_people or nil
+	if type(key) ~= "table" then
+		return nil
+	end
+	local named = type(key.named) == "table" and key.named or {}
+	local unnamed = tonumber(key.unnamed) or 0
+	local groups = tonumber(key.groups) or 0
+	if #named == 0 and unnamed == 0 then
+		return nil
+	end
+	local who = {}
+	for _, name in ipairs(named) do
+		table.insert(who, name)
+	end
+	if unnamed > 0 then
+		table.insert(who, string.format("%d %s not named in People", unnamed, unnamed == 1 and "person" or "people"))
+	end
+	local list
+	if #who == 1 then
+		list = who[1]
+	else
+		list = table.concat(who, ", ", 1, #who - 1) .. " and " .. who[#who]
+	end
+	return string.format(
+		"Key people: %s. %d %s judged by their faces.",
+		list,
+		groups,
+		groups == 1 and "group was" or "groups were"
+	)
 end
 
 ---

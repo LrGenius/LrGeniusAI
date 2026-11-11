@@ -180,6 +180,10 @@ sources = [
   # "Focus on the subject": how the subject is found and its focus measured.
   "server-rs/crates/lrg-ml/src/subject.rs",
   "server-rs/crates/lrg-imaging/src/subject_focus.rs",
+  # "Key people", and the small faces of the tile pass.
+  "server-rs/crates/lrg-analysis/src/key_people.rs",
+  "server-rs/crates/lrg-api/src/key_people.rs",
+  "server-rs/crates/lrg-ml/src/yunet.rs",
 ]
 
 [page."Help-AI-Agents.md"]

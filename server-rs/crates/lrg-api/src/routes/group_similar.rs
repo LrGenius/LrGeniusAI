@@ -85,6 +85,10 @@ struct GroupingParams {
     /// thresholds, because a blink is a blink however gentle the cull.
     /// Clamped to 0.25..4.
     reject_margin_scale: Option<f64>,
+    /// Judge each group by its key people's faces: the people named in People
+    /// and those in many of the selected photos (`crate::key_people`). Needs
+    /// the full face pass; off by default.
+    key_people: bool,
 }
 
 /// Mirrors `_parse_grouping_params`. `Err` carries the (status, body) to
@@ -185,6 +189,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
     let use_iqa = flag(data.get("use_iqa"), true);
     let include_stored_metadata = flag(data.get("include_stored_metadata"), false);
     let include_embeddings = flag(data.get("include_embeddings"), false);
+    let key_people = flag(data.get("key_people"), false);
 
     // Clamped, not rejected: a weight outside 0..1 is a tuning fat-finger, and
     // the blend clamps anyway.
@@ -224,6 +229,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         include_embeddings,
         semantic_weight,
         reject_margin_scale,
+        key_people,
     })
 }
 
@@ -389,6 +395,8 @@ struct GroupingOutcome {
     /// Under `culling_preset: "auto"`, ranked photos with no genre: their
     /// group's preset was chosen from the others, or is `default`.
     genre_missing: usize,
+    /// What `key_people` found, when it was asked for.
+    key_people: Option<KeyPeopleOutcome>,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -400,6 +408,20 @@ struct GroupingOutcome {
     /// Per photo with a non-zero embedding, the embedding packed for a
     /// fixture. Empty unless `include_embeddings` was requested.
     embeddings: std::collections::HashMap<String, String>,
+}
+
+/// What judging by key people found.
+struct KeyPeopleOutcome {
+    /// The key people with a name in People.
+    named: Vec<String>,
+    /// And how many without one.
+    unnamed: usize,
+    /// Groups judged by their key people's faces.
+    groups: usize,
+    /// Photos with face rows, and photos with faces never through face
+    /// recognition.
+    recognised: usize,
+    unrecognised: usize,
 }
 
 /// The ranking signals a run lost, and the one reason they share.
@@ -423,12 +445,13 @@ const KISS_GATE_SIGNAL: &str = "the check whether closed eyes are a kiss or a la
 /// keywords and provider names — none of it affects culling, all of it is
 /// potentially identifying, and a fixture is meant to be shareable without
 /// shipping anything about the photographs themselves. The genre is one coarse
-/// word ("sport", "portrait").
+/// word ("sport", "portrait"); the names key people put on reasons
+/// (`cull_who_*`) are left out.
 fn stored_cull_fields(metadata: &Map<String, Value>) -> Map<String, Value> {
     metadata
         .iter()
         .filter(|(k, _)| {
-            k.starts_with("cull_")
+            (k.starts_with("cull_") && !k.starts_with("cull_who_"))
                 || k.as_str() == "exposure_bias"
                 || k.as_str() == "capture_time"
                 || k.as_str() == meta::GENRE_FIELD
@@ -539,6 +562,7 @@ async fn compute_groups(
             subject_unmeasured: 0,
             subject_model_ready: state.subject.is_cached(),
             genre_missing: 0,
+            key_people: None,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
@@ -610,6 +634,20 @@ async fn compute_groups(
         params.time_delta_seconds,
         &config_of(grouping_preset),
     );
+    let key_people = if params.key_people {
+        let names = crate::routes::faces::load_person_names(state);
+        let key = crate::key_people::load(&store, partition.records(), names).await?;
+        let groups = crate::key_people::apply(&mut partition, &key);
+        Some(KeyPeopleOutcome {
+            named: key.named(),
+            unnamed: key.unnamed(),
+            groups,
+            recognised: key.recognised(),
+            unrecognised: key.unrecognised,
+        })
+    } else {
+        None
+    };
     let group_presets: Vec<&'static str> = (0..partition.group_count())
         .map(|g| {
             if auto {
@@ -817,6 +855,7 @@ async fn compute_groups(
         subject_unmeasured,
         subject_model_ready: state.subject.is_cached(),
         genre_missing,
+        key_people,
         unavailable,
     })
 }
@@ -912,6 +951,26 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
              Similar Photos' and 'Prepare now'.",
             outcome.state_unmeasured
         ));
+    }
+    if let Some(key) = &outcome.key_people {
+        if key.unrecognised > 0 {
+            warnings.push(format!(
+                "{} photo(s) with faces have not been through face recognition, so the key \
+                 people could not be found in them. Run 'Cull Similar Photos' again with key \
+                 people on and choose 'Prepare now'.",
+                key.unrecognised
+            ));
+        }
+        // Only where some photos could be told apart: with none, the warning
+        // above is the cause.
+        if key.recognised > 0 && key.named.is_empty() && key.unnamed == 0 {
+            warnings.push(
+                "No one is in enough of these photos to be a key person, and no one in them is \
+                 named in People, so faces were judged as usual. Name the people who matter in \
+                 People to have them judged first."
+                    .to_string(),
+            );
+        }
     }
     if outcome.genre_missing > 0 {
         warnings.push(format!(
@@ -1097,6 +1156,13 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
                     // Under `auto`, how many groups each preset ranked, so the
                     // plugin can say what the genre chose.
                     "presets": preset_counts(&outcome.groups),
+                    // When asked: who the key people were, and how many groups
+                    // were judged by them.
+                    "key_people": outcome.key_people.as_ref().map(|k| json!({
+                        "named": k.named,
+                        "unnamed": k.unnamed,
+                        "groups": k.groups,
+                    })),
                     // Surfaced so the plugin can tell the user that some of
                     // their selection was skipped rather than silently ranking
                     // fewer photos than they picked.
@@ -1136,10 +1202,49 @@ mod tests {
             subject_unmeasured: 0,
             subject_model_ready: true,
             genre_missing: 0,
+            key_people: None,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
         }
+    }
+
+    /// Key people asked for: photos never through face recognition are named
+    /// with the fix, and a selection with nobody to judge by says so.
+    #[test]
+    fn key_people_say_what_they_could_not_do() {
+        let mut o = outcome(10, 0);
+        o.key_people = Some(KeyPeopleOutcome {
+            named: Vec::new(),
+            unnamed: 0,
+            groups: 0,
+            recognised: 6,
+            unrecognised: 4,
+        });
+        let warnings = grouping_warnings(&o);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].starts_with("4 photo(s) with faces"));
+        assert!(warnings[0].contains("Prepare now"));
+        assert!(warnings[1].contains("No one is in enough"));
+
+        // None recognised at all: the cause is said, not "no one counts".
+        o.key_people = Some(KeyPeopleOutcome {
+            named: Vec::new(),
+            unnamed: 0,
+            groups: 0,
+            recognised: 0,
+            unrecognised: 10,
+        });
+        assert_eq!(grouping_warnings(&o).len(), 1);
+
+        o.key_people = Some(KeyPeopleOutcome {
+            named: vec!["Anna".into()],
+            unnamed: 1,
+            groups: 3,
+            recognised: 10,
+            unrecognised: 0,
+        });
+        assert!(grouping_warnings(&o).is_empty());
     }
 
     /// Photos prepared before focus was measured are ranked without it, and

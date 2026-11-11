@@ -71,7 +71,7 @@ fn ranking_holds_its_level_on_the_benchmark() {
     floor("winner top-1", r.winner_accuracy(), 0.73);
     floor("pair order", r.pair_accuracy(), 0.85);
     floor("reject precision", r.reject_precision(), 0.92);
-    floor("reject recall", r.reject_recall(), 0.69);
+    floor("reject recall", r.reject_recall(), 0.70);
     assert!(
         r.must_keep_reject_rate() <= 0.10,
         "{:.1}% of the frames that must survive any cull were nominated (ceiling 10%)",
