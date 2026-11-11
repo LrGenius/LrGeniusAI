@@ -187,6 +187,9 @@ sources = [
   "server-rs/crates/lrg-ml/src/yunet.rs",
   # "Keep" and "Highlights": choosing to a target across a shoot.
   "server-rs/crates/lrg-analysis/src/selection.rs",
+  # "Your culling style".
+  "server-rs/crates/lrg-analysis/src/taste.rs",
+  "plugin/LrGeniusAI.lrdevplugin/TaskLearnCullingStyle.lua",
 ]
 
 [page."Help-AI-Agents.md"]

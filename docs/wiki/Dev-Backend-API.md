@@ -630,6 +630,7 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `key_people` | bool | Judge by the selection's key people (`lrg_api::key_people`): the persons named in People who are in the selection, and those in at least a fifth of its photos with faces and at least three (`lrg_analysis::key_people::KeyPeopleRule`). Faces without a person in People are clustered among the selection's for this. In a group where any frame shows one, every frame's face aggregates are summed again from its key faces alone, every one counting however small (no prominence gate), and the reasons about eyes, focus and gaze name the key person (`cull_who_*`, rank time only, never stored and left out of `stored_metadata`). Reads `FACE_TABLE`, so it needs the full face pass. Default false |
 | `target_count`, `target_fraction` | int, float 0..1 | Choose this many photos across the whole selection, or this share of them (one or the other; both is a 400), instead of a pick per group (`lrg_analysis::selection`). See *Target* below |
 | `highlights_count` | int | With a target, this many highlights among the chosen photos |
+| `use_taste` | bool | Reorder each group by the photographer's learned culling style; see `POST /v1/cull/taste` |
 | `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_embeddings` | bool | Echo each photo's SigLIP2 embedding as `embedding_q8`: base64 of a little-endian `f32` scale and one signed byte per dimension (`lrg_analysis::eval::quantize_embedding`, about 1.5 KB). For fixtures, whose replay groups the way the backend did only with it. Absent for a photo without an embedding |
@@ -773,6 +774,34 @@ again straight away if the request loaded it. So each prompt is embedded once pe
 database, and in normal use only a free-text search or keyword clustering loads the text tower.
 Only the prompts the request needs: on a CPU without fast fp16 one text-tower pass can take many
 seconds, and a first cull must stay inside the plugin's request timeout.
+
+### `POST /v1/cull/taste`
+Learns the photographer's culling style from their own decisions (`lrg_analysis::taste`). Body:
+`labels` — `[{"photo_id", "flag": -1|0|1, "rating": 0-5, "own": bool}]`, where `own` says the mark is
+the photographer's rather than one a cull wrote and they left — and `culling_preset` (default
+`auto`). The photos are ranked as `/v1/cull/grade` would rank them; inside every group with at
+least one `own` mark, each two photos marked differently are a decision (pick over none over
+reject, then more stars). A pairwise logistic regression without bias learns weights for the
+ranked signals — `cull_score` itself, `sharpness_effective`, `exposure`, `highlight_clip`, `noise`,
+`aesthetic`, `face_score`, `eye_openness`, `eye_focus`, `eye_closed`, `smile`, `gaze_off_lens`,
+`mouth_open`, `moment`, `subject_focus` — on their differences, each scaled by its spread, and
+five-fold cross-validation by group compares it with the default ranking on the same held-out
+decisions. The model is stored next to the database (`cull_taste.json`) and returned as
+`{"model": {"pairs", "groups", "agreement", "default_agreement", "used"}}`; `used` is true from
+30 decisions and when it agrees more often than the default. Fewer than 30 decisions is a 422 with
+`error_code: "too_few_decisions"`, `pairs` and `needed`.
+
+### `GET /v1/cull/taste`
+The learned style: `{"model": {…}}` as above, or `{"model": null}`.
+
+### `DELETE /v1/cull/taste`
+Forgets it: `{"deleted": true|false}`.
+
+With `use_taste` on `/v1/cull/grade`, a learned style that is `used` reorders each group's frames
+that are not reject candidates by its score (a frame missing a signal counts the group's mean for
+it); reject candidates keep their places after them, and a group whose pick changed gives the new
+pick the reason `preferred_by_your_style`. `summary.taste_changed_picks` counts those groups. A
+style not learned, or not better than the default, is said in `warnings` and changes nothing.
 
 ---
 

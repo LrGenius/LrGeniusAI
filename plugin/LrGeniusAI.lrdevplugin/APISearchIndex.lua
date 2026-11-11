@@ -217,6 +217,7 @@ local ENDPOINTS = {
 	FIND_SIMILAR = "/v1/search/similar",
 	GROUP_SIMILAR = "/v1/cull/groups",
 	CULL = "/v1/cull/grade",
+	CULL_TASTE = "/v1/cull/taste",
 
 	-- Faces and persons
 	FACES_DETECT = "/v1/faces/detect",
@@ -2060,6 +2061,10 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	if options.key_people then
 		body.key_people = true
 	end
+	-- Reorder each burst by the photographer's learned culling style.
+	if options.use_taste then
+		body.use_taste = true
+	end
 	-- Choose across the whole selection instead of a pick per burst: a number
 	-- of photos or a share of them, and highlights among them.
 	if type(options.target_count) == "number" then
@@ -2116,6 +2121,44 @@ function SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, tasks)
 		return nil, err
 	end
 	return (result and result.photo_ids) or {}, nil
+end
+
+---
+-- Learns the photographer's culling style from their own decisions.
+-- @param labels table Array of { photo_id, flag (-1/0/1), rating (0-5), own (boolean) }.
+-- @param preset string|nil Culling preset to rank them with ("auto" when nil).
+-- @return table|nil The model summary ({ pairs, groups, agreement, default_agreement, used }),
+--         or nil plus the error, which says what to do.
+function SearchIndexAPI.learnCullingStyle(labels, preset)
+	local result, err =
+		_request("POST", SearchIndexAPI.url("CULL_TASTE"), { labels = labels, culling_preset = preset or "auto" }, 1800)
+	if err then
+		log:error("learnCullingStyle failed: " .. tostring(err))
+		return nil, err
+	end
+	return result and result.model or nil, nil
+end
+
+---
+-- The learned culling style, if any.
+-- @return table|nil The model summary or nil when none was learned, plus an error.
+function SearchIndexAPI.cullingStyleStatus()
+	local result, err = _request("GET", SearchIndexAPI.url("CULL_TASTE"), nil, 30)
+	if err then
+		return nil, err
+	end
+	return result and result.model or nil, nil
+end
+
+---
+-- Forgets the learned culling style.
+-- @return boolean|nil Whether one was deleted, plus an error.
+function SearchIndexAPI.forgetCullingStyle()
+	local result, err = _request("DELETE", SearchIndexAPI.url("CULL_TASTE"), nil, 30)
+	if err then
+		return nil, err
+	end
+	return result and result.deleted == true, nil
 end
 
 ---

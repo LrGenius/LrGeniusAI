@@ -120,6 +120,48 @@ describe("Util.cullDecisionOf under a target", function()
 	end)
 end)
 
+describe("Util.cullTasteLabels", function()
+	it("counts as the photographer's only what differs from what the cull wrote", function()
+		local labels = Util.cullTasteLabels({
+			-- Never culled, flagged by hand.
+			a = { pickStatus = 1, rating = 0, written = {} },
+			-- The cull's pick, left alone.
+			b = { pickStatus = 1, rating = 0, written = { pickStatus = 1 } },
+			-- The cull's pick, taken away.
+			c = { pickStatus = 0, rating = 0, written = { pickStatus = 1 } },
+			-- The cull's pick, given three stars.
+			d = { pickStatus = 1, rating = 3, written = { pickStatus = 1 } },
+			-- Nothing at all.
+			e = { pickStatus = 0, rating = 0, written = {} },
+		})
+		local own = {}
+		for _, label in ipairs(labels) do
+			own[label.photo_id] = label.own
+		end
+		assert.are.same({ a = true, b = false, c = true, d = true, e = false }, own)
+		assert.are.equal("a", labels[1].photo_id)
+	end)
+end)
+
+describe("Util.cullingStyleSummary", function()
+	it("says how well it agrees and whether culling uses it", function()
+		local used = Util.cullingStyleSummary({
+			pairs = 412,
+			groups = 87,
+			agreement = 0.714,
+			default_agreement = 0.642,
+			used = true,
+		})
+		assert.truthy(used:find("412 decisions in 87 bursts", 1, true))
+		assert.truthy(used:find("71%", 1, true))
+		assert.truthy(used:find("64%", 1, true))
+		assert.truthy(used:find("Use my culling style", 1, true))
+		local unused = Util.cullingStyleSummary({ pairs = 40, groups = 9, agreement = 0.5, default_agreement = 0.6 })
+		assert.truthy(unused:find("will not use it", 1, true))
+		assert.are.equal("No culling style has been learned yet.", Util.cullingStyleSummary(nil))
+	end)
+end)
+
 describe("Util.responseWarnings", function()
 	it("prefers the list and removes duplicates", function()
 		local list = Util.responseWarnings({

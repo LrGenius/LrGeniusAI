@@ -25,7 +25,7 @@ pub fn router() -> axum::Router<Arc<AppState>> {
         .route("/cull/grade", axum::routing::post(cull))
 }
 
-struct GroupingParams {
+pub(super) struct GroupingParams {
     photo_ids: Vec<String>,
     phash_threshold: Option<f64>,
     clip_threshold: Option<f64>,
@@ -95,12 +95,15 @@ struct GroupingParams {
     target: Option<lrg_analysis::selection::Target>,
     /// And this many highlights among them.
     highlights: usize,
+    /// Reorder each group's frames by the photographer's learned taste
+    /// (`/v1/cull/taste`), where one was learned and proved better.
+    use_taste: bool,
 }
 
 /// Mirrors `_parse_grouping_params`. `Err` carries the (status, body) to
 /// return directly.
 #[allow(clippy::result_large_err)] // error path only; not worth boxing for this
-fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
+pub(super) fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
     let bad = |msg: &str| {
         Err((
             axum::http::StatusCode::BAD_REQUEST,
@@ -196,6 +199,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
     let include_stored_metadata = flag(data.get("include_stored_metadata"), false);
     let include_embeddings = flag(data.get("include_embeddings"), false);
     let key_people = flag(data.get("key_people"), false);
+    let use_taste = flag(data.get("use_taste"), false);
     let number = |key: &str| {
         data.get(key).and_then(|v| {
             v.as_f64()
@@ -260,6 +264,7 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         key_people,
         target,
         highlights,
+        use_taste,
     })
 }
 
@@ -405,8 +410,8 @@ fn group_to_json(
 
 /// What `compute_groups` produced, plus the facts the caller needs to decide
 /// whether to warn the user.
-struct GroupingOutcome {
-    groups: Vec<Group>,
+pub(super) struct GroupingOutcome {
+    pub(super) groups: Vec<Group>,
     /// Photo ids that had no row in `IMAGE_TABLE` at all — never indexed.
     /// `load_grouping_inputs` drops these silently, which used to make an
     /// unindexed folder look like an empty result with no explanation.
@@ -453,6 +458,8 @@ struct GroupingOutcome {
     key_people: Option<KeyPeopleOutcome>,
     /// The photos chosen to the request's target, when it set one.
     selection: Option<lrg_analysis::selection::Selection>,
+    /// What `use_taste` did, when it was asked for.
+    taste: Option<TasteOutcome>,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -464,6 +471,17 @@ struct GroupingOutcome {
     /// Per photo with a non-zero embedding, the embedding packed for a
     /// fixture. Empty unless `include_embeddings` was requested.
     embeddings: std::collections::HashMap<String, String>,
+}
+
+/// What `use_taste` did.
+enum TasteOutcome {
+    /// Used; this many groups got another pick.
+    Applied(usize),
+    /// Learned, but it did not agree with the photographer more often than
+    /// the default ranking, so it was not used.
+    NotBetter,
+    /// Nothing learned yet.
+    NotLearned,
 }
 
 /// What judging by key people found.
@@ -599,7 +617,7 @@ fn apply_aesthetic_scores(records: &mut [GroupingInput]) -> usize {
     missing
 }
 
-async fn compute_groups(
+pub(super) async fn compute_groups(
     state: &AppState,
     params: &GroupingParams,
 ) -> Result<GroupingOutcome, String> {
@@ -620,6 +638,7 @@ async fn compute_groups(
             genre_missing: 0,
             key_people: None,
             selection: None,
+            taste: None,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
@@ -904,10 +923,20 @@ async fn compute_groups(
         } else {
             Default::default()
         };
-    let groups = partition.rank(|g| {
+    let mut groups = partition.rank(|g| {
         let preset = group_presets[g];
         (config(preset), auto.then_some(preset))
     });
+    // Before the selection, which takes each group's order as it finds it.
+    let taste = params
+        .use_taste
+        .then(|| match super::cull_taste::load(state) {
+            Some(model) if model.useful() => {
+                TasteOutcome::Applied(lrg_analysis::taste::apply(&mut groups, &model))
+            }
+            Some(_) => TasteOutcome::NotBetter,
+            None => TasteOutcome::NotLearned,
+        });
     let selection = params.target.map(|target| {
         let embedding_of = |id: &str| selection_embeddings.get(id).map(Vec::as_slice);
         let people_of = |id: &str| {
@@ -927,6 +956,7 @@ async fn compute_groups(
         )
     });
     Ok(GroupingOutcome {
+        taste,
         selection,
         stored_metadata,
         embeddings,
@@ -1039,6 +1069,20 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
              Similar Photos' and 'Prepare now'.",
             outcome.state_unmeasured
         ));
+    }
+    match &outcome.taste {
+        Some(TasteOutcome::NotLearned) => warnings.push(
+            "No culling style has been learned yet, so the default ranking decided. Run \
+             'Learn My Culling Style' on photos you culled yourself first."
+                .to_string(),
+        ),
+        Some(TasteOutcome::NotBetter) => warnings.push(
+            "Your learned culling style did not agree with your own choices more often than \
+             the default ranking, so the default ranking decided. Learning from more culled \
+             shoots may change that."
+                .to_string(),
+        ),
+        _ => {}
     }
     if let Some(selection) = &outcome.selection {
         if selection.selected.len() < selection.wanted {
@@ -1274,6 +1318,12 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
                         "highlight_photo_ids": s.highlights,
                         "selected_with_defect": s.selected_with_defect,
                     })),
+                    // With `use_taste`: how many picks the learned style moved,
+                    // or null when it was not used.
+                    "taste_changed_picks": match &outcome.taste {
+                        Some(TasteOutcome::Applied(n)) => json!(n),
+                        _ => Value::Null,
+                    },
                     "key_people": outcome.key_people.as_ref().map(|k| json!({
                         "named": k.named,
                         "unnamed": k.unnamed,
@@ -1320,6 +1370,7 @@ mod tests {
             genre_missing: 0,
             key_people: None,
             selection: None,
+            taste: None,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),

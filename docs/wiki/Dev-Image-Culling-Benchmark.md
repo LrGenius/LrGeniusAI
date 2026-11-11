@@ -283,6 +283,18 @@ first version made the grainier twin of a chosen frame a highlight. Scenes made 
 the novelty term and the people bonus are not exercised here; their weights
 are a first version.
 
+## A learned culling style
+
+Step 6 (2026-11-11) learns from the photographer's own flags and stars and
+proves itself by cross-validation on them; there is no public data for it, and
+it is measured on each photographer's own decisions every time it learns. As a
+check that it learns at all, the benchmark's labels were given to
+`POST /v1/cull/taste` as if they were a photographer's (the best frames picked,
+the clear defects rejected): from 2557 decisions in 89 series it agreed with
+them 91.6 % of the time on held-out series, the default ranking 87.3 %.
+The other 31 series had been taken for focus stacks, which no decision comes
+from — see below.
+
 ## Open: what the benchmark found and this did not fix
 
 - **A face found in one frame and not the next.** Where the face detector

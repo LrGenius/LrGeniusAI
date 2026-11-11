@@ -347,6 +347,31 @@ so it never appears in People. A small face is not found in every frame alike:
 a frame where it was missed ranks below the frames that show it, but when its
 subject is sharp it is not suggested for rejection for that.
 
+## Your culling style
+
+Every photographer culls a little differently: one always takes the broader
+smile, another the sharper frame, a third the stronger moment. **Library →
+Plug-in Extras → Learn My Culling Style...** learns yours from photos you
+culled yourself — select a few shoots where you set flags, rejects or stars
+and start it.
+
+- **What it learns from:** inside each burst, two frames you marked
+  differently — a pick over an unflagged frame over a reject, more stars over
+  fewer — are one decision. Marks a cull set and you left alone are not
+  counted; ones you changed are, and say the most.
+- **How it proves itself:** it learns from most of your bursts and is tested
+  on the rest, against the default ranking on the same bursts. It reports how
+  often each agrees with you ("agrees with your own choices 71 % of the time;
+  the default ranking 64 %"). It needs at least 30 decisions, and it is used
+  only when it agrees with you more often than the default does.
+- **How it is used:** tick **Use my culling style** in Cull Similar Photos. It
+  reorders the frames of a burst that are not reject candidates; a blink or a
+  blur stays a reject, since that is not a matter of taste. A pick it changed
+  says "your culling style prefers it", and the completion message counts them.
+
+It stays on this computer, with the backend's database. Run the task again to
+learn from more shoots; its dialog also forgets the learned style.
+
 ## Result collections in Lightroom
 
 For each culling run, the plugin creates a new collection set:
@@ -465,6 +490,7 @@ Typical reason codes include:
 - `strong_moment_but_unusable` – the group's strongest moment, but a technical
   flaw put it among the reject candidates; look before deleting
 - `bracket_frame_kept` / `focus_stack_frame_kept` / `panorama_frame_kept`
+- `preferred_by_your_style` – your learned culling style chose this pick
 
 These help explain why a specific frame was chosen as a pick or flagged as a reject candidate.
 

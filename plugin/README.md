@@ -126,6 +126,11 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
   off — every frame of such a set is part of one picture
 - Choose how hard to cull (gentle / balanced / strict) without changing preset
+- Keep a number or a share of a shoot instead of a pick per burst, every scene
+  first, with highlights for a sneak peek
+- Learn your own culling style from photos you culled yourself (Learn My
+  Culling Style), used only where it agrees with you more often than the
+  default ranking
 - Write the result as Lightroom flags, star ratings and a purple "look before
   deleting" label, in one undo step, leaving photos you already flagged, rated
   or labelled alone unless you say otherwise

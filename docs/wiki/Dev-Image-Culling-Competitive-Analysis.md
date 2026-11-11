@@ -89,7 +89,9 @@ Missing, in the order the plan takes them:
    ([numbers](Dev-Image-Culling-Benchmark.md#scenes-a-target-and-highlights)).*
 6. **Animal eyes.**
 7. **Learning from the user** — a Lightroom catalog holds years of the
-   photographer's flags and stars, which no stand-alone tool can read.
+   photographer's flags and stars, which no stand-alone tool can read. *Done:
+   learned locally, and used only where cross-validation shows it agrees with
+   the photographer more often than the default ranking.*
 8. Optionally, **a vision model for close calls**, with its reason in words.
 
 ## Sources

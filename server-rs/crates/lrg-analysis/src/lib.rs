@@ -17,4 +17,5 @@ pub mod relevance_filter;
 pub mod selection;
 pub mod sets;
 pub mod style_engine;
+pub mod taste;
 pub mod training;

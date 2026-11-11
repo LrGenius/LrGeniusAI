@@ -9,6 +9,7 @@ local function showCullDialog(ctx)
 	props.cullingPreset = prefs.cullPreset or "auto"
 	props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
 	props.keyPeople = prefs.cullKeyPeople == true
+	props.useTaste = prefs.cullUseTaste == true
 	props.cullStrength = prefs.cullStrength or "balanced"
 	props.keepMode = prefs.cullKeepMode or "burst"
 	props.keepAmount = prefs.cullKeepAmount or 20
@@ -170,6 +171,12 @@ local function showCullDialog(ctx)
 					.. "recognition to the preparation, which takes longer.",
 			}),
 			f:checkbox({
+				value = bind("useTaste"),
+				title = "Use my culling style",
+				tooltip = "Reorders each burst the way you cull, as learned by 'Learn My Culling Style' "
+					.. "from photos you culled yourself. Reject candidates stay rejects.",
+			}),
+			f:checkbox({
 				value = bind("createDuplicatesCollection"),
 				title = LOC(
 					"$$$/LrGeniusAI/CullTask/CreateDuplicates=Create 'Duplicates / Near Duplicates' collection"
@@ -229,6 +236,7 @@ local function showCullDialog(ctx)
 	prefs.cullPreset = props.cullingPreset
 	prefs.cullCreateDuplicatesCollection = props.createDuplicatesCollection
 	prefs.cullKeyPeople = props.keyPeople
+	prefs.cullUseTaste = props.useTaste
 	prefs.cullStrength = props.cullStrength
 	prefs.cullKeepMode = props.keepMode
 	prefs.cullKeepAmount = props.keepAmount
@@ -245,6 +253,7 @@ local function showCullDialog(ctx)
 		cullingPreset = props.cullingPreset,
 		createDuplicatesCollection = props.createDuplicatesCollection,
 		keyPeople = props.keyPeople,
+		useTaste = props.useTaste,
 		cullStrength = props.cullStrength,
 		keepMode = props.keepMode,
 		keepAmount = props.keepAmount,
@@ -255,58 +264,6 @@ local function showCullDialog(ctx)
 		rateByDecision = props.rateByDecision,
 		labelStrongMoment = props.labelStrongMoment,
 	}
-end
-
----
--- What the catalog holds now for the photos a cull touched — flag, stars and
--- colour label — plus what the last cull wrote (`cullWritten`), by photo ID.
--- `Util.cullFlagPlan` compares the two to tell the cull's own marks from the
--- photographer's.
---
--- One batched read; falls back to per-photo reads if the batch call fails, as
--- `PhotoSelector` does, so a read error degrades to slower rather than to
--- "no flags applied".
--- @return table photoId -> { pickStatus, rating, colorNameForLabel }
-local function currentFlagsByPhotoId(catalog, photoById)
-	local photos = {}
-	local idByPhoto = {}
-	for photoId, photo in pairs(photoById) do
-		table.insert(photos, photo)
-		idByPhoto[photo] = photoId
-	end
-	local keys = { "pickStatus", "rating", "colorNameForLabel" }
-	local current = {}
-	local ok, batch = LrTasks.pcall(function()
-		return catalog:batchGetRawMetadata(photos, keys)
-	end)
-	if ok and type(batch) == "table" then
-		for photo, values in pairs(batch) do
-			local photoId = idByPhoto[photo]
-			if photoId and type(values) == "table" then
-				current[photoId] = values
-			end
-		end
-	else
-		log:warn("batchGetRawMetadata failed before applying cull flags; reading per photo: " .. tostring(batch))
-		for photoId, photo in pairs(photoById) do
-			current[photoId] = {
-				pickStatus = photo:getRawMetadata("pickStatus"),
-				rating = photo:getRawMetadata("rating"),
-				colorNameForLabel = photo:getRawMetadata("colorNameForLabel"),
-			}
-		end
-	end
-	-- What the last cull wrote. Read per photo with `noThrow`: a catalog that
-	-- never saw this field (older plugin) simply has nothing recorded, which
-	-- makes every existing mark the photographer's — the safe reading.
-	for photoId, photo in pairs(photoById) do
-		local okProp, written = LrTasks.pcall(function()
-			return photo:getPropertyForPlugin(_PLUGIN, "cullWritten", nil, true)
-		end)
-		current[photoId] = current[photoId] or {}
-		current[photoId].written = Util.cullWrittenDecode(okProp and written or nil)
-	end
-	return current
 end
 
 local function dedupePhotoIds(photoIds)
@@ -722,6 +679,7 @@ LrTasks.startAsyncTask(function()
 			culling_preset = options.cullingPreset,
 			reject_margin_scale = Util.cullRejectMarginScale(options.cullStrength),
 			key_people = options.keyPeople,
+			use_taste = options.useTaste,
 			target_count = target.target_count,
 			target_fraction = target.target_fraction,
 			highlights_count = target.highlights_count,
@@ -915,7 +873,7 @@ LrTasks.startAsyncTask(function()
 		local flagCounts
 		local flagsFailed
 		if options.flagPicks or options.flagRejects or options.rateByDecision or options.labelStrongMoment then
-			local current = currentFlagsByPhotoId(catalog, photoById)
+			local current = Util.cullCurrentMarks(catalog, photoById)
 			local plan
 			plan, flagCounts = Util.cullFlagPlan(groups, {
 				flagPicks = options.flagPicks,
@@ -1042,6 +1000,16 @@ LrTasks.startAsyncTask(function()
 		local selectionLine = Util.cullSelectionLine(summary)
 		if selectionLine then
 			completionMessage = completionMessage .. "\n\n" .. selectionLine
+		end
+		local tasteChanged = tonumber(summary.taste_changed_picks)
+		if tasteChanged and tasteChanged > 0 then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. string.format(
+					"Your culling style chose a different pick in %d %s.",
+					tasteChanged,
+					tasteChanged == 1 and "burst" or "bursts"
+				)
 		end
 		local keyPeopleLine = Util.cullKeyPeopleLine(summary)
 		if keyPeopleLine then

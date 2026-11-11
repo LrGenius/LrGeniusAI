@@ -3328,6 +3328,113 @@ function Util.cullWrittenDecode(text)
 end
 
 ---
+-- The decisions a culling style is learned from: each photo's flag and stars,
+-- and whether they are the photographer's own (`own`) — anything that differs
+-- from what the last cull wrote, including a cull's flag the photographer
+-- took away. A cull's mark left as it was is not theirs.
+--
+-- @param current table photoId -> { pickStatus, rating, written }, as
+--        `Util.cullCurrentMarks` returns it.
+-- @return table Array of { photo_id, flag, rating, own }, by photo ID.
+--
+function Util.cullTasteLabels(current)
+	local labels = {}
+	for photoId, marks in pairs(current or {}) do
+		local flag = tonumber(marks.pickStatus) or 0
+		local rating = tonumber(marks.rating) or 0
+		local wrote = type(marks.written) == "table" and marks.written or {}
+		local own = flag ~= (tonumber(wrote.pickStatus) or 0) or rating ~= (tonumber(wrote.rating) or 0)
+		table.insert(labels, { photo_id = photoId, flag = flag, rating = rating, own = own })
+	end
+	table.sort(labels, function(a, b)
+		return a.photo_id < b.photo_id
+	end)
+	return labels
+end
+
+---
+-- What a learned culling style is, in words: how many decisions it came from,
+-- how often it agrees with the photographer against the default ranking, and
+-- whether culling will use it.
+--
+-- @param model table|nil `{ pairs, groups, agreement, default_agreement, used }`.
+-- @return string
+--
+function Util.cullingStyleSummary(model)
+	if type(model) ~= "table" then
+		return "No culling style has been learned yet."
+	end
+	local line = string.format(
+		"Learned from %d decisions in %d bursts. It agrees with your own choices %d%% of the time; "
+			.. "the default ranking %d%%.",
+		tonumber(model.pairs) or 0,
+		tonumber(model.groups) or 0,
+		math.floor((tonumber(model.agreement) or 0) * 100 + 0.5),
+		math.floor((tonumber(model.default_agreement) or 0) * 100 + 0.5)
+	)
+	if model.used then
+		return line .. " Cull Similar Photos uses it when 'Use my culling style' is ticked."
+	end
+	return line
+		.. " It does not agree with you more often than the default ranking, so culling will not use it. "
+		.. "Learning from more shoots you culled yourself may change that."
+end
+
+---
+-- What the catalog holds now for the photos a cull touched — flag, stars and
+-- colour label — plus what the last cull wrote (`cullWritten`), by photo ID.
+-- `Util.cullFlagPlan` compares the two to tell the cull's own marks from the
+-- photographer's.
+--
+-- One batched read; falls back to per-photo reads if the batch call fails, as
+-- `PhotoSelector` does, so a read error degrades to slower rather than to
+-- "no flags applied".
+-- Shared by the cull and 'Learn My Culling Style', which needs the same
+-- tell between the cull's marks and the photographer's.
+-- @return table photoId -> { pickStatus, rating, colorNameForLabel, written }
+function Util.cullCurrentMarks(catalog, photoById)
+	local photos = {}
+	local idByPhoto = {}
+	for photoId, photo in pairs(photoById) do
+		table.insert(photos, photo)
+		idByPhoto[photo] = photoId
+	end
+	local keys = { "pickStatus", "rating", "colorNameForLabel" }
+	local current = {}
+	local ok, batch = LrTasks.pcall(function()
+		return catalog:batchGetRawMetadata(photos, keys)
+	end)
+	if ok and type(batch) == "table" then
+		for photo, values in pairs(batch) do
+			local photoId = idByPhoto[photo]
+			if photoId and type(values) == "table" then
+				current[photoId] = values
+			end
+		end
+	else
+		log:warn("batchGetRawMetadata failed before applying cull flags; reading per photo: " .. tostring(batch))
+		for photoId, photo in pairs(photoById) do
+			current[photoId] = {
+				pickStatus = photo:getRawMetadata("pickStatus"),
+				rating = photo:getRawMetadata("rating"),
+				colorNameForLabel = photo:getRawMetadata("colorNameForLabel"),
+			}
+		end
+	end
+	-- What the last cull wrote. Read per photo with `noThrow`: a catalog that
+	-- never saw this field (older plugin) simply has nothing recorded, which
+	-- makes every existing mark the photographer's — the safe reading.
+	for photoId, photo in pairs(photoById) do
+		local okProp, written = LrTasks.pcall(function()
+			return photo:getPropertyForPlugin(_PLUGIN, "cullWritten", nil, true)
+		end)
+		current[photoId] = current[photoId] or {}
+		current[photoId].written = Util.cullWrittenDecode(okProp and written or nil)
+	end
+	return current
+end
+
+---
 -- Decides which Lightroom flags, star ratings and colour labels a cull result
 -- should write, photo by photo, and what it must leave alone.
 --

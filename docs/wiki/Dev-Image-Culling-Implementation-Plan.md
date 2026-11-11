@@ -1340,8 +1340,8 @@ after.
 | 2 | The genre chooses the preset, per group (`culling_preset: "auto"`, the plugin's new default) | **done** — at or above the hand-chosen presets on every ranking number ([numbers](Dev-Image-Culling-Benchmark.md#the-preset-from-the-genre)) |
 | 3 | People who matter (the photographer's key people) and small faces in a crowd | **done** — key people opt-in (`key_people`), named in the explanation; a tile pass for small faces ([numbers](Dev-Image-Culling-Benchmark.md#people-key-people-and-small-faces)) |
 | 4 | Scenes, a target count or share, highlights across a shoot | **done** — `target_count`/`target_fraction`, `highlights_count`; one photo per series covers every series ([numbers](Dev-Image-Culling-Benchmark.md#scenes-a-target-and-highlights)) |
-| 5 | Animal eyes | planned, licence gate first |
-| 6 | Learning the photographer's taste from the catalog's flags and stars, locally | planned |
+| 5 | Animal eyes | **stopped at the licence gate** (2026-11-11): no model with weights and training data clear for this project's use — see below |
+| 6 | Learning the photographer's taste from the catalog's flags and stars, locally | **done** — `/v1/cull/taste`, *Learn My Culling Style*, `use_taste`; proven per photographer by cross-validation against the default ranking, used only when better |
 | 7 | A vision model for close calls, optional, with its reason in words | planned |
 
 Already at the level of the best of them: judging against the burst rather
@@ -1349,4 +1349,24 @@ than absolute thresholds, eye focus on the full-size original, eye state with
 an explicit "unknown", an explanation for every frame, and brackets, focus
 stacks and panoramas recognised and kept. Missing at the start: everything in
 the table.
+
+### Step 5: the licence gate
+
+Animal eyes need a model that finds them, and every candidate failed the gate
+on its weights or its training data, not its code:
+
+- **RTMPose-m on AP-10K** (MMPose): code Apache-2.0. AP-10K is given as
+  CC-BY-4.0 in its repository and as "non-commercial use only" in MMPose's
+  documentation; the AI Challenger pre-training has no published licence. The
+  question is open upstream
+  ([open-mmlab/mmpose#3281](https://github.com/open-mmlab/mmpose/issues/3281)).
+- **SuperAnimal** (DeepLabCut model zoo): weights for academic, non-commercial
+  use only; the dataset under a modified MIT licence with a separate
+  commercial licence on request. Luxonis' ONNX export is GPL-3.0.
+- **RF-DETR keypoints** (Apache-2.0) is a general keypoint model: it would have
+  to be trained on animal eyes, and the public data for that is the data above.
+
+Until the photographer, who decides what licence risk the project takes, says
+otherwise, animals are judged by focus on the subject (step 1), which the
+wildlife preset weights fully. Birds had no candidate at all.
 

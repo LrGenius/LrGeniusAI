@@ -2049,6 +2049,131 @@ async fn a_target_chooses_across_scenes_and_says_what_it_chose() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// `/v1/cull/taste`: a photographer who always flags the broadest smile where
+/// the default ranking picks the sharpest frame. Learned, it agrees with them
+/// more often than the default, is used by a cull asking for it and moves the
+/// pick; forgotten, the cull says so. Too few decisions are refused with the
+/// reason.
+#[tokio::test]
+async fn a_culling_style_is_learned_used_and_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let mut rows = Vec::new();
+    let mut labels = Vec::new();
+    for b in 0..15i64 {
+        for i in 0..4i64 {
+            let id = format!("b{b}_{i}");
+            let sharp = 0.9 - 0.1 * i as f64;
+            let smile = 0.2 + 0.2 * i as f64;
+            let meta = serde_json::json!({
+                "filename": format!("{id}.jpg"),
+                "capture_time": 1_700_000_000 + b * 3600 + i,
+                "cull_phash": format!("{:016x}", 0xffff_0000_ffff_0000u64 ^ b as u64),
+                "cull_sharpness": sharp,
+                "cull_sharpness_peak": sharp,
+                "cull_exposure": 0.7,
+                "cull_noise": 0.1,
+                "cull_face_count": 1,
+                "cull_faces_present": true,
+                "cull_face_score": 0.6,
+                "cull_face_sharpness": 0.6,
+                "cull_eye_openness": 0.9,
+                "cull_blink_penalty": 0.1,
+                "cull_smile": smile,
+                "cull_eye_closed": 0.05,
+                (lrg_analysis::grouping::FACE_STATE_VERSION_KEY): lrg_analysis::grouping::FACE_STATE_VERSION,
+                (lrg_analysis::grouping::SUBJECT_VERSION_KEY): lrg_analysis::grouping::SUBJECT_VERSION,
+            });
+            rows.push(lrg_store::StoreRecord {
+                id: id.clone(),
+                vector: None,
+                metadata: meta.as_object().unwrap().clone(),
+            });
+            labels.push(serde_json::json!({
+                "photo_id": id, "flag": i64::from(i == 3), "rating": i, "own": true,
+            }));
+        }
+    }
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &rows)
+        .await
+        .unwrap();
+
+    let (code, too_few) = post_json(
+        &app,
+        "/v1/cull/taste",
+        serde_json::json!({"labels": &labels[..8], "culling_preset": "default", "db_path": db}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY, "{too_few}");
+    assert_eq!(too_few["error_code"], "too_few_decisions");
+
+    let (code, learned) = post_json(
+        &app,
+        "/v1/cull/taste",
+        serde_json::json!({"labels": labels, "culling_preset": "default", "db_path": db}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{learned}");
+    let model = &learned["model"];
+    assert_eq!(model["pairs"], 90);
+    assert_eq!(model["used"], true, "{learned}");
+    assert!(model["agreement"].as_f64() > model["default_agreement"].as_f64());
+    assert_eq!(
+        get_json(&app, &format!("/v1/cull/taste?db_path={db}")).await["model"]["pairs"],
+        90
+    );
+
+    let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+    let grade = serde_json::json!({
+        "photo_ids": ids, "culling_preset": "default", "use_iqa": false,
+        "use_taste": true, "db_path": db,
+    });
+    let json = cull_request(app.clone(), grade.clone()).await;
+    assert_eq!(
+        json["summary"]["taste_changed_picks"], 15,
+        "{}",
+        json["summary"]
+    );
+    let first = json["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| {
+            g["photo_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("b0_0"))
+        })
+        .unwrap();
+    assert_eq!(first["winner_photo_id"], "b0_3");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/v1/cull/taste?db_path={db}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["deleted"], true);
+    let json = cull_request(app, grade).await;
+    assert!(json["summary"]["taste_changed_picks"].is_null());
+    assert!(
+        json["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap_or("")
+            .contains("No culling style has been learned")),
+        "{}",
+        json["warnings"]
+    );
+}
+
 /// The default preset asks the prompts nothing, so a cull on it neither needs
 /// nor writes any — and has no text tower to miss.
 #[tokio::test]
