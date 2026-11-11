@@ -73,6 +73,17 @@ impl KeyPeople {
             .count()
     }
 
+    /// The key people a photo shows, for a selection's people coverage.
+    pub fn key_persons_in(&self, photo_id: &str) -> Vec<String> {
+        let mut persons: Vec<String> = self
+            .key_faces(photo_id)
+            .filter_map(|f| f.person.clone())
+            .collect();
+        persons.sort();
+        persons.dedup();
+        persons
+    }
+
     fn key_faces<'a>(&'a self, photo_id: &str) -> impl Iterator<Item = &'a Face> + 'a {
         self.faces
             .get(photo_id)

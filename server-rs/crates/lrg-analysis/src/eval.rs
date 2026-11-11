@@ -621,11 +621,26 @@ pub fn evaluate_by_preset(
     preset: &str,
     config_of: impl Fn(&str) -> CullingConfig,
 ) -> EvalReport {
+    score(fixture, produce(fixture, preset, &config_of))
+}
+
+/// The groups the backend would return for a fixture under a preset.
+fn produce(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: &dyn Fn(&str) -> CullingConfig,
+) -> Vec<Group> {
     use crate::culling_config::{preset_for_genres, AUTO_PRESET};
-    if preset != AUTO_PRESET {
-        return evaluate(fixture, &config_of(preset));
-    }
     let records = fixture_records(fixture);
+    if preset != AUTO_PRESET {
+        return group_and_sort_images_with_config(
+            records,
+            None,
+            None,
+            fixture.time_delta_seconds,
+            &config_of(preset),
+        );
+    }
     let genre = |r: &GroupingInput| {
         r.metadata
             .get("genre")
@@ -647,8 +662,109 @@ pub fn evaluate_by_preset(
             preset_for_genres(genres.iter().map(String::as_str)).unwrap_or("default")
         })
         .collect();
-    let produced = partition.rank(|g| (config_of(presets[g]), Some(presets[g])));
-    score(fixture, produced)
+    partition.rank(|g| (config_of(presets[g]), Some(presets[g])))
+}
+
+/// How a selection to a target did on a fixture's labels.
+#[derive(Debug, Clone, Default)]
+pub struct SelectionReport {
+    pub series: usize,
+    pub selected: usize,
+    /// Series with at least one frame chosen.
+    pub series_covered: usize,
+    /// Chosen frames labelled rank 1 — the best a series has.
+    pub best: usize,
+    /// Chosen frames labelled reject (not optional).
+    pub rejects: usize,
+    pub highlights: usize,
+    /// Highlights labelled rank 1.
+    pub highlights_best: usize,
+}
+
+impl SelectionReport {
+    pub fn add(&mut self, other: &SelectionReport) {
+        self.series += other.series;
+        self.selected += other.selected;
+        self.series_covered += other.series_covered;
+        self.best += other.best;
+        self.rejects += other.rejects;
+        self.highlights += other.highlights;
+        self.highlights_best += other.highlights_best;
+    }
+}
+
+/// Selects to `target` (and `highlights`) on what the grouper produced for a
+/// fixture under `preset`, and scores the choice against its labels.
+pub fn evaluate_selection(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: impl Fn(&str) -> CullingConfig,
+    target: crate::selection::Target,
+    highlights: usize,
+) -> SelectionReport {
+    use crate::selection::{select, SceneRule, SelectionRule};
+    let produced = produce(fixture, preset, &config_of);
+    let photos: HashMap<&str, &EvalPhoto> = fixture
+        .groups
+        .iter()
+        .flat_map(|g| g.photos.iter().map(|p| (p.photo_id.as_str(), p)))
+        .collect();
+    let embeddings: HashMap<&str, Vec<f32>> = fixture
+        .groups
+        .iter()
+        .flat_map(|g| g.photos.iter())
+        .filter_map(|p| {
+            let v = p
+                .embedding_q8
+                .as_deref()
+                .and_then(dequantize_embedding)
+                .or_else(|| p.embedding.clone())?;
+            Some((p.photo_id.as_str(), v))
+        })
+        .collect();
+    let embedding_of = |id: &str| embeddings.get(id).map(Vec::as_slice);
+    let chosen = select(
+        &produced,
+        &embedding_of,
+        &|_| Vec::new(),
+        target,
+        highlights,
+        &SceneRule::defaults(),
+        &SelectionRule::defaults(),
+    );
+    let series_of: HashMap<&str, usize> = fixture
+        .groups
+        .iter()
+        .enumerate()
+        .flat_map(|(i, g)| g.photos.iter().map(move |p| (p.photo_id.as_str(), i)))
+        .collect();
+    let covered: HashSet<usize> = chosen
+        .selected
+        .iter()
+        .filter_map(|id| series_of.get(id.as_str()).copied())
+        .collect();
+    let label = |id: &String| photos.get(id.as_str());
+    SelectionReport {
+        series: fixture.groups.len(),
+        selected: chosen.selected.len(),
+        series_covered: covered.len(),
+        best: chosen
+            .selected
+            .iter()
+            .filter(|id| label(id).is_some_and(|p| p.rank == Some(1)))
+            .count(),
+        rejects: chosen
+            .selected
+            .iter()
+            .filter(|id| label(id).is_some_and(|p| p.reject && !p.reject_optional))
+            .count(),
+        highlights: chosen.highlights.len(),
+        highlights_best: chosen
+            .highlights
+            .iter()
+            .filter(|id| label(id).is_some_and(|p| p.rank == Some(1)))
+            .count(),
+    }
 }
 
 fn fixture_records(fixture: &EvalFixture) -> Vec<GroupingInput> {

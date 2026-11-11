@@ -2897,6 +2897,60 @@ function Util.cullPrepTasks(preset, keyPeople)
 end
 
 ---
+-- The request fields for what the cull keeps: nothing for "the pick of every
+-- burst", `target_count` for a number of photos, `target_fraction` for a
+-- share (in percent in the dialog), and `highlights_count` when above 0.
+--
+-- @param mode string|nil "burst", "count" or "percent".
+-- @param amount number|nil The number, or the percentage.
+-- @param highlights number|nil How many highlights.
+-- @return table
+--
+function Util.cullTargetFields(mode, amount, highlights)
+	local fields = {}
+	amount = tonumber(amount)
+	if mode == "count" and amount and amount >= 1 then
+		fields.target_count = math.floor(amount + 0.5)
+	elseif mode == "percent" and amount and amount > 0 then
+		fields.target_fraction = math.min(amount, 100) / 100
+	end
+	highlights = tonumber(highlights)
+	if highlights and highlights >= 1 then
+		fields.highlights_count = math.floor(highlights + 0.5)
+	end
+	return fields
+end
+
+---
+-- The line of the cull's completion message about a target, or nil when the
+-- cull kept the pick of every burst.
+--
+-- @param summary table|nil The `/v1/cull/grade` summary.
+-- @return string|nil
+--
+function Util.cullSelectionLine(summary)
+	local selection = type(summary) == "table" and summary.selection or nil
+	if type(selection) ~= "table" then
+		return nil
+	end
+	local chosen = tonumber(selection.selected_count) or 0
+	local scenes = tonumber(selection.scene_count) or 0
+	local highlights = type(selection.highlight_photo_ids) == "table" and #selection.highlight_photo_ids or 0
+	local line = string.format(
+		"Kept %d %s across %d %s; they are the picks.",
+		chosen,
+		chosen == 1 and "photo" or "photos",
+		scenes,
+		scenes == 1 and "scene" or "scenes"
+	)
+	if highlights > 0 then
+		line = line
+			.. string.format(" %d %s in the Highlights collection.", highlights, highlights == 1 and "is" or "are")
+	end
+	return line
+end
+
+---
 -- The line of the cull's completion message about key people, or nil when
 -- they were not asked for.
 --
@@ -3156,6 +3210,16 @@ Util.CULL_STRONG_MOMENT_LABEL = "purple"
 --
 function Util.cullDecisionOf(photoResult)
 	if type(photoResult) ~= "table" then
+		return "alternate"
+	end
+	-- Under a target the picks are the photos chosen across the selection,
+	-- including the only frame of a scene that is a reject candidate.
+	if photoResult.selected ~= nil then
+		if photoResult.selected then
+			return "pick"
+		elseif photoResult.reject_candidate then
+			return "reject_candidate"
+		end
 		return "alternate"
 	end
 	if photoResult.winner then

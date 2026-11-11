@@ -1940,6 +1940,115 @@ async fn key_people_judge_the_frame_and_are_named() {
     assert_eq!(json["summary"]["key_people"]["groups"], 1);
 }
 
+/// A target: one photo from two scenes an hour apart is the better scene's
+/// pick, said per photo, per group and in the summary; asking for more than
+/// is worth keeping says so; and both kinds of target at once are refused.
+#[tokio::test]
+async fn a_target_chooses_across_scenes_and_says_what_it_chose() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let photo = |id: &str, t: i64, hash: &str, sharpness: f64, aesthetic: f64| {
+        let mut meta = serde_json::Map::new();
+        meta.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        meta.insert("capture_time".into(), serde_json::json!(t));
+        meta.insert("cull_phash".into(), serde_json::json!(hash));
+        meta.insert("cull_sharpness".into(), serde_json::json!(sharpness));
+        meta.insert("cull_exposure".into(), serde_json::json!(0.8));
+        meta.insert("cull_noise".into(), serde_json::json!(0.1));
+        meta.insert("aesthetic_score".into(), serde_json::json!(aesthetic));
+        meta.insert(
+            "aesthetic_model".into(),
+            serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+        );
+        meta.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: meta,
+        }
+    };
+    let t0 = 1_700_000_000;
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                photo("dinner0", t0, "ffffffffffffffff", 0.9, 5.0),
+                photo("dinner1", t0 + 1, "ffffffffffffffff", 0.8, 4.8),
+                photo("dance0", t0 + 3600, "0000000000000000", 0.9, 7.5),
+                photo("dance1", t0 + 3601, "0000000000000000", 0.8, 7.0),
+            ],
+        )
+        .await
+        .unwrap();
+    let ids = ["dinner0", "dinner1", "dance0", "dance1"];
+    let json = cull_request(
+        app.clone(),
+        serde_json::json!({
+            "photo_ids": ids, "use_iqa": false, "db_path": db,
+            "target_count": 1, "highlights_count": 1,
+        }),
+    )
+    .await;
+    let selection = &json["summary"]["selection"];
+    assert_eq!(selection["wanted"], 1, "{json}");
+    assert_eq!(selection["selected_count"], 1);
+    assert_eq!(selection["scene_count"], 2);
+    assert_eq!(
+        selection["highlight_photo_ids"],
+        serde_json::json!(["dance0"])
+    );
+    let dance = json["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["photo_ids"][0] == "dance0")
+        .unwrap();
+    assert_eq!(dance["selected_photo_ids"], serde_json::json!(["dance0"]));
+    assert_eq!(dance["scene_id"], "scene_0002");
+    let dance0 = dance["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["photo_id"] == "dance0")
+        .unwrap();
+    assert_eq!(dance0["selected"], true);
+    assert_eq!(dance0["highlight"], true);
+
+    // All four, but nothing is a reject here: four are chosen, no warning.
+    let all = cull_request(
+        app.clone(),
+        serde_json::json!({
+            "photo_ids": ids, "use_iqa": false, "db_path": db, "target_fraction": 1.0,
+        }),
+    )
+    .await;
+    assert_eq!(all["summary"]["selection"]["selected_count"], 4, "{all}");
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/cull/grade")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ids, "db_path": db,
+                        "target_count": 2, "target_fraction": 0.5,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 /// The default preset asks the prompts nothing, so a cull on it neither needs
 /// nor writes any — and has no text tower to miss.
 #[tokio::test]

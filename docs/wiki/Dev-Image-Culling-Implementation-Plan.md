@@ -1339,7 +1339,7 @@ after.
 | 1 | The subject without a face: RF-DETR-Seg finds it, focus measured on it and on the background; only the subject's faces counted; noise compared between frames of equal sharpness; a `wildlife` preset | **done** — winner 31.7 → 73.3 %, must-keep lost 12.1 → 9.1 % ([numbers](Dev-Image-Culling-Benchmark.md#the-subject-pass)) |
 | 2 | The genre chooses the preset, per group (`culling_preset: "auto"`, the plugin's new default) | **done** — at or above the hand-chosen presets on every ranking number ([numbers](Dev-Image-Culling-Benchmark.md#the-preset-from-the-genre)) |
 | 3 | People who matter (the photographer's key people) and small faces in a crowd | **done** — key people opt-in (`key_people`), named in the explanation; a tile pass for small faces ([numbers](Dev-Image-Culling-Benchmark.md#people-key-people-and-small-faces)) |
-| 4 | Scenes, a target count or share, highlights across a shoot | planned |
+| 4 | Scenes, a target count or share, highlights across a shoot | **done** — `target_count`/`target_fraction`, `highlights_count`; one photo per series covers every series ([numbers](Dev-Image-Culling-Benchmark.md#scenes-a-target-and-highlights)) |
 | 5 | Animal eyes | planned, licence gate first |
 | 6 | Learning the photographer's taste from the catalog's flags and stars, locally | planned |
 | 7 | A vision model for close calls, optional, with its reason in words | planned |

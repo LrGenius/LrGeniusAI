@@ -89,6 +89,12 @@ struct GroupingParams {
     /// and those in many of the selected photos (`crate::key_people`). Needs
     /// the full face pass; off by default.
     key_people: bool,
+    /// Choose this many photos across the whole selection
+    /// (`lrg_analysis::selection`): `target_count`, or `target_fraction` of
+    /// them. `None` leaves culling as it was: a pick per group.
+    target: Option<lrg_analysis::selection::Target>,
+    /// And this many highlights among them.
+    highlights: usize,
 }
 
 /// Mirrors `_parse_grouping_params`. `Err` carries the (status, body) to
@@ -190,6 +196,28 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
     let include_stored_metadata = flag(data.get("include_stored_metadata"), false);
     let include_embeddings = flag(data.get("include_embeddings"), false);
     let key_people = flag(data.get("key_people"), false);
+    let number = |key: &str| {
+        data.get(key).and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+    };
+    let target = match (number("target_count"), number("target_fraction")) {
+        (Some(_), Some(_)) => return bad("Give target_count or target_fraction, not both"),
+        (Some(n), None) if n.is_finite() && n >= 0.0 => {
+            Some(lrg_analysis::selection::Target::Count(n as usize))
+        }
+        (None, Some(f)) if f.is_finite() && (0.0..=1.0).contains(&f) => {
+            Some(lrg_analysis::selection::Target::Fraction(f))
+        }
+        (None, None) => None,
+        _ => return bad("Invalid target_count or target_fraction value"),
+    };
+    let highlights = match number("highlights_count") {
+        None => 0,
+        Some(n) if n.is_finite() && n >= 0.0 => n as usize,
+        Some(_) => return bad("Invalid highlights_count value"),
+    };
 
     // Clamped, not rejected: a weight outside 0..1 is a tuning fat-finger, and
     // the blend clamps anyway.
@@ -230,6 +258,8 @@ fn parse_grouping_params(data: &Value) -> Result<GroupingParams, Response> {
         semantic_weight,
         reject_margin_scale,
         key_people,
+        target,
+        highlights,
     })
 }
 
@@ -277,7 +307,12 @@ async fn load_grouping_inputs(
         .collect())
 }
 
-fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) -> Value {
+fn group_to_json(
+    index: usize,
+    g: &Group,
+    params: &GroupingParams,
+    outcome: &GroupingOutcome,
+) -> Value {
     let photos: Vec<Value> = g
         .photos
         .iter()
@@ -297,6 +332,10 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
             }
             if let Some(packed) = outcome.embeddings.get(&p.photo_id) {
                 photo["embedding_q8"] = json!(packed);
+            }
+            if let Some(selection) = &outcome.selection {
+                photo["selected"] = json!(selection.selected.contains(&p.photo_id));
+                photo["highlight"] = json!(selection.highlights.contains(&p.photo_id));
             }
             photo
         })
@@ -322,7 +361,7 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
         Value::Null
     };
 
-    json!({
+    let mut group = json!({
         "group_id": g.group_id,
         "group_type": g.group_type,
         // `group_type` already carries "bracket"/"focus_stack"/"panorama", but
@@ -346,7 +385,22 @@ fn group_to_json(g: &Group, params: &GroupingParams, outcome: &GroupingOutcome) 
         "max_capture_time": g.max_capture_time,
         "time_span_seconds": g.time_span_seconds,
         "debug": debug,
-    })
+    });
+    // Under a target: which scene the group is part of, and which of its
+    // photos were chosen — which may be none, or more than its pick.
+    if let Some(selection) = &outcome.selection {
+        group["scene_id"] = json!(format!(
+            "scene_{:04}",
+            selection.scene_of_group.get(index).copied().unwrap_or(0) + 1
+        ));
+        group["selected_photo_ids"] = json!(g
+            .photos
+            .iter()
+            .filter(|p| selection.selected.contains(&p.photo_id))
+            .map(|p| p.photo_id.clone())
+            .collect::<Vec<_>>());
+    }
+    group
 }
 
 /// What `compute_groups` produced, plus the facts the caller needs to decide
@@ -397,6 +451,8 @@ struct GroupingOutcome {
     genre_missing: usize,
     /// What `key_people` found, when it was asked for.
     key_people: Option<KeyPeopleOutcome>,
+    /// The photos chosen to the request's target, when it set one.
+    selection: Option<lrg_analysis::selection::Selection>,
     /// CLIP-IQA signals the run asked for and had to do without, because
     /// their prompt vectors were neither stored nor obtainable from the text
     /// tower.
@@ -563,6 +619,7 @@ async fn compute_groups(
             subject_model_ready: state.subject.is_cached(),
             genre_missing: 0,
             key_people: None,
+            selection: None,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),
@@ -634,20 +691,22 @@ async fn compute_groups(
         params.time_delta_seconds,
         &config_of(grouping_preset),
     );
-    let key_people = if params.key_people {
+    let key_data = if params.key_people {
         let names = crate::routes::faces::load_person_names(state);
-        let key = crate::key_people::load(&store, partition.records(), names).await?;
-        let groups = crate::key_people::apply(&mut partition, &key);
-        Some(KeyPeopleOutcome {
+        Some(crate::key_people::load(&store, partition.records(), names).await?)
+    } else {
+        None
+    };
+    let key_people = key_data.as_ref().map(|key| {
+        let groups = crate::key_people::apply(&mut partition, key);
+        KeyPeopleOutcome {
             named: key.named(),
             unnamed: key.unnamed(),
             groups,
             recognised: key.recognised(),
             unrecognised: key.unrecognised,
-        })
-    } else {
-        None
-    };
+        }
+    });
     let group_presets: Vec<&'static str> = (0..partition.group_count())
         .map(|g| {
             if auto {
@@ -835,11 +894,40 @@ async fn compute_groups(
         Default::default()
     };
 
+    // Kept for the selection, which compares photos across groups.
+    let selection_embeddings: std::collections::HashMap<String, Vec<f32>> =
+        if params.target.is_some() {
+            records
+                .iter()
+                .filter_map(|r| Some((r.photo_id.clone(), r.embedding.clone()?)))
+                .collect()
+        } else {
+            Default::default()
+        };
     let groups = partition.rank(|g| {
         let preset = group_presets[g];
         (config(preset), auto.then_some(preset))
     });
+    let selection = params.target.map(|target| {
+        let embedding_of = |id: &str| selection_embeddings.get(id).map(Vec::as_slice);
+        let people_of = |id: &str| {
+            key_data
+                .as_ref()
+                .map(|k| k.key_persons_in(id))
+                .unwrap_or_default()
+        };
+        lrg_analysis::selection::select(
+            &groups,
+            &embedding_of,
+            &people_of,
+            target,
+            params.highlights,
+            &lrg_analysis::selection::SceneRule::defaults(),
+            &lrg_analysis::selection::SelectionRule::defaults(),
+        )
+    });
     Ok(GroupingOutcome {
+        selection,
         stored_metadata,
         embeddings,
         groups,
@@ -951,6 +1039,23 @@ fn grouping_warnings(outcome: &GroupingOutcome) -> Vec<String> {
              Similar Photos' and 'Prepare now'.",
             outcome.state_unmeasured
         ));
+    }
+    if let Some(selection) = &outcome.selection {
+        if selection.selected.len() < selection.wanted {
+            warnings.push(format!(
+                "Only {} photo(s) were worth keeping, fewer than the {} asked for: the rest are \
+                 reject candidates. They are in the Reject Candidates collection to look at.",
+                selection.selected.len(),
+                selection.wanted
+            ));
+        }
+        if !selection.selected_with_defect.is_empty() {
+            warnings.push(format!(
+                "{} scene(s) had nothing but flawed frames, so their best one was kept anyway. \
+                 Look at it before delivering: its explanation says what is wrong.",
+                selection.selected_with_defect.len()
+            ));
+        }
     }
     if let Some(key) = &outcome.key_people {
         if key.unrecognised > 0 {
@@ -1075,7 +1180,8 @@ async fn group_similar(State(state): State<Arc<AppState>>, body: Option<Json<Val
             let json_groups: Vec<Value> = outcome
                 .groups
                 .iter()
-                .map(|g| group_to_json(g, &params, &outcome))
+                .enumerate()
+                .map(|(i, g)| group_to_json(i, g, &params, &outcome))
                 .collect();
             let mut response = json!({"groups": json_groups, "warnings": warnings});
             if let Some(w) = joined_warning(&warnings) {
@@ -1134,7 +1240,8 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
             let json_groups: Vec<Value> = outcome
                 .groups
                 .iter()
-                .map(|g| group_to_json(g, &params, &outcome))
+                .enumerate()
+                .map(|(i, g)| group_to_json(i, g, &params, &outcome))
                 .collect();
             Json(json!({
                 "status": "success",
@@ -1158,6 +1265,15 @@ async fn cull(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> 
                     "presets": preset_counts(&outcome.groups),
                     // When asked: who the key people were, and how many groups
                     // were judged by them.
+                    // Under a target: how many were asked for and chosen, in
+                    // how many scenes, and the highlights.
+                    "selection": outcome.selection.as_ref().map(|s| json!({
+                        "wanted": s.wanted,
+                        "selected_count": s.selected.len(),
+                        "scene_count": s.scene_count,
+                        "highlight_photo_ids": s.highlights,
+                        "selected_with_defect": s.selected_with_defect,
+                    })),
                     "key_people": outcome.key_people.as_ref().map(|k| json!({
                         "named": k.named,
                         "unnamed": k.unnamed,
@@ -1203,6 +1319,7 @@ mod tests {
             subject_model_ready: true,
             genre_missing: 0,
             key_people: None,
+            selection: None,
             unavailable: None,
             stored_metadata: Default::default(),
             embeddings: Default::default(),

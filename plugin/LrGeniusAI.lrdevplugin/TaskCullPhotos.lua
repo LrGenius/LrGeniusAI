@@ -10,6 +10,9 @@ local function showCullDialog(ctx)
 	props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
 	props.keyPeople = prefs.cullKeyPeople == true
 	props.cullStrength = prefs.cullStrength or "balanced"
+	props.keepMode = prefs.cullKeepMode or "burst"
+	props.keepAmount = prefs.cullKeepAmount or 20
+	props.highlightsCount = prefs.cullHighlightsCount or 0
 	-- Flags are what a photographer culls *with*, so picks are flagged by
 	-- default; rejects are opt-in because a reject flag is one menu command
 	-- away from deleting files. Both honour existing flags unless told not to.
@@ -78,6 +81,52 @@ local function showCullDialog(ctx)
 					tooltip = "How far below the pick a frame must score to become a reject candidate. "
 						.. "Blur, blinks and blocked faces are rejected at the same thresholds whatever you choose.",
 				}),
+			}),
+			f:row({
+				f:static_text({
+					title = "Keep:",
+					width = share("labelWidth"),
+				}),
+				f:popup_menu({
+					value = bind("keepMode"),
+					items = {
+						{ title = "The pick of every burst", value = "burst" },
+						{ title = "A number of photos", value = "count" },
+						{ title = "A share of the photos (%)", value = "percent" },
+					},
+					width = 200,
+					tooltip = "A number or a share chooses across the whole selection: the best of every "
+						.. "scene first, then the best of the rest that are unlike what is chosen.",
+				}),
+				f:edit_field({
+					value = bind("keepAmount"),
+					width_in_digits = 5,
+					min = 1,
+					max = 100000,
+					precision = 0,
+					enabled = LrView.bind({
+						key = "keepMode",
+						transform = function(mode)
+							return mode ~= "burst"
+						end,
+					}),
+				}),
+			}),
+			f:row({
+				f:static_text({
+					title = "Highlights:",
+					width = share("labelWidth"),
+				}),
+				f:edit_field({
+					value = bind("highlightsCount"),
+					width_in_digits = 4,
+					min = 0,
+					max = 1000,
+					precision = 0,
+					tooltip = "The best photos of the shoot, kept apart from each other, in a "
+						.. "'Highlights' collection: for a sneak peek. 0 for none.",
+				}),
+				f:static_text({ title = "(0 for none)" }),
 			}),
 			f:row({
 				f:static_text({
@@ -181,6 +230,9 @@ local function showCullDialog(ctx)
 	prefs.cullCreateDuplicatesCollection = props.createDuplicatesCollection
 	prefs.cullKeyPeople = props.keyPeople
 	prefs.cullStrength = props.cullStrength
+	prefs.cullKeepMode = props.keepMode
+	prefs.cullKeepAmount = props.keepAmount
+	prefs.cullHighlightsCount = props.highlightsCount
 	prefs.cullFlagPicks = props.flagPicks
 	prefs.cullFlagRejects = props.flagRejects
 	prefs.cullOverwriteUserMarks = props.overwriteUserMarks
@@ -194,6 +246,9 @@ local function showCullDialog(ctx)
 		createDuplicatesCollection = props.createDuplicatesCollection,
 		keyPeople = props.keyPeople,
 		cullStrength = props.cullStrength,
+		keepMode = props.keepMode,
+		keepAmount = props.keepAmount,
+		highlightsCount = props.highlightsCount,
 		flagPicks = props.flagPicks,
 		flagRejects = props.flagRejects,
 		overwriteUserMarks = props.overwriteUserMarks,
@@ -659,6 +714,7 @@ LrTasks.startAsyncTask(function()
 		})
 		progressScope:setPortionComplete(0, 1)
 
+		local target = Util.cullTargetFields(options.keepMode, options.keepAmount, options.highlightsCount)
 		local cullResult, err = SearchIndexAPI.cullPhotos(photoIds, {
 			phash_threshold = "auto",
 			clip_threshold = "auto",
@@ -666,6 +722,9 @@ LrTasks.startAsyncTask(function()
 			culling_preset = options.cullingPreset,
 			reject_margin_scale = Util.cullRejectMarginScale(options.cullStrength),
 			key_people = options.keyPeople,
+			target_count = target.target_count,
+			target_fraction = target.target_fraction,
+			highlights_count = target.highlights_count,
 		})
 		local groups = cullResult and cullResult.groups or nil
 		local summary = (cullResult and cullResult.summary) or {}
@@ -723,14 +782,38 @@ LrTasks.startAsyncTask(function()
 			-- frames were recognised rather than just quietly not culled.
 			local keepAll = group["keep_all"] == true
 
-			if winnerPhotoId then
-				table.insert(picksIds, winnerPhotoId)
-			end
-			for _, photoId in ipairs(alternatePhotoIds) do
-				table.insert(alternateIds, photoId)
-			end
-			for _, photoId in ipairs(rejectCandidatePhotoIds) do
-				table.insert(rejectIds, photoId)
+			-- Under a target the picks are the photos chosen across the whole
+			-- selection — none of a burst, or several — not one per burst. A
+			-- chosen reject candidate (the only frame of its scene) is a pick.
+			local selectedPhotoIds = group["selected_photo_ids"]
+			if type(selectedPhotoIds) == "table" then
+				local chosen = {}
+				for _, photoId in ipairs(selectedPhotoIds) do
+					chosen[photoId] = true
+					table.insert(picksIds, photoId)
+				end
+				local rejected = {}
+				for _, photoId in ipairs(rejectCandidatePhotoIds) do
+					rejected[photoId] = true
+					if not chosen[photoId] then
+						table.insert(rejectIds, photoId)
+					end
+				end
+				for _, photoId in ipairs(groupPhotoIds) do
+					if not chosen[photoId] and not rejected[photoId] then
+						table.insert(alternateIds, photoId)
+					end
+				end
+			else
+				if winnerPhotoId then
+					table.insert(picksIds, winnerPhotoId)
+				end
+				for _, photoId in ipairs(alternatePhotoIds) do
+					table.insert(alternateIds, photoId)
+				end
+				for _, photoId in ipairs(rejectCandidatePhotoIds) do
+					table.insert(rejectIds, photoId)
+				end
 			end
 			if keepAll then
 				setGroupCount = setGroupCount + 1
@@ -766,6 +849,9 @@ LrTasks.startAsyncTask(function()
 		local rejectPhotos = photosFromIds(rejectIds, photoById, notInCatalog)
 		local duplicatePhotos = photosFromIds(duplicateIds, photoById, notInCatalog)
 		local setPhotos = photosFromIds(setIds, photoById, notInCatalog)
+		local selection = type(summary.selection) == "table" and summary.selection or nil
+		local highlightPhotos =
+			photosFromIds(selection and selection.highlight_photo_ids or {}, photoById, notInCatalog)
 
 		local catalog = LrApplication.activeCatalog()
 		local timestamp = LrDate.timeToW3CDate(LrDate.currentTime())
@@ -904,6 +990,9 @@ LrTasks.startAsyncTask(function()
 					duplicatePhotos
 				)
 			end
+			if #highlightPhotos > 0 then
+				createResultCollection("Highlights", highlightPhotos)
+			end
 			-- Only created when something was actually detected: an empty
 			-- collection on every run would train the user to ignore it.
 			if #setPhotos > 0 then
@@ -950,6 +1039,10 @@ LrTasks.startAsyncTask(function()
 				)
 		end
 
+		local selectionLine = Util.cullSelectionLine(summary)
+		if selectionLine then
+			completionMessage = completionMessage .. "\n\n" .. selectionLine
+		end
 		local keyPeopleLine = Util.cullKeyPeopleLine(summary)
 		if keyPeopleLine then
 			completionMessage = completionMessage .. "\n\n" .. keyPeopleLine

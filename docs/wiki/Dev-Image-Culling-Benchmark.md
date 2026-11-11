@@ -258,6 +258,31 @@ first guess, and a contract test holds what it does: a guest standing larger in
 front no longer hides the bride's blink, and the explanation says "Anna: eyes
 closed".
 
+## Scenes, a target and highlights
+
+Step 4 (2026-11-11): a number or a share of photos chosen across a shoot, and
+highlights among them (`lrg_analysis::selection`). The benchmark's series lie
+an hour apart, so each is a scene; it can say whether the choice takes every
+series and its best frame first, not whether a gallery is well told.
+`cull_eval --preset auto --target N --highlights 5`:
+
+| target | series covered | best frame of its series | labelled reject | highlights the best of their series |
+|---|---|---|---|---|
+| 120 (one per series) | 100 % | 76.7 % | 0.8 % | 72 % (5 per genre) |
+| 240 (two per series) | 100 % | 63.6 % | 2.9 % | 72 % |
+| 10 % | 93.3 % | 78.8 % | 0.9 % | 72 % |
+
+One per series takes the same frame as the pick wherever the pick is right
+(winner top-1 77.5 %). The second frame of a series is often a worse copy,
+since the benchmark has no second moment to offer: 2.9 % of the chosen were
+labelled rejects the ranking had not nominated. Two choices came from this
+table: a cost of 0.1 per place a frame ranks below its group's pick when filling
+(best frame 56.9 → 63.6 %, rejects 3.3 → 2.9 %; 0.2 took more rejects again),
+and highlights take of each group only its best-ranked chosen frame — the
+first version made the grainier twin of a chosen frame a highlight. Scenes made of several bursts,
+the novelty term and the people bonus are not exercised here; their weights
+are a first version.
+
 ## Open: what the benchmark found and this did not fix
 
 - **A face found in one frame and not the next.** Where the face detector

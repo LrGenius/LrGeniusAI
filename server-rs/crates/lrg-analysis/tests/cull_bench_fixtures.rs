@@ -13,7 +13,11 @@
 //! `scripts/cull_bench.py run` measures.
 
 use lrg_analysis::culling_config::get_culling_config;
-use lrg_analysis::eval::{evaluate, evaluate_by_preset, merge, EvalFixture, EvalReport};
+use lrg_analysis::eval::{
+    evaluate, evaluate_by_preset, evaluate_selection, merge, EvalFixture, EvalReport,
+    SelectionReport,
+};
+use lrg_analysis::selection::Target;
 
 fn fixtures() -> Vec<EvalFixture> {
     let dir = concat!(
@@ -179,5 +183,35 @@ fn auto_ranks_as_well_as_the_preset_chosen_by_hand() {
         "must-keep kept",
         1.0 - auto.must_keep_reject_rate(),
         1.0 - by_hand.must_keep_reject_rate(),
+    );
+}
+
+/// A target of one photo per series: every series is in it (each is a scene
+/// of its own, an hour from the next), mostly with its best frame, and almost
+/// never with a labelled reject.
+#[test]
+fn a_target_of_one_per_series_covers_every_series() {
+    let mut all = SelectionReport::default();
+    for f in &fixtures() {
+        let target = Target::Count(f.groups.len());
+        all.add(&evaluate_selection(
+            f,
+            "auto",
+            get_culling_config,
+            target,
+            0,
+        ));
+    }
+    assert_eq!(all.series_covered, all.series, "{all:?}");
+    let share = |a: usize| a as f64 / all.selected.max(1) as f64;
+    assert!(
+        share(all.best) >= 0.76,
+        "best of its series {:.3}",
+        share(all.best)
+    );
+    assert!(
+        share(all.rejects) <= 0.01,
+        "rejects {:.3}",
+        share(all.rejects)
     );
 }

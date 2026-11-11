@@ -85,7 +85,8 @@ Missing, in the order the plan takes them:
    small faces in a crowd. *Done: key people, named in the explanation, and a
    second look for small faces
    ([numbers](Dev-Image-Culling-Benchmark.md#people-key-people-and-small-faces)).*
-5. **Scenes, a target count and highlights** across a shoot.
+5. **Scenes, a target count and highlights** across a shoot. *Done
+   ([numbers](Dev-Image-Culling-Benchmark.md#scenes-a-target-and-highlights)).*
 6. **Animal eyes.**
 7. **Learning from the user** — a Lightroom catalog holds years of the
    photographer's flags and stars, which no stand-alone tool can read.

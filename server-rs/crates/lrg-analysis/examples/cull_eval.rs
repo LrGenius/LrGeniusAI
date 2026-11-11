@@ -17,6 +17,8 @@
 //! each knob over a range of values, one at a time, and prints what each value
 //! scores; it suggests and changes nothing. `--preset auto` ranks each group
 //! with the preset its photos' genre calls for, as `/v1/cull/grade` does.
+//! `--target N` or `--target P%` (and `--highlights N`) chooses that many
+//! photos across each fixture and says how the choice did on its labels.
 //!
 //! Fixture format: see `lrg_analysis::eval::EvalFixture`, and
 //! `testdata/cull_eval/README.md` for how to build one from a real shoot.
@@ -24,7 +26,10 @@
 use std::path::{Path, PathBuf};
 
 use lrg_analysis::culling_config::{get_culling_config, CullingConfig};
-use lrg_analysis::eval::{evaluate_by_preset, merge, EvalFixture, EvalReport};
+use lrg_analysis::eval::{
+    evaluate_by_preset, evaluate_selection, merge, EvalFixture, EvalReport, SelectionReport,
+};
+use lrg_analysis::selection::Target;
 
 fn load_fixtures(root: &Path) -> Vec<(PathBuf, EvalFixture)> {
     let mut paths: Vec<PathBuf> = if root.is_dir() {
@@ -434,7 +439,8 @@ fn main() {
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         eprintln!(
             "usage: cull_eval <fixture.json|fixture-dir> [--preset NAME] \
-             [--compare] [--ablate KNOB] [--by-defect] [--mistakes] [--tune KNOB[,KNOB…]]\n\n\
+             [--compare] [--ablate KNOB] [--by-defect] [--mistakes] [--tune KNOB[,KNOB…]]\n\
+             \x20               [--target N|P%] [--highlights N]\n\n\
              --preset NAME   override each fixture's own culling_preset\n\
              --compare       also run CullingConfig::python_parity and show the delta\n\
              --ablate KNOB   also run with one knob rolled back, and show the delta\n\
@@ -508,4 +514,47 @@ fn main() {
     if let Some(knobs) = tune_knobs {
         tune(&fixtures, preset, &knobs);
     }
+
+    if let Some(target) = value_after("--target") {
+        let target = match target.strip_suffix('%') {
+            Some(p) => Target::Fraction(p.parse::<f64>().expect("--target P%") / 100.0),
+            None => Target::Count(target.parse().expect("--target N")),
+        };
+        let highlights: usize = value_after("--highlights")
+            .map(|h| h.parse().expect("--highlights N"))
+            .unwrap_or(0);
+        let mut all = SelectionReport::default();
+        println!("\n=== selection to {target:?}, {highlights} highlight(s) per fixture ===");
+        for (_, f) in &fixtures {
+            let r = evaluate_selection(
+                f,
+                preset.unwrap_or(&f.culling_preset),
+                get_culling_config,
+                target,
+                highlights,
+            );
+            print_selection(&f.name, &r);
+            all.add(&r);
+        }
+        print_selection("ALL FIXTURES", &all);
+    }
+}
+
+fn print_selection(name: &str, r: &SelectionReport) {
+    let pct = |a: usize, b: usize| {
+        if b == 0 {
+            0.0
+        } else {
+            a as f64 * 100.0 / b as f64
+        }
+    };
+    println!(
+        "  {name:<16} chose {:>4}  series covered {:>5.1}%  best of its series {:>5.1}%  \
+         rejects {:>5.1}%  highlights best {:>5.1}%",
+        r.selected,
+        pct(r.series_covered, r.series),
+        pct(r.best, r.selected),
+        pct(r.rejects, r.selected),
+        pct(r.highlights_best, r.highlights),
+    );
 }

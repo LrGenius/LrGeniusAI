@@ -2060,6 +2060,16 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	if options.key_people then
 		body.key_people = true
 	end
+	-- Choose across the whole selection instead of a pick per burst: a number
+	-- of photos or a share of them, and highlights among them.
+	if type(options.target_count) == "number" then
+		body.target_count = options.target_count
+	elseif type(options.target_fraction) == "number" then
+		body.target_fraction = options.target_fraction
+	end
+	if type(options.highlights_count) == "number" and options.highlights_count > 0 then
+		body.highlights_count = options.highlights_count
+	end
 	-- Overrides the preset's own weight for the genre semantic axis (peak
 	-- action, expression, candid moment). Exposed so the signal can be swept
 	-- from outside without a backend rebuild; nil leaves the preset in charge.

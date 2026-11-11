@@ -628,10 +628,26 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
 | `key_people` | bool | Judge by the selection's key people (`lrg_api::key_people`): the persons named in People who are in the selection, and those in at least a fifth of its photos with faces and at least three (`lrg_analysis::key_people::KeyPeopleRule`). Faces without a person in People are clustered among the selection's for this. In a group where any frame shows one, every frame's face aggregates are summed again from its key faces alone, every one counting however small (no prominence gate), and the reasons about eyes, focus and gaze name the key person (`cull_who_*`, rank time only, never stored and left out of `stored_metadata`). Reads `FACE_TABLE`, so it needs the full face pass. Default false |
+| `target_count`, `target_fraction` | int, float 0..1 | Choose this many photos across the whole selection, or this share of them (one or the other; both is a 400), instead of a pick per group (`lrg_analysis::selection`). See *Target* below |
+| `highlights_count` | int | With a target, this many highlights among the chosen photos |
 | `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
 | `include_embeddings` | bool | Echo each photo's SigLIP2 embedding as `embedding_q8`: base64 of a little-endian `f32` scale and one signed byte per dimension (`lrg_analysis::eval::quantize_embedding`, about 1.5 KB). For fixtures, whose replay groups the way the backend did only with it. Absent for a photo without an embedding |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
+
+**Target.** With `target_count` or `target_fraction`, the ranked groups are joined into
+*scenes* — consecutive groups at most 90 s apart whose picks are at most 0.35 apart in cosine
+distance where both have an embedding — and photos are chosen across them by a *keep value*
+comparable between groups: the aesthetic score, blended 0.7/0.3 with the moment where judged,
+halved by a clear defect (`cull_score` is measured against each group and is not comparable).
+First the best pick of every scene (the best scenes', when the target is smaller than their
+number); then, until the target, the photo with the highest keep value less 0.5 × its cosine
+similarity to the closest chosen photo (frames of one group count at least 0.9 alike, embedding
+or not) and less 0.1 per place it ranks below its group's pick, plus 0.1 for a group not yet chosen
+from and 0.1 per key person (with `key_people`) not yet in the selection. A reject candidate is chosen only as the only frame of its scene, and is
+listed in `selection.selected_with_defect`. Highlights are the best chosen photos without a
+defect, at most each group's best-ranked chosen frame, kept apart the same way. Without a target nothing changes. The weights are a first
+version; see [Dev-Image-Culling-Benchmark.md](Dev-Image-Culling-Benchmark.md) for what is measured.
 
 **`auto`** chooses the preset per group from the photos' stored `genre`
 (`lrg_ml::genre`): the preset most of the group's genres call for
@@ -723,12 +739,13 @@ against the group.
 
 | Field | Type | Description |
 |---|---|---|
-| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count`, `presets` — under `auto`, groups per chosen preset (`{"sports": 12, "default": 4}`), empty otherwise — and `key_people`: with `key_people`, `{"named": [names], "unnamed": n, "groups": groups judged by them}`, else null |
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count`, `selection` — with a target, `{"wanted", "selected_count", "scene_count", "highlight_photo_ids", "selected_with_defect"}`, else null — `presets` — under `auto`, groups per chosen preset (`{"sports": 12, "default": 4}`), empty otherwise — and `key_people`: with `key_people`, `{"named": [names], "unnamed": n, "groups": groups judged by them}`, else null |
+| `groups[].scene_id`, `groups[].selected_photo_ids` | string, string[] | With a target: the group's scene (`scene_0001`, in time order) and which of its photos were chosen — none, or several. `photos[].selected` and `photos[].highlight` say the same per photo |
 | `groups[].preset` | string | The preset the group was ranked with: the request's, or under `auto` the one its genre called for. Also in `debug.culling_preset` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
 | `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`eye_squint`/`gaze_off_lens`/`mouth_open`/`face_luminance`/`face_across_stops`/`face_blown` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
-| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), under `auto` photos without a genre, with `key_people` photos with faces never through face recognition and a selection where no one is a key person, photos whose subject was not measured, photos whose moment was not judged. Empty when there is nothing to say |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), with a target fewer photos worth keeping than asked for and scenes kept with nothing but flawed frames, under `auto` photos without a genre, with `key_people` photos with faces never through face recognition and a selection where no one is a key person, photos whose subject was not measured, photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
 The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a

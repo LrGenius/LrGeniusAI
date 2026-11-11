@@ -86,6 +86,40 @@ describe("Util.cullKeyPeopleLine", function()
 	end)
 end)
 
+describe("Util.cullTargetFields", function()
+	it("sends nothing for the pick of every burst", function()
+		assert.are.same({}, Util.cullTargetFields("burst", 20, 0))
+		assert.are.same({}, Util.cullTargetFields(nil, nil, nil))
+	end)
+
+	it("sends a count, or a share of at most all, and highlights above 0", function()
+		assert.are.same({ target_count = 300 }, Util.cullTargetFields("count", 300, 0))
+		assert.are.same({ target_fraction = 0.25, highlights_count = 20 }, Util.cullTargetFields("percent", 25, 20))
+		assert.are.same({ target_fraction = 1 }, Util.cullTargetFields("percent", 140, nil))
+	end)
+end)
+
+describe("Util.cullSelectionLine", function()
+	it("says how many were kept, across how many scenes, and the highlights", function()
+		assert.are.equal(
+			"Kept 300 photos across 41 scenes; they are the picks. 3 are in the Highlights collection.",
+			Util.cullSelectionLine({
+				selection = { selected_count = 300, scene_count = 41, highlight_photo_ids = { "a", "b", "c" } },
+			})
+		)
+		assert.is_nil(Util.cullSelectionLine({}))
+	end)
+end)
+
+describe("Util.cullDecisionOf under a target", function()
+	it("makes the chosen photos the picks", function()
+		assert.are.equal("pick", Util.cullDecisionOf({ winner = false, selected = true }))
+		assert.are.equal("pick", Util.cullDecisionOf({ reject_candidate = true, selected = true }))
+		assert.are.equal("alternate", Util.cullDecisionOf({ winner = true, selected = false }))
+		assert.are.equal("reject_candidate", Util.cullDecisionOf({ reject_candidate = true, selected = false }))
+	end)
+end)
+
 describe("Util.responseWarnings", function()
 	it("prefers the list and removes duplicates", function()
 		local list = Util.responseWarnings({

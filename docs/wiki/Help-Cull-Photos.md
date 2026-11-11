@@ -66,6 +66,18 @@ photos, so it works best on frames shot with AEB.
      `Balanced` is the preset's own margin. It only moves the score margin:
      a blurred frame, a blink or a blocked face is rejected at the same
      threshold whatever you choose.
+   - **Keep** – `The pick of every burst` (the default), `A number of
+     photos` or `A share of the photos (%)`. A number or a share chooses
+     across the whole selection, the way a gallery is delivered: the shoot is
+     split into scenes (bursts close in time and alike), the best photo of
+     every scene comes first, then the best of the rest that are unlike what is
+     already chosen, so the speeches do not crowd out the dancing. The chosen
+     photos are the picks — none of some bursts, several of others. A photo
+     with a flaw is chosen only when its scene has nothing better, and the
+     culling warning says so.
+   - **Highlights** – with a number or a share, this many of the best chosen
+     photos, kept different from each other, go into a `Highlights`
+     collection: a sneak peek. 0 for none.
    - **Create 'Duplicates / Near Duplicates' collection** – on by default.
    - **Lightroom flags and ratings** – see the next section.
 4. Start the task and wait until the progress dialog completes.
