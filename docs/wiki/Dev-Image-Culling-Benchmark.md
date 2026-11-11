@@ -293,7 +293,24 @@ check that it learns at all, the benchmark's labels were given to
 the clear defects rejected): from 2557 decisions in 89 series it agreed with
 them 91.6 % of the time on held-out series, the default ranking 87.3 %.
 The other 31 series had been taken for focus stacks, which no decision comes
-from — see below.
+from; see the next section.
+
+## Focus stacks that were not
+
+The check above turned up 31 of the 120 series read as focus stacks — every
+one a series without people whose shaken frame, sharp nowhere, made its
+"sharpest region" jump. A stack is kept whole, so none of their rejects was
+ever nominated: most of what the first run put down to wildlife and landscape
+finding few rejects. A focus stack now needs every frame sharp somewhere
+(`focus_stack_min_peak_ratio`):
+
+| | before | after (by hand / `auto`) |
+|---|---|---|
+| reject recall | 70.8 % | 86.9 % / 87.2 % |
+| reject precision | 92.8 % | 94.1 % / 94.4 % |
+| landscape recall | 35.4 % | 66.7 % |
+| wildlife recall | 13.7 % | 76.7 % |
+| must-keep lost | 9.1 % | 9.1 % / 8.3 % |
 
 ## Open: what the benchmark found and this did not fix
 
@@ -313,8 +330,9 @@ from — see below.
 - **Who is the subject among people** is a guess the backend and the benchmark
   sometimes make differently (a footballer in front that Mask R-CNN missed, a
   face the backend counts and the benchmark blurred): 3 keepers.
-- **Wildlife finds few rejects** (recall 14 %), as before, now with no keeper
-  lost: the blur threshold sits below most of the blurred frames there.
+- **Wildlife and landscape still find fewer rejects** than the other genres
+  (77 % and 67 %): the default preset rejects a soft single only, and its blur
+  threshold sits below some of the blurred frames there.
 - **Camera shake is rarely named** `motion_blur` (1 %), as before.
 
 ## Open after the first run
@@ -339,3 +357,5 @@ from — see below.
 - **Wildlife and landscape find few rejects** (recall 14 % and 33 %): the
   `default` preset rejects a soft single only, and its blur threshold sits
   below most of the blurred frames there.
+  *Mostly a misreading: 31 series were taken for focus stacks. 77 % and 67 %
+  since that was fixed.*

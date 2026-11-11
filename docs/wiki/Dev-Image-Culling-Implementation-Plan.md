@@ -1036,6 +1036,15 @@ is how a stack is recognised, and it is also what a group of people shifting
 their weight between frames looks like. `SetFrame::faces` now carries
 `cull_face_count`, and a group with a face in any frame is never a stack.
 
+**A frame sharp nowhere is no slice.** The public benchmark found the second
+way a burst passes for a stack: one camera-shaken frame has no sharp region,
+and its "sharpest region" lands wherever the noise is, so the region travels.
+31 of its 120 series were kept whole as stacks, their rejects never nominated.
+`SetFrame::peak_sharpness` (`cull_sharpness_peak`) now has to reach
+`focus_stack_min_peak_ratio` (0.35) of the group's sharpest frame in every
+frame: reject recall on the benchmark 70.8 → 86.9 %, precision 92.8 → 94.1 %,
+the labelled sets of `testdata/cull_eval` still kept and recognised.
+
 The first run's flag writing, undo, respect-existing protection and
 collections all behaved as designed: 96 picks flagged (103 picks minus the 7
 "stacks", which are never flagged), 49 purple labels, 0 rejects (as

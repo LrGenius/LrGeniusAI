@@ -490,6 +490,10 @@ pub struct SetDetectionConfig {
     /// minimum spread, in normalized frame widths, of `cull_sharp_region_*`
     /// across the group.
     pub focus_stack_min_region_travel: f64,
+    /// ...and every frame sharp somewhere: its sharpest part at least this
+    /// share of the sharpest frame's. A frame sharp nowhere is a miss, not a
+    /// slice. 0 switches the check off.
+    pub focus_stack_min_peak_ratio: f64,
     /// ...while the framing stays put. Maximum pHash Hamming distance between
     /// any two frames of a focus stack or bracket.
     pub static_framing_max_phash: u32,
@@ -686,6 +690,7 @@ const BASE: CullingConfig = CullingConfig {
         bracket_max_frame_gap_seconds: 4.0,
         uniform_ev_tolerance: 0.34,
         focus_stack_min_region_travel: 0.12,
+        focus_stack_min_peak_ratio: 0.35,
         static_framing_max_phash: 12,
         panorama_min_adjacent_distance: 0.06,
         panorama_max_adjacent_distance: 0.35,

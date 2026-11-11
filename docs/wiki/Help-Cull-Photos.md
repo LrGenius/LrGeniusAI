@@ -26,6 +26,8 @@ winner, no reject candidates, and the whole group goes to the
 
 Detection is deliberately cautious and needs corroborating evidence from more
 than one signal, so it can miss a set rather than misread an ordinary burst.
+A focus stack needs every frame to be sharp somewhere: a tripod burst with one
+shaken frame is a burst to cull, not a stack to keep.
 Exposure-bracket detection reads the exposure compensation value from your
 photos, so it works best on frames shot with AEB.
 

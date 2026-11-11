@@ -1808,6 +1808,10 @@ impl Partition {
                         .get("cull_face_count")
                         .and_then(Value::as_u64)
                         .unwrap_or(0) as usize,
+                    peak_sharpness: r
+                        .metadata
+                        .get("cull_sharpness_peak")
+                        .and_then(Value::as_f64),
                     sharp_region: match (
                         r.metadata
                             .get("cull_sharp_region_x")
