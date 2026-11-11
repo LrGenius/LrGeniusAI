@@ -312,6 +312,28 @@ finding few rejects. A focus stack now needs every frame sharp somewhere
 | wildlife recall | 13.7 % | 76.7 % |
 | must-keep lost | 9.1 % | 9.1 % / 8.3 % |
 
+## A second opinion for close calls (not shipped)
+
+Step 7 would ask a vision model which of two frames to keep where the ranking
+is unsure, and was to ship only if that beat the ranking. Measured on the
+benchmark's close calls — groups whose pick and runner-up score within 0.05 of
+each other (`cull_eval --close-calls`): 94 of them, 53 with the two frames
+labelled differently, mostly one frame a stop darker or brighter, grainier or
+slightly soft than the other. `lrg-llama`'s `tiebreak_probe` shows a local
+model both frames side by side, alternating which is on the left:
+
+| | right on the 53 |
+|---|---|
+| the ranking | 34 (64.2 %) |
+| Qwen2.5-VL 3B (Q4_K_M, local) | 32 (60.4 %) — and "the left one" 96 % of the time |
+
+The model answers by position, not by the photographs, so the tiebreak does
+not ship. The benchmark's close calls are technical — every frame of a series
+shows the same moment — which is where a model would be weakest and the
+measurements strongest; the moment and expression, where it could help, need
+a hand-culled shoot to test. A larger model, or a cloud one, can be measured
+with the same two commands.
+
 ## Open: what the benchmark found and this did not fix
 
 - **A face found in one frame and not the next.** Where the face detector

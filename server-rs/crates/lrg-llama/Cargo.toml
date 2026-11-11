@@ -107,4 +107,5 @@ llama-cpp-2 = { version = "=0.1.156", features = [
 ] }
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

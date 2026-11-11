@@ -93,6 +93,7 @@ Missing, in the order the plan takes them:
    learned locally, and used only where cross-validation shows it agrees with
    the photographer more often than the default ranking.*
 8. Optionally, **a vision model for close calls**, with its reason in words.
+   *Measured with a local model and not better than the ranking; not shipped.*
 
 ## Sources
 

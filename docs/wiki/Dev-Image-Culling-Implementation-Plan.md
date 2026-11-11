@@ -1351,7 +1351,7 @@ after.
 | 4 | Scenes, a target count or share, highlights across a shoot | **done** — `target_count`/`target_fraction`, `highlights_count`; one photo per series covers every series ([numbers](Dev-Image-Culling-Benchmark.md#scenes-a-target-and-highlights)) |
 | 5 | Animal eyes | **stopped at the licence gate** (2026-11-11): no model with weights and training data clear for this project's use — see below |
 | 6 | Learning the photographer's taste from the catalog's flags and stars, locally | **done** — `/v1/cull/taste`, *Learn My Culling Style*, `use_taste`; proven per photographer by cross-validation against the default ranking, used only when better |
-| 7 | A vision model for close calls, optional, with its reason in words | planned |
+| 7 | A vision model for close calls, optional, with its reason in words | **measured, not shipped**: a local 3B model was right in 60.4 % of the benchmark's close calls, the ranking in 64.2 % ([numbers](Dev-Image-Culling-Benchmark.md#a-second-opinion-for-close-calls-not-shipped)) |
 
 Already at the level of the best of them: judging against the burst rather
 than absolute thresholds, eye focus on the full-size original, eye state with

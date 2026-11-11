@@ -165,6 +165,7 @@ sources = [
   "server-rs/crates/lrg-analysis/src/eval.rs",
   "server-rs/crates/lrg-analysis/examples/cull_eval.rs",
   "server-rs/crates/lrg-analysis/src/selection.rs",
+  "server-rs/crates/lrg-llama/examples/tiebreak_probe.rs",
   "server-rs/testdata/cull_bench/fixtures/*.json",
 ]
 

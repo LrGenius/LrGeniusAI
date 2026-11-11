@@ -19,6 +19,9 @@
 //! with the preset its photos' genre calls for, as `/v1/cull/grade` does.
 //! `--target N` or `--target P%` (and `--highlights N`) chooses that many
 //! photos across each fixture and says how the choice did on its labels.
+//! `--close-calls FILE [--gap G]` writes the groups whose pick and runner-up
+//! score within G (0.05) of each other, with their labels, as JSON — the set a
+//! second opinion is measured on.
 //!
 //! Fixture format: see `lrg_analysis::eval::EvalFixture`, and
 //! `testdata/cull_eval/README.md` for how to build one from a real shoot.
@@ -27,7 +30,8 @@ use std::path::{Path, PathBuf};
 
 use lrg_analysis::culling_config::{get_culling_config, CullingConfig};
 use lrg_analysis::eval::{
-    evaluate_by_preset, evaluate_selection, merge, EvalFixture, EvalReport, SelectionReport,
+    close_calls, evaluate_by_preset, evaluate_selection, merge, EvalFixture, EvalReport,
+    SelectionReport,
 };
 use lrg_analysis::selection::Target;
 
@@ -440,7 +444,7 @@ fn main() {
         eprintln!(
             "usage: cull_eval <fixture.json|fixture-dir> [--preset NAME] \
              [--compare] [--ablate KNOB] [--by-defect] [--mistakes] [--tune KNOB[,KNOB…]]\n\
-             \x20               [--target N|P%] [--highlights N]\n\n\
+             \x20               [--target N|P%] [--highlights N] [--close-calls FILE [--gap G]]\n\n\
              --preset NAME   override each fixture's own culling_preset\n\
              --compare       also run CullingConfig::python_parity and show the delta\n\
              --ablate KNOB   also run with one knob rolled back, and show the delta\n\
@@ -513,6 +517,39 @@ fn main() {
 
     if let Some(knobs) = tune_knobs {
         tune(&fixtures, preset, &knobs);
+    }
+
+    if let Some(out) = value_after("--close-calls") {
+        let gap: f64 = value_after("--gap")
+            .map(|g| g.parse().expect("--gap G"))
+            .unwrap_or(0.05);
+        let calls: Vec<_> = fixtures
+            .iter()
+            .flat_map(|(_, f)| {
+                close_calls(
+                    f,
+                    preset.unwrap_or(&f.culling_preset),
+                    get_culling_config,
+                    gap,
+                )
+            })
+            .collect();
+        let decided: Vec<_> = calls
+            .iter()
+            .filter(|c| matches!((c.pick_rank, c.runner_up_rank), (Some(a), Some(b)) if a != b))
+            .collect();
+        let right = decided
+            .iter()
+            .filter(|c| c.pick_rank < c.runner_up_rank)
+            .count();
+        println!(
+            "\n=== close calls within {gap} ===\n  {} close calls, {} with different labels; \
+             the ranking chose the better one in {right}",
+            calls.len(),
+            decided.len()
+        );
+        std::fs::write(&out, serde_json::to_string_pretty(&calls).unwrap())
+            .expect("write --close-calls");
     }
 
     if let Some(target) = value_after("--target") {

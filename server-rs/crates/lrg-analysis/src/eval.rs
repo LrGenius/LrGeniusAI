@@ -665,6 +665,51 @@ fn produce(
     partition.rank(|g| (config_of(presets[g]), Some(presets[g])))
 }
 
+/// A close call: a group whose two best frames that are not reject candidates
+/// scored within a margin of each other — where a second opinion could matter.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CloseCall {
+    pub pick: String,
+    pub runner_up: String,
+    /// `cull_score` of the pick less the runner-up's.
+    pub gap: f64,
+    /// Their labelled ranks, where labelled.
+    pub pick_rank: Option<usize>,
+    pub runner_up_rank: Option<usize>,
+}
+
+/// The close calls the grouper produced for a fixture under `preset`: groups
+/// whose pick and runner-up are within `max_gap` of each other.
+pub fn close_calls(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: impl Fn(&str) -> CullingConfig,
+    max_gap: f64,
+) -> Vec<CloseCall> {
+    let produced = produce(fixture, preset, &config_of);
+    let rank_of: HashMap<&str, Option<usize>> = fixture
+        .groups
+        .iter()
+        .flat_map(|g| g.photos.iter().map(|p| (p.photo_id.as_str(), p.rank)))
+        .collect();
+    produced
+        .iter()
+        .filter(|g| !g.keep_all())
+        .filter_map(|g| {
+            let mut usable = g.photos.iter().filter(|p| !p.reject_candidate);
+            let (a, b) = (usable.next()?, usable.next()?);
+            let gap = a.cull_score - b.cull_score;
+            (gap <= max_gap).then(|| CloseCall {
+                pick: a.photo_id.clone(),
+                runner_up: b.photo_id.clone(),
+                gap,
+                pick_rank: rank_of.get(a.photo_id.as_str()).copied().flatten(),
+                runner_up_rank: rank_of.get(b.photo_id.as_str()).copied().flatten(),
+            })
+        })
+        .collect()
+}
+
 /// How a selection to a target did on a fixture's labels.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionReport {

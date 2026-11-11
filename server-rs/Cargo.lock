@@ -4469,6 +4469,7 @@ dependencies = [
 name = "lrg-llama"
 version = "0.1.0"
 dependencies = [
+ "image",
  "llama-cpp-2",
  "llama-cpp-sys-2",
  "llguidance",
