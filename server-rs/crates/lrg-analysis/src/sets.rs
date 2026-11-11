@@ -49,6 +49,14 @@ pub struct SetFrame<'a> {
     /// baptism, seven "focus stacks" of 3 to 10 faces each, 27 frames kept
     /// from a cull for no reason. A frame with faces is never part of one.
     pub faces: usize,
+    /// How sharp the frame's sharpest part is, `cull_sharpness_peak`.
+    ///
+    /// Every slice of a focus stack is sharp somewhere — at its own depth. A
+    /// frame sharp nowhere is a miss, and its "sharpest region" is wherever
+    /// the noise happens to be: on the public benchmark, a camera-shaken frame
+    /// alone made 31 tripod series of 120 "travel" and turned them into stacks
+    /// that were never culled.
+    pub peak_sharpness: Option<f64>,
 }
 
 fn cosine_distance(a: &[f32], b: &[f32]) -> Option<f64> {
@@ -184,7 +192,22 @@ fn is_focus_stack(frames: &[SetFrame], cfg: &SetDetectionConfig) -> bool {
         max - min
     };
     let travel = span(|r| r.0).hypot(span(|r| r.1));
-    travel >= cfg.focus_stack_min_region_travel
+    if travel < cfg.focus_stack_min_region_travel {
+        return false;
+    }
+    // Every frame sharp somewhere, where that is known; see
+    // `SetFrame::peak_sharpness`.
+    let peaks: Vec<f64> = frames.iter().filter_map(|f| f.peak_sharpness).collect();
+    if peaks.len() == frames.len() {
+        let best = peaks.iter().cloned().fold(0.0f64, f64::max);
+        if peaks
+            .iter()
+            .any(|p| *p < cfg.focus_stack_min_peak_ratio * best)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// A panorama sweep: uniform exposure, and consecutive frames that overlap
@@ -275,6 +298,7 @@ mod tests {
             embedding: None,
             sharp_region: Some(region),
             faces: 0,
+            peak_sharpness: None,
         }
     }
 
@@ -293,6 +317,7 @@ mod tests {
                 embedding: None,
                 sharp_region: None,
                 faces: 0,
+                peak_sharpness: None,
             })
             .collect()
     }
@@ -456,6 +481,7 @@ mod tests {
                 embedding: Some(v.as_slice()),
                 sharp_region: None,
                 faces: 0,
+                peak_sharpness: None,
             })
             .collect();
         assert_eq!(
@@ -479,9 +505,36 @@ mod tests {
                 embedding: Some(v.as_slice()),
                 sharp_region: None,
                 faces: 0,
+                peak_sharpness: None,
             })
             .collect();
         assert_eq!(detect_intentional_set(&frames, &cfg()), None);
+    }
+
+    /// A tripod series whose sharp region "travels" only because one frame is
+    /// shaken — sharp nowhere — is no focus stack; slices each sharp at their
+    /// own depth still are.
+    #[test]
+    fn a_frame_sharp_nowhere_is_no_slice_of_a_stack() {
+        let regions = [(0.2, 0.5), (0.5, 0.5), (0.8, 0.5)];
+        let stack = |peaks: [f64; 3]| -> Vec<SetFrame<'static>> {
+            regions
+                .iter()
+                .zip(peaks)
+                .map(|(&r, p)| SetFrame {
+                    peak_sharpness: Some(p),
+                    ..frame(Some(0.0), 0xabcd_ef01_2345_6789, r)
+                })
+                .collect()
+        };
+        assert_eq!(
+            detect_intentional_set(&stack([0.7, 0.65, 0.72]), &cfg()),
+            Some(IntentionalSet::FocusStack)
+        );
+        assert_eq!(
+            detect_intentional_set(&stack([0.7, 0.1, 0.72]), &cfg()),
+            None
+        );
     }
 
     #[test]

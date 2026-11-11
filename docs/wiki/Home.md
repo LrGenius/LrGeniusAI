@@ -51,6 +51,8 @@ Welcome to the project wiki.
 - [Server Guide](Dev-Server-Guide) — backend architecture, database backup, lifecycle
 - [Dev: Feature Priority Decision](Dev-Feature-Priority-Decision)
 - [Dev: Image Culling Implementation Plan](Dev-Image-Culling-Implementation-Plan)
+- [Dev: Culling — what the other tools judge](Dev-Image-Culling-Competitive-Analysis) — Lightroom, Aftershoot, Narrative, FilterPixel, Imagen, Excire, Evoto
+- [Dev: Culling — the public benchmark](Dev-Image-Culling-Benchmark) — defects made on purpose on free-licence photos, and what it measured
 - [Dev: Capture One Port — Findings and Plan](Dev-Capture-One-Port-Plan) — what Capture One can and cannot do; investigated 2026-09-10, not pursued
 
 ### Auto-generated from README files

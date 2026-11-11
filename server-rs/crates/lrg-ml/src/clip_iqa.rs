@@ -90,6 +90,32 @@ pub const ACTION_PROMPT_PAIRS: &[(&str, &str)] = &[
 /// still a *whole-frame* judgement, so on a group shot it reports the mood of
 /// the picture rather than of any one face — useful, but not a substitute for
 /// per-face analysis.
+/// The moment in wildlife: behaviour, not technique. Each pair asks the same
+/// question of the same subject — the bird in flight against the bird sitting,
+/// the animal feeding against the animal resting — because a partial pair only
+/// adds noise to the average (the organism set's lesson). Whether the animal's
+/// eye is sharp is not asked: that needs detection, and a scene judgement would
+/// only look like it answered it.
+pub const WILDLIFE_PROMPT_PAIRS: &[(&str, &str)] = &[
+    (
+        "a bird in flight with its wings spread.",
+        "a bird perched still with its wings folded.",
+    ),
+    (
+        "an animal catching or eating its prey.",
+        "an animal resting with nothing happening.",
+    ),
+    ("an animal running or leaping.", "an animal standing still."),
+    (
+        "an animal looking straight at the camera.",
+        "an animal with its head turned away from the camera.",
+    ),
+    (
+        "two animals interacting with each other.",
+        "two animals ignoring each other.",
+    ),
+];
+
 pub const EXPRESSION_PROMPT_PAIRS: &[(&str, &str)] = &[
     (
         "a person with a warm, genuine smile.",
@@ -294,6 +320,8 @@ pub enum PromptSet {
     Expression,
     /// Is this a real moment or a pose? [`CANDID_PROMPT_PAIRS`].
     Candid,
+    /// Is the animal doing something? [`WILDLIFE_PROMPT_PAIRS`].
+    Wildlife,
     /// Is an athlete feeling something strongly? [`SPORT_EMOTION_PROMPT_PAIRS`].
     SportEmotion,
     /// Are people laughing, moved, reacting? [`EVENT_EMOTION_PROMPT_PAIRS`].
@@ -316,6 +344,7 @@ impl PromptSet {
             PromptSet::Action => ACTION_PROMPT_PAIRS,
             PromptSet::Expression => EXPRESSION_PROMPT_PAIRS,
             PromptSet::Candid => CANDID_PROMPT_PAIRS,
+            PromptSet::Wildlife => WILDLIFE_PROMPT_PAIRS,
             PromptSet::SportEmotion => SPORT_EMOTION_PROMPT_PAIRS,
             PromptSet::EventEmotion => EVENT_EMOTION_PROMPT_PAIRS,
             PromptSet::EyesClosedIntent => EYES_CLOSED_INTENT_PROMPT_PAIRS,
@@ -338,6 +367,7 @@ impl PromptSet {
             PromptSet::Action => "action",
             PromptSet::Expression => "expression",
             PromptSet::Candid => "candid",
+            PromptSet::Wildlife => "wildlife",
             PromptSet::SportEmotion => "sport_emotion",
             PromptSet::EventEmotion => "event_emotion",
             PromptSet::EyesClosedIntent => "eyes_closed_intent",
@@ -352,6 +382,7 @@ impl PromptSet {
             "action" => Some(PromptSet::Action),
             "expression" => Some(PromptSet::Expression),
             "candid" => Some(PromptSet::Candid),
+            "wildlife" => Some(PromptSet::Wildlife),
             "sport_emotion" => Some(PromptSet::SportEmotion),
             "event_emotion" => Some(PromptSet::EventEmotion),
             "eyes_closed_intent" => Some(PromptSet::EyesClosedIntent),
@@ -364,19 +395,21 @@ impl PromptSet {
     /// [`PromptSet::Organism`] for the species task and
     /// [`PromptSet::EyesClosedIntent`] for the blink penalty — which decide
     /// whether something runs rather than grading anything.
-    pub const SEMANTIC: [PromptSet; 5] = [
+    pub const SEMANTIC: [PromptSet; 6] = [
         PromptSet::Action,
         PromptSet::Expression,
         PromptSet::Candid,
+        PromptSet::Wildlife,
         PromptSet::SportEmotion,
         PromptSet::EventEmotion,
     ];
 
     /// Every set, so the invariant tests cannot silently skip a new one.
-    pub const ALL: [PromptSet; 7] = [
+    pub const ALL: [PromptSet; 8] = [
         PromptSet::Action,
         PromptSet::Expression,
         PromptSet::Candid,
+        PromptSet::Wildlife,
         PromptSet::SportEmotion,
         PromptSet::EventEmotion,
         PromptSet::EyesClosedIntent,

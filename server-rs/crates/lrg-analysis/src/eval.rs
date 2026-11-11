@@ -36,17 +36,29 @@
 //! harness runnable in CI with no image assets, and keeps it measuring
 //! *ranking*, which is what changes. Measuring the metric extraction itself is
 //! the goldens' job (`lrg-imaging/tests/goldens.rs`).
+//!
+//! Two kinds of fixture feed it. A hand cull (*Export Culling Fixture* in
+//! Lightroom) labels a ranking and the frames to delete. The public benchmark
+//! (`scripts/cull_bench.py`, `testdata/cull_bench/`) makes the defects itself on
+//! free-licence photographs, so it knows more than a ranking: which frame must
+//! survive any cull (`must_keep`), which defect each frame carries (`defect`),
+//! and what the explanation should and should not say about it
+//! (`expect_reasons`, `forbid_reasons`). Those labels are optional, and a
+//! fixture without them scores exactly as before.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use base64::Engine;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::culling_config::CullingConfig;
-use crate::grouping::{group_and_sort_images_with_config, Group, GroupingInput};
+use crate::grouping::{
+    group_and_sort_images_with_config, partition_records, Group, GroupingInput, RankedPhoto,
+};
 
 /// One labelled photo.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct EvalPhoto {
     pub photo_id: String,
     #[serde(default)]
@@ -58,16 +70,86 @@ pub struct EvalPhoto {
     pub phash: Option<String>,
     #[serde(default)]
     pub embedding: Option<Vec<f32>>,
+    /// The embedding as [`quantize_embedding`] packs it, which is how
+    /// `/v1/cull/grade` hands it out (`include_embeddings`). Used when
+    /// `embedding` is absent.
+    ///
+    /// Without an embedding the harness groups on pHash and capture time
+    /// alone, and a frame two stops brighter or a soft frame of the same burst
+    /// then lands in a group of its own: its score is computed against nothing
+    /// and no longer says how it compares with its siblings. A full `f32`
+    /// vector is 1152 numbers; this is a fifth of the size and moves a cosine
+    /// distance by about 1e-4, far inside every grouping threshold.
+    #[serde(default)]
+    pub embedding_q8: Option<String>,
     /// The `cull_*` fields exactly as `IMAGE_TABLE` holds them.
     #[serde(default)]
     pub metadata: Map<String, Value>,
     /// The photographer's own ranking, 1 = best. Photos left unranked are
-    /// scored as ties below every ranked one.
+    /// scored as ties below every ranked one. Several frames may share a rank:
+    /// any of them is a correct winner.
     #[serde(default)]
     pub rank: Option<usize>,
     /// True for frames the photographer would delete.
     #[serde(default)]
     pub reject: bool,
+    /// Deleting this frame is a mistake however hard the cull: a shallow depth
+    /// of field, a panning shot. Nominating it is counted on its own, as the
+    /// error a user never forgives.
+    #[serde(default)]
+    pub must_keep: bool,
+    /// Whether this frame goes is a matter of cull strength, not of a defect: a
+    /// stop darker than its twin, noisier than it. A reject candidate here is
+    /// neither right nor wrong, so it counts for neither reject precision nor
+    /// recall.
+    #[serde(default)]
+    pub reject_optional: bool,
+    /// What is wrong with the frame (`blur_strong`, `eyes_soft`, `panning`…),
+    /// for the breakdown by defect. Free text; the benchmark's names are listed
+    /// in `testdata/cull_bench/README.md`.
+    #[serde(default)]
+    pub defect: Option<String>,
+    /// Reason codes the explanation should carry. A hit when any one of them
+    /// is there, since the same defect may be named more than one way.
+    #[serde(default)]
+    pub expect_reasons: Vec<String>,
+    /// Reason codes that would misdescribe the frame — `blurred` on a frame
+    /// whose subject is sharp and only its background is not.
+    #[serde(default)]
+    pub forbid_reasons: Vec<String>,
+}
+
+/// Packs an embedding as base64 of a little-endian `f32` scale followed by one
+/// signed byte per dimension, each value ≈ byte × scale.
+///
+/// One scale per vector, symmetric about zero. For the unit-length SigLIP2
+/// embeddings that loses less than 1e-4 of a cosine distance, which is what
+/// the grouper compares.
+pub fn quantize_embedding(v: &[f32]) -> String {
+    let max = v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let scale = if max > 0.0 { max / 127.0 } else { 1.0 };
+    let mut bytes = Vec::with_capacity(4 + v.len());
+    bytes.extend_from_slice(&scale.to_le_bytes());
+    bytes.extend(
+        v.iter()
+            .map(|x| (x / scale).round().clamp(-127.0, 127.0) as i8 as u8),
+    );
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// The inverse of [`quantize_embedding`]; `None` for anything it did not make.
+pub fn dequantize_embedding(packed: &str) -> Option<Vec<f32>> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(packed)
+        .ok()?;
+    if bytes.len() < 5 {
+        return None;
+    }
+    let scale = f32::from_le_bytes(bytes[..4].try_into().ok()?);
+    if !scale.is_finite() {
+        return None;
+    }
+    Some(bytes[4..].iter().map(|b| *b as i8 as f32 * scale).collect())
 }
 
 /// One labelled group: the frames a human considers one decision.
@@ -114,6 +196,66 @@ fn default_preset() -> String {
     "default".to_string()
 }
 
+/// What happened to the frames of one kind of defect, summed over a fixture.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DefectStats {
+    pub photos: usize,
+    /// Had the best score of its labelled group: which defect takes the top
+    /// spot when the winner is wrong.
+    pub won: usize,
+    /// Nominated for deletion.
+    pub rejected: usize,
+    /// Of `photos`, labelled `reject`: the frames this defect should cost.
+    pub reject_labelled: usize,
+    /// Of `reject_labelled`, nominated. The recall for this defect.
+    pub reject_found: usize,
+    pub must_keep: usize,
+    /// Of `must_keep`, nominated anyway.
+    pub must_keep_rejected: usize,
+    /// Pairs of this frame against a better-ranked frame of its group, and how
+    /// many of them came out in that order (a tie counts half).
+    pub pairs: usize,
+    pub pairs_correct: f64,
+    /// Frames with an `expect_reasons` label, and how many explanations
+    /// named one of them.
+    pub reasons_expected: usize,
+    pub reasons_hit: usize,
+    /// Frames with a `forbid_reasons` label, and how many explanations used a
+    /// forbidden one anyway.
+    pub forbid_checked: usize,
+    pub forbid_seen: usize,
+}
+
+impl DefectStats {
+    fn add(&mut self, other: &DefectStats) {
+        self.photos += other.photos;
+        self.won += other.won;
+        self.rejected += other.rejected;
+        self.reject_labelled += other.reject_labelled;
+        self.reject_found += other.reject_found;
+        self.must_keep += other.must_keep;
+        self.must_keep_rejected += other.must_keep_rejected;
+        self.pairs += other.pairs;
+        self.pairs_correct += other.pairs_correct;
+        self.reasons_expected += other.reasons_expected;
+        self.reasons_hit += other.reasons_hit;
+        self.forbid_checked += other.forbid_checked;
+        self.forbid_seen += other.forbid_seen;
+    }
+}
+
+/// A frame the benchmark's labels say was judged wrong in the way a
+/// photographer forgives least, for `cull_eval --mistakes`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mistake {
+    pub photo_id: String,
+    pub defect: Option<String>,
+    /// `"must-keep lost"` or `"wrong reason"`.
+    pub kind: &'static str,
+    /// What the explanation said.
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EvalReport {
     pub fixture: String,
@@ -122,6 +264,27 @@ pub struct EvalReport {
     pub winner_hits: usize,
     /// Mean NDCG over `ranked_groups`.
     pub ndcg: f64,
+    /// Pairs of frames inside one labelled group whose ranks differ, and how
+    /// many of them the scores put in the same order (a tie counts half).
+    ///
+    /// Finer than the winner: it sees every comparison inside a burst, not just
+    /// the top one, and it is the measure the published work on photo series
+    /// reports (Chang et al. 2016, "Automatic Triage for a Photo Series").
+    pub pairs_labelled: usize,
+    pub pairs_correct: f64,
+    /// Frames labelled `must_keep`, and how many were nominated for deletion.
+    pub must_keep_labelled: usize,
+    pub must_keep_rejected: usize,
+    /// Frames with `expect_reasons`, and how many explanations named one.
+    pub reasons_expected: usize,
+    pub reasons_hit: usize,
+    /// Frames with `forbid_reasons`, and how many explanations used one.
+    pub forbid_checked: usize,
+    pub forbid_seen: usize,
+    /// The same counts per `defect` label, for `cull_eval --by-defect`.
+    pub by_defect: BTreeMap<String, DefectStats>,
+    /// Every must-keep frame nominated and every forbidden reason given.
+    pub mistakes: Vec<Mistake>,
     pub rejects_predicted: usize,
     pub rejects_labelled: usize,
     pub rejects_correct: usize,
@@ -173,11 +336,28 @@ impl EvalReport {
     pub fn grouping_recall(&self) -> f64 {
         ratio(self.grouping_pairs_correct, self.grouping_pairs_labelled)
     }
+    pub fn pair_accuracy(&self) -> f64 {
+        ratio_f(self.pairs_correct, self.pairs_labelled)
+    }
+    /// The share of `must_keep` frames that were nominated for deletion. Lower
+    /// is better, and the target is zero.
+    pub fn must_keep_reject_rate(&self) -> f64 {
+        ratio(self.must_keep_rejected, self.must_keep_labelled)
+    }
+    pub fn reason_hit_rate(&self) -> f64 {
+        ratio(self.reasons_hit, self.reasons_expected)
+    }
+    /// The share of frames whose explanation used a reason it must not. Lower
+    /// is better.
+    pub fn forbidden_reason_rate(&self) -> f64 {
+        ratio(self.forbid_seen, self.forbid_checked)
+    }
 
-    /// A fixed-width block, one fixture per call.
+    /// A fixed-width block, one fixture per call. The benchmark's lines
+    /// (pairs, must-keep, reasons) appear only when the fixture labels them.
     pub fn to_text(&self) -> String {
         let pct = |v: f64| format!("{:>6.1}%", v * 100.0);
-        format!(
+        let mut text = format!(
             "{name}\n  \
              winner top-1     {winner} ({wh}/{rg})\n  \
              NDCG             {ndcg:>6.3}\n  \
@@ -203,7 +383,88 @@ impl EvalReport {
             sr_n = self.intentional_sets_recognised,
             gp = pct(self.grouping_precision()),
             gr = pct(self.grouping_recall()),
-        )
+        );
+        if self.pairs_labelled > 0 {
+            text.push_str(&format!(
+                "\n  pair order       {} ({:.1}/{})",
+                pct(self.pair_accuracy()),
+                self.pairs_correct,
+                self.pairs_labelled
+            ));
+        }
+        if self.must_keep_labelled > 0 {
+            text.push_str(&format!(
+                "\n  must-keep lost   {} ({}/{})",
+                pct(self.must_keep_reject_rate()),
+                self.must_keep_rejected,
+                self.must_keep_labelled
+            ));
+        }
+        if self.reasons_expected > 0 {
+            text.push_str(&format!(
+                "\n  reason named     {} ({}/{})",
+                pct(self.reason_hit_rate()),
+                self.reasons_hit,
+                self.reasons_expected
+            ));
+        }
+        if self.forbid_checked > 0 {
+            text.push_str(&format!(
+                "\n  wrong reason     {} ({}/{})",
+                pct(self.forbidden_reason_rate()),
+                self.forbid_seen,
+                self.forbid_checked
+            ));
+        }
+        text
+    }
+
+    /// One row per `defect` label: how often it was rejected, how often a
+    /// must-keep frame of it was lost, how often it ranked below the better
+    /// frames of its group, and whether the explanation named it right.
+    pub fn defect_table(&self) -> String {
+        let cell = |n: f64, d: usize| -> String {
+            if d == 0 {
+                "     -".to_string()
+            } else {
+                format!("{:>5.0}%", 100.0 * n / d as f64)
+            }
+        };
+        let mut out = format!(
+            "  {:<18}{:>6} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n",
+            "defect",
+            "frames",
+            "won",
+            "rejected",
+            "found",
+            "kept-ok",
+            "ordered",
+            "named",
+            "misnamed"
+        );
+        for (defect, s) in &self.by_defect {
+            out.push_str(&format!(
+                "  {:<18}{:>6} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}\n",
+                defect,
+                s.photos,
+                s.won,
+                cell(s.rejected as f64, s.photos),
+                cell(s.reject_found as f64, s.reject_labelled),
+                cell((s.must_keep - s.must_keep_rejected) as f64, s.must_keep),
+                cell(s.pairs_correct, s.pairs),
+                cell(s.reasons_hit as f64, s.reasons_expected),
+                cell(s.forbid_seen as f64, s.forbid_checked),
+            ));
+        }
+        out
+    }
+}
+
+fn ratio_f(numerator: f64, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator / denominator as f64
     }
 }
 
@@ -239,6 +500,18 @@ pub fn merge(reports: &[EvalReport], name: &str) -> EvalReport {
         out.grouping_pairs_predicted += r.grouping_pairs_predicted;
         out.grouping_pairs_labelled += r.grouping_pairs_labelled;
         out.grouping_pairs_correct += r.grouping_pairs_correct;
+        out.pairs_labelled += r.pairs_labelled;
+        out.pairs_correct += r.pairs_correct;
+        out.must_keep_labelled += r.must_keep_labelled;
+        out.must_keep_rejected += r.must_keep_rejected;
+        out.reasons_expected += r.reasons_expected;
+        out.reasons_hit += r.reasons_hit;
+        out.forbid_checked += r.forbid_checked;
+        out.forbid_seen += r.forbid_seen;
+        for (defect, stats) in &r.by_defect {
+            out.by_defect.entry(defect.clone()).or_default().add(stats);
+        }
+        out.mistakes.extend(r.mistakes.iter().cloned());
     }
     out.ndcg = if out.ranked_groups == 0 {
         0.0
@@ -289,7 +562,10 @@ fn to_grouping_input(p: &EvalPhoto) -> GroupingInput {
             p.filename.clone()
         },
         capture_time: p.capture_time,
-        embedding: p.embedding.clone(),
+        embedding: p
+            .embedding
+            .clone()
+            .or_else(|| p.embedding_q8.as_deref().and_then(dequantize_embedding)),
         phash: p
             .phash
             .as_deref()
@@ -321,14 +597,231 @@ where
 /// the user actually gets — including whether grouping put the right frames
 /// together in the first place.
 pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
-    let records: Vec<GroupingInput> = fixture
+    let produced = group_and_sort_images_with_config(
+        fixture_records(fixture),
+        None,
+        None,
+        fixture.time_delta_seconds,
+        cfg,
+    );
+    score(fixture, produced)
+}
+
+/// [`evaluate`] under a preset name, with `config_of` turning a name into the
+/// config to use (a tuned or ablated one, say). Under `"auto"` it does what
+/// `/v1/cull/grade` does: groups with the preset most of the fixture's genres
+/// call for, and ranks each group with the one its own photos' genres call for
+/// (`stored_metadata.genre`).
+///
+/// One caveat: a fixture's prompt scores (`cull_semantic_iqa`) come from the
+/// preset it was exported under. Where `auto` chooses another, the group is
+/// ranked on the other preset's weights but those prompts' answers.
+pub fn evaluate_by_preset(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: impl Fn(&str) -> CullingConfig,
+) -> EvalReport {
+    score(fixture, produce(fixture, preset, &config_of))
+}
+
+/// The groups the backend would return for a fixture under a preset.
+fn produce(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: &dyn Fn(&str) -> CullingConfig,
+) -> Vec<Group> {
+    use crate::culling_config::{preset_for_genres, AUTO_PRESET};
+    let records = fixture_records(fixture);
+    if preset != AUTO_PRESET {
+        return group_and_sort_images_with_config(
+            records,
+            None,
+            None,
+            fixture.time_delta_seconds,
+            &config_of(preset),
+        );
+    }
+    let genre = |r: &GroupingInput| {
+        r.metadata
+            .get("genre")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let all: Vec<String> = records.iter().filter_map(genre).collect();
+    let grouping = preset_for_genres(all.iter().map(String::as_str)).unwrap_or("default");
+    let partition = partition_records(
+        records,
+        None,
+        None,
+        fixture.time_delta_seconds,
+        &config_of(grouping),
+    );
+    let presets: Vec<&'static str> = (0..partition.group_count())
+        .map(|g| {
+            let genres: Vec<String> = partition.members(g).filter_map(genre).collect();
+            preset_for_genres(genres.iter().map(String::as_str)).unwrap_or("default")
+        })
+        .collect();
+    partition.rank(|g| (config_of(presets[g]), Some(presets[g])))
+}
+
+/// A close call: a group whose two best frames that are not reject candidates
+/// scored within a margin of each other — where a second opinion could matter.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CloseCall {
+    pub pick: String,
+    pub runner_up: String,
+    /// `cull_score` of the pick less the runner-up's.
+    pub gap: f64,
+    /// Their labelled ranks, where labelled.
+    pub pick_rank: Option<usize>,
+    pub runner_up_rank: Option<usize>,
+}
+
+/// The close calls the grouper produced for a fixture under `preset`: groups
+/// whose pick and runner-up are within `max_gap` of each other.
+pub fn close_calls(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: impl Fn(&str) -> CullingConfig,
+    max_gap: f64,
+) -> Vec<CloseCall> {
+    let produced = produce(fixture, preset, &config_of);
+    let rank_of: HashMap<&str, Option<usize>> = fixture
+        .groups
+        .iter()
+        .flat_map(|g| g.photos.iter().map(|p| (p.photo_id.as_str(), p.rank)))
+        .collect();
+    produced
+        .iter()
+        .filter(|g| !g.keep_all())
+        .filter_map(|g| {
+            let mut usable = g.photos.iter().filter(|p| !p.reject_candidate);
+            let (a, b) = (usable.next()?, usable.next()?);
+            let gap = a.cull_score - b.cull_score;
+            (gap <= max_gap).then(|| CloseCall {
+                pick: a.photo_id.clone(),
+                runner_up: b.photo_id.clone(),
+                gap,
+                pick_rank: rank_of.get(a.photo_id.as_str()).copied().flatten(),
+                runner_up_rank: rank_of.get(b.photo_id.as_str()).copied().flatten(),
+            })
+        })
+        .collect()
+}
+
+/// How a selection to a target did on a fixture's labels.
+#[derive(Debug, Clone, Default)]
+pub struct SelectionReport {
+    pub series: usize,
+    pub selected: usize,
+    /// Series with at least one frame chosen.
+    pub series_covered: usize,
+    /// Chosen frames labelled rank 1 — the best a series has.
+    pub best: usize,
+    /// Chosen frames labelled reject (not optional).
+    pub rejects: usize,
+    pub highlights: usize,
+    /// Highlights labelled rank 1.
+    pub highlights_best: usize,
+}
+
+impl SelectionReport {
+    pub fn add(&mut self, other: &SelectionReport) {
+        self.series += other.series;
+        self.selected += other.selected;
+        self.series_covered += other.series_covered;
+        self.best += other.best;
+        self.rejects += other.rejects;
+        self.highlights += other.highlights;
+        self.highlights_best += other.highlights_best;
+    }
+}
+
+/// Selects to `target` (and `highlights`) on what the grouper produced for a
+/// fixture under `preset`, and scores the choice against its labels.
+pub fn evaluate_selection(
+    fixture: &EvalFixture,
+    preset: &str,
+    config_of: impl Fn(&str) -> CullingConfig,
+    target: crate::selection::Target,
+    highlights: usize,
+) -> SelectionReport {
+    use crate::selection::{select, SceneRule, SelectionRule};
+    let produced = produce(fixture, preset, &config_of);
+    let photos: HashMap<&str, &EvalPhoto> = fixture
+        .groups
+        .iter()
+        .flat_map(|g| g.photos.iter().map(|p| (p.photo_id.as_str(), p)))
+        .collect();
+    let embeddings: HashMap<&str, Vec<f32>> = fixture
+        .groups
+        .iter()
+        .flat_map(|g| g.photos.iter())
+        .filter_map(|p| {
+            let v = p
+                .embedding_q8
+                .as_deref()
+                .and_then(dequantize_embedding)
+                .or_else(|| p.embedding.clone())?;
+            Some((p.photo_id.as_str(), v))
+        })
+        .collect();
+    let embedding_of = |id: &str| embeddings.get(id).map(Vec::as_slice);
+    let chosen = select(
+        &produced,
+        &embedding_of,
+        &|_| Vec::new(),
+        target,
+        highlights,
+        &SceneRule::defaults(),
+        &SelectionRule::defaults(),
+    );
+    let series_of: HashMap<&str, usize> = fixture
+        .groups
+        .iter()
+        .enumerate()
+        .flat_map(|(i, g)| g.photos.iter().map(move |p| (p.photo_id.as_str(), i)))
+        .collect();
+    let covered: HashSet<usize> = chosen
+        .selected
+        .iter()
+        .filter_map(|id| series_of.get(id.as_str()).copied())
+        .collect();
+    let label = |id: &String| photos.get(id.as_str());
+    SelectionReport {
+        series: fixture.groups.len(),
+        selected: chosen.selected.len(),
+        series_covered: covered.len(),
+        best: chosen
+            .selected
+            .iter()
+            .filter(|id| label(id).is_some_and(|p| p.rank == Some(1)))
+            .count(),
+        rejects: chosen
+            .selected
+            .iter()
+            .filter(|id| label(id).is_some_and(|p| p.reject && !p.reject_optional))
+            .count(),
+        highlights: chosen.highlights.len(),
+        highlights_best: chosen
+            .highlights
+            .iter()
+            .filter(|id| label(id).is_some_and(|p| p.rank == Some(1)))
+            .count(),
+    }
+}
+
+fn fixture_records(fixture: &EvalFixture) -> Vec<GroupingInput> {
+    fixture
         .groups
         .iter()
         .flat_map(|g| g.photos.iter().map(to_grouping_input))
-        .collect();
-    let produced =
-        group_and_sort_images_with_config(records, None, None, fixture.time_delta_seconds, cfg);
+        .collect()
+}
 
+/// Scores what the grouper produced against the fixture's labels.
+fn score(fixture: &EvalFixture, produced: Vec<Group>) -> EvalReport {
     let mut report = EvalReport {
         fixture: fixture.name.clone(),
         ..Default::default()
@@ -369,6 +862,11 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
         .iter()
         .flat_map(|g| g.photo_ids.iter().map(move |id| (id.as_str(), g)))
         .collect();
+    let ranked_by_id: HashMap<&str, &RankedPhoto> = produced
+        .iter()
+        .flat_map(|g| g.photos.iter().map(|p| (p.photo_id.as_str(), p)))
+        .collect();
+    let score_of = |id: &str| ranked_by_id.get(id).map_or(0.0, |r| r.cull_score);
 
     // --- ranking, per labelled group ---------------------------------------
     //
@@ -411,6 +909,39 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
             continue;
         }
 
+        // Every pair whose ranks differ, in the order the labels give. The
+        // worse frame's defect gets the credit when the better one is a best
+        // frame of the group (rank 1): that is the comparison the defect is
+        // about, where a pair of two flawed frames is a matter of degree.
+        for (i, a) in group.photos.iter().enumerate() {
+            for b in &group.photos[i + 1..] {
+                let (Some(ra), Some(rb)) = (a.rank, b.rank) else {
+                    continue;
+                };
+                if ra == rb {
+                    continue;
+                }
+                let (better, worse) = if ra < rb { (a, b) } else { (b, a) };
+                let (sb, sw) = (score_of(&better.photo_id), score_of(&worse.photo_id));
+                let credit = if sb > sw {
+                    1.0
+                } else if sb == sw {
+                    0.5
+                } else {
+                    0.0
+                };
+                report.pairs_labelled += 1;
+                report.pairs_correct += credit;
+                if better.rank == Some(1) {
+                    if let Some(defect) = &worse.defect {
+                        let stats = report.by_defect.entry(defect.clone()).or_default();
+                        stats.pairs += 1;
+                        stats.pairs_correct += credit;
+                    }
+                }
+            }
+        }
+
         let has_ranking = group.photos.iter().any(|p| p.rank == Some(1));
         if has_ranking && group.photos.len() > 1 {
             report.ranked_groups += 1;
@@ -418,14 +949,7 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
             let mut by_score: Vec<(&EvalPhoto, f64)> = group
                 .photos
                 .iter()
-                .map(|p| {
-                    let score = produced_by_id
-                        .get(p.photo_id.as_str())
-                        .and_then(|g| g.photos.iter().find(|r| r.photo_id == p.photo_id))
-                        .map(|r| r.cull_score)
-                        .unwrap_or(0.0);
-                    (p, score)
-                })
+                .map(|p| (p, score_of(&p.photo_id)))
                 .collect();
             by_score.sort_by(|a, b| {
                 b.1.partial_cmp(&a.1)
@@ -434,6 +958,9 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
             });
             if by_score[0].0.rank == Some(1) {
                 report.winner_hits += 1;
+            }
+            if let Some(defect) = &by_score[0].0.defect {
+                report.by_defect.entry(defect.clone()).or_default().won += 1;
             }
             let order: Vec<f64> = by_score
                 .iter()
@@ -449,10 +976,17 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
     };
 
     // --- rejects ------------------------------------------------------------
+    //
+    // A frame whose deletion is a matter of cull strength counts neither way:
+    // nominating it is not a mistake, and missing it is not timidity.
     for group in &produced {
         for id in &group.reject_candidate_photo_ids {
+            let labelled = label.get(id.as_str());
+            if labelled.is_some_and(|p| p.reject_optional) {
+                continue;
+            }
             report.rejects_predicted += 1;
-            if label.get(id.as_str()).is_some_and(|p| p.reject) {
+            if labelled.is_some_and(|p| p.reject) {
                 report.rejects_correct += 1;
             }
         }
@@ -462,8 +996,67 @@ pub fn evaluate(fixture: &EvalFixture, cfg: &CullingConfig) -> EvalReport {
         .iter()
         .filter(|g| g.intentional_set.is_none())
         .flat_map(|g| g.photos.iter())
-        .filter(|p| p.reject)
+        .filter(|p| p.reject && !p.reject_optional)
         .count();
+
+    // --- the benchmark's labels, per photo ---------------------------------
+    for photo in fixture.groups.iter().flat_map(|g| g.photos.iter()) {
+        let produced = ranked_by_id.get(photo.photo_id.as_str());
+        let rejected = produced.is_some_and(|r| r.reject_candidate);
+        let reasons: &[String] = produced.map_or(&[], |r| r.reason_codes.as_slice());
+        let named = !photo.expect_reasons.is_empty()
+            && photo.expect_reasons.iter().any(|c| reasons.contains(c));
+        let misnamed = photo.forbid_reasons.iter().any(|c| reasons.contains(c));
+
+        if photo.must_keep {
+            report.must_keep_labelled += 1;
+            report.must_keep_rejected += usize::from(rejected);
+        }
+        for (wrong, kind) in [
+            (photo.must_keep && rejected, "must-keep lost"),
+            (misnamed, "wrong reason"),
+        ] {
+            if wrong {
+                report.mistakes.push(Mistake {
+                    photo_id: photo.photo_id.clone(),
+                    defect: photo.defect.clone(),
+                    kind,
+                    reasons: reasons.to_vec(),
+                });
+            }
+        }
+        if !photo.expect_reasons.is_empty() {
+            report.reasons_expected += 1;
+            report.reasons_hit += usize::from(named);
+        }
+        if !photo.forbid_reasons.is_empty() {
+            report.forbid_checked += 1;
+            report.forbid_seen += usize::from(misnamed);
+        }
+
+        let Some(defect) = &photo.defect else {
+            continue;
+        };
+        let stats = report.by_defect.entry(defect.clone()).or_default();
+        stats.photos += 1;
+        stats.rejected += usize::from(rejected);
+        if photo.reject && !photo.reject_optional {
+            stats.reject_labelled += 1;
+            stats.reject_found += usize::from(rejected);
+        }
+        if photo.must_keep {
+            stats.must_keep += 1;
+            stats.must_keep_rejected += usize::from(rejected);
+        }
+        if !photo.expect_reasons.is_empty() {
+            stats.reasons_expected += 1;
+            stats.reasons_hit += usize::from(named);
+        }
+        if !photo.forbid_reasons.is_empty() {
+            stats.forbid_checked += 1;
+            stats.forbid_seen += usize::from(misnamed);
+        }
+    }
 
     report
 }
@@ -492,7 +1085,90 @@ mod tests {
             .clone(),
             rank,
             reject,
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_quantized_embedding_keeps_cosine_distances() {
+        let a: Vec<f32> = (0..1152)
+            .map(|i| ((i * 37 % 101) as f32 - 50.0) / 900.0)
+            .collect();
+        let b: Vec<f32> = a
+            .iter()
+            .enumerate()
+            .map(|(i, x)| x + (i % 7) as f32 / 4000.0)
+            .collect();
+        let cosine = |x: &[f32], y: &[f32]| {
+            let dot: f32 = x.iter().zip(y).map(|(p, q)| p * q).sum();
+            let n = |v: &[f32]| v.iter().map(|p| p * p).sum::<f32>().sqrt();
+            1.0 - dot / (n(x) * n(y))
+        };
+        let qa = dequantize_embedding(&quantize_embedding(&a)).unwrap();
+        let qb = dequantize_embedding(&quantize_embedding(&b)).unwrap();
+        assert_eq!(qa.len(), 1152);
+        assert!((cosine(&a, &b) - cosine(&qa, &qb)).abs() < 1e-3);
+        assert!(dequantize_embedding("not base64!").is_none());
+        assert!(dequantize_embedding("").is_none());
+    }
+
+    /// A must-keep frame that is nominated, a reason that is named and one
+    /// that is forbidden all land in their own counters, overall and per
+    /// defect, and a frame whose deletion is optional counts for nothing.
+    #[test]
+    fn the_benchmark_labels_are_counted_per_defect() {
+        let mut sharp = photo("sharp", 1000.0, 0.9, Some(1), false);
+        sharp.defect = Some("original".into());
+        sharp.forbid_reasons = vec!["blurred".into()];
+        let mut soft = photo("soft", 1000.3, 0.05, Some(3), true);
+        soft.defect = Some("blur_strong".into());
+        soft.expect_reasons = vec!["blurred".into(), "motion_blur".into()];
+        let mut keep = photo("keep", 1000.6, 0.05, Some(1), false);
+        keep.defect = Some("background_soft".into());
+        keep.must_keep = true;
+        keep.forbid_reasons = vec!["blurred".into()];
+        let mut optional = photo("dark", 1000.9, 0.88, Some(2), false);
+        optional
+            .metadata
+            .insert("cull_exposure".into(), Value::from(0.1));
+        optional.reject_optional = true;
+        optional.defect = Some("under".into());
+        let fixture = EvalFixture {
+            name: "labels".into(),
+            notes: String::new(),
+            groups_are_authoritative: true,
+            culling_preset: "default".into(),
+            time_delta_seconds: Some(1),
+            groups: vec![EvalGroup {
+                group_id: "g1".into(),
+                intentional_set: None,
+                photos: vec![sharp, soft, keep, optional],
+            }],
+        };
+        let report = evaluate(&fixture, &get_culling_config("default"));
+        // The background-soft frame reads as soft frame-wide here, which is
+        // exactly the mistake must_keep exists to count.
+        assert_eq!(report.must_keep_labelled, 1);
+        assert_eq!(report.must_keep_rejected, 1);
+        assert_eq!(report.forbid_checked, 2);
+        assert_eq!(
+            report.forbid_seen, 1,
+            "only the background-soft frame is misnamed"
+        );
+        assert_eq!(report.reasons_expected, 1);
+        assert_eq!(report.reasons_hit, 1);
+        let soft = &report.by_defect["blur_strong"];
+        assert_eq!((soft.reject_labelled, soft.reject_found), (1, 1));
+        assert_eq!(soft.pairs, 2, "against both rank-1 frames");
+        assert!(report.pairs_labelled >= 4);
+        // The darker frame's fate is a matter of cull strength: whatever
+        // happened to it, it is not among the predicted or labelled rejects.
+        assert_eq!(report.rejects_labelled, 1);
+        assert!(!report.to_text().is_empty());
+        assert!(report.defect_table().contains("background_soft"));
+        let merged = merge(&[report.clone(), report.clone()], "twice");
+        assert_eq!(merged.by_defect["blur_strong"].pairs, 4);
+        assert_eq!(merged.must_keep_rejected, 2);
     }
 
     #[test]

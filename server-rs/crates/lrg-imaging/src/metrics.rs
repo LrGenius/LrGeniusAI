@@ -181,6 +181,65 @@ fn py_round(v: f64) -> i64 {
 ///
 /// `cfg` carries what used to be file-private constants; passing
 /// [`ImageMetricsConfig::default`] reproduces the historical numbers exactly.
+/// Stored with every photo's culling metrics as `cull_metrics_version`, so a
+/// photo measured before a metric existed is told apart from one where the
+/// metric had nothing to measure. Absent means 1; 2 added [`fine_noise`].
+pub const METRICS_VERSION: i64 = 2;
+
+/// Grain at the resolution the frame is handed in, not at the 512 px the other
+/// metrics work on: the mean 3×3 box-blur residual where the smoothed image is
+/// flat, in luma units (`0..1`). `None` when too little of the frame is flat.
+///
+/// At 512 px the reduction averages grain away — on the public benchmark a
+/// copy at about ISO 12 800 read 0.023 above its clean original on
+/// `cull_noise_flat` — while it still lifts every focus measure taken at full
+/// size, so the grainy twin won. Here it reads several times the clean frame.
+/// Every second pixel of every second row, which bounds the cost of a 2048 px
+/// working copy to a few tens of milliseconds and changes nothing a burst
+/// compares.
+pub fn fine_noise(image: &RgbImage, cfg: &ImageMetricsConfig) -> Option<f64> {
+    let (w, h) = (image.width, image.height);
+    if w < 7 || h < 7 || image.pixels.len() < w * h * 3 {
+        return None;
+    }
+    let luma = |x: usize, y: usize| -> f32 {
+        let i = (y * w + x) * 3;
+        (0.299 * image.pixels[i] as f32
+            + 0.587 * image.pixels[i + 1] as f32
+            + 0.114 * image.pixels[i + 2] as f32)
+            / 255.0
+    };
+    let smoothed = |x: usize, y: usize| -> f32 {
+        let mut acc = 0.0f32;
+        for yy in y - 1..=y + 1 {
+            for xx in x - 1..=x + 1 {
+                acc += luma(xx, yy);
+            }
+        }
+        acc / 9.0
+    };
+    let gradient_threshold = cfg.noise_flat_gradient_threshold.max(0.0) as f32;
+    let (mut sum, mut count, mut sampled) = (0.0f64, 0usize, 0usize);
+    for y in (2..h - 2).step_by(2) {
+        for x in (2..w - 2).step_by(2) {
+            sampled += 1;
+            let reference = luma(x, y);
+            if reference <= 0.15 || reference >= 0.85 {
+                continue;
+            }
+            let gx = 0.5 * (smoothed(x + 1, y) - smoothed(x - 1, y));
+            let gy = 0.5 * (smoothed(x, y + 1) - smoothed(x, y - 1));
+            if (gx * gx + gy * gy).sqrt() > gradient_threshold {
+                continue;
+            }
+            sum += (reference - smoothed(x, y)).abs() as f64;
+            count += 1;
+        }
+    }
+    let min = (cfg.noise_flat_min_fraction.clamp(0.0, 1.0) * sampled as f64).ceil() as usize;
+    (count > 0 && count >= min.max(1)).then(|| (sum / count as f64 * 1e5).round() / 1e5)
+}
+
 pub fn culling_metrics(image: &RgbImage, cfg: &ImageMetricsConfig) -> CullingMetrics {
     let (w, h) = (image.width, image.height);
     if w == 0 || h == 0 {
@@ -654,6 +713,53 @@ mod tests {
                 clean.cull_noise_flat
             );
         }
+    }
+
+    /// Grain at full size: what the 512 px reduction averages away. A large
+    /// frame with light grain reads several times its clean twin, sharp or
+    /// soft alike, and focus alone moves it far less.
+    #[test]
+    fn fine_noise_sees_grain_the_reduction_averages_away() {
+        let size = 1536;
+        let cfg = ImageMetricsConfig::default();
+        let read = |px: &[u8]| {
+            fine_noise(
+                &RgbImage {
+                    pixels: px,
+                    width: size,
+                    height: size,
+                },
+                &cfg,
+            )
+            .unwrap()
+        };
+        let (sharp, soft) = (read(&scene(size, true, 0)), read(&scene(size, false, 0)));
+        let (grainy_sharp, grainy_soft) =
+            (read(&scene(size, true, 6)), read(&scene(size, false, 6)));
+        assert!(
+            grainy_sharp > 3.0 * sharp.max(1e-4),
+            "{grainy_sharp} vs {sharp}"
+        );
+        assert!(
+            grainy_soft > 3.0 * soft.max(1e-4),
+            "{grainy_soft} vs {soft}"
+        );
+        assert!(
+            (sharp - soft).abs() < 0.002,
+            "focus moved it: {sharp} vs {soft}"
+        );
+        let tiny = vec![0u8; 5 * 5 * 3];
+        assert_eq!(
+            fine_noise(
+                &RgbImage {
+                    pixels: &tiny,
+                    width: 5,
+                    height: 5
+                },
+                &cfg
+            ),
+            None
+        );
     }
 
     /// A frame that is texture edge to edge has nothing flat to measure. The

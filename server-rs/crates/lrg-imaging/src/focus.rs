@@ -180,13 +180,24 @@ fn sobel(img: &[f64], w: usize, x: usize, y: usize, vertical: bool) -> f64 {
 /// interior slice would be empty), `window` is 0, or the patch has no structure
 /// to judge — see [`MIN_STRUCTURE`].
 pub fn blur_effect(patch: &LumaPatch, window: usize) -> Option<f64> {
+    blur_effect_axes(patch, window).map(|[vertical, horizontal]| vertical.max(horizontal))
+}
+
+/// [`blur_effect`] along each axis on its own: `[vertical, horizontal]`, where
+/// "vertical" is the patch re-blurred top to bottom.
+///
+/// The two agree on a patch that is sharp or out of focus all round. They part
+/// on a streak: a background smeared sideways by a pan has nothing left for a
+/// horizontal re-blur to remove and plenty for a vertical one, so it reads
+/// blurred across and sharp along.
+pub fn blur_effect_axes(patch: &LumaPatch, window: usize) -> Option<[f64; 2]> {
     let (w, h) = (patch.width, patch.height);
     if w < 4 || h < 4 || window == 0 || patch.data.len() < w * h {
         return None;
     }
-    let mut worst: Option<f64> = None;
+    let mut axes = [0.0f64; 2];
     let mut structure = 0.0f64;
-    for vertical in [true, false] {
+    for (axis, vertical) in [true, false].into_iter().enumerate() {
         let blurred = box_filter(patch, window, vertical);
         let (mut m1, mut m2, mut raw) = (0.0f64, 0.0f64, 0.0f64);
         // skimage's `slice(2, s - 1)` on both axes.
@@ -202,13 +213,12 @@ pub fn blur_effect(patch: &LumaPatch, window: usize) -> Option<f64> {
         }
         let count = ((w - 3) * (h - 3)) as f64;
         structure = structure.max(raw / count);
-        let b = (m1 - m2).abs() / m1;
-        worst = Some(worst.map_or(b, |prev: f64| prev.max(b)));
+        axes[axis] = (m1 - m2).abs() / m1;
     }
     if structure < MIN_STRUCTURE {
         return None;
     }
-    worst
+    Some(axes)
 }
 
 /// `1 - blur_effect`: the orientation the culling scores use, higher is sharper.

@@ -26,6 +26,8 @@ winner, no reject candidates, and the whole group goes to the
 
 Detection is deliberately cautious and needs corroborating evidence from more
 than one signal, so it can miss a set rather than misread an ordinary burst.
+A focus stack needs every frame to be sharp somewhere: a tripod burst with one
+shaken frame is a burst to cull, not a stack to keep.
 Exposure-bracket detection reads the exposure compensation value from your
 photos, so it works best on frames shot with AEB.
 
@@ -43,18 +45,41 @@ photos, so it works best on frames shot with AEB.
    - **Apply to** – `Selected photos only` or `Current view`.
    - **Burst time window (seconds)** – how far apart two frames may be and
      still count as the same burst. `Auto (from preset)` uses the preset's
-     own window: 1 s for Default, Portrait and Street, 2 s for Event, 3 s for
-     Sports.
+     own window: 1 s for Default, Portrait and Street, 2 s for Event and
+     Wildlife, 3 s for Sports — under the Auto preset, the window of the
+     preset most of the selection calls for.
    - **Culling preset** – tunes thresholds and weights:
-     `Default (sharpness, exposure, faces)`, `Portrait (faces and expression)`,
-     `Street (candid moments)`, `Event (people, emotion, moments)`,
-     `Sports (action and emotion)`. Every preset except Default also judges
-     the moment; see below.
+     `Auto (each burst by its genre)`, `Default (sharpness, exposure, faces)`,
+     `Portrait (faces and expression)`, `Street (candid moments)`,
+     `Event (people, emotion, moments)`, `Sports (action and emotion)`,
+     `Wildlife (animals, the subject sharp)`. Every preset except Default also
+     judges the moment; see below.
+   - **Auto** is the default for a new setup: each burst is judged with the
+     preset its photos' genre calls for (Portrait, Event, Sports, Wildlife or
+     Default), so a wedding day with a football match in the afternoon is
+     culled with both. The completion message says what it chose. Photos the
+     AI has called "street" are judged as an event: the Street preset
+     deliberately ignores focus, and that should be your choice, not a guess.
+     On the [public benchmark](Dev-Image-Culling-Benchmark.md) Auto ranked at
+     least as well as the preset chosen by hand for every series. Choose a
+     preset yourself when you know better — it then applies to everything.
    - **Cull strength** – how many near-misses become reject candidates.
      `Gentle` keeps more alternates, `Strict` aims for one keeper per burst,
      `Balanced` is the preset's own margin. It only moves the score margin:
      a blurred frame, a blink or a blocked face is rejected at the same
      threshold whatever you choose.
+   - **Keep** – `The pick of every burst` (the default), `A number of
+     photos` or `A share of the photos (%)`. A number or a share chooses
+     across the whole selection, the way a gallery is delivered: the shoot is
+     split into scenes (bursts close in time and alike), the best photo of
+     every scene comes first, then the best of the rest that are unlike what is
+     already chosen, so the speeches do not crowd out the dancing. The chosen
+     photos are the picks — none of some bursts, several of others. A photo
+     with a flaw is chosen only when its scene has nothing better, and the
+     culling warning says so.
+   - **Highlights** – with a number or a share, this many of the best chosen
+     photos, kept different from each other, go into a `Highlights`
+     collection: a sneak peek. 0 for none.
    - **Create 'Duplicates / Near Duplicates' collection** – on by default.
    - **Lightroom flags and ratings** – see the next section.
 4. Start the task and wait until the progress dialog completes.
@@ -114,6 +139,8 @@ asks what the photo shows:
 - **Event** asks about candid moments and about emotion (laughing, crying with
   joy, hugging, guests reacting).
 - **Portrait** asks about expression, **Street** about candid, unposed moments.
+- **Wildlife** asks about behaviour: a bird in flight, an animal feeding,
+  running, looking back at the camera, two animals interacting.
 
 The stronger of the two answers counts, not their average: the goal
 celebration has no ball in it, and the shot on goal has nobody cheering yet.
@@ -197,6 +224,48 @@ culling dialog offers to prepare them again; if you skip that, the bursts they
 are in are ranked without eye focus, and the culling warning says how many
 photos that affects.
 
+## Focus on the subject
+
+A frame can look soft for two opposite reasons. The focus missed: the subject
+is soft and, often, the background behind it sharp. Or the photographer meant
+it: a shallow depth of field, or a pan that streaks the background while the
+athlete or the bird stays sharp. Sharpness measured over the whole frame cannot
+tell the two apart, and that is the frame it most often gets wrong — it calls
+the keeper blurred, or keeps the one whose focus landed on the wall behind.
+
+So culling first finds what the photo is of: a person, an animal, a vehicle or
+a thing, with its outline (an AI model, part of **Download AI models**, about
+120 MB). It then measures focus on the subject and on the background
+separately.
+
+- **A sharp subject settles it.** When the subject reads sharp, a soft
+  background is a choice and the frame is never called blurred for it. A pan is
+  named as such ("a pan: the subject sharp, the background streaked").
+- **Focus behind the subject is named.** A frame whose subject is clearly
+  softer than in another frame of the burst says "the subject is not sharp",
+  or "focus landed behind it" when the background is the sharper part, and
+  becomes a reject candidate when it is clearly behind. A single photo is
+  never rejected for it alone.
+- **Faces come first.** For a person whose eyes could be measured, the eyes
+  decide, as before; the subject answers for everything faces cannot — an
+  athlete seen from the side, an animal, a car.
+- **Only faces on the subject count.** A second person soft in the background
+  of a portrait, or a spectator behind the athlete, is out of focus on purpose
+  and no longer makes the keeper a reject. When the subject is an animal or a
+  thing — a dog, a cake — and no face is on it, the people beside it are more
+  likely the point, and every face counts.
+- **What carries the subject belongs to it.** A rider and the horse, a cyclist
+  and the bicycle are one subject, so neither is ever taken for the background
+  the other stands against.
+- **Wildlife** leans on the subject most, and judges the moment by behaviour:
+  in flight, feeding, running, looking back. The animal's eye is not judged
+  yet.
+
+Photos prepared before this existed have no subject reading. The culling
+dialog offers to prepare them again; if you skip that, the bursts they are in
+are judged on frame-wide sharpness, and the culling warning says how many
+photos that affects.
+
 ## Eyes open, smile and gaze
 
 Whether the eyes are open is judged by an AI model made for exactly that:
@@ -248,6 +317,62 @@ The model is part of **Download AI models** (about 7 MB). Without it culling
 uses the old rough estimate for blinks and says so in a culling warning, with
 the fix; photos prepared before the model was downloaded are offered for
 preparing again once it is there.
+
+## Key people
+
+Tick **Judge the key people first** in the dialog, and a frame is judged by the
+people who matter in the shoot rather than by whoever is largest in it:
+
+- **Who counts:** everyone you have named in **People** who is in these photos,
+  and anyone who is in at least a fifth of the selected photos that have faces
+  (and in three at least) — the couple at a wedding, the child at a birthday.
+  Faces you have not sorted in People yet are grouped among the selection's
+  photos for this, so it works on a shoot you have never opened People for.
+- **What changes:** in a burst that shows one of them, only their faces count —
+  however small. The bride's blink counts though a guest stands larger in front
+  of her, and a frame where she turned away has no face that matters. Bursts
+  without a key person are judged as before.
+- **Named in the explanation:** "Anna: eyes closed", "Anna: the eyes are not
+  sharp". The completion message lists the key people it found.
+
+It needs face recognition, which the fast culling preparation leaves out:
+with the option on, **Prepare now** also recognises faces, which takes
+longer. Photos that have not been through it are counted in the culling
+warning. The rule of who counts is a first guess: no public collection of
+photographs says who mattered to the photographer, so it is not measured.
+
+**Small faces.** Faces are looked for twice: once in the whole photo, and
+again in four overlapping quarters of it, which finds faces down to about a
+third of the size — the people in the back of a group, the spectators of a
+match. Such a face counts for culling only; it is too small to be recognised,
+so it never appears in People. A small face is not found in every frame alike:
+a frame where it was missed ranks below the frames that show it, but when its
+subject is sharp it is not suggested for rejection for that.
+
+## Your culling style
+
+Every photographer culls a little differently: one always takes the broader
+smile, another the sharper frame, a third the stronger moment. **Library →
+Plug-in Extras → Learn My Culling Style...** learns yours from photos you
+culled yourself — select a few shoots where you set flags, rejects or stars
+and start it.
+
+- **What it learns from:** inside each burst, two frames you marked
+  differently — a pick over an unflagged frame over a reject, more stars over
+  fewer — are one decision. Marks a cull set and you left alone are not
+  counted; ones you changed are, and say the most.
+- **How it proves itself:** it learns from most of your bursts and is tested
+  on the rest, against the default ranking on the same bursts. It reports how
+  often each agrees with you ("agrees with your own choices 71 % of the time;
+  the default ranking 64 %"). It needs at least 30 decisions, and it is used
+  only when it agrees with you more often than the default does.
+- **How it is used:** tick **Use my culling style** in Cull Similar Photos. It
+  reorders the frames of a burst that are not reject candidates; a blink or a
+  blur stays a reject, since that is not a matter of taste. A pick it changed
+  says "your culling style prefers it", and the completion message counts them.
+
+It stays on this computer, with the backend's database. Run the task again to
+learn from more shoots; its dialog also forgets the learned style.
 
 ## Result collections in Lightroom
 
@@ -306,6 +431,9 @@ For each photo, the backend stores culling-related fields such as:
   `cull_gaze_off_lens`, `cull_mouth_open`, `cull_face_luminance`,
   `cull_face_across_stops`, `cull_face_blown` (from the face model; absent when no
   face could be judged)
+- subject: `cull_subject_kind`, `cull_subject_area`, `cull_subject_focus` and
+  `cull_background_focus` (focus on the subject and on the rest of the frame),
+  `cull_background_streak` (how streaked the background is, high for a pan)
 - aesthetic scores: `cull_aesthetic` (a contrast-and-colour heuristic) and the
   photo's **Aesthetic score** from the AestheticSigLIP model, stored at
   indexing time (`aesthetic_score`) and read by culling as `cull_aesthetic_model`
@@ -329,6 +457,10 @@ Typical reason codes include:
 - `sharpest_in_group`
 - `blurred`
 - `underexposed` / `overexposed`
+- `highlights_clipped` – highlights blown out where a sibling frame kept them
+- `noisier_than_sibling` – clearly grainier than a frame of the burst that is
+  otherwise as sharp: ranked below it, never a reject candidate for the grain
+  alone
 - `best_face_quality` / `weak_face_quality`
 - `eyes_open_best`
 - `eyes_closed` – the eyes are closed, and another frame of the burst has them
@@ -343,16 +475,24 @@ Typical reason codes include:
 - `face_out_of_focus` – the same for the whole face, where the eyes were too
   small to measure
 - `eyes_sharpest_in_group`
+- `subject_out_of_focus` – the subject is clearly softer than in a sharper
+  frame of the same burst
+- `focus_on_background` – the same, with the background the sharper part:
+  focus landed behind the subject
+- `subject_sharpest_in_group`
+- `panning` – the subject sharp, the background streaked by a pan; never
+  counted as blur
 - `possible_occlusion`
 - `no_face_detected_in_group`
 - `near_duplicate_weaker`
-- `peak_action` / `best_expression` / `strongest_moment` / `strongest_emotion`
-  – the moment decided the pick
+- `peak_action` / `best_expression` / `strongest_moment` / `strongest_emotion` /
+  `peak_behaviour` – the moment decided the pick
 - `eyes_closed_intentional` – eyes closed in a kiss or a laugh, not counted as a
   blink
 - `strong_moment_but_unusable` – the group's strongest moment, but a technical
   flaw put it among the reject candidates; look before deleting
 - `bracket_frame_kept` / `focus_stack_frame_kept` / `panorama_frame_kept`
+- `preferred_by_your_style` – your learned culling style chose this pick
 
 These help explain why a specific frame was chosen as a pick or flagged as a reject candidate.
 
@@ -410,9 +550,16 @@ Rejects for a blink, a blocked face or a weak face are judged against the
 other frames of the group as well as against fixed thresholds: a frame is only
 a blink when its eyes read clearly less open than the best frame of its burst.
 On small faces the eye estimate reads "closed" on every frame, so without this
-every frame but the pick was a reject. The same treatment for blur exists in
-the backend but is switched off until it has been checked against hand-culled
-shoots of several genres.
+every frame but the pick was a reject. Blur is judged the same way: a frame
+with siblings is only blurred when it is clearly softer than the sharpest of
+them, and a burst that missed focus throughout is still rejected whole.
+
+**Blown highlights cost, a dark frame hardly.** Between two frames of a burst,
+the one whose highlights are blown out where its sibling kept them ranks lower
+and says so ("highlights blown out where a sibling frame kept them").
+Lightroom lifts a stop of shadow without a trace and brings nothing back from
+a clipped highlight. A photo that is clipped on purpose, high key say, is
+clipped in every frame of its burst and loses nothing.
 
 ## Tips for best results
 

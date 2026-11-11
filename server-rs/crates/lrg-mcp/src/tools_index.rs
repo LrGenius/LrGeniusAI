@@ -285,7 +285,8 @@ pub struct CullArgs {
     #[serde(flatten)]
     pub photos: Photos,
     /// What kind of shoot it is, which tunes grouping and grading:
-    /// "default", "event", "portrait", "sports" or "street".
+    /// "auto" (each group by its photos' genre — best when unsure or mixed),
+    /// "default", "event", "portrait", "sports", "street" or "wildlife".
     #[serde(default)]
     pub preset: Option<String>,
     /// Only group, without grading the frames inside each group. Faster.

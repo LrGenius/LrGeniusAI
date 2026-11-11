@@ -157,6 +157,18 @@ sources = [
   "server-rs/crates/lrg-api/src/species_links.rs",
 ]
 
+# The benchmark page reports numbers measured with these; a change to how
+# they score or what the script makes is a change to the page.
+[page."Dev-Image-Culling-Benchmark.md"]
+sources = [
+  "server-rs/scripts/cull_bench.py",
+  "server-rs/crates/lrg-analysis/src/eval.rs",
+  "server-rs/crates/lrg-analysis/examples/cull_eval.rs",
+  "server-rs/crates/lrg-analysis/src/selection.rs",
+  "server-rs/crates/lrg-llama/examples/tiebreak_probe.rs",
+  "server-rs/testdata/cull_bench/fixtures/*.json",
+]
+
 [page."Help-Cull-Photos.md"]
 sources = [
   "plugin/LrGeniusAI.lrdevplugin/TaskCullPhotos.lua",
@@ -167,6 +179,18 @@ sources = [
   "server-rs/crates/lrg-imaging/src/focus.rs",
   "server-rs/crates/lrg-ml/src/face_state.rs",
   "server-rs/crates/lrg-analysis/src/face_aggregate.rs",
+  # "Focus on the subject": how the subject is found and its focus measured.
+  "server-rs/crates/lrg-ml/src/subject.rs",
+  "server-rs/crates/lrg-imaging/src/subject_focus.rs",
+  # "Key people", and the small faces of the tile pass.
+  "server-rs/crates/lrg-analysis/src/key_people.rs",
+  "server-rs/crates/lrg-api/src/key_people.rs",
+  "server-rs/crates/lrg-ml/src/yunet.rs",
+  # "Keep" and "Highlights": choosing to a target across a shoot.
+  "server-rs/crates/lrg-analysis/src/selection.rs",
+  # "Your culling style".
+  "server-rs/crates/lrg-analysis/src/taste.rs",
+  "plugin/LrGeniusAI.lrdevplugin/TaskLearnCullingStyle.lua",
 ]
 
 [page."Help-AI-Agents.md"]

@@ -64,6 +64,12 @@ culling falls back to a rough eye estimate and says so in its warning. Once it
 is downloaded, **Cull Similar Photos** offers to prepare the photos with faces
 again.
 
+The subject detection model (about 120 MB), which culling uses to tell a frame
+whose focus missed its subject from a shallow depth of field or a pan, is the
+same: its own entry under the same button. Without it culling judges sharpness
+on the whole frame, as before, and says so in its warning; once it is
+downloaded, **Cull Similar Photos** offers to prepare the photos again.
+
 ---
 
 ### 4. Model "Missing" Even After Installation

@@ -53,6 +53,7 @@ const AESTHETIC_APPROX_BYTES: u64 = 868_000_000;
 const BIOCLIP_APPROX_BYTES: u64 = 876_000_000;
 const FACE_APPROX_BYTES: u64 = 94_200_000;
 const FACE_STATE_APPROX_BYTES: u64 = 6_800_000;
+const SUBJECT_APPROX_BYTES: u64 = 122_900_000;
 
 /// Release tag holding the YuNet + FaceNet ONNX files.
 ///
@@ -72,6 +73,14 @@ const FACE_ASSETS_RELEASE_TAG: &str = "face-assets-v1";
 /// `.github/workflows/model-assets-face-state.yml`'s `tag_name`.
 const FACE_STATE_ASSETS_RELEASE_TAG: &str = "face-state-assets-v1";
 
+/// Release tag holding RF-DETR-Seg Nano as ONNX
+/// (`scripts/export_subject_rfdetr.py`), which finds a photo's subject for
+/// culling. Its own family and tag: without it culling judges sharpness
+/// frame-wide as before, and no other family may report "not ready" for it.
+/// Bump together with `.github/workflows/model-assets-subject.yml`'s
+/// `tag_name`.
+const SUBJECT_ASSETS_RELEASE_TAG: &str = "subject-assets-v1";
+
 /// A model family as the user meets it: one indicator in the Plug-in Manager,
 /// one entry in `/v1/models/assets`, and the unit the combined download skips
 /// when it cannot be fetched.
@@ -82,17 +91,19 @@ enum Family {
     Bioclip,
     Face,
     FaceState,
+    Subject,
 }
 
 impl Family {
     /// Every family, in the order `/v1/models/assets` lists them and the
     /// combined download fetches them.
-    const ALL: [Family; 5] = [
+    const ALL: [Family; 6] = [
         Family::Clip,
         Family::Aesthetic,
         Family::Bioclip,
         Family::Face,
         Family::FaceState,
+        Family::Subject,
     ];
 
     fn id(self) -> &'static str {
@@ -102,6 +113,7 @@ impl Family {
             Family::Bioclip => "bioclip",
             Family::Face => "face",
             Family::FaceState => "face_state",
+            Family::Subject => "subject",
         }
     }
 
@@ -114,6 +126,7 @@ impl Family {
             Family::Bioclip => "Species identification",
             Family::Face => "Face detection",
             Family::FaceState => "Eye and expression analysis",
+            Family::Subject => "Subject detection",
         }
     }
 
@@ -124,6 +137,7 @@ impl Family {
             Family::Bioclip => BIOCLIP_APPROX_BYTES,
             Family::Face => FACE_APPROX_BYTES,
             Family::FaceState => FACE_STATE_APPROX_BYTES,
+            Family::Subject => SUBJECT_APPROX_BYTES,
         }
     }
 
@@ -135,6 +149,7 @@ impl Family {
             Family::Bioclip => state.bioclip.is_cached(),
             Family::Face => state.face.is_cached(),
             Family::FaceState => state.face_state.is_cached(),
+            Family::Subject => state.subject.is_cached(),
         }
     }
 }
@@ -229,6 +244,7 @@ async fn run_download(state: Arc<Downloads>, missing: Vec<Family>) {
     let bioclip_paths = lrg_ml::model_paths::resolve_bioclip();
     let face_paths = lrg_ml::model_paths::resolve_face();
     let face_state_paths = lrg_ml::model_paths::resolve_face_state();
+    let subject_paths = lrg_ml::model_paths::resolve_subject();
 
     let families: Vec<FamilyDownload<'_>> = missing
         .iter()
@@ -239,6 +255,7 @@ async fn run_download(state: Arc<Downloads>, missing: Vec<Family>) {
                 Family::Bioclip => bioclip_assets(&bioclip_paths),
                 Family::Face => face_assets(&face_paths),
                 Family::FaceState => face_state_assets(&face_state_paths),
+                Family::Subject => subject_assets(&subject_paths),
             };
             FamilyDownload {
                 name: family.name(),
@@ -406,6 +423,15 @@ fn face_state_assets(paths: &lrg_ml::face_state::FaceStatePaths) -> Vec<ReleaseA
             paths.blendshapes_onnx.as_path(),
         ),
     ]
+}
+
+/// The subject finder (RF-DETR-Seg Nano) and where it goes.
+fn subject_assets(paths: &lrg_ml::subject::SubjectPaths) -> Vec<ReleaseAsset<'_>> {
+    vec![(
+        SUBJECT_ASSETS_RELEASE_TAG,
+        "subject_rfdetr_seg_nano.onnx",
+        paths.onnx.as_path(),
+    )]
 }
 
 /// The face-model assets and where they go.

@@ -118,6 +118,45 @@ pub struct RankingConfig {
     /// relative normalisation engages. Below this the group agrees, and
     /// stretching noise to fill 0..1 would manufacture a ranking out of it.
     pub relative_min_spread: f64,
+    /// How much of the technical score a frame loses for highlights blown out
+    /// beyond the least clipped frame of its group, at
+    /// [`Self::clip_penalty_scale`] and more. 0 leaves clipping out.
+    ///
+    /// The exposure term asks how close the mean is to mid-grey, which a frame
+    /// a stop and a third brighter can answer better than the original while
+    /// 14 % of it is blown white. On the public benchmark that frame took the
+    /// pick in 21 of 120 series. Lightroom lifts a stop of shadow without a
+    /// trace and recovers nothing from a clipped highlight, so clipping is
+    /// what costs, and only against a sibling: a high-key photograph clipped
+    /// on purpose is clipped in every frame of its burst.
+    pub clip_penalty_weight: f64,
+    /// The excess of highlight clipping over the group's least clipped frame
+    /// (a share of the frame) at which the penalty is full, and from which the
+    /// frame is labelled `highlights_clipped`.
+    pub clip_penalty_scale: f64,
+    /// A frame whose grain at full working size (`cull_noise_fine`) is at
+    /// least this many times a sibling's of the same frame-wide sharpness is a
+    /// *noisy twin*. 0 switches the rule off.
+    ///
+    /// Grain reads as detail in every focus measure taken at full size: on the
+    /// public benchmark a copy at about ISO 12 800 measured face sharpness
+    /// +0.19 and eye focus +0.06 to +0.09 above its clean original, won the
+    /// series 58 times in 120, and made the original "eyes out of focus"
+    /// beside it. Comparing grain across the whole group instead rewards blur,
+    /// which removes grain too, so only frames of equal sharpness are
+    /// compared. A noisy twin loses [`Self::noise_twin_penalty`], is named
+    /// `noisier_than_sibling`, and does not set the group's best focus. The
+    /// penalty orders it below its twin but never makes it a reject candidate
+    /// on its own.
+    pub noise_twin_ratio: f64,
+    /// How close two frames' frame-wide sharpness (`cull_sharpness`, at 512
+    /// px, where grain barely moves it) must be to compare their grain. Grain
+    /// moved it by 0.005–0.02 on the public benchmark; a pan and the same frame
+    /// with its background blurred instead sat 0.023 apart, and at 0.03 the
+    /// pan was the "noisier twin" of a keeper.
+    pub noise_twin_sharpness_delta: f64,
+    /// What a noisy twin loses from its score.
+    pub noise_twin_penalty: f64,
     /// How much of the aesthetic signal comes from the AestheticSigLIP score
     /// stored with the photo (`aesthetic_score`, scaled to `0..1` by the API
     /// layer as `cull_aesthetic_model`) rather than the contrast/colourfulness
@@ -251,13 +290,17 @@ pub struct RankingConfig {
     /// The occlusion proxy's own margin. It moves by 0.1–0.35 between frames
     /// of one group of people (head turns, side light; median spread 0.11
     /// measured on a real shoot), roughly half its whole range, so the
-    /// shared margin fired in most multi-face groups.
+    /// shared margin fired in most multi-face groups. 0.20, the candidate
+    /// measured on that shoot, since the public benchmark found the same: at
+    /// 0.10 five of seven sport originals it nominated for deletion were
+    /// "occluded" against a copy of themselves a stop brighter.
     pub relative_occlusion_margin: f64,
     /// Judge blur against the group too (soft *and* clearly softer than the
-    /// sharpest sibling). **Off by default, pending calibration:** it and the
-    /// wider occlusion margin were fitted to the stored metrics of one shoot,
-    /// and the maintainers asked to hold them until a hand-cull comparison
-    /// across genres exists. `--ablate` them in `cull_eval` once it does.
+    /// sharpest sibling). On since the public benchmark
+    /// (`testdata/cull_bench`), which agreed with the real baptism shoot it
+    /// was first fitted to: reject precision 82.3 % → 82.8 %, must-keep frames
+    /// lost 25.4 % → 24.6 %, recall unchanged. Still to be confirmed against a
+    /// hand cull across genres.
     pub relative_blur_rule: bool,
     /// How much of the face term in a face group's score comes from the eye
     /// focus (`cull_eye_focus`, scored against the group like exposure) rather
@@ -354,6 +397,44 @@ pub struct RankingConfig {
     /// light. 0 switches the label off.
     pub reason_face_hard_light_stops: f64,
     pub reason_face_hard_light_delta: f64,
+    /// How much of the sharpness in the score comes from focus on the subject
+    /// (`cull_subject_focus`, scored against the group like eye focus) rather
+    /// than from the frame-wide and tiled readings. 0 leaves it out of the
+    /// score.
+    ///
+    /// The frame-wide reading asks whether the frame is busy and the tiled one
+    /// whether *anything* is sharp; neither knows what the photo is of. On the
+    /// public benchmark a frame whose focus landed on the background read as
+    /// sharp as the original. Applies only when every frame of the group went
+    /// through the subject pass and has a reading, all or nothing like the
+    /// moment.
+    ///
+    /// 0.75 by default: on the public benchmark pair order rose from 76.6 % at
+    /// 0 to 82.9 %, and at 1.0 a landscape's "subject" (a rock, a boat) took
+    /// over and cost reject precision. Sports and wildlife take all of it.
+    pub subject_focus_weight: f64,
+    /// At or above this, the subject counts as in focus: a soft frame-wide
+    /// reading is then a shallow depth of field or a pan, not a blur defect,
+    /// as sharp eyes already settle it for faces. Below it, with a sibling
+    /// whose subject is clearly sharper, the frame is labelled
+    /// `subject_out_of_focus` (or `focus_on_background`). 0 switches subject
+    /// focus out of the labels and defects.
+    pub reason_subject_focus_threshold: f64,
+    /// Below this, and [`Self::relative_subject_margin`] behind the group's
+    /// sharpest subject, the frame is a clear defect and a reject candidate.
+    /// Never for a single: without a sibling there is no evidence the subject
+    /// could have been sharper.
+    pub reject_subject_focus_threshold: f64,
+    /// How far behind the group's sharpest subject a frame must be for the
+    /// subject label and defect.
+    pub relative_subject_margin: f64,
+    /// A soft subject whose background reads at least this much sharper is
+    /// labelled `focus_on_background`: the focus did not miss, it landed
+    /// behind.
+    pub reason_background_sharper_margin: f64,
+    /// A frame with its subject in focus and a background streaked at least
+    /// this much along one axis is labelled `panning`. 0 switches it off.
+    pub reason_panning_streak: f64,
 }
 
 /// Which deliberately-captured multi-frame set a group is, if any.
@@ -409,6 +490,10 @@ pub struct SetDetectionConfig {
     /// minimum spread, in normalized frame widths, of `cull_sharp_region_*`
     /// across the group.
     pub focus_stack_min_region_travel: f64,
+    /// ...and every frame sharp somewhere: its sharpest part at least this
+    /// share of the sharpest frame's. A frame sharp nowhere is a miss, not a
+    /// slice. 0 switches the check off.
+    pub focus_stack_min_peak_ratio: f64,
     /// ...while the framing stays put. Maximum pHash Hamming distance between
     /// any two frames of a focus stack or bracket.
     pub static_framing_max_phash: u32,
@@ -479,6 +564,9 @@ impl CullingConfig {
         cfg.ranking.usable_gate = false;
         cfg.ranking.reject_blurred_without_alternative = false;
         cfg.ranking.relative_defect_rules = false;
+        cfg.ranking.relative_blur_rule = false;
+        cfg.ranking.clip_penalty_weight = 0.0;
+        cfg.ranking.noise_twin_ratio = 0.0;
         cfg.ranking.eye_focus_weight = 0.0;
         cfg.ranking.reason_eye_focus_threshold = 0.0;
         cfg.ranking.reject_eye_focus_threshold = 0.0;
@@ -492,6 +580,10 @@ impl CullingConfig {
         cfg.ranking.reason_face_darker_stops = 0.0;
         cfg.ranking.reason_face_blown_threshold = 0.0;
         cfg.ranking.reason_face_hard_light_stops = 0.0;
+        cfg.ranking.subject_focus_weight = 0.0;
+        cfg.ranking.reason_subject_focus_threshold = 0.0;
+        cfg.ranking.reject_subject_focus_threshold = 0.0;
+        cfg.ranking.reason_panning_streak = 0.0;
         cfg
     }
 }
@@ -538,6 +630,11 @@ const BASE: CullingConfig = CullingConfig {
         recompute_technical_score: true,
         relative_normalization_weight: 0.5,
         relative_min_spread: 0.03,
+        clip_penalty_weight: 0.2,
+        clip_penalty_scale: 0.05,
+        noise_twin_ratio: 1.6,
+        noise_twin_sharpness_delta: 0.02,
+        noise_twin_penalty: 0.15,
         aesthetic_model_weight: 0.9,
         // No axis by default: "default" spans every genre, and there is no
         // question that is right for all of them.
@@ -550,11 +647,14 @@ const BASE: CullingConfig = CullingConfig {
         reason_motion_anisotropy_threshold: 0.55,
         reason_moment_margin: 0.15,
         relative_defect_rules: true,
-        relative_defect_margin: 0.10,
-        // Same as the shared margin until calibrated; 0.20 (half the proxy's
-        // range) is the measured candidate — see `relative_blur_rule`.
-        relative_occlusion_margin: 0.10,
-        relative_blur_rule: false,
+        // 0.14 since the public benchmark: the face state model's lids read
+        // up to 0.1 apart between a frame and the same frame a stop brighter,
+        // so at 0.10 originals were "blinks" against their own copies (reject
+        // precision 82.3 % → 84.6 %, must-keep lost 25.4 % → 20.4 %, recall
+        // 70.0 % → 69.7 %).
+        relative_defect_margin: 0.14,
+        relative_occlusion_margin: 0.20,
+        relative_blur_rule: true,
         eye_focus_weight: 0.35,
         reason_eye_focus_threshold: 0.52,
         reject_eye_focus_threshold: 0.45,
@@ -576,6 +676,12 @@ const BASE: CullingConfig = CullingConfig {
         reason_face_blown_threshold: 0.15,
         reason_face_hard_light_stops: 2.0,
         reason_face_hard_light_delta: 1.0,
+        subject_focus_weight: 0.75,
+        reason_subject_focus_threshold: 0.5,
+        reject_subject_focus_threshold: 0.38,
+        relative_subject_margin: 0.08,
+        reason_background_sharper_margin: 0.05,
+        reason_panning_streak: 0.2,
     },
     sets: SetDetectionConfig {
         enabled: true,
@@ -584,6 +690,7 @@ const BASE: CullingConfig = CullingConfig {
         bracket_max_frame_gap_seconds: 4.0,
         uniform_ev_tolerance: 0.34,
         focus_stack_min_region_travel: 0.12,
+        focus_stack_min_peak_ratio: 0.35,
         static_framing_max_phash: 12,
         panorama_min_adjacent_distance: 0.06,
         panorama_max_adjacent_distance: 0.35,
@@ -721,6 +828,11 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             // High ISO across the board — judge noise against the other frames
             // from the same burst, not against a fixed ceiling.
             cfg.ranking.relative_normalization_weight = 0.65;
+            // The athlete is what has to be sharp; with the subject measured,
+            // the frame-wide reading adds nothing a pan does not spoil. On the
+            // public benchmark 1.0 put 80 % of sport pairs in order, 0.75 79 %
+            // and 0.5 77 %.
+            cfg.ranking.subject_focus_weight = 1.0;
             // The whole point of the preset. Sharpness alone cannot tell the
             // frame with the ball from the frame just after it, and inside one
             // burst it is the only signal with any range left. Emotion is the
@@ -746,11 +858,120 @@ pub fn get_culling_config(preset: &str) -> CullingConfig {
             cfg.ranking.reason_face_blown_threshold = 0.0;
             cfg.ranking.reason_face_hard_light_stops = 0.0;
         }
+        "wildlife" => {
+            // Long lenses wide open, like sports: the background is meant to
+            // be soft, and the frame-wide number measures exactly that. The
+            // subject is what has to be sharp, so it carries most of the
+            // sharpness, and the pan of a bird in flight is a technique, not a
+            // blur.
+            cfg.grouping.time_window_default_seconds = 2;
+            cfg.ranking.sharpness_peak_weight = 0.70;
+            // All of it: on the public benchmark 1.0 nominated no keeper and
+            // only rejects (12 of 12), where 0.75 lost 2 of 48 pans and soft
+            // backgrounds.
+            cfg.ranking.subject_focus_weight = 1.0;
+            cfg.ranking.relative_normalization_weight = 0.65;
+            // Behaviour is the moment: in flight, feeding, looking back. Below
+            // sports' weight because the prompts are a first version and the
+            // animal's eye, which often decides, is not judged yet.
+            cfg.ranking.semantic_prompt_set = Some("wildlife");
+            cfg.ranking.semantic_weight = 0.25;
+            // People in a wildlife frame are rarely the subject.
+            cfg.ranking.reason_face_darker_stops = 0.0;
+            cfg.ranking.reason_face_blown_threshold = 0.0;
+            cfg.ranking.reason_face_hard_light_stops = 0.0;
+        }
         _ => {}
     }
     cfg
 }
 
 pub fn available_presets() -> Vec<&'static str> {
-    vec!["default", "event", "portrait", "sports", "street"]
+    vec![
+        AUTO_PRESET,
+        "default",
+        "event",
+        "portrait",
+        "sports",
+        "street",
+        "wildlife",
+    ]
+}
+
+/// Not a preset of its own: each group is ranked with the preset its photos'
+/// genre calls for ([`preset_for_genres`]). On its own — for grouping, or where
+/// no photo has a genre — it is `default`.
+pub const AUTO_PRESET: &str = "auto";
+
+/// The preset a photo genre (`lrg_ml::genre`'s ids) calls for. A concert is
+/// people and a moment under stage light, like an event; everything without
+/// people or a moment to judge — landscape, architecture, food, macro, the
+/// sky — is the default.
+///
+/// A "street" genre is ranked as an event, not with the `street` preset: that
+/// one leaves focus unjudged on purpose, which is the photographer's call to
+/// make, not a guess's. The genre model calls many photos of people outdoors
+/// "street" — on the public benchmark 13 of 24 portraits and 12 of 24 events —
+/// and the `street` preset then found 63 % of the rejects where `event` found
+/// 69 %, with as many keepers kept.
+pub fn preset_for_genre(genre: &str) -> &'static str {
+    match genre {
+        "portrait" => "portrait",
+        "event" | "concert" | "street" => "event",
+        "sport" => "sports",
+        "wildlife" => "wildlife",
+        _ => "default",
+    }
+}
+
+/// The preset most of these photos' genres call for, `None` when none has a
+/// genre. A tie goes to the preset that asks more of the photos (event, then
+/// portrait, sports, wildlife, default): a wedding burst split between
+/// "event" and "portrait" still has its moment judged.
+pub fn preset_for_genres<'a>(genres: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    const ORDER: [&str; 5] = ["event", "portrait", "sports", "wildlife", "default"];
+    let mut counts = [0usize; ORDER.len()];
+    for genre in genres {
+        let preset = preset_for_genre(genre);
+        if let Some(i) = ORDER.iter().position(|p| *p == preset) {
+            counts[i] += 1;
+        }
+    }
+    let most = *counts.iter().max()?;
+    (most > 0).then(|| ORDER[counts.iter().position(|&c| c == most).unwrap_or(0)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_genre_majority_chooses_and_a_tie_asks_more() {
+        assert_eq!(preset_for_genres([]), None);
+        assert_eq!(
+            preset_for_genres(["sport", "sport", "landscape"]),
+            Some("sports")
+        );
+        // A burst of a speech, half read as a portrait: the moment still counts.
+        assert_eq!(
+            preset_for_genres(["portrait", "event", "concert", "portrait"]),
+            Some("event")
+        );
+        assert_eq!(preset_for_genres(["food", "other"]), Some("default"));
+        // A guess of "street" does not switch focus off.
+        assert_eq!(preset_for_genres(["street"]), Some("event"));
+        // Every preset a genre can call for is one the API accepts.
+        for genre in [
+            "portrait",
+            "event",
+            "concert",
+            "sport",
+            "wildlife",
+            "street",
+            "landscape",
+            "other",
+        ] {
+            assert!(available_presets().contains(&preset_for_genre(genre)));
+        }
+    }
 }

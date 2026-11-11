@@ -86,7 +86,7 @@ cargo run -p lrg-server -- --db-path /path/to/lrgenius.db --debug
 
 **The ML golden tests skip when their model files are absent, and a skip is
 reported as a pass.** Set `LRG_REQUIRE_GOLDENS` to the families whose assets
-are present (`face`, `auraface`, `facestate`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
+are present (`face`, `auraface`, `facestate`, `subject`, `siglip`, `aesthetic`, `bioclip`, or `all`) to turn that skip into a
 failure — this is what stops CI being green on numerical checks that never ran.
 PR CI provisions the face pair (89 MB) and requires it; the nightly
 `golden-tests-full.yml` fetches every family. If you add a golden test, gate it

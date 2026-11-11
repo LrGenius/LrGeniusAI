@@ -217,6 +217,7 @@ local ENDPOINTS = {
 	FIND_SIMILAR = "/v1/search/similar",
 	GROUP_SIMILAR = "/v1/cull/groups",
 	CULL = "/v1/cull/grade",
+	CULL_TASTE = "/v1/cull/taste",
 
 	-- Faces and persons
 	FACES_DETECT = "/v1/faces/detect",
@@ -2024,9 +2025,11 @@ end
 -- @param options table phash_threshold, clip_threshold, time_delta_seconds,
 --   culling_preset, use_iqa (defaults true; scores the aesthetic term with
 --   CLIP-IQA over stored embeddings), semantic_weight (overrides the preset's
---   weight for the genre axis; 0 disables it), and include_stored_metadata
+--   weight for the genre axis; 0 disables it), include_stored_metadata
 --   (echoes each photo's stored cull_* inputs under photos[].stored_metadata,
---   for building evaluation fixtures).
+--   for building evaluation fixtures) and include_embeddings (echoes each
+--   photo's embedding, packed, as photos[].embedding_q8, so a fixture groups
+--   the way the backend did when it is replayed).
 -- @return table|nil result, string|nil error
 ---
 function SearchIndexAPI.cullPhotos(photoIds, options)
@@ -2049,6 +2052,28 @@ function SearchIndexAPI.cullPhotos(photoIds, options)
 	end
 	if options.include_stored_metadata then
 		body.include_stored_metadata = true
+	end
+	if options.include_embeddings then
+		body.include_embeddings = true
+	end
+	-- Judge each burst by its key people's faces (named in People, or in many
+	-- of the photos). Needs the faces task in the prep pass.
+	if options.key_people then
+		body.key_people = true
+	end
+	-- Reorder each burst by the photographer's learned culling style.
+	if options.use_taste then
+		body.use_taste = true
+	end
+	-- Choose across the whole selection instead of a pick per burst: a number
+	-- of photos or a share of them, and highlights among them.
+	if type(options.target_count) == "number" then
+		body.target_count = options.target_count
+	elseif type(options.target_fraction) == "number" then
+		body.target_fraction = options.target_fraction
+	end
+	if type(options.highlights_count) == "number" and options.highlights_count > 0 then
+		body.highlights_count = options.highlights_count
 	end
 	-- Overrides the preset's own weight for the genre semantic axis (peak
 	-- action, expression, candid moment). Exposed so the signal can be swept
@@ -2096,6 +2121,44 @@ function SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, tasks)
 		return nil, err
 	end
 	return (result and result.photo_ids) or {}, nil
+end
+
+---
+-- Learns the photographer's culling style from their own decisions.
+-- @param labels table Array of { photo_id, flag (-1/0/1), rating (0-5), own (boolean) }.
+-- @param preset string|nil Culling preset to rank them with ("auto" when nil).
+-- @return table|nil The model summary ({ pairs, groups, agreement, default_agreement, used }),
+--         or nil plus the error, which says what to do.
+function SearchIndexAPI.learnCullingStyle(labels, preset)
+	local result, err =
+		_request("POST", SearchIndexAPI.url("CULL_TASTE"), { labels = labels, culling_preset = preset or "auto" }, 1800)
+	if err then
+		log:error("learnCullingStyle failed: " .. tostring(err))
+		return nil, err
+	end
+	return result and result.model or nil, nil
+end
+
+---
+-- The learned culling style, if any.
+-- @return table|nil The model summary or nil when none was learned, plus an error.
+function SearchIndexAPI.cullingStyleStatus()
+	local result, err = _request("GET", SearchIndexAPI.url("CULL_TASTE"), nil, 30)
+	if err then
+		return nil, err
+	end
+	return result and result.model or nil, nil
+end
+
+---
+-- Forgets the learned culling style.
+-- @return boolean|nil Whether one was deleted, plus an error.
+function SearchIndexAPI.forgetCullingStyle()
+	local result, err = _request("DELETE", SearchIndexAPI.url("CULL_TASTE"), nil, 30)
+	if err then
+		return nil, err
+	end
+	return result and result.deleted == true, nil
 end
 
 ---

@@ -8,6 +8,7 @@ pub mod edit_budget;
 mod fake_release;
 pub mod hf_repo;
 pub mod keep_awake;
+pub mod key_people;
 pub mod llm_engine;
 pub mod llm_models;
 pub mod middleware;
@@ -41,6 +42,7 @@ pub const API_PREFIX: &str = "/v1";
 pub fn build_router(state: Arc<AppState>) -> Router {
     let v1 = Router::new()
         .merge(routes::server::router())
+        .merge(routes::cull_taste::router())
         .merge(routes::index::router())
         .merge(routes::db::router())
         .merge(routes::clip::router())

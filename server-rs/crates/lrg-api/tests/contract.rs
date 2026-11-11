@@ -63,6 +63,9 @@ fn models_absent() -> ModelAssetPaths {
             mesh_onnx: dir.join("face_mesh_v2.onnx"),
             blendshapes_onnx: dir.join("face_blendshapes_v2.onnx"),
         },
+        subject: lrg_ml::subject::SubjectPaths {
+            onnx: dir.join("subject_rfdetr_seg_nano.onnx"),
+        },
         bioclip: lrg_ml::bioclip::BioclipModelPaths {
             image_onnx: dir.join("bioclip2_image.onnx"),
             taxa_bin: dir.join("bioclip2_taxa.bin"),
@@ -369,7 +372,17 @@ async fn model_assets_report_every_family_the_plugin_reads() {
         .iter()
         .map(|family| family["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["clip", "aesthetic", "bioclip", "face", "face_state"]);
+    assert_eq!(
+        ids,
+        [
+            "clip",
+            "aesthetic",
+            "bioclip",
+            "face",
+            "face_state",
+            "subject"
+        ]
+    );
     for family in families {
         assert_eq!(family["ready"], serde_json::json!(false), "{family}");
         assert_eq!(family["downloadable"], serde_json::json!(true), "{family}");
@@ -1157,6 +1170,16 @@ async fn check_unprocessed_re_queues_only_a_different_embedding_model() {
 /// Seeds `count` photos one second apart with identical pHashes, i.e. an
 /// obvious burst that grouping must collapse into a single group.
 async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
+    seed_burst_measured(state, count, with_embedding, true).await;
+}
+
+/// [`seed_burst`], with or without the subject pass behind it.
+async fn seed_burst_measured(
+    state: &Arc<AppState>,
+    count: usize,
+    with_embedding: bool,
+    subject_measured: bool,
+) {
     let store = state.store().unwrap();
     let records: Vec<lrg_store::StoreRecord> = (0..count)
         .map(|i| {
@@ -1185,6 +1208,18 @@ async fn seed_burst(state: &Arc<AppState>, count: usize, with_embedding: bool) {
                 "aesthetic_model".into(),
                 serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
             );
+            // Through the subject pass, which found nothing: "no subject" is
+            // an answer too, so a cull has nothing to say about it either.
+            if subject_measured {
+                meta.insert(
+                    lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+                    serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+                );
+                meta.insert(
+                    "cull_subject_model".into(),
+                    serde_json::json!(lrg_ml::subject::MODEL_ID),
+                );
+            }
             lrg_store::StoreRecord {
                 id: format!("burst{i}"),
                 vector: with_embedding.then(|| vec![0.5f32; 1152]),
@@ -1649,6 +1684,496 @@ async fn a_second_database_is_filled_with_prompts_from_memory() {
     );
 }
 
+/// Photos prepared before the subject pass are ranked on frame-wide sharpness,
+/// and the response says so once, with the fix for a model that is not on
+/// disk.
+#[tokio::test]
+async fn cull_says_once_when_the_subject_was_not_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    seed_burst_measured(&state, 3, true, false).await;
+    let json = cull_request(
+        app,
+        serde_json::json!({"photo_ids": ["burst0", "burst1", "burst2"], "db_path": db}),
+    )
+    .await;
+    let warnings = json["warnings"].as_array().expect("warnings");
+    let subject: Vec<&str> = warnings
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|w| w.contains("subject"))
+        .collect();
+    assert_eq!(subject.len(), 1, "{json}");
+    assert!(subject[0].contains("3 photo(s)"), "{}", subject[0]);
+    assert!(subject[0].contains("Download AI models"), "{}", subject[0]);
+}
+
+/// `culling_preset: "auto"`: each burst is ranked with the preset its photos'
+/// genre calls for, the response says which, and a photo without a genre is
+/// counted in a warning with the fix.
+#[tokio::test]
+async fn auto_ranks_each_burst_with_the_preset_its_genre_calls_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    // Two bursts an hour apart: a match, and a coast where one frame has no
+    // genre yet.
+    let photo = |id: &str, t: i64, hash: &str, sharpness: f64, genre: Option<&str>| {
+        let mut meta = serde_json::Map::new();
+        meta.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        meta.insert("capture_time".into(), serde_json::json!(t));
+        meta.insert("cull_phash".into(), serde_json::json!(hash));
+        meta.insert("cull_sharpness".into(), serde_json::json!(sharpness));
+        meta.insert("cull_exposure".into(), serde_json::json!(0.8));
+        meta.insert("cull_noise".into(), serde_json::json!(0.1));
+        meta.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        if let Some(g) = genre {
+            meta.insert(lrg_store::meta::GENRE_FIELD.into(), serde_json::json!(g));
+        }
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: meta,
+        }
+    };
+    let t0 = 1_700_000_000;
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                photo("match0", t0, "ffffffffffffffff", 0.9, Some("sport")),
+                photo("match1", t0 + 1, "ffffffffffffffff", 0.8, Some("sport")),
+                photo("match2", t0 + 2, "ffffffffffffffff", 0.7, Some("portrait")),
+                photo(
+                    "coast0",
+                    t0 + 3600,
+                    "0000000000000000",
+                    0.9,
+                    Some("landscape"),
+                ),
+                photo("coast1", t0 + 3601, "0000000000000000", 0.8, None),
+            ],
+        )
+        .await
+        .unwrap();
+    let json = cull_request(
+        app,
+        serde_json::json!({
+            "photo_ids": ["match0", "match1", "match2", "coast0", "coast1"],
+            "culling_preset": "auto",
+            "use_iqa": false,
+            "db_path": db,
+        }),
+    )
+    .await;
+    let groups = json["groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 2, "{json}");
+    let preset_of = |first: &str| {
+        groups
+            .iter()
+            .find(|g| g["photo_ids"][0] == first)
+            .map(|g| g["preset"].clone())
+            .unwrap()
+    };
+    assert_eq!(preset_of("match0"), "sports");
+    assert_eq!(preset_of("coast0"), "default");
+    assert_eq!(json["summary"]["culling_preset"], "auto");
+    assert_eq!(json["summary"]["presets"]["sports"], 1);
+    assert_eq!(json["summary"]["presets"]["default"], 1);
+    let genre: Vec<&str> = json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|w| w.contains("genre"))
+        .collect();
+    assert_eq!(genre.len(), 1, "{json}");
+    assert!(genre[0].starts_with("1 photo(s)"), "{}", genre[0]);
+    assert!(genre[0].contains("Prepare now"), "{}", genre[0]);
+}
+
+/// `key_people`: the people named in People and those in many of the photos
+/// are the faces a frame is judged by. A guest stands larger in front; the bride
+/// behind her blinks in the sharpest frame. Indexing summed the faces up by
+/// size, so only the key people see the blink — and the explanation names her.
+#[tokio::test]
+async fn key_people_judge_the_frame_and_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let store = state.store().unwrap();
+
+    let t0 = 1_700_000_000;
+    let photo = |i: i64, sharpness: f64| {
+        let mut m = serde_json::Map::new();
+        m.insert("filename".into(), serde_json::json!(format!("w{i}.jpg")));
+        m.insert("capture_time".into(), serde_json::json!(t0 + i));
+        m.insert("cull_phash".into(), serde_json::json!("ffffffffffffffff"));
+        m.insert("cull_sharpness".into(), serde_json::json!(sharpness));
+        m.insert("cull_exposure".into(), serde_json::json!(0.8));
+        m.insert("cull_noise".into(), serde_json::json!(0.1));
+        // What indexing stored: the guest's open eyes speak for every frame.
+        m.insert("cull_faces_detected".into(), serde_json::json!(2));
+        m.insert("cull_face_count".into(), serde_json::json!(1));
+        m.insert("cull_faces_present".into(), serde_json::json!(true));
+        m.insert("cull_face_score".into(), serde_json::json!(0.6));
+        m.insert("cull_eye_openness".into(), serde_json::json!(0.9));
+        m.insert("cull_blink_penalty".into(), serde_json::json!(0.1));
+        m.insert("cull_eye_closed".into(), serde_json::json!(0.05));
+        m.insert("cull_eye_state".into(), serde_json::json!("open"));
+        m.insert(
+            lrg_analysis::grouping::FACE_STATE_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::FACE_STATE_VERSION),
+        );
+        m.insert(
+            lrg_analysis::grouping::FOCUS_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::FOCUS_VERSION),
+        );
+        m.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        lrg_store::StoreRecord {
+            id: format!("w{i}"),
+            vector: None,
+            metadata: m,
+        }
+    };
+    store
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[photo(0, 0.9), photo(1, 0.8), photo(2, 0.7)],
+        )
+        .await
+        .unwrap();
+    let face = |photo: i64, n: usize, person: &str, area: f64, closed: f64| {
+        let state = if closed >= 0.6 { "closed" } else { "open" };
+        lrg_store::StoreRecord {
+            id: format!("w{photo}_{n}"),
+            vector: Some(vec![0.0; 512]),
+            metadata: serde_json::json!({
+                "photo_id": format!("w{photo}"),
+                "person_id": person,
+                "face_area_ratio": area,
+                "face_sharpness": 0.6,
+                "face_det_score": 0.95,
+                "face_center_proximity": 0.8,
+                "face_eye_openness": 1.0 - closed,
+                "face_blink_penalty": closed,
+                "face_occlusion": 0.1,
+                "face_eye_state": state,
+                "face_eye_closed": closed,
+                "face_smile": 0.3,
+                "face_eye_squint": 0.1,
+                "face_gaze_off_lens": 5.0,
+                "face_mouth_open": 0.1,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }
+    };
+    let mut faces = Vec::new();
+    for i in 0..3 {
+        faces.push(face(i, 0, "person_2", 0.06, 0.05));
+        faces.push(face(
+            i,
+            1,
+            "person_1",
+            0.01,
+            if i == 0 { 0.9 } else { 0.05 },
+        ));
+    }
+    store.upsert(lrg_store::FACE_TABLE, &faces).await.unwrap();
+    let (code, _) = put_json(
+        &app,
+        &format!("/v1/faces/persons/person_1?db_path={db}"),
+        serde_json::json!({"name": "Anna"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    let ask = |key_people: bool| {
+        serde_json::json!({
+            "photo_ids": ["w0", "w1", "w2"],
+            "culling_preset": "event",
+            "use_iqa": false,
+            "key_people": key_people,
+            "db_path": db,
+        })
+    };
+    // By size, the sharpest frame wins: nobody seems to blink.
+    let by_size = cull_request(app.clone(), ask(false)).await;
+    assert_eq!(by_size["groups"][0]["winner_photo_id"], "w0", "{by_size}");
+
+    let json = cull_request(app, ask(true)).await;
+    let group = &json["groups"][0];
+    assert_ne!(group["winner_photo_id"], "w0", "{json}");
+    let w0 = group["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["photo_id"] == "w0")
+        .unwrap();
+    assert!(
+        w0["explanation"]
+            .as_str()
+            .unwrap()
+            .contains("Anna: eyes closed"),
+        "{w0}"
+    );
+    // Both are key people: Anna by name, the guest by being in every frame.
+    assert_eq!(
+        json["summary"]["key_people"]["named"],
+        serde_json::json!(["Anna"])
+    );
+    assert_eq!(json["summary"]["key_people"]["unnamed"], 1);
+    assert_eq!(json["summary"]["key_people"]["groups"], 1);
+}
+
+/// A target: one photo from two scenes an hour apart is the better scene's
+/// pick, said per photo, per group and in the summary; asking for more than
+/// is worth keeping says so; and both kinds of target at once are refused.
+#[tokio::test]
+async fn a_target_chooses_across_scenes_and_says_what_it_chose() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let photo = |id: &str, t: i64, hash: &str, sharpness: f64, aesthetic: f64| {
+        let mut meta = serde_json::Map::new();
+        meta.insert("filename".into(), serde_json::json!(format!("{id}.jpg")));
+        meta.insert("capture_time".into(), serde_json::json!(t));
+        meta.insert("cull_phash".into(), serde_json::json!(hash));
+        meta.insert("cull_sharpness".into(), serde_json::json!(sharpness));
+        meta.insert("cull_exposure".into(), serde_json::json!(0.8));
+        meta.insert("cull_noise".into(), serde_json::json!(0.1));
+        meta.insert("aesthetic_score".into(), serde_json::json!(aesthetic));
+        meta.insert(
+            "aesthetic_model".into(),
+            serde_json::json!(lrg_ml::aesthetic::MODEL_ID),
+        );
+        meta.insert(
+            lrg_analysis::grouping::SUBJECT_VERSION_KEY.into(),
+            serde_json::json!(lrg_analysis::grouping::SUBJECT_VERSION),
+        );
+        lrg_store::StoreRecord {
+            id: id.into(),
+            vector: None,
+            metadata: meta,
+        }
+    };
+    let t0 = 1_700_000_000;
+    state
+        .store()
+        .unwrap()
+        .upsert(
+            lrg_store::IMAGE_TABLE,
+            &[
+                photo("dinner0", t0, "ffffffffffffffff", 0.9, 5.0),
+                photo("dinner1", t0 + 1, "ffffffffffffffff", 0.8, 4.8),
+                photo("dance0", t0 + 3600, "0000000000000000", 0.9, 7.5),
+                photo("dance1", t0 + 3601, "0000000000000000", 0.8, 7.0),
+            ],
+        )
+        .await
+        .unwrap();
+    let ids = ["dinner0", "dinner1", "dance0", "dance1"];
+    let json = cull_request(
+        app.clone(),
+        serde_json::json!({
+            "photo_ids": ids, "use_iqa": false, "db_path": db,
+            "target_count": 1, "highlights_count": 1,
+        }),
+    )
+    .await;
+    let selection = &json["summary"]["selection"];
+    assert_eq!(selection["wanted"], 1, "{json}");
+    assert_eq!(selection["selected_count"], 1);
+    assert_eq!(selection["scene_count"], 2);
+    assert_eq!(
+        selection["highlight_photo_ids"],
+        serde_json::json!(["dance0"])
+    );
+    let dance = json["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["photo_ids"][0] == "dance0")
+        .unwrap();
+    assert_eq!(dance["selected_photo_ids"], serde_json::json!(["dance0"]));
+    assert_eq!(dance["scene_id"], "scene_0002");
+    let dance0 = dance["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["photo_id"] == "dance0")
+        .unwrap();
+    assert_eq!(dance0["selected"], true);
+    assert_eq!(dance0["highlight"], true);
+
+    // All four, but nothing is a reject here: four are chosen, no warning.
+    let all = cull_request(
+        app.clone(),
+        serde_json::json!({
+            "photo_ids": ids, "use_iqa": false, "db_path": db, "target_fraction": 1.0,
+        }),
+    )
+    .await;
+    assert_eq!(all["summary"]["selection"]["selected_count"], 4, "{all}");
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/cull/grade")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "photo_ids": ids, "db_path": db,
+                        "target_count": 2, "target_fraction": 0.5,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// `/v1/cull/taste`: a photographer who always flags the broadest smile where
+/// the default ranking picks the sharpest frame. Learned, it agrees with them
+/// more often than the default, is used by a cull asking for it and moves the
+/// pick; forgotten, the cull says so. Too few decisions are refused with the
+/// reason.
+#[tokio::test]
+async fn a_culling_style_is_learned_used_and_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lrgenius.db").to_str().unwrap().to_string();
+    let (app, state) = fresh_app();
+    state.ensure_db_path(&db).await.unwrap();
+    let mut rows = Vec::new();
+    let mut labels = Vec::new();
+    for b in 0..15i64 {
+        for i in 0..4i64 {
+            let id = format!("b{b}_{i}");
+            let sharp = 0.9 - 0.1 * i as f64;
+            let smile = 0.2 + 0.2 * i as f64;
+            let meta = serde_json::json!({
+                "filename": format!("{id}.jpg"),
+                "capture_time": 1_700_000_000 + b * 3600 + i,
+                "cull_phash": format!("{:016x}", 0xffff_0000_ffff_0000u64 ^ b as u64),
+                "cull_sharpness": sharp,
+                "cull_sharpness_peak": sharp,
+                "cull_exposure": 0.7,
+                "cull_noise": 0.1,
+                "cull_face_count": 1,
+                "cull_faces_present": true,
+                "cull_face_score": 0.6,
+                "cull_face_sharpness": 0.6,
+                "cull_eye_openness": 0.9,
+                "cull_blink_penalty": 0.1,
+                "cull_smile": smile,
+                "cull_eye_closed": 0.05,
+                (lrg_analysis::grouping::FACE_STATE_VERSION_KEY): lrg_analysis::grouping::FACE_STATE_VERSION,
+                (lrg_analysis::grouping::SUBJECT_VERSION_KEY): lrg_analysis::grouping::SUBJECT_VERSION,
+            });
+            rows.push(lrg_store::StoreRecord {
+                id: id.clone(),
+                vector: None,
+                metadata: meta.as_object().unwrap().clone(),
+            });
+            labels.push(serde_json::json!({
+                "photo_id": id, "flag": i64::from(i == 3), "rating": i, "own": true,
+            }));
+        }
+    }
+    state
+        .store()
+        .unwrap()
+        .upsert(lrg_store::IMAGE_TABLE, &rows)
+        .await
+        .unwrap();
+
+    let (code, too_few) = post_json(
+        &app,
+        "/v1/cull/taste",
+        serde_json::json!({"labels": &labels[..8], "culling_preset": "default", "db_path": db}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY, "{too_few}");
+    assert_eq!(too_few["error_code"], "too_few_decisions");
+
+    let (code, learned) = post_json(
+        &app,
+        "/v1/cull/taste",
+        serde_json::json!({"labels": labels, "culling_preset": "default", "db_path": db}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{learned}");
+    let model = &learned["model"];
+    assert_eq!(model["pairs"], 90);
+    assert_eq!(model["used"], true, "{learned}");
+    assert!(model["agreement"].as_f64() > model["default_agreement"].as_f64());
+    assert_eq!(
+        get_json(&app, &format!("/v1/cull/taste?db_path={db}")).await["model"]["pairs"],
+        90
+    );
+
+    let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+    let grade = serde_json::json!({
+        "photo_ids": ids, "culling_preset": "default", "use_iqa": false,
+        "use_taste": true, "db_path": db,
+    });
+    let json = cull_request(app.clone(), grade.clone()).await;
+    assert_eq!(
+        json["summary"]["taste_changed_picks"], 15,
+        "{}",
+        json["summary"]
+    );
+    let first = json["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| {
+            g["photo_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("b0_0"))
+        })
+        .unwrap();
+    assert_eq!(first["winner_photo_id"], "b0_3");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/v1/cull/taste?db_path={db}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(response).await["deleted"], true);
+    let json = cull_request(app, grade).await;
+    assert!(json["summary"]["taste_changed_picks"].is_null());
+    assert!(
+        json["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap_or("")
+            .contains("No culling style has been learned")),
+        "{}",
+        json["warnings"]
+    );
+}
+
 /// The default preset asks the prompts nothing, so a cull on it neither needs
 /// nor writes any — and has no text tower to miss.
 #[tokio::test]
@@ -1896,11 +2421,16 @@ async fn check_unprocessed_understands_the_cull_task() {
     let store = state.store().unwrap();
 
     // A prepared row carries a capture time: grouping runs on it, and a row
-    // without one is reported again (see `undated` below).
+    // without one is reported again (see `undated` below). It also carries the
+    // metrics version it was measured with (see `measured_before_fine_noise`).
     let row = |phash: Option<&str>, faces_present: Option<bool>| {
         let mut m = serde_json::Map::new();
         if let Some(p) = phash {
             m.insert("cull_phash".into(), serde_json::json!(p));
+            m.insert(
+                "cull_metrics_version".into(),
+                serde_json::json!(lrg_imaging::metrics::METRICS_VERSION),
+            );
         }
         if let Some(f) = faces_present {
             m.insert("cull_faces_present".into(), serde_json::json!(f));
@@ -1961,6 +2491,17 @@ async fn check_unprocessed_understands_the_cull_task() {
                         m
                     },
                 },
+                // Prepared before grain was measured at full working size:
+                // measured once more, then never again.
+                lrg_store::StoreRecord {
+                    id: "measured_before_fine_noise".into(),
+                    vector: None,
+                    metadata: {
+                        let mut m = row(Some("abcd0123abcd0128"), Some(false));
+                        m.remove("cull_metrics_version");
+                        m
+                    },
+                },
             ],
         )
         .await
@@ -1975,7 +2516,7 @@ async fn check_unprocessed_understands_the_cull_task() {
                         "photo_ids": [
                             "done_faceless", "done_with_faces",
                             "needs_face_pass", "needs_everything", "unknown",
-                            "undated", "undated_for_good",
+                            "undated", "undated_for_good", "measured_before_fine_noise",
                         ],
                         "tasks": "cull",
                         "regenerate_metadata": "false",
@@ -1992,7 +2533,13 @@ async fn check_unprocessed_understands_the_cull_task() {
     let json = body_json(response).await;
     assert_eq!(
         json["photo_ids"],
-        serde_json::json!(["needs_face_pass", "needs_everything", "unknown", "undated"]),
+        serde_json::json!([
+            "needs_face_pass",
+            "needs_everything",
+            "unknown",
+            "undated",
+            "measured_before_fine_noise"
+        ]),
         "a faceless photo that has been culled must not be reported forever, and \
          neither is one whose capture time is known to be unavailable"
     );
@@ -4074,6 +4621,10 @@ async fn check_unprocessed_remeasures_faces_prepared_before_eye_focus() {
         m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
         m.insert("cull_face_count".into(), serde_json::json!(faces));
         m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        m.insert(
+            "cull_metrics_version".into(),
+            serde_json::json!(lrg_imaging::metrics::METRICS_VERSION),
+        );
         if version {
             m.insert("cull_focus_version".into(), serde_json::json!(1));
         }
@@ -4265,6 +4816,10 @@ async fn check_unprocessed_asks_for_face_state_only_with_the_model() {
         m.insert("cull_faces_present".into(), serde_json::json!(faces > 0));
         m.insert("cull_face_count".into(), serde_json::json!(faces));
         m.insert("capture_time".into(), serde_json::json!(1_700_000_000.0));
+        m.insert(
+            "cull_metrics_version".into(),
+            serde_json::json!(lrg_imaging::metrics::METRICS_VERSION),
+        );
         m.insert("cull_focus_version".into(), serde_json::json!(1));
         if let Some(version) = state {
             m.insert("cull_face_state_version".into(), serde_json::json!(version));

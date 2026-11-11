@@ -18,21 +18,147 @@ describe("Util.cullPrepTasks", function()
 	it("adds the embedding for every preset that judges the moment", function()
 		-- Without an embedding the backend has nothing to judge emotion or
 		-- action from, and ranks sports and events on sharpness alone.
-		for _, preset in ipairs({ "sports", "event", "portrait", "street" }) do
+		-- `auto` too: the genre that chooses each burst's preset is read from
+		-- the same embedding.
+		for _, preset in ipairs({ "auto", "sports", "event", "portrait", "street", "wildlife" }) do
 			assert.is_true(Util.cullPresetJudgesMoment(preset), preset)
 			assert.are.same({ "cull", "embeddings" }, Util.cullPrepTasks(preset), preset)
 		end
 	end)
 
+	it("adds face recognition for key people", function()
+		assert.are.same({ "cull", "faces" }, Util.cullPrepTasks("default", true))
+		assert.are.same({ "cull", "embeddings", "faces" }, Util.cullPrepTasks("auto", true))
+		assert.are.same({ "cull", "embeddings" }, Util.cullPrepTasks("auto", false))
+	end)
+
 	it("asks for the image model as well as the face model", function()
 		assert.are.same(
-			{ "clip", "aesthetic", "face", "face_state" },
+			{ "clip", "aesthetic", "face", "face_state", "subject" },
 			Util.requiredModelFamilies(Util.cullPrepTasks("sports"))
 		)
 		assert.are.same(
-			{ "aesthetic", "face", "face_state" },
+			{ "aesthetic", "face", "face_state", "subject" },
 			Util.requiredModelFamilies(Util.cullPrepTasks("default"))
 		)
+	end)
+end)
+
+describe("Util.cullPresetSummary", function()
+	it("names the one preset of a run", function()
+		assert.are.equal("Sports", Util.cullPresetSummary({ culling_preset = "sports" }, "default"))
+		assert.are.equal("Portrait", Util.cullPresetSummary(nil, "portrait"))
+		assert.are.equal("Default", Util.cullPresetSummary({}, nil))
+	end)
+
+	it("says what the genre chose under auto, most groups first", function()
+		local summary = {
+			culling_preset = "auto",
+			presets = { default = 4, sports = 12, event = 1 },
+		}
+		assert.are.equal(
+			"Auto by genre (Sports 12 groups, Default 4 groups, Event 1 group)",
+			Util.cullPresetSummary(summary, "auto")
+		)
+	end)
+
+	it("falls back to the preset name when an older backend sends no counts", function()
+		assert.are.equal("Auto by genre", Util.cullPresetSummary({ culling_preset = "auto", presets = {} }, "auto"))
+	end)
+end)
+
+describe("Util.cullKeyPeopleLine", function()
+	it("names the key people and counts the rest", function()
+		assert.are.equal(
+			"Key people: Anna, Ben and 2 people not named in People. 7 groups were judged by their faces.",
+			Util.cullKeyPeopleLine({ key_people = { named = { "Anna", "Ben" }, unnamed = 2, groups = 7 } })
+		)
+		assert.are.equal(
+			"Key people: Anna. 1 group was judged by their faces.",
+			Util.cullKeyPeopleLine({ key_people = { named = { "Anna" }, unnamed = 0, groups = 1 } })
+		)
+	end)
+
+	it("says nothing when key people were not asked for or none were found", function()
+		assert.is_nil(Util.cullKeyPeopleLine({}))
+		assert.is_nil(Util.cullKeyPeopleLine(nil))
+		assert.is_nil(Util.cullKeyPeopleLine({ key_people = { named = {}, unnamed = 0, groups = 0 } }))
+	end)
+end)
+
+describe("Util.cullTargetFields", function()
+	it("sends nothing for the pick of every burst", function()
+		assert.are.same({}, Util.cullTargetFields("burst", 20, 0))
+		assert.are.same({}, Util.cullTargetFields(nil, nil, nil))
+	end)
+
+	it("sends a count, or a share of at most all, and highlights above 0", function()
+		assert.are.same({ target_count = 300 }, Util.cullTargetFields("count", 300, 0))
+		assert.are.same({ target_fraction = 0.25, highlights_count = 20 }, Util.cullTargetFields("percent", 25, 20))
+		assert.are.same({ target_fraction = 1 }, Util.cullTargetFields("percent", 140, nil))
+	end)
+end)
+
+describe("Util.cullSelectionLine", function()
+	it("says how many were kept, across how many scenes, and the highlights", function()
+		assert.are.equal(
+			"Kept 300 photos across 41 scenes; they are the picks. 3 are in the Highlights collection.",
+			Util.cullSelectionLine({
+				selection = { selected_count = 300, scene_count = 41, highlight_photo_ids = { "a", "b", "c" } },
+			})
+		)
+		assert.is_nil(Util.cullSelectionLine({}))
+	end)
+end)
+
+describe("Util.cullDecisionOf under a target", function()
+	it("makes the chosen photos the picks", function()
+		assert.are.equal("pick", Util.cullDecisionOf({ winner = false, selected = true }))
+		assert.are.equal("pick", Util.cullDecisionOf({ reject_candidate = true, selected = true }))
+		assert.are.equal("alternate", Util.cullDecisionOf({ winner = true, selected = false }))
+		assert.are.equal("reject_candidate", Util.cullDecisionOf({ reject_candidate = true, selected = false }))
+	end)
+end)
+
+describe("Util.cullTasteLabels", function()
+	it("counts as the photographer's only what differs from what the cull wrote", function()
+		local labels = Util.cullTasteLabels({
+			-- Never culled, flagged by hand.
+			a = { pickStatus = 1, rating = 0, written = {} },
+			-- The cull's pick, left alone.
+			b = { pickStatus = 1, rating = 0, written = { pickStatus = 1 } },
+			-- The cull's pick, taken away.
+			c = { pickStatus = 0, rating = 0, written = { pickStatus = 1 } },
+			-- The cull's pick, given three stars.
+			d = { pickStatus = 1, rating = 3, written = { pickStatus = 1 } },
+			-- Nothing at all.
+			e = { pickStatus = 0, rating = 0, written = {} },
+		})
+		local own = {}
+		for _, label in ipairs(labels) do
+			own[label.photo_id] = label.own
+		end
+		assert.are.same({ a = true, b = false, c = true, d = true, e = false }, own)
+		assert.are.equal("a", labels[1].photo_id)
+	end)
+end)
+
+describe("Util.cullingStyleSummary", function()
+	it("says how well it agrees and whether culling uses it", function()
+		local used = Util.cullingStyleSummary({
+			pairs = 412,
+			groups = 87,
+			agreement = 0.714,
+			default_agreement = 0.642,
+			used = true,
+		})
+		assert.truthy(used:find("412 decisions in 87 bursts", 1, true))
+		assert.truthy(used:find("71%", 1, true))
+		assert.truthy(used:find("64%", 1, true))
+		assert.truthy(used:find("Use my culling style", 1, true))
+		local unused = Util.cullingStyleSummary({ pairs = 40, groups = 9, agreement = 0.5, default_agreement = 0.6 })
+		assert.truthy(unused:find("will not use it", 1, true))
+		assert.are.equal("No culling style has been learned yet.", Util.cullingStyleSummary(nil))
 	end)
 end)
 

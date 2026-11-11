@@ -4363,6 +4363,7 @@ dependencies = [
 name = "lrg-analysis"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "lrg-imaging",
  "rayon",
  "serde",
@@ -4468,6 +4469,7 @@ dependencies = [
 name = "lrg-llama"
 version = "0.1.0"
 dependencies = [
+ "image",
  "llama-cpp-2",
  "llama-cpp-sys-2",
  "llguidance",

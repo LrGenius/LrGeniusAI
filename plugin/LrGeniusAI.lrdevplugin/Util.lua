@@ -2668,10 +2668,12 @@ function Util.requiredModelFamilies(tasks)
 			needed.face = true
 			needed.face_state = true
 		elseif task == "cull" then
-			-- The fast cull ingest also scores each photo's aesthetic.
+			-- The fast cull ingest also scores each photo's aesthetic, and
+			-- finds its subject to measure focus on it.
 			needed.face = true
 			needed.face_state = true
 			needed.aesthetic = true
+			needed.subject = true
 		elseif task == "species" then
 			needed.bioclip = true
 		end
@@ -2679,7 +2681,7 @@ function Util.requiredModelFamilies(tasks)
 	-- Fixed order rather than pairs(): the result reaches a dialog, and a list
 	-- that reshuffles between runs reads like a different problem each time.
 	local result = {}
-	for _, id in ipairs({ "clip", "aesthetic", "face", "face_state", "bioclip" }) do
+	for _, id in ipairs({ "clip", "aesthetic", "face", "face_state", "subject", "bioclip" }) do
 		if needed[id] then
 			table.insert(result, id)
 		end
@@ -2804,13 +2806,68 @@ end
 -- Mirrors the backend presets, where every one but `default` gives the moment
 -- weight. `default` spans every genre and has no moment question that is right
 -- for all of them. The moment is read from the SigLIP2 embedding, which is
--- why this decides what the cull prep pass computes.
+-- why this decides what the cull prep pass computes. `auto` counts too: it
+-- chooses each burst's preset from the genre, which is read from the same
+-- embedding.
 --
 -- @param preset string|nil Culling preset name.
 -- @return boolean
 --
 function Util.cullPresetJudgesMoment(preset)
 	return type(preset) == "string" and preset ~= "" and preset ~= "default"
+end
+
+local CULL_PRESET_NAMES = {
+	auto = "Auto by genre",
+	default = "Default",
+	event = "Event",
+	portrait = "Portrait",
+	sports = "Sports",
+	street = "Street",
+	wildlife = "Wildlife",
+}
+
+---
+-- The preset line of the cull's completion message.
+--
+-- Under `auto` the backend says how many groups each preset ranked
+-- (`summary.presets`), which is what the genre chose: most groups first.
+-- Otherwise the one preset of the run.
+--
+-- @param summary table|nil The `/v1/cull/grade` summary.
+-- @param requested string|nil The preset the dialog asked for.
+-- @return string
+--
+function Util.cullPresetSummary(summary, requested)
+	summary = type(summary) == "table" and summary or {}
+	local chosen = {}
+	if type(summary.presets) == "table" then
+		for name, count in pairs(summary.presets) do
+			if type(count) == "number" and count > 0 then
+				chosen[#chosen + 1] = { name = name, count = count }
+			end
+		end
+	end
+	if #chosen == 0 then
+		local name = summary.culling_preset or requested or "default"
+		return CULL_PRESET_NAMES[name] or tostring(name)
+	end
+	table.sort(chosen, function(a, b)
+		if a.count ~= b.count then
+			return a.count > b.count
+		end
+		return a.name < b.name
+	end)
+	local parts = {}
+	for _, entry in ipairs(chosen) do
+		parts[#parts + 1] = string.format(
+			"%s %d %s",
+			CULL_PRESET_NAMES[entry.name] or entry.name,
+			entry.count,
+			entry.count == 1 and "group" or "groups"
+		)
+	end
+	return "Auto by genre (" .. table.concat(parts, ", ") .. ")"
 end
 
 ---
@@ -2821,14 +2878,115 @@ end
 -- without one the backend has nothing to judge it from and quietly ranks on
 -- sharpness alone — the very gap the moment exists to close.
 --
+-- Key people add `faces`: telling people apart needs face recognition, which
+-- the fast pass leaves out.
+--
 -- @param preset string|nil Culling preset name.
+-- @param keyPeople boolean|nil Whether the cull judges by key people.
 -- @return table Task names.
 --
-function Util.cullPrepTasks(preset)
+function Util.cullPrepTasks(preset, keyPeople)
+	local tasks = { "cull" }
 	if Util.cullPresetJudgesMoment(preset) then
-		return { "cull", "embeddings" }
+		table.insert(tasks, "embeddings")
 	end
-	return { "cull" }
+	if keyPeople then
+		table.insert(tasks, "faces")
+	end
+	return tasks
+end
+
+---
+-- The request fields for what the cull keeps: nothing for "the pick of every
+-- burst", `target_count` for a number of photos, `target_fraction` for a
+-- share (in percent in the dialog), and `highlights_count` when above 0.
+--
+-- @param mode string|nil "burst", "count" or "percent".
+-- @param amount number|nil The number, or the percentage.
+-- @param highlights number|nil How many highlights.
+-- @return table
+--
+function Util.cullTargetFields(mode, amount, highlights)
+	local fields = {}
+	amount = tonumber(amount)
+	if mode == "count" and amount and amount >= 1 then
+		fields.target_count = math.floor(amount + 0.5)
+	elseif mode == "percent" and amount and amount > 0 then
+		fields.target_fraction = math.min(amount, 100) / 100
+	end
+	highlights = tonumber(highlights)
+	if highlights and highlights >= 1 then
+		fields.highlights_count = math.floor(highlights + 0.5)
+	end
+	return fields
+end
+
+---
+-- The line of the cull's completion message about a target, or nil when the
+-- cull kept the pick of every burst.
+--
+-- @param summary table|nil The `/v1/cull/grade` summary.
+-- @return string|nil
+--
+function Util.cullSelectionLine(summary)
+	local selection = type(summary) == "table" and summary.selection or nil
+	if type(selection) ~= "table" then
+		return nil
+	end
+	local chosen = tonumber(selection.selected_count) or 0
+	local scenes = tonumber(selection.scene_count) or 0
+	local highlights = type(selection.highlight_photo_ids) == "table" and #selection.highlight_photo_ids or 0
+	local line = string.format(
+		"Kept %d %s across %d %s; they are the picks.",
+		chosen,
+		chosen == 1 and "photo" or "photos",
+		scenes,
+		scenes == 1 and "scene" or "scenes"
+	)
+	if highlights > 0 then
+		line = line
+			.. string.format(" %d %s in the Highlights collection.", highlights, highlights == 1 and "is" or "are")
+	end
+	return line
+end
+
+---
+-- The line of the cull's completion message about key people, or nil when
+-- they were not asked for.
+--
+-- @param summary table|nil The `/v1/cull/grade` summary.
+-- @return string|nil
+--
+function Util.cullKeyPeopleLine(summary)
+	local key = type(summary) == "table" and summary.key_people or nil
+	if type(key) ~= "table" then
+		return nil
+	end
+	local named = type(key.named) == "table" and key.named or {}
+	local unnamed = tonumber(key.unnamed) or 0
+	local groups = tonumber(key.groups) or 0
+	if #named == 0 and unnamed == 0 then
+		return nil
+	end
+	local who = {}
+	for _, name in ipairs(named) do
+		table.insert(who, name)
+	end
+	if unnamed > 0 then
+		table.insert(who, string.format("%d %s not named in People", unnamed, unnamed == 1 and "person" or "people"))
+	end
+	local list
+	if #who == 1 then
+		list = who[1]
+	else
+		list = table.concat(who, ", ", 1, #who - 1) .. " and " .. who[#who]
+	end
+	return string.format(
+		"Key people: %s. %d %s judged by their faces.",
+		list,
+		groups,
+		groups == 1 and "group was" or "groups were"
+	)
 end
 
 ---
@@ -3054,6 +3212,16 @@ function Util.cullDecisionOf(photoResult)
 	if type(photoResult) ~= "table" then
 		return "alternate"
 	end
+	-- Under a target the picks are the photos chosen across the selection,
+	-- including the only frame of a scene that is a reject candidate.
+	if photoResult.selected ~= nil then
+		if photoResult.selected then
+			return "pick"
+		elseif photoResult.reject_candidate then
+			return "reject_candidate"
+		end
+		return "alternate"
+	end
 	if photoResult.winner then
 		return "pick"
 	elseif photoResult.reject_candidate then
@@ -3157,6 +3325,113 @@ function Util.cullWrittenDecode(text)
 		end
 	end
 	return written
+end
+
+---
+-- The decisions a culling style is learned from: each photo's flag and stars,
+-- and whether they are the photographer's own (`own`) — anything that differs
+-- from what the last cull wrote, including a cull's flag the photographer
+-- took away. A cull's mark left as it was is not theirs.
+--
+-- @param current table photoId -> { pickStatus, rating, written }, as
+--        `Util.cullCurrentMarks` returns it.
+-- @return table Array of { photo_id, flag, rating, own }, by photo ID.
+--
+function Util.cullTasteLabels(current)
+	local labels = {}
+	for photoId, marks in pairs(current or {}) do
+		local flag = tonumber(marks.pickStatus) or 0
+		local rating = tonumber(marks.rating) or 0
+		local wrote = type(marks.written) == "table" and marks.written or {}
+		local own = flag ~= (tonumber(wrote.pickStatus) or 0) or rating ~= (tonumber(wrote.rating) or 0)
+		table.insert(labels, { photo_id = photoId, flag = flag, rating = rating, own = own })
+	end
+	table.sort(labels, function(a, b)
+		return a.photo_id < b.photo_id
+	end)
+	return labels
+end
+
+---
+-- What a learned culling style is, in words: how many decisions it came from,
+-- how often it agrees with the photographer against the default ranking, and
+-- whether culling will use it.
+--
+-- @param model table|nil `{ pairs, groups, agreement, default_agreement, used }`.
+-- @return string
+--
+function Util.cullingStyleSummary(model)
+	if type(model) ~= "table" then
+		return "No culling style has been learned yet."
+	end
+	local line = string.format(
+		"Learned from %d decisions in %d bursts. It agrees with your own choices %d%% of the time; "
+			.. "the default ranking %d%%.",
+		tonumber(model.pairs) or 0,
+		tonumber(model.groups) or 0,
+		math.floor((tonumber(model.agreement) or 0) * 100 + 0.5),
+		math.floor((tonumber(model.default_agreement) or 0) * 100 + 0.5)
+	)
+	if model.used then
+		return line .. " Cull Similar Photos uses it when 'Use my culling style' is ticked."
+	end
+	return line
+		.. " It does not agree with you more often than the default ranking, so culling will not use it. "
+		.. "Learning from more shoots you culled yourself may change that."
+end
+
+---
+-- What the catalog holds now for the photos a cull touched — flag, stars and
+-- colour label — plus what the last cull wrote (`cullWritten`), by photo ID.
+-- `Util.cullFlagPlan` compares the two to tell the cull's own marks from the
+-- photographer's.
+--
+-- One batched read; falls back to per-photo reads if the batch call fails, as
+-- `PhotoSelector` does, so a read error degrades to slower rather than to
+-- "no flags applied".
+-- Shared by the cull and 'Learn My Culling Style', which needs the same
+-- tell between the cull's marks and the photographer's.
+-- @return table photoId -> { pickStatus, rating, colorNameForLabel, written }
+function Util.cullCurrentMarks(catalog, photoById)
+	local photos = {}
+	local idByPhoto = {}
+	for photoId, photo in pairs(photoById) do
+		table.insert(photos, photo)
+		idByPhoto[photo] = photoId
+	end
+	local keys = { "pickStatus", "rating", "colorNameForLabel" }
+	local current = {}
+	local ok, batch = LrTasks.pcall(function()
+		return catalog:batchGetRawMetadata(photos, keys)
+	end)
+	if ok and type(batch) == "table" then
+		for photo, values in pairs(batch) do
+			local photoId = idByPhoto[photo]
+			if photoId and type(values) == "table" then
+				current[photoId] = values
+			end
+		end
+	else
+		log:warn("batchGetRawMetadata failed before applying cull flags; reading per photo: " .. tostring(batch))
+		for photoId, photo in pairs(photoById) do
+			current[photoId] = {
+				pickStatus = photo:getRawMetadata("pickStatus"),
+				rating = photo:getRawMetadata("rating"),
+				colorNameForLabel = photo:getRawMetadata("colorNameForLabel"),
+			}
+		end
+	end
+	-- What the last cull wrote. Read per photo with `noThrow`: a catalog that
+	-- never saw this field (older plugin) simply has nothing recorded, which
+	-- makes every existing mark the photographer's — the safe reading.
+	for photoId, photo in pairs(photoById) do
+		local okProp, written = LrTasks.pcall(function()
+			return photo:getPropertyForPlugin(_PLUGIN, "cullWritten", nil, true)
+		end)
+		current[photoId] = current[photoId] or {}
+		current[photoId].written = Util.cullWrittenDecode(okProp and written or nil)
+	end
+	return current
 end
 
 ---

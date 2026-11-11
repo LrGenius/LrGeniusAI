@@ -108,6 +108,11 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   - `Alternates`
   - `Reject Candidates`
   - optional `Duplicates / Near Duplicates`
+- Choose the preset per burst from its genre (`Auto`, the default), so a
+  wedding and the football match that afternoon are culled each with its own
+- Find the subject of a photo and judge focus on it: a shallow depth of field
+  or a pan is not called blurred, focus that landed behind the subject is
+  named, and a soft bystander in the background does not reject the keeper
 - Judge the moment as well as sharpness: the Sports and Event presets ask
   about action and emotion, keep usable frames ahead of flawed ones, and do not
   count a kiss or a laugh with closed eyes as a blink
@@ -125,6 +130,11 @@ The plugin is designed to work with local and cloud providers, while keeping Lig
   `Brackets / Stacks / Panoramas (keep all)` collection with ranking switched
   off — every frame of such a set is part of one picture
 - Choose how hard to cull (gentle / balanced / strict) without changing preset
+- Keep a number or a share of a shoot instead of a pick per burst, every scene
+  first, with highlights for a sneak peek
+- Learn your own culling style from photos you culled yourself (Learn My
+  Culling Style), used only where it agrees with you more often than the
+  default ranking
 - Write the result as Lightroom flags, star ratings and a purple "look before
   deleting" label, in one undo step, leaving photos you already flagged, rated
   or labelled alone unless you say otherwise

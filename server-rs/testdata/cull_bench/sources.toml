@@ -1,0 +1,1445 @@
+# The photographs of the public culling benchmark: Wikimedia Commons
+# quality images, each under the free licence named with it.
+# Written by `scripts/cull_bench.py select`; see testdata/cull_bench/README.md.
+# Only the measurements made from them are in this repository, not the
+# photographs.
+
+[[source]]
+key = "3975460fe2"
+genre = "event"
+title = "File:38. Ulica - Kresala Dance Group - Hitaz Orhoit, 20250705 1228 1085.jpg"
+page = "https://commons.wikimedia.org/wiki/File:38._Ulica_-_Kresala_Dance_Group_-_Hitaz_Orhoit,_20250705_1228_1085.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Jakub Hałun"
+width = 3690
+height = 2464
+why = "3 faces"
+
+[[source]]
+key = "272339bc89"
+genre = "event"
+title = "File:38. Ulica - Kresala Dance Group - Hitaz Orhoit, 20250705 1243 1160.jpg"
+page = "https://commons.wikimedia.org/wiki/File:38._Ulica_-_Kresala_Dance_Group_-_Hitaz_Orhoit,_20250705_1243_1160.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Jakub Hałun"
+width = 3477
+height = 2321
+why = "2 faces"
+
+[[source]]
+key = "c08aeba16e"
+genre = "event"
+title = "File:BYD Dolphin IAA 2023 1X7A0039.jpg"
+page = "https://commons.wikimedia.org/wiki/File:BYD_Dolphin_IAA_2023_1X7A0039.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Alexander-93"
+width = 5169
+height = 3449
+why = "2 faces"
+
+[[source]]
+key = "b8783a8343"
+genre = "event"
+title = "File:Georgios Ntaviotis & Daniel Souček, U21 CZE-GRE 2019-10-10.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Georgios_Ntaviotis_%26_Daniel_Sou%C4%8Dek,_U21_CZE-GRE_2019-10-10.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Tadeáš Bednarz"
+width = 3292
+height = 2195
+why = "3 faces"
+
+[[source]]
+key = "c8c191fc6c"
+genre = "event"
+title = "File:2019 Tour of Austria – 3rd stage 20190608 (43).jpg"
+page = "https://commons.wikimedia.org/wiki/File:2019_Tour_of_Austria_%E2%80%93_3rd_stage_20190608_(43).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 15:50, 4 August 2019 (UTC)"
+width = 3000
+height = 2000
+why = "4 faces"
+
+[[source]]
+key = "76a05ef7b5"
+genre = "event"
+title = "File:34. Ulica - Teatr Migro - DROM - ścieżkami Romów - 20210710 1846 9078.jpg"
+page = "https://commons.wikimedia.org/wiki/File:34._Ulica_-_Teatr_Migro_-_DROM_-_%C5%9Bcie%C5%BCkami_Rom%C3%B3w_-_20210710_1846_9078.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 2804
+height = 3000
+why = "7 faces"
+
+[[source]]
+key = "de99a73210"
+genre = "event"
+title = "File:Taipei Taiwan Jiaozi-Restaurant-14th-avenue-03.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Taipei_Taiwan_Jiaozi-Restaurant-14th-avenue-03.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5124
+height = 3660
+why = "2 faces"
+
+[[source]]
+key = "7496dc35eb"
+genre = "event"
+title = "File:35. Ulica - Teatr Migro - Echa - 20220709 1614 8018.jpg"
+page = "https://commons.wikimedia.org/wiki/File:35._Ulica_-_Teatr_Migro_-_Echa_-_20220709_1614_8018.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 4186
+height = 3679
+why = "4 faces"
+
+[[source]]
+key = "729065fb22"
+genre = "event"
+title = "File:39. Ulica - Krakowski Teatr Tańca - Szach mat! - 20260711 1715 3042.jpg"
+page = "https://commons.wikimedia.org/wiki/File:39._Ulica_-_Krakowski_Teatr_Ta%C5%84ca_-_Szach_mat!_-_20260711_1715_3042.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Jakub Hałun"
+width = 2476
+height = 3160
+why = "2 faces"
+
+[[source]]
+key = "0e16ca83d1"
+genre = "event"
+title = "File:Hahoe Byeolsingut Tallori 08.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Hahoe_Byeolsingut_Tallori_08.jpg"
+license = "CC0"
+license_url = "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+author = "Bernard Gagnon"
+width = 2152
+height = 3013
+why = "10 faces"
+
+[[source]]
+key = "38865425e3"
+genre = "event"
+title = "File:Sabah State Railway Train-Attendant-selling-a-ticket-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Sabah_State_Railway_Train-Attendant-selling-a-ticket-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 4306
+height = 3327
+why = "2 faces"
+
+[[source]]
+key = "2c49094538"
+genre = "event"
+title = "File:2018-07-15 (308) Wachauer Radtage at Donaubrücke Melk.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2018-07-15_(308)_Wachauer_Radtage_at_Donaubr%C3%BCcke_Melk.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "GT1976"
+width = 4000
+height = 3000
+why = "6 faces"
+
+[[source]]
+key = "e103a711de"
+genre = "event"
+title = "File:39. Ulica - Krakowski Teatr Tańca - Szach mat! - 20260711 1735 3245.jpg"
+page = "https://commons.wikimedia.org/wiki/File:39._Ulica_-_Krakowski_Teatr_Ta%C5%84ca_-_Szach_mat!_-_20260711_1735_3245.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Jakub Hałun"
+width = 2362
+height = 3545
+why = "8 faces"
+
+[[source]]
+key = "1a55cfbdab"
+genre = "event"
+title = "File:Slow Life in A Tea House 01 edited.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Slow_Life_in_A_Tea_House_01_edited.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Original: Liming Huang Derivative work: Radomianin"
+width = 7352
+height = 4523
+why = "3 faces"
+
+[[source]]
+key = "1d9f2610e5"
+genre = "event"
+title = "File:34. Ulica - Teatr HoM - Ukryte - 20210711 1331 9618.jpg"
+page = "https://commons.wikimedia.org/wiki/File:34._Ulica_-_Teatr_HoM_-_Ukryte_-_20210711_1331_9618.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 4612
+height = 3372
+why = "9 faces"
+
+[[source]]
+key = "e62110cd7e"
+genre = "event"
+title = "File:XXL - Asaco Metal Fest 2013 - 07.jpg"
+page = "https://commons.wikimedia.org/wiki/File:XXL_-_Asaco_Metal_Fest_2013_-_07.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Carlos Delgado"
+width = 4430
+height = 3323
+why = "2 faces"
+
+[[source]]
+key = "9a9547705d"
+genre = "event"
+title = "File:34. Ulica - Stefano Di Renzo - Hold on! - 20210709 1729 8079.jpg"
+page = "https://commons.wikimedia.org/wiki/File:34._Ulica_-_Stefano_Di_Renzo_-_Hold_on!_-_20210709_1729_8079.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 2948
+height = 4560
+why = "4 faces"
+
+[[source]]
+key = "a4f6bd93aa"
+genre = "event"
+title = "File:Shoro-nagashi in Nagasaki, 20240815 1818 3798.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Shoro-nagashi_in_Nagasaki,_20240815_1818_3798.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Jakub Hałun"
+width = 4416
+height = 2947
+why = "2 faces"
+
+[[source]]
+key = "8fabf9c309"
+genre = "event"
+title = "File:34. Ulica - Teatr HoM - Ukryte - 20210711 1334 9629.jpg"
+page = "https://commons.wikimedia.org/wiki/File:34._Ulica_-_Teatr_HoM_-_Ukryte_-_20210711_1334_9629.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 2667
+height = 4224
+why = "6 faces"
+
+[[source]]
+key = "9d6ae4d821"
+genre = "event"
+title = "File:38. Ulica - Kresala Dance Group - Hitaz Orhoit, 20250705 1204 0976.jpg"
+page = "https://commons.wikimedia.org/wiki/File:38._Ulica_-_Kresala_Dance_Group_-_Hitaz_Orhoit,_20250705_1204_0976.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Jakub Hałun"
+width = 3041
+height = 3723
+why = "5 faces"
+
+[[source]]
+key = "41f8eba1ec"
+genre = "event"
+title = "File:34. Ulica - Leo Bassi - Me, Mussolini! - 20210905 1435 2302.jpg"
+page = "https://commons.wikimedia.org/wiki/File:34._Ulica_-_Leo_Bassi_-_Me,_Mussolini!_-_20210905_1435_2302.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 2453
+height = 3675
+why = "2 faces"
+
+[[source]]
+key = "31f7d26f6c"
+genre = "event"
+title = "File:Semporna Sabah Malaysia Igal-Dancer-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Semporna_Sabah_Malaysia_Igal-Dancer-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 3301
+height = 4951
+why = "2 faces"
+
+[[source]]
+key = "66cc9c44aa"
+genre = "event"
+title = "File:34. Ulica - Teatr HoM - Ukryte - 20210711 1319 9563.jpg"
+page = "https://commons.wikimedia.org/wiki/File:34._Ulica_-_Teatr_HoM_-_Ukryte_-_20210711_1319_9563.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 2947
+height = 4415
+why = "2 faces"
+
+[[source]]
+key = "3828f0a5d3"
+genre = "event"
+title = "File:20171110 Three girls Oudomxay 0841 DxO.jpg"
+page = "https://commons.wikimedia.org/wiki/File:20171110_Three_girls_Oudomxay_0841_DxO.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jakub Hałun"
+width = 4590
+height = 3040
+why = "3 faces"
+
+[[source]]
+key = "b11fd2960c"
+genre = "portrait"
+title = "File:Geneva International Motor Show 2018, Le Grand-Saconnex (1X7A0394).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Geneva_International_Motor_Show_2018,_Le_Grand-Saconnex_(1X7A0394).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Matti Blume"
+width = 2575
+height = 3862
+why = "face, eyes 155 px apart"
+
+[[source]]
+key = "515d321464"
+genre = "portrait"
+title = "File:Mnich buddyjski w klasztorze Erdene Dzuu.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Mnich_buddyjski_w_klasztorze_Erdene_Dzuu.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Marcin Konsek"
+width = 2051
+height = 3076
+why = "face, eyes 102 px apart"
+
+[[source]]
+key = "6450ea8cd1"
+genre = "portrait"
+title = "File:Justice K. K. Usha.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Justice_K._K._Usha.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Augustus Binu : flickr : Instagram"
+width = 2752
+height = 4129
+why = "face, eyes 412 px apart"
+
+[[source]]
+key = "a743c01ad7"
+genre = "portrait"
+title = "File:Lucha entre clanes de la tribu Mundari, Terekeka, Sudán del Sur, 2024-01-29, DD 112.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Lucha_entre_clanes_de_la_tribu_Mundari,_Terekeka,_Sud%C3%A1n_del_Sur,_2024-01-29,_DD_112.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 3447
+height = 6524
+why = "face, eyes 446 px apart"
+
+[[source]]
+key = "aaf832007f"
+genre = "portrait"
+title = "File:BandoneonistaMDP-jul2017.jpg"
+page = "https://commons.wikimedia.org/wiki/File:BandoneonistaMDP-jul2017.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Ezarate"
+width = 3311
+height = 3546
+why = "face, eyes 121 px apart"
+
+[[source]]
+key = "4a47cda87a"
+genre = "portrait"
+title = "File:Potter and his work, Jaura, India.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Potter_and_his_work,_Jaura,_India.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Yann ( talk )"
+width = 3806
+height = 2464
+why = "face, eyes 90 px apart"
+
+[[source]]
+key = "050421b937"
+genre = "portrait"
+title = "File:Campamento de ganado de la tribu Mundari, Terekeka, Sudán del Sur, 2024-01-28, DD 63.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Campamento_de_ganado_de_la_tribu_Mundari,_Terekeka,_Sud%C3%A1n_del_Sur,_2024-01-28,_DD_63.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 5129
+height = 7694
+why = "face, eyes 60 px apart"
+
+[[source]]
+key = "340869e10d"
+genre = "portrait"
+title = "File:Daimler press conference, GIMS 2018, Le Grand-Saconnex (1X7A0765).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Daimler_press_conference,_GIMS_2018,_Le_Grand-Saconnex_(1X7A0765).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Matti Blume"
+width = 6720
+height = 4480
+why = "face, eyes 127 px apart"
+
+[[source]]
+key = "05c6da7657"
+genre = "portrait"
+title = "File:Arlette Laguiller mp3h9252.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Arlette_Laguiller_mp3h9252.jpg"
+license = "CC BY-SA 2.0 fr"
+license_url = "https://creativecommons.org/licenses/by-sa/2.0/fr/deed.en"
+author = "Rama"
+width = 3007
+height = 2007
+why = "face, eyes 345 px apart"
+
+[[source]]
+key = "e370138d31"
+genre = "portrait"
+title = "File:Ian Callum Genf 2019 1Y7A4975.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Ian_Callum_Genf_2019_1Y7A4975.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Alexander Migl"
+width = 3000
+height = 3200
+why = "face, eyes 397 px apart"
+
+[[source]]
+key = "06d05a897a"
+genre = "portrait"
+title = "File:Bawang-Jamal Sabah Rungus-boy-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Bawang-Jamal_Sabah_Rungus-boy-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 2326
+height = 3010
+why = "face, eyes 305 px apart"
+
+[[source]]
+key = "f461ea00f2"
+genre = "portrait"
+title = "File:Beijing dancer-20110104-RM-134643.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Beijing_dancer-20110104-RM-134643.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Ermell"
+width = 3547
+height = 2660
+why = "face, eyes 80 px apart"
+
+[[source]]
+key = "8d5e8313e6"
+genre = "portrait"
+title = "File:Campamento de ganado de la tribu Mundari, Terekeka, Sudán del Sur, 2024-01-29, DD 30.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Campamento_de_ganado_de_la_tribu_Mundari,_Terekeka,_Sud%C3%A1n_del_Sur,_2024-01-29,_DD_30.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 4858
+height = 4858
+why = "face, eyes 199 px apart"
+
+[[source]]
+key = "0f59ef69cd"
+genre = "portrait"
+title = "File:Young mother smiling while holding her baby in Laos.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Young_mother_smiling_while_holding_her_baby_in_Laos.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Basile Morin"
+width = 4476
+height = 2984
+why = "face, eyes 282 px apart"
+
+[[source]]
+key = "7414ad02de"
+genre = "portrait"
+title = "File:Buceando en Madeira, Portugal, 2019-06-01, DD 77.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Buceando_en_Madeira,_Portugal,_2019-06-01,_DD_77.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 5551
+height = 3958
+why = "face, eyes 99 px apart"
+
+[[source]]
+key = "d6b8efec76"
+genre = "portrait"
+title = "File:Young child surrounded by pigeons, Eminönü Square, Istanbul, 2008.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Young_child_surrounded_by_pigeons,_Emin%C3%B6n%C3%BC_Square,_Istanbul,_2008.jpg"
+license = "CC0"
+license_url = "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+author = "DimiTalen"
+width = 3008
+height = 2000
+why = "face, eyes 70 px apart"
+
+[[source]]
+key = "171e80ba74"
+genre = "portrait"
+title = "File:Młoda Mongołka na lokalnym festiwalu Naadam (01).jpg"
+page = "https://commons.wikimedia.org/wiki/File:M%C5%82oda_Mongo%C5%82ka_na_lokalnym_festiwalu_Naadam_(01).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Marcin Konsek"
+width = 3288
+height = 2192
+why = "face, eyes 78 px apart"
+
+[[source]]
+key = "91eb44dce3"
+genre = "portrait"
+title = "File:Wolfgang Sobotka 23-05-2013 01.JPG"
+page = "https://commons.wikimedia.org/wiki/File:Wolfgang_Sobotka_23-05-2013_01.JPG"
+license = "CC BY-SA 3.0 at"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0/at/deed.en"
+author = "Michael Kranewitter"
+width = 4232
+height = 2848
+why = "face, eyes 316 px apart"
+
+[[source]]
+key = "0ba8167fb4"
+genre = "portrait"
+title = "File:Campamento de ganado de la tribu Mundari, Terekeka, Sudán del Sur, 2024-01-28, DD 66.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Campamento_de_ganado_de_la_tribu_Mundari,_Terekeka,_Sud%C3%A1n_del_Sur,_2024-01-28,_DD_66.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 4746
+height = 8322
+why = "face, eyes 92 px apart"
+
+[[source]]
+key = "f73f511703"
+genre = "portrait"
+title = "File:Cobbler repairing shoes in old workshop (Bazaar in Bitola, Macedonia, 2025).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Cobbler_repairing_shoes_in_old_workshop_(Bazaar_in_Bitola,_Macedonia,_2025).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Petar Milošević"
+width = 5472
+height = 3648
+why = "face, eyes 58 px apart"
+
+[[source]]
+key = "13ce286f38"
+genre = "portrait"
+title = "File:Lisardo Lombardia au Festival interceltique de Lorient 2012.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Lisardo_Lombardia_au_Festival_interceltique_de_Lorient_2012.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Édouard Hue ( User:EdouardHue )"
+width = 3075
+height = 4612
+why = "face, eyes 463 px apart"
+
+[[source]]
+key = "27a9c6b312"
+genre = "portrait"
+title = "File:Nordest music in Avenida Paulista, São Paulo, Brazil.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Nordest_music_in_Avenida_Paulista,_S%C3%A3o_Paulo,_Brazil.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Wilfredor"
+width = 2848
+height = 3543
+why = "face, eyes 99 px apart"
+
+[[source]]
+key = "93b7c93146"
+genre = "portrait"
+title = "File:Carlos Garcia-Alix 02 by-dpc.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Carlos_Garcia-Alix_02_by-dpc.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "David Perez"
+width = 6000
+height = 4000
+why = "face, eyes 338 px apart"
+
+[[source]]
+key = "bf3aac4346"
+genre = "portrait"
+title = "File:Nun talking to women on steps of new Basilica of Our Lady of Guadulupe.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Nun_talking_to_women_on_steps_of_new_Basilica_of_Our_Lady_of_Guadulupe.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Daniel Case"
+width = 3714
+height = 3258
+why = "face, eyes 84 px apart"
+
+[[source]]
+key = "5d21bf9fff"
+genre = "sport"
+title = "File:ST vs Gloucester - Match - 43.JPG"
+page = "https://commons.wikimedia.org/wiki/File:ST_vs_Gloucester_-_Match_-_43.JPG"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "PierreSelim"
+width = 3654
+height = 2740
+why = "athlete covers 15.1%"
+
+[[source]]
+key = "6b9954a581"
+genre = "sport"
+title = "File:Argentine - Portugal - Esteban Cambiasso.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Argentine_-_Portugal_-_Esteban_Cambiasso.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Ludovic Péron"
+width = 3744
+height = 3744
+why = "athlete covers 28.5%"
+
+[[source]]
+key = "deb161e0a6"
+genre = "sport"
+title = "File:SC Wiener Neustadt vs. Team Wiener Linien 20190803 (55).jpg"
+page = "https://commons.wikimedia.org/wiki/File:SC_Wiener_Neustadt_vs._Team_Wiener_Linien_20190803_(55).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 21:43, 7 August 2019 (UTC)"
+width = 3000
+height = 2000
+why = "athlete covers 13.6%"
+
+[[source]]
+key = "49be2da749"
+genre = "sport"
+title = "File:2013 Longines Global Champions - Lausanne - 14-09-2013 - Agathe Vacher et Careena 1.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2013_Longines_Global_Champions_-_Lausanne_-_14-09-2013_-_Agathe_Vacher_et_Careena_1.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 4553
+height = 3015
+why = "athlete covers 3.1%"
+
+[[source]]
+key = "97c8baddeb"
+genre = "sport"
+title = "File:Hertha BSC vs. West Ham United 20190731 (196).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Hertha_BSC_vs._West_Ham_United_20190731_(196).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 16:19, 29 August 2019 (UTC)"
+width = 2000
+height = 3000
+why = "athlete covers 38.2%"
+
+[[source]]
+key = "88e3babfb0"
+genre = "sport"
+title = "File:Austria national under-21 football team - Teamcamp October 2019 (49).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Austria_national_under-21_football_team_-_Teamcamp_October_2019_(49).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 18:41, 13 October 2019 (UTC)"
+width = 4500
+height = 3000
+why = "athlete covers 36.1%"
+
+[[source]]
+key = "33f4f7a21b"
+genre = "sport"
+title = "File:2013 Longines Global Champions - Lausanne - 14-09-2013 - Jos Verlooy et Farfelu de la Pomme 1.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2013_Longines_Global_Champions_-_Lausanne_-_14-09-2013_-_Jos_Verlooy_et_Farfelu_de_la_Pomme_1.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 4928
+height = 3264
+why = "athlete covers 3.8%"
+
+[[source]]
+key = "16642a2aa8"
+genre = "sport"
+title = "File:Final EMS-A 2013 Wheelchair Fencing WCH t201328.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Final_EMS-A_2013_Wheelchair_Fencing_WCH_t201328.jpg"
+license = "CC BY 3.0"
+license_url = "https://creativecommons.org/licenses/by/3.0"
+author = "Marie-Lan Nguyen"
+width = 5000
+height = 3338
+why = "athlete covers 18.4%"
+
+[[source]]
+key = "49e449af39"
+genre = "sport"
+title = "File:Unofficial winner's ceremony SL Soldeu 24 (3).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Unofficial_winner%27s_ceremony_SL_Soldeu_24_(3).jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Tournasol7"
+width = 2669
+height = 3906
+why = "athlete covers 7.6%"
+
+[[source]]
+key = "65052a03ce"
+genre = "sport"
+title = "File:2013 Longines Global Champions - Lausanne - 14-09-2013 - Reed Kessler et Soraya de l'Obstination 1.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2013_Longines_Global_Champions_-_Lausanne_-_14-09-2013_-_Reed_Kessler_et_Soraya_de_l%27Obstination_1.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 4250
+height = 2815
+why = "athlete covers 2.4%"
+
+[[source]]
+key = "0ab7b7558d"
+genre = "sport"
+title = "File:Khusayin Norchaev 7.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Khusayin_Norchaev_7.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Umarxon III"
+width = 4000
+height = 6000
+why = "athlete covers 32.4%"
+
+[[source]]
+key = "6c5b8ddfcc"
+genre = "sport"
+title = "File:Hertha BSC vs. West Ham United 20190731 (004).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Hertha_BSC_vs._West_Ham_United_20190731_(004).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 15:29, 29 August 2019 (UTC)"
+width = 2000
+height = 3000
+why = "athlete covers 55.0%"
+
+[[source]]
+key = "a00dd8d6ae"
+genre = "sport"
+title = "File:Hertha BSC vs. West Ham United 20190731 (052).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Hertha_BSC_vs._West_Ham_United_20190731_(052).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 15:42, 29 August 2019 (UTC)"
+width = 3000
+height = 2000
+why = "athlete covers 27.8%"
+
+[[source]]
+key = "5791d27a6a"
+genre = "sport"
+title = "File:Ana Bucik Grandvalira 2023 SL 1st run (7).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Ana_Bucik_Grandvalira_2023_SL_1st_run_(7).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Krzysztof Golik"
+width = 4695
+height = 3021
+why = "athlete covers 4.7%"
+
+[[source]]
+key = "204c910caa"
+genre = "sport"
+title = "File:2022-03-13 Wintersport, Skisprung-Weltcup der Frauen in Oberhof 1DX 7113 by Stepro.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2022-03-13_Wintersport,_Skisprung-Weltcup_der_Frauen_in_Oberhof_1DX_7113_by_Stepro.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Steffen Prößdorf"
+width = 3354
+height = 2236
+why = "athlete covers 6.2%"
+
+[[source]]
+key = "70795e2681"
+genre = "sport"
+title = "File:Championnat de France de cyclisme handisport - 20140615 - Contre la montre 88.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Championnat_de_France_de_cyclisme_handisport_-_20140615_-_Contre_la_montre_88.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 3576
+height = 2368
+why = "athlete covers 10.1%"
+
+[[source]]
+key = "69efcf48d6"
+genre = "sport"
+title = "File:2013 Longines Global Champions - Lausanne - 14-09-2013 - Eduardo Menezes et Caruschka 2 3.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2013_Longines_Global_Champions_-_Lausanne_-_14-09-2013_-_Eduardo_Menezes_et_Caruschka_2_3.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 4190
+height = 2775
+why = "athlete covers 4.6%"
+
+[[source]]
+key = "e8d3e73800"
+genre = "sport"
+title = "File:SC Wiener Neustadt vs. SKN St. Pölten 2018-05-31 (033).jpg"
+page = "https://commons.wikimedia.org/wiki/File:SC_Wiener_Neustadt_vs._SKN_St._P%C3%B6lten_2018-05-31_(033).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Steindy ( talk ) 13:17, 5 June 2018 (UTC)"
+width = 2000
+height = 3000
+why = "athlete covers 42.0%"
+
+[[source]]
+key = "b9c85f436d"
+genre = "sport"
+title = "File:Hertha BSC vs. West Ham United 20190731 (007).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Hertha_BSC_vs._West_Ham_United_20190731_(007).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "-- Steindy ( talk ) 15:30, 29 August 2019 (UTC)"
+width = 3000
+height = 2000
+why = "athlete covers 33.0%"
+
+[[source]]
+key = "a1db3440fc"
+genre = "sport"
+title = "File:USO-RCT - 20141003 - Maul 5.jpg"
+page = "https://commons.wikimedia.org/wiki/File:USO-RCT_-_20141003_-_Maul_5.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 3963
+height = 2625
+why = "athlete covers 32.6%"
+
+[[source]]
+key = "3ea5938f81"
+genre = "sport"
+title = "File:Zrinka Ljutic in Soldeu 2024 (6).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Zrinka_Ljutic_in_Soldeu_2024_(6).jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Tournasol7"
+width = 2685
+height = 4909
+why = "athlete covers 14.1%"
+
+[[source]]
+key = "a83be53776"
+genre = "sport"
+title = "File:USO - RCT - 28-09-2013 - Stade Mathon - Melée ouverte 20.jpg"
+page = "https://commons.wikimedia.org/wiki/File:USO_-_RCT_-_28-09-2013_-_Stade_Mathon_-_Mel%C3%A9e_ouverte_20.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Clément Bucco-Lechat"
+width = 4000
+height = 2649
+why = "athlete covers 22.4%"
+
+[[source]]
+key = "ace0fa42b4"
+genre = "sport"
+title = "File:2014 10 04 12-00Rallye France, Parc assistance Colmar, Kris Meeke.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2014_10_04_12-00Rallye_France,_Parc_assistance_Colmar,_Kris_Meeke.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Florival fr"
+width = 4608
+height = 3072
+why = "athlete covers 39.7%"
+
+[[source]]
+key = "b90e1cc5a3"
+genre = "sport"
+title = "File:Wolves vs Slavs 2015 G09.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Wolves_vs_Slavs_2015_G09.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "George Chernilevsky"
+width = 4400
+height = 2200
+why = "athlete covers 30.9%"
+
+[[source]]
+key = "a1be0071ff"
+genre = "wildlife"
+title = "File:Oriental marbled skipper (Muschampia orientalis) Corfu.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Oriental_marbled_skipper_(Muschampia_orientalis)_Corfu.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Charles J. Sharp"
+width = 3485
+height = 2323
+why = "animal covers 26.6%"
+
+[[source]]
+key = "24dc7ff85e"
+genre = "wildlife"
+title = "File:Montagna mountain satyr (Pedaliodes montagna) mating Cundinamarca.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Montagna_mountain_satyr_(Pedaliodes_montagna)_mating_Cundinamarca.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Charles J. Sharp"
+width = 4996
+height = 3330
+why = "animal covers 19.2%"
+
+[[source]]
+key = "913eb6ce21"
+genre = "wildlife"
+title = "File:Himantopus himantopus, Sète cf13.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Himantopus_himantopus,_S%C3%A8te_cf13.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Christian Ferrer"
+width = 3722
+height = 2094
+why = "animal covers 3.5%"
+
+[[source]]
+key = "bafadc1b80"
+genre = "wildlife"
+title = "File:Salmonete de roca (Mullus surmuletus), Parque natural de la Arrábida, Portugal, 2020-07-21, DD 59.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Salmonete_de_roca_(Mullus_surmuletus),_Parque_natural_de_la_Arr%C3%A1bida,_Portugal,_2020-07-21,_DD_59.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 5401
+height = 2560
+why = "animal covers 7.5%"
+
+[[source]]
+key = "c6dd657d73"
+genre = "wildlife"
+title = "File:Camp Elephant Sitting TrunkOntusk River Mudumalai Mar21 A7C 00392.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Camp_Elephant_Sitting_TrunkOntusk_River_Mudumalai_Mar21_A7C_00392.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Timothy A. Gonsalves"
+width = 4000
+height = 6000
+why = "animal covers 36.8%"
+
+[[source]]
+key = "42921a0142"
+genre = "wildlife"
+title = "File:Gavia immer1 BS.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Gavia_immer1_BS.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Cephas"
+width = 3410
+height = 2273
+why = "animal covers 8.4%"
+
+[[source]]
+key = "d98dbf2315"
+genre = "wildlife"
+title = "File:144 Lilac-breasted roller in Etosha National Park Photo by Giles Laurent.jpg"
+page = "https://commons.wikimedia.org/wiki/File:144_Lilac-breasted_roller_in_Etosha_National_Park_Photo_by_Giles_Laurent.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Giles Laurent"
+width = 4229
+height = 2819
+why = "animal covers 6.8%"
+
+[[source]]
+key = "c61c170cba"
+genre = "wildlife"
+title = "File:Juveniles Yellow-billed Stork Lupande Jul23 A7R 06388.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Juveniles_Yellow-billed_Stork_Lupande_Jul23_A7R_06388.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "This Photo was taken by Timothy A. Gonsalves . Feel free to use my photos, but please mention me as the author. I would much appreciate if you send me an email tagooty@yahoo.com or write on my talk page , for my information. Please contact me before commercial use. Please do not upload an edited image here without consulting me. I would like to make corrections only at my own source to ensure that the changes improve the image and are preserved. Otherwise you may upload an edited image with a new name. Please use one of the templates derivative or extract ."
+width = 5485
+height = 4114
+why = "animal covers 16.1%"
+
+[[source]]
+key = "ab8287366b"
+genre = "wildlife"
+title = "File:Dülmen, Merfeld, Wildpferdebahn, Dülmener Wildpferde -- 2020 -- 7118.jpg"
+page = "https://commons.wikimedia.org/wiki/File:D%C3%BClmen,_Merfeld,_Wildpferdebahn,_D%C3%BClmener_Wildpferde_--_2020_--_7118.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Dietmar Rabich"
+width = 6004
+height = 3377
+why = "animal covers 12.9%"
+
+[[source]]
+key = "f8a2b9db3d"
+genre = "wildlife"
+title = "File:Dülmen, Merfeld, Dülmener Pferde im Merfelder Bruch -- 2024 -- 4024.jpg"
+page = "https://commons.wikimedia.org/wiki/File:D%C3%BClmen,_Merfeld,_D%C3%BClmener_Pferde_im_Merfelder_Bruch_--_2024_--_4024.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Dietmar Rabich"
+width = 5973
+height = 4480
+why = "animal covers 30.9%"
+
+[[source]]
+key = "6dbe8a4bad"
+genre = "wildlife"
+title = "File:Common eider (Somateria mollissima mollissima) male eclipse plumage swimming.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Common_eider_(Somateria_mollissima_mollissima)_male_eclipse_plumage_swimming.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Charles J. Sharp"
+width = 4358
+height = 2905
+why = "animal covers 17.4%"
+
+[[source]]
+key = "33730aff14"
+genre = "wildlife"
+title = "File:Carpodacus mexicanus5.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Carpodacus_mexicanus5.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "Basar"
+width = 3552
+height = 2591
+why = "animal covers 5.7%"
+
+[[source]]
+key = "982295f860"
+genre = "wildlife"
+title = "File:Schotse hooglanders (Highland Cow) beheren het gebied. Locatie, natuurgebied Delleboersterheide – Catspoele 01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Schotse_hooglanders_(Highland_Cow)_beheren_het_gebied._Locatie,_natuurgebied_Delleboersterheide_%E2%80%93_Catspoele_01.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Dominicus Johannes Bergsma"
+width = 4022
+height = 1775
+why = "animal covers 2.9%"
+
+[[source]]
+key = "368827d220"
+genre = "wildlife"
+title = "File:Cochin fauve à Auderghem (DSCF6331).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Cochin_fauve_%C3%A0_Auderghem_(DSCF6331).jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Trougnouf (Benoit Brummer)"
+width = 4650
+height = 3296
+why = "animal covers 45.5%"
+
+[[source]]
+key = "2c7a05b403"
+genre = "wildlife"
+title = "File:Nile crocodile in the Zambezi.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Nile_crocodile_in_the_Zambezi.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Bernard Gagnon"
+width = 5184
+height = 3456
+why = "animal covers 12.2%"
+
+[[source]]
+key = "136f30dbd9"
+genre = "wildlife"
+title = "File:Mother Baby Red Colobus Monkey Jozani Oct26 A7CR 14643.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Mother_Baby_Red_Colobus_Monkey_Jozani_Oct26_A7CR_14643.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "This Photo was taken by Timothy A. Gonsalves . Feel free to use my photos, but please mention me as the author. I would much appreciate if you send me an email tagooty@yahoo.com or write on my talk page , for my information. Please contact me before commercial use. Please do not upload an edited image here without consulting me. I would like to make corrections only at my own source to ensure that the changes improve the image and are preserved. Otherwise you may upload an edited image with a new name. Please use one of the templates derivative or extract ."
+width = 4043
+height = 6065
+why = "animal covers 40.3%"
+
+[[source]]
+key = "b76106106a"
+genre = "wildlife"
+title = "File:Wallabia bicolor eating from hand, side view.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Wallabia_bicolor_eating_from_hand,_side_view.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Grendelkhan"
+width = 6000
+height = 4000
+why = "animal covers 37.4%"
+
+[[source]]
+key = "a6b69d4878"
+genre = "wildlife"
+title = "File:Alouette bilophe Jbil.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Alouette_bilophe_Jbil.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "El Golli Mohamed"
+width = 4331
+height = 2880
+why = "animal covers 7.3%"
+
+[[source]]
+key = "cf74123b01"
+genre = "wildlife"
+title = "File:20240614 great blue heron with fish beaver brook open space PD200769.jpg"
+page = "https://commons.wikimedia.org/wiki/File:20240614_great_blue_heron_with_fish_beaver_brook_open_space_PD200769.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Paul Danese"
+width = 4950
+height = 4950
+why = "animal covers 18.3%"
+
+[[source]]
+key = "52e87e88f3"
+genre = "wildlife"
+title = "File:Carrion crow (Corvus corone) head.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Carrion_crow_(Corvus_corone)_head.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Alexis Lours"
+width = 4447
+height = 2754
+why = "animal covers 36.3%"
+
+[[source]]
+key = "1ddaec165b"
+genre = "wildlife"
+title = "File:Red Vented Bulbul IIT Mandi Himachal Mar20 D72 14359.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Red_Vented_Bulbul_IIT_Mandi_Himachal_Mar20_D72_14359.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Timothy A. Gonsalves"
+width = 3789
+height = 2842
+why = "animal covers 13.4%"
+
+[[source]]
+key = "13ccb16418"
+genre = "wildlife"
+title = "File:Larus michahellis, Istanbul (TR) -- 2024 -- 0392.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Larus_michahellis,_Istanbul_(TR)_--_2024_--_0392.jpg"
+license = "CC BY 4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0"
+author = "Anil Öztas"
+width = 3015
+height = 2010
+why = "animal covers 16.7%"
+
+[[source]]
+key = "eb347389f0"
+genre = "wildlife"
+title = "File:Papión de Anubis (Papio anubis), parque nacional de Tarangire, Tanzania, 2024-05-24, DD 112.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Papi%C3%B3n_de_Anubis_(Papio_anubis),_parque_nacional_de_Tarangire,_Tanzania,_2024-05-24,_DD_112.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 5204
+height = 3469
+why = "animal covers 49.4%"
+
+[[source]]
+key = "8beac41895"
+genre = "wildlife"
+title = "File:Aigrette garzette004 thyna.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Aigrette_garzette004_thyna.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "El Golli Mohamed"
+width = 3611
+height = 2392
+why = "animal covers 8.6%"
+
+[[source]]
+key = "82e1f07a1e"
+genre = "landscape"
+title = "File:Quarry in Makhtesh Ramon (50771).jpg"
+page = "https://commons.wikimedia.org/wiki/File:Quarry_in_Makhtesh_Ramon_(50771).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Rhododendrites"
+width = 3814
+height = 2840
+why = "no subject"
+
+[[source]]
+key = "5484df423b"
+genre = "landscape"
+title = "File:Taroko-Gorge Hualien Taiwan Swallow-Grotto-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Taroko-Gorge_Hualien_Taiwan_Swallow-Grotto-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 3840
+height = 5760
+why = "no subject"
+
+[[source]]
+key = "cda90e57bb"
+genre = "landscape"
+title = "File:Kawah-Ijen Indonesia The-sulfur-mine-at the-floor-of-the-crater-03.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Kawah-Ijen_Indonesia_The-sulfur-mine-at_the-floor-of-the-crater-03.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5289
+height = 3235
+why = "no subject"
+
+[[source]]
+key = "05f598ac4f"
+genre = "landscape"
+title = "File:Mali i Thatë from Magaro Peak, September 2019.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Mali_i_That%C3%AB_from_Magaro_Peak,_September_2019.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Liridon"
+width = 8471
+height = 4915
+why = "no subject"
+
+[[source]]
+key = "80c4745939"
+genre = "landscape"
+title = "File:Laguna Salada, Bolivia, 2016-02-02, DD 111.JPG"
+page = "https://commons.wikimedia.org/wiki/File:Laguna_Salada,_Bolivia,_2016-02-02,_DD_111.JPG"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 8688
+height = 5792
+why = "no subject"
+
+[[source]]
+key = "c02818d287"
+genre = "landscape"
+title = "File:21-224-5054 NNP Synevyr RB 18.jpg"
+page = "https://commons.wikimedia.org/wiki/File:21-224-5054_NNP_Synevyr_RB_18.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Rbrechko"
+width = 6000
+height = 4000
+why = "no subject"
+
+[[source]]
+key = "47f543bcdb"
+genre = "landscape"
+title = "File:Silam Sabah Kennedy-Bay-02.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Silam_Sabah_Kennedy-Bay-02.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5760
+height = 3840
+why = "no subject"
+
+[[source]]
+key = "4e730d2bb8"
+genre = "landscape"
+title = "File:2014 Picunda, Wybrzeże Morza Czarnego (03).jpg"
+page = "https://commons.wikimedia.org/wiki/File:2014_Picunda,_Wybrze%C5%BCe_Morza_Czarnego_(03).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Hons084"
+width = 4281
+height = 2858
+why = "no subject"
+
+[[source]]
+key = "43f1a8aec1"
+genre = "landscape"
+title = "File:Trees surrounded by grassy tumuli at sunset in Daereungwon Tomb Complex of Gyeongju in South Korea.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Trees_surrounded_by_grassy_tumuli_at_sunset_in_Daereungwon_Tomb_Complex_of_Gyeongju_in_South_Korea.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Basile Morin"
+width = 6720
+height = 4200
+why = "no subject"
+
+[[source]]
+key = "14782e0ed1"
+genre = "landscape"
+title = "File:Huanglong Sichuan China Multicolored-ponds-03.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Huanglong_Sichuan_China_Multicolored-ponds-03.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 3188
+height = 2125
+why = "no subject"
+
+[[source]]
+key = "78aa127754"
+genre = "landscape"
+title = "File:2016 Bordżomi, Widok na wzgórza otaczające miasto (02).jpg"
+page = "https://commons.wikimedia.org/wiki/File:2016_Bord%C5%BComi,_Widok_na_wzg%C3%B3rza_otaczaj%C4%85ce_miasto_(02).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Marcin Konsek"
+width = 5138
+height = 2890
+why = "no subject"
+
+[[source]]
+key = "599c769f47"
+genre = "landscape"
+title = "File:Boralde de Saint-Chély-d'Aubrac 01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Boralde_de_Saint-Ch%C3%A9ly-d%27Aubrac_01.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Krzysztof Golik"
+width = 6000
+height = 4000
+why = "no subject"
+
+[[source]]
+key = "bfb6082537"
+genre = "landscape"
+title = "File:Kinabatangan Sabah Quarry-at-Jalan-Sukau-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Kinabatangan_Sabah_Quarry-at-Jalan-Sukau-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5562
+height = 3708
+why = "no subject"
+
+[[source]]
+key = "6172c739a5"
+genre = "landscape"
+title = "File:2016 Kampot, Zachód słońca nad rzeką Praek Tuek Chhu (19).jpg"
+page = "https://commons.wikimedia.org/wiki/File:2016_Kampot,_Zach%C3%B3d_s%C5%82o%C5%84ca_nad_rzek%C4%85_Praek_Tuek_Chhu_(19).jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Marcin Konsek"
+width = 4927
+height = 3285
+why = "no subject"
+
+[[source]]
+key = "de09a79df2"
+genre = "landscape"
+title = "File:2017 Kamieniołom Romanowo 6.jpg"
+page = "https://commons.wikimedia.org/wiki/File:2017_Kamienio%C5%82om_Romanowo_6.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Jacek Halicki"
+width = 4714
+height = 2972
+why = "no subject"
+
+[[source]]
+key = "d0898a2893"
+genre = "landscape"
+title = "File:Kunak Sabah Mostyn-Estate-11.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Kunak_Sabah_Mostyn-Estate-11.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5571
+height = 3768
+why = "no subject"
+
+[[source]]
+key = "22f76fe24c"
+genre = "landscape"
+title = "File:Géiseres Sol de Mañana, Bolivia, 2016-02-02, DD 50-54 PAN.JPG"
+page = "https://commons.wikimedia.org/wiki/File:G%C3%A9iseres_Sol_de_Ma%C3%B1ana,_Bolivia,_2016-02-02,_DD_50-54_PAN.JPG"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 17023
+height = 4207
+why = "no subject"
+
+[[source]]
+key = "d7e2b69c4d"
+genre = "landscape"
+title = "File:Mavrovo Lake (Мавровско Езеро).JPG"
+page = "https://commons.wikimedia.org/wiki/File:Mavrovo_Lake_(%D0%9C%D0%B0%D0%B2%D1%80%D0%BE%D0%B2%D1%81%D0%BA%D0%BE_%D0%95%D0%B7%D0%B5%D1%80%D0%BE).JPG"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Pudelek (Marcin Szala)"
+width = 4001
+height = 1474
+why = "no subject"
+
+[[source]]
+key = "7f181aa4b9"
+genre = "landscape"
+title = "File:District-Tawau Sabah Mosquito-infested-pond-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:District-Tawau_Sabah_Mosquito-infested-pond-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 3747
+height = 5620
+why = "no subject"
+
+[[source]]
+key = "75af81f10a"
+genre = "landscape"
+title = "File:Hạ Long Bay, Ti Tốp Island, 2020-01 CN-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:H%E1%BA%A1_Long_Bay,_Ti_T%E1%BB%91p_Island,_2020-01_CN-01.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Steffen Schmitz ( more photos )"
+width = 13612
+height = 4534
+why = "no subject"
+
+[[source]]
+key = "cebca9eb4c"
+genre = "landscape"
+title = "File:Bosque de Piedra, provincia de Varna, Bulgaria, 2016-05-27, DD 83.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Bosque_de_Piedra,_provincia_de_Varna,_Bulgaria,_2016-05-27,_DD_83.jpg"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 8539
+height = 5693
+why = "no subject"
+
+[[source]]
+key = "a99e442b07"
+genre = "landscape"
+title = "File:Kinabatangan Sabah Jalan-Sukau-02.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Kinabatangan_Sabah_Jalan-Sukau-02.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5428
+height = 3619
+why = "no subject"
+
+[[source]]
+key = "f0f0936fba"
+genre = "landscape"
+title = "File:Onna Okinawa Japan Cape-Manzamo-01.jpg"
+page = "https://commons.wikimedia.org/wiki/File:Onna_Okinawa_Japan_Cape-Manzamo-01.jpg"
+license = "CC BY-SA 3.0"
+license_url = "https://creativecommons.org/licenses/by-sa/3.0"
+author = "CEphoto, Uwe Aranas"
+width = 5387
+height = 3591
+why = "no subject"
+
+[[source]]
+key = "3bf1b264eb"
+genre = "landscape"
+title = "File:Laguna Colorada, Bolivia, 2016-02-02, DD 83-87 PAN.JPG"
+page = "https://commons.wikimedia.org/wiki/File:Laguna_Colorada,_Bolivia,_2016-02-02,_DD_83-87_PAN.JPG"
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0"
+author = "Diego Delso"
+width = 20578
+height = 4998
+why = "no subject"

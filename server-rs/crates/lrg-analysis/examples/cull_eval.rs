@@ -12,13 +12,28 @@
 //! signal change can be shown to be an improvement rather than asserted to be
 //! one. Use `--ablate <knob>` to isolate a single change.
 //!
+//! `--by-defect` adds a table per defect for fixtures that label them (the
+//! public benchmark, `testdata/cull_bench`). `--tune <knob>[,<knob>…]` tries
+//! each knob over a range of values, one at a time, and prints what each value
+//! scores; it suggests and changes nothing. `--preset auto` ranks each group
+//! with the preset its photos' genre calls for, as `/v1/cull/grade` does.
+//! `--target N` or `--target P%` (and `--highlights N`) chooses that many
+//! photos across each fixture and says how the choice did on its labels.
+//! `--close-calls FILE [--gap G]` writes the groups whose pick and runner-up
+//! score within G (0.05) of each other, with their labels, as JSON — the set a
+//! second opinion is measured on.
+//!
 //! Fixture format: see `lrg_analysis::eval::EvalFixture`, and
 //! `testdata/cull_eval/README.md` for how to build one from a real shoot.
 
 use std::path::{Path, PathBuf};
 
 use lrg_analysis::culling_config::{get_culling_config, CullingConfig};
-use lrg_analysis::eval::{evaluate, merge, EvalFixture, EvalReport};
+use lrg_analysis::eval::{
+    close_calls, evaluate_by_preset, evaluate_selection, merge, EvalFixture, EvalReport,
+    SelectionReport,
+};
+use lrg_analysis::selection::Target;
 
 fn load_fixtures(root: &Path) -> Vec<(PathBuf, EvalFixture)> {
     let mut paths: Vec<PathBuf> = if root.is_dir() {
@@ -45,13 +60,16 @@ fn load_fixtures(root: &Path) -> Vec<(PathBuf, EvalFixture)> {
         .collect()
 }
 
+/// Each fixture under `preset` (or its own), with `config_of` turning a preset
+/// name into the config to rank with — per group under `auto`.
 fn run(
     fixtures: &[(PathBuf, EvalFixture)],
-    config_for: impl Fn(&EvalFixture) -> CullingConfig,
+    preset: Option<&str>,
+    config_of: impl Fn(&str) -> CullingConfig,
 ) -> Vec<EvalReport> {
     fixtures
         .iter()
-        .map(|(_, f)| evaluate(f, &config_for(f)))
+        .map(|(_, f)| evaluate_by_preset(f, preset.unwrap_or(&f.culling_preset), &config_of))
         .collect()
 }
 
@@ -77,22 +95,214 @@ fn ablate(mut cfg: CullingConfig, knob: &str) -> CullingConfig {
             cfg.ranking.reason_face_focus_threshold = 0.0;
             cfg.ranking.reject_face_focus_threshold = 0.0;
         }
+        // What the first run of the public benchmark changed: back to the
+        // margins it replaced, and no clipping penalty.
+        "benchmark-calibration" => {
+            cfg.ranking.clip_penalty_weight = 0.0;
+            cfg.ranking.relative_defect_margin = 0.10;
+            cfg.ranking.relative_occlusion_margin = 0.10;
+            cfg.ranking.relative_blur_rule = false;
+        }
+        // Ranking as it was before the subject pass, on the same measurements:
+        // no subject in the score or the labels, no noisy twins. The face
+        // aggregates in a fixture already count only the subject's faces, which
+        // only re-indexing could take back.
+        "subject" => {
+            cfg.ranking.subject_focus_weight = 0.0;
+            cfg.ranking.reason_subject_focus_threshold = 0.0;
+            cfg.ranking.reject_subject_focus_threshold = 0.0;
+            cfg.ranking.reason_panning_streak = 0.0;
+            cfg.ranking.noise_twin_ratio = 0.0;
+        }
         other => panic!(
             "unknown --ablate knob {other:?}; expected one of: \
              sharpness-peak, relative, aesthetic-model, semantic, emotion, usable-gate, \
-             kiss-gate, single-rejects, sets, eye-focus"
+             kiss-gate, single-rejects, sets, eye-focus, benchmark-calibration, subject"
         ),
     }
     cfg
 }
 
-fn print_block(title: &str, reports: &[EvalReport]) {
+/// A numeric knob `--tune` can sweep, and the values it tries. A switch is a
+/// knob with the values 0 and 1.
+struct Knob {
+    name: &'static str,
+    values: &'static [f64],
+    set: fn(&mut CullingConfig, f64),
+}
+
+const KNOBS: &[Knob] = &[
+    Knob {
+        name: "reason_blur_threshold",
+        values: &[0.08, 0.12, 0.16, 0.20, 0.24, 0.28],
+        set: |c, v| c.ranking.reason_blur_threshold = v,
+    },
+    Knob {
+        name: "relative_blur_rule",
+        values: &[0.0, 1.0],
+        set: |c, v| c.ranking.relative_blur_rule = v > 0.5,
+    },
+    Knob {
+        name: "relative_defect_margin",
+        values: &[0.04, 0.07, 0.10, 0.14, 0.20],
+        set: |c, v| c.ranking.relative_defect_margin = v,
+    },
+    Knob {
+        name: "relative_occlusion_margin",
+        values: &[0.10, 0.15, 0.20, 0.25],
+        set: |c, v| c.ranking.relative_occlusion_margin = v,
+    },
+    Knob {
+        name: "sharpness_peak_weight",
+        values: &[0.0, 0.25, 0.4, 0.55, 0.7, 0.85],
+        set: |c, v| c.ranking.sharpness_peak_weight = v,
+    },
+    Knob {
+        name: "reject_score_delta",
+        values: &[0.10, 0.14, 0.18, 0.22, 0.26],
+        set: |c, v| c.ranking.reject_score_delta = v,
+    },
+    Knob {
+        name: "eye_focus_weight",
+        values: &[0.0, 0.2, 0.35, 0.5, 0.65],
+        set: |c, v| c.ranking.eye_focus_weight = v,
+    },
+    Knob {
+        name: "reject_eye_focus_threshold",
+        values: &[0.35, 0.40, 0.45, 0.50, 0.55],
+        set: |c, v| c.ranking.reject_eye_focus_threshold = v,
+    },
+    Knob {
+        name: "reason_eye_focus_threshold",
+        values: &[0.42, 0.47, 0.52, 0.57, 0.62],
+        set: |c, v| c.ranking.reason_eye_focus_threshold = v,
+    },
+    Knob {
+        name: "relative_focus_margin",
+        values: &[0.03, 0.05, 0.08, 0.11, 0.15],
+        set: |c, v| c.ranking.relative_focus_margin = v,
+    },
+    Knob {
+        name: "aesthetic_model_weight",
+        values: &[0.0, 0.3, 0.6, 0.9, 1.0],
+        set: |c, v| c.ranking.aesthetic_model_weight = v,
+    },
+    Knob {
+        name: "relative_normalization_weight",
+        values: &[0.0, 0.25, 0.5, 0.65, 0.8],
+        set: |c, v| c.ranking.relative_normalization_weight = v,
+    },
+    Knob {
+        name: "semantic_weight",
+        values: &[0.0, 0.15, 0.3, 0.45, 0.6],
+        set: |c, v| c.ranking.semantic_weight = v,
+    },
+    Knob {
+        name: "clip_penalty_weight",
+        values: &[0.0, 0.1, 0.2, 0.3, 0.45],
+        set: |c, v| c.ranking.clip_penalty_weight = v,
+    },
+    Knob {
+        name: "clip_penalty_scale",
+        values: &[0.02, 0.05, 0.1, 0.2],
+        set: |c, v| c.ranking.clip_penalty_scale = v,
+    },
+    Knob {
+        name: "noise_twin_ratio",
+        values: &[0.0, 1.3, 1.6, 2.0, 3.0],
+        set: |c, v| c.ranking.noise_twin_ratio = v,
+    },
+    Knob {
+        name: "noise_twin_penalty",
+        values: &[0.05, 0.1, 0.15, 0.25, 0.35],
+        set: |c, v| c.ranking.noise_twin_penalty = v,
+    },
+    Knob {
+        name: "noise_twin_sharpness_delta",
+        values: &[0.01, 0.02, 0.03, 0.05, 0.08],
+        set: |c, v| c.ranking.noise_twin_sharpness_delta = v,
+    },
+    Knob {
+        name: "subject_focus_weight",
+        values: &[0.0, 0.25, 0.5, 0.75, 1.0],
+        set: |c, v| c.ranking.subject_focus_weight = v,
+    },
+    Knob {
+        name: "reason_subject_focus_threshold",
+        values: &[0.0, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55],
+        set: |c, v| c.ranking.reason_subject_focus_threshold = v,
+    },
+    Knob {
+        name: "reject_subject_focus_threshold",
+        values: &[0.0, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5],
+        set: |c, v| c.ranking.reject_subject_focus_threshold = v,
+    },
+    Knob {
+        name: "relative_subject_margin",
+        values: &[0.03, 0.05, 0.08, 0.12, 0.16],
+        set: |c, v| c.ranking.relative_subject_margin = v,
+    },
+    Knob {
+        name: "reason_background_sharper_margin",
+        values: &[0.0, 0.02, 0.05, 0.1],
+        set: |c, v| c.ranking.reason_background_sharper_margin = v,
+    },
+    Knob {
+        name: "reason_panning_streak",
+        values: &[0.0, 0.05, 0.1, 0.15, 0.2, 0.3],
+        set: |c, v| c.ranking.reason_panning_streak = v,
+    },
+    Knob {
+        name: "reject_exposure_threshold",
+        values: &[0.0, 0.15, 0.22, 0.28, 0.34],
+        set: |c, v| c.ranking.reject_exposure_threshold = v,
+    },
+];
+
+/// One number for `--tune` to compare values by, and only for that: the
+/// report itself keeps every measure apart, because they trade against each
+/// other. Ordering counts most, a lost must-keep frame costs twice what a
+/// found reject is worth, and a wrong reject costs as much as a missed one.
+fn tune_objective(r: &EvalReport) -> f64 {
+    let order = if r.pairs_labelled > 0 {
+        r.pair_accuracy()
+    } else {
+        r.ndcg
+    };
+    order + r.winner_accuracy() + 0.5 * r.reject_recall() + 0.5 * r.reject_precision()
+        - 2.0 * r.must_keep_reject_rate()
+        - 0.5 * r.forbidden_reason_rate()
+}
+
+fn print_block(title: &str, reports: &[EvalReport], by_defect: bool) {
     println!("\n=== {title} ===");
     for r in reports {
         println!("{}", r.to_text());
     }
+    let all = merge(reports, "ALL FIXTURES");
     if reports.len() > 1 {
-        println!("\n{}", merge(reports, "ALL FIXTURES").to_text());
+        println!("\n{}", all.to_text());
+    }
+    if by_defect && !all.by_defect.is_empty() {
+        println!("\n{}", all.defect_table());
+    }
+}
+
+/// `--mistakes`: each frame on its own line, fixture first, so a `grep` for a
+/// genre or a defect narrows it down.
+fn print_mistakes(reports: &[EvalReport]) {
+    println!("\n=== mistakes ===");
+    for r in reports {
+        for m in &r.mistakes {
+            println!(
+                "{:<16} {:<15} {:<16} {:<42} {}",
+                r.fixture,
+                m.kind,
+                m.defect.as_deref().unwrap_or("-"),
+                m.photo_id,
+                m.reasons.join(",")
+            );
+        }
     }
 }
 
@@ -148,6 +358,84 @@ fn print_delta(before: &EvalReport, after: &EvalReport) {
         before.grouping_recall(),
         after.grouping_recall(),
     );
+    if before.pairs_labelled > 0 {
+        row("pair order", before.pair_accuracy(), after.pair_accuracy());
+    }
+    // Inverted so that "positive is better" holds here too.
+    if before.must_keep_labelled > 0 {
+        row(
+            "must-keep kept",
+            1.0 - before.must_keep_reject_rate(),
+            1.0 - after.must_keep_reject_rate(),
+        );
+    }
+    if before.reasons_expected > 0 {
+        row(
+            "reason named",
+            before.reason_hit_rate(),
+            after.reason_hit_rate(),
+        );
+    }
+    if before.forbid_checked > 0 {
+        row(
+            "no wrong reason",
+            1.0 - before.forbidden_reason_rate(),
+            1.0 - after.forbidden_reason_rate(),
+        );
+    }
+}
+
+/// `--tune`: each named knob alone, over its values, on top of each fixture's
+/// own preset. Prints the measures per value and marks the best by
+/// [`tune_objective`]. A suggestion to look at, not a setting.
+fn tune(fixtures: &[(PathBuf, EvalFixture)], preset: Option<&str>, names: &str) {
+    for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let Some(knob) = KNOBS.iter().find(|k| k.name == name) else {
+            let known: Vec<&str> = KNOBS.iter().map(|k| k.name).collect();
+            panic!(
+                "unknown --tune knob {name:?}; expected one of: {}",
+                known.join(", ")
+            );
+        };
+        println!("\n=== tune: {name} ===");
+        println!(
+            "  {:>7}  {:>7} {:>7} {:>7} {:>7} {:>8} {:>7}  {:>7}",
+            "value", "top-1", "pairs", "rej-P", "rej-R", "kept-ok", "named", "score"
+        );
+        let mut best: Option<(f64, f64)> = None;
+        let mut rows = Vec::new();
+        for &value in knob.values {
+            let reports = run(fixtures, preset, |p| {
+                let mut cfg = get_culling_config(p);
+                (knob.set)(&mut cfg, value);
+                cfg
+            });
+            let all = merge(&reports, name);
+            let score = tune_objective(&all);
+            if best.is_none_or(|(_, s)| score > s + 1e-9) {
+                best = Some((value, score));
+            }
+            rows.push((value, all, score));
+        }
+        for (value, all, score) in rows {
+            let mark = if best.is_some_and(|(v, _)| v == value) {
+                "  <- best"
+            } else {
+                ""
+            };
+            println!(
+                "  {:>7.3}  {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>7.1}% {:>6.1}%  {:>7.3}{mark}",
+                value,
+                all.winner_accuracy() * 100.0,
+                all.pair_accuracy() * 100.0,
+                all.reject_precision() * 100.0,
+                all.reject_recall() * 100.0,
+                (1.0 - all.must_keep_reject_rate()) * 100.0,
+                all.reason_hit_rate() * 100.0,
+                score,
+            );
+        }
+    }
 }
 
 fn main() {
@@ -155,12 +443,20 @@ fn main() {
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         eprintln!(
             "usage: cull_eval <fixture.json|fixture-dir> [--preset NAME] \
-             [--compare] [--ablate KNOB]\n\n\
+             [--compare] [--ablate KNOB] [--by-defect] [--mistakes] [--tune KNOB[,KNOB…]]\n\
+             \x20               [--target N|P%] [--highlights N] [--close-calls FILE [--gap G]]\n\n\
              --preset NAME   override each fixture's own culling_preset\n\
              --compare       also run CullingConfig::python_parity and show the delta\n\
              --ablate KNOB   also run with one knob rolled back, and show the delta\n\
-             \x20               (sharpness-peak | relative | iqa | semantic | emotion |\n\
-             \x20                usable-gate | kiss-gate | single-rejects | sets)"
+             \x20               (sharpness-peak | relative | aesthetic-model | semantic |\n\
+             \x20                emotion | usable-gate | kiss-gate | single-rejects | sets |\n\
+             \x20                eye-focus | benchmark-calibration | subject)\n\
+             --by-defect     a table per labelled defect (the public benchmark)\n\
+             --mistakes      every must-keep frame lost and every wrong reason, with\n\
+             \x20               what the explanation said\n\
+             --tune KNOBS    sweep each knob alone and show what each value scores:\n\
+             \x20               {}",
+            KNOBS.iter().map(|k| k.name).collect::<Vec<_>>().join(", ")
         );
         std::process::exit(if args.is_empty() { 2 } else { 0 });
     }
@@ -174,7 +470,10 @@ fn main() {
     };
     let preset_override = value_after("--preset");
     let ablate_knob = value_after("--ablate");
+    let tune_knobs = value_after("--tune");
     let compare = args.iter().any(|a| a == "--compare");
+    let by_defect = args.iter().any(|a| a == "--by-defect");
+    let mistakes = args.iter().any(|a| a == "--mistakes");
 
     let fixtures = load_fixtures(&root);
     if fixtures.is_empty() {
@@ -192,22 +491,107 @@ fn main() {
             .sum::<usize>(),
     );
 
-    let current = |f: &EvalFixture| {
-        get_culling_config(preset_override.as_deref().unwrap_or(&f.culling_preset))
-    };
-    let after = run(&fixtures, current);
-    print_block("current", &after);
+    let preset = preset_override.as_deref();
+    let after = run(&fixtures, preset, get_culling_config);
+    print_block("current", &after, by_defect);
+    if mistakes {
+        print_mistakes(&after);
+    }
     let after_all = merge(&after, "current");
 
     if compare {
-        let before = run(&fixtures, |_| CullingConfig::python_parity());
-        print_block("python_parity (ranking before this pass)", &before);
+        let before = run(&fixtures, preset, |_| CullingConfig::python_parity());
+        print_block(
+            "python_parity (ranking before this pass)",
+            &before,
+            by_defect,
+        );
         print_delta(&merge(&before, "parity"), &after_all);
     }
 
     if let Some(knob) = ablate_knob {
-        let before = run(&fixtures, |f| ablate(current(f), &knob));
-        print_block(&format!("ablated: {knob}"), &before);
+        let before = run(&fixtures, preset, |p| ablate(get_culling_config(p), &knob));
+        print_block(&format!("ablated: {knob}"), &before, by_defect);
         print_delta(&merge(&before, "ablated"), &after_all);
     }
+
+    if let Some(knobs) = tune_knobs {
+        tune(&fixtures, preset, &knobs);
+    }
+
+    if let Some(out) = value_after("--close-calls") {
+        let gap: f64 = value_after("--gap")
+            .map(|g| g.parse().expect("--gap G"))
+            .unwrap_or(0.05);
+        let calls: Vec<_> = fixtures
+            .iter()
+            .flat_map(|(_, f)| {
+                close_calls(
+                    f,
+                    preset.unwrap_or(&f.culling_preset),
+                    get_culling_config,
+                    gap,
+                )
+            })
+            .collect();
+        let decided: Vec<_> = calls
+            .iter()
+            .filter(|c| matches!((c.pick_rank, c.runner_up_rank), (Some(a), Some(b)) if a != b))
+            .collect();
+        let right = decided
+            .iter()
+            .filter(|c| c.pick_rank < c.runner_up_rank)
+            .count();
+        println!(
+            "\n=== close calls within {gap} ===\n  {} close calls, {} with different labels; \
+             the ranking chose the better one in {right}",
+            calls.len(),
+            decided.len()
+        );
+        std::fs::write(&out, serde_json::to_string_pretty(&calls).unwrap())
+            .expect("write --close-calls");
+    }
+
+    if let Some(target) = value_after("--target") {
+        let target = match target.strip_suffix('%') {
+            Some(p) => Target::Fraction(p.parse::<f64>().expect("--target P%") / 100.0),
+            None => Target::Count(target.parse().expect("--target N")),
+        };
+        let highlights: usize = value_after("--highlights")
+            .map(|h| h.parse().expect("--highlights N"))
+            .unwrap_or(0);
+        let mut all = SelectionReport::default();
+        println!("\n=== selection to {target:?}, {highlights} highlight(s) per fixture ===");
+        for (_, f) in &fixtures {
+            let r = evaluate_selection(
+                f,
+                preset.unwrap_or(&f.culling_preset),
+                get_culling_config,
+                target,
+                highlights,
+            );
+            print_selection(&f.name, &r);
+            all.add(&r);
+        }
+        print_selection("ALL FIXTURES", &all);
+    }
+}
+
+fn print_selection(name: &str, r: &SelectionReport) {
+    let pct = |a: usize, b: usize| {
+        if b == 0 {
+            0.0
+        } else {
+            a as f64 * 100.0 / b as f64
+        }
+    };
+    println!(
+        "  {name:<16} chose {:>4}  series covered {:>5.1}%  best of its series {:>5.1}%  \
+         rejects {:>5.1}%  highlights best {:>5.1}%",
+        r.selected,
+        pct(r.series_covered, r.series),
+        pct(r.best, r.selected),
+        pct(r.rejects, r.selected),
+        pct(r.highlights_best, r.highlights),
+    );
 }

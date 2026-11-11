@@ -15,3 +15,4 @@ pub mod metrics;
 pub mod pil_resample;
 pub mod raw;
 pub mod scene;
+pub mod subject_focus;

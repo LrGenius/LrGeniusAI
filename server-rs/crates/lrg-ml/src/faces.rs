@@ -148,6 +148,9 @@ pub struct FaceModel {
     loaded: Mutex<Option<Loaded>>,
     last_used_unix: AtomicI64,
     load_error: Mutex<Option<String>>,
+    /// Look at four tiles of the frame again for faces too small for the
+    /// first pass (`yunet::tiles`). On; off only to measure what it adds.
+    tile_pass: bool,
 }
 
 fn now_unix() -> i64 {
@@ -208,6 +211,11 @@ pub struct FaceResult {
     /// model is on disk. `None` when it did not run for this face (not
     /// prominent, too small, model missing).
     pub state: Option<crate::face_state::FaceState>,
+    /// Found by the tile pass: a face too small for one look at the whole
+    /// frame. It counts for culling but gets no identity — no embedding and
+    /// no thumbnail even under [`FacePass::Full`], since 20 to 60 pixels do
+    /// not tell people apart — and comes after every face of the first pass.
+    pub from_tiles: bool,
 }
 
 /// Re-measures every face's eye and face focus on `image`, a larger copy of
@@ -319,6 +327,34 @@ fn build_session(path: &Path) -> ort::Result<Session> {
     crate::apply_kleidiai_policy(builder)?.commit_from_file(path)
 }
 
+/// One look of the detector at an RGB8 image, its faces in that image's
+/// coordinates.
+fn run_detector(
+    session: &mut Session,
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> Result<Vec<yunet::Detection>, FaceError> {
+    let pre = yunet::preprocess(pixels, width, height);
+    let input = Tensor::from_array(([1, 3, 640, 640], pre.blob))?;
+    let outputs = session.run(ort::inputs!["input" => input])?;
+    // Fetched by name, not by index. The YuNet graph declares its twelve
+    // outputs as cls/obj/bbox/kps per stride, and `decode_outputs` needs
+    // them in exactly that grouping; positional indexing would depend on
+    // the exporter's ordering, and a silently permuted set decodes into
+    // plausible boxes in the wrong places rather than failing.
+    let mut flat = Vec::with_capacity(yunet::NUM_OUTPUTS);
+    for name in yunet::OUTPUT_NAMES {
+        let value = outputs.get(name).ok_or_else(|| {
+            FaceError::UnexpectedOutputs(format!("detector has no output named `{name}`"))
+        })?;
+        let (_, data) = value.try_extract_tensor::<f32>()?;
+        flat.push(data);
+    }
+    let refs: [&[f32]; yunet::NUM_OUTPUTS] = std::array::from_fn(|i| flat[i]);
+    Ok(yunet::decode_outputs(&refs, pre.det_scale))
+}
+
 impl FaceModel {
     pub fn new(paths: FaceModelPaths) -> Self {
         FaceModel {
@@ -327,7 +363,16 @@ impl FaceModel {
             loaded: Mutex::new(None),
             last_used_unix: AtomicI64::new(0),
             load_error: Mutex::new(None),
+            tile_pass: true,
         }
+    }
+
+    /// The same model without the tile pass, which finds only the faces one
+    /// look at the whole frame finds: for measuring what the tiles add.
+    #[must_use]
+    pub fn without_tiles(mut self) -> Self {
+        self.tile_pass = false;
+        self
     }
 
     /// Whether the detector and the *active* recognizer are on disk.
@@ -492,29 +537,32 @@ impl FaceModel {
         let loaded = guard.as_mut().ok_or(FaceError::NotLoaded)?;
         let model_id = loaded.recognizer.model_id();
 
-        let pre = yunet::preprocess(pixels, width, height);
-        let input = Tensor::from_array(([1, 3, 640, 640], pre.blob))?;
-        let outputs = loaded.det_session.run(ort::inputs!["input" => input])?;
-        // Fetched by name, not by index. The YuNet graph declares its twelve
-        // outputs as cls/obj/bbox/kps per stride, and `decode_outputs` needs
-        // them in exactly that grouping; positional indexing would depend on
-        // the exporter's ordering, and a silently permuted set decodes into
-        // plausible boxes in the wrong places rather than failing.
-        let mut flat = Vec::with_capacity(yunet::NUM_OUTPUTS);
-        for name in yunet::OUTPUT_NAMES {
-            let value = outputs.get(name).ok_or_else(|| {
-                FaceError::UnexpectedOutputs(format!("detector has no output named `{name}`"))
-            })?;
-            let (_, data) = value.try_extract_tensor::<f32>()?;
-            flat.push(data);
+        let mut detections = run_detector(&mut loaded.det_session, pixels, width, height)?;
+        let first_pass = detections.len();
+        // Faces too small for one look at the whole frame: four overlapping
+        // tiles looked at again, their faces added after the first pass's,
+        // which therefore comes out exactly as before.
+        if self.tile_pass {
+            let mut found = Vec::new();
+            for tile in yunet::tiles(width, height) {
+                let crop = yunet::crop(pixels, width, tile);
+                let dets = run_detector(&mut loaded.det_session, &crop, tile.w, tile.h)?;
+                found.extend(dets.into_iter().map(|d| (d, tile)));
+            }
+            yunet::merge_tiles(&mut detections, found, width, height);
         }
-        let refs: [&[f32]; yunet::NUM_OUTPUTS] = std::array::from_fn(|i| flat[i]);
-        let detections = yunet::decode_outputs(&refs, pre.det_scale);
 
         let image_area = (width * height).max(1) as f64;
         let mut results = Vec::with_capacity(detections.len());
 
-        for det in &detections {
+        for (k, det) in detections.iter().enumerate() {
+            let from_tiles = k >= first_pass;
+            // No identity for a tile face; see `FaceResult::from_tiles`.
+            let pass = if from_tiles {
+                FacePass::QualityOnly
+            } else {
+                pass
+            };
             let kps_f64: [[f64; 2]; 5] = det.kps.map(|p| [p[0] as f64, p[1] as f64]);
 
             let x1 = (det.bbox[0].round() as i64).max(0).min(width as i64);
@@ -642,6 +690,7 @@ impl FaceModel {
                 eye_px: round4(focus.eye_px),
                 focus_scale: 1.0,
                 state: None,
+                from_tiles,
             });
         }
         Ok((results, model_id))
@@ -740,6 +789,7 @@ mod focus_tests {
             eye_px: 25.0,
             focus_scale: 1.0,
             state: None,
+            from_tiles: false,
         }
     }
 

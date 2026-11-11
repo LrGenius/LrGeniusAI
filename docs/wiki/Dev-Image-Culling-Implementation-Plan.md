@@ -1036,6 +1036,15 @@ is how a stack is recognised, and it is also what a group of people shifting
 their weight between frames looks like. `SetFrame::faces` now carries
 `cull_face_count`, and a group with a face in any frame is never a stack.
 
+**A frame sharp nowhere is no slice.** The public benchmark found the second
+way a burst passes for a stack: one camera-shaken frame has no sharp region,
+and its "sharpest region" lands wherever the noise is, so the region travels.
+31 of its 120 series were kept whole as stacks, their rejects never nominated.
+`SetFrame::peak_sharpness` (`cull_sharpness_peak`) now has to reach
+`focus_stack_min_peak_ratio` (0.35) of the group's sharpest frame in every
+frame: reject recall on the benchmark 70.8 → 86.9 %, precision 92.8 → 94.1 %,
+the labelled sets of `testdata/cull_eval` still kept and recognised.
+
 The first run's flag writing, undo, respect-existing protection and
 collections all behaved as designed: 96 picks flagged (103 picks minus the 7
 "stacks", which are never flagged), 49 purple labels, 0 rejects (as
@@ -1324,4 +1333,49 @@ eyes shut. The relative rules catch the first two inside a burst, since every fr
 reads alike there. And portraits from Commons are not a shoot, so **the thresholds
 stay hypotheses** until a hand-culled shoot with real blinks has been scored with
 `cull_eval --ablate` — the same caveat as every other threshold here.
+
+## Matching the established tools
+
+Planned on 2026-11-10 after researching what the other culling tools judge
+([Dev-Image-Culling-Competitive-Analysis.md](Dev-Image-Culling-Competitive-Analysis.md)).
+Each step is measured on the public benchmark
+([Dev-Image-Culling-Benchmark.md](Dev-Image-Culling-Benchmark.md)) before and
+after.
+
+| Step | What | Status |
+|---|---|---|
+| 0 | A public benchmark, a harness that scores it by defect, the margins and the clipping penalty it argued for | **done** |
+| 1 | The subject without a face: RF-DETR-Seg finds it, focus measured on it and on the background; only the subject's faces counted; noise compared between frames of equal sharpness; a `wildlife` preset | **done** — winner 31.7 → 73.3 %, must-keep lost 12.1 → 9.1 % ([numbers](Dev-Image-Culling-Benchmark.md#the-subject-pass)) |
+| 2 | The genre chooses the preset, per group (`culling_preset: "auto"`, the plugin's new default) | **done** — at or above the hand-chosen presets on every ranking number ([numbers](Dev-Image-Culling-Benchmark.md#the-preset-from-the-genre)) |
+| 3 | People who matter (the photographer's key people) and small faces in a crowd | **done** — key people opt-in (`key_people`), named in the explanation; a tile pass for small faces ([numbers](Dev-Image-Culling-Benchmark.md#people-key-people-and-small-faces)) |
+| 4 | Scenes, a target count or share, highlights across a shoot | **done** — `target_count`/`target_fraction`, `highlights_count`; one photo per series covers every series ([numbers](Dev-Image-Culling-Benchmark.md#scenes-a-target-and-highlights)) |
+| 5 | Animal eyes | **stopped at the licence gate** (2026-11-11): no model with weights and training data clear for this project's use — see below |
+| 6 | Learning the photographer's taste from the catalog's flags and stars, locally | **done** — `/v1/cull/taste`, *Learn My Culling Style*, `use_taste`; proven per photographer by cross-validation against the default ranking, used only when better |
+| 7 | A vision model for close calls, optional, with its reason in words | **measured, not shipped**: a local 3B model was right in 60.4 % of the benchmark's close calls, the ranking in 64.2 % ([numbers](Dev-Image-Culling-Benchmark.md#a-second-opinion-for-close-calls-not-shipped)) |
+
+Already at the level of the best of them: judging against the burst rather
+than absolute thresholds, eye focus on the full-size original, eye state with
+an explicit "unknown", an explanation for every frame, and brackets, focus
+stacks and panoramas recognised and kept. Missing at the start: everything in
+the table.
+
+### Step 5: the licence gate
+
+Animal eyes need a model that finds them, and every candidate failed the gate
+on its weights or its training data, not its code:
+
+- **RTMPose-m on AP-10K** (MMPose): code Apache-2.0. AP-10K is given as
+  CC-BY-4.0 in its repository and as "non-commercial use only" in MMPose's
+  documentation; the AI Challenger pre-training has no published licence. The
+  question is open upstream
+  ([open-mmlab/mmpose#3281](https://github.com/open-mmlab/mmpose/issues/3281)).
+- **SuperAnimal** (DeepLabCut model zoo): weights for academic, non-commercial
+  use only; the dataset under a modified MIT licence with a separate
+  commercial licence on request. Luxonis' ONNX export is GPL-3.0.
+- **RF-DETR keypoints** (Apache-2.0) is a general keypoint model: it would have
+  to be trained on animal eyes, and the public data for that is the data above.
+
+Until the photographer, who decides what licence risk the project takes, says
+otherwise, animals are judged by focus on the subject (step 1), which the
+wildlife preset weights fully. Birds had no candidate at all.
 

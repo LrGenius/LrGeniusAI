@@ -43,6 +43,11 @@ pub struct AppState {
     /// detection never depends on it: without it culling falls back to the
     /// eye-openness proxy and says so.
     pub face_state: Arc<lrg_ml::face_state::FaceStateModel>,
+    /// Global — RF-DETR-Seg, which finds the subject of a photo so culling can
+    /// tell focus on the subject from focus on the background
+    /// (`lrg_ml::subject`). A family of its own: without it culling judges
+    /// sharpness frame-wide, as before, and says so.
+    pub subject: Arc<lrg_ml::subject::SubjectModel>,
     /// Global — BioCLIP 2 plus its pruned Tree-of-Life head, same lazy-load
     /// and idle-unload contract as `siglip`/`face`. Its head alone is a few
     /// hundred MB resident, so leaving it out of `run_maintenance` would keep
@@ -111,6 +116,7 @@ pub struct ModelAssetPaths {
     pub aesthetic: AestheticPaths,
     pub face: FaceModelPaths,
     pub face_state: lrg_ml::face_state::FaceStatePaths,
+    pub subject: lrg_ml::subject::SubjectPaths,
     pub bioclip: BioclipModelPaths,
 }
 
@@ -122,6 +128,7 @@ impl ModelAssetPaths {
             aesthetic: lrg_ml::model_paths::resolve_aesthetic(),
             face: lrg_ml::model_paths::resolve_face(),
             face_state: lrg_ml::model_paths::resolve_face_state(),
+            subject: lrg_ml::model_paths::resolve_subject(),
             bioclip: lrg_ml::model_paths::resolve_bioclip(),
         }
     }
@@ -154,6 +161,7 @@ impl AppState {
             aesthetic: Arc::new(AestheticModel::new(models.aesthetic)),
             face: Arc::new(FaceModel::new(models.face)),
             face_state: Arc::new(lrg_ml::face_state::FaceStateModel::new(models.face_state)),
+            subject: Arc::new(lrg_ml::subject::SubjectModel::new(models.subject)),
             bioclip: Arc::new(BioclipModel::new(models.bioclip)),
             jobs: Arc::new(JobRegistry::new()),
             ui_bridge: Arc::new(UiBridge::new()),
@@ -195,6 +203,7 @@ impl AppState {
         self.aesthetic.unload_if_idle();
         self.face.unload_if_idle();
         self.face_state.unload_if_idle();
+        self.subject.unload_if_idle();
         self.bioclip.unload_if_idle();
         self.llm.unload_if_idle();
         self.mlx.unload_if_idle();

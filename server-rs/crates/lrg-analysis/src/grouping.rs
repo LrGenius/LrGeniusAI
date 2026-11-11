@@ -192,6 +192,9 @@ pub struct Group {
     /// and is never `None` here — but `reject_candidate_photo_ids` is
     /// guaranteed empty.
     pub intentional_set: Option<IntentionalSet>,
+    /// The preset this group was ranked with, when the caller chose one per
+    /// group (`culling_preset: "auto"`); `None` when one config ranked all.
+    pub preset: Option<&'static str>,
 }
 
 impl Group {
@@ -261,6 +264,29 @@ struct Scored<'a> {
     cull_face_luminance: Option<f64>,
     cull_face_across_stops: Option<f64>,
     cull_face_blown: Option<f64>,
+    /// Focus on the subject and on the background, and how streaked the
+    /// background is (`lrg_imaging::subject_focus`); `None` when there was no
+    /// subject or too little of it to measure.
+    cull_subject_focus: Option<f64>,
+    cull_background_focus: Option<f64>,
+    cull_background_streak: Option<f64>,
+    /// The photo went through the subject pass (`cull_subject_version` is
+    /// current), whether or not it found a subject.
+    subject_measured: bool,
+    /// Grain at full working size (`cull_noise_fine`), and whether it makes
+    /// this frame a noisy twin of a sibling — see
+    /// `RankingConfig::noise_twin_ratio`.
+    cull_noise_fine: Option<f64>,
+    noisy_twin: bool,
+    /// What [`RankingConfig::noise_twin_penalty`] took off the final score,
+    /// after the moment blend: given back when deciding rejects.
+    noise_cost: f64,
+    /// The subject labels: clearly softer than the group's sharpest subject,
+    /// and of those, sharper behind than on the subject.
+    subject_soft: bool,
+    focus_on_background: bool,
+    /// Subject sharp, background streaked along one axis: a pan.
+    panning: bool,
     /// A prominent face has its lids down on a lowered head: looking down.
     looking_down: bool,
     /// The photo went through the face state pass (`cull_face_state_version`
@@ -329,6 +355,23 @@ pub fn face_state_is_current(metadata: &serde_json::Map<String, Value>) -> bool 
     metadata.get(FACE_STATE_VERSION_KEY).and_then(Value::as_i64) == Some(FACE_STATE_VERSION)
 }
 
+/// Stored on every photo that went through the subject pass (the subject
+/// found by `lrg_ml::subject`, focus measured on it by
+/// `lrg_imaging::subject_focus`), subject or not. Like [`FOCUS_VERSION_KEY`],
+/// its presence tells "no subject in this photo" from "prepared before the
+/// pass existed".
+pub const SUBJECT_VERSION_KEY: &str = "cull_subject_version";
+
+/// The value stored under [`SUBJECT_VERSION_KEY`]. Bump it when stored
+/// readings become incomparable with new ones; `/index/unprocessed` then has
+/// those photos measured again, and until then they rank as before the pass.
+pub const SUBJECT_VERSION: i64 = 1;
+
+/// Whether a photo's subject was measured by this version of the pass.
+pub fn subject_is_current(metadata: &serde_json::Map<String, Value>) -> bool {
+    metadata.get(SUBJECT_VERSION_KEY).and_then(Value::as_i64) == Some(SUBJECT_VERSION)
+}
+
 /// How much eye focus one point of the 0–10 in the explanation is worth.
 ///
 /// On the reference portrait (`testdata/astronaut.jpg`) a Gaussian blur of
@@ -351,7 +394,25 @@ fn eye_focus_out_of_ten(eye_focus: f64, best: f64) -> u32 {
         .clamp(0.0, 10.0) as u32
 }
 
-fn explanation_from_reason_codes(codes: &[String]) -> String {
+/// The key person a reason is about, by name, where culling's key people
+/// recorded one (`cull_who_*`, written at rank time by the API and never
+/// stored): "Anna: eyes closed" rather than "eyes closed" on a frame of eight.
+pub const WHO_EYES_CLOSED_KEY: &str = "cull_who_eyes_closed";
+pub const WHO_EYE_FOCUS_KEY: &str = "cull_who_eye_focus";
+pub const WHO_LOOKING_AWAY_KEY: &str = "cull_who_looking_away";
+
+fn who_for(code: &str) -> Option<&'static str> {
+    match code {
+        "eyes_closed" | "eyes_half_closed" | "possible_blink" => Some(WHO_EYES_CLOSED_KEY),
+        "eyes_out_of_focus" | "face_out_of_focus" => Some(WHO_EYE_FOCUS_KEY),
+        "looking_away" => Some(WHO_LOOKING_AWAY_KEY),
+        _ => None,
+    }
+}
+
+/// The reasons in words, with the key person named where `metadata` says who
+/// a reason is about.
+fn explanation_naming(codes: &[String], metadata: &Map<String, Value>) -> String {
     if codes.is_empty() {
         return "single image in group".to_string();
     }
@@ -361,6 +422,7 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             "blurred" => "noticeably blurred".to_string(),
             "motion_blur" => "softness looks like camera shake or subject motion".to_string(),
             "peak_action" => "strongest moment in the sequence".to_string(),
+            "peak_behaviour" => "the animal is doing the most in this frame".to_string(),
             "best_expression" => "best expression in the group".to_string(),
             "strongest_moment" => "the most genuine, unposed moment in the group".to_string(),
             "strongest_emotion" => "strongest emotion in the group".to_string(),
@@ -376,6 +438,9 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             "panorama_frame_kept" => "part of a panorama sweep — kept, not culled".to_string(),
             "underexposed" => "darker than stronger alternatives".to_string(),
             "overexposed" => "brighter than stronger alternatives".to_string(),
+            "highlights_clipped" => {
+                "highlights blown out where a sibling frame kept them".to_string()
+            }
             "low_aesthetic" => "weaker aesthetic impression than alternatives".to_string(),
             "best_face_quality" => "best face quality in group".to_string(),
             "weak_face_quality" => "weaker face quality than alternatives".to_string(),
@@ -384,6 +449,15 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
             }
             "possible_occlusion" => "possible facial occlusion or weak visibility".to_string(),
             "eyes_out_of_focus" => "the eyes are not sharp — focus landed elsewhere".to_string(),
+            "subject_out_of_focus" => "the subject is not sharp".to_string(),
+            "focus_on_background" => {
+                "the subject is soft and the background sharp — focus landed behind it".to_string()
+            }
+            "subject_sharpest_in_group" => "sharpest subject in group".to_string(),
+            "panning" => "a pan: the subject sharp, the background streaked".to_string(),
+            "noisier_than_sibling" => {
+                "visibly grainier than an equally sharp sibling frame".to_string()
+            }
             "face_out_of_focus" => "the face is not sharp".to_string(),
             "eyes_sharpest_in_group" => "sharpest eyes in group".to_string(),
             "eyes_open_best" => "best eyes-open result in group".to_string(),
@@ -403,7 +477,16 @@ fn explanation_from_reason_codes(codes: &[String]) -> String {
     };
     codes
         .iter()
-        .map(|c| label(c))
+        .map(|c| {
+            match who_for(c)
+                .and_then(|key| metadata.get(key))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+            {
+                Some(name) => format!("{name}: {}", label(c)),
+                None => label(c),
+            }
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -454,6 +537,31 @@ fn rank_group_records(
     // detail as grain), so a group indexed half before and half after the
     // flat one shipped must not compare one frame's grain with another's
     // texture. All or nothing per group, like the moment.
+    // The least clipped frame of the group, for the clipping penalty: blown
+    // highlights count only beyond what every frame of the burst shares.
+    let least_clipped = records
+        .iter()
+        .map(|r| metric(&r.metadata, "cull_highlight_clip", 0.0))
+        .fold(f64::INFINITY, f64::min);
+    let clip_excess = |clip: f64| -> f64 {
+        if records.len() < 2 || cfg.ranking.clip_penalty_scale <= 0.0 {
+            return 0.0;
+        }
+        ((clip - least_clipped).max(0.0) / cfg.ranking.clip_penalty_scale).min(1.0)
+    };
+    // Subject focus takes part in the sharpness only when every frame of the
+    // group went through the subject pass and has a reading — all or nothing,
+    // like the moment, so frames are never compared on two different
+    // questions. A single has nothing to compare with.
+    let subject_values: Vec<f64> = records
+        .iter()
+        .filter_map(|r| r.metadata.get("cull_subject_focus").and_then(Value::as_f64))
+        .map(unit)
+        .collect();
+    let blend_subject = cfg.ranking.subject_focus_weight > 0.0
+        && records.len() > 1
+        && subject_values.len() == records.len()
+        && records.iter().all(|r| subject_is_current(&r.metadata));
     let all_have_flat_noise = records.iter().all(|r| {
         r.metadata
             .get("cull_noise_flat")
@@ -472,6 +580,18 @@ fn rank_group_records(
             let sharpness_effective = match m.get("cull_sharpness_peak").and_then(Value::as_f64) {
                 Some(peak) => (1.0 - rk_peak_weight) * sharpness + rk_peak_weight * unit(peak),
                 None => sharpness,
+            };
+            // What the technical score reads as sharpness: part of it from the
+            // subject, scored against the group. `sharpness_effective` itself
+            // stays the frame's own reading, for the blur rules and the
+            // explanation.
+            let sharpness_scored = match m.get("cull_subject_focus").and_then(Value::as_f64) {
+                Some(subject) if blend_subject => {
+                    let w = cfg.ranking.subject_focus_weight.clamp(0.0, 1.0);
+                    (1.0 - w) * sharpness_effective
+                        + w * relative_to_group(&subject_values, unit(subject), cfg)
+                }
+                _ => sharpness_effective,
             };
             let motion_anisotropy = metric(m, "cull_motion_anisotropy", 0.0);
             let exposure_absolute = metric(m, "cull_exposure", 0.0);
@@ -518,10 +638,11 @@ fn rank_group_records(
                     + im.technical_weight_exposure
                     + im.technical_weight_noise;
                 unit(
-                    (im.technical_weight_sharpness * sharpness_effective
+                    (im.technical_weight_sharpness * sharpness_scored
                         + im.technical_weight_exposure * exposure
                         + im.technical_weight_noise * (1.0 - noise_penalty))
-                        / weight_sum.max(1e-6),
+                        / weight_sum.max(1e-6)
+                        - cfg.ranking.clip_penalty_weight * clip_excess(highlight_clip),
                 )
             } else {
                 metric(m, "cull_technical_score", technical_default)
@@ -612,6 +733,16 @@ fn rank_group_records(
                 cull_face_luminance: read("cull_face_luminance"),
                 cull_face_across_stops,
                 cull_face_blown: read("cull_face_blown"),
+                cull_subject_focus: read("cull_subject_focus"),
+                cull_background_focus: read("cull_background_focus"),
+                cull_background_streak: read("cull_background_streak"),
+                subject_measured: subject_is_current(m),
+                cull_noise_fine: m.get("cull_noise_fine").and_then(Value::as_f64),
+                noisy_twin: false,
+                noise_cost: 0.0,
+                subject_soft: false,
+                focus_on_background: false,
+                panning: false,
                 looking_down: m
                     .get("cull_looking_down")
                     .and_then(Value::as_bool)
@@ -642,6 +773,30 @@ fn rank_group_records(
 
     let group_has_faces = scored.iter().any(|s| s.cull_face_count > 0);
     let rk = &cfg.ranking;
+
+    // A frame clearly grainier than a sibling of the same frame-wide sharpness:
+    // the same picture at a higher ISO, whose grain every focus measure reads
+    // as detail. See `RankingConfig::noise_twin_ratio`.
+    let noisy: Vec<bool> = scored
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            rk.noise_twin_ratio > 0.0
+                && item.cull_noise_fine.is_some_and(|mine| {
+                    scored.iter().enumerate().any(|(j, other)| {
+                        j != i
+                            && (other.cull_sharpness - item.cull_sharpness).abs()
+                                <= rk.noise_twin_sharpness_delta
+                            && other
+                                .cull_noise_fine
+                                .is_some_and(|theirs| mine >= theirs * rk.noise_twin_ratio)
+                    })
+                })
+        })
+        .collect();
+    for (item, noisy) in scored.iter_mut().zip(&noisy) {
+        item.noisy_twin = *noisy;
+    }
 
     // The moment is the stronger of the genre axis and the emotion question,
     // not their mean: the goal celebration has no ball in it, and the shot on
@@ -771,15 +926,17 @@ fn rank_group_records(
                 .cull_eye_focus
                 .is_some_and(|v| v >= rk.reason_eye_focus_threshold)
     };
+    // A noisy twin's focus readings are its grain as much as its focus, so it
+    // does not set the bar its siblings are held to.
     let eye_focus_values: Vec<f64> = scored
         .iter()
-        .filter(|s| s.cull_face_count > 0)
+        .filter(|s| s.cull_face_count > 0 && !s.noisy_twin)
         .filter_map(|s| s.cull_eye_focus)
         .collect();
     let best_eye_focus = eye_focus_values.iter().cloned().reduce(f64::max);
     let best_face_focus = scored
         .iter()
-        .filter(|s| s.cull_face_count > 0)
+        .filter(|s| s.cull_face_count > 0 && !s.noisy_twin)
         .filter_map(|s| s.cull_face_focus)
         .reduce(f64::max);
     // In the score only when *every* frame with a face has a reading: a frame
@@ -791,6 +948,37 @@ fn rank_group_records(
             .filter(|s| s.cull_face_count > 0)
             .all(|s| s.cull_eye_focus.is_some());
     let focus_margin = rk.relative_focus_margin.max(0.0);
+
+    // The subject's focus is judged only when every frame went through the
+    // subject pass — all or nothing, like eye focus. A frame in which no
+    // subject was found, or too little of one to measure, abstains.
+    let subject_active = scored.iter().all(|s| s.subject_measured);
+    let best_subject = scored
+        .iter()
+        .filter(|s| subject_active && !s.noisy_twin)
+        .filter_map(|s| s.cull_subject_focus)
+        .reduce(f64::max);
+    let subject_margin = rk.relative_subject_margin.max(0.0);
+    // In focus: the subject reads sharp, absolutely and against the group's
+    // sharpest subject. Then a soft frame-wide reading is a shallow depth of
+    // field or a pan and not a blur defect — as sharp eyes already settle it
+    // for a face. A burst whose subject missed focus throughout has no frame
+    // that qualifies, so its blur rules stand.
+    let subject_in_focus = |item: &Scored| {
+        subject_active
+            && rk.reason_subject_focus_threshold > 0.0
+            && item.cull_subject_focus.is_some_and(|v| {
+                v >= rk.reason_subject_focus_threshold
+                    && best_subject.is_none_or(|b| v >= b - subject_margin)
+            })
+    };
+    // Clearly behind the group's sharpest subject: the focus missed it.
+    let subject_behind = |value: f64, threshold: f64| {
+        threshold > 0.0
+            && value < threshold
+            && group_size > 1
+            && best_subject.is_some_and(|b| value < b - subject_margin)
+    };
     // Clearly behind the group on focus: below `threshold`, with a sibling to
     // compare against, and — under the relative rules — behind the group's
     // best by the margin. A single never qualifies: with nothing sharper
@@ -858,6 +1046,12 @@ fn rank_group_records(
             unit(weighted / weight_sum.max(1e-6))
         };
 
+        if item.noisy_twin {
+            let before = item.cull_score;
+            item.cull_score = unit(item.cull_score - rk.noise_twin_penalty);
+            item.noise_cost = before - item.cull_score;
+        }
+
         // The moment, blended over whatever the quality signals concluded.
         //
         // A convex blend rather than another weighted term, because it answers
@@ -874,6 +1068,9 @@ fn rank_group_records(
         if let Some(moment) = item.moment {
             let w = rk.semantic_weight.clamp(0.0, 1.0);
             item.cull_score = unit((1.0 - w) * item.cull_score + w * moment);
+            // Both terms are in 0..1, so the blend never clamps and scales
+            // the penalty by exactly its weight.
+            item.noise_cost *= 1.0 - w;
         }
 
         // Defects no edit can repair, at the thresholds the reject rules have
@@ -909,6 +1106,7 @@ fn rank_group_records(
         // focus: on a shoot, ten frames of a child behind birthday candles all
         // read "blurred" with sharp eyes and lost the group its pick.
         let blur_defect = !eyes_in_focus(item)
+            && !subject_in_focus(item)
             && item.sharpness_effective < rk.reason_blur_threshold
             && (!relative
                 || !rk.relative_blur_rule
@@ -957,7 +1155,35 @@ fn rank_group_records(
             eye_focus.is_some_and(|v| behind(v, rk.reason_eye_focus_threshold, best_eye_focus));
         item.face_soft =
             face_focus.is_some_and(|v| behind(v, rk.reason_face_focus_threshold, best_face_focus));
+        // Focus that landed beside the subject, judged like eye focus: a label
+        // below the reason threshold, a defect below the reject one, both only
+        // against a sharper sibling. Where the eyes were measured sharp the
+        // face has settled it.
+        let subject_focus = item
+            .cull_subject_focus
+            .filter(|_| subject_active && !eyes_in_focus(item));
+        let subject_defect =
+            subject_focus.is_some_and(|v| subject_behind(v, rk.reject_subject_focus_threshold));
+        item.subject_soft =
+            subject_focus.is_some_and(|v| subject_behind(v, rk.reason_subject_focus_threshold));
+        item.focus_on_background = item.subject_soft
+            && match (item.cull_subject_focus, item.cull_background_focus) {
+                (Some(subject), Some(background)) => {
+                    background >= subject + rk.reason_background_sharper_margin
+                }
+                _ => false,
+            };
+        item.panning = rk.reason_panning_streak > 0.0
+            && subject_in_focus(item)
+            && item
+                .cull_background_streak
+                .is_some_and(|streak| streak >= rk.reason_panning_streak)
+            && match (item.cull_subject_focus, item.cull_background_focus) {
+                (Some(subject), Some(background)) => background < subject,
+                _ => false,
+            };
         item.hard_defect = blur_defect
+            || subject_defect
             || (group_has_faces
                 && item.cull_face_count > 0
                 && (blink_defect || occlusion_defect || eye_focus_defect || face_focus_defect));
@@ -1030,8 +1256,9 @@ fn rank_group_records(
             if intentional_set.is_some() {
                 return false;
             }
-            let is_soft =
-                item.sharpness_effective < rk.reason_blur_threshold && !eyes_in_focus(item);
+            let is_soft = item.sharpness_effective < rk.reason_blur_threshold
+                && !eyes_in_focus(item)
+                && !subject_in_focus(item);
             if i == 0 {
                 // Nothing better to compare with: a single, or the best of its
                 // group. Only blur counts here; see
@@ -1039,7 +1266,23 @@ fn rank_group_records(
                 // exposure and the blink proxy do not.
                 return rk.reject_blurred_without_alternative && is_soft;
             }
-            item.cull_score <= (winner_score - rk.reject_score_delta).max(0.0)
+            // Grain against a twin decides the order, never a deletion on its
+            // own: the grainier frame is the same picture, and noise reduction
+            // takes most of it back. On the public benchmark the penalty alone
+            // pushed pans past this line, whose streaked background keeps more
+            // grain than a twin blurred all round.
+            //
+            // So does a face not found beside siblings whose was, when the
+            // frame's subject is in focus: the face turned away, or the
+            // detector missed it in this exposure — on the benchmark a soft
+            // background or a stop less light was enough to lose a small face
+            // the other frames had. It ranks below them; only a real defect
+            // deletes it.
+            let faceless_but_sharp =
+                group_has_faces && item.cull_face_count == 0 && subject_in_focus(item);
+            (!faceless_but_sharp
+                && item.cull_score + item.noise_cost
+                    <= (winner_score - rk.reject_score_delta).max(0.0))
                 || item.hard_defect
                 || item.cull_exposure < rk.reject_exposure_threshold
                 || item.weak_face
@@ -1071,7 +1314,40 @@ fn rank_group_records(
                 },
             );
         }
-        if item.cull_exposure < rk.reason_exposure_threshold {
+        if item.focus_on_background {
+            reason_codes.push("focus_on_background".to_string());
+        } else if item.subject_soft {
+            reason_codes.push("subject_out_of_focus".to_string());
+        }
+        if item.panning {
+            reason_codes.push("panning".to_string());
+        }
+        if item.noisy_twin {
+            reason_codes.push("noisier_than_sibling".to_string());
+        }
+        if is_winner
+            && scored.len() > 1
+            && subject_active
+            && item
+                .cull_subject_focus
+                .is_some_and(|v| best_subject.is_some_and(|b| v >= b - rk.reason_sharpest_delta))
+            && scored
+                .iter()
+                .filter(|s| s.cull_subject_focus.is_some())
+                .count()
+                > 1
+        {
+            reason_codes.push("subject_sharpest_in_group".to_string());
+        }
+        // Named on its own, whatever the exposure term says: a frame can sit
+        // nearer mid-grey than its sibling and still have lost its highlights.
+        let blown = rk.clip_penalty_weight > 0.0
+            && scored.len() > 1
+            && item.cull_highlight_clip - least_clipped >= rk.clip_penalty_scale;
+        if blown {
+            reason_codes.push("highlights_clipped".to_string());
+        }
+        if !blown && item.cull_exposure < rk.reason_exposure_threshold {
             reason_codes.push(if item.cull_shadow_clip >= item.cull_highlight_clip {
                 "underexposed".to_string()
             } else {
@@ -1222,6 +1498,7 @@ fn rank_group_records(
                 } else if let Some(axis) = rk.semantic_prompt_set {
                     reason_codes.push(match axis {
                         "action" => "peak_action".to_string(),
+                        "wildlife" => "peak_behaviour".to_string(),
                         "expression" => "best_expression".to_string(),
                         "candid" => "strongest_moment".to_string(),
                         other => format!("strongest_{other}"),
@@ -1353,9 +1630,19 @@ fn rank_group_records(
                 }
             }
         }
+        for (key, value) in [
+            ("noise_fine", item.cull_noise_fine),
+            ("subject_focus", item.cull_subject_focus),
+            ("background_focus", item.cull_background_focus),
+            ("background_streak", item.cull_background_streak),
+        ] {
+            if let Some(v) = value {
+                metrics.insert(key.into(), Value::from(round4(v)));
+            }
+        }
         metrics.insert("clear_defect".into(), Value::from(item.hard_defect));
 
-        let mut explanation = explanation_from_reason_codes(&reason_codes);
+        let mut explanation = explanation_naming(&reason_codes, &item.record.metadata);
         // Only where there is a comparison: a frame alone has no sharpest
         // sibling to be measured against.
         if focus_active && item.cull_face_count > 0 && eye_focus_values.len() > 1 {
@@ -1402,15 +1689,246 @@ pub fn group_and_sort_images(
 /// evaluation harness, which sweeps individual knobs to measure what each one
 /// is worth.
 pub fn group_and_sort_images_with_config(
-    mut records: Vec<GroupingInput>,
+    records: Vec<GroupingInput>,
     phash_threshold: Option<f64>,
     clip_threshold: Option<f64>,
     time_delta: Option<i64>,
     cfg: &CullingConfig,
 ) -> Vec<Group> {
-    if records.is_empty() {
-        return Vec::new();
+    let cfg = *cfg;
+    partition_records(records, phash_threshold, clip_threshold, time_delta, &cfg)
+        .rank(|_| (cfg, None))
+}
+
+/// The groups of a set of photos before any of them is ranked: the first half
+/// of [`group_and_sort_images_with_config`], for a caller that decides how to
+/// rank each group by what is in it. `culling_preset: "auto"` picks a preset
+/// per group from its photos' genre, and has to score that preset's prompts on
+/// them before they are ranked.
+pub struct Partition {
+    records: Vec<GroupingInput>,
+    group_of: Vec<usize>,
+    members: Vec<Vec<usize>>,
+    edge_kinds: HashMap<(usize, usize), &'static str>,
+    th: Thresholds,
+    cfg: CullingConfig,
+}
+
+impl Partition {
+    /// Every photo, in the grouper's order.
+    pub fn records(&self) -> &[GroupingInput] {
+        &self.records
     }
+
+    /// The same, to add what ranking reads — prompt scores — before
+    /// [`Self::rank`].
+    pub fn records_mut(&mut self) -> &mut [GroupingInput] {
+        &mut self.records
+    }
+
+    /// The group of each photo in [`Self::records`], `0..group_count()`.
+    pub fn group_of(&self) -> &[usize] {
+        &self.group_of
+    }
+
+    pub fn group_count(&self) -> usize {
+        self.members.len()
+    }
+
+    /// The photos of one group.
+    pub fn members(&self, group: usize) -> impl Iterator<Item = &GroupingInput> {
+        self.members[group].iter().map(|&i| &self.records[i])
+    }
+
+    /// Ranks each group with the config `choose` gives for it, and records the
+    /// preset name it gives as [`Group::preset`]. What makes a group, and
+    /// which groups are brackets, focus stacks or panoramas, stays with the
+    /// config the partition was made with.
+    pub fn rank(
+        self,
+        choose: impl Fn(usize) -> (CullingConfig, Option<&'static str>),
+    ) -> Vec<Group> {
+        let Partition {
+            records,
+            members,
+            edge_kinds,
+            th,
+            cfg,
+            ..
+        } = self;
+        let mut groups: Vec<Group> = Vec::with_capacity(members.len());
+        for (g, idxs) in members.into_iter().enumerate() {
+            // idxs are already in ascending original-index order, which is
+            // global-sort order, so component_records is pre-sorted.
+            let component: Vec<&GroupingInput> = idxs.iter().map(|&i| &records[i]).collect();
+            let group_photo_ids: Vec<String> =
+                component.iter().map(|r| r.photo_id.clone()).collect();
+
+            let capture_times: Vec<f64> = component.iter().filter_map(|r| r.capture_time).collect();
+            let time_span_seconds = if capture_times.len() >= 2 {
+                capture_times.iter().cloned().fold(f64::MIN, f64::max)
+                    - capture_times.iter().cloned().fold(f64::MAX, f64::min)
+            } else {
+                0.0
+            };
+
+            let mut pairwise_distances = Vec::new();
+            let mut pairwise_phash_distances = Vec::new();
+            let mut group_edge_types: HashSet<&'static str> = HashSet::new();
+            for a in 0..idxs.len() {
+                for b in (a + 1)..idxs.len() {
+                    let (gi, gj) = (idxs[a].min(idxs[b]), idxs[a].max(idxs[b]));
+                    let (left, right) = (&records[gi], &records[gj]);
+                    if let Some(d) = cosine_distance(
+                        effective_embedding(&left.embedding),
+                        effective_embedding(&right.embedding),
+                    ) {
+                        pairwise_distances.push(round4(d));
+                    }
+                    if let Some(d) = phash_hamming(left.phash, right.phash) {
+                        pairwise_phash_distances.push(d);
+                    }
+                    if let Some(&kind) = edge_kinds.get(&(gi, gj)) {
+                        group_edge_types.insert(kind);
+                    }
+                }
+            }
+
+            // `component` is in global-sort order, which for timed records is
+            // ascending capture time — the adjacency order the panorama rule needs.
+            let set_frames: Vec<SetFrame> = component
+                .iter()
+                .map(|r| SetFrame {
+                    capture_time: r.capture_time,
+                    exposure_bias: r.metadata.get("exposure_bias").and_then(Value::as_f64),
+                    phash: r.phash,
+                    embedding: effective_embedding(&r.embedding),
+                    faces: r
+                        .metadata
+                        .get("cull_face_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize,
+                    peak_sharpness: r
+                        .metadata
+                        .get("cull_sharpness_peak")
+                        .and_then(Value::as_f64),
+                    sharp_region: match (
+                        r.metadata
+                            .get("cull_sharp_region_x")
+                            .and_then(Value::as_f64),
+                        r.metadata
+                            .get("cull_sharp_region_y")
+                            .and_then(Value::as_f64),
+                    ) {
+                        (Some(x), Some(y)) => Some((x, y)),
+                        _ => None,
+                    },
+                })
+                .collect();
+            let intentional_set = detect_intentional_set(&set_frames, &cfg.sets);
+
+            let group_type: &'static str = if let Some(kind) = intentional_set {
+                kind.as_str()
+            } else if group_photo_ids.len() == 1 {
+                "single"
+            } else if group_edge_types.contains("near_duplicate")
+                && !group_edge_types.contains("burst")
+            {
+                "near_duplicate"
+            } else if time_span_seconds <= th.time_window_seconds {
+                "burst"
+            } else {
+                "near_duplicate"
+            };
+
+            let (rank_cfg, preset) = choose(g);
+            let ranked = rank_group_records(&component, group_type, intentional_set, &rank_cfg);
+            let group_id = format!("group_{:04}", g + 1);
+            // `None` when every frame is a reject candidate: a blurred single, or a
+            // burst where nothing came out. The best-ranked frame is still first
+            // in `photos`, but nothing is nominated as the pick.
+            let winner_photo_id = if ranked.is_empty() {
+                Some(group_photo_ids[0].clone())
+            } else {
+                ranked.iter().find(|r| r.winner).map(|r| r.photo_id.clone())
+            };
+            let alternate_photo_ids: Vec<String> = ranked
+                .iter()
+                .filter(|r| !r.winner && !r.reject_candidate)
+                .map(|r| r.photo_id.clone())
+                .collect();
+            let reject_candidate_photo_ids: Vec<String> = ranked
+                .iter()
+                .filter(|r| r.reject_candidate)
+                .map(|r| r.photo_id.clone())
+                .collect();
+
+            let mut edge_types: Vec<&'static str> = group_edge_types.into_iter().collect();
+            edge_types.sort_unstable();
+
+            groups.push(Group {
+                group_id,
+                group_type,
+                group_size: group_photo_ids.len(),
+                primary_photo_id: group_photo_ids[0].clone(),
+                photo_ids: group_photo_ids,
+                winner_photo_id,
+                alternate_photo_ids,
+                reject_candidate_photo_ids,
+                intentional_set,
+                photos: ranked,
+                min_capture_time: capture_times
+                    .iter()
+                    .cloned()
+                    .fold(None, |acc: Option<f64>, v| {
+                        Some(acc.map_or(v, |a| a.min(v)))
+                    }),
+                max_capture_time: capture_times
+                    .iter()
+                    .cloned()
+                    .fold(None, |acc: Option<f64>, v| {
+                        Some(acc.map_or(v, |a| a.max(v)))
+                    }),
+                time_span_seconds: (time_span_seconds * 1000.0).round_ties_even() / 1000.0,
+                pairwise_distances,
+                pairwise_phash_distances,
+                edge_types,
+                thresholds: (
+                    th.phash_hamming_threshold,
+                    round4(th.duplicate_distance_threshold),
+                    round4(th.burst_distance_threshold),
+                    th.duplicate_time_window_seconds,
+                    th.time_window_seconds,
+                ),
+                preset,
+            });
+        }
+
+        groups.sort_by(|a, b| {
+            a.min_capture_time
+                .is_none()
+                .cmp(&b.min_capture_time.is_none())
+                .then(
+                    a.min_capture_time
+                        .unwrap_or(f64::INFINITY)
+                        .partial_cmp(&b.min_capture_time.unwrap_or(f64::INFINITY))
+                        .unwrap(),
+                )
+                .then(a.primary_photo_id.cmp(&b.primary_photo_id))
+        });
+
+        groups
+    }
+}
+
+/// Groups photos without ranking them; see [`Partition`].
+pub fn partition_records(
+    mut records: Vec<GroupingInput>,
+    phash_threshold: Option<f64>,
+    clip_threshold: Option<f64>,
+    time_delta: Option<i64>,
+    cfg: &CullingConfig,
+) -> Partition {
     let cfg = *cfg;
     let th = derive_grouping_thresholds(phash_threshold, clip_threshold, time_delta, &cfg);
 
@@ -1570,160 +2088,14 @@ pub fn group_and_sort_images_with_config(
         members[g].push(i);
     }
 
-    let mut groups: Vec<Group> = Vec::with_capacity(group_counter);
-    for (g, idxs) in members.into_iter().enumerate() {
-        // idxs are already in ascending original-index order, which is
-        // global-sort order, so component_records is pre-sorted.
-        let component: Vec<&GroupingInput> = idxs.iter().map(|&i| &records[i]).collect();
-        let group_photo_ids: Vec<String> = component.iter().map(|r| r.photo_id.clone()).collect();
-
-        let capture_times: Vec<f64> = component.iter().filter_map(|r| r.capture_time).collect();
-        let time_span_seconds = if capture_times.len() >= 2 {
-            capture_times.iter().cloned().fold(f64::MIN, f64::max)
-                - capture_times.iter().cloned().fold(f64::MAX, f64::min)
-        } else {
-            0.0
-        };
-
-        let mut pairwise_distances = Vec::new();
-        let mut pairwise_phash_distances = Vec::new();
-        let mut group_edge_types: HashSet<&'static str> = HashSet::new();
-        for a in 0..idxs.len() {
-            for b in (a + 1)..idxs.len() {
-                let (gi, gj) = (idxs[a].min(idxs[b]), idxs[a].max(idxs[b]));
-                let (left, right) = (&records[gi], &records[gj]);
-                if let Some(d) = cosine_distance(
-                    effective_embedding(&left.embedding),
-                    effective_embedding(&right.embedding),
-                ) {
-                    pairwise_distances.push(round4(d));
-                }
-                if let Some(d) = phash_hamming(left.phash, right.phash) {
-                    pairwise_phash_distances.push(d);
-                }
-                if let Some(&kind) = edge_kinds.get(&(gi, gj)) {
-                    group_edge_types.insert(kind);
-                }
-            }
-        }
-
-        // `component` is in global-sort order, which for timed records is
-        // ascending capture time — the adjacency order the panorama rule needs.
-        let set_frames: Vec<SetFrame> = component
-            .iter()
-            .map(|r| SetFrame {
-                capture_time: r.capture_time,
-                exposure_bias: r.metadata.get("exposure_bias").and_then(Value::as_f64),
-                phash: r.phash,
-                embedding: effective_embedding(&r.embedding),
-                faces: r
-                    .metadata
-                    .get("cull_face_count")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize,
-                sharp_region: match (
-                    r.metadata
-                        .get("cull_sharp_region_x")
-                        .and_then(Value::as_f64),
-                    r.metadata
-                        .get("cull_sharp_region_y")
-                        .and_then(Value::as_f64),
-                ) {
-                    (Some(x), Some(y)) => Some((x, y)),
-                    _ => None,
-                },
-            })
-            .collect();
-        let intentional_set = detect_intentional_set(&set_frames, &cfg.sets);
-
-        let group_type: &'static str = if let Some(kind) = intentional_set {
-            kind.as_str()
-        } else if group_photo_ids.len() == 1 {
-            "single"
-        } else if group_edge_types.contains("near_duplicate") && !group_edge_types.contains("burst")
-        {
-            "near_duplicate"
-        } else if time_span_seconds <= th.time_window_seconds {
-            "burst"
-        } else {
-            "near_duplicate"
-        };
-
-        let ranked = rank_group_records(&component, group_type, intentional_set, &cfg);
-        let group_id = format!("group_{:04}", g + 1);
-        // `None` when every frame is a reject candidate: a blurred single, or a
-        // burst where nothing came out. The best-ranked frame is still first
-        // in `photos`, but nothing is nominated as the pick.
-        let winner_photo_id = if ranked.is_empty() {
-            Some(group_photo_ids[0].clone())
-        } else {
-            ranked.iter().find(|r| r.winner).map(|r| r.photo_id.clone())
-        };
-        let alternate_photo_ids: Vec<String> = ranked
-            .iter()
-            .filter(|r| !r.winner && !r.reject_candidate)
-            .map(|r| r.photo_id.clone())
-            .collect();
-        let reject_candidate_photo_ids: Vec<String> = ranked
-            .iter()
-            .filter(|r| r.reject_candidate)
-            .map(|r| r.photo_id.clone())
-            .collect();
-
-        let mut edge_types: Vec<&'static str> = group_edge_types.into_iter().collect();
-        edge_types.sort_unstable();
-
-        groups.push(Group {
-            group_id,
-            group_type,
-            group_size: group_photo_ids.len(),
-            primary_photo_id: group_photo_ids[0].clone(),
-            photo_ids: group_photo_ids,
-            winner_photo_id,
-            alternate_photo_ids,
-            reject_candidate_photo_ids,
-            intentional_set,
-            photos: ranked,
-            min_capture_time: capture_times
-                .iter()
-                .cloned()
-                .fold(None, |acc: Option<f64>, v| {
-                    Some(acc.map_or(v, |a| a.min(v)))
-                }),
-            max_capture_time: capture_times
-                .iter()
-                .cloned()
-                .fold(None, |acc: Option<f64>, v| {
-                    Some(acc.map_or(v, |a| a.max(v)))
-                }),
-            time_span_seconds: (time_span_seconds * 1000.0).round_ties_even() / 1000.0,
-            pairwise_distances,
-            pairwise_phash_distances,
-            edge_types,
-            thresholds: (
-                th.phash_hamming_threshold,
-                round4(th.duplicate_distance_threshold),
-                round4(th.burst_distance_threshold),
-                th.duplicate_time_window_seconds,
-                th.time_window_seconds,
-            ),
-        });
+    Partition {
+        records,
+        group_of,
+        members,
+        edge_kinds,
+        th,
+        cfg,
     }
-
-    groups.sort_by(|a, b| {
-        a.min_capture_time
-            .is_none()
-            .cmp(&b.min_capture_time.is_none())
-            .then(
-                a.min_capture_time
-                    .unwrap_or(f64::INFINITY)
-                    .partial_cmp(&b.min_capture_time.unwrap_or(f64::INFINITY))
-                    .unwrap(),
-            )
-            .then(a.primary_photo_id.cmp(&b.primary_photo_id))
-    });
-
-    groups
 }
 
 #[cfg(test)]
@@ -1867,6 +2239,193 @@ mod tests {
         groups[0].winner_photo_id.clone().expect("group has a pick")
     }
 
+    /// A frame with the subject pass's readings: frame-wide sharpness, focus on
+    /// the subject and on the background.
+    fn subject_frame(
+        id: &str,
+        t: f64,
+        sharpness: f64,
+        subject: f64,
+        background: f64,
+    ) -> GroupingInput {
+        let mut r = with_metrics(
+            rec(id, Some(t), Some(0xffff_ffff_ffff_ffff)),
+            &[
+                ("cull_sharpness", sharpness),
+                ("cull_sharpness_peak", sharpness),
+                ("cull_exposure", 0.7),
+                ("cull_noise", 0.1),
+                ("cull_subject_focus", subject),
+                ("cull_background_focus", background),
+                ("cull_background_streak", 0.02),
+            ],
+        );
+        r.metadata
+            .insert(SUBJECT_VERSION_KEY.into(), Value::from(SUBJECT_VERSION));
+        r
+    }
+
+    /// A face found in two frames and missed in the third, whose subject is as
+    /// sharp: the third ranks last, but is no reject for the face alone.
+    #[test]
+    fn a_face_missed_on_a_sharp_subject_ranks_lower_but_is_kept() {
+        let with_face = |id: &str, t: f64| {
+            let mut r = subject_frame(id, t, 0.4, 0.66, 0.6);
+            for (k, v) in [
+                ("cull_face_score", 0.6),
+                ("cull_face_sharpness", 0.5),
+                ("cull_eye_openness", 0.9),
+                ("cull_blink_penalty", 0.1),
+            ] {
+                r.metadata.insert(k.into(), Value::from(v));
+            }
+            r.metadata.insert("cull_face_count".into(), Value::from(1));
+            r
+        };
+        let groups = run(vec![
+            with_face("a", 1000.0),
+            with_face("b", 1000.4),
+            subject_frame("missed", 1000.8, 0.4, 0.66, 0.6),
+        ]);
+        let missed = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "missed")
+            .unwrap();
+        assert_eq!(missed.rank, 3);
+        assert!(
+            missed
+                .reason_codes
+                .iter()
+                .any(|c| c == "no_face_detected_in_group"),
+            "{:?}",
+            missed.reason_codes
+        );
+        assert!(!missed.reject_candidate, "{:?}", missed.reason_codes);
+    }
+
+    /// A shallow depth of field: the frame reads soft, the subject sharp. The
+    /// subject settles it — not blurred, not a reject — where the frame-wide
+    /// reading alone made it a blur defect against its busier sibling.
+    #[test]
+    fn a_sharp_subject_on_a_soft_background_is_not_blurred() {
+        let burst = vec![
+            subject_frame("deep", 1000.0, 0.35, 0.62, 0.6),
+            subject_frame("shallow", 1000.4, 0.08, 0.63, 0.25),
+        ];
+        let groups = run(burst.clone());
+        let shallow = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "shallow")
+            .unwrap();
+        assert!(!shallow.reject_candidate, "{:?}", shallow.reason_codes);
+        assert!(
+            !shallow.reason_codes.iter().any(|c| c == "blurred"),
+            "{:?}",
+            shallow.reason_codes
+        );
+
+        // Without the subject pass the same pair is a blur defect.
+        let bare: Vec<GroupingInput> = burst
+            .into_iter()
+            .map(|mut r| {
+                r.metadata.remove(SUBJECT_VERSION_KEY);
+                r
+            })
+            .collect();
+        let groups = run(bare);
+        let shallow = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "shallow")
+            .unwrap();
+        assert!(shallow.reject_candidate, "documenting the fault it fixes");
+    }
+
+    /// Focus behind the subject: the frame reads as sharp as its sibling, but
+    /// its subject is soft and its background sharp. Named and rejected.
+    #[test]
+    fn focus_behind_the_subject_is_named_and_rejected() {
+        let groups = run(vec![
+            subject_frame("on_subject", 1000.0, 0.30, 0.62, 0.40),
+            subject_frame("behind", 1000.4, 0.31, 0.30, 0.65),
+        ]);
+        assert_eq!(winner_of(&groups), "on_subject");
+        let behind = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "behind")
+            .unwrap();
+        assert!(behind.reject_candidate, "{:?}", behind.reason_codes);
+        assert!(
+            behind
+                .reason_codes
+                .iter()
+                .any(|c| c == "focus_on_background"),
+            "{:?}",
+            behind.reason_codes
+        );
+    }
+
+    /// The same picture at a higher ISO: grain lifts its eye focus above the
+    /// clean frame's. It loses, is named, and the clean frame is not called
+    /// out of focus beside it.
+    #[test]
+    fn a_noisy_twin_loses_and_does_not_set_the_bar() {
+        let frame = |id: &str, t: f64, eye: f64, grain: f64| {
+            let mut r = with_metrics(
+                rec(id, Some(t), Some(0xffff_ffff_ffff_ffff)),
+                &[
+                    ("cull_sharpness", 0.30),
+                    ("cull_sharpness_peak", 0.5),
+                    ("cull_exposure", 0.7),
+                    ("cull_noise", 0.1),
+                    ("cull_face_score", 0.6),
+                    ("cull_face_sharpness", 0.5),
+                    ("cull_eye_openness", 0.9),
+                    ("cull_blink_penalty", 0.1),
+                    ("cull_eye_focus", eye),
+                    ("cull_noise_fine", grain),
+                ],
+            );
+            r.metadata.insert("cull_face_count".into(), Value::from(1));
+            r.metadata
+                .insert(FOCUS_VERSION_KEY.into(), Value::from(FOCUS_VERSION));
+            r
+        };
+        let groups = run(vec![
+            frame("clean", 1000.0, 0.50, 0.004),
+            frame("grainy", 1000.4, 0.62, 0.020),
+        ]);
+        assert_eq!(winner_of(&groups), "clean");
+        let clean = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "clean")
+            .unwrap();
+        assert!(
+            !clean.reason_codes.iter().any(|c| c == "eyes_out_of_focus"),
+            "{:?}",
+            clean.reason_codes
+        );
+        let grainy = groups[0]
+            .photos
+            .iter()
+            .find(|p| p.photo_id == "grainy")
+            .unwrap();
+        assert!(
+            grainy
+                .reason_codes
+                .iter()
+                .any(|c| c == "noisier_than_sibling"),
+            "{:?}",
+            grainy.reason_codes
+        );
+        // Below its twin, but not deleted for the grain alone.
+        assert!(!grainy.reject_candidate, "{:?}", grainy.reason_codes);
+    }
+
     /// The shallow-depth-of-field case. `shallow` has a razor-sharp subject on
     /// smooth bokeh: low frame-wide variance, high peak. `busy` is soft
     /// everywhere over detailed foliage: higher frame-wide variance, no peak.
@@ -1956,7 +2515,8 @@ mod tests {
         // ...but a frame whose eyes are visibly less open than the best, or
         // whose face is visibly more obstructed, still is.
         let mut worse = burst.clone();
-        worse.push(frame("blink", 1001.5, 0.02, 0.80));
+        // 0.15 below the most open eyes: past `relative_defect_margin` (0.14).
+        worse.push(frame("blink", 1001.5, 0.0, 0.80));
         // 0.25 above the clearest face: past occlusion's own, wider margin.
         worse.push(frame("covered", 1002.0, 0.15, 0.95));
         let groups = run(worse);
@@ -2308,7 +2868,7 @@ mod tests {
         // `quality` always applies and is not selectable, and `organism` gates
         // the species task rather than grading anything, so a preset naming
         // either would be a bug and this test is what catches it.
-        const KNOWN: [&str; 3] = ["action", "expression", "candid"];
+        const KNOWN: [&str; 4] = ["action", "expression", "candid", "wildlife"];
         let mut with_axis = 0;
         for preset in crate::culling_config::available_presets() {
             let rk = get_culling_config(preset).ranking;

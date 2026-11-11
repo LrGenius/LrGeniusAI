@@ -53,14 +53,18 @@ metrics rather than scoring the grouper against itself.
    rest, and which you would delete.
 2. Index the shoot (`tasks=cull` is enough) and pull the stored inputs:
    ```bash
-   curl -s localhost:19819/cull -H 'content-type: application/json' \
-     -d '{"photo_ids": ["…"], "include_stored_metadata": true}' > raw.json
+   curl -s localhost:19819/v1/cull/grade -H 'content-type: application/json' \
+     -H "Authorization: Bearer $TOKEN" \
+     -d '{"photo_ids": ["…"], "include_stored_metadata": true,
+          "include_embeddings": true}' > raw.json
    ```
    Use each `photos[].stored_metadata` block verbatim as the entry's
    `metadata` — **not** `photos[].metrics`. The two look similar and are not:
    `metrics` is what ranking *concluded* (short names, derived values, preset
    weights already applied), `stored_metadata` is what it *read*. Only the
-   latter can reproduce a run.
+   latter can reproduce a run. Copy `photos[].embedding_q8` as the entry's
+   `embedding_q8` too: the harness groups with it, and without it a darker or
+   softer frame of a burst can land in a group of its own.
 3. Write one JSON file per shoot in this directory, shaped like the existing
    ones — the schema is `lrg_analysis::eval::EvalFixture`:
 

@@ -6,9 +6,14 @@ local function showCullDialog(ctx)
 	local props = LrBinding.makePropertyTable(ctx)
 	props.scope = prefs.cullScope or "selected"
 	props.timeDeltaSeconds = prefs.cullTimeDeltaSeconds or 2
-	props.cullingPreset = prefs.cullPreset or "default"
+	props.cullingPreset = prefs.cullPreset or "auto"
 	props.createDuplicatesCollection = prefs.cullCreateDuplicatesCollection ~= false
+	props.keyPeople = prefs.cullKeyPeople == true
+	props.useTaste = prefs.cullUseTaste == true
 	props.cullStrength = prefs.cullStrength or "balanced"
+	props.keepMode = prefs.cullKeepMode or "burst"
+	props.keepAmount = prefs.cullKeepAmount or 20
+	props.highlightsCount = prefs.cullHighlightsCount or 0
 	-- Flags are what a photographer culls *with*, so picks are flagged by
 	-- default; rejects are opt-in because a reject flag is one menu command
 	-- away from deleting files. Both honour existing flags unless told not to.
@@ -80,12 +85,59 @@ local function showCullDialog(ctx)
 			}),
 			f:row({
 				f:static_text({
+					title = "Keep:",
+					width = share("labelWidth"),
+				}),
+				f:popup_menu({
+					value = bind("keepMode"),
+					items = {
+						{ title = "The pick of every burst", value = "burst" },
+						{ title = "A number of photos", value = "count" },
+						{ title = "A share of the photos (%)", value = "percent" },
+					},
+					width = 200,
+					tooltip = "A number or a share chooses across the whole selection: the best of every "
+						.. "scene first, then the best of the rest that are unlike what is chosen.",
+				}),
+				f:edit_field({
+					value = bind("keepAmount"),
+					width_in_digits = 5,
+					min = 1,
+					max = 100000,
+					precision = 0,
+					enabled = LrView.bind({
+						key = "keepMode",
+						transform = function(mode)
+							return mode ~= "burst"
+						end,
+					}),
+				}),
+			}),
+			f:row({
+				f:static_text({
+					title = "Highlights:",
+					width = share("labelWidth"),
+				}),
+				f:edit_field({
+					value = bind("highlightsCount"),
+					width_in_digits = 4,
+					min = 0,
+					max = 1000,
+					precision = 0,
+					tooltip = "The best photos of the shoot, kept apart from each other, in a "
+						.. "'Highlights' collection: for a sneak peek. 0 for none.",
+				}),
+				f:static_text({ title = "(0 for none)" }),
+			}),
+			f:row({
+				f:static_text({
 					title = LOC("$$$/LrGeniusAI/CullTask/PresetLabel=Culling preset:"),
 					width = share("labelWidth"),
 				}),
 				f:popup_menu({
 					value = bind("cullingPreset"),
 					items = {
+						{ title = "Auto (each burst by its genre)", value = "auto" },
 						{ title = "Default (sharpness, exposure, faces)", value = "default" },
 						{
 							title = "Portrait (faces and expression)",
@@ -103,9 +155,26 @@ local function showCullDialog(ctx)
 							title = "Sports (action and emotion)",
 							value = "sports",
 						},
+						{
+							title = "Wildlife (animals, the subject sharp)",
+							value = "wildlife",
+						},
 					},
 					width = 260,
 				}),
+			}),
+			f:checkbox({
+				value = bind("keyPeople"),
+				title = "Judge the key people first",
+				tooltip = "The people you named in People, and those in many of these photos: a frame is "
+					.. "judged by their eyes and focus, however small they are in it. Adds face "
+					.. "recognition to the preparation, which takes longer.",
+			}),
+			f:checkbox({
+				value = bind("useTaste"),
+				title = "Use my culling style",
+				tooltip = "Reorders each burst the way you cull, as learned by 'Learn My Culling Style' "
+					.. "from photos you culled yourself. Reject candidates stay rejects.",
 			}),
 			f:checkbox({
 				value = bind("createDuplicatesCollection"),
@@ -166,7 +235,12 @@ local function showCullDialog(ctx)
 	prefs.cullTimeDeltaSeconds = props.timeDeltaSeconds
 	prefs.cullPreset = props.cullingPreset
 	prefs.cullCreateDuplicatesCollection = props.createDuplicatesCollection
+	prefs.cullKeyPeople = props.keyPeople
+	prefs.cullUseTaste = props.useTaste
 	prefs.cullStrength = props.cullStrength
+	prefs.cullKeepMode = props.keepMode
+	prefs.cullKeepAmount = props.keepAmount
+	prefs.cullHighlightsCount = props.highlightsCount
 	prefs.cullFlagPicks = props.flagPicks
 	prefs.cullFlagRejects = props.flagRejects
 	prefs.cullOverwriteUserMarks = props.overwriteUserMarks
@@ -178,65 +252,18 @@ local function showCullDialog(ctx)
 		timeDeltaSeconds = props.timeDeltaSeconds,
 		cullingPreset = props.cullingPreset,
 		createDuplicatesCollection = props.createDuplicatesCollection,
+		keyPeople = props.keyPeople,
+		useTaste = props.useTaste,
 		cullStrength = props.cullStrength,
+		keepMode = props.keepMode,
+		keepAmount = props.keepAmount,
+		highlightsCount = props.highlightsCount,
 		flagPicks = props.flagPicks,
 		flagRejects = props.flagRejects,
 		overwriteUserMarks = props.overwriteUserMarks,
 		rateByDecision = props.rateByDecision,
 		labelStrongMoment = props.labelStrongMoment,
 	}
-end
-
----
--- What the catalog holds now for the photos a cull touched — flag, stars and
--- colour label — plus what the last cull wrote (`cullWritten`), by photo ID.
--- `Util.cullFlagPlan` compares the two to tell the cull's own marks from the
--- photographer's.
---
--- One batched read; falls back to per-photo reads if the batch call fails, as
--- `PhotoSelector` does, so a read error degrades to slower rather than to
--- "no flags applied".
--- @return table photoId -> { pickStatus, rating, colorNameForLabel }
-local function currentFlagsByPhotoId(catalog, photoById)
-	local photos = {}
-	local idByPhoto = {}
-	for photoId, photo in pairs(photoById) do
-		table.insert(photos, photo)
-		idByPhoto[photo] = photoId
-	end
-	local keys = { "pickStatus", "rating", "colorNameForLabel" }
-	local current = {}
-	local ok, batch = LrTasks.pcall(function()
-		return catalog:batchGetRawMetadata(photos, keys)
-	end)
-	if ok and type(batch) == "table" then
-		for photo, values in pairs(batch) do
-			local photoId = idByPhoto[photo]
-			if photoId and type(values) == "table" then
-				current[photoId] = values
-			end
-		end
-	else
-		log:warn("batchGetRawMetadata failed before applying cull flags; reading per photo: " .. tostring(batch))
-		for photoId, photo in pairs(photoById) do
-			current[photoId] = {
-				pickStatus = photo:getRawMetadata("pickStatus"),
-				rating = photo:getRawMetadata("rating"),
-				colorNameForLabel = photo:getRawMetadata("colorNameForLabel"),
-			}
-		end
-	end
-	-- What the last cull wrote. Read per photo with `noThrow`: a catalog that
-	-- never saw this field (older plugin) simply has nothing recorded, which
-	-- makes every existing mark the photographer's — the safe reading.
-	for photoId, photo in pairs(photoById) do
-		local okProp, written = LrTasks.pcall(function()
-			return photo:getPropertyForPlugin(_PLUGIN, "cullWritten", nil, true)
-		end)
-		current[photoId] = current[photoId] or {}
-		current[photoId].written = Util.cullWrittenDecode(okProp and written or nil)
-	end
-	return current
 end
 
 local function dedupePhotoIds(photoIds)
@@ -567,7 +594,7 @@ LrTasks.startAsyncTask(function()
 		-- and skips the LLM entirely. Presets that judge the moment also need
 		-- the embedding, so a photo culled before with the default preset
 		-- counts as unprepared for them.
-		local prepTasks = Util.cullPrepTasks(options.cullingPreset)
+		local prepTasks = Util.cullPrepTasks(options.cullingPreset, options.keyPeople)
 		local judgesMoment = Util.cullPresetJudgesMoment(options.cullingPreset)
 		local missing, missingErr = SearchIndexAPI.checkUnprocessedPhotoIds(photoIds, prepTasks)
 		if missingErr then
@@ -644,12 +671,18 @@ LrTasks.startAsyncTask(function()
 		})
 		progressScope:setPortionComplete(0, 1)
 
+		local target = Util.cullTargetFields(options.keepMode, options.keepAmount, options.highlightsCount)
 		local cullResult, err = SearchIndexAPI.cullPhotos(photoIds, {
 			phash_threshold = "auto",
 			clip_threshold = "auto",
 			time_delta_seconds = options.timeDeltaSeconds,
 			culling_preset = options.cullingPreset,
 			reject_margin_scale = Util.cullRejectMarginScale(options.cullStrength),
+			key_people = options.keyPeople,
+			use_taste = options.useTaste,
+			target_count = target.target_count,
+			target_fraction = target.target_fraction,
+			highlights_count = target.highlights_count,
 		})
 		local groups = cullResult and cullResult.groups or nil
 		local summary = (cullResult and cullResult.summary) or {}
@@ -707,14 +740,38 @@ LrTasks.startAsyncTask(function()
 			-- frames were recognised rather than just quietly not culled.
 			local keepAll = group["keep_all"] == true
 
-			if winnerPhotoId then
-				table.insert(picksIds, winnerPhotoId)
-			end
-			for _, photoId in ipairs(alternatePhotoIds) do
-				table.insert(alternateIds, photoId)
-			end
-			for _, photoId in ipairs(rejectCandidatePhotoIds) do
-				table.insert(rejectIds, photoId)
+			-- Under a target the picks are the photos chosen across the whole
+			-- selection — none of a burst, or several — not one per burst. A
+			-- chosen reject candidate (the only frame of its scene) is a pick.
+			local selectedPhotoIds = group["selected_photo_ids"]
+			if type(selectedPhotoIds) == "table" then
+				local chosen = {}
+				for _, photoId in ipairs(selectedPhotoIds) do
+					chosen[photoId] = true
+					table.insert(picksIds, photoId)
+				end
+				local rejected = {}
+				for _, photoId in ipairs(rejectCandidatePhotoIds) do
+					rejected[photoId] = true
+					if not chosen[photoId] then
+						table.insert(rejectIds, photoId)
+					end
+				end
+				for _, photoId in ipairs(groupPhotoIds) do
+					if not chosen[photoId] and not rejected[photoId] then
+						table.insert(alternateIds, photoId)
+					end
+				end
+			else
+				if winnerPhotoId then
+					table.insert(picksIds, winnerPhotoId)
+				end
+				for _, photoId in ipairs(alternatePhotoIds) do
+					table.insert(alternateIds, photoId)
+				end
+				for _, photoId in ipairs(rejectCandidatePhotoIds) do
+					table.insert(rejectIds, photoId)
+				end
 			end
 			if keepAll then
 				setGroupCount = setGroupCount + 1
@@ -750,6 +807,9 @@ LrTasks.startAsyncTask(function()
 		local rejectPhotos = photosFromIds(rejectIds, photoById, notInCatalog)
 		local duplicatePhotos = photosFromIds(duplicateIds, photoById, notInCatalog)
 		local setPhotos = photosFromIds(setIds, photoById, notInCatalog)
+		local selection = type(summary.selection) == "table" and summary.selection or nil
+		local highlightPhotos =
+			photosFromIds(selection and selection.highlight_photo_ids or {}, photoById, notInCatalog)
 
 		local catalog = LrApplication.activeCatalog()
 		local timestamp = LrDate.timeToW3CDate(LrDate.currentTime())
@@ -813,7 +873,7 @@ LrTasks.startAsyncTask(function()
 		local flagCounts
 		local flagsFailed
 		if options.flagPicks or options.flagRejects or options.rateByDecision or options.labelStrongMoment then
-			local current = currentFlagsByPhotoId(catalog, photoById)
+			local current = Util.cullCurrentMarks(catalog, photoById)
 			local plan
 			plan, flagCounts = Util.cullFlagPlan(groups, {
 				flagPicks = options.flagPicks,
@@ -888,6 +948,9 @@ LrTasks.startAsyncTask(function()
 					duplicatePhotos
 				)
 			end
+			if #highlightPhotos > 0 then
+				createResultCollection("Highlights", highlightPhotos)
+			end
 			-- Only created when something was actually detected: an empty
 			-- collection on every run would train the user to ignore it.
 			if #setPhotos > 0 then
@@ -921,7 +984,7 @@ LrTasks.startAsyncTask(function()
 			tostring(summary.alternate_count or #alternatePhotos),
 			tostring(summary.reject_candidate_count or #rejectPhotos),
 			tostring(summary.near_duplicate_group_count or nearDuplicateGroupCount),
-			tostring(summary.culling_preset or options.cullingPreset or "default")
+			Util.cullPresetSummary(summary, options.cullingPreset)
 		)
 		local setGroups = summary.intentional_set_group_count or setGroupCount
 		if setGroups and setGroups > 0 then
@@ -932,6 +995,25 @@ LrTasks.startAsyncTask(function()
 					tostring(setGroups),
 					tostring(summary.intentional_set_photo_count or #setPhotos)
 				)
+		end
+
+		local selectionLine = Util.cullSelectionLine(summary)
+		if selectionLine then
+			completionMessage = completionMessage .. "\n\n" .. selectionLine
+		end
+		local tasteChanged = tonumber(summary.taste_changed_picks)
+		if tasteChanged and tasteChanged > 0 then
+			completionMessage = completionMessage
+				.. "\n\n"
+				.. string.format(
+					"Your culling style chose a different pick in %d %s.",
+					tasteChanged,
+					tasteChanged == 1 and "burst" or "bursts"
+				)
+		end
+		local keyPeopleLine = Util.cullKeyPeopleLine(summary)
+		if keyPeopleLine then
+			completionMessage = completionMessage .. "\n\n" .. keyPeopleLine
 		end
 
 		if strongMomentRejects > 0 then

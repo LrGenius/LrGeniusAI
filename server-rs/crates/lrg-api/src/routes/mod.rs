@@ -3,6 +3,7 @@ pub mod assets;
 pub mod bioclip;
 pub mod bootstrap;
 pub mod clip;
+pub mod cull_taste;
 pub mod db;
 pub mod edit;
 pub mod face_recognizer;

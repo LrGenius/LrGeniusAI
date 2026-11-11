@@ -65,6 +65,7 @@ when it is `"failed"`.
 | `face_model` / `face_error` | YuNet + the active recognizer (FaceNet or AuraFace). |
 | `face_recognizer` | Which recognizer is active: `"facenet"` or `"auraface"` (see `GET /v1/faces/recognizer`). |
 | `face_state_model` / `face_state_error` | MediaPipe Face Mesh V2 + Blendshape V2, which read eye state, smile and gaze for culling. |
+| `subject_model` / `subject_error` | RF-DETR-Seg Nano, which finds a photo's subject so culling can measure focus on it. |
 | `species_model` / `species_error` | BioCLIP 2. |
 
 The two SigLIP2 towers load and idle-unload **independently**, so an
@@ -286,6 +287,46 @@ the model ran on this pass. Without the model
 the response says once that a rough eye estimate was used, with the fix
 (`"Photos were analysed without eye state, smile and gaze: …"`).
 
+**Small faces.** Faces are detected twice on the working copy: once on a 640 px view of the whole
+frame, and again on four tiles of 60 % of its width and height, one per corner
+(`lrg_ml::yunet::tiles`; only when the frame is more than 800 px on its long edge). A tile face is
+added after the first pass's faces, which therefore come out exactly as before, when it is narrower
+than the first pass is counted on to find (20 px in its view, about 64 px on a 2048 px copy: wider
+tile faces were as often texture as faces on the public benchmark), lies whole in its tile, and
+overlaps no face already found. It counts for every culling aggregate, and `cull_faces_detected`
+counts it, but it gets no identity: no embedding, no thumbnail and no `FACE_TABLE` row, so it never
+reaches People or key people.
+
+**The subject, and focus on it.** The `cull` task, or `subject` on its own, finds the
+photo's subject when the `subject` model is on disk (`lrg_ml::subject`, RF-DETR-Seg Nano: COCO
+objects with masks, on a 312 px square of the working copy) and measures focus on it and on
+the background (`lrg_imaging::subject_focus`). The subject is the object with the most weight
+— the model's score, times the square root of its area, times how central it is — joined by
+others of its kind at least a quarter its size (the second person of a couple), and by a person,
+animal or vehicle of that size touching it (the rider of a horse, the cyclist on a bicycle);
+furniture and street fixtures are never the subject, and nothing under 0.4 % of the frame is. Focus is the
+blur effect over tiles of the working copy (a sixth of the subject's size, 32–96 px), the 80th
+percentile of the tiles inside the subject and of those clear of it. Per photo:
+`cull_subject_kind` (`person`/`animal`/`vehicle`/`object`), `cull_subject_score`,
+`cull_subject_area`, `cull_subject_x`/`_y`, `cull_subject_focus` and `cull_background_focus`
+(absent when too little could be measured), `cull_background_streak` (how much sharper the
+background reads along one axis than across it, high for a pan), `cull_subject_mask` (the
+subject's mask on a 26×26 grid, hex, eight cells to a byte), and always `cull_subject_version`
+and `cull_subject_model`, also when no subject was found. Without the model the response says
+once that sharpness was judged on the whole frame, with the fix.
+
+The face pass then counts only the faces that belong to the subject — a face whose centre lies on
+that mask — so a bystander soft behind a shallow depth of field does not reject the keeper, and a
+spectator's face that the soft background hides does not make the frame "faceless" beside its
+twin. For a person that holds even when no face is on them (an athlete seen from behind): the
+frame then has no face that matters. For an animal or a vehicle the faces on it count (the
+rider), and when none is, every face (the owner beside the dog). Beside a thing (a cake, a ball)
+and without a subject, every face counts. `cull_face_count` and the `cull_face_*` and
+`cull_eye_*` aggregates are over the faces that count; `cull_faces_detected` is every face found,
+which is what decides whether the face pass has readings to bring up to date, for People too.
+`cull_face_subject_version` records the subject version the face aggregates were taken against;
+a cull pass over a photo whose subject reading is newer runs the face step again.
+
 `/v1/index/unprocessed` does **not** count a missing preview as outstanding:
 the cull pre-flight and the agent's indexing command ask it too, and would offer
 to prepare photos that lack nothing they need. Photos indexed before previews
@@ -408,11 +449,11 @@ producer this build uses*, not merely present:
 | task | outstanding when |
 | --- | --- |
 | `embeddings` | no embedding, or a stored `embedding_model` that is not this build's |
-| `faces` | no face rows and no `faces_checked`, a `face_model` that is not this build's, or — once its model is on disk — a photo with faces whose `cull_face_state_version` is missing or older, or that a culling pass left with face rows it could not match (`face_rows_behind`) |
+| `faces` | no face rows and no `faces_checked`, a `face_model` that is not this build's, or — once its model is on disk — a photo with faces (`cull_faces_detected` > 0, or `cull_face_count` on a photo prepared before that existed) whose `cull_face_state_version` is missing or older, or that a culling pass left with face rows it could not match (`face_rows_behind`) |
 | `aesthetic` (also implied by `embeddings` and `cull`) | no `aesthetic_score`, or an `aesthetic_model` that is not this build's — and only when the scorer is on disk, since a missing model cannot be fixed by running again |
 | genre (with `embeddings`, `cull` and `aesthetic`) | an embedding but no `genre`, or a `genre_version` that is not this build's (the genre list or its prompts changed), and only when the search model is on disk. Made again from the stored embedding, so the photo is not re-embedded |
 | `species` | no `species_checked`, or a `species_model` that is not the head on disk |
-| `cull` | faces (`cull_face_count` > 0) and no `cull_face_state_version` while the face state model is on disk; no `cull_phash`, no `cull_faces_present` key, no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again), or faces (`cull_face_count` > 0) but no `cull_focus_version` — prepared before eye and face focus were measured. The cull pass then runs the face step again even on a photo whose faces are already checked; it writes no identities, only the culling fields |
+| `cull` | faces (`cull_face_count` > 0) and no `cull_face_state_version` while the face state model is on disk; no `cull_phash`, no `cull_faces_present` key, no `capture_time` without a `capture_time_unknown` stamp (grouping needs the time; a photo prepared before the fast path sent it is prepared again once, and one with no time in the catalog or the file's EXIF is stamped so it is not asked for again), or faces (`cull_face_count` > 0) but no `cull_focus_version` — prepared before eye and face focus were measured. The cull pass then runs the face step again even on a photo whose faces are already checked; it writes no identities, only the culling fields. Also, while the subject model is on disk, no current `cull_subject_version` or another `cull_subject_model` — prepared before the subject was found — or faces (`cull_faces_detected` > 0) whose `cull_face_subject_version` is not the photo's `cull_subject_version`, counted before the subject told them from bystanders |
 | `metadata` | no title, caption, alt_text or keywords |
 
 `regenerate_metadata` overrides all of them.
@@ -581,14 +622,43 @@ Runs the full culling pipeline on a set of photos: grouping, scoring, and classi
 | Field | Type | Description |
 |---|---|---|
 | `photo_ids` | array | Photos to cull. Ids with no stored record are skipped and counted in `summary.unindexed_count` |
-| `culling_preset` | string | `default`, `portrait`, `street`, `event` or `sports`. 400 with `available_presets` for anything else |
+| `culling_preset` | string | `auto`, `default`, `portrait`, `street`, `event`, `sports` or `wildlife`. Absent means `default`. 400 with `available_presets` for anything else |
 | `time_delta_seconds` | int | Burst window. Absent means the preset's own |
 | `phash_threshold`, `clip_threshold` | float or `"auto"` | Grouping thresholds |
 | `use_iqa` | bool | Score the CLIP-IQA signals (the moment and the kiss gate) over the stored SigLIP2 embeddings. Default true. The aesthetic term is not one of them: it is the AestheticSigLIP score stored with each photo, used whatever this says |
 | `semantic_weight` | float | Overrides the preset's moment weight, for the ranking as well as for deciding whether to score it. Clamped to 0..1 |
+| `key_people` | bool | Judge by the selection's key people (`lrg_api::key_people`): the persons named in People who are in the selection, and those in at least a fifth of its photos with faces and at least three (`lrg_analysis::key_people::KeyPeopleRule`). Faces without a person in People are clustered among the selection's for this. In a group where any frame shows one, every frame's face aggregates are summed again from its key faces alone, every one counting however small (no prominence gate), and the reasons about eyes, focus and gaze name the key person (`cull_who_*`, rank time only, never stored and left out of `stored_metadata`). Reads `FACE_TABLE`, so it needs the full face pass. Default false |
+| `target_count`, `target_fraction` | int, float 0..1 | Choose this many photos across the whole selection, or this share of them (one or the other; both is a 400), instead of a pick per group (`lrg_analysis::selection`). See *Target* below |
+| `highlights_count` | int | With a target, this many highlights among the chosen photos |
+| `use_taste` | bool | Reorder each group by the photographer's learned culling style; see `POST /v1/cull/taste` |
 | `reject_margin_scale` | float | Scales the preset's `reject_score_delta`, the score margin below the pick at which a frame becomes a reject candidate: above 1 fewer rejects, below 1 more. The defect rules (blur, blink, occlusion, exposure) are untouched. Clamped to 0.25..4. The plugin sends 1.5 / 1.0 / 0.6 for its gentle / balanced / strict cull strength |
 | `include_stored_metadata` | bool | Echo each photo's stored `cull_*` inputs as `stored_metadata` (for fixtures) |
+| `include_embeddings` | bool | Echo each photo's SigLIP2 embedding as `embedding_q8`: base64 of a little-endian `f32` scale and one signed byte per dimension (`lrg_analysis::eval::quantize_embedding`, about 1.5 KB). For fixtures, whose replay groups the way the backend did only with it. Absent for a photo without an embedding |
 | `include_debug` | bool | Per-group thresholds and pairwise distances |
+
+**Target.** With `target_count` or `target_fraction`, the ranked groups are joined into
+*scenes* — consecutive groups at most 90 s apart whose picks are at most 0.35 apart in cosine
+distance where both have an embedding — and photos are chosen across them by a *keep value*
+comparable between groups: the aesthetic score, blended 0.7/0.3 with the moment where judged,
+halved by a clear defect (`cull_score` is measured against each group and is not comparable).
+First the best pick of every scene (the best scenes', when the target is smaller than their
+number); then, until the target, the photo with the highest keep value less 0.5 × its cosine
+similarity to the closest chosen photo (frames of one group count at least 0.9 alike, embedding
+or not) and less 0.1 per place it ranks below its group's pick, plus 0.1 for a group not yet chosen
+from and 0.1 per key person (with `key_people`) not yet in the selection. A reject candidate is chosen only as the only frame of its scene, and is
+listed in `selection.selected_with_defect`. Highlights are the best chosen photos without a
+defect, at most each group's best-ranked chosen frame, kept apart the same way. Without a target nothing changes. The weights are a first
+version; see [Dev-Image-Culling-Benchmark.md](Dev-Image-Culling-Benchmark.md) for what is measured.
+
+**`auto`** chooses the preset per group from the photos' stored `genre`
+(`lrg_ml::genre`): the preset most of the group's genres call for
+(`lrg_analysis::culling_config::preset_for_genres`), a tie going to the one that asks more
+(event, portrait, sports, wildlife, default). `portrait` → `portrait`; `event`, `concert` and
+`street` → `event` (a guessed "street" does not switch focus off the way the `street` preset
+does on purpose); `sport` → `sports`; `wildlife` → `wildlife`; every other genre → `default`. The
+groups themselves are made with the preset most of the whole selection calls for (its burst
+window and distances), and each group's prompts are scored with its own preset's sets. Photos
+without a genre are counted in `warnings`; a group where none has one is `default`.
 
 Every preset except `default` judges the **moment**: the stronger of the
 preset's axis (`cull_semantic_iqa`: action, expression or candid) and, for
@@ -600,6 +670,27 @@ the database (below), and never stored themselves. Within a
 group the moment applies only when every frame has it, and frames with a
 defect no edit repairs (blur, unintended closed eyes, occlusion, focus that
 missed the eyes) always rank below usable ones.
+
+**Focus on the subject** (`cull_subject_focus`, `cull_background_focus`,
+`cull_background_streak`, stored by the subject step of `/v1/index/photos`) acts only
+when every frame of a group carries the current `cull_subject_version` (all or
+nothing), and a frame without a subject abstains:
+
+- in the score, as `subject_focus_weight` of the sharpness the technical term reads,
+  against the group like exposure (0.75; `sports` and `wildlife` 1.0);
+- a subject at `reason_subject_focus_threshold` and close to the group's sharpest is
+  *in focus*, and then a soft frame-wide reading is not a blur defect — a shallow depth
+  of field or a pan, as sharp eyes already settle it for a face;
+- below `reason_subject_focus_threshold` and `relative_subject_margin` behind the
+  group's sharpest subject, the reason `subject_out_of_focus`, or `focus_on_background`
+  when the background reads `reason_background_sharper_margin` sharper; below
+  `reject_subject_focus_threshold`, a clear defect. Never for a single;
+- `panning` on a frame whose subject is in focus and whose background is streaked at
+  `reason_panning_streak` or more; `subject_sharpest_in_group` on a pick within
+  `reason_sharpest_delta` of the sharpest subject.
+
+Photos without a current reading are counted in `warnings`, with the fix ("Prepare
+now", or "Download AI models" when the model is missing).
 
 **Eye and face focus** (`cull_eye_focus`, `cull_face_focus`, stored by the
 face pass of `/v1/index/photos`) are `1 - blur_effect` (Crété-Roffet, as
@@ -649,11 +740,13 @@ against the group.
 
 | Field | Type | Description |
 |---|---|---|
-| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count` |
+| `summary` | object | `group_count`, `pick_count`, `alternate_count`, `reject_candidate_count`, `near_duplicate_group_count`, `intentional_set_group_count`, `intentional_set_photo_count`, `culling_preset`, `unindexed_count`, `selection` — with a target, `{"wanted", "selected_count", "scene_count", "highlight_photo_ids", "selected_with_defect"}`, else null — `presets` — under `auto`, groups per chosen preset (`{"sports": 12, "default": 4}`), empty otherwise — and `key_people`: with `key_people`, `{"named": [names], "unnamed": n, "groups": groups judged by them}`, else null |
+| `groups[].scene_id`, `groups[].selected_photo_ids` | string, string[] | With a target: the group's scene (`scene_0001`, in time order) and which of its photos were chosen — none, or several. `photos[].selected` and `photos[].highlight` say the same per photo |
+| `groups[].preset` | string | The preset the group was ranked with: the request's, or under `auto` the one its genre called for. Also in `debug.culling_preset` |
 | `groups[].winner_photo_id` | string or null | The best-ranked frame that is not a reject candidate. **`null`** when every frame is one: a blurred single, or a burst blurred throughout |
 | `groups[].alternate_photo_ids`, `groups[].reject_candidate_photo_ids` | string[] | The rest of the group |
 | `groups[].photos[]` | object[] | Per photo: `rank`, `cull_score`, `winner`, `reject_candidate`, `reason_codes`, `explanation`, `metrics`. `metrics` carries `semantic`/`semantic_axis`, `emotion`/`emotion_axis` and `moment` only when computed, `eye_focus`/`face_focus` only when measured, `eye_closed`/`smile`/`eye_squint`/`gaze_off_lens`/`mouth_open`/`face_luminance`/`face_across_stops`/`face_blown` when the group was judged on the face state, `eyes_closed_intended` when true, and always `clear_defect`. Where at least two frames of the group had their eyes measured, `explanation` ends in `eye focus N/10 within the group`: 10 for the sharpest, one point less per 0.03 below it |
-| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), photos whose moment was not judged. Empty when there is nothing to say |
+| `warnings` | string[] | Every caveat for the run, most fundamental first: unanalyzed photos skipped, no embeddings, AI signals whose prompt vectors could not be prepared (one message naming every lost signal and the fix), photos with faces prepared before eye focus or eye state were measured (one message when "Prepare now" fixes both), photos whose eyes the face state model could not analyse because it is not downloaded (with that fix), with a target fewer photos worth keeping than asked for and scenes kept with nothing but flawed frames, under `auto` photos without a genre, with `key_people` photos with faces never through face recognition and a selection where no one is a key person, photos whose subject was not measured, photos whose moment was not judged. Empty when there is nothing to say |
 | `warning` | string or null | The same messages joined, for clients older than `warnings` |
 
 The **aesthetic term** of every preset is the stored AestheticSigLIP score: `aesthetic_score` of a
@@ -681,6 +774,34 @@ again straight away if the request loaded it. So each prompt is embedded once pe
 database, and in normal use only a free-text search or keyword clustering loads the text tower.
 Only the prompts the request needs: on a CPU without fast fp16 one text-tower pass can take many
 seconds, and a first cull must stay inside the plugin's request timeout.
+
+### `POST /v1/cull/taste`
+Learns the photographer's culling style from their own decisions (`lrg_analysis::taste`). Body:
+`labels` — `[{"photo_id", "flag": -1|0|1, "rating": 0-5, "own": bool}]`, where `own` says the mark is
+the photographer's rather than one a cull wrote and they left — and `culling_preset` (default
+`auto`). The photos are ranked as `/v1/cull/grade` would rank them; inside every group with at
+least one `own` mark, each two photos marked differently are a decision (pick over none over
+reject, then more stars). A pairwise logistic regression without bias learns weights for the
+ranked signals — `cull_score` itself, `sharpness_effective`, `exposure`, `highlight_clip`, `noise`,
+`aesthetic`, `face_score`, `eye_openness`, `eye_focus`, `eye_closed`, `smile`, `gaze_off_lens`,
+`mouth_open`, `moment`, `subject_focus` — on their differences, each scaled by its spread, and
+five-fold cross-validation by group compares it with the default ranking on the same held-out
+decisions. The model is stored next to the database (`cull_taste.json`) and returned as
+`{"model": {"pairs", "groups", "agreement", "default_agreement", "used"}}`; `used` is true from
+30 decisions and when it agrees more often than the default. Fewer than 30 decisions is a 422 with
+`error_code: "too_few_decisions"`, `pairs` and `needed`.
+
+### `GET /v1/cull/taste`
+The learned style: `{"model": {…}}` as above, or `{"model": null}`.
+
+### `DELETE /v1/cull/taste`
+Forgets it: `{"deleted": true|false}`.
+
+With `use_taste` on `/v1/cull/grade`, a learned style that is `used` reorders each group's frames
+that are not reject candidates by its score (a frame missing a signal counts the group's mean for
+it); reject candidates keep their places after them, and a group whose pick changed gives the new
+pick the reason `preferred_by_your_style`. `summary.taste_changed_picks` counts those groups. A
+style not learned, or not better than the default, is said in `warnings` and changes nothing.
 
 ---
 
@@ -1412,10 +1533,12 @@ network does which job.
 
 ### `GET /v1/models/assets`
 Per-family readiness plus one overall `ready` flag and `missing_approx_bytes`
-for the "this will download about N GB" line. All five families — `clip`, `aesthetic`
-(the photo quality scorer), `bioclip`, `face` and `face_state` (eye state, smile and gaze,
-~7 MB, tag `face-state-assets-v1`) — are `downloadable: true` and all five gate `ready`.
-`face_state` is a family of its own so that face detection never reports "not ready" because of it.
+for the "this will download about N GB" line. All six families — `clip`, `aesthetic`
+(the photo quality scorer), `bioclip`, `face`, `face_state` (eye state, smile and gaze,
+~7 MB, tag `face-state-assets-v1`) and `subject` (RF-DETR-Seg Nano, which finds a photo's
+subject for culling, ~123 MB, tag `subject-assets-v1`) — are `downloadable: true` and all
+six gate `ready`. `face_state` and `subject` are families of their own so that face
+detection never reports "not ready" because of them.
 Face detection used to be the exception: its `buffalo_l` weights came from
 `INSIGHTFACE_ROOT`, were not redistributable, and had to be excluded from
 `ready` so the button did not stay red forever over something the download
